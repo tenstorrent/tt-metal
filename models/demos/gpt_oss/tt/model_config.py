@@ -336,7 +336,9 @@ class ModelArgs:
         fused_decode: the model about to be built uses the fused decode layers (fused_decode/), whose
         decode-only weights are only written by a fused build; a marker from a non-fused build of the same
         model (e.g. batch > 1 on the same mesh) does not cover them, nor does one whose decode-only expert copies have
-        another dtype (fused_decode/config.py: GPT_OSS_FUSED_EXPERT_DTYPE)."""
+        another dtype (fused_decode/config.py: GPT_OSS_FUSED_EXPERT_DTYPE). The routed-expert weights themselves
+        have another layout in a one-chip fused build (ND-sharded BFP8, fused_decode/nd.py), so the marker records
+        that layout and fused / non-fused one-chip builds do not accept each other's marker."""
         if os.getenv("GPT_OSS_FORCE_MODEL_LOAD") == "1":
             return False
         cache_path = self.weight_cache_path(dtype)
@@ -359,8 +361,15 @@ class ModelArgs:
             return False
         if fused_decode and meta.get("fused_decode_expert_dtype", "bfp4") != self._fused_decode_expert_dtype():
             return False
+        if meta.get("expert_layout", "interleaved") != self._expert_layout(fused_decode):
+            return False
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
+
+    def _expert_layout(self, fused_decode):
+        """Layout of the routed-expert weights a build writes: 'nd1x32_bfp8' for the one-chip fused decode, which
+        streams them (fused_decode/nd.py), else 'interleaved'."""
+        return "nd1x32_bfp8" if fused_decode and tuple(self.mesh_device.shape) == (1, 1) else "interleaved"
 
     @staticmethod
     def _fused_decode_expert_dtype():
@@ -383,6 +392,7 @@ class ModelArgs:
                         "dtype": str(dtype),
                         "fused_decode_weights": self.FUSED_DECODE_WEIGHTS_VERSION if fused_decode else False,
                         "fused_decode_expert_dtype": self._fused_decode_expert_dtype() if fused_decode else None,
+                        "expert_layout": self._expert_layout(fused_decode),
                     }
                 )
             )

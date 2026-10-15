@@ -209,3 +209,16 @@ def decode_forward_stream(hidden_states, expert_indices, expert_weights, weights
     """
     act = stream["gate_up"](hidden_states, expert_indices, expert_weights, weights.gate_up_stream, stream["act"])
     return stream["down"](act, expert_indices, expert_weights, weights.down_stream, stream["partial"], send=send)
+
+
+def decode_forward_nd(hidden_states, expert_indices, expert_weights, weights, bias, stream):
+    """TP=1 decode MoE for one token over its top-k experts with the ND-weight streaming ops of fused_decode/nd.py.
+
+    As decode_forward_stream, but the ops stream the experts' own ND-sharded gate / up / down weights (weights:
+    ExpertWeights) with the decode-only bias tiles (bias: NdDecodeExpertBias). With one device the partial sum is the
+    full MoE output; the next layer boundary reads it directly (no all-reduce, nothing to send).
+    """
+    act = stream["gate_up"](
+        hidden_states, expert_indices, expert_weights, weights.gate_proj, weights.up_proj, bias.gate_up, stream["act"]
+    )
+    return stream["down"](act, expert_indices, expert_weights, weights.down_proj, bias.down, stream["partial"])

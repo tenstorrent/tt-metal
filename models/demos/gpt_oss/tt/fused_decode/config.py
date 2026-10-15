@@ -38,17 +38,27 @@ def fused_decode_layout_supported(
     (grid: the device compute-with-storage grid, x by y; dram_banks: the device's DRAM bank count; system_devices:
     the number of devices in the whole system).
 
+    Two meshes are supported: 1x4 at TP=4 (QuietBox 2) and 1x1 at TP=1 (one P150; see TP=1 below).
+
     The fused layer serves one token per device with TP over a single mesh row and no expert parallelism. Its
     layouts (the flat 3-page residual and boundary all-reduce of fused_decode/boundary.py on a 4-device ring, the
     30-core LM-head input, Q/K/V head buffers, the streamed weights' per-DRAM-bank column split and worker cores) are
     sized for the gpt-oss-20b shapes on the 11x10 Blackhole grid at TP=4, and its decode-only streamed weight copies
     (about +3.2 GB of DRAM per device) were budgeted for that model. The boundary all-reduce also assumes the mesh is
     the whole system (a closed 4-device fabric ring), so a 1x4 slice of a larger system (e.g. one data-parallel
-    submesh of a LoudBox or Galaxy) is excluded. Every other layout keeps the original decode path."""
+    submesh of a LoudBox or Galaxy) is excluded. Every other layout keeps the original decode path.
+
+    TP=1: one chip has no DRAM for decode-only copies of the BFP8 experts, so the routed experts are streamed from the
+    model's own expert weights, stored for that in an ND-sharded layout (nd.py) that prefill reads as well; the layer
+    boundary needs no all-reduce. GPT_OSS_FUSED_DECODE_TP1=0 keeps the original decode path on one chip."""
+    mesh = tuple(mesh_shape)
+    if mesh == (1, 1):
+        if tp != 1 or os.environ.get(ENV_FUSED_DECODE_TP1, "1").strip().lower() in ("0", "false", "off", "no"):
+            return False
+    elif mesh != (1, 4) or tp != 4:
+        return False
     return (
         is_blackhole
-        and tuple(mesh_shape) == (1, 4)
-        and tp == 4
         and ep == 1
         and num_experts == 32
         and not use_throughput_experts
@@ -56,7 +66,9 @@ def fused_decode_layout_supported(
         and grid[0] >= FUSED_DECODE_MIN_GRID[0]
         and grid[1] >= FUSED_DECODE_MIN_GRID[1]
         and dram_banks == FUSED_DECODE_DRAM_BANKS
-        and system_devices == mesh_shape[0] * mesh_shape[1]
+        # The 1x4 boundary all-reduce needs the closed ring of the whole system; one chip has no ring (and
+        # ttnn.get_num_devices() counts every chip of the host, not the visible ones).
+        and (mesh == (1, 1) or system_devices == mesh_shape[0] * mesh_shape[1])
     )
 
 
@@ -76,6 +88,17 @@ def fused_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_e
         (grid.x, grid.y),
         mesh_device.dram_grid_size().x,
         ttnn.get_num_devices(),
+    )
+
+
+ENV_FUSED_DECODE_TP1 = "GPT_OSS_FUSED_DECODE_TP1"
+
+
+def tp1_nd_experts(mesh_device, mesh_config, hf_config, use_throughput_experts):
+    """Whether this model's routed experts are stored ND-sharded in BFP8 for the TP=1 fused decode (nd.py): the
+    one-chip mesh takes the fused decode path. Prefill reads the same tensors."""
+    return tuple(mesh_device.shape) == (1, 1) and fused_decode_supported(
+        mesh_device, mesh_config, hf_config, use_throughput_experts, 1
     )
 
 
@@ -115,6 +138,22 @@ QKV_STREAM_READERS = 1
 OPROJ_STREAM_READERS = 1
 GATE_UP_STREAM_READERS = 3
 DOWN_STREAM_READERS = 2
+# TP=1 (one chip): 4x the QKV columns (160 tiles = 20 per bank) and o_proj K (128 tiles). Measured standalone: 2 readers
+# per bank beat 3-5 (QKV 35 vs 41 us, o_proj 31 vs 53 us); the QKV consumer's weight ring is capped (all 10 columns of
+# 92 BFP8 tiles would take 1 MB of L1).
+TP1_QKV_STREAM_READERS = 2
+TP1_OPROJ_STREAM_READERS = 2
+TP1_QKV_PREFETCH = 6
+
+# TP=1 routed experts (nd.py): weight rows per CB slot (90 = 5 x 18), slots in flight per stream, tiles per NOC packet,
+# swept on one chip (gate|up 489 GB/s, down 448 GB/s; 6 / 8 / 12: 446 / 402); split accumulation in custom_mm; DST full
+# sync; 2 weight streams per core (the reader on NOC0 streams the even K blocks, the writer on NOC1 the odd ones).
+ND_K_BLOCK = 18
+ND_DEPTH = 4
+ND_PACKET_TILES = 9
+ND_SPLIT_ACC = True
+ND_FULL_SYNC = True
+ND_STREAMS = 2
 
 # Decode LM head (fused_decode/terminal.py): a DRAM-streaming copy of the LM-head weight, vocab split evenly over the TP
 # devices, BFP8 x BF16 LoFi like the other dense projections. Readers per DRAM bank (measured standalone: 1 and 2

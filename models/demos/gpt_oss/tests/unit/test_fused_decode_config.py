@@ -4,8 +4,8 @@
 """Host-only checks of the fused decode gate (tt/fused_decode/config.py).
 
 fused_decode_layout_supported decides which decoder layers use the fused decode path. It must accept exactly the
-validated envelope (gpt-oss-20b, Blackhole 1x4, TP=4, one token per device) and keep every other configuration on
-the original decode path. No device is needed.
+validated envelopes (gpt-oss-20b, Blackhole, one token per device: 1x4 at TP=4, or one chip at TP=1) and keep every
+other configuration on the original decode path. No device is needed.
 """
 
 from unittest.mock import MagicMock
@@ -43,11 +43,61 @@ def test_minimum_grid_is_supported():
     assert fused_decode_layout_supported(**{**SUPPORTED, "grid": FUSED_DECODE_MIN_GRID})
 
 
+# One P150 (TP=1). The host's device count does not matter: no fabric ring (and get_num_devices() counts every chip).
+ONE_CHIP = {**SUPPORTED, "mesh_shape": (1, 1), "tp": 1}
+
+
+@pytest.mark.parametrize("system_devices", [1, 4])
+def test_one_chip_is_supported(monkeypatch, system_devices):
+    from models.demos.gpt_oss.tt.fused_decode.config import ENV_FUSED_DECODE_TP1
+
+    monkeypatch.delenv(ENV_FUSED_DECODE_TP1, raising=False)
+    assert fused_decode_layout_supported(**{**ONE_CHIP, "system_devices": system_devices})
+
+
+@pytest.mark.parametrize("value", ["0", "off", "false"])
+def test_one_chip_opt_out(monkeypatch, value):
+    from models.demos.gpt_oss.tt.fused_decode.config import ENV_FUSED_DECODE_TP1
+
+    monkeypatch.setenv(ENV_FUSED_DECODE_TP1, value)
+    assert not fused_decode_layout_supported(**ONE_CHIP)
+    assert fused_decode_layout_supported(**SUPPORTED)  # the 1x4 path does not depend on it
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"tp": 4}, {"num_experts": 128}, {"tokens": 32}, {"dram_banks": FUSED_DECODE_DRAM_BANKS - 1}],
+    ids=["tp_4", "gpt_oss_120b_experts", "batch_32", "seven_dram_banks"],
+)
+def test_one_chip_outside_envelope(change):
+    assert not fused_decode_layout_supported(**{**ONE_CHIP, **change})
+
+
+def test_nd_bank_mapping():
+    """nd.py's reader addresses expert e's output column c of an N-tile-wide ND-sharded weight as tensor page
+    (e * K + k) * N + c; with [1, 1, K, 1-tile] shards dealt round-robin, that column is shard e * N + c, in bank
+    (e * N + c) % banks, as one run of K tiles."""
+    E, K, N, banks = 32, 90, 90, FUSED_DECODE_DRAM_BANKS
+    shard_of_page = lambda page: (page // (K * N)) * N + page % N  # [1, 1, K, 1] shards of a [1, E, K, N] tensor
+    for e, c in ((0, 0), (1, 0), (5, 89), (31, 7)):
+        pages = [(e * K + k) * N + c for k in range(K)]
+        assert {shard_of_page(p) for p in pages} == {e * N + c}
+        assert (e * N + c) % banks == shard_of_page(pages[0]) % banks
+
+
+@pytest.mark.parametrize("tp, width", [(1, 64), (4, 128)])
+def test_sampler_candidate_width(tp, width):
+    """ttnn.sampling sorts candidate tiles in pairs: one chip's 32 candidates are padded to two tiles."""
+    from models.demos.gpt_oss.tt.fused_decode.terminal import MIN_SAMPLER_CANDIDATES, TOPK
+
+    assert max(TOPK * tp, MIN_SAMPLER_CANDIDATES) == width
+
+
 @pytest.mark.parametrize(
     "change",
     [
         {"is_blackhole": False},
-        {"mesh_shape": (1, 1), "tp": 1},
+        {"mesh_shape": (1, 1), "tp": 4},
         {"mesh_shape": (1, 2), "tp": 2},
         {"mesh_shape": (1, 8), "tp": 8},
         {"mesh_shape": (4, 8), "tp": 8, "ep": 4},
@@ -64,7 +114,7 @@ def test_minimum_grid_is_supported():
     ],
     ids=[
         "wormhole",
-        "mesh_1x1",
+        "mesh_1x1_tp_4",
         "mesh_1x2",
         "mesh_1x8",
         "mesh_4x8",

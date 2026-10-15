@@ -1,15 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fused decode path (tt/fused_decode) against the HuggingFace reference on Blackhole 1x4.
+"""Fused decode path (tt/fused_decode) against the HuggingFace reference on Blackhole 1x4 and on one chip.
 
 A 2-layer model (layer 0 sliding-window, layer 1 full attention) with random weights decodes a short sequence one
 token at a time through the fused decode path: decode inputs op, layer boundaries (fabric all-reduce + residual add +
 RMSNorm), streamed QKV / o_proj / router / routed experts, and the streamed LM head with folded logits. Every step's
 logits, unfolded on the host by Model.process_output_decode, are compared with the reference logits at that position.
-Runs once per routed-expert decode weight format (GPT_OSS_FUSED_EXPERT_DTYPE: BFP4, the default, and BFP8).
+At 1x4 it runs once per routed-expert decode weight format (GPT_OSS_FUSED_EXPERT_DTYPE: BFP4, the default, and BFP8).
+On one chip (TP=1, no all-reduce) the routed experts are streamed from the model's own BFP8 expert weights in their
+ND-sharded layout (fused_decode/nd.py), so it runs once.
 
-Run on a QuietBox 2 (Blackhole 1x4):
+Run on a QuietBox 2 (Blackhole 1x4; -k 1x1 for one chip) or one P150:
     HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b pytest models/demos/gpt_oss/tests/unit/test_fused_decode.py
 """
 
@@ -38,7 +40,7 @@ PCC_THRESHOLD = 0.95
     reason="~45 s on a QuietBox 2; the CI gpt-oss-20b unit job has a 5-minute budget. Run locally on Blackhole 1x4.",
 )
 @pytest.mark.parametrize("expert_dtype", ["bfp4", "bfp8"])
-@parametrize_mesh_with_fabric([(1, 4)])
+@parametrize_mesh_with_fabric([(1, 4), (1, 1)])
 def test_fused_decode_matches_reference(mesh_device, device_params, reset_seeds, expert_dtype, monkeypatch):
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
 
@@ -49,6 +51,9 @@ def test_fused_decode_matches_reference(mesh_device, device_params, reset_seeds,
 
     if not is_blackhole():
         pytest.skip("The fused decode path runs on Blackhole only")
+    one_chip = tuple(mesh_device.shape) == (1, 1)
+    if one_chip and expert_dtype == "bfp4":
+        pytest.skip("One chip streams the BFP8 expert weights themselves (GPT_OSS_FUSED_EXPERT_DTYPE does not apply)")
     monkeypatch.setenv("GPT_OSS_FUSED_EXPERT_DTYPE", expert_dtype)
 
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
@@ -79,6 +84,13 @@ def test_fused_decode_matches_reference(mesh_device, device_params, reset_seeds,
     want_dtype = {"bfp4": ttnn.bfloat4_b, "bfp8": ttnn.bfloat8_b}[expert_dtype]
     for layer in model.layers:
         experts = layer.mlp.experts
+        if one_chip:
+            # No decode copy: the ND ops stream the BFP8 ND-sharded expert weights prefill uses.
+            assert experts.decode_weights is None and experts.nd_bias is not None
+            for w in (experts.weights.gate_proj, experts.weights.up_proj, experts.weights.down_proj):
+                assert w.dtype == ttnn.bfloat8_b
+                assert "ND_SHARDED" in str(w.memory_config()), w.memory_config()
+            continue
         assert experts.decode_weights.gate_up_stream.dtype == want_dtype
         assert experts.decode_weights.down_stream.dtype == want_dtype
         assert experts.decode_stream["gate_up"].weight_dtype == want_dtype

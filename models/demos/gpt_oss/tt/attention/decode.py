@@ -8,6 +8,9 @@ from ..fused_decode.config import (
     OPROJ_STREAM_READERS,
     QKV_DECODE_WEIGHT_DTYPE,
     QKV_STREAM_READERS,
+    TP1_OPROJ_STREAM_READERS,
+    TP1_QKV_PREFETCH,
+    TP1_QKV_STREAM_READERS,
     sdpa_decode_program_config,
 )
 from .config import AttentionConfig, ProgramConfig
@@ -91,9 +94,10 @@ def decode_forward(
             hidden_size // ttnn.TILE_SIZE,
             (num_local_heads + 2 * num_local_kv_heads) * head_dim,
             QKV_DECODE_WEIGHT_DTYPE,
-            readers=QKV_STREAM_READERS,
+            readers=TP1_QKV_STREAM_READERS if mesh_config.tp == 1 else QKV_STREAM_READERS,
             out_mode=3,
             heads=(num_local_heads * head_dim // ttnn.TILE_SIZE, num_local_kv_heads * head_dim // ttnn.TILE_SIZE),
+            prefetch_cols=TP1_QKV_PREFETCH if mesh_config.tp == 1 else None,
         )
         tt_q, tt_k, tt_v = qkv_stream(
             hidden_states,
@@ -210,7 +214,7 @@ def decode_forward(
             num_local_heads * head_dim // ttnn.TILE_SIZE,
             hidden_size,
             OPROJ_DECODE_WEIGHT_DTYPE,
-            readers=OPROJ_STREAM_READERS,
+            readers=TP1_OPROJ_STREAM_READERS if mesh_config.tp == 1 else OPROJ_STREAM_READERS,
             x_pages=head_dim // ttnn.TILE_SIZE,
             out_mode=5,
         )

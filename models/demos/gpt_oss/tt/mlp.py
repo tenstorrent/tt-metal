@@ -6,7 +6,7 @@ MoE MLP: Router + Experts with minimal abstraction
 """
 
 import ttnn
-from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
+from models.demos.gpt_oss.tt.expert_configs import gpt_oss_program_config
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
@@ -152,7 +152,7 @@ class MLP:
             )
 
             # Use GPT-OSS specific program config
-            program_config = GPTOSSProgramConfig()
+            program_config = gpt_oss_program_config(mesh_device, mesh_config)
 
             # Create experts with new modular implementation
             self.experts = Experts(
@@ -162,7 +162,9 @@ class MLP:
                 ccl_manager=ccl_manager,
                 mesh_config=mesh_config,
                 program_config=program_config,
-                weight_dtype=ttnn.bfloat4_b,
+                # The TP=1 fused decode streams the experts' own weights, shared with prefill: BFP8 (exact for the
+                # checkpoint's MXFP4 values), ND-sharded (fused_decode/nd.py). Otherwise BFP4.
+                weight_dtype=ttnn.bfloat8_b if self.indexed_decode and mesh_config.decode.tp == 1 else ttnn.bfloat4_b,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 indexed_decode=self.indexed_decode,
             )

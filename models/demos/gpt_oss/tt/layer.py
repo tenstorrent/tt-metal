@@ -103,7 +103,10 @@ class DecoderLayer:
             # The producing o_proj / MoE down ops send their partial sums themselves, and each boundary runs inside the
             # op consuming its output (fused_decode/config.py).
             self.boundary_sent = ccl_manager.decode_boundary_send(hf_config.hidden_size, "attn") is not None
-            self.boundary_fuse_consumer = DECODE_BOUNDARY_FUSE_CONSUMER and self.boundary_sent
+            # One device (TP=1): no all-reduce, the consumer reads the producer's partial directly.
+            self.boundary_fuse_consumer = DECODE_BOUNDARY_FUSE_CONSUMER and (
+                self.boundary_sent or self.boundary.ring == 1
+            )
             self.input_norm_gamma = self.boundary.flat_gamma(self.input_layernorm)
             self.post_norm_gamma = self.boundary.flat_gamma(self.post_attention_layernorm)
             self.next_norm_gamma = None  # set_decode_next_norm (the model knows the next layer)

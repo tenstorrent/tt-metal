@@ -101,11 +101,13 @@ class CCLManager:
         return self._decode_boundary[hidden_size]
 
     def decode_boundary_send(self, hidden_size, site):
-        """`send` argument of the producer stream ops: fuse the boundary's fabric send (None: the boundary sends)."""
+        """`send` argument of the producer stream ops: fuse the boundary's fabric send (None: the boundary sends, or
+        one device: nothing to send)."""
         from .fused_decode.config import DECODE_BOUNDARY_CCL, DECODE_BOUNDARY_FUSED_SEND
 
-        if DECODE_BOUNDARY_FUSED_SEND and DECODE_BOUNDARY_CCL == "fabric":
-            return (self.get_decode_boundary(hidden_size), site)
+        boundary = self.get_decode_boundary(hidden_size)
+        if DECODE_BOUNDARY_FUSED_SEND and DECODE_BOUNDARY_CCL == "fabric" and boundary.ring > 1:
+            return (boundary, site)
         return None
 
     def get_decode_expert_stream(self, hidden, inter_pad, top_k, swiglu_limit, alpha, weight_dtype=ttnn.bfloat4_b):
@@ -132,6 +134,22 @@ class CCLManager:
                     self.mesh_device, hidden, inter_pad, top_k, readers=DOWN_STREAM_READERS, weight_dtype=weight_dtype
                 ),
                 "act": self._persistent_zeros((top_k, inter_pad), ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
+                "partial": self.get_decode_partial(hidden),
+            }
+        return self._decode_expert_stream[key]
+
+    def get_decode_nd_expert_stream(self, hidden, inter, top_k, swiglu_limit, alpha):
+        """TP=1 routed-expert ops (fused_decode/nd.py) over the experts' own ND-sharded BFP8 weights and their
+        persistent buffers, shared by every decoder layer's decode path: the [k, I] BF16 row-major activation and the
+        flat partial sum (get_decode_partial)."""
+        key = ("nd", hidden, inter, top_k)
+        if key not in self._decode_expert_stream:
+            from .fused_decode.nd import NdExpertDown, NdExpertGateUp
+
+            self._decode_expert_stream[key] = {
+                "gate_up": NdExpertGateUp(self.mesh_device, hidden, inter, top_k, swiglu_limit, alpha),
+                "down": NdExpertDown(self.mesh_device, hidden, inter, top_k),
+                "act": self._persistent_zeros((top_k, inter), ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
                 "partial": self.get_decode_partial(hidden),
             }
         return self._decode_expert_stream[key]

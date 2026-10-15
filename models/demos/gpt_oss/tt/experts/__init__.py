@@ -31,9 +31,9 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 
 from .config import ExpertConfig, ProgramConfig
-from .decode import decode_forward, decode_forward_stream
+from .decode import decode_forward, decode_forward_nd, decode_forward_stream
 from .prefill import prefill_forward
-from .weights import load_decode_expert_weights, load_expert_weights
+from .weights import load_decode_expert_weights, load_expert_weights, load_nd_decode_expert_bias
 
 __all__ = ["Experts", "ExpertConfig", "ProgramConfig"]
 
@@ -71,13 +71,20 @@ class Experts:
             weight_dtype: Data type for weights (default: bfloat4_b)
             tensor_cache_path: Optional path for weight caching
             indexed_decode: Fused decode: only the routed experts are computed (DRAM-streaming ops, one token per
-                device, TP without expert parallelism); requires the router's decode_indexed outputs.
+                device, TP without expert parallelism); requires the router's decode_indexed outputs. At TP=1 the
+                weights themselves are stored ND-sharded (BFP8) and streamed; at TP>1 decode-only copies are.
         """
         self.config = config
         self.mesh_config = mesh_config
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.program_config = program_config
+
+        nd_decode = indexed_decode and mesh_config.decode.tp == 1
+        if nd_decode:
+            assert (
+                weight_dtype == ttnn.bfloat8_b
+            ), f"the TP=1 fused decode streams BFP8 expert weights, got {weight_dtype}"
 
         # Load weights
         self.weights = load_expert_weights(
@@ -87,6 +94,7 @@ class Experts:
             mesh_config=mesh_config,
             weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
+            nd_sharded=nd_decode,
         )
 
         # Cache prefill sparsity (created once, reused for all prefill calls)
@@ -96,7 +104,19 @@ class Experts:
         # DRAM-streaming ops of fused_decode/stream.py (ops and buffers shared by every layer through the CCL manager).
         self.decode_weights = None
         self.decode_stream = None
-        if indexed_decode:
+        self.nd_bias = None
+        if nd_decode:
+            # TP=1 (one chip): no DRAM for a decode-only copy; fused_decode/nd.py streams self.weights directly.
+            assert mesh_config.decode.ep == 1, "fused decode needs EP == 1"
+            self.nd_bias = load_nd_decode_expert_bias(mesh_device, config, state_dict, tensor_cache_path)
+            self.decode_stream = ccl_manager.get_decode_nd_expert_stream(
+                config.hidden_size,
+                config.intermediate_size,
+                config.num_experts_per_tok,
+                config.swiglu_limit,
+                config.alpha,
+            )
+        elif indexed_decode:
             assert mesh_config.decode.tp > 1 and mesh_config.decode.ep == 1, "fused decode needs TP > 1, EP == 1"
             from ..fused_decode.config import expert_decode_weight_dtype
 
@@ -169,6 +189,10 @@ class Experts:
         Returns:
             Expert output tensor [1, batch, seq_len, hidden_size]
         """
+        if is_decode and self.nd_bias is not None:
+            return decode_forward_nd(
+                hidden_states, topk_expert_indices, topk_expert_weights, self.weights, self.nd_bias, self.decode_stream
+            )
         if is_decode and self.decode_stream is not None:
             return decode_forward_stream(
                 hidden_states,

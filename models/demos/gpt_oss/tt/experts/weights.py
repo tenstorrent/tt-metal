@@ -34,6 +34,7 @@ def load_expert_weights(
     mesh_config: MeshConfig,
     weight_dtype=ttnn.bfloat4_b,
     tensor_cache_path=None,
+    nd_sharded=False,
 ) -> ExpertWeights:
     """
     Load and shard expert weights.
@@ -45,6 +46,9 @@ def load_expert_weights(
         mesh_config: Mesh parallelization configuration
         weight_dtype: Data type for weights
         tensor_cache_path: Optional path for weight caching
+        nd_sharded: Store gate / up / down ND-sharded in one-tile-column shards per expert (fused_decode/nd.py: the
+            TP=1 fused decode streams them; prefill reads them like the interleaved tensors). Cached under their own
+            names.
 
     Returns:
         ExpertWeights with loaded and sharded tensors
@@ -75,6 +79,20 @@ def load_expert_weights(
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
     row_mesh_mapper = mesh_config.row_parallel(mesh_device)
 
+    weight_memory = {"gate_proj": ttnn.DRAM_MEMORY_CONFIG, "up_proj": ttnn.DRAM_MEMORY_CONFIG}
+    weight_memory["down_proj"] = ttnn.DRAM_MEMORY_CONFIG
+    weight_tag = ""
+    if nd_sharded:
+        from ..fused_decode.nd import ND_SHARD_WIDTH, nd_expert_memory_config
+
+        assert mesh_config.decode.tp == 1, "ND-sharded expert weights are a TP=1 layout"
+        weight_memory = {
+            "gate_proj": nd_expert_memory_config(mesh_device, config.hidden_size),
+            "up_proj": nd_expert_memory_config(mesh_device, config.hidden_size),
+            "down_proj": nd_expert_memory_config(mesh_device, intermediate_size_per_device),
+        }
+        weight_tag = f"_nde1x{ND_SHARD_WIDTH}"
+
     # Load gate projection
     gate_proj_tt = ttnn.as_tensor(
         gate_proj,
@@ -82,8 +100,8 @@ def load_expert_weights(
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "gate_proj"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj{weight_tag}"),
+        memory_config=weight_memory["gate_proj"],
     )
 
     # Load up projection
@@ -93,8 +111,8 @@ def load_expert_weights(
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "up_proj"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj{weight_tag}"),
+        memory_config=weight_memory["up_proj"],
     )
     bias_dtype = ttnn.bfloat16
     # Load gate bias
@@ -138,8 +156,8 @@ def load_expert_weights(
         layout=ttnn.TILE_LAYOUT,
         dtype=weight_dtype,
         mesh_mapper=row_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, "down_proj"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj{weight_tag}"),
+        memory_config=weight_memory["down_proj"],
     )
 
     down_proj_bias_tt = ttnn.as_tensor(
@@ -160,6 +178,38 @@ def load_expert_weights(
         up_proj_bias=up_proj_bias_tt,
         down_proj_bias=down_proj_bias_tt,
         intermediate_size_per_device=intermediate_size_per_device,
+    )
+
+
+@dataclass(frozen=True)
+class NdDecodeExpertBias:
+    """Decode-only bias tiles of the TP=1 fused decode (fused_decode/nd.py nd_bias_tensor), sharded like the ND expert
+    weights: the packed [gate | up] bias [1, E, 32, 2 I] and the down bias [1, E, 32, H]."""
+
+    gate_up: ttnn.Tensor
+    down: ttnn.Tensor
+
+
+def load_nd_decode_expert_bias(mesh_device, config: ExpertConfig, state_dict, tensor_cache_path=None):
+    from ..fused_decode.nd import ND_SHARD_WIDTH, nd_bias_tensor
+    from ..fused_decode.stream import NBIAS
+
+    gate_up_bias = down_bias = None
+    if state_dict:
+        bias = state_dict["gate_up_proj_bias"].float().reshape(config.num_experts, 2 * config.intermediate_size)
+        gate_up_bias = torch.cat([bias[..., ::2], bias[..., 1::2]], -1)  # gate / up interleaved -> [gate | up]
+        down_bias = state_dict["down_proj_bias"].float().reshape(config.num_experts, config.hidden_size)
+    suffix = f"nde1x{ND_SHARD_WIDTH}_nb{NBIAS}"
+    return NdDecodeExpertBias(
+        gate_up=nd_bias_tensor(
+            mesh_device,
+            gate_up_bias,
+            config.num_experts,
+            get_cache_file_name(tensor_cache_path, f"gate_up_bias_{suffix}"),
+        ),
+        down=nd_bias_tensor(
+            mesh_device, down_bias, config.num_experts, get_cache_file_name(tensor_cache_path, f"down_bias_{suffix}")
+        ),
     )
 
 

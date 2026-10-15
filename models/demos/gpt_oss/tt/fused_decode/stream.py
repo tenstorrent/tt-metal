@@ -409,7 +409,8 @@ class LinearStream(_BankStreamOp):
     x: x_pages = 0: the flat BF16 normed hidden of the layer boundary (fused_decode/boundary.py); otherwise a BF16
     32x32-tile tensor (any TensorAccessor layout; a DRAM source is staged in L1 first) whose activation is row
     (j / x_pages) of tile page (j % x_pages) for j < k_tiles (x_pages = 2: the [heads, 64] SDPA output, head by head).
-    prefetch_cols: cap on the weight columns buffered ahead (default: all of them when a boundary is fused in, else 3).
+    prefetch_cols: cap on the weight columns buffered ahead (default: all of them when a boundary is fused in or
+    prefetch_all, else 3).
     out_mode:
       3: attention heads, out = (Q, K, V) BF16 [heads, head_tiles * 32] tile tensors, head h in row h,
          heads = (q_cols, k_cols) output tiles of Q and K;
@@ -430,6 +431,7 @@ class LinearStream(_BankStreamOp):
         heads=(0, 0),
         head_tiles=2,
         prefetch_cols=None,
+        prefetch_all=False,
     ):
         n_tiles = -(-n // TILE)
         banks = mesh_device.dram_grid_size().x
@@ -447,6 +449,7 @@ class LinearStream(_BankStreamOp):
         self.heads = heads
         self.head_tiles = head_tiles
         self.prefetch_cols = prefetch_cols
+        self.prefetch_all = prefetch_all
         self.weight_dtype = weight_dtype
         self.tile_bytes = TILE_BYTES[weight_dtype]
         self.col_bytes = self.kt * self.tile_bytes
@@ -473,10 +476,14 @@ class LinearStream(_BankStreamOp):
         else:
             outs = (out,) * 3
         cb_x, cb_w, cb_scr, cb_stage, cb_out = 0, 1, 3, 4, 16
-        stage = self.x_pages if x.memory_config().buffer_type == ttnn.BufferType.DRAM else 0
+        # A DRAM source is staged whole: x_pages tiles per row of tiles (2 rows for the 64 heads of TP=1).
+        stage = 0
+        if self.x_pages and x.memory_config().buffer_type == ttnn.BufferType.DRAM:
+            stage = self.x_pages * -(-int(x.padded_shape[-2]) // TILE)
         # A fused boundary's consumer can buffer all its weight columns: the readers stream them while the boundary
         # runs (fused_decode.config.DECODE_BOUNDARY_PREFETCH_ALL).
-        w_cols = max(3, self.cols) if pending is not None and DECODE_BOUNDARY_PREFETCH_ALL else 3
+        # prefetch_all: also without a fused boundary (an activation gather long enough to hide the whole stream).
+        w_cols = max(3, self.cols) if (pending is not None and DECODE_BOUNDARY_PREFETCH_ALL) or self.prefetch_all else 3
         if self.prefetch_cols is not None:
             # Large columns (the LM head's ~97 KB): cap the ring at what L1 holds.
             w_cols = min(w_cols, max(3, self.prefetch_cols))
