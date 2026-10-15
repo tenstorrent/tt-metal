@@ -175,12 +175,12 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
-@pytest.mark.parametrize(
-    "chunk_local", [256], ids=["chunk256"]
-)  # chunk=2048, T=4096 (32 blocks) — keeps the fp32 CPU ref fast
+# chunk=2048, T=4096 (32 blocks) keeps the fp32 CPU ref fast; chunk=1024 makes chunk 0 a cold MSA chunk below the
+# 2048-token top-k window (cache-read path).
+@pytest.mark.parametrize("chunk_local", [256, 128], ids=["chunk256", "chunk128"])
 @pytest.mark.parametrize("layer_kind", ["dense", "sparse"])
 def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, chunk_local, reset_seeds):
-    """Chunked-prefill chunk-1 output vs the self-contained torch CPU reference (absolute correctness).
+    """Chunked-prefill chunk 0 and chunk 1 outputs vs the self-contained torch CPU reference (absolute correctness).
 
     Unlike test_attention_chunked (chunked == device single-shot — a self-consistency check that a shared
     bug could pass), this pins the device chunked path to the CPU reference's attention output. The device
@@ -235,6 +235,7 @@ def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, ch
     ref_model = MiniMaxM3TextModel(MiniMaxM3Config(), DictWeights(ref_state))
     cos_ref, sin_ref = build_rope(total, ROTARY_DIM, THETA)
     ref_attn = ref_model._attention(x.float(), p, cos_ref, sin_ref, is_sparse)[0]  # [1, total, H]
+    ref_c0 = ref_attn[:, :chunk, :].reshape(1, chunk, HIDDEN)
     ref_c1 = ref_attn[:, chunk:total, :].reshape(1, chunk, HIDDEN)
 
     # --- device chunked: swizzled weights -> Attention; chunk0 then chunk1 (cache-read) ---
@@ -323,11 +324,16 @@ def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, ch
         return torch.cat([compose_tp_hidden(dts, r, cols) for r in range(rows)], dim=2)
 
     kvc = allocate_kv_caches(mesh_device, num_layers=1, max_seq_len=total, sp_axis=sp_axis, num_users=1)
-    run(x[:, :chunk], 0, chunk, 0, kvc)
+    out_c0 = run(x[:, :chunk], 0, chunk, 0, kvc)
+    dev_c0 = gather_seq(out_c0).reshape(1, chunk, HIDDEN)
     out_c1 = run(x[:, chunk:], chunk, total, chunk, kvc)
     ttnn.synchronize_device(mesh_device)
     dev_c1 = gather_seq(out_c1).reshape(1, chunk, HIDDEN)
 
+    passing0, pcc0 = comp_pcc(ref_c0, dev_c0, 0.99)
     passing, pcc = comp_pcc(ref_c1, dev_c1, 0.99)
-    logger.info(f"[{layer_kind}] chunked-prefill chunk1 vs CPU reference[{chunk}:{total}]: pcc={pcc}")
+    logger.info(
+        f"[{layer_kind}] chunked-prefill vs CPU reference: chunk0 pcc={pcc0}, chunk1[{chunk}:{total}] pcc={pcc}"
+    )
+    assert passing0, f"{layer_kind} cold chunk0 vs CPU ref PCC fail: {pcc0}"
     assert passing, f"{layer_kind} chunked vs CPU ref PCC fail: {pcc}"

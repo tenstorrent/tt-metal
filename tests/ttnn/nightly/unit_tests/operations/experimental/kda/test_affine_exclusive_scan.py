@@ -56,9 +56,9 @@ _UNIT_CASE = _ProductionCase(
 # Kimi-K3 production layouts. References are pooled medians from two independent
 # three-sample Blackhole runs after scoping synchronization to each independent head.
 _PRODUCTION_CASES = (
-    _ProductionCase("sp1-tp8", 12, 8, 128, 128, 96782),
-    _ProductionCase("sp2-tp4", 24, 4, 128, 128, 76542),
-    _ProductionCase("sp4-tp2", 48, 2, 128, 128, 65000),
+    _ProductionCase("sp1-tp8", 12, 8, 128, 128, 100847),
+    _ProductionCase("sp2-tp4", 24, 4, 128, 128, 76819),
+    _ProductionCase("sp4-tp2", 48, 2, 128, 128, 66771),
 )
 
 

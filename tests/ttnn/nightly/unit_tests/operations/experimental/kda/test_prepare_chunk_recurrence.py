@@ -60,10 +60,11 @@ def _prepare_chunk_recurrence_ops(
         raise ValueError("chunk-recurrence preparation tensor shapes must be positive")
 
     q, k, v, g, beta = inputs
-    if len(q.shape) != 3 or len(v.shape) != 3 or len(beta.shape) != 4:
+    if len(q.shape) != 3 or len(v.shape) != 3 or len(beta.shape) != 3:
         raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
-    num_heads, num_chunks, chunk_size, trailing = beta.shape
-    if chunk_size != CHUNK_SIZE or trailing != 1 or q.shape[-1] % num_heads or v.shape[-1] % num_heads:
+    _, rows, num_heads = beta.shape
+    num_chunks = rows // CHUNK_SIZE
+    if rows % CHUNK_SIZE or q.shape[-1] % num_heads or v.shape[-1] % num_heads:
         raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
     key_dim = q.shape[-1] // num_heads
     value_dim = v.shape[-1] // num_heads
@@ -126,7 +127,7 @@ def test_prepare_chunk_recurrence_work_golden() -> None:
         torch.empty((1, 32, 2)),
         torch.empty((1, 32, 1)),
         torch.empty((1, 32, 2)),
-        torch.empty((1, 1, 32, 1)),
+        torch.empty((1, 32, 1)),
     )
     outputs = (
         torch.empty((1, 1, 32, 1)),
@@ -162,7 +163,8 @@ def _host_inputs(
     k = (0.3 * torch.randn(1, sequence, num_heads * key_dim, generator=generator)).to(torch.bfloat16).float()
     v = (0.2 * torch.randn(1, sequence, num_heads * value_dim, generator=generator)).to(torch.bfloat16).float()
     g = (-0.001 - 0.05 * torch.rand(1, sequence, num_heads * key_dim, generator=generator)).to(torch.bfloat16).float()
-    beta = torch.sigmoid(torch.randn(num_heads, num_chunks, CHUNK_SIZE, 1, generator=generator)).float()
+    # Token-major pre-sigmoid beta logits [1, T, H], as the fused projection holds them.
+    beta = torch.randn(1, sequence, num_heads, generator=generator).to(torch.bfloat16).float()
     return q, k, v, g, beta
 
 
@@ -180,8 +182,9 @@ def _oracle(
     num_heads: int,
     output_bf16_mask: int,
 ) -> tuple[torch.Tensor, ...]:
-    q, k, v, g, beta, *_ = inputs
-    num_chunks = beta.shape[1]
+    q, k, v, g, beta_logits, *_ = inputs
+    num_chunks = beta_logits.shape[1] // CHUNK_SIZE
+    beta = _reshape_flat(torch.sigmoid(beta_logits.float()), num_heads, num_chunks, 1)
     key_dim = q.shape[-1] // num_heads
     value_dim = v.shape[-1] // num_heads
     q = _reshape_flat(q, num_heads, num_chunks, key_dim)
@@ -237,9 +240,7 @@ def _to_device(
 
 
 def _device_inputs(inputs: tuple[torch.Tensor, ...], device: ttnn.Device) -> tuple[ttnn.Tensor, ...]:
-    return tuple(
-        _to_device(tensor, device, ttnn.bfloat16 if index < 4 else ttnn.float32) for index, tensor in enumerate(inputs)
-    )
+    return tuple(_to_device(tensor, device, ttnn.bfloat16) for tensor in inputs)
 
 
 def _run(
@@ -249,6 +250,7 @@ def _run(
     output_bf16_mask: int = 0,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
+    beta_logits_column_offset: int = 0,
 ) -> list[ttnn.Tensor]:
     with ttnn.manage_config("throw_exception_on_fallback", True):
         return ttnn.experimental.kda.prepare_chunk_recurrence(
@@ -257,6 +259,7 @@ def _run(
             output_bf16_mask=output_bf16_mask,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
+            beta_logits_column_offset=beta_logits_column_offset,
         )
 
 
@@ -276,7 +279,7 @@ def _t_inv_numerical_stress_inputs() -> tuple[torch.Tensor, ...]:
     noise = torch.randn(1, CHUNK_SIZE, 128, generator=generator)
     inputs[1] = ((0.36 / 128**0.5) * (direction + 0.07 * noise)).to(torch.bfloat16).float()
     inputs[3] = torch.full_like(inputs[3], -0.05).to(torch.bfloat16).float()
-    inputs[4] = 0.90 + 0.03 * torch.rand(1, 1, CHUNK_SIZE, 1, generator=generator)
+    inputs[4] = torch.logit(0.90 + 0.03 * torch.rand(1, CHUNK_SIZE, 1, generator=generator)).to(torch.bfloat16).float()
     return tuple(inputs)
 
 
@@ -452,6 +455,71 @@ def test_prepare_chunk_recurrence_unbounded_legacy_call_matches_explicit_bounds(
         ttnn.deallocate(tensor)
 
 
+@pytest.mark.parametrize("gate_scale", [-4.0, -5.0], ids=["power-of-two", "kimi-k3-lower-bound"])
+def test_prepare_chunk_recurrence_gate_scale_matches_prescaled_gate(device: ttnn.Device, gate_scale: float) -> None:
+    """gate_scale must equal scaling g on the host bit for bit when the host product is exact in BF16."""
+    case = _UNIT_TEST_CASE
+    host_inputs = _case_host_inputs(case, seed=1931)
+    # Eighths in [-2, 2] times a scale of magnitude at most 5 need at most 7 mantissa bits, so both the unscaled
+    # gate and its host-scaled copy are exact in BF16, and the device's FP32 product is exact for any BF16 scale.
+    unscaled_g = torch.round((host_inputs[3] / gate_scale).clamp(-2.0, 2.0) * 8) / 8
+    prescaled_inputs = _device_inputs(
+        tuple(host_inputs[:3]) + (unscaled_g * gate_scale,) + tuple(host_inputs[4:]), device
+    )
+    unscaled_inputs = _device_inputs(tuple(host_inputs[:3]) + (unscaled_g,) + tuple(host_inputs[4:]), device)
+    start = make_actual_start(device, 0)
+
+    def run(inputs: tuple[ttnn.Tensor, ...], **kwargs) -> list[ttnn.Tensor]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            return ttnn.experimental.kda.prepare_chunk_recurrence(
+                *inputs, case.num_heads, actual_start=start, output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK, **kwargs
+            )
+
+    prescaled = run(prescaled_inputs)
+    scaled = run(unscaled_inputs, gate_scale=gate_scale)
+    for name, expected, actual in zip(OUTPUT_NAMES, prescaled, scaled, strict=True):
+        assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name=f"{name} gate_scale {gate_scale}")
+    for tensor in (*prescaled, *scaled, *prescaled_inputs, *unscaled_inputs, start):
+        ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize("beta_offset", [32, 64])
+@pytest.mark.parametrize("start_row", [0, 32, 48], ids=["start0", "chunk-aligned-start", "mid-chunk-start"])
+def test_prepare_chunk_recurrence_beta_logits_column_window(
+    device: ttnn.Device, start_row: int, beta_offset: int
+) -> None:
+    """The production combination: beta logits read in place from a column window of a wider tensor, a folded gate
+    scale and a nonzero actual_start, bit-identical to the same logits as their own tensor."""
+    case = _TestCase("h40-n2-k32-v32", 40, 2, 32, 32)
+    host_inputs = _case_host_inputs(case, seed=1941)
+    rows = case.num_chunks * CHUNK_SIZE
+    logits = host_inputs[4]
+    wide = torch.zeros(1, rows, beta_offset + 64)
+    wide[..., beta_offset : beta_offset + case.num_heads] = logits
+    inputs = _device_inputs(host_inputs, device)
+    wide_tt = _to_device(wide, device, ttnn.bfloat16)
+    start = make_actual_start(device, start_row)
+
+    def run(beta: ttnn.Tensor, **kwargs) -> list[ttnn.Tensor]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            return ttnn.experimental.kda.prepare_chunk_recurrence(
+                *inputs[:4],
+                beta,
+                case.num_heads,
+                actual_start=start,
+                output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK,
+                gate_scale=-5.0,
+                **kwargs,
+            )
+
+    expected = run(inputs[4])
+    actual = run(wide_tt, beta_logits_column_offset=beta_offset)
+    for name, want, got in zip(OUTPUT_NAMES, expected, actual, strict=True):
+        assert_bit_identical(ttnn.to_torch(want), ttnn.to_torch(got), name=f"{name} beta window start {start_row}")
+    for tensor in (*expected, *actual, *inputs, wide_tt, start):
+        ttnn.deallocate(tensor)
+
+
 def test_prepare_chunk_recurrence_rejects_end_without_start(device, expect_error):
     inputs = _device_inputs(_host_inputs(2, 2, 32, 32), device)
     end = make_actual_start(device, 64)
@@ -601,8 +669,7 @@ def test_prepare_chunk_recurrence_rejects_host_inputs(
 ) -> None:
     host_inputs = _host_inputs(2, 2, 32, 32)
     inputs = list(_device_inputs(host_inputs, device))
-    dtype = ttnn.bfloat16 if host_index < 4 else ttnn.float32
-    inputs[host_index] = ttnn.from_torch(host_inputs[host_index], dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    inputs[host_index] = ttnn.from_torch(host_inputs[host_index], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     with expect_error(
         RuntimeError,
         f"{('q', 'k', 'v', 'g', 'beta')[host_index]} must be an allocated device tensor",
@@ -623,7 +690,10 @@ def test_prepare_chunk_recurrence_rejects_host_inputs(
         ("head_divisibility", "flat widths must be divisible by num_heads"),
         ("key_alignment", "K and V must be positive and tile aligned"),
         ("value_alignment", "K and V must be positive and tile aligned"),
-        ("beta", "beta shape must be"),
+        ("beta_rows", "beta logits must be token-major"),
+        ("beta_dtype", "beta must be BFLOAT16, got DataType::FLOAT32"),
+        ("beta_unaligned_offset", "beta logits must be token-major"),
+        ("beta_fewer_columns_than_heads", "beta logits must be token-major"),
         ("sharded", "q must use interleaved memory"),
     ],
 )
@@ -636,6 +706,7 @@ def test_prepare_chunk_recurrence_rejects_invalid_inputs(
     host_inputs = list(_host_inputs(2, 2, 32, 32))
     inputs = list(_device_inputs(tuple(host_inputs), device))
     num_heads = 2
+    beta_logits_column_offset = 0
     if case == "g_dtype":
         inputs[3] = _to_device(host_inputs[3], device, ttnn.float32)
     elif case == "layout":
@@ -660,8 +731,16 @@ def test_prepare_chunk_recurrence_rejects_invalid_inputs(
             inputs[index] = _to_device(tensor, device, ttnn.bfloat16)
     elif case == "value_alignment":
         inputs[2] = _to_device(torch.randn(1, 64, 96).to(torch.bfloat16).float(), device, ttnn.bfloat16)
-    elif case == "beta":
-        inputs[4] = _to_device(host_inputs[4][:, :1], device, ttnn.float32)
+    elif case == "beta_rows":
+        inputs[4] = _to_device(host_inputs[4][:, :32], device, ttnn.bfloat16)
+    elif case == "beta_dtype":
+        inputs[4] = _to_device(host_inputs[4], device, ttnn.float32)
+    elif case == "beta_unaligned_offset":
+        inputs[4] = _to_device(torch.zeros(1, 64, 128), device, ttnn.bfloat16)
+        beta_logits_column_offset = 16
+    elif case == "beta_fewer_columns_than_heads":
+        inputs[4] = _to_device(torch.zeros(1, 64, 33), device, ttnn.bfloat16)
+        beta_logits_column_offset = 32
     elif case == "sharded":
         shard_spec = ttnn.ShardSpec(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
@@ -671,7 +750,7 @@ def test_prepare_chunk_recurrence_rejects_invalid_inputs(
         sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
         inputs[0] = _to_device(host_inputs[0], device, ttnn.bfloat16, memory_config=sharded)
     with expect_error(RuntimeError, message):
-        _run(tuple(inputs), num_heads)
+        _run(tuple(inputs), num_heads, beta_logits_column_offset=beta_logits_column_offset)
 
 
 def test_prepare_chunk_recurrence_rejects_invalid_options(device: ttnn.Device, expect_error: Callable) -> None:
@@ -700,7 +779,7 @@ def test_prepare_chunk_recurrence_scratch_wrap(device: ttnn.Device, output_bf16_
     work_items_per_core = 32
     chunks = grid.x * grid.y * work_items_per_core
     chunk = _t_inv_numerical_stress_inputs()
-    inputs = tuple(x.repeat(1, chunks, 1) for x in chunk[:4]) + (chunk[4].repeat(1, chunks, 1, 1),)
+    inputs = tuple(x.repeat(1, chunks, 1) for x in chunk)
     key_dim = chunk[3].shape[-1]
     expected = torch.exp(chunk[3].sum(dim=1)).reshape(1, 1, key_dim, 1).repeat(1, chunks, 1, 1)
     if output_bf16_mask & (1 << 5):

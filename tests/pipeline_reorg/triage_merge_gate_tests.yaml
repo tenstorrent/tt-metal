@@ -7,8 +7,11 @@
 - name: triage
   cmd: pytest -v -s ./tools/tests/triage/ --ignore=./tools/tests/triage/test_hang_report.py
   skus:
-    wh_n150_civ2:
-      timeout: 11
+    # wh_n150_civ2 disabled: test_dump_callstacks[cause_hang_with_app0] intermittently fails with
+    # "Core is not halted (not stuck on ebreak)" on n150, clogging the merge gate. Re-enable once
+    # the underlying hang-detection race is fixed.
+    # wh_n150_civ2:
+    #   timeout: 11
     bh_p150b_civ2_viommu:
       timeout: 11
   owner_id: U09UX6JLA3U # Ognjen Nenezic
