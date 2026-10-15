@@ -269,8 +269,14 @@ def test_eltwise_bcast_col_custom(
             r_sample,
         )
 
+    # Above LoFi each fidelity phase must show: LoFi output is up to ~8 bf16 steps off a HiFi golden here.
+    max_ulp = (
+        2
+        if mathop == MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi
+        else None
+    )
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
     ), "Assert against golden failed"
 
 

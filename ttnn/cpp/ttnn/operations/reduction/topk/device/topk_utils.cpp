@@ -67,7 +67,8 @@ bool topk_multicore_structurally_eligible(uint32_t reduced_width, uint32_t num_t
  *    and return the minimum
  *
  * Memory cost model:
- * - Gather cost: Data movement between cores (2 * num_cores * tile_sizes)
+ * - Gather cost: Data movement between cores (2 * num_cores * tile_sizes; with tree_merge only
+ *   the surviving core's Kt tiles reach the final core)
  * - Local cost: Per-core memory usage (split_size/TILE_WIDTH * tile_sizes), plus the
  *   4 * Kt landing and merge tiles with tree_merge
  * - Total must fit within L1 memory per core
@@ -155,11 +156,13 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
         const uint32_t Kt = tt::div_up(k, tile_width);
         const uint32_t Wt_final = num_cores * Kt;
         const uint32_t Wt_local = split_size / tile_width;
-        const uint32_t shared_cost = 4 * (value_tile_size + index_tile_size) +              // c_0,c_1 input
-                                     Wt_final * (transposed_tile_size + index_tile_size) +  // c_4,c_5 gathered
-                                     2 * index_tile_size;                                   // c_9 local-index out
+        // The tree leaves one core's Kt tiles for the final core, so its gather and workspace CBs hold Kt tiles.
+        const uint32_t gather_tiles = tree_merge ? Kt : Wt_final;
+        const uint32_t shared_cost = 4 * (value_tile_size + index_tile_size) +                  // c_0,c_1 input
+                                     gather_tiles * (transposed_tile_size + index_tile_size) +  // c_4,c_5 gathered
+                                     2 * index_tile_size;                                       // c_9 local-index out
         const uint32_t final_core_cost =  // + c_8 value, c_6/c_7 workspace
-            shared_cost + 2 * value_tile_size + Wt_final * (transposed_tile_size + index_tile_size);
+            shared_cost + 2 * value_tile_size + gather_tiles * (transposed_tile_size + index_tile_size);
         const uint32_t local_core_cost =  // + c_2/c_3 transposed, c_8 value, c_10..c_13 tree-merge landing/workspace
             shared_cost + Wt_local * (transposed_tile_size + index_tile_size) + 2 * transposed_tile_size +
             (tree_merge ? 4 * Kt * (transposed_tile_size + index_tile_size) : 0);

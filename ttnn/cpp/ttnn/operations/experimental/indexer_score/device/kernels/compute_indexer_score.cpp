@@ -276,38 +276,29 @@ inline void mul_phase(uint32_t r, uint32_t slot_base, uint32_t col_base, uint32_
     CircularBuffer(cb_w).wait_front(w_group_tiles);  // gates popped in kernel_main
     set_mul_mode_custom<cb_qk, cb_w, cb_acc_strip>();
     qk.wait_front(batch_tiles);
-    if constexpr (mul_heads_per_pass == 0 || mul_heads_per_pass >= reduce_heads) {
+    // One pass over every head at LoFi; above it passes of mul_heads_per_pass heads add up in L1.
+    constexpr bool single_pass = mul_heads_per_pass == 0 || mul_heads_per_pass >= reduce_heads;
+    constexpr uint32_t heads_per_pass = single_pass ? reduce_heads : mul_heads_per_pass;
+    for (uint32_t h0 = 0; h0 < reduce_heads; h0 += heads_per_pass) {
+        const uint32_t h1 = (h0 + heads_per_pass < reduce_heads) ? h0 + heads_per_pass : reduce_heads;
+        if constexpr (!single_pass) {
+            pack_reconfig_l1_acc(h0 == 0 ? 0 : 1);
+        }
         for (uint32_t sub_base = 0; sub_base < cols; sub_base += mul_ct_dim) {
             const uint32_t n_cols = (sub_base + mul_ct_dim <= cols) ? mul_ct_dim : (cols - sub_base);
             tile_regs_acquire();
-            for (uint32_t hl = 0; hl < reduce_heads; ++hl) {
+            for (uint32_t hl = h0; hl < h1; ++hl) {
                 mul_tiles_bcast_cols_custom(cb_qk, cb_w, hl * cols + sub_base, w_base + hl, 0, n_cols);
             }
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t out_col = 0; out_col < n_cols; ++out_col) {
-                pack_tile(out_col, cb_acc_strip, slot_base + col_base + sub_base + out_col);
+                pack_tile<!single_pass>(out_col, cb_acc_strip, slot_base + col_base + sub_base + out_col);
             }
             tile_regs_release();
         }
-    } else {
-        for (uint32_t h0 = 0; h0 < reduce_heads; h0 += mul_heads_per_pass) {
-            const uint32_t h1 = (h0 + mul_heads_per_pass < reduce_heads) ? h0 + mul_heads_per_pass : reduce_heads;
-            pack_reconfig_l1_acc(h0 == 0 ? 0 : 1);
-            for (uint32_t sub_base = 0; sub_base < cols; sub_base += mul_ct_dim) {
-                const uint32_t n_cols = (sub_base + mul_ct_dim <= cols) ? mul_ct_dim : (cols - sub_base);
-                tile_regs_acquire();
-                for (uint32_t hl = h0; hl < h1; ++hl) {
-                    mul_tiles_bcast_cols_custom(cb_qk, cb_w, hl * cols + sub_base, w_base + hl, 0, n_cols);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t out_col = 0; out_col < n_cols; ++out_col) {
-                    pack_tile<true>(out_col, cb_acc_strip, slot_base + col_base + sub_base + out_col);
-                }
-                tile_regs_release();
-            }
-        }
+    }
+    if constexpr (!single_pass) {
         pack_reconfig_l1_acc(0);
     }
     qk.pop_front(batch_tiles);

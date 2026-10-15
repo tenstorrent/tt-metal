@@ -3,48 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
-#include "api/dataflow/endpoints.h"
-#include "api/dataflow/noc_semaphore.h"
 
-constexpr std::uint32_t onetile = 1;
-
-// Drain each write before popping its slot, or the compute's next pack can overwrite it mid NoC read.
-void send_tiles(
-    const Noc& noc,
-    DataflowBuffer& src_dfb,
-    std::uint32_t Kt,
-    std::uint32_t tile_bytes,
-    std::uint32_t noc_x,
-    std::uint32_t noc_y,
-    std::uint32_t dst_base) {
-    const UnicastEndpoint remote;
-    for (std::uint32_t i = 0; i < Kt; ++i) {
-        src_dfb.wait_front(onetile);
-        noc.async_write(
-            src_dfb,
-            remote,
-            tile_bytes,
-            {.offset_bytes = 0},
-            {.noc_x = noc_x, .noc_y = noc_y, .addr = dst_base + (i * tile_bytes)});
-        noc.async_write_barrier();
-        src_dfb.pop_front(onetile);
-    }
-}
+#include "topk_local_writer_common.hpp"
 
 void kernel_main() {
-    constexpr std::uint32_t receiver_sem_id = get_compile_time_arg_val(0);  // Final core readiness signal
-    constexpr std::uint32_t sender_sem_id = get_compile_time_arg_val(1);    // Local core completion signal
+    using namespace topk_local_writer;
+
     // Args 2, 3 and 5 (final core coordinates, K) belong to the non tree writer; destinations come at runtime here.
-    constexpr std::uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr std::uint32_t Kt = get_compile_time_arg_val(6);
     constexpr std::uint32_t merge_tiles = 2 * Kt;  // own Kt tiles, then the partner's
-    constexpr std::uint32_t values_dfb_index = get_compile_time_arg_val(7);
-    constexpr std::uint32_t output_ind_dfb_index = get_compile_time_arg_val(8);
-    constexpr std::uint32_t final_values_dfb_index = get_compile_time_arg_val(9);
-    constexpr std::uint32_t final_indices_dfb_index = get_compile_time_arg_val(10);
     constexpr std::uint32_t landing_values_dfb_index = get_compile_time_arg_val(11);
     constexpr std::uint32_t landing_indices_dfb_index = get_compile_time_arg_val(12);
     constexpr std::uint32_t credit_sem_id = get_compile_time_arg_val(13);  // Parent freed its landing slot
@@ -66,23 +32,21 @@ void kernel_main() {
     Semaphore<> data_sem(data_sem_id);
     DataflowBuffer values_dfb(values_dfb_index);
     DataflowBuffer landing_values_dfb(landing_values_dfb_index);
-    const DataflowBuffer final_values_dfb(final_values_dfb_index);
 
     const std::uint32_t tile_bytes_values = values_dfb.get_entry_size();
 
     // The landing CB is one 2*Kt slot cycled whole, so its base is the same address on every local core.
     const std::uint32_t landing_values_base = landing_values_dfb.get_write_ptr();
 
-    const std::uint32_t final_values_base = final_values_dfb.get_write_ptr() + final_slot * tile_bytes_values * Kt;
+    const std::uint32_t final_values_base = final_slot_addr(final_values_dfb_index, final_slot, tile_bytes_values);
 
 #if !defined(TOPK_FUSED_STABLE_KEYS)
     // Fused-key mode has no separate index stream (and the index CBs may not exist on this core).
     DataflowBuffer indices_dfb(output_ind_dfb_index);
     DataflowBuffer landing_indices_dfb(landing_indices_dfb_index);
-    const DataflowBuffer final_indices_dfb(final_indices_dfb_index);
     const std::uint32_t tile_bytes_ind = indices_dfb.get_entry_size();
     const std::uint32_t landing_indices_base = landing_indices_dfb.get_write_ptr();
-    const std::uint32_t final_indices_base = final_indices_dfb.get_write_ptr() + final_slot * tile_bytes_ind * Kt;
+    const std::uint32_t final_indices_base = final_slot_addr(final_indices_dfb_index, final_slot, tile_bytes_ind);
 #endif
 
     std::uint32_t landed = 0;  // Partner deliveries so far; data_sem counts them monotonically across rows

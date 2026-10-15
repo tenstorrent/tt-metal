@@ -14,8 +14,8 @@
 // padding, so those units exist purely to write zeros.
 //
 // When half tile units would leave cores idle, finish_units_per_tile splits each half into its two 16x16 faces
-// (four units per tile). The _faces reader and writer gather one face's 16 columns, stage them in the same half
-// tile page and write that face only; everything below describes the half tile units, which run main's kernels.
+// (four units per tile). A face unit gathers its face's 16 columns, stages them in the same half tile page and
+// writes that face only; everything below describes the half tile units.
 //
 // Per unit the gather load is SPLIT ACROSS BOTH RISCs: the reader (BRISC) owns unit rows
 // [0, 8) and the writer (NCRISC) rows [8, 16). Each side reads its own <=8 RM u32
@@ -64,8 +64,8 @@ constexpr uint32_t writer_bounce_cb_index = tt::CBIndex::c_3;  // writer-private
 constexpr uint32_t values_cb_index = tt::CBIndex::c_16;        // staged value face-pairs, reader -> writer
 constexpr uint32_t indices_cb_index = tt::CBIndex::c_17;       // staged index face-pairs, reader -> writer
 
-// The sizing constants below must mirror topk_route_finish_gather_common.hpp and its _faces copy;
-// keep the three files in sync.
+// The sizing constants below must mirror topk_route_finish_gather_common.hpp — keep the
+// two files in sync.
 //
 // Gather bounce buffers (one per RISC — each is that RISC's private scratch): 64 slots of
 // 64 B. 64 B slot size (not the elements' 2 B) because Blackhole's NoC requires 64 B
@@ -243,18 +243,13 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         reader_bounce_cb_index,
         values_cb_index,
         indices_cb_index,
-        split.index_is_u32 ? 1u : 0u};
-    const bool faces = split.units_per_tile == 4;
-    if (faces) {
-        reader_compile_args.push_back(split.units_per_tile);
-    }
+        split.index_is_u32 ? 1u : 0u,
+        split.units_per_tile};
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices.buffer()).append_to(reader_compile_args);
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
-        faces ? "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/"
-                "reader_topk_route_finish_gather_faces.cpp"
-              : "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_topk_route_finish_gather.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_topk_route_finish_gather.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
@@ -267,19 +262,15 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         writer_bounce_cb_index,
         value_half_bytes,
         idx_half_bytes,
-        split.index_is_u32 ? 1u : 0u};
-    if (faces) {
-        writer_compile_args.push_back(split.units_per_tile);
-    }
+        split.index_is_u32 ? 1u : 0u,
+        split.units_per_tile};
     tt::tt_metal::TensorAccessorArgs(*values_out.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices_out.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(*indices.buffer()).append_to(writer_compile_args);
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
-        faces
-            ? "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_finish_tiles_faces.cpp"
-            : "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_finish_tiles.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_finish_tiles.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
