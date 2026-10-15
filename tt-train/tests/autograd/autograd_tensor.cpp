@@ -317,6 +317,21 @@ TEST_F(AutogradTensorTest, AssignEmptyValueEmptiesTheTensor) {
     EXPECT_FALSE(core::is_tensor_initialized(tensor->get_value(autograd::PreferredPrecision::NATIVE)));
 }
 
+// Only bf16 and fp32 are cast; a value of any other dtype must match the stored one.
+TEST_F(AutogradTensorTest, AssignRejectsNonFloatDtypeMismatch) {
+    for (const auto float_dtype : {ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32}) {
+        auto stored_float = autograd::create_tensor(filled(1.0F, float_dtype));
+        EXPECT_ANY_THROW(stored_float->assign(filled(2.0F, ttnn::DataType::UINT32)));
+        EXPECT_EQ(stored_float->get_value(autograd::PreferredPrecision::NATIVE).dtype(), float_dtype);
+
+        auto stored_uint = autograd::create_tensor(filled(1.0F, ttnn::DataType::UINT32));
+        EXPECT_ANY_THROW(stored_uint->assign(filled(2.0F, float_dtype)));
+    }
+    auto stored_uint = autograd::create_tensor(filled(1.0F, ttnn::DataType::UINT32));
+    EXPECT_NO_THROW(stored_uint->assign(filled(2.0F, ttnn::DataType::UINT32)));
+    EXPECT_EQ(stored_uint->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::UINT32);
+}
+
 TEST_F(AutogradTensorTest, FullViewTracksFusedAdamWStep) {
     optimizers::AdamWConfig config;
     config.lr = 1e-2F;

@@ -150,9 +150,7 @@ void read_autograd_tensor(FlatBufferFile& file, std::string_view name, ttml::aut
     if (has_grads) {
         ttnn::Tensor grad;
         read_ttnn_tensor(file, std::string(name) + "/grad", grad);
-        // Gradients are bf16: backward produces them in bf16, and the fused optimizer kernels accept only bf16.
-        tensor->set_grad(
-            grad.dtype() == ttnn::DataType::BFLOAT16 ? grad : ttnn::typecast(grad, ttnn::DataType::BFLOAT16));
+        tensor->set_grad(grad);
     }
 }
 

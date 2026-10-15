@@ -84,8 +84,17 @@ void AutocastTensor::set_tensor(const ttnn::Tensor &tensor) {
 
 void AutocastTensor::assign(const ttnn::Tensor &tensor) {
     const auto &native = m_state->native;
-    const bool cast = is_float_tensor(native) && is_float_tensor(tensor) && tensor.dtype() != native.dtype();
-    set_tensor(cast ? ttnn::typecast(tensor, native.dtype()) : tensor);
+    if (!core::is_tensor_initialized(native) || !core::is_tensor_initialized(tensor) ||
+        tensor.dtype() == native.dtype()) {
+        set_tensor(tensor);
+        return;
+    }
+    TT_FATAL(
+        is_float_tensor(native) && is_float_tensor(tensor),
+        "assign() casts only between bf16 and fp32, got a {} value for a tensor stored as {}",
+        enchantum::to_string(tensor.dtype()),
+        enchantum::to_string(native.dtype()));
+    set_tensor(ttnn::typecast(tensor, native.dtype()));
 }
 
 uint64_t AutocastTensor::native_version() const {
