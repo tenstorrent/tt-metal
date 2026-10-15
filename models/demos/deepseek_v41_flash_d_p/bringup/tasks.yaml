@@ -9,7 +9,7 @@ tasks:
   step: intake
   deps: []
   gate:
-    cmd: python -m models.demos.common.bringup.intake.check_checkpoint && python -m models.demos.common.bringup.reference.prompt
+    cmd: BRINGUP_SCALED=0 python -m models.demos.common.bringup.intake.check_checkpoint && BRINGUP_SCALED=0 python -m models.demos.common.bringup.reference.prompt
     metrics:
       intake_approved: == 1
       prompt_hash_ok: == 1
@@ -26,7 +26,7 @@ tasks:
   deps:
   - R.1
   gate:
-    cmd: python -m models.demos.common.bringup.intake.check_hf_sanity && python -m models.demos.common.bringup.reference.check_hf
+    cmd: BRINGUP_SCALED=0 python -m models.demos.common.bringup.intake.check_hf_sanity && BRINGUP_SCALED=0 python -m models.demos.common.bringup.reference.check_hf
       --seq 4096
     metrics:
       revision_ok: == 1
@@ -56,7 +56,7 @@ tasks:
   deps:
   - R.2
   gate:
-    cmd: python -m models.demos.common.bringup.reference.check_reference --seq 4096 --chunk 2048
+    cmd: BRINGUP_SCALED=0 python -m models.demos.common.bringup.reference.check_reference --seq 4096 --chunk 2048
     metrics:
       pcc_hidden: '>= 0.99999'
       pcc_state_min: '>= 0.99999'
@@ -64,28 +64,6 @@ tasks:
       boundaries_missing: == 0
       graph_replay_maxabs: <= 0
   paths: *id001
-- id: G.s4096
-  title: 'Golden s4096: 4096 tokens in 2048-token chunks, full dumps'
-  step: goldens
-  deps:
-  - R.3
-  gate:
-    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s4096
-    metrics:
-      golden_layers: == 8
-      golden_chunks: == 2
-      golden_hash_ok: == 1
-- id: G.s55296
-  title: 'Golden s55296: 55296 tokens in 2048-token chunks'
-  step: goldens
-  deps:
-  - G.s4096
-  gate:
-    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s55296
-    metrics:
-      golden_layers: == 8
-      golden_chunks: == 27
-      golden_hash_ok: == 1
 - id: B.1
   title: 'Box: mesh opens with the spec''s device params, collectives are exact'
   step: box
@@ -127,7 +105,7 @@ tasks:
   - B.1
   - SC.1
   gate:
-    cmd: python -m models.demos.common.bringup.plan.check_plan
+    cmd: BRINGUP_SCALED=0 python -m models.demos.common.bringup.plan.check_plan
     metrics:
       plan_fits: == 1
       unplaced_tensors: == 0
@@ -145,24 +123,43 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/scaling.yaml
   approval: plan
 - id: SG.1
-  title: 'Scaled run: the reduced checkpoint (heads and experts cut by the plan''s scale factors) and its golden'
+  title: 'The scaled model: the reduced checkpoint (heads and experts cut by the plan''s scale factors)'
   step: scale
   deps:
   - PL.1
   gate:
-    cmd: python -m models.demos.common.bringup.plan.scale && BRINGUP_SCALED=1 python -m models.demos.common.bringup.reference.generate_golden
-      --rung scaled
+    cmd: python -m models.demos.common.bringup.plan.scale
     metrics:
       scale_errors: == 0
       scale_tensors_total: '>= 1'
-      golden_layers: == 8
-      golden_hash_ok: == 1
   role: scale
   paths:
   - models/demos/deepseek_v41_flash_d_p/reference
   - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
   - models/demos/deepseek_v41_flash_d_p/__init__.py
   - models/demos/deepseek_v41_flash_d_p/bringup/scaling.yaml
+- id: G.s4096
+  title: 'Golden s4096: 4096 tokens in 2048-token chunks, full dumps (the scaled model)'
+  step: goldens
+  deps:
+  - SG.1
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s4096
+    metrics:
+      golden_layers: == 8
+      golden_chunks: == 2
+      golden_hash_ok: == 1
+- id: G.s55296
+  title: 'Golden s55296: 55296 tokens in 2048-token chunks (the scaled model)'
+  step: goldens
+  deps:
+  - G.s4096
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s55296
+    metrics:
+      golden_layers: == 8
+      golden_chunks: == 27
+      golden_hash_ok: == 1
 - id: C.swa.attn_hc
   title: swa attn_hc (op) on device, layer 0
   step: implement
@@ -177,7 +174,7 @@ tasks:
   tests:
   - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_hc.py
   freeze_extra: &id002
-  - /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json
+  - /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json
   paths: &id003
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
@@ -187,14 +184,6 @@ tasks:
     kind: op
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T12:32:52'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_hc.py: 844683b16f738e708261a4e7deeabda9c6940a98c672188d295fd92fa3c07c58
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.01
   title: 'swa block with steps 1-1 on device (last: attn_hc)'
   step: implement
@@ -214,13 +203,6 @@ tasks:
     swapped:
     - attn_hc
     layer: 0
-  frozen:
-    at: '2026-10-15T12:40:36'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_01_attn_hc.py: cf81cf1100e4a52b556a61b5cd4ffc3b3bcbffcfaa9ed8f4e2882b540ecbc58f
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.attn_collapse
   title: swa attn_collapse (op) on device, layer 0
   step: implement
@@ -242,14 +224,6 @@ tasks:
     kind: op
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T12:43:29'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_collapse.py: 1730c80c8c469ad82d74f63250d5900679e66eb4b73884e8651eff6e72fcafc0
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.02
   title: 'swa block with steps 1-2 on device (last: attn_collapse)'
   step: implement
@@ -271,13 +245,6 @@ tasks:
     - attn_hc
     - attn_collapse
     layer: 0
-  frozen:
-    at: '2026-10-15T12:47:33'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_02_attn_collapse.py: 64d37736e56e80d50a539eba5d6edc42b1c73ae50aa78575ad5d03e40c585c03
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.attn_norm
   title: swa attn_norm (norm) on device, layer 0
   step: implement
@@ -299,14 +266,6 @@ tasks:
     kind: norm
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T12:50:03'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_norm.py: 1920d5dcc35000a02aea90dd527459c035a74c027c44d2e2875bda502247d3ab
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.03
   title: 'swa block with steps 1-3 on device (last: attn_norm)'
   step: implement
@@ -329,13 +288,6 @@ tasks:
     - attn_collapse
     - attn_norm
     layer: 0
-  frozen:
-    at: '2026-10-15T12:54:34'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_03_attn_norm.py: 5c3c9f5fb4239ad9fc3b9bf842cef83b9c333acec004d24e926c995cfb601370
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.q_a
   title: swa q_a (op) on device, layer 0
   step: implement
@@ -357,14 +309,6 @@ tasks:
     kind: op
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T12:57:17'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_q_a.py: 011f809a76bc030a2138b4616f14b06f364e2b760782bc693abf658fcb10ffb7
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.04
   title: 'swa block with steps 1-4 on device (last: q_a)'
   step: implement
@@ -388,13 +332,6 @@ tasks:
     - attn_norm
     - q_a
     layer: 0
-  frozen:
-    at: '2026-10-15T13:05:43'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_04_q_a.py: 3f5f52146f123e8979b61991c1664f2b9613e6d5c3e03e779e3e5c7a600b251a
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.kv
   title: swa kv (op) on device, layer 0
   step: implement
@@ -416,13 +353,6 @@ tasks:
     kind: op
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T13:16:30'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_kv.py: ccb85ed84b1cffe2399a4be4de8e5985ff052f5a62919032ad3e0662d13b9733
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.05
   title: 'swa block with steps 1-5 on device (last: kv)'
   step: implement
@@ -447,13 +377,6 @@ tasks:
     - q_a
     - kv
     layer: 0
-  frozen:
-    at: '2026-10-15T13:27:00'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_05_kv.py: 17fd60714f0f986f3729372219a1bcf4e801aa79d43b461027d5879982a78633
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.attention
   title: swa attention (attention) on device, layer 0
   step: implement
@@ -476,14 +399,6 @@ tasks:
     kind: attention
     layer: 0
     stateful: true
-  frozen:
-    at: '2026-10-15T13:44:41'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py: 8b49446c2b9751dd27dd053a3e0b0810b02561eb50616c76ec224f9b77429687
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.06
   title: 'swa block with steps 1-6 on device (last: attention)'
   step: implement
@@ -509,13 +424,6 @@ tasks:
     - kv
     - attention
     layer: 0
-  frozen:
-    at: '2026-10-15T14:46:15'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_06_attention.py: b43699a3eaabe3a0d9e2577f9ef32d3e35fe284887c20ba88d64c393aa3482b3
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.attn_residual
   title: swa attn_residual (residual) on device, layer 0
   step: implement
@@ -537,14 +445,6 @@ tasks:
     kind: residual
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T15:40:11'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_residual.py: 7d51bea38e5aa47a89abb31359868ae76ea05be0297a490ddda3b7370f7de034
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.07
   title: 'swa block with steps 1-7 on device (last: attn_residual)'
   step: implement
@@ -571,13 +471,6 @@ tasks:
     - attention
     - attn_residual
     layer: 0
-  frozen:
-    at: '2026-10-15T15:58:20'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_07_attn_residual.py: 9686f3648654c2180ac310008dd0186524bd52210f582bc42316317164625420
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.ffn_hc
   title: swa ffn_hc (op) on device, layer 0
   step: implement
@@ -599,14 +492,6 @@ tasks:
     kind: op
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T16:02:08'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_hc.py: bc028d6630109578adfdc500abdf159e10adb5a443b4ce4140d81347f3406df9
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.08
   title: 'swa block with steps 1-8 on device (last: ffn_hc)'
   step: implement
@@ -634,13 +519,6 @@ tasks:
     - attn_residual
     - ffn_hc
     layer: 0
-  frozen:
-    at: '2026-10-15T16:03:24'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_08_ffn_hc.py: a60c0967e93f8d4a17a9665dbc088ec30d51b881117a5735904d7e49f020926c
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.ffn_collapse
   title: swa ffn_collapse (op) on device, layer 0
   step: implement
@@ -662,14 +540,6 @@ tasks:
     kind: op
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T16:07:10'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_collapse.py: 87574f9105110ddb2046f9a20b284251908b34f18f94eae47409cd3d9b1cd1dc
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.09
   title: 'swa block with steps 1-9 on device (last: ffn_collapse)'
   step: implement
@@ -698,13 +568,6 @@ tasks:
     - ffn_hc
     - ffn_collapse
     layer: 0
-  frozen:
-    at: '2026-10-15T16:19:54'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_09_ffn_collapse.py: dca6012c740aa9be9c3d98e51a0fbf59ae83edb9714e81526294c85a37c1d33d
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.ffn_norm
   title: swa ffn_norm (norm) on device, layer 0
   step: implement
@@ -726,14 +589,6 @@ tasks:
     kind: norm
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T16:23:44'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_norm.py: 7c9efc13bf565056e7f3d8f17d227d8372b1fec158331f5d41be8658e6f3ea8b
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.10
   title: 'swa block with steps 1-10 on device (last: ffn_norm)'
   step: implement
@@ -763,13 +618,6 @@ tasks:
     - ffn_collapse
     - ffn_norm
     layer: 0
-  frozen:
-    at: '2026-10-15T16:27:15'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_10_ffn_norm.py: e6fb030ad43e9821d1c774875e5fc8a93a23c00bf8666b9ee93fe42f4b52f593
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.router
   title: swa router (router) on device, layer 0
   step: implement
@@ -791,14 +639,6 @@ tasks:
     kind: router
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T16:31:10'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_router.py: e5833ea73182d819cb9612b9095d11224571bf0dfd0b137bece4433d25c3b4fd
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.11
   title: 'swa block with steps 1-11 on device (last: router)'
   step: implement
@@ -829,13 +669,6 @@ tasks:
     - ffn_norm
     - router
     layer: 0
-  frozen:
-    at: '2026-10-15T16:37:03'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_11_router.py: 17507f141d6913d947a0505bd6bd57651824e519e5ba209869cbb5813ad7d9d5
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.experts
   title: swa experts (moe) on device, layer 0
   step: implement
@@ -857,13 +690,6 @@ tasks:
     kind: moe
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T17:28:10'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py: 68e1eec7357760f968325d6fb62a60e2768b3a08d8276f365625e46911ebd182
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.12
   title: 'swa block with steps 1-12 on device (last: experts)'
   step: implement
@@ -895,13 +721,6 @@ tasks:
     - router
     - experts
     layer: 0
-  frozen:
-    at: '2026-10-15T18:37:41'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_12_experts.py: 9045f1b9036f5c7f78bd97dd9a0ae3d068566b6e612285fb52a90bf5c09212eb
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.shared_expert
   title: swa shared_expert (mlp) on device, layer 0
   step: implement
@@ -923,13 +742,6 @@ tasks:
     kind: mlp
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T18:48:10'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_shared_expert.py: 52b25d834cc789ccb766ec4a3a0d37ba874c9254046458564dcf0d55e08d0d34
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.13
   title: 'swa block with steps 1-13 on device (last: shared_expert)'
   step: implement
@@ -962,13 +774,6 @@ tasks:
     - experts
     - shared_expert
     layer: 0
-  frozen:
-    at: '2026-10-15T18:53:15'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_13_shared_expert.py: f5fa647e81686c658fe83b91a3e53d80f45f449cb860845adc0c826554b2f265
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.moe_add
   title: swa moe_add (residual) on device, layer 0
   step: implement
@@ -990,14 +795,6 @@ tasks:
     kind: residual
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T18:57:31'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_moe_add.py: c7a9577f5181cbe1560f30fec72e9b82d0535ec58d7332850fd92d32e0d4ccde
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.14
   title: 'swa block with steps 1-14 on device (last: moe_add)'
   step: implement
@@ -1031,13 +828,6 @@ tasks:
     - shared_expert
     - moe_add
     layer: 0
-  frozen:
-    at: '2026-10-15T19:00:25'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_14_moe_add.py: 6ed9af1a23529dd9656034b11ca33b00b0a60825429d4daaafb0e8efb69f2cfe
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.ffn_residual
   title: swa ffn_residual (residual) on device, layer 0
   step: implement
@@ -1059,14 +849,6 @@ tasks:
     kind: residual
     layer: 0
     stateful: false
-  frozen:
-    at: '2026-10-15T19:04:51'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_residual.py: 9482ecac8e90dc7f23bf18569687b5ae1e57155b258f0960f408d74aa298540e
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.15
   title: 'swa block with steps 1-15 on device (last: ffn_residual)'
   step: implement
@@ -1101,13 +883,6 @@ tasks:
     - moe_add
     - ffn_residual
     layer: 0
-  frozen:
-    at: '2026-10-15T19:10:05'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_15_ffn_residual.py: 7433ca8af728e35d6d23f4b3e2a68dad3cf8d8be5edd57a86708d5fbcedf85eb
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.engram_rows
   title: swa_engram engram_rows (embedding) on device, layer 1
   step: implement
@@ -1129,14 +904,6 @@ tasks:
     kind: embedding
     layer: 1
     stateful: true
-  frozen:
-    at: '2026-10-15T19:14:35'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_rows.py: 3d5cc9d92105add40cc53c5c21c8d342cf470bb1b66ced91c72b7fc69005b640
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.01
   title: 'swa_engram block with steps 1-1 on device (last: engram_rows)'
   step: implement
@@ -1156,13 +923,6 @@ tasks:
     swapped:
     - engram_rows
     layer: 1
-  frozen:
-    at: '2026-10-15T19:20:15'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_01_engram_rows.py: 4578cce163738818f565344e8b09cb58a4eb5c375da4f0753f2edcabd01725ac
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.engram_kv
   title: swa_engram engram_kv (op) on device, layer 1
   step: implement
@@ -1184,14 +944,6 @@ tasks:
     kind: op
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-15T19:25:21'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_kv.py: 04ba00765da447751f3a9df99f9dcdbdc51176deaead6d062cc92b03ccf94f7d
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.02
   title: 'swa_engram block with steps 1-2 on device (last: engram_kv)'
   step: implement
@@ -1213,13 +965,6 @@ tasks:
     - engram_rows
     - engram_kv
     layer: 1
-  frozen:
-    at: '2026-10-15T19:35:01'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_02_engram_kv.py: b4ff7a24fd1235f7c4ab7c8aaa98644e5d0822e8f03fb6c4e89452d35d110d02
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.engram_add
   title: swa_engram engram_add (residual) on device, layer 1
   step: implement
@@ -1241,14 +986,6 @@ tasks:
     kind: residual
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-15T19:40:12'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_add.py: 95e7712974d754cdd630bf85dd9f438b3af66ff2c817002a5470827199fb8631
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.03
   title: 'swa_engram block with steps 1-3 on device (last: engram_add)'
   step: implement
@@ -1271,13 +1008,6 @@ tasks:
     - engram_kv
     - engram_add
     layer: 1
-  frozen:
-    at: '2026-10-15T19:48:31'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_03_engram_add.py: a0dab073a941d26d4386b88c0c180319e17b7d263ca541a98106540bebce2309
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.attn_hc
   title: swa_engram attn_hc (op) on device, layer 1
   step: implement
@@ -1299,14 +1029,6 @@ tasks:
     kind: op
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-15T19:53:30'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_hc.py: 6f302bac6b8d49f20200dd3ab37f407ad55c2ebbcc15f501bf8d8d038a94d3f4
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.04
   title: 'swa_engram block with steps 1-4 on device (last: attn_hc)'
   step: implement
@@ -1330,13 +1052,6 @@ tasks:
     - engram_add
     - attn_hc
     layer: 1
-  frozen:
-    at: '2026-10-15T19:55:06'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_04_attn_hc.py: fff9afe6a8b9d6d4bf19399ee6af2396914261b4cb3c30baa59f0b3906fcd1aa
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.attn_collapse
   title: swa_engram attn_collapse (op) on device, layer 1
   step: implement
@@ -1358,14 +1073,6 @@ tasks:
     kind: op
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-15T19:59:29'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_collapse.py: 3161b21cafa187a654445c8083f91c6ab8edda18fe343ca30350347e51a68c57
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.05
   title: 'swa_engram block with steps 1-5 on device (last: attn_collapse)'
   step: implement
@@ -1390,13 +1097,6 @@ tasks:
     - attn_hc
     - attn_collapse
     layer: 1
-  frozen:
-    at: '2026-10-15T20:01:16'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_05_attn_collapse.py: 9bb65c675aecd29702bb3a694965c3c3efc451e5a76f9f1851c0e5e283228215
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.attn_norm
   title: swa_engram attn_norm (norm) on device, layer 1
   step: implement
@@ -1418,14 +1118,6 @@ tasks:
     kind: norm
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-15T20:05:36'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_norm.py: 346e2167f38133aa76a80cf080455fd7b21500a0f983f156208ebdf2dfbdca51
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.06
   title: 'swa_engram block with steps 1-6 on device (last: attn_norm)'
   step: implement
@@ -1451,13 +1143,6 @@ tasks:
     - attn_collapse
     - attn_norm
     layer: 1
-  frozen:
-    at: '2026-10-15T20:07:14'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_06_attn_norm.py: 0998ba53467b8f9317dd4b7576539dace0cfeed0c9ecf7daf7a064a85b1e5602
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.q_a
   title: swa_engram q_a (op) on device, layer 1
   step: implement
@@ -1479,14 +1164,6 @@ tasks:
     kind: op
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-15T20:11:38'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_q_a.py: baf3263feeb5156971fccf758a54e9220b99d10b8752a80e5a3f84980ac525a8
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.07
   title: 'swa_engram block with steps 1-7 on device (last: q_a)'
   step: implement
@@ -1513,13 +1190,6 @@ tasks:
     - attn_norm
     - q_a
     layer: 1
-  frozen:
-    at: '2026-10-15T20:17:38'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_07_q_a.py: ec3c788a632fad1ff94371c38e369ee6c2b5b78d27e5a44a4ced4ad9339752df
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.kv
   title: swa_engram kv (op) on device, layer 1
   step: implement
@@ -1541,13 +1211,6 @@ tasks:
     kind: op
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-15T20:26:19'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_kv.py: bb707e95d680bdc5471f974d10f6d3c09b8b3101c26d7a02bef178a575745753
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.08
   title: 'swa_engram block with steps 1-8 on device (last: kv)'
   step: implement
@@ -1575,13 +1238,6 @@ tasks:
     - q_a
     - kv
     layer: 1
-  frozen:
-    at: '2026-10-15T20:27:42'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_08_kv.py: 5dcce461dcb3ffaabff49c9ec915096e699327c922458ce071dcb8fc1a54448c
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.attention
   title: swa_engram attention (attention) on device, layer 1
   step: implement
@@ -1604,14 +1260,6 @@ tasks:
     kind: attention
     layer: 1
     stateful: true
-  frozen:
-    at: '2026-10-15T20:32:13'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attention.py: 1d9c329c46043249aeb8845b644572ea1cbaf39af010852236aa14e60d8c08b4
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.09
   title: 'swa_engram block with steps 1-9 on device (last: attention)'
   step: implement
@@ -1640,13 +1288,6 @@ tasks:
     - kv
     - attention
     layer: 1
-  frozen:
-    at: '2026-10-15T20:49:41'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_09_attention.py: f519eb4d0d3ac89f0d7b86fb020e585bc0f4f780cb3ac91a0fc38fea19daaf84
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.attn_residual
   title: swa_engram attn_residual (residual) on device, layer 1
   step: implement
@@ -1668,14 +1309,6 @@ tasks:
     kind: residual
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-15T20:54:19'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_residual.py: 5510e46d14e31d447b89e5b01164038eb5419fe74624254c99d9bd10b3e03ee8
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.10
   title: 'swa_engram block with steps 1-10 on device (last: attn_residual)'
   step: implement
@@ -1705,13 +1338,6 @@ tasks:
     - attention
     - attn_residual
     layer: 1
-  frozen:
-    at: '2026-10-15T20:57:13'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_10_attn_residual.py: 0a121e68aacb0c55ad9f501cb4dd44cddcedb6310429dbf22e971daac479c482
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.ffn_hc
   title: swa_engram ffn_hc (op) on device, layer 1
   step: implement
@@ -1733,14 +1359,6 @@ tasks:
     kind: op
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-15T21:01:56'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_hc.py: 025d91089057afc58f134c4dda3a0b51020f18ed6ceab3ee38348054c46ef4c6
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.11
   title: 'swa_engram block with steps 1-11 on device (last: ffn_hc)'
   step: implement
@@ -1771,13 +1389,6 @@ tasks:
     - attn_residual
     - ffn_hc
     layer: 1
-  frozen:
-    at: '2026-10-15T21:03:33'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_11_ffn_hc.py: dd28e0b78548ca6b2d6d737a42c5de127e5fc342c13d7f214b96690a1eba8637
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.ffn_collapse
   title: swa_engram ffn_collapse (op) on device, layer 1
   step: implement
@@ -1799,14 +1410,6 @@ tasks:
     kind: op
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-15T21:08:16'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_collapse.py: 238cec0601397b38e3b7ab2fba9f1c44c63f11dfa61811b5b6843ea1ad8b5158
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.12
   title: 'swa_engram block with steps 1-12 on device (last: ffn_collapse)'
   step: implement
@@ -1838,13 +1441,6 @@ tasks:
     - ffn_hc
     - ffn_collapse
     layer: 1
-  frozen:
-    at: '2026-10-15T21:10:03'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_12_ffn_collapse.py: e5f763c2f40d9cc94be530023221534e87d490a901643ee239a96fbea74e3894
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.ffn_norm
   title: swa_engram ffn_norm (norm) on device, layer 1
   step: implement
@@ -1866,14 +1462,6 @@ tasks:
     kind: norm
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-15T21:14:51'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_norm.py: a290622e494e7c30bbbf64e9c842cef04a43434472ad621757204b13c1928bcd
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.13
   title: 'swa_engram block with steps 1-13 on device (last: ffn_norm)'
   step: implement
@@ -1906,13 +1494,6 @@ tasks:
     - ffn_collapse
     - ffn_norm
     layer: 1
-  frozen:
-    at: '2026-10-15T21:16:32'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_13_ffn_norm.py: 6cb4d1b19f6f91236ddc2b718efd5ce0fd3a12a9c18fad79566036b751efbd0f
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.router
   title: swa_engram router (router) on device, layer 1
   step: implement
@@ -1934,14 +1515,6 @@ tasks:
     kind: router
     layer: 1
     stateful: false
-  frozen:
-    at: '2026-10-15T21:21:24'
-    reference: PASS
-    stub: FAIL
-    mutations: PASS
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_router.py: 1752dd5d982cfbf78fbec8dc6e1109ac5b29717e0b08204226b53f96c24d9519
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.14
   title: 'swa_engram block with steps 1-14 on device (last: router)'
   step: implement
@@ -1975,13 +1548,6 @@ tasks:
     - ffn_norm
     - router
     layer: 1
-  frozen:
-    at: '2026-10-15T21:22:45'
-    reference: PASS
-    stub: FAIL
-    files:
-      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_14_router.py: 6dc7a76c5f3712ad2da560aece6dc5a992d2b8d94f21ad6c5e9b93c4091fc8e4
-      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.experts
   title: swa_engram experts (moe) on device, layer 1
   step: implement
@@ -7161,31 +6727,6 @@ tasks:
       host_transfers_per_layer: == 0
   device: true
   paths: *id003
-- id: SL.scaled
-  title: 'Scaled ladder scaled: the reduced model at the deployment''s per-chip shapes'
-  step: integrate
-  deps:
-  - L.s55296
-  - SG.1
-  gate:
-    cmd: BRINGUP_SCALED=1 BRINGUP_RUNG=scaled scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
-    metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
-  device: true
-  paths: *id003
-- id: SL.scaled_last
-  title: 'Scaled ladder scaled_last: the reduced model at the deployment''s per-chip shapes'
-  step: integrate
-  deps:
-  - SL.scaled
-  gate:
-    cmd: BRINGUP_SCALED=1 BRINGUP_RUNG=scaled_last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
-    metrics:
-      pcc_layer_L*: '>= 0.97'
-      pcc_state_min: '>= 0.97'
-  device: true
-  paths: *id003
 - id: K.1
   title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
   step: contract
@@ -7216,26 +6757,13 @@ tasks:
       device_ms_total: '> 0'
       profiled_programs: '>= 1'
   device: true
-- id: SX.1
-  title: 'Scaled profile: warm per-section, per-chip profile of one long chunk of the reduced model'
+- id: X.2
+  title: Opportunity list ranked by measured device time
   step: perf
   deps:
   - X.1
-  - SL.scaled_last
   gate:
-    cmd: BRINGUP_SCALED=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
-      TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
-    metrics:
-      device_ms_total: '> 0'
-      profiled_programs: '>= 1'
-  device: true
-- id: X.2
-  title: Opportunity list ranked by measured device time (scaled run)
-  step: perf
-  deps:
-  - SX.1
-  gate:
-    cmd: python -m models.demos.common.bringup.plan.opportunities --profile SX.1
+    cmd: python -m models.demos.common.bringup.plan.opportunities --profile X.1
     metrics:
       opportunities_listed: '>= 1'
   paths:
@@ -7259,17 +6787,14 @@ tasks:
       timeline_ok: == 1
   device: true
 - id: O.1
-  title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes (real and scaled runs)'
+  title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
   step: optests
   deps:
   - X.3
   gate:
     cmd: BRINGUP_CAPTURE_FORKS=models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh
       --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture
-      && BRINGUP_SCALED=1 BRINGUP_CAPTURE_FORKS=models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls_scaled.json
-      BRINGUP_RUNG=scaled_last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      -p models.demos.common.bringup.testing.fork_capture && python -m models.demos.common.bringup.testing.fork_cases --capture
-      models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls.json models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls_scaled.json
+      && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls.json
       --run-tests
     metrics:
       forks_used: '>= 0'
