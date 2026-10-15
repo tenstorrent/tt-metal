@@ -67,9 +67,11 @@ protected:
         return r;
     }
 
-    /** Runs the sending forwarders' write `leg` (an EC_FWD_FLAG_*_ALONE) alone,
-     * 20000 times on each of P forwarders at `slot`, and records it. */
-    void run_write_alone(const char* name, uint32_t leg, uint32_t P, uint32_t slot);
+    /** Runs `mode`, one stretch of the path alone, for 20000 packets or writes
+     * on each of P forwarders at payload `payload`, BATCH kLegBatch and
+     * N_LINK = N_DELIVER = 8; checks the count at the kernel whose window it
+     * records and at E0; and records it. */
+    void run_leg(const char* name, suite::Mode mode, uint32_t P, uint32_t payload);
 
     /** Runs `c` with every gtest failure from any thread captured instead of
      * reported, and returns the run's result; `failures` receives each
@@ -128,23 +130,9 @@ constexpr uint32_t Slot(uint32_t payload) { return EC_HEADER_BYTES + payload; }
 // The end-to-end grid the legs measured alone run on: the throughput sweep's
 // slot sizes at P = 1, 2 and 4, BATCH 4 and N_LINK = N_DELIVER = 8, so the
 // tabulator sets each leg beside the whole path at the shapes both measured.
-struct LegPoint {
-    uint32_t P, slot;
-};
+constexpr uint32_t kLegP[] = {1u, 2u, 4u};
+constexpr uint32_t kLegPayload[] = {64u, 1024u, 4096u, 16384u};
 constexpr uint32_t kLegBatch = 4u;
-constexpr LegPoint kLegGrid[] = {
-    {1u, Slot(64u)},
-    {1u, Slot(1024u)},
-    {1u, Slot(4096u)},
-    {1u, Slot(16384u)},
-    {2u, Slot(64u)},
-    {2u, Slot(1024u)},
-    {2u, Slot(4096u)},
-    {2u, Slot(16384u)},
-    {4u, Slot(64u)},
-    {4u, Slot(1024u)},
-    {4u, Slot(4096u)},
-    {4u, Slot(16384u)}};
 
 }  // namespace
 
@@ -608,8 +596,7 @@ TEST_P(EthCreditHw, EthernetHopBySlotAndBatch) {
                 .shape = {1u, 8u, 8u, Slot(payload), batch},
                 .direction = ec::Direction::AToB,
                 .packets = each(1u, 20000u)};
-            c.stage.e0_source_self = true;
-            c.stage.e1_sink_local = true;
+            c.stage.mode = suite::Mode::EthernetHop;
             const auto r = run(c);
             ASSERT_TRUE(r.launched);
             suite::expect_all_done(r);
@@ -620,84 +607,66 @@ TEST_P(EthCreditHw, EthernetHopBySlotAndBatch) {
     }
 }
 
-// The NoC hop alone, the sending forwarder into E0 sinking locally (W1, W2,
-// R3): packet rate on the forwarder's clock on the leg grid.
-TEST_P(EthCreditHw, NocHopBySlotAndP) {
-    for (const LegPoint& pt : kLegGrid) {
-        suite::Case c{
-            .name = "noc_hop_sweep",
-            .shape = {pt.P, 8u, 8u, pt.slot, kLegBatch},
-            .direction = ec::Direction::AToB,
-            .packets = each(pt.P, 20000u)};
-        c.stage.e0_sink_local = true;
-        c.stage.launch_e1 = false;
-        const auto r = run(c);
-        ASSERT_TRUE(r.launched);
-        suite::expect_all_done(r);
-        for (uint32_t p = 0; p < pt.P; ++p) {
-            EXPECT_EQ(r.chips[0].fwd[p].block.packets_out[p], 20000u) << "forwarder " << p;
-            EXPECT_EQ(r.chips[0].e0.block.packets_out[p], 20000u) << "E0 p " << p;
-        }
-        suite::record_throughput(spec(), fixture(), c, r, 0u);
-    }
-}
-
-// The receive side alone, E1 sourcing locally into the receiving forwarder
-// (W5, W6, R1): packet rate on the forwarder's clock on the leg grid.
-TEST_P(EthCreditHw, ReceiveSideBySlotAndP) {
-    for (const LegPoint& pt : kLegGrid) {
-        suite::Case c{
-            .name = "receive_side_sweep",
-            .shape = {pt.P, 8u, 8u, pt.slot, kLegBatch},
-            .direction = ec::Direction::AToB,
-            .packets = each(pt.P, 20000u)};
-        c.stage.e1_source_self = true;
-        const auto r = run(c);
-        ASSERT_TRUE(r.launched);
-        suite::expect_all_done(r);
-        for (uint32_t p = 0; p < pt.P; ++p) {
-            EXPECT_EQ(r.chips[1].e1.block.packets_in[p], 20000u) << "E1 p " << p;
-            EXPECT_EQ(r.chips[1].fwd[p].block.packets_in[p], 20000u) << "forwarder " << p;
-        }
-        suite::record_throughput(spec(), fixture(), c, r, 0u);
-    }
-}
-
-void EthCreditHw::run_write_alone(const char* name, uint32_t leg, uint32_t P, uint32_t slot) {
-    suite::Case c{.name = name, .shape = {P, 8u, 8u, slot, kLegBatch}, .direction = ec::Direction::AToB};
-    c.packets = each(P, 20000u);
-    c.stage.leg_alone = leg;
-    c.stage.launch_e1 = false;
+void EthCreditHw::run_leg(const char* name, suite::Mode mode, uint32_t P, uint32_t payload) {
+    constexpr uint32_t kCount = 20000u;
+    suite::Case c{.name = name, .shape = {P, 8u, 8u, Slot(payload), kLegBatch}, .direction = ec::Direction::AToB};
+    c.packets = each(P, kCount);
+    c.stage.mode = mode;
     const auto r = run(c);
     ASSERT_TRUE(r.launched);
     suite::expect_all_done(r);
+    const suite::ModeSpec leg = suite::mode_spec(mode);
+    const bool at_sender = leg.path.receiver == suite::Receiver::Sender;
     for (uint32_t p = 0; p < P; ++p) {
-        EXPECT_EQ(r.chips[0].fwd[p].block.packets_out[p], 20000u) << "forwarder " << p;
-        EXPECT_EQ(r.chips[0].e0.block.packets_out[p], 0u) << "E0 p " << p << " must send nothing";
+        const auto& at = at_sender ? r.chips[0].fwd[p].block : r.chips[1].fwd[p].block;
+        EXPECT_EQ(at_sender ? at.packets_out[p] : at.packets_in[p], kCount) << "forwarder " << p;
+        EXPECT_EQ(r.chips[0].e0.block.packets_out[p], leg.e0_sends ? kCount : 0u) << "E0 p " << p;
     }
     suite::record_throughput(spec(), fixture(), c, r, 0u);
+}
+
+// The NoC hop alone (W1, W2, R3): the sending forwarder into E0 sinking
+// locally, on the leg grid.
+TEST_P(EthCreditHw, NocHopBySlotAndP) {
+    for (const uint32_t P : kLegP) {
+        for (const uint32_t payload : kLegPayload) {
+            run_leg("noc_hop_sweep", suite::Mode::NocHop, P, payload);
+        }
+    }
+}
+
+// The receive side alone (W5, W6, R1): E1 sourcing locally into the receiving
+// forwarder, on the leg grid.
+TEST_P(EthCreditHw, ReceiveSideBySlotAndP) {
+    for (const uint32_t P : kLegP) {
+        for (const uint32_t payload : kLegPayload) {
+            run_leg("receive_side_sweep", suite::Mode::ReceiveSide, P, payload);
+        }
+    }
 }
 
 // W1 alone: each sending forwarder writes one header into E0's tx_fifo[p] as
 // its send step does, back to back on the measurement image, on the leg grid.
 TEST_P(EthCreditHw, W1AloneBySlotAndP) {
-    for (const LegPoint& pt : kLegGrid) {
-        run_write_alone("w1_alone", EC_FWD_FLAG_W1_ALONE, pt.P, pt.slot);
+    for (const uint32_t P : kLegP) {
+        for (const uint32_t payload : kLegPayload) {
+            run_leg("w1_alone", suite::Mode::W1Alone, P, payload);
+        }
     }
 }
 
 // W2 alone and R1 alone: each sending forwarder repeats the build's pointer
-// store into E0's write shadow (W2) or E1's read shadow (R1), at P = 1, 2 and
-// 4. No slot size changes a pointer store.
+// store into E0's write shadow (W2) or E1's read shadow (R1), at the leg grid's
+// P. No slot size changes a pointer store.
 TEST_P(EthCreditHw, W2AloneByP) {
-    for (const uint32_t P : {1u, 2u, 4u}) {
-        run_write_alone("w2_alone", EC_FWD_FLAG_W2_ALONE, P, Slot(64u));
+    for (const uint32_t P : kLegP) {
+        run_leg("w2_alone", suite::Mode::W2Alone, P, 64u);
     }
 }
 
 TEST_P(EthCreditHw, R1AloneByP) {
-    for (const uint32_t P : {1u, 2u, 4u}) {
-        run_write_alone("r1_alone", EC_FWD_FLAG_R1_ALONE, P, Slot(64u));
+    for (const uint32_t P : kLegP) {
+        run_leg("r1_alone", suite::Mode::R1Alone, P, 64u);
     }
 }
 
@@ -715,8 +684,7 @@ TEST_P(EthCreditHw, RoundTripBySlot) {
                 .shape = {1u, 1u, 8u, Slot(payload), 1u},
                 .direction = ec::Direction::AToB,
                 .packets = each(1u, 20000u)};
-            c.stage.round_trip = true;
-            c.stage.r2_after_consume = consume;
+            c.stage.mode = consume ? suite::Mode::RoundTripConsume : suite::Mode::RoundTripHop;
             const auto r = run(c);
             ASSERT_TRUE(r.launched);
             suite::expect_all_done(r);
@@ -760,8 +728,7 @@ TEST_P(EthCreditHw, ReceiveDepthByE0Source) {
             .shape = {1u, d.n_link, d.n_deliver, Slot(4096u), d.batch},
             .direction = ec::Direction::AToB,
             .packets = each(1u, 20000u)};
-        c.stage.e0_source_self = true;
-        c.stage.r2_after_consume = d.consume;
+        c.stage.mode = d.consume ? suite::Mode::E0SourceConsume : suite::Mode::E0Source;
         const auto r = run(c);
         ASSERT_TRUE(r.launched);
         suite::expect_all_done(r);

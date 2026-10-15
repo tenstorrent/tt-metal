@@ -91,11 +91,35 @@ constexpr uint32_t kTxqMaxPktSize = 0x0Cu;
 constexpr uint32_t kTxqCmdOngoingBit = 16u;
 constexpr uint32_t kRxqOutstandingWrCnt = 0x50u;
 
-/** The bring-up modes E0 and E1 are built with; all off is the benchmark. */
+/** What a recorded run measures: the whole path, or one stretch of it alone
+ * (records.hpp, Path). mode_spec() names everything each one sets. */
+enum class Mode {
+    FullPath,
+    NocHop,
+    EthernetHop,
+    ReceiveSide,
+    W1Alone,
+    W2Alone,
+    R1Alone,
+    /** E0 sourcing over the link into the receiving forwarder; with Consume,
+     * E1 returns R2 only after the consume. */
+    E0Source,
+    E0SourceConsume,
+    /** The whole path, the sending forwarders timing the credit round trip
+     * of the hop loop, or of the loop through the remote consume. */
+    RoundTripHop,
+    RoundTripConsume,
+};
+
+/** The bring-up modes E0 and E1 are built with; all off is the benchmark. A
+ * Mode other than FullPath sets the fields it needs itself (mode_spec()), and
+ * a case that names one leaves those fields at their defaults. */
 struct Stage {
+    Mode mode = Mode::FullPath;
     bool e0_sink_local = false;
     bool e0_source_self = false;
     bool e1_sink_local = false;
+    /** E1 fills rx itself and returns no R2 (EC_E1_SOURCE_SELF). */
     bool e1_source_self = false;
     /** E1 returns R2 only for packets the receiving forwarder's R1 shows
      * consumed (EC_E1_R2_AFTER_CONSUME). */
@@ -104,14 +128,6 @@ struct Stage {
     uint32_t counter_first_delay = 0;
     /** Launch E1 on the receiving tile; false leaves the link's far end idle. */
     bool launch_e1 = true;
-    /** Nonzero, one EC_FWD_FLAG_*_ALONE: the sending forwarders repeat that
-     * write send-count times and nothing else, on the measurement image; E0
-     * sends nothing. */
-    uint32_t leg_alone = 0;
-    /** The sending forwarders time one packet at a time from its W2 to the
-     * first R3 that covers it (EC_FWD_FLAG_ROUND_TRIP), on the measurement
-     * image. */
-    bool round_trip = false;
     /** Launch E0 on chip B; false withholds one side of the handshake. */
     bool launch_e0_b = true;
     /** Misalign chip A's E0 peer_rx_base, an argument E0 must refuse. */
@@ -125,6 +141,64 @@ struct Stage {
     int dirty_erisc_chip = -1;
     int dirty_lim_chip = -1;
 };
+
+/** What a Mode sets: the Path its records report, the bring-up fields it
+ * runs with, the flags of each sending forwarder (nonzero: the measurement
+ * image), and whether E0 sends what the forwarders give it. */
+struct ModeSpec {
+    Path path;
+    Stage stage;
+    uint32_t fwd_flags = 0;
+    bool e0_sends = true;
+};
+
+inline ModeSpec mode_spec(Mode mode) {
+    switch (mode) {
+        case Mode::FullPath: return {.path = kFullPath};
+        case Mode::NocHop: return {.path = kNocHop, .stage = {.e0_sink_local = true, .launch_e1 = false}};
+        case Mode::EthernetHop: return {.path = kEthernetHop, .stage = {.e0_source_self = true, .e1_sink_local = true}};
+        case Mode::ReceiveSide: return {.path = kReceiveSide, .stage = {.e1_source_self = true}, .e0_sends = false};
+        case Mode::W1Alone:
+            return {
+                .path = kW1Alone, .stage = {.launch_e1 = false}, .fwd_flags = EC_FWD_FLAG_W1_ALONE, .e0_sends = false};
+        case Mode::W2Alone:
+            return {
+                .path = kW2Alone, .stage = {.launch_e1 = false}, .fwd_flags = EC_FWD_FLAG_W2_ALONE, .e0_sends = false};
+        case Mode::R1Alone:
+            return {
+                .path = kR1Alone, .stage = {.launch_e1 = false}, .fwd_flags = EC_FWD_FLAG_R1_ALONE, .e0_sends = false};
+        case Mode::E0Source: return {.path = kE0Source, .stage = {.e0_source_self = true}};
+        case Mode::E0SourceConsume:
+            return {.path = kE0Source, .stage = {.e0_source_self = true, .r2_after_consume = true}};
+        case Mode::RoundTripHop: return {.path = kFullPath, .fwd_flags = EC_FWD_FLAG_ROUND_TRIP};
+        case Mode::RoundTripConsume:
+            return {.path = kFullPath, .stage = {.r2_after_consume = true}, .fwd_flags = EC_FWD_FLAG_ROUND_TRIP};
+    }
+    return {.path = kFullPath};
+}
+
+/** `st` with its mode's bring-up fields set, or nullopt when `st` names a mode
+ * and also sets one of those fields itself. */
+inline std::optional<Stage> resolved(const Stage& st) {
+    if (st.mode == Mode::FullPath) {
+        return st;
+    }
+    const Stage defaults{};
+    if (st.e0_sink_local != defaults.e0_sink_local || st.e0_source_self != defaults.e0_source_self ||
+        st.e1_sink_local != defaults.e1_sink_local || st.e1_source_self != defaults.e1_source_self ||
+        st.r2_after_consume != defaults.r2_after_consume || st.launch_e1 != defaults.launch_e1) {
+        return std::nullopt;
+    }
+    const Stage& m = mode_spec(st.mode).stage;
+    Stage out = st;
+    out.e0_sink_local = m.e0_sink_local;
+    out.e0_source_self = m.e0_source_self;
+    out.e1_sink_local = m.e1_sink_local;
+    out.e1_source_self = m.e1_source_self;
+    out.r2_after_consume = m.r2_after_consume;
+    out.launch_e1 = m.launch_e1;
+    return out;
+}
 
 /** One run's request. */
 struct Case {
@@ -524,6 +598,19 @@ inline void write_kernel_jsonl(
 inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harness::RunSpec& spec, const Case& c) {
     RunResult out;
     const auto& hal = ttm::MetalContext::instance().hal();
+    const std::optional<Stage> resolved_stage = resolved(c.stage);
+    if (!resolved_stage) {
+        ADD_FAILURE() << c.name << " names a mode and sets one of its bring-up fields too";
+        return out;
+    }
+    const Stage& st = *resolved_stage;
+    const ModeSpec mode = mode_spec(st.mode);
+    /* A round trip ends at the sender's poll of R3; receive work between its
+     * polls would count in it, so the timing sender must only send. */
+    if ((mode.fwd_flags & EC_FWD_FLAG_ROUND_TRIP) != 0u && c.direction != ec::Direction::AToB) {
+        ADD_FAILURE() << c.name << " times round trips, which needs a send-only sender: direction AToB";
+        return out;
+    }
     if (g_undrained != Undrained::None) {
         ADD_FAILURE() << "refusing to launch " << c.name << ": run " << g_undrained_case
                       << " in this process ended undrained (" << undrained_name(g_undrained)
@@ -621,34 +708,34 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
     /* Bring-up modes move the source or the sink off the forwarders. */
     for (uint32_t i = 0; i < ec::kChips; ++i) {
         for (uint32_t p = 0; p < c.shape.P; ++p) {
-            if (c.stage.e0_source_self || c.stage.e1_source_self) {
+            if (st.e0_source_self || st.e1_source_self) {
                 args.chips[i].fwd[p].send_count = 0u;
             }
-            if (c.stage.e1_source_self || c.stage.leg_alone != 0u) {
+            if (!mode.e0_sends) {
                 args.chips[i].e0.erisc.count[p] = 0u;
             }
             if (args.chips[i].fwd[p].send_count != 0u) {
-                args.chips[i].fwd[p].flags |= c.stage.leg_alone | (c.stage.round_trip ? EC_FWD_FLAG_ROUND_TRIP : 0u);
+                args.chips[i].fwd[p].flags |= mode.fwd_flags;
             }
-            if (c.stage.e1_sink_local || c.stage.e0_sink_local || !c.stage.launch_e1) {
+            if (st.e1_sink_local || st.e0_sink_local || !st.launch_e1) {
                 args.chips[i].fwd[p].recv_count = 0u;
             }
             /* A withheld E1 is no barrier participant, so the director must
              * not wait for it. */
-            if (!c.stage.launch_e1) {
+            if (!st.launch_e1) {
                 args.chips[i].fwd[p].flags &= ~EC_FWD_FLAG_INBOUND_ACTIVE;
             }
         }
     }
 
-    if (c.stage.corrupt_e0_peer_rx) {
+    if (st.corrupt_e0_peer_rx) {
         args.chips[0].e0.peer_rx_base += 8u;
     }
 
     const auto root = kernel_root(spec.open.kernel_dir);
     const auto e0_src = root / "kernels" / "eth_credit" / "e0_kernel.cpp";
     const auto e1_src = root / "kernels" / "eth_credit" / "e1_kernel.cpp";
-    const auto defines = kernel_defines(c.shape, c.stage);
+    const auto defines = kernel_defines(c.shape, st);
 
     ttmd::MeshWorkload workload;
     for (uint32_t i = 0; i < ec::kChips; ++i) {
@@ -661,12 +748,12 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
                 cr.eth_translated,
                 l.eth_ctrl_base,
                 l.eth.total_bytes,
-                c.stage.dirty_erisc_chip == static_cast<int>(i))) {
+                st.dirty_erisc_chip == static_cast<int>(i))) {
             return out;
         }
         const hreg::Region arena{l.lim_base, hreg::round_up(l.x280.total_bytes, hreg::kCacheLineBytes)};
         hreg::zero_region(*tiles[i], arena);
-        if (c.stage.dirty_lim_chip == static_cast<int>(i)) {
+        if (st.dirty_lim_chip == static_cast<int>(i)) {
             hreg::write_args(*tiles[i], hreg::Region{arena.addr, hreg::kCacheLineBytes}, uint32_t{0xA5A5A5A5u});
         }
         const auto back = tiles[i]->read_available_lim(arena.addr, arena.bytes);
@@ -683,7 +770,7 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
          * ERISC0 uses NoC 0 and ERISC1 NoC 1 (tt_metal/impl/host_api/tt_metal.cpp,
          * "In dual ERISC mode, ERISC0 in dedicated mode must use NOC0"); the
          * placement's x280_noc0 and x280_noc1 are resolved for those NoCs. */
-        if (i == 0u || c.stage.launch_e0_b) {
+        if (i == 0u || st.launch_e0_b) {
             const auto e0 = ttm::CreateKernel(
                 program,
                 e0_src.string(),
@@ -696,7 +783,7 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
             ttm::SetRuntimeArgs(program, e0, core, ec::pack_runtime_args(args.chips[i].e0));
             cr.e0.launched = true;
         }
-        if (args.chips[i].has_e1 && c.stage.launch_e1) {
+        if (args.chips[i].has_e1 && st.launch_e1) {
             const auto e1 = ttm::CreateKernel(
                 program,
                 e1_src.string(),
@@ -721,7 +808,7 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
 
     /* The forwarder's measurement modes are built into their own image. */
     const auto image =
-        c.stage.leg_alone != 0u || c.stage.round_trip
+        mode.fwd_flags != 0u
             ? hart_::image_path("X280_ETH_CREDIT_MEASURE_FW_IMAGE", "firmware-eth-credit-x280-fwd-measure.bin")
             : hart_::image_path(spec.open.image_env_var, spec.open.image_file);
     std::array<hexec::X280Launch, ec::kChips> launches{};
@@ -1020,49 +1107,29 @@ inline void expect_all_done(const RunResult& r) {
 inline void expect_conserved(const Case& c, const RunResult& r, uint32_t s) {
     const ChipResult& tx = r.chips[s];
     const ChipResult& rx = r.chips[1u - s];
+    const std::optional<Stage> st = resolved(c.stage);
+    ASSERT_TRUE(st) << c.name << " names a mode and sets one of its bring-up fields too";
     for (uint32_t p = 0; p < c.shape.P; ++p) {
         const uint32_t n = c.packets[p];
-        if (!c.stage.e0_source_self) {
+        if (!st->e0_source_self) {
             EXPECT_EQ(tx.fwd[p].block.packets_out[p], n) << "chip " << tx.chip << " forwarder " << p << " sent";
         }
         EXPECT_EQ(tx.e0.block.packets_out[p], n) << "chip " << tx.chip << " E0 p " << p;
         if (rx.e1.launched) {
             EXPECT_EQ(rx.e1.block.packets_in[p], n) << "chip " << rx.chip << " E1 p " << p;
-            if (!c.stage.e1_sink_local) {
+            if (!st->e1_sink_local) {
                 EXPECT_EQ(rx.fwd[p].block.packets_in[p], n) << "chip " << rx.chip << " forwarder " << p << " consumed";
             }
         }
     }
 }
 
-/** What `st` leaves of the path between the two forwarders. */
-inline Path measured_path(const Stage& st) {
-    if (st.e1_sink_local) {
-        return kEthernetHop;
-    }
-    if (st.e0_sink_local) {
-        return kNocHop;
-    }
-    if (st.e1_source_self) {
-        return kReceiveSide;
-    }
-    if (st.e0_source_self) {
-        return kE0Source;
-    }
-    switch (st.leg_alone) {
-        case EC_FWD_FLAG_W1_ALONE: return kW1Alone;
-        case EC_FWD_FLAG_W2_ALONE: return kW2Alone;
-        case EC_FWD_FLAG_R1_ALONE: return kR1Alone;
-    }
-    return kFullPath;
-}
-
 /**
- * Writes one JSONL record per p for a completed direction, of the path
- * measured_path() names: the receiving forwarders' packet counts over their
- * own mtime window, with `c.stage.e0_sink_local` the sending forwarders' sent
- * counts over theirs, or with `c.stage.e1_sink_local` E1's over its ERISC
- * wall-clock window (P must be 1, a fatal failure otherwise); both chips, both
+ * Writes one JSONL record per p for a completed direction, of the Path its
+ * mode names: the receiving forwarders' packet counts over their own mtime
+ * window, a sending forwarder's sent counts over its own for a Receiver::Sender
+ * path, or E1's over its ERISC wall-clock window for the Ethernet hop (P must
+ * be 1, a fatal failure otherwise); both chips, both
  * ERISC coordinates, the X280 tile, the shape, the X280 PLL, and both chips'
  * ERISC clock evidence.
  *
@@ -1082,7 +1149,7 @@ inline void record_throughput(
     uint32_t s) {
     const ChipResult& tx = r.chips[s];
     const ChipResult& rx = r.chips[1u - s];
-    const Path path = measured_path(c.stage);
+    const Path path = mode_spec(c.stage.mode).path;
     const bool at_e1 = path.receiver == Receiver::E1;
     const bool at_sender = path.receiver == Receiver::Sender;
     ASSERT_TRUE(!at_e1 || c.shape.P == 1u) << "E1's receive window covers every p, so it reports only P = 1";
@@ -1115,9 +1182,9 @@ inline void record_throughput(
 
 /**
  * Writes one eth_credit_round_trip record per p for a completed
- * `c.stage.round_trip` direction from sender chip `s`: the sending
+ * round-trip mode's direction from sender chip `s`: the sending
  * forwarder's timed round trips (its EC_SITE_FWD_ROUND_TRIP entry), which loop
- * they close (`hop`, or `consume` with `c.stage.r2_after_consume`) and where
+ * they close (`hop`, or `consume` for Mode::RoundTripConsume) and where
  * the run placed every core, as record_throughput places them. Adds a fatal
  * failure for a sender that timed none.
  */
@@ -1149,7 +1216,11 @@ inline void record_round_trip(
         hout::write_jsonl(
             spec.suite_label,
             hout::record(round_trip_record(
-                window, c.stage.r2_after_consume ? "consume" : "hop", *timed, tx.erisc_clock, rx.erisc_clock)));
+                window,
+                c.stage.mode == Mode::RoundTripConsume ? "consume" : "hop",
+                *timed,
+                tx.erisc_clock,
+                rx.erisc_clock)));
         std::printf(
             "  p %u: %llu round trips over %llu mtime ticks\n",
             p,
