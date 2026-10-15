@@ -53,6 +53,11 @@ ROUTED_PREFILL_MIN_SEQ_DEFAULT = 128
 ROUTED_PREFILL_CHUNK_DEFAULT = 8192
 # masked_bincount splits the token rows over a fixed 64-core grid.
 ROUTED_PREFILL_SEQ_MULTIPLE = 64
+# ttnn.scatter parallelizes over rows only, so the [1, k*C] row -> token scatter of _chunk runs on one core (1.5 ms per
+# layer at C = 8192). From this chunk length up, the k*C pairs are split into ROUTED_SCATTER_GROUPS rows that scatter
+# on separate cores into their own copy of the buffer, then a max over the copies merges them.
+ROUTED_SCATTER_SPLIT_MIN_C = 1024
+ROUTED_SCATTER_GROUPS = 32
 # Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py).
 ROUTED_PREFILL_WEIGHTS_VERSION = 1
 ROUTED_CACHE_SUBDIR = "experts_routed_ep"
@@ -420,9 +425,11 @@ class RoutedPrefillExperts:
         rows = spare + ttnn.TILE_SIZE
         # Scatter order is slot-major (pair r = slot * C + token), so the token of pair r is r mod C.
         pair_token = torch.arange(k * C, dtype=torch.int32).remainder(C).reshape(1, k * C)
+        split = C >= ROUTED_SCATTER_SPLIT_MIN_C
         consts = {
             "rows": rows,
             "spare": spare,
+            "scatter_groups": ROUTED_SCATTER_GROUPS if split else 1,
             "pair_token": ttnn.from_torch(
                 pair_token,
                 device=self.mesh_device,
@@ -440,6 +447,18 @@ class RoutedPrefillExperts:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             ),
         }
+        if split:
+            G = ROUTED_SCATTER_GROUPS
+            fp32_rm = dict(
+                device=self.mesh_device,
+                dtype=ttnn.float32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            # Token ids < 2^24 are exact in fp32; group g holds pairs [g*k*C/G, (g+1)*k*C/G) of the slot-major order.
+            consts["pair_token_g"] = ttnn.from_torch(pair_token.reshape(G, k * C // G).to(torch.float32), **fp32_rm)
+            consts["row_init_g"] = ttnn.from_torch(torch.zeros(G, rows, dtype=torch.float32), **fp32_rm)
         # The expert op writes a fresh bf8 buffer when fed the row-major dispatch (_chunk) and leaves rows outside the
         # occupied expert regions uninitialized. The spare tile is the one such region the combine reads (non-local
         # pairs, weighted 0 for a token with no local expert), so it is zeroed with one tile-row insert: zeros at
@@ -471,7 +490,8 @@ class RoutedPrefillExperts:
 
     def _pair_positions(self, indices, region_offsets, consts):
         """Dispatch-buffer row of every (token, slot) pair, uint32 ROW_MAJOR, in two orders: token-major [C, k] (the
-        combine gather index) and slot-major [1, k*C] (pair r = slot * C + token, the scatter index).
+        combine gather index) and slot-major [G, k*C/G] (pair r = slot * C + token in row-major order, the scatter
+        index; G = consts["scatter_groups"]).
 
         Local pair (t, j) of expert e: region_offsets[e] + #pairs of e from tokens < t (a token's k experts are
         distinct, so this is the pair's rank within e's region). Non-local pairs: the spare tile. All arithmetic is
@@ -535,7 +555,8 @@ class RoutedPrefillExperts:
         # Slot-major copy via a tile transpose: [k, C] row-major is k long rows, so the flatten to [1, k*C] is cheap
         # (the token-major [C, k] -> [1, k*C] reshape copies C 16-byte rows and cost 3.3 ms per layer at 8K).
         pos_t = ttnn.transpose(pos, -2, -1)  # [k, C]
-        pos_sm = ttnn.reshape(ttnn.to_layout(pos_t, ttnn.ROW_MAJOR_LAYOUT), (1, k * C))
+        G = consts["scatter_groups"]
+        pos_sm = ttnn.reshape(ttnn.to_layout(pos_t, ttnn.ROW_MAJOR_LAYOUT), (G, k * C // G))
         ttnn.deallocate(pos_t)
         pos_tm = ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(pos)
@@ -567,10 +588,28 @@ class RoutedPrefillExperts:
         pos_tm, pos_sm = self._pair_positions(indices, region_offsets, consts)  # [C, k] and [1, k*C] uint32 RM
 
         # Dispatch: buffer row -> source token (scatter of the pair's token index to its row), then gather the rows.
-        # Rows no pair writes (region padding, the spare tile) read token 0: finite and never consumed.
-        tok_of_row = ttnn.scatter(consts["row_init"], -1, pos_sm, consts["pair_token"])
-        ttnn.deallocate(pos_sm)
-        tok_of_row = ttnn.to_layout(tok_of_row, ttnn.ROW_MAJOR_LAYOUT)
+        # Rows no pair writes (region padding, the spare tile) read token 0 (the split path: the spare row reads another
+        # valid token): finite and never consumed.
+        if consts["scatter_groups"] == 1:
+            tok_of_row = ttnn.scatter(consts["row_init"], -1, pos_sm, consts["pair_token"])
+            ttnn.deallocate(pos_sm)
+            tok_of_row = ttnn.to_layout(tok_of_row, ttnn.ROW_MAJOR_LAYOUT)
+        else:
+            # One scatter row (core) per pair group, each into its own zero-initialized copy of the buffer. A local
+            # pair's row is unique, so exactly one copy holds its token and the others hold 0; the max over the
+            # copies is that token (exact in fp32). Rows no pair writes stay 0. The spare row gets the largest token
+            # among the non-local pairs instead of the last one written, a valid row of x either way; the expert op
+            # reads only the expert regions, so it never consumes it.
+            tok_g = ttnn.scatter(consts["row_init_g"], -1, pos_sm, consts["pair_token_g"])  # [G, rows] fp32
+            ttnn.deallocate(pos_sm)
+            tok_g_tile = ttnn.to_layout(tok_g, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(tok_g)
+            tok_max = ttnn.max(tok_g_tile, dim=0, keepdim=True)  # [1, rows] fp32
+            ttnn.deallocate(tok_g_tile)
+            tok_u = ttnn.typecast(tok_max, ttnn.uint32)
+            ttnn.deallocate(tok_max)
+            tok_of_row = ttnn.to_layout(tok_u, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(tok_u)
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
         x_rm = ttnn.reshape(x_rm, (C, H))
         # padding_idx=0: every row that reads token 0 (about 3/4 of the k*C buffer rows on each of the N devices are
