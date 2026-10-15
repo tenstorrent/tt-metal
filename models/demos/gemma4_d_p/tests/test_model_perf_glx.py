@@ -33,37 +33,36 @@ from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fab
 CONTEXT_LEN = 262144
 CHUNK_SIZES = (2048, 4096, 8192)
 # Baselines in ms to reach each context, keyed by (chunk_size, context_k), 1k = 1024 tokens.
+# A context with no baseline is not gated. Wall time to reach 1k is a single chunk, dominated by
+# host staging and dispatch noise, so it has none. Device time is gated at every context.
 WALL_MS_BASELINES = {
-    (2048, 1): 62.1,
-    (2048, 10): 318.0,
-    (2048, 100): 3656.2,
-    (2048, 256): 11525.4,
-    (4096, 1): 83.3,
-    (4096, 10): 253.1,
-    (4096, 100): 2419.9,
-    (4096, 256): 7702.8,
-    (8192, 1): 120.8,
-    (8192, 10): 247.3,
-    (8192, 100): 2007.1,
-    (8192, 256): 6799.5,
+    (2048, 10): 285.0,
+    (2048, 100): 3319.4,
+    (2048, 256): 10640.6,
+    (4096, 10): 239.4,
+    (4096, 100): 2290.1,
+    (4096, 256): 7384.6,
+    (8192, 10): 234.1,
+    (8192, 100): 1916.6,
+    (8192, 256): 6507.3,
 }
 DEVICE_MS_BASELINES = {
-    (2048, 1): 59.7,
-    (2048, 10): 304.7,
-    (2048, 100): 3513.4,
-    (2048, 256): 11142.7,
-    (4096, 1): 79.9,
-    (4096, 10): 243.6,
-    (4096, 100): 2344.9,
-    (4096, 256): 7504.8,
-    (8192, 1): 118.5,
-    (8192, 10): 242.2,
-    (8192, 100): 1971.4,
-    (8192, 256): 6709.5,
+    (2048, 1): 53.1,
+    (2048, 10): 270.6,
+    (2048, 100): 3170.7,
+    (2048, 256): 10257.7,
+    (4096, 1): 75.1,
+    (4096, 10): 229.0,
+    (4096, 100): 2223.7,
+    (4096, 256): 7192.6,
+    (8192, 1): 112.0,
+    (8192, 10): 229.1,
+    (8192, 100): 1879.6,
+    (8192, 256): 6409.9,
 }
 # Allowed run-to-run variation either side of the baseline, keyed by context_k.
 # Device time excludes host staging, so its margins are tighter.
-WALL_MS_MARGINS = {1: 0.02, 10: 0.02, 100: 0.015, 256: 0.01}
+WALL_MS_MARGINS = {10: 0.02, 100: 0.015, 256: 0.01}
 DEVICE_MS_MARGINS = {1: 0.01, 10: 0.01, 100: 0.01, 256: 0.01}
 
 
@@ -86,14 +85,14 @@ RESULT_HEADER = (
 @pytest.mark.timeout(540)
 @parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 def test_model_perf_glx(mesh_device, reset_seeds):
-    """Check the 1k/10k/100k/256k wall and device times of a traced 256k prefill against their baselines.
+    """Check the 1k/10k/100k/256k device times and 10k/100k/256k wall times of a traced 256k prefill
+    against their baselines.
 
     Runs every chunk size in one process, writing weights once. Fails if a time is outside its
     range on either side: too slow is a regression, too fast means the baseline needs updating.
     """
-    for metric, ranges in (("wall", WALL_MS_RANGES), ("device", DEVICE_MS_RANGES)):
-        if unset := [(c, k) for c in CHUNK_SIZES for k in REPORT_CONTEXT_KS if (c, k) not in ranges]:
-            pytest.fail(f"no {metric}-time baseline for (chunk_size, context_k) {unset} (context in units of 1k)")
+    if unset := [(c, k) for c in CHUNK_SIZES for k in REPORT_CONTEXT_KS if (c, k) not in DEVICE_MS_RANGES]:
+        pytest.fail(f"no device-time baseline for (chunk_size, context_k) {unset} (context in units of 1k)")
 
     mesh_config = _mesh_config(mesh_device)
     hf_model_id = _hf_model_id()
@@ -121,6 +120,8 @@ def test_model_perf_glx(mesh_device, reset_seeds):
                     ("wall", wall_ms, WALL_MS_RANGES),
                     ("device", device_ms, DEVICE_MS_RANGES),
                 ):
+                    if (chunk_size, context_k) not in ranges:
+                        continue
                     ms = measured[context_k]
                     min_ms, max_ms = ranges[(chunk_size, context_k)]
                     if ms > max_ms:
