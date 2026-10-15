@@ -1,0 +1,72 @@
+{
+ "used": [
+  {
+   "id": "K-23",
+   "how": "bias added in fp32 on the SFPU (ttnn.add) only for the top-k keys; weights gathered from the unbiased scores; bias recentred at load",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-4",
+   "how": "dense routing scattered in fp32 ROW_MAJOR (idx and weights to_layout RM) since scatter rejects fp32 TILE",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "gate kept bf16 as stored (exact), x fp32 straight into the matmul; the hi/lo split it suggests was measured",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-16",
+   "how": "explains why the bf16 hi + lo split of x gave no gain; dropped the split (DS41-21)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-39",
+   "how": "4 of 2048 flipped rows (key gaps down to 1.6e-6) accepted as near-tie noise, not chased",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "pcc 0 FAIL block before the real pass read as the precompile collect pass",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "whether splitting an fp32 matmul operand into bf16 halves helps on the FPU (now DS41-21)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "already done by C.swa.ffn_norm: DS41-20 reads '(RESOLVED by the framework, F73) ... no cap (testing/component.py:350-356)'; this step added DS41-21 only"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "DS41-21"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.router",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T16:36:36",
+  "head": "69bd304ab83",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.router.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/router.py"
+  ]
+ }
+}
