@@ -43,6 +43,9 @@ def _first_device(t) -> torch.Tensor:
 PROFILE = os.environ.get("V41_PREFILL_PROFILE", "0") == "1"
 # DS41F-0068: the chunk embedding uploaded S-sharded / TP-replicated and split on device (0 = the D-over-TP mapper)
 EMBED_PARTITION = os.environ.get("V41_PREFILL_EMBED_PARTITION", "1") == "1"
+ENGRAM_EARLY = (
+    os.environ.get("V41_PREFILL_ENGRAM_EARLY", "1") == "1"
+)  # DS41F-0068: the Engram fetch before the embedding
 
 
 class PhaseProfile:
@@ -372,16 +375,24 @@ class V41Prefill:
         prof = PhaseProfile(self.mesh) if PROFILE else None
         mark = prof if prof is not None else (lambda name: None)
         rows = {}
-        if self.engrams and engram_host is not None:
-            # layer 14's rows are only needed at block 14: gather them in the background while blocks 0..13 run. DS41F-0068: the
-            # fetch starts BEFORE the embedding (its host gather + upload, ~140 ms at 8192) so layer 1's rows are not waited for
+
+        def _fetch():
+            # layer 14's rows are only needed at block 14: gather them in the background while blocks 0..13 run
             fetch = getattr(engram_host, "rows_async", None)
-            rows = fetch(self.slot, part, start) if fetch is not None else engram_host.rows_for(self.slot, part, start)
-        mark("engram.host")
+            return fetch(self.slot, part, start) if fetch is not None else engram_host.rows_for(self.slot, part, start)
+
+        if self.engrams and engram_host is not None and ENGRAM_EARLY:
+            # DS41F-0068: the fetch starts BEFORE the embedding (its host gather + upload, ~140 ms at 8192) so layer 1's rows are
+            # not waited for (V41_PREFILL_ENGRAM_EARLY=0: after it, as before)
+            rows = _fetch()
+            mark("engram.host")
         streams = self._streams(part)
         self._route_bias(part)
         pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
         mark("embed")
+        if self.engrams and engram_host is not None and not ENGRAM_EARLY:
+            rows = _fetch()
+            mark("engram.host")
         owned = True
         for blk in self.blocks:
             L = blk.layer
