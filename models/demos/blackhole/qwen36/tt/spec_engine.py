@@ -113,6 +113,16 @@ def reseed_rows_host(plan, pt, T, nb, scratch_block):
     return tok, pos, pt_rows
 
 
+def parked_rows_host(ring, e_prev, s, T):
+    """A parked row's host state (see TPGatedDeltaNet.save_spec_user) whose last commit used ring slot s ->
+    (ring slot 0 [D, Nv, Dk, Dv], E_prev [D, kc-1+T, C] shifted by s so a mi = 0 verify reads its rows s+1 ..)."""
+    D = ring.shape[0] // T
+    slot = ring.reshape(D, T, *ring.shape[1:])[:, s].contiguous()
+    e = torch.zeros_like(e_prev)
+    e[:, : e_prev.shape[1] - s] = e_prev[:, s:]
+    return slot, e
+
+
 def draft_step_plan(pending, p, K):
     """(pending tok [B,1] int32, [K] position vectors [B] int32): step k writes slot p[u] + k."""
     tok = torch.tensor([[int(t)] for t in pending], dtype=torch.int32)
@@ -446,6 +456,9 @@ class MTPSpecEngine:
         self._last_pt = None  # fitted host page table of the most recent verify
         self._fresh = {}  # slot -> prompt length, prefilled and awaiting the seed verify
         self._active = set()  # slots holding a live request
+        self._parked = {}  # slot -> per-GDN-layer host state of a live row left out of a verify
+        self._prompts = {}  # slot -> (prompt ids, page-table row) of a fresh slot, for a re-prefill
+        self._fresh_dirty = set()  # fresh slots left out of a seed, which overwrote their prefill state
         self._row_active = None  # [B] bool: rows that held a request in the last verify (None = all)
         self._offered = set()  # slots the last propose gave drafts (num_valid > 0)
         self._no_draft = set()  # slots whose drafts the runner withholds: propose skips them
@@ -794,10 +807,16 @@ class MTPSpecEngine:
         return {"per_seq": per_seq, "fixed": fixed, "per_token": per_token}
 
     def release(self, slot):
-        """Mark a slot empty (no device work)."""
+        """Mark a slot empty and re-offer drafts to every row (no device work)."""
         self._active.discard(slot)
         self._fresh.pop(slot, None)
+        self._parked.pop(slot, None)
+        self._prompts.pop(slot, None)
+        self._fresh_dirty.discard(slot)
         reset_draft_skip(self, slot)
+        # the leaving request may be why other rows' drafts were withheld: offer them again
+        self._no_draft.clear()
+        self._withheld_streak.clear()
 
     def remap_slots(self, remap):
         """Apply a runner slot_remap (row i takes slot remap[i]'s state) to every GDN layer and the per-slot host
@@ -813,6 +832,9 @@ class MTPSpecEngine:
         self._last_hidden = [self._last_hidden[j] for j in idx]
         self._fresh = {new_of[u]: n for u, n in self._fresh.items()}
         self._withheld_streak = {new_of[u]: n for u, n in self._withheld_streak.items()}
+        self._parked = {new_of[u]: v for u, v in self._parked.items()}
+        self._prompts = {new_of[u]: v for u, v in self._prompts.items()}
+        self._fresh_dirty = {new_of[u] for u in self._fresh_dirty}
         self._active = {new_of[u] for u in self._active}
         self._offered = {new_of[u] for u in self._offered}
         self._no_draft = {new_of[u] for u in self._no_draft}
@@ -826,11 +848,14 @@ class MTPSpecEngine:
         Replays the recorded chunk trace when B == 1 and record_prefill ran, else the eager path.
         The GDN seed and the MTP KV of slot Tp-1 are written by the first ``verify``."""
         reset_draft_skip(self, slot)
+        self._parked.pop(slot, None)
+        self._fresh_dirty.discard(slot)
         model = self.model
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         assert self._last_hidden, "prefill before prepare"
         prompt_list = [int(t) for t in torch.as_tensor(prompt_ids).reshape(-1)]
         Tp = len(prompt_list)
+        self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone())
         cap_blocks = int(torch.as_tensor(page_table_row).shape[-1]) if _cap_blocks is None else _cap_blocks
         assert Tp + self.T <= table_capacity(
             cap_blocks, self.block_size
@@ -866,6 +891,12 @@ class MTPSpecEngine:
         self._active.add(slot)
         return lt.reshape(-1)[: self.vocab].float()
 
+    def _reprefill(self, slot):
+        """Re-run a fresh slot's prefill (a seed overwrote its prefill GDN state while it was left out)."""
+        prompt, row = self._prompts[slot]
+        logger.info(f"[spec_engine] re-prefill slot {slot} ({len(prompt)} tokens)")
+        self.prefill(slot, prompt, row)
+
     def _capture_last_row(self, feed, i, slot):
         """feed row i -> self._last_hidden[slot], fixed-shape programs only (a per-length slice would
         compile per prompt length). Exact like _set_anchor."""
@@ -885,7 +916,8 @@ class MTPSpecEngine:
     def verify(self, tokens, start_pos, accepted_counts, page_table, read_logits=False, active=None):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j. The first verify after prefill is
         the seed (see _seed): row 0 holds the first generated token, other rows are filler, accepted_counts = 1.
-        Fresh rows may join running ones (see _join).
+        Fresh rows may join running ones (see _join). A live row left out is parked on host and restored when it
+        returns; a fresh row left out defers its seed.
         ``active`` (bool [B], None = all): False rows are padding and run over the null block.
         Returns (ids int32 [B, T], logits [B, T, vocab] or None)."""
         assert self.captured, "verify before capture"
@@ -903,11 +935,20 @@ class MTPSpecEngine:
         unknown = [u for u in rows if u not in self._active]
         if unknown:
             raise ValueError(f"rows {unknown} carry a request that was never prefilled into that slot")
-        live_pad = [u for u in range(B) if not active[u] and u in self._active]
-        if live_pad:
-            raise NotImplementedError(
-                f"padding rows {live_pad} hold a live request's state; the verify would overwrite it"
-            )
+        # contract 4e: a live row left out of a step keeps its GDN state on host until it returns
+        for u in range(B):
+            if not active[u] and u in self._active and u not in self._fresh and u not in self._parked:
+                self._parked[u] = [dn.save_spec_user(u) for dn in self._gdn]
+                logger.info(f"[spec_engine] parked slot {u} (left out of a step)")
+        back = [u for u in rows if u in self._parked]
+        if back:
+            for li, dn in enumerate(self._gdn):
+                dn.load_spec_users({u: parked_rows_host(*self._parked[u][li], int(mi_prev[u]), T) for u in back})
+            for u in back:
+                del self._parked[u]
+            # restored into ring slot 0: the returning row verifies from mi = 0
+            mi_prev = mi_prev.clone()
+            mi_prev[back] = 0
         if not bool(active.all()):
             pt = pt.clone()
             pt[~active] = 0  # vLLM null block
@@ -919,16 +960,23 @@ class MTPSpecEngine:
             self._last_cap_blocks, self.block_size
         ), "verify window past the paged KV capacity"
 
-        if self._fresh:
-            if not set(self._fresh) <= set(rows):
-                raise ValueError(f"fresh rows {sorted(set(self._fresh) - set(rows))} are not active")
+        fresh_now = {u: Tp for u, Tp in self._fresh.items() if active[u]}
+        if fresh_now:
+            # the seed rewrites every row's durable GDN state: fresh rows left out must re-prefill before their own seed
+            self._fresh_dirty |= set(self._fresh) - set(fresh_now)
+            for u in sorted(fresh_now):
+                if u in self._fresh_dirty:
+                    self._reprefill(u)
             # Each fresh user's slot Tp-1 MTP KV, then the seed (its filler rows are never run).
             self._stage_mtp_tables(pt)
-            for u, Tp in sorted(self._fresh.items()):
+            for u, Tp in sorted(fresh_now.items()):
                 assert int(start_pos[u]) == Tp, f"slot {u}: start_pos {int(start_pos[u])} != prompt length {Tp}"
                 self._warm_mtp_last(self._last_hidden[u], int(tokens[u, 0]), Tp - 1, self._mtp_pt_rows[u])
-            fresh = sorted(self._fresh)
-            self._fresh.clear()
+            fresh = sorted(fresh_now)
+            for u in fresh:
+                del self._fresh[u]
+                self._prompts.pop(u, None)
+                self._fresh_dirty.discard(u)
             if set(fresh) == set(rows):
                 return self._seed(tokens, start_pos, pt, read_logits)
             return self._join(tokens, start_pos, mi_prev, pt, active, fresh, read_logits)
@@ -1046,12 +1094,27 @@ class MTPSpecEngine:
         return ids, logits
 
     def decode_forward(
-        self, tokens, start_pos, *, num_valid_drafts, accepted_counts, page_table, spec_mode="argmax_ids"
+        self,
+        tokens,
+        start_pos,
+        *,
+        num_valid_drafts,
+        accepted_counts,
+        page_table,
+        spec_mode="argmax_ids",
+        slot_remap=None,
     ):
-        """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block); returns VerifyResult."""
+        """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block); slot_remap is applied after
+        validation. Returns VerifyResult."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
         clean, start0, active = sanitize_verify_block(tokens, start_pos, num_valid_drafts, self.K)
+        if clean.shape[0] != self.B:
+            raise ValueError(f"block has {clean.shape[0]} rows, engine has B={self.B}")
+        if not bool(active.any()):
+            raise ValueError("no active row in the verify block")
+        if slot_remap is not None:
+            self.remap_slots(slot_remap)
         self._no_draft = note_withheld_drafts(
             self._offered,
             self._no_draft,
@@ -1060,10 +1123,6 @@ class MTPSpecEngine:
             num_valid_drafts,
             self.no_draft_streak,
         )
-        if clean.shape[0] != self.B:
-            raise ValueError(f"block has {clean.shape[0]} rows, engine has B={self.B}")
-        if not bool(active.any()):
-            raise ValueError("no active row in the verify block")
         ids, logits = self.verify(
             clean, start0, accepted_counts, page_table, read_logits=spec_mode == "logits", active=active
         )
@@ -1187,7 +1246,8 @@ class MTPSpecEngine:
         fit = draft_rows_fit(p, K, table_capacity(cap_blocks, self.block_size))
         decline = [(not f) or pd for f, pd in zip(fit, pad)]
         skip, skip_all = propose_skip_plan(self._no_draft, B)
-        if skip_all:  # the runner withholds every row's drafts: no anchor/reseed/drafter work
+        # B > 1 keeps the reseed: a row re-offered after a release then drafts from a complete MTP KV
+        if skip_all and B == 1:  # the runner withholds every row's drafts: no anchor/reseed/drafter work
             self.skipped_propose_calls += 1
             self._offered.clear()
             return DraftResult(torch.zeros(B, K, dtype=torch.int32), torch.zeros(B, dtype=torch.int32))

@@ -30,6 +30,7 @@ from models.demos.blackhole.qwen36.tt.spec_engine import (
     last_row_selector,
     mask_unused_columns,
     note_withheld_drafts,
+    parked_rows_host,
     propose_skip_plan,
     reseed_row_plan,
     reseed_rows_host,
@@ -510,6 +511,9 @@ def test_mark_cleared_on_release_and_prefill(expect_error):
         return types.SimpleNamespace(
             _active={0},
             _fresh={},
+            _parked={},
+            _prompts={},
+            _fresh_dirty=set(),
             _offered={0},
             _no_draft={0},
             _speculated={0},
@@ -529,3 +533,157 @@ def test_mark_cleared_on_release_and_prefill(expect_error):
     with expect_error(AssertionError, ".*"):  # stops at "prefill before prepare", after the state is cleared
         MTPSpecEngine.prefill(eng, 0, [1, 2, 3], None)
     assert clean(eng)
+
+
+def _bare_engine(B, K=2, **kw):
+    e = MTPSpecEngine.__new__(MTPSpecEngine)
+    e.B, e.K, e.T, e.block_size = B, K, K + 1, 64
+    e._active, e._fresh, e._offered = set(range(B)), {}, set()
+    e._parked, e._prompts, e._fresh_dirty = {}, {}, set()
+    e._no_draft, e._speculated, e._withheld_streak = set(range(B)), set(range(B)), {u: 3 for u in range(B)}
+    e._row_active, e._last_pt, e._last_cap_blocks, e.skipped_propose_calls = None, None, 4, 0
+    e.__dict__.update(kw)
+    return e
+
+
+def test_release_reoffers_drafts_to_all_rows():
+    e = _bare_engine(3, _fresh={0: 1, 1: 1})
+    MTPSpecEngine.release(e, 0)
+    assert e._no_draft == set() and e._withheld_streak == {}
+    assert e._speculated == {1, 2} and e._active == {1, 2} and e._fresh == {1: 1}
+
+
+@pytest.mark.parametrize("B", [1, 2])
+def test_propose_all_marked_skips_only_at_b1(B):
+    e, K = _bare_engine(B), 2
+    calls = []
+
+    def fake_propose(*a, **kw):
+        if B == 1:
+            raise AssertionError("propose called")
+        calls.append(kw)
+        return torch.zeros(B, K, dtype=torch.int32)
+
+    e.propose = fake_propose
+    ctok = torch.ones(B, K + 1, dtype=torch.int32)
+    cpos = (torch.arange(K + 1) + 1).repeat(B, 1).to(torch.int32)
+    acc = torch.ones(B, dtype=torch.int32)
+    res = e.propose_draft_tokens(K, ctok, cpos, acc, page_table=torch.zeros(B, 4, dtype=torch.int32))
+    assert res.draft_token_ids.shape == (B, K) and not bool(res.num_valid.any())
+    if B == 1:
+        assert e.skipped_propose_calls == 1 and not calls
+    else:
+        assert e.skipped_propose_calls == 0 and calls[0]["decline"] == [True, True]
+
+
+def test_decode_forward_remap_after_validation(expect_error):
+    B, K = 2, 2
+    order = []
+    e = _bare_engine(B, _gdn=[])
+    e.no_draft_streak = 16
+    e.remap_slots = lambda r: order.append("remap")
+    e.verify = lambda *a, **k: (order.append("verify"), (torch.zeros(B, K + 1, dtype=torch.int32), None))[1]
+    tok = torch.ones(B, K + 1, dtype=torch.int32)
+    pos = (torch.arange(K + 1) + 5).repeat(B, 1).to(torch.int32)
+    acc = torch.ones(B, dtype=torch.int32)
+    kw = dict(accepted_counts=acc, page_table=None, slot_remap=[1, 0])
+    with expect_error(ValueError, ".*"):
+        e.decode_forward(tok, pos, num_valid_drafts=torch.full((B,), K + 5, dtype=torch.int32), **kw)
+    assert order == []
+    e.decode_forward(tok, pos, num_valid_drafts=torch.zeros(B, dtype=torch.int32), **kw)
+    assert order == ["remap", "verify"]
+
+
+def test_parked_rows_host():
+    D, T = 2, 4
+    ring = torch.tensor([10.0 * d + t for d in range(D) for t in range(T)]).reshape(D * T, 1, 1, 1)
+    e_prev = torch.arange(D * (3 + T), dtype=torch.float32).reshape(D, 3 + T, 1)
+    slot, e = parked_rows_host(ring, e_prev, 0, T)
+    assert slot.flatten().tolist() == [0.0, 10.0] and torch.equal(e, e_prev)
+    slot, e = parked_rows_host(ring, e_prev, 3, T)
+    assert slot.flatten().tolist() == [3.0, 13.0] and slot.shape == (D, 1, 1, 1)
+    assert torch.equal(e[:, :4], e_prev[:, 3:]) and not bool(e[:, 4:].any())
+
+
+class _FakeGdn:
+    def __init__(self, T):
+        self.T, self.saved, self.loaded = T, [], []
+
+    def save_spec_user(self, u):
+        self.saved.append(u)
+        return torch.full((2 * self.T, 1, 1, 1), float(u)), torch.zeros(2, 3, 1)
+
+    def load_spec_users(self, states):
+        self.loaded.append(states)
+
+
+def test_verify_parks_and_restores_left_out_row():
+    B, K = 2, 2
+    T = K + 1
+    gdn, calls = _FakeGdn(T), []
+
+    def verify_traced(*a, **kw):
+        calls.append(a)
+        return list(range(B * T)), "feed", None
+
+    model = types.SimpleNamespace(
+        _fit_spec_page_table=lambda pt, nb: torch.as_tensor(pt, dtype=torch.int32), verify_traced=verify_traced
+    )
+    e = _bare_engine(B, K, captured=True, nb=4, _timing=False, _gdn=[gdn], model=model)
+    tok = torch.ones(B, T, dtype=torch.int32)
+    pos = torch.full((B,), 5, dtype=torch.int32)
+    pt = torch.zeros(B, 4, dtype=torch.int32)
+    for _ in range(2):
+        e.verify(tok, pos, torch.ones(B, dtype=torch.int32), pt, active=[True, False])
+    assert gdn.saved == [1] and set(e._parked) == {1} and not gdn.loaded
+    e.verify(tok, pos, torch.tensor([1, 3], dtype=torch.int32), pt)
+    assert list(gdn.loaded[0]) == [1] and gdn.loaded[0][1][0].flatten().tolist() == [1.0, 1.0]
+    assert calls[-1][2] == [0, 0] and e._parked == {}
+
+
+def test_release_and_remap_cover_parked_state():
+    e = _bare_engine(2, _parked={0: ["a"]}, _prompts={0: ("p", None)}, _fresh_dirty={0})
+    MTPSpecEngine.release(e, 0)
+    assert e._parked == {} and e._prompts == {} and e._fresh_dirty == set()
+    e = _bare_engine(2, _parked={0: ["a"]}, _prompts={0: ("p", None)}, _fresh_dirty={0}, _last_hidden=[0, 1])
+    e._gdn = [types.SimpleNamespace(remap_spec_slots=lambda r: None)]
+    MTPSpecEngine.remap_slots(e, [1, 0])
+    assert set(e._parked) == {1} and set(e._prompts) == {1} and e._fresh_dirty == {1}
+
+
+def test_verify_defers_fresh_row_left_out():
+    B, K = 2, 2
+    T = K + 1
+    row = torch.zeros(4, dtype=torch.int32)
+    model = types.SimpleNamespace(_fit_spec_page_table=lambda pt, nb: torch.as_tensor(pt, dtype=torch.int32))
+    e = _bare_engine(
+        B,
+        K,
+        captured=True,
+        nb=4,
+        _timing=False,
+        _gdn=[],
+        model=model,
+        _fresh={0: 5, 1: 7},
+        _prompts={0: ([1] * 5, row), 1: ([2] * 7, row)},
+        _mtp_pt_rows=[None] * B,
+        _last_hidden=[None] * B,
+    )
+    e._stage_mtp_tables = e._warm_mtp_last = lambda *a, **k: None
+    seeds, joins, prefills = [], [], []
+    e._seed = lambda *a: (seeds.append(1), (torch.zeros(B, T, dtype=torch.int32), None))[1]
+    e._join = lambda *a: (joins.append(a[5]), (torch.zeros(B, T, dtype=torch.int32), None))[1]
+
+    def prefill(slot, prompt, r):
+        prefills.append((slot, prompt))
+        e._fresh[slot] = len(prompt)
+        e._fresh_dirty.discard(slot)
+
+    e.prefill = prefill
+    tok = torch.ones(B, T, dtype=torch.int32)
+    pt = torch.zeros(B, 4, dtype=torch.int32)
+    one = torch.ones(B, dtype=torch.int32)
+    e.verify(tok, torch.tensor([5, 0]), one, pt, active=[True, False])
+    assert seeds == [1] and e._fresh == {1: 7} and e._fresh_dirty == {1} and 0 not in e._prompts
+    e.verify(tok, torch.tensor([6, 7]), one, pt)
+    assert prefills == [(1, [2] * 7)] and joins == [[1]] and e._fresh == {} and e._fresh_dirty == set()

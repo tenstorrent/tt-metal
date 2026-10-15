@@ -1524,25 +1524,43 @@ class TPGatedDeltaNet:
         """seed_spec_state for the users in ``rows`` only; every other user's ring blocks and E_prev row are kept.
         One fixed program per user offset: warm every user before trace capture."""
         assert self._spec_ring is not None, "seed_spec_rows before prepare_spec_verify"
-        B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
+        Nv, Dk, Dv, K, C = self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
         T = self._spec_shape[1]
         rows = {int(u) for u in rows}
         self.sync_conv_win()
+        ring_parts = {}
+        for u in sorted(rows):
+            s = ttnn.slice(self.rec_state, (u, 0, 0, 0), (u + 1, Nv, Dk, Dv))
+            if s.dtype != ttnn.float32:
+                c = ttnn.typecast(s, ttnn.float32)
+                ttnn.deallocate(s)
+                s = c
+            ring_parts[u] = s
+        full = (
+            self._conv_win_buf
+            if self._spec_win_pad is None
+            else ttnn.concat([self._conv_win_buf, self._spec_win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
+        e_parts = {u: ttnn.slice(full, (u, 0, 0), (u + 1, K - 1 + T, C)) for u in sorted(rows)}
+        self._write_spec_rows(ring_parts, e_parts)
+        if full is not self._conv_win_buf:
+            ttnn.deallocate(full)
+        self._conv_taps_stale, self._conv_win_stale = False, False
+
+    def _write_spec_rows(self, ring_parts, e_parts):
+        """Write per-user device tensors ([1, Nv, Dk, Dv] fp32 / [1, K-1+T, C]) into ring slot 0 / the E_prev row;
+        users not given keep theirs. Deallocates the given tensors."""
+        assert self._spec_ring is not None, "_write_spec_rows before prepare_spec_verify"
+        B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
+        T = self._spec_shape[1]
         ring4 = ttnn.reshape(self._spec_ring, (1, T * B * Nv, Dk, Dv))
         assert (
             ring4.buffer_address() == self._spec_ring.buffer_address()
         ), "the rank-4 ring view copied instead of aliasing; slice_write would write to a temporary"
-        parts = []
-        for u in range(B):
-            if u in rows:
-                s = ttnn.slice(self.rec_state, (u, 0, 0, 0), (u + 1, Nv, Dk, Dv))
-                if s.dtype != ttnn.float32:
-                    c = ttnn.typecast(s, ttnn.float32)
-                    ttnn.deallocate(s)
-                    s = c
-            else:
-                s = ttnn.slice(ring4, (0, u * Nv, 0, 0), (1, (u + 1) * Nv, Dk, Dv))
-            parts.append(s)
+        parts = [
+            ring_parts[u] if u in ring_parts else ttnn.slice(ring4, (0, u * Nv, 0, 0), (1, (u + 1) * Nv, Dk, Dv))
+            for u in range(B)
+        ]
         blk0 = ttnn.concat(parts, dim=1)
         for s in parts:
             ttnn.deallocate(s)
@@ -1550,22 +1568,46 @@ class TPGatedDeltaNet:
         ttnn.deallocate(blk0)
         ttnn.experimental.slice_write(sharded, ring4, [0, 0, 0, 0], [1, B * Nv, Dk, Dv], [1, 1, 1, 1])
         ttnn.deallocate(sharded)
-        full = (
-            self._conv_win_buf
-            if self._spec_win_pad is None
-            else ttnn.concat([self._conv_win_buf, self._spec_win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        )
         eparts = [
-            ttnn.slice(full if u in rows else self._verify_win_buf, (u, 0, 0), (u + 1, K - 1 + T, C)) for u in range(B)
+            e_parts[u] if u in e_parts else ttnn.slice(self._verify_win_buf, (u, 0, 0), (u + 1, K - 1 + T, C))
+            for u in range(B)
         ]
         new = ttnn.concat(eparts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for e in eparts:
             ttnn.deallocate(e)
-        if full is not self._conv_win_buf:
-            ttnn.deallocate(full)
         ttnn.copy(new, self._verify_win_buf)
         ttnn.deallocate(new)
-        self._conv_taps_stale, self._conv_win_stale = False, False
+
+    def save_spec_user(self, u):
+        """Host copy of user u's ring blocks (every slot) and E_prev row.
+
+        Returns ([D*T, Nv, Dk, Dv], [D, K-1+T, C]); D = devices.
+        """
+        assert self._spec_ring is not None, "save_spec_user before prepare_spec_verify"
+        B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
+        T = self._spec_shape[1]
+        r4 = ttnn.reshape(self._spec_ring, (T, B * Nv, Dk, Dv))
+        ring_dev = ttnn.slice(r4, (0, u * Nv, 0, 0), (T, (u + 1) * Nv, Dk, Dv))
+        e_dev = ttnn.slice(self._verify_win_buf, (u, 0, 0), (u + 1, K - 1 + T, C))
+        comp = ttnn.ConcatMeshToTensor(self.mesh, dim=0)
+        ring, e = ttnn.to_torch(ring_dev, mesh_composer=comp), ttnn.to_torch(e_dev, mesh_composer=comp)
+        ttnn.deallocate(ring_dev)
+        ttnn.deallocate(e_dev)
+        return ring, e
+
+    def load_spec_users(self, states):
+        """Write host states {u: (ring slot [D, Nv, Dk, Dv], E_prev row [D, K-1+T, C])}.
+
+        Goes into ring slot 0 / the E_prev row of each u; other users kept.
+        """
+        mapper = ttnn.ShardTensorToMesh(self.mesh, dim=0)
+
+        def up(x, dtype):
+            return ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=mapper)
+
+        ring_parts = {u: up(r, ttnn.float32) for u, (r, _) in states.items()}
+        e_parts = {u: up(e, self._verify_win_buf.dtype) for u, (_, e) in states.items()}
+        self._write_spec_rows(ring_parts, e_parts)
 
     def forward_verify_recurrent(self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None):
         """Batched hybrid spec-decode verify for GDN: advance B users x T candidate rows at once.

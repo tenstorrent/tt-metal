@@ -1083,7 +1083,7 @@ class Qwen36Model:
 
         ``slot``: GDN decode row this user's state ends up in; ``page_table`` is that user's [1, nb] row
         either way. The prefill itself is B=1, so slot > 0 (or any batched GDN binding) runs it on the
-        persistent B=1 scratch and copies the result into row ``slot`` with TPGatedDeltaNet.write_slot,
+        persistent B=1 scratch and copies the result on device into row ``slot`` with TPGatedDeltaNet.write_slot,
         leaving the other users' rows intact (as prefill_paged_slots does). A B=1 model
         (max_batch_size == 1, slot 0) prefills in place.
         """
@@ -1091,16 +1091,21 @@ class Qwen36Model:
         assert 0 <= slot < self.args.max_batch_size, f"slot {slot} out of range [0,{self.args.max_batch_size})"
         if self.args.max_batch_size > 1:
             dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
-            comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            dram = ttnn.DRAM_MEMORY_CONFIG
             prev = self._bind_gdn_prefill_scratch()
             try:
                 logits = self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk)
-                ttnn.synchronize_device(self.device)
-                rec_snap = [ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_layers]
-                conv_snap = [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_layers]
+                snap = [
+                    (
+                        ttnn.clone(dn.rec_state, memory_config=dram),
+                        [ttnn.clone(c, memory_config=dram) for c in dn.conv_states],
+                    )
+                    for dn in dn_layers
+                ]
             finally:
                 self._unbind_gdn_prefill_scratch(prev)
-            self._write_gdn_slot(slot, rec_snap, conv_snap)
+            for dn, (rec, convs) in zip(dn_layers, snap):
+                dn.write_slot(slot, rec, convs)  # consumes the clones
             return logits
         return self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk)
 
@@ -2609,12 +2614,13 @@ class Qwen36Model:
         """vLLM continuous-batching TP prefill: prefill each new request into ITS decode slot.
         Per-slot analogue of prefill_paged_peruser: a new request is prefilled while other decode
         slots are live, so each user's B=1 state must land in row empty_slots[u] WITHOUT disturbing
-        the others (GDN is a fixed [B,...] buffer indexed by slot, not paged). Same machinery as
-        prefill_traced_bucket_batched (B=1 scratch, pre-warmed masked-bucket, snapshot) but write_slot
-        into the slot (preserving live rows). Attention fills each user's blocks via its page-table
-        row. ``token_ids_list`` N [1,T_u]; ``page_table`` [N, max_blocks]; ``empty_slots`` N ints;
-        ``valid_lens`` optional. Returns N host torch logits [1,1,vocab] in call order. Call
-        allocate_kv_caches(batch_size=B) + batched warmup first; long prompts use prefill_traced_chunked via pre-warmed programs (no post-park compile).
+        the others (GDN is a fixed [B,...] buffer indexed by slot, not paged). Each request runs B=1 on
+        the persistent GDN scratch (pre-warmed masked bucket / chunk trace), then its state is cloned on
+        device and written into its slot with write_slot (preserving live rows) before the next request.
+        Attention fills each user's blocks via its page-table row. ``token_ids_list`` N [1,T_u];
+        ``page_table`` [N, max_blocks]; ``empty_slots`` N ints; ``valid_lens`` optional. Returns N host
+        torch logits [1,1,vocab] in call order. Call allocate_kv_caches(batch_size=B) + batched warmup
+        first; long prompts use prefill_traced_chunked via pre-warmed programs (no post-park compile).
         """
         assert self.num_devices > 1, "prefill_paged_slots is the TP (num_devices>1) path"
         N = len(token_ids_list)
@@ -2623,87 +2629,67 @@ class Qwen36Model:
         assert pt.shape[0] == N, "page_table must have one row per request"
         comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         dn_states = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        dram = ttnn.DRAM_MEMORY_CONFIG
 
-        # Bind the persistent B=1 GDN prefill scratch: prefill runs B=1 and its per-sequence reset
-        # would otherwise zero the batched [B,...] decode buffer (clobbering the live rows). This is
-        # the SAME scratch whose addresses the chunk-prefill trace baked at warmup, so the traced
-        # long-prompt path replays correctly; short prompts use the masked bucket on the same scratch.
-        prev = self._bind_gdn_prefill_scratch()
         host_logits = []
-        per_user_rec = []
-        per_user_conv = []
-        try:
-            for u in range(N):
-                toks = token_ids_list[u]
-                assert toks.shape[0] == 1, f"request {u}: token_ids must be [1, T_u]"
-                actual = int(valid_lens[u]) if valid_lens is not None else toks.shape[1]
-                assert actual >= 1, f"request {u}: empty prompt (actual_len={actual})"
-                # Trace-safe prefill into the B=1 scratch: prefill_traced_chunked runs short prompts in
-                # one masked-bucket forward and chunks longer ones; GDN state carries + is snapshotted below.
+        for u in range(N):
+            toks = token_ids_list[u]
+            assert toks.shape[0] == 1, f"request {u}: token_ids must be [1, T_u]"
+            actual = int(valid_lens[u]) if valid_lens is not None else toks.shape[1]
+            assert actual >= 1, f"request {u}: empty prompt (actual_len={actual})"
+            # Bind the persistent B=1 GDN prefill scratch: prefill runs B=1 and its per-sequence reset
+            # would otherwise zero the batched [B,...] decode buffer (clobbering the live rows). This is
+            # the SAME scratch whose addresses the chunk-prefill trace baked at warmup, so the traced
+            # long-prompt path replays correctly; short prompts use the masked bucket on the same scratch.
+            prev = self._bind_gdn_prefill_scratch()
+            try:
+                # prefill_traced_chunked runs short prompts in one masked-bucket forward and chunks longer ones.
                 lg = self.prefill_traced_chunked(toks[:, :actual], pt[u : u + 1], actual_len=actual)
                 host_logits.append(
                     ttnn.to_torch(lg, mesh_composer=comp).reshape(-1, self.args.vocab_size)[:1].float().view(1, 1, -1)
                 )
                 ttnn.deallocate(lg)
-                # Snapshot this user's B=1 scratch state (host round trip — the next user's reset
-                # overwrites the scratch in place; see prefill_traced_bucket_batched for why not clone).
-                per_user_rec.append([ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states])
-                per_user_conv.append(
-                    [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states]
-                )
-        finally:
-            # Always rebind the batched decode buffers (a mid-loop assert must not leave GDN on scratch).
-            # Does NOT free the scratch — it persists for the next request and keeps the trace valid.
-            self._unbind_gdn_prefill_scratch(prev)
-
-        # Write each user's snapshot into its decode slot, preserving the other live rows.
-        for u in range(N):
-            self._write_gdn_slot(int(empty_slots[u]), per_user_rec[u], per_user_conv[u])
+                # write_slot consumes these clones below, before the next request's chunk-trace replay
+                # could overwrite them (see prefill_traced_bucket_batched).
+                snap = [
+                    (
+                        ttnn.clone(dn.rec_state, memory_config=dram),
+                        [ttnn.clone(c, memory_config=dram) for c in dn.conv_states],
+                    )
+                    for dn in dn_states
+                ]
+            finally:
+                # Always rebind the batched decode buffers (a mid-call assert must not leave GDN on scratch).
+                # Does NOT free the scratch — it persists for the next request and keeps the trace valid.
+                self._unbind_gdn_prefill_scratch(prev)
+            for dn, (rec, convs) in zip(dn_states, snap):
+                dn.write_slot(int(empty_slots[u]), rec, convs)  # preserves the other live rows
         return host_logits
-
-    def _write_gdn_slot(self, slot, rec_snap, conv_snap):
-        """Upload one request's B=1 GDN state snapshot (host torch, per GDN layer) and write it
-        into decode `slot` of the batched buffers via TPGatedDeltaNet.write_slot (preserving the
-        other live rows). Shapes/mappers mirror _assemble_per_user_gdn (mesh dim 0 = devices).
-
-        rec_snap[li]:  host [num_devices, Nv, Dk, Dv]; conv_snap[li]: list of K host [num_devices, 1, D].
-        """
-        mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
-        dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
-        for li, dn in enumerate(dn_layers):
-            rec = ttnn.from_torch(
-                rec_snap[li],
-                dtype=dn.rec_state.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=mapper,
-            )
-            convs = [
-                ttnn.from_torch(
-                    conv_snap[li][m],
-                    dtype=dn.conv_states[m].dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.mesh_device,
-                    mesh_mapper=mapper,
-                )
-                for m in range(dn.K)
-            ]
-            dn.write_slot(slot, rec, convs)
 
     def warmup_gdn_slot_ops(self):
         """Compile the per-slot GDN state edits (write_slot per slot, remap_slots) before any trace is live."""
         if self._gdn_slot_ops_warmed:
             return
-        comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         dn_states = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        dram = ttnn.DRAM_MEMORY_CONFIG
         prev = self._bind_gdn_prefill_scratch()
         try:
-            rec = [ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states]
-            conv = [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states]
+            # The prefill paths' device copy: clone from the bound scratch, then write_slot.
+            dev_snaps = [
+                [
+                    (
+                        ttnn.clone(dn.rec_state, memory_config=dram),
+                        [ttnn.clone(c, memory_config=dram) for c in dn.conv_states],
+                    )
+                    for dn in dn_states
+                ]
+                for _ in range(self.args.max_batch_size)
+            ]
         finally:
             self._unbind_gdn_prefill_scratch(prev)
         for slot in range(self.args.max_batch_size):
-            self._write_gdn_slot(slot, rec, conv)
+            for dn, (r, cs) in zip(dn_states, dev_snaps[slot]):
+                dn.write_slot(slot, r, cs)
         # A full permutation touches every row, so one remap compiles every gather program.
         self._remap_gdn_slots(list(range(self.args.max_batch_size))[::-1])
         ttnn.synchronize_device(self.mesh_device)

@@ -42,6 +42,12 @@ class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
         return {"image": 1, "video": 1}
 
 
+class TT_Qwen3_5SpecProcessingInfo(TT_Qwen3_5ProcessingInfo):
+    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
+        # the spec engine's prefill is text-only: vLLM rejects visual items at admission (HTTP 400)
+        return {"image": 0, "video": 0}
+
+
 @MULTIMODAL_REGISTRY.register_processor(
     Qwen3VLMultiModalProcessor, info=TT_Qwen3_5ProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
 )
@@ -434,12 +440,17 @@ def _mesh_tp(default=4):
         return default
 
 
+@MULTIMODAL_REGISTRY.register_processor(
+    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5SpecProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
+)
 class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     """Plugin spec-decode contract adapter (B * (K+1) <= 32) over the MTP engine in tt/spec_engine.py."""
 
     _ENABLE_MTP = True
     _SPEC_K = int(os.environ.get("QWEN36_SPEC_K", "3"))  # vLLM warmup does not carry K
     _SUPPORTED_K = (3, 7, 11)
+    # decode_forward is overridden and does not execute the reload commands (DECODE_RELOAD_CONTRACT legacy mode)
+    decode_input_update_contract = 0
 
     # verify answers argmax_ids (greedy) or logits ([B, 1+K, V] for host acceptance);
     # the first token after prefill is host-sampled
@@ -464,11 +475,17 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             return SpecReject(reason=f"QWEN36_SPEC_K={k} unsupported; need one of {cls._SUPPORTED_K}", supported_k=())
         if max_num_seqs * (k + 1) > 32:
             return SpecReject(
-                reason=f"max_num_seqs={max_num_seqs} x (K+1)={k + 1} verify rows exceed the 32-row tile",
+                reason=f"max_num_seqs={max_num_seqs} x (K+1)={k + 1} verify rows exceed the 32-row tile"
+                " (K is fixed by QWEN36_SPEC_K)",
                 supported_k=tuple(x for x in cls._SUPPORTED_K if max_num_seqs * (x + 1) <= 32),
             )
         if requested_k < k:
             return SpecReject(reason=f"requested_k={requested_k} < engine K={k}", supported_k=(k,))
+        bs = getattr(getattr(vllm_config, "cache_config", None), "block_size", None)
+        if bs is not None and int(bs) != _BLOCK_SIZE:
+            return SpecReject(
+                reason=f"block_size={bs} unsupported; the engine's page tables use {_BLOCK_SIZE}", supported_k=()
+            )
         try:
             from models.demos.blackhole.qwen36.tt.spec_engine import spec_memory_costs
 
@@ -576,6 +593,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         N = tokens.shape[0]
         start_pos = kwargs.get("start_pos")
         assert start_pos is None or all(int(s) == 0 for s in start_pos), "no chunked prefill / prefix caching"
+        if self._has_visual(kwargs, "pixel_values") or self._has_visual(kwargs, "pixel_values_videos"):
+            raise ValueError("Qwen36MTPContractForCausalLM is text-only; image/video requests are not supported")
         eng = self._ensure_ready(kv_cache)
         slots = [int(x) for x in kwargs.get("empty_slots") or range(N)]
         table = self._table(page_table[:N])
@@ -586,7 +605,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         return torch.stack(rows).reshape(N, 1, -1), torch.zeros(N, dtype=torch.long)
 
     def decode_forward(self, *args, **kwargs):
-        from vllm_tt_plugin.spec_decode import VerifyOutput
+        from vllm_tt_plugin.spec_decode import VerifyOutput, check_spec_side_tensors
 
         def _read(name, pos):
             return kwargs[name] if name in kwargs else (args[pos] if pos < len(args) else None)
@@ -599,10 +618,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         num_valid_drafts = kwargs.pop("num_valid_drafts")
         accepted_counts = kwargs.pop("accepted_counts")
         spec_mode = kwargs.pop("spec_mode")
+        check_spec_side_tensors(num_valid_drafts, accepted_counts, int(tokens.shape[0]), self._SPEC_K)
         assert kwargs.get("page_tables_per_layer") is None, "per-layer page tables unsupported"
         eng = self._ensure_ready()
-        if remap is not None:
-            eng.remap_slots(remap)
         res = eng.decode_forward(
             tokens,
             start_pos,
@@ -610,6 +628,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             accepted_counts=accepted_counts,
             page_table=self._table(page_table),
             spec_mode=spec_mode,
+            slot_remap=remap,
         )
         logits = res.logits if spec_mode == "logits" else None
         return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=res.argmax_ids, hidden=None, logits=logits)
@@ -623,6 +642,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         B = int(tokens.shape[0])
         if nv is not None and bool(torch.as_tensor(nv).any()):
             raise ValueError("narrow decode step carries drafts")
+        if ac is not None:
+            from vllm_tt_plugin.spec_decode import check_spec_side_tensors
+
+            check_spec_side_tensors(torch.zeros(B, dtype=torch.int32), ac, B, self._SPEC_K, call="decode")
         # Contract 4d: an ordinary step after a multi-token commit carries the count; it picks the state slot.
         acc = torch.ones(B, dtype=torch.int32) if ac is None else torch.as_tensor(ac).reshape(B).to(torch.int32)
         assert kwargs.get("page_tables_per_layer") is None, "per-layer page tables unsupported"
@@ -632,8 +655,6 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         pos = torch.full((B, K + 1), -1, dtype=torch.int32)
         pos[:, 0] = torch.as_tensor(start_pos).reshape(B).to(torch.int32)
         eng = self._ensure_ready()
-        if remap is not None:
-            eng.remap_slots(remap)
         res = eng.decode_forward(
             tok,
             pos,
@@ -641,12 +662,15 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             accepted_counts=acc,
             page_table=self._table(page_table),
             spec_mode="logits",
+            slot_remap=remap,
         )
         return res.logits[:, :1].float()
 
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
-        from vllm_tt_plugin.spec_decode import DraftOutput
+        from vllm_tt_plugin.spec_decode import DraftOutput, check_spec_side_tensors
 
+        B = int(committed_tokens.shape[0])
+        check_spec_side_tensors(torch.zeros(B, dtype=torch.int32), accepted_counts, B, self._SPEC_K, call="propose")
         res = self._engine().propose_draft_tokens(
             num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=hidden
         )

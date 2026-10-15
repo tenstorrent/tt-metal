@@ -48,7 +48,12 @@ from models.demos.blackhole.qwen36.tests.spec_helpers import (  # noqa: E402
 )
 from models.demos.blackhole.qwen36.tests.test_spec_lossless import _N_LAYERS  # noqa: E402
 from models.demos.blackhole.qwen36.tt import qwen36_vllm  # noqa: E402
-from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM, Qwen36MTPContractForCausalLM  # noqa: E402
+from models.demos.blackhole.qwen36.tt.qwen36_vllm import (  # noqa: E402
+    Qwen36ForCausalLM,
+    Qwen36MTPContractForCausalLM,
+    TT_Qwen3_5ProcessingInfo,
+    TT_Qwen3_5SpecProcessingInfo,
+)
 from models.demos.blackhole.qwen36.tt.spec_engine import (  # noqa: E402
     DraftResult,
     VerifyResult,
@@ -324,11 +329,14 @@ def test_spec_vllm_class_runner(mesh_device, monkeypatch):
 
 
 def _cached_ckpt(repo="Qwen/Qwen3.8-27B"):
-    """Local snapshot dir of ``repo`` from the HF cache, or None when it is not cached."""
+    """Local snapshot dir of ``repo`` (or HF_MODEL, a hub id or a local dir), or None when it is not cached."""
+    name = os.environ.get("HF_MODEL", repo)
+    if os.path.isdir(name):
+        return name
     try:
         from huggingface_hub import snapshot_download
 
-        return snapshot_download(os.environ.get("HF_MODEL", repo), local_files_only=True)
+        return snapshot_download(name, local_files_only=True)
     except Exception:
         return None
 
@@ -417,6 +425,30 @@ def test_spec_plan_broken_config_rejected():
     assert isinstance(CLS.spec_plan(SimpleNamespace(), 1, 3), SpecReject)
 
 
+@pytest.mark.parametrize("bs,ok", [(128, False), (64, True)])
+def test_spec_plan_block_size(hf_config, bs, ok):
+    """Only the engine's 64-token block size is planned."""
+    cfg = _vcfg(hf_config)
+    cfg.cache_config = SimpleNamespace(block_size=bs)
+    r = CLS.spec_plan(cfg, 1, 3)
+    if ok:
+        assert isinstance(r, SpecPlan)
+    else:
+        assert isinstance(r, SpecReject) and "block_size=128" in r.reason and r.supported_k == ()
+
+
+def test_decode_input_update_contract():
+    """The spec class opts out of the reload commands; the base class keeps them."""
+    assert CLS.decode_input_update_contract == 0
+    assert Qwen36ForCausalLM.decode_input_update_contract == 1
+
+
+def test_processor_info_text_only():
+    """The spec class registers a text-only processor info; the base class keeps its own."""
+    assert CLS._processor_factory.info is TT_Qwen3_5SpecProcessingInfo
+    assert Qwen36ForCausalLM._processor_factory.info is TT_Qwen3_5ProcessingInfo
+
+
 def test_plugin_admission_accepts_class(hf_config):
     """The plugin's resolve_speculative_plan admits the class with effective_k 3."""
     plan = resolve_speculative_plan(_vcfg(hf_config), CLS, CLS.model_capabilities, 1)
@@ -441,7 +473,8 @@ class FakeEngine:
         self.K, self.V = K, V
         self.calls = []
 
-    def decode_forward(self, tokens, start_pos, **kw):
+    def decode_forward(self, tokens, start_pos, slot_remap=None, **kw):
+        kw["slot_remap"] = slot_remap
         self.calls.append(("decode_forward", tokens, start_pos, kw))
         logits = torch.arange(1 + self.K, dtype=torch.bfloat16)[None, :, None].expand(1, 1 + self.K, self.V)
         return VerifyResult(
@@ -460,9 +493,6 @@ class FakeEngine:
 
     def release(self, slot):
         self.calls.append(("release", slot))
-
-    def remap_slots(self, remap):
-        self.calls.append(("remap_slots", [int(x) for x in remap]))
 
 
 @pytest.fixture
@@ -517,7 +547,7 @@ def test_decode_forward_logits_mode_carries_logits(gen_eng):
 
 
 def test_decode_forward_slot_remap_verify(gen_eng):
-    """A verify step applies slot_remap on the engine once, before engine.decode_forward; None skips it."""
+    """A verify step passes slot_remap into a single engine.decode_forward call; None stays None."""
     gen, eng = gen_eng
     kw = dict(
         tokens=torch.tensor([[1, 2, 3, 4]], dtype=torch.int32), start_pos=torch.tensor([10], dtype=torch.int32),
@@ -526,22 +556,22 @@ def test_decode_forward_slot_remap_verify(gen_eng):
         spec_mode="argmax_ids",
     )  # fmt: skip
     gen.decode_forward(**kw)
-    assert [c[0] for c in eng.calls] == ["decode_forward"]
+    assert [c[0] for c in eng.calls] == ["decode_forward"] and eng.calls[0][3]["slot_remap"] is None
     eng.calls.clear()
     gen.decode_forward(**kw, slot_remap=torch.tensor([1, 0]))
-    assert [c[0] for c in eng.calls] == ["remap_slots", "decode_forward"]
-    assert eng.calls[0][1] == [1, 0]
+    assert [c[0] for c in eng.calls] == ["decode_forward"]
+    assert eng.calls[0][3]["slot_remap"].tolist() == [1, 0]
 
 
 def test_decode_forward_slot_remap_narrow(gen_eng):
-    """A narrow step applies slot_remap on the engine once, before engine.decode_forward."""
+    """A narrow step passes slot_remap into a single engine.decode_forward call."""
     gen, eng = gen_eng
     gen.decode_forward(
         tokens=torch.tensor([7]), start_pos=torch.tensor([10]), page_table=torch.ones(1, 8, dtype=torch.int32),
         slot_remap=torch.tensor([1, 0]),
     )  # fmt: skip
-    assert [c[0] for c in eng.calls] == ["remap_slots", "decode_forward"]
-    assert eng.calls[0][1] == [1, 0]
+    assert [c[0] for c in eng.calls] == ["decode_forward"]
+    assert eng.calls[0][3]["slot_remap"].tolist() == [1, 0]
 
 
 @pytest.mark.parametrize("tok_shape", [(1,), (1, 1)])
@@ -567,12 +597,40 @@ def test_decode_forward_narrow_counts(gen_eng, expect_error):
     base = dict(tokens=torch.tensor([7]), start_pos=torch.tensor([10]), page_table=torch.ones(1, 8, dtype=torch.int32))
     assert gen.decode_forward(**base).shape[:2] == (1, 1)
     assert _last(eng, "decode_forward")[3]["accepted_counts"].tolist() == [1]
-    gen.decode_forward(**base, accepted_counts=torch.tensor([2]))
+    gen.decode_forward(**base, accepted_counts=torch.tensor([2], dtype=torch.int32))
     kw = _last(eng, "decode_forward")[3]
     assert kw["accepted_counts"].tolist() == [2] and kw["accepted_counts"].dtype == torch.int32
     assert kw["num_valid_drafts"].tolist() == [0]
     with expect_error(ValueError, ".*"):
-        gen.decode_forward(**base, num_valid_drafts=torch.tensor([1]))
+        gen.decode_forward(**base, num_valid_drafts=torch.tensor([1], dtype=torch.int32))
+
+
+@pytest.mark.parametrize("bad", ["nv_int64", "ac_zero"])
+def test_decode_forward_verify_rejects_bad_side_tensors(gen_eng, bad, expect_error):
+    """Invalid side tensors raise ValueError before the engine sees any call."""
+    gen, eng = gen_eng
+    nv, ac = torch.tensor([3], dtype=torch.int32), torch.tensor([1], dtype=torch.int32)
+    if bad == "nv_int64":
+        nv, msg = nv.long(), "num_valid_drafts must be int32"
+    else:
+        ac, msg = torch.tensor([0], dtype=torch.int32), "accepted_counts entries must lie in"
+    with expect_error(ValueError, msg):
+        gen.decode_forward(
+            tokens=torch.tensor([[1, 2, 3, 4]], dtype=torch.int32), start_pos=torch.tensor([10], dtype=torch.int32),
+            page_table=torch.arange(1, 9, dtype=torch.int32).reshape(1, 8),
+            num_valid_drafts=nv, accepted_counts=ac, spec_mode="argmax_ids",
+        )  # fmt: skip
+    assert eng.calls == []
+
+
+def test_decode_forward_narrow_rejects_out_of_range_counts(gen_eng, expect_error):
+    """Narrow accepted_counts outside [1, 1+K] raises ValueError before the engine call."""
+    gen, eng = gen_eng
+    base = dict(tokens=torch.tensor([7]), start_pos=torch.tensor([10]), page_table=torch.ones(1, 8, dtype=torch.int32))
+    for bad in (0, 5):
+        with expect_error(ValueError, "accepted_counts entries must lie in"):
+            gen.decode_forward(**base, accepted_counts=torch.tensor([bad], dtype=torch.int32))
+    assert eng.calls == []
 
 
 def test_warmup_model_decode_enable_trace_routing(monkeypatch):
@@ -616,6 +674,17 @@ def test_prefill_forward(gen_eng):
     _, slot, toks, table = _last(eng, "prefill")
     assert slot == 0 and toks.tolist() == list(range(L))
     assert table.shape == (1, spec_table_width(4096, 3, 64))
+
+
+def test_prefill_forward_rejects_visual(gen_eng, expect_error):
+    """Image/video inputs raise ValueError before the engine is touched."""
+    gen, eng = gen_eng
+    tokens = torch.arange(20, dtype=torch.long).reshape(1, 20)
+    pt = torch.arange(1, 6, dtype=torch.int32).reshape(1, 5)
+    for key in ("pixel_values", "pixel_values_videos"):
+        with expect_error(ValueError, "text-only"):
+            gen.prefill_forward(tokens, pt, None, prompt_lens=np.array([7]), empty_slots=[0], **{key: [torch.zeros(1)]})
+    assert eng.calls == []
 
 
 def test_prefill_forward_multi_row(gen_eng):

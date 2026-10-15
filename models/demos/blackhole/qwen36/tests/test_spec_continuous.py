@@ -94,14 +94,15 @@ class BatchDriver:
         if max_new == 1:
             self._finish(row)
 
-    def step(self):
+    def step(self, skip=frozenset()):
+        """One decode step; requests whose id is in skip are left out (padding rows) and keep their state."""
         eng = self.eng
         tokens = torch.zeros((B, 1 + K), dtype=torch.int32)
         start = torch.full((B, 1 + K), PAD, dtype=torch.int32)
         nvd = torch.zeros(B, dtype=torch.int32)
         acc = torch.ones(B, dtype=torch.int32)
         pt = torch.zeros((B, NB), dtype=torch.int32)
-        live = self.live()
+        live = [r for r in self.live() if self.reqs[r]["rid"] not in skip]
         pos0, drafts, ns = {}, {}, {}
         for r in live:
             q = self.reqs[r]
@@ -161,10 +162,10 @@ class BatchDriver:
         self.eng.remap_slots(perm)
         self.reqs = [self.reqs[j] for j in perm]
 
-    def run(self, schedule, remaps=None):
+    def run(self, schedule, remaps=None, skips=None):
         """schedule: step index -> [(row, rid, prompt)] admissions, made at that step or the first later one
         where the row is free. remaps: step index -> slot_remap permutation, applied after that step's admissions
-        and before its decode."""
+        and before its decode. skips: step index -> request ids left out of that step's decode."""
         waiting = []
         while True:
             waiting += schedule.get(self.steps, [])
@@ -176,7 +177,7 @@ class BatchDriver:
                 self.remap(remaps[self.steps])
             if not self.live() and not waiting and not any(s > self.steps for s in schedule):
                 break
-            self.step()
+            self.step((skips or {}).get(self.steps, frozenset()))
         return self.outs
 
 
@@ -276,6 +277,42 @@ def test_row_moves_keep_state(mesh_device):
         )
         for u in range(B):
             _assert_same(f"request {u} after row moves", moved[u], full[u])
+        assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_left_out_rows_keep_state(mesh_device):
+    """Requests left out of decode steps (running, or before their first decode) keep their full-batch tokens."""
+    model, eng, tokenizer, prompts = _setup(mesh_device)
+    n_prog = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        full = BatchDriver(eng, seed=1).run({0: [(u, u, prompts[u]) for u in range(B)]})
+        out = BatchDriver(eng, seed=6).run(
+            {
+                0: [(u, u, prompts[u]) for u in (0, 1, 2, 3, 4)],
+                3: [(5, 5, prompts[5])],
+                4: [(6, 6, prompts[6])],
+                8: [(7, 7, prompts[7])],
+            },
+            skips={
+                2: {1, 3},  # running requests left out for a step
+                3: {1, 5},  # request 1 for a second step; request 5 left out before its first decode
+                4: {5},  # request 6 seeds while 5 waits: 5 is re-prefilled when it returns
+                6: {0, 1, 2, 3, 4, 6},  # every live request but one left out
+                9: {2},
+                10: {2},  # request 2 left out across a row move
+            },
+            remaps={10: [7, 6, 5, 4, 3, 2, 1, 0]},
+        )
+        for u in range(B):
+            _assert_same(f"request {u} left out of some steps", out[u], full[u])
+        assert not eng._parked, f"parked slots left behind: {sorted(eng._parked)}"
         assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
     finally:
         mesh_device.set_program_cache_misses_allowed(True)
