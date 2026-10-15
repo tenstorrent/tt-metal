@@ -72,7 +72,18 @@ DEVICE_STEPS = {
         "moe_add",
         "ffn_residual",
     },
-    "swa_engram": {"engram_rows", "engram_kv", "engram_add"},
+    # the attention side reuses the swa modules (component gates C.swa_engram.attn_hc .. attention passed on them)
+    "swa_engram": {
+        "engram_rows",
+        "engram_kv",
+        "engram_add",
+        "attn_hc",
+        "attn_collapse",
+        "attn_norm",
+        "q_a",
+        "kv",
+        "attention",
+    },
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].

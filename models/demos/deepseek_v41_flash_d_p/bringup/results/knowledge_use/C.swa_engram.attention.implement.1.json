@@ -1,0 +1,47 @@
+{
+ "used": [
+  {
+   "id": "DS41-17",
+   "how": "confirmed the reused TtWindowCache serves layer 1's 0_window_kv at every server start, so only the hybrid registration was missing",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "read the pcc=0 FAIL block before the real pass as the precompile collect pass, not a failure",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "steps that pass on a reused module (no implement agent) are not added to hooks DEVICE_STEPS, so the hybrid device model and contract tests miss them (added as DS41-28)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "known_issues.md touched (DS41-28 added); DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x the step's own component error, no cap', nothing to change"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "DS41-28"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa_engram.attention",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T20:44:58",
+  "head": "b2b0e1d3dad",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa_engram.attention.implement.1.json"
+  ]
+ }
+}
