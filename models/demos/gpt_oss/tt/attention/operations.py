@@ -18,8 +18,9 @@ def deterministic_prefill_allreduce():
     (reduce_scatter_minimal_async + all_gather_async on the CCLManager's semaphores). Inside the full model on a
     Blackhole 1x4 ring that async pair leaves device 0's copy of the reduced output stale in a few tiles of every call,
     so the TP replicas of the residual stream drift apart and two prefills of the same prompt do not give bit-identical
-    logits. ttnn.all_reduce (as used by the decode attention and the MoE) is bit-reproducible; it costs prefill time
-    (tests/unit/test_prefill_determinism.py)."""
+    logits. ttnn.all_reduce (as used by the decode attention and the MoE) is bit-reproducible; with the real weights
+    on a QuietBox 2 it costs no measurable prefill time at 128 to 4096 tokens (tests/unit/test_prefill_determinism.py).
+    """
     return os.environ.get(ENV_DETERMINISTIC_PREFILL_ALLREDUCE, "0").strip() == "1"
 
 
