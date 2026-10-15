@@ -5,7 +5,8 @@
 // Single-core sender worker for the stage gate tests. The host drives it through
 // a small control block in this core's L1:
 //   word 0             : go count; chunk i is sent once go > i
-//   words 1 + 2i, 2 + 2i: slot id and gate mode for chunk i
+//   word 1             : cancel; nonzero makes the worker exit from either wait
+//   words 2 + 2i, 3 + 2i: slot id and gate mode for chunk i
 //
 // Per chunk i:
 //   1. wait for go > i,
@@ -62,9 +63,12 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_chunks; ++i) {
         do {
             invalidate_l1_cache();
+            if (control[1] != 0) {
+                return;
+            }
         } while (control[0] <= i);
-        const uint32_t slot = control[1 + 2 * i];
-        const uint32_t mode = control[2 + 2 * i];
+        const uint32_t slot = control[2 + 2 * i];
+        const uint32_t mode = control[3 + 2 * i];
 
         const uint32_t base = first_value + i * chunk_elems;
         for (uint32_t p = 0; p < num_pages; ++p) {
@@ -96,6 +100,9 @@ void kernel_main() {
 
         while (*consumed_sem == 0) {
             invalidate_l1_cache();
+            if (control[1] != 0) {
+                return;
+            }
         }
         *consumed_sem = 0;
     }

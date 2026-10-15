@@ -409,6 +409,16 @@ public:
             coords_.begin(), coords_.end(), [&](const auto& c) { return receiver_->is_stage_gate_open(c, gate); });
     }
 
+    // Open every gate and ack whatever arrives, so a test that bails out early can tear down.
+    void drain() {
+        for (uint32_t g = 0; g < receiver_->get_num_stage_gates(); ++g) {
+            set_gate(g, /*open=*/true);
+        }
+        while (num_consumed_ < num_sent_ && wait_released(num_consumed_ + 1, kGateReleaseTimeout)) {
+            consume();
+        }
+    }
+
 private:
     static bool wait_until(std::chrono::milliseconds timeout, const std::function<bool()>& done) {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -1047,6 +1057,12 @@ void verify_stage_gate_lease_mode(
     receiver->wait_for_fabric_links();
     sender->wait_for_fabric_links();
     auto receiver_done = std::async(std::launch::async, [&] { Finish(receiver_cq); });
+    // Runs before receiver_done's destructor: if an assert below fails, let the held transfer
+    // through so the receiver hands its links back and the pending Finish() returns.
+    struct DrainOnExit {
+        StageGateHarness& h;
+        ~DrainOnExit() { h.drain(); }
+    } drain_on_exit{h};
     EXPECT_EQ(receiver_done.wait_for(kGateHeldWindow), std::future_status::timeout)
         << "receiver handed its link back while its transfer was held at a closed gate";
     for (const auto& coord : h.coords()) {
@@ -1095,8 +1111,8 @@ public:
         worker_(sender->get_worker_cores().start_coord) {
         TT_FATAL(core_range_volume(sender->get_worker_cores()) == 1, "StageGateProducer drives one worker core");
 
-        // Control block: {go, slot0, mode0, slot1, mode1, ...}.
-        std::vector<uint32_t> control{0u};
+        // Control block: {go, cancel, slot0, mode0, slot1, mode1, ...}.
+        std::vector<uint32_t> control{0u, 0u};
         for (const auto& c : chunks) {
             control.push_back(c.slot);
             control.push_back(static_cast<uint32_t>(c.mode));
@@ -1137,6 +1153,18 @@ public:
 
     // Wait for the worker to finish every chunk.
     void finish() { Finish(mesh_->mesh_command_queue()); }
+
+    // If a test bails out early, stop the worker and drain it before freeing its control block.
+    ~StageGateProducer() {
+        std::vector<uint32_t> cancel{1u};
+        for (const auto& coord : coords_) {
+            tt::tt_metal::detail::WriteToDeviceL1(
+                mesh_->get_device(coord), worker_, control_addr_ + sizeof(uint32_t), cancel);
+        }
+        Finish(mesh_->mesh_command_queue());
+    }
+    StageGateProducer(const StageGateProducer&) = delete;
+    StageGateProducer& operator=(const StageGateProducer&) = delete;
 
 private:
     MeshWorkload make_workload(D2DStreamServiceSender* sender, uint32_t num_chunks) {
