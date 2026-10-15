@@ -3,6 +3,7 @@
 
 """CPU regression for the common runner's GPT-OSS request call contract."""
 
+import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -147,6 +148,45 @@ class PrefillRuntimeContractTests(unittest.TestCase):
                 d2h_service=object(),
             )
         runtime.model.prefill_forward.assert_not_called()
+
+    def test_reduced_first_rank_builds_only_requested_layers_without_mutating_config(self):
+        from models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss import GptOssPrefillAdapter
+
+        hf_config = SimpleNamespace(num_hidden_layers=36, layer_types=list(range(36)))
+        params = SimpleNamespace(
+            num_layers=2,
+            max_seq_len=1024,
+            mesh_shape=(4, 8),
+            chunk_size=1024,
+            num_users=2,
+            sp_axis=0,
+            tp_axis=1,
+            weight_cache_path=None,
+            is_first_rank=True,
+            is_last_rank=True,
+            first_layer_idx=0,
+        )
+        runtime_sentinel = object()
+        with (
+            patch.dict(os.environ, {"GPT_OSS_WEIGHTS_FROM_CACHE": "1"}, clear=False),
+            patch(
+                "models.demos.gpt_oss_d_p.tt.tt_prefill_runtime.TtPrefillRuntime",
+                return_value=runtime_sentinel,
+            ) as runtime_cls,
+        ):
+            result = GptOssPrefillAdapter().build_runtime(
+                mesh_device=object(),
+                hf_config=hf_config,
+                params=params,
+            )
+
+        self.assertIs(result, runtime_sentinel)
+        reduced = runtime_cls.call_args.kwargs["hf_config"]
+        self.assertIsNot(reduced, hf_config)
+        self.assertEqual(reduced.num_hidden_layers, 2)
+        self.assertEqual(reduced.layer_types, [0, 1])
+        self.assertEqual(hf_config.num_hidden_layers, 36)
+        self.assertEqual(hf_config.layer_types, list(range(36)))
 
 
 if __name__ == "__main__":
