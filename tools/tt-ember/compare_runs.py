@@ -63,15 +63,21 @@ def load_runs(out_root: Path, filters: list[str]) -> dict[str, pd.DataFrame]:
     return runs
 
 
+def grid_union(runs: dict[str, pd.DataFrame]) -> list[str]:
+    """Every grid that appears in any run, ordered by core count (then by name)."""
+    grids = {str(g) for df in runs.values() for g in df["grid"]}
+
+    def cores(grid: str) -> int:
+        x, _, y = grid.partition("x")
+        return int(x) * int(y) if x.isdigit() and y.isdigit() else 0
+
+    return sorted(grids, key=lambda g: (cores(g), g))
+
+
 def plot_metric(runs: dict[str, pd.DataFrame], column: str, ylabel: str, title: str, out_path: Path, dpi: int) -> None:
     """One PNG: all runs overlaid on the same axes, x = grid string."""
 
-    # Collect union of all grids in order of first appearance
-    all_grids: list[str] = []
-    for df in runs.values():
-        for g in df["grid"].astype(str):
-            if g not in all_grids:
-                all_grids.append(g)
+    all_grids = grid_union(runs)
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
@@ -105,11 +111,7 @@ def plot_metric(runs: dict[str, pd.DataFrame], column: str, ylabel: str, title: 
 def plot_overcompute(runs: dict[str, pd.DataFrame], column: str, out_path: Path, dpi: int) -> None:
     """Plot (ideal - measured) for each run on one graph."""
 
-    all_grids: list[str] = []
-    for df in runs.values():
-        for g in df["grid"].astype(str):
-            if g not in all_grids:
-                all_grids.append(g)
+    all_grids = grid_union(runs)
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
@@ -157,11 +159,7 @@ def plot_overcompute(runs: dict[str, pd.DataFrame], column: str, out_path: Path,
 def plot_overcompute_percentage(runs: dict[str, pd.DataFrame], column: str, out_path: Path, dpi: int) -> None:
     """Plot ideal / measured for each run — values > 1 mean measured is below ideal."""
 
-    all_grids: list[str] = []
-    for df in runs.values():
-        for g in df["grid"].astype(str):
-            if g not in all_grids:
-                all_grids.append(g)
+    all_grids = grid_union(runs)
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
@@ -211,11 +209,7 @@ def plot_percentage_change(
 ) -> None:
     """Plot % change relative to first (minimum) grid: (value[i] - value[0]) / value[0] * 100."""
 
-    all_grids: list[str] = []
-    for df in runs.values():
-        for g in df["grid"].astype(str):
-            if g not in all_grids:
-                all_grids.append(g)
+    all_grids = grid_union(runs)
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
@@ -269,6 +263,14 @@ def main() -> int:
         "--output-dir", type=Path, default=None, help="Where to save comparison PNGs. Default: <out-root>/comparison/"
     )
     parser.add_argument("--dpi", type=int, default=150)
+    parser.add_argument(
+        "--no-overcompute",
+        action="store_true",
+        help=(
+            "Skip the overcompute charts. Their ideal line assumes work grows with the core count, "
+            "which only holds for fixed-per-core runs; use this for split-mode runs."
+        ),
+    )
     args = parser.parse_args()
 
     out_root = args.out_root.expanduser().resolve()
@@ -327,19 +329,19 @@ def main() -> int:
             dpi=args.dpi,
         )
 
-    plot_overcompute(
-        runs=runs,
-        column="dynamic_charge_peak_mah",
-        out_path=output_dir / "overcompute.png",
-        dpi=args.dpi,
-    )
-
-    plot_overcompute_percentage(
-        runs=runs,
-        column="dynamic_charge_peak_mah",
-        out_path=output_dir / "overcompute_percentage.png",
-        dpi=args.dpi,
-    )
+    if not args.no_overcompute:
+        plot_overcompute(
+            runs=runs,
+            column="dynamic_charge_peak_mah",
+            out_path=output_dir / "overcompute.png",
+            dpi=args.dpi,
+        )
+        plot_overcompute_percentage(
+            runs=runs,
+            column="dynamic_charge_peak_mah",
+            out_path=output_dir / "overcompute_percentage.png",
+            dpi=args.dpi,
+        )
 
     print("\nDone.")
     return 0
