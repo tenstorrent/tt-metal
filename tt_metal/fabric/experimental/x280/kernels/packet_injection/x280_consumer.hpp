@@ -683,7 +683,7 @@ private:
         phase_start_mtime_ = Transport::mtime();
 
         // The timed-loop rule (transport_bandwidth_frontend_cxx.hpp): the phase
-        // works on register copies of the consumer's state, which lives on the
+        // works on local copies of the consumer's state, which lives on the
         // uncached LIM stack and arena, and stores them back before anything
         // reads them through the object.
         const uint32_t P = P_;
@@ -870,7 +870,7 @@ private:
         phase_start_mtime_ = Transport::mtime();
 
         // The timed-loop rule (transport_bandwidth_frontend_cxx.hpp): the phase
-        // works on register copies of the consumer's state, which lives on the
+        // works on local copies of the consumer's state, which lives on the
         // uncached LIM stack and arena, and stores them back before anything
         // reads them through the object.
         const uint32_t P = P_;
