@@ -62,6 +62,11 @@ ROUTED_SCATTER_GROUPS = 32
 # token blocks of at most this many tokens so that intermediate (47 MB at 2048) and the reduced block live in L1 instead
 # of a DRAM round trip; at C = 8192 this measured 2.39 -> 1.91 ms per layer for gather + reduce + bf8 cast (one device).
 ROUTED_COMBINE_BLOCK = 2048
+# Largest chunk-size-dependent transient this module places in L1 (per device, interleaved). Above it the tensor goes
+# to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1. The default chunk (8192) puts
+# the dispatch-gather input x_rm (C*H*2 = 47 MB) under it; the combine block is bounded by ROUTED_COMBINE_BLOCK
+# (2048 tokens: [Cs, k, H] bf16 = 47 MB, the reduced block 12 MB), which is also under it.
+ROUTED_L1_CAP_BYTES = 64 << 20
 # Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py).
 ROUTED_PREFILL_WEIGHTS_VERSION = 1
 ROUTED_CACHE_SUBDIR = "experts_routed_ep"
@@ -99,6 +104,11 @@ def routed_weights_dtype(layer_idx):
         return ttnn.bfloat8_b
     layers = {int(v) for v in spec.split(",") if v.strip() != ""}
     return ttnn.bfloat8_b if layer_idx is not None and int(layer_idx) in layers else ROUTED_WEIGHTS_DTYPE
+
+
+def _l1_if_fits(nbytes):
+    """L1 for a transient of nbytes per device when it fits under ROUTED_L1_CAP_BYTES, else DRAM."""
+    return ttnn.L1_MEMORY_CONFIG if nbytes <= ROUTED_L1_CAP_BYTES else ttnn.DRAM_MEMORY_CONFIG
 
 
 def routed_prefill_mesh_supported(mesh_device, num_experts=32):
@@ -618,7 +628,8 @@ class RoutedPrefillExperts:
             ttnn.deallocate(tok_u)
         # The row-major copy of x lives in L1 (47 MB at C = 8192) only for the gather: the untilize skips a DRAM write
         # and the gather reads the local pairs' rows from L1 (measured 0.94 -> 0.77 ms per layer at 8K, one device).
-        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # A chunk whose copy exceeds ROUTED_L1_CAP_BYTES (C > 11650) keeps it in DRAM.
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=_l1_if_fits(C * H * 2))
         x_rm = ttnn.reshape(x_rm, (C, H))
         # padding_idx=0: every row that reads token 0 (about 3/4 of the k*C buffer rows on each of the N devices are
         # unwritten and read token 0) is served from a per-core L1 copy of x[0] instead of DRAM; same values.
@@ -664,6 +675,9 @@ class RoutedPrefillExperts:
         # One token block (ROUTED_COMBINE_BLOCK) at a time: the [Cs, k, H] gather output and the reduced [Cs, H] block
         # stay in L1 (interleaved), so only the bf8 block is written to DRAM. Bit-identical to one DRAM-resident pass.
         Cs = min(C, ROUTED_COMBINE_BLOCK)
+        # Bounded by ROUTED_COMBINE_BLOCK, not by C; the cap only guards a larger block constant.
+        combined_mem = _l1_if_fits(Cs * k * H * 2)
+        part_mem = _l1_if_fits(Cs * H * 2)
         pieces = []
         for s in range(0, C, Cs):
             e = min(s + Cs, C)
@@ -680,7 +694,7 @@ class RoutedPrefillExperts:
                 out_rm,
                 padding_idx=consts["spare"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=combined_mem,
             )  # [Cs, k, H]
             combined = ttnn.reshape(combined, (1, 1, e - s, k, H))
             part = ttnn.experimental.deepseek_prefill.post_combine_reduce(
@@ -689,7 +703,7 @@ class RoutedPrefillExperts:
                 idx_s,
                 self.dispatch_table,
                 expert_dim=3,
-                output_memory_config=ttnn.L1_MEMORY_CONFIG,
+                output_memory_config=part_mem,
             )
             ttnn.deallocate(combined)
             if pos_s is not pos_tm:

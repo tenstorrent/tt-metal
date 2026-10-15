@@ -13,6 +13,8 @@ Checks, per sequence length and layer:
   * multi-chunk: S=4096 with GPT_OSS_ROUTED_PREFILL_CHUNK=1024 (4 chunks), same checks and thresholds;
   * non-multiple-of-1024 lengths: S=8256 (a full 8192 chunk plus a 64-token last chunk); pair positions exact at
     S=1088 (one chunk shorter than the shared prefix operator; the dense path cannot run 1088, so no MoE case);
+  * combine token blocks: S=2112 (a full 2048-token combine block plus a 64-token last block), routed vs HF only
+    (the dense path cannot run a 2112-token chunk);
   * supports(): batch > 1 and non-multiple-of-64 lengths run dense.
 
 Run: pytest models/demos/gpt_oss/tests/unit/test_routed_prefill_experts.py -k 1x4
@@ -36,6 +38,8 @@ from ..test_factory import TestFactory, parametrize_mesh_with_fabric
 
 THRESHOLDS = json.loads((Path(__file__).resolve().parents[2] / "unit_test_thresholds.json").read_text())
 ROUTED_VS_DENSE_PCC = 0.99
+# Lengths of test_routed_prefill_experts that the dense prefill path can also run (the routed-vs-dense check).
+DENSE_REF_LENGTHS = (128, 1024, 4096, 8256)
 
 
 def _load_layer_moe(model_path, layer_idx):
@@ -139,8 +143,8 @@ def routed_env(monkeypatch):
 @parametrize_mesh_with_fabric([(1, 4)])
 @pytest.mark.parametrize(
     "seq_len, chunk",
-    [(128, None), (1024, None), (4096, None), (4096, 1024), (8256, None)],
-    ids=["S128", "S1024", "S4096", "S4096-chunk1024", "S8256"],
+    [(128, None), (1024, None), (2112, None), (4096, None), (4096, 1024), (8256, None)],
+    ids=["S128", "S1024", "S2112", "S4096", "S4096-chunk1024", "S8256"],
 )
 @pytest.mark.parametrize("layer_idx", [0, 12], ids=["layer0", "layer12"])
 def test_routed_prefill_experts(
@@ -198,19 +202,24 @@ def test_routed_prefill_experts(
     # --- full MoE: routed vs dense vs HF ---
     out_routed = _first_device(tt_mlp(tt_hidden(), is_decode=False), mesh_device).reshape(seq_len, -1)
     out_routed2 = _first_device(tt_mlp(tt_hidden(), is_decode=False), mesh_device).reshape(seq_len, -1)
-    min_seq = routed.min_seq
-    routed.min_seq = 1 << 30  # force the dense path
-    out_dense = _first_device(tt_mlp(tt_hidden(), is_decode=False), mesh_device).reshape(seq_len, -1)
-    routed.min_seq = min_seq
+    # S2112 (one routed chunk: a full ROUTED_COMBINE_BLOCK of 2048 tokens plus a 64-token last block) has no dense
+    # reference: the dense path splits each chunk into 1024-token pieces and cannot run a 2112-token chunk.
+    dense_ref = seq_len in DENSE_REF_LENGTHS
+    out_dense = None
+    if dense_ref:
+        min_seq = routed.min_seq
+        routed.min_seq = 1 << 30  # force the dense path
+        out_dense = _first_device(tt_mlp(tt_hidden(), is_decode=False), mesh_device).reshape(seq_len, -1)
+        routed.min_seq = min_seq
     with torch.no_grad():
         ref_mlp, _ = reference(hidden_q.reshape(1, seq_len, -1))
     ref_mlp = ref_mlp.reshape(seq_len, -1)
 
     assert not torch.isnan(out_routed).any(), "NaN in routed MoE output"
     assert torch.equal(out_routed, out_routed2), "routed MoE output differs between identical runs"
-    ok_rd, pcc_rd = _pcc(out_dense, out_routed, ROUTED_VS_DENSE_PCC)
+    ok_rd, pcc_rd = _pcc(out_dense, out_routed, ROUTED_VS_DENSE_PCC) if dense_ref else (True, None)
     ok_rm, pcc_rm = _pcc(ref_mlp, out_routed, thresholds["mlp"])
-    _, pcc_dm = _pcc(ref_mlp, out_dense, 0.0)
+    pcc_dm = _pcc(ref_mlp, out_dense, 0.0)[1] if dense_ref else None
     logger.info(
         f"S={seq_len} layer={layer_idx}: MoE routed-vs-dense {pcc_rd} routed-vs-HF {pcc_rm} dense-vs-HF {pcc_dm}"
     )
