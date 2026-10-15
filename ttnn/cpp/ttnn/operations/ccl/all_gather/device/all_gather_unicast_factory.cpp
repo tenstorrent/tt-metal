@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_unicast_factory.hpp"
+#include "all_gather_geometry.hpp"
 
 #include <tt-metalium/kernel_types.hpp>  // for tt::tt_metal::NOC
 #include <tt-metalium/math.hpp>
@@ -35,35 +36,29 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-    if (operation_attributes.sub_core_grid.has_value()) {
-        available_cores = available_cores.intersection(operation_attributes.sub_core_grid.value());
+    const auto avail =
+        available_worker_cores(mesh_device, operation_attributes.subdevice_id, operation_attributes.sub_core_grid);
+    {
+        // SHADOW COMPARE — remove after review: the pre-wiring worker-core derivation.
+        auto old_subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+        auto old_available_cores =
+            mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, old_subdevice_id);
+        if (operation_attributes.sub_core_grid.has_value()) {
+            old_available_cores = old_available_cores.intersection(operation_attributes.sub_core_grid.value());
+        }
+        TT_FATAL(
+            old_subdevice_id == avail.subdevice_id && old_available_cores == avail.cores,
+            "shadow: available worker cores differ");
     }
-    ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
     // Kernel needs to wait to receive all remote data before exiting, and in some cases needs to wait
-    // for all remote devices to be ready before beginning operation.
-    // Since Fabric doesn't provide such capability within kernels, we need to manually sync using global semaphores.
-    // Allocate the semaphore in L1_SMALL to avoid fragmenting the larger L1 memory pool.
-    // Two semaphores:
+    // for all remote devices to be ready before beginning operation (see allocate_gather_semaphores).
+    // Two semaphores, created in this order:
     // - barrier_sem: one-shot init handshake ("I'm alive") to the neighbor.
     // - data_valid_sem: chunks upstream has relayed into our output (relay gate + completion).
-    bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
-    auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
-    if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
-        log_warning(
-            tt::LogOp,
-            "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
-            "allocations. Configure an L1_SMALL region to mitigate this.");
-    }
-    auto barrier_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    auto data_valid_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
-    log_debug(tt::LogOp, "All devices are ready, starting program execution");
+    const auto sems = allocate_gather_semaphores(mesh_device, avail.cores, avail.subdevice_id, 2);
+    const auto& barrier_sem = sems[0];
+    const auto& data_valid_sem = sems[1];
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
@@ -73,7 +68,7 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
             output_tensor,
             barrier_sem,
             data_valid_sem,
-            available_cores.num_cores());
+            avail.cores.num_cores());
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -175,78 +170,86 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // special-cased here, and reader and writer cannot disagree.
     ////////////////////////////////////////////////////////////////
 
-    // --- Copy mode ---
-    // The kernel always reads whole *aligned* input pages into L1 (required by the input's NoC
-    // read alignment, DRAM or L1) but writes at output *content* (unaligned) granularity -- which is
-    // why chunk sizing differs by the three modes above.
-    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-    const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
-    const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
-    // matched/concat write a whole aligned input page (== L1 read stride) into an output slot;
-    // split writes output-content-sized pieces to separate output page bases.
-    const bool is_split = input_unaligned_page_size > output_unaligned_page_size;
-    const uint32_t output_chunk_size = is_split ? output_unaligned_page_size : input_page_size;
-    const uint32_t output_chunks_per_page = is_split ? 1u : output_unaligned_page_size / input_unaligned_page_size;
-    const uint32_t split_factor = is_split ? input_unaligned_page_size / output_unaligned_page_size : 1u;
-    TT_FATAL(
-        output_chunks_per_page == 1 || input_page_size == input_unaligned_page_size,
-        "concat requires an unpadded input page");  // so slots align to content
+    // --- Geometry: copy mode, chunk count, stripe (see all_gather_geometry.hpp) ---
+    const auto geom = GatherGeometry::make(input_tensor, output_tensor, operation_attributes.dim_from_end, num_devices);
+    const uint32_t split_factor = geom.in_chunks_per_page;
+    const uint32_t output_chunk_size = geom.chunk_size;
+    const uint32_t output_chunks_per_page = geom.out_chunks_per_page;
+    const uint32_t num_input_pages = geom.num_input_pages;
+    const uint32_t num_output_chunks = geom.num_chunks;
+    const uint32_t output_chunks_per_stripe = geom.chunks_per_stripe;
 
     // Relay reads our own output back into the CB, which is packed at chunk stride, so the output's
-    // aligned page must be exactly tiled by chunks. select_program_factory routes these away;
-    // reaching here means unicast was forced (2D bent axis or neighbour-exchange fabric).
-    TT_FATAL(
-        output_tensor.buffer()->aligned_page_size() == output_chunks_per_page * output_chunk_size,
-        "all_gather unicast cannot relay a padded output page: {} B of content in a {} B page holding {} chunk(s) of "
-        "{} B. Use a row size that is a multiple of the output's memory alignment, or the same buffer type on both "
-        "sides.",
-        output_unaligned_page_size,
-        output_tensor.buffer()->aligned_page_size(),
-        output_chunks_per_page,
-        output_chunk_size);
-
-    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
-    const uint32_t num_output_chunks = num_input_pages * split_factor;
-    TT_FATAL(
-        num_output_chunks / split_factor == num_input_pages,
-        "all_gather output chunk count overflowed uint32: {} input pages x split factor {}",
-        num_input_pages,
-        split_factor);
+    // aligned page must be exactly tiled by chunks.
+    geom.require_relay_packed();
 
     // TODO: fix the messaging in below function
     ::ttnn::ccl::validate_packet_size(arch, packet_size, output_chunk_size);
 
-    // --- Stripe geometry ---
-    // input_pages_per_stripe = num input pages along [gather dim .. last dim] this
-    // device contributes per stripe. For a last-dim RM gather this is the *page* count,
-    // which handles sharded RM input (> 1 input page per row).
-    const auto& input_shape = input_tensor.padded_shape();
-    const auto tile_spec =
-        input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
-    uint32_t input_pages_per_stripe = 1;
-    for (int32_t i = operation_attributes.dim_from_end; i < 0; i++) {
-        uint32_t extent;
-        if (i == -1) {
-            if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-                extent = input_shape[i] / tile_spec.get_width();
-            } else {
-                // This is a page count, so divide by the unaligned page size, not aligned
-                extent = (input_shape[i] * input_tensor.element_size()) / input_unaligned_page_size;
-            }
-        } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == -2) {
-            extent = input_shape[i] / tile_spec.get_height();
-        } else {
-            extent = input_shape[i];
-        }
-        input_pages_per_stripe *= extent;
-    }
+    {
+        // SHADOW COMPARE — remove after review: the pre-wiring derivation, value for value.
+        const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
+        const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
+        const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
+        const bool is_split = input_unaligned_page_size > output_unaligned_page_size;
+        const uint32_t old_output_chunk_size = is_split ? output_unaligned_page_size : input_page_size;
+        const uint32_t old_output_chunks_per_page =
+            is_split ? 1u : output_unaligned_page_size / input_unaligned_page_size;
+        const uint32_t old_split_factor = is_split ? input_unaligned_page_size / output_unaligned_page_size : 1u;
+        const bool old_packed =
+            output_tensor.buffer()->aligned_page_size() == old_output_chunks_per_page * old_output_chunk_size;
+        const uint32_t old_num_input_pages = input_tensor.buffer()->num_pages();
+        const uint32_t old_num_output_chunks = old_num_input_pages * old_split_factor;
 
-    // Stripe = this device's contiguous run of chunks per row = input_pages_per_stripe
-    // * split_factor. Measured in chunks (not output pages) so multi-shard concat works:
-    // a stripe's chunks are laid across output pages via the inner byte-offset counter
-    // and may straddle pages.
-    const uint32_t output_chunks_per_stripe = input_pages_per_stripe * split_factor;
-    TT_FATAL(output_chunks_per_stripe > 0, "output_chunks_per_stripe must be > 0");
+        const auto& input_shape = input_tensor.padded_shape();
+        const auto tile_spec =
+            input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+        uint32_t input_pages_per_stripe = 1;
+        for (int32_t i = operation_attributes.dim_from_end; i < 0; i++) {
+            uint32_t extent;
+            if (i == -1) {
+                if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+                    extent = input_shape[i] / tile_spec.get_width();
+                } else {
+                    extent = (input_shape[i] * input_tensor.element_size()) / input_unaligned_page_size;
+                }
+            } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == -2) {
+                extent = input_shape[i] / tile_spec.get_height();
+            } else {
+                extent = input_shape[i];
+            }
+            input_pages_per_stripe *= extent;
+        }
+        const uint32_t old_output_chunks_per_stripe = input_pages_per_stripe * old_split_factor;
+
+        TT_FATAL(old_split_factor == split_factor, "shadow: split_factor {} != {}", old_split_factor, split_factor);
+        TT_FATAL(
+            old_output_chunk_size == output_chunk_size,
+            "shadow: chunk {} != {}",
+            old_output_chunk_size,
+            output_chunk_size);
+        TT_FATAL(
+            old_output_chunks_per_page == output_chunks_per_page,
+            "shadow: output_chunks_per_page {} != {}",
+            old_output_chunks_per_page,
+            output_chunks_per_page);
+        TT_FATAL(
+            old_output_chunks_per_stripe == output_chunks_per_stripe,
+            "shadow: chunks_per_stripe {} != {}",
+            old_output_chunks_per_stripe,
+            output_chunks_per_stripe);
+        TT_FATAL(
+            old_num_input_pages == num_input_pages,
+            "shadow: num_input_pages {} != {}",
+            old_num_input_pages,
+            num_input_pages);
+        TT_FATAL(
+            old_num_output_chunks == num_output_chunks,
+            "shadow: num_chunks {} != {}",
+            old_num_output_chunks,
+            num_output_chunks);
+        TT_FATAL(old_packed == geom.out_packed, "shadow: packed {} != {}", old_packed, geom.out_packed);
+    }
 
     ////////////////////////////////////////////////////////////////
     // Core selection
@@ -265,8 +268,17 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Packed bytes of the gathered output crossing one link. At the *requested* link count, so if
     // the core grid later forces links down (which warns) the choices below stay the ones for the
     // wider config.
-    const uint64_t per_link_bytes =
-        output_tensor.tensor_spec().compute_packed_buffer_size_bytes() / std::max(1u, num_links);
+    const uint64_t per_link_bytes = ::ttnn::operations::ccl::per_link_bytes(output_tensor.tensor_spec(), num_links);
+    {
+        // SHADOW COMPARE — remove after review.
+        const uint64_t old_per_link_bytes =
+            output_tensor.tensor_spec().compute_packed_buffer_size_bytes() / std::max(1u, num_links);
+        TT_FATAL(
+            old_per_link_bytes == per_link_bytes,
+            "shadow: per_link_bytes {} != {}",
+            old_per_link_bytes,
+            per_link_bytes);
+    }
 
     // --- Per-arch tuning ---
     uint32_t workers_per_dir = 1;  // >1 needs a fabric mux core per direction per link
@@ -427,24 +439,44 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     // --- CB sizing ---
     // A CB entry holds a whole number of packet loads, and of input pages (split) or output pages
-    // (concat), so the entry boundary never cuts a page; one of those two counts is always 1. A packet
-    // can still end early: broken contiguity can fill its scatter chunks before its payload.
-    const uint32_t chunks_per_group = std::max(split_factor, output_chunks_per_page);
-    uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
-    chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
-    uint32_t cb_page_size = chunks_per_packet * output_chunk_size;
-    // Pack several packets into one CB page to reduce reader/writer sync frequency (this also raises the
-    // effective CB depth). An integer multiplier preserves the whole-packet and whole-page properties above.
-    // The clamp is defensive: it holds whatever packets_per_cb_entry is tuned to, including 1.
+    // (concat), so the entry boundary never cuts a page; one of those two counts is always 1. Several
+    // packets per entry reduce reader/writer sync frequency (see WalkGeometry::make, EntryPolicy::Legacy).
     const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
-    const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, packets_per_cb_entry);
-    if (multiplier < packets_per_cb_entry) {
-        log_warning(
-            tt::LogOp,
-            "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
-            max_l1_space);
+    const auto walk = WalkGeometry::make(
+        geom,
+        *input_tensor.buffer(),
+        *output_tensor.buffer(),
+        packet_size,
+        run_cap_bytes,
+        EntryPolicy::Legacy,
+        packets_per_cb_entry,
+        cb_depth,
+        max_l1_space);
+    const uint32_t cb_page_size = walk.cb_entry_bytes;
+    {
+        // SHADOW COMPARE — remove after review: the pre-wiring CB sizing (minus its warning).
+        const uint32_t chunks_per_group = std::max(split_factor, output_chunks_per_page);
+        uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
+        chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
+        uint32_t old_cb_page_size = chunks_per_packet * output_chunk_size;
+        const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * old_cb_page_size), 1u, packets_per_cb_entry);
+        old_cb_page_size *= multiplier;
+        TT_FATAL(old_cb_page_size == cb_page_size, "shadow: cb_page_size {} != {}", old_cb_page_size, cb_page_size);
+        TT_FATAL(
+            old_cb_page_size / output_chunk_size == walk.chunks_per_entry,
+            "shadow: chunks_per_cb_entry {} != {}",
+            old_cb_page_size / output_chunk_size,
+            walk.chunks_per_entry);
+        TT_FATAL(walk.cb_depth == cb_depth, "shadow: cb_depth {} != {}", cb_depth, walk.cb_depth);
     }
-    cb_page_size *= multiplier;
+    log_debug(
+        tt::LogOp,
+        "all_gather unicast walk: stride {} xfer {} (max {}) in_runs sub_page {} cross_page {}",
+        walk.stride,
+        walk.xfer,
+        walk.xfer_max,
+        walk.in_runs.sub_page,
+        walk.in_runs.cross_page);
 
     // Input and relay CB
     uint32_t cb0_id = tt::CB::c_in0;
@@ -460,7 +492,12 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // for a signal per CB page. Both neighbours are worse, and the two divides have to round up -- truncating
     // them lands on 3-4 signals instead.
     const uint32_t total_slices = num_links * workers_per_dir;
-    const uint32_t outputs_per_cb_page = std::max(1u, cb_page_size / output_chunk_size);
+    const uint32_t outputs_per_cb_page = std::max(1u, walk.chunks_per_entry);
+    TT_FATAL(  // SHADOW COMPARE — remove after review.
+        outputs_per_cb_page == std::max(1u, cb_page_size / output_chunk_size),
+        "shadow: outputs_per_cb_page {} != {}",
+        outputs_per_cb_page,
+        std::max(1u, cb_page_size / output_chunk_size));
     const uint32_t chunks_per_slice = std::max(1u, num_output_chunks / total_slices);
     const uint32_t cb_pages_per_stripe = std::max(1u, tt::div_up(chunks_per_slice, outputs_per_cb_page));
     constexpr uint32_t signals_per_stripe = 2;
@@ -563,17 +600,30 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t w = 0; w < workers_per_dir; ++w) {
             const uint32_t slice_idx = (link * workers_per_dir) + w;
-            const uint32_t input_pages_per_slice = num_input_pages / total_slices;
-            const uint32_t remainder = num_input_pages % total_slices;
-            const uint32_t input_tile_id_start = (slice_idx * input_pages_per_slice) + std::min(slice_idx, remainder);
-            const uint32_t input_tile_id_end =
-                ((slice_idx + 1) * input_pages_per_slice) + std::min(slice_idx + 1, remainder);
-            // Map this slice of input pages to its slice of output chunks. num_output_chunks is
-            // num_input_pages * split_factor, so the map is just a scale by split_factor (1 in
-            // matched/concat).
-            const uint32_t local_output_start = input_tile_id_start * split_factor;
-            const uint32_t local_output_end = input_tile_id_end * split_factor;
-            const uint32_t num_worker_output_chunks = local_output_end - local_output_start;
+            // This slice of input pages, scaled to output chunks (see GatherGeometry::slice_of).
+            const Slice slice = geom.slice_of(slice_idx, total_slices);
+            const uint32_t local_output_start = slice.first_chunk;
+            const uint32_t num_worker_output_chunks = slice.num_chunks;
+            {
+                // SHADOW COMPARE — remove after review.
+                const uint32_t input_pages_per_slice = num_input_pages / total_slices;
+                const uint32_t remainder = num_input_pages % total_slices;
+                const uint32_t input_tile_id_start =
+                    (slice_idx * input_pages_per_slice) + std::min(slice_idx, remainder);
+                const uint32_t input_tile_id_end =
+                    ((slice_idx + 1) * input_pages_per_slice) + std::min(slice_idx + 1, remainder);
+                const uint32_t old_start = input_tile_id_start * split_factor;
+                const uint32_t old_count = (input_tile_id_end * split_factor) - old_start;
+                TT_FATAL(
+                    old_start == local_output_start && old_count == num_worker_output_chunks,
+                    "shadow: slice {}/{} old ({}, {}) != new ({}, {})",
+                    slice_idx,
+                    total_slices,
+                    old_start,
+                    old_count,
+                    local_output_start,
+                    num_worker_output_chunks);
+            }
             const uint32_t half = num_worker_output_chunks / 2;
 
             // Both directions (dir: 0 = forward, 1 = backward). mirror_core is this core's coords, reused as the

@@ -1,0 +1,18 @@
+# generated/profiler/reports/2026_10_15_20_49_06/ops_perf_results_2026_10_15_20_49_06.csv: 2112 AllGather rows (of 4152)
+
+config                                                             out    n   median_us  spread%   ideal_us    eff%    us/MB
+----------------------------------------------------------------------------------------------------------------------------
+linear|tile|bf16|DRAM|[1,1,2048,4096]|dim3|L2|AllGather         16.8MB   20      268.20      2.6     293.60   109.5    15.99
+linear|tile|bf16|DRAM|[1,1,2048,4096]|dim3|L2|AllGatherAsync    16.8MB   20      401.58      2.8     293.60    73.1    23.94
+linear|tile|f32|DRAM|[1,1,2048,2048]|dim3|L2|AllGather          16.8MB   20      289.32      1.3     293.60   101.5    17.25
+linear|tile|f32|DRAM|[1,1,2048,2048]|dim3|L2|AllGatherAsync     16.8MB   20      332.90      1.4     293.60    88.2    19.84
+ring|tile|bf16|DRAM|[1,1,2048,4096]|dim3|L2|AllGather           16.8MB   20      146.50      6.0     146.80   100.2     8.73
+ring|tile|bf16|DRAM|[1,1,2048,4096]|dim3|L2|AllGatherAsync      16.8MB   20      204.87      1.6     146.80    71.7    12.21
+ring|tile|f32|DRAM|[1,1,2048,2048]|dim3|L2|AllGather            16.8MB   20      152.93      4.7     146.80    96.0     9.12
+ring|tile|f32|DRAM|[1,1,2048,2048]|dim3|L2|AllGatherAsync       16.8MB   20      189.31      1.0     146.80    77.5    11.28
+linear|tile|bfp8|DRAM|[1,1,2048,8192]|dim3|L2|AllGather         17.8MB   20      272.46      2.7     293.60   107.8    15.28
+linear|tile|bfp8|DRAM|[1,1,2048,8192]|dim3|L2|AllGatherAsync    17.8MB   20      698.87      1.2     293.60    42.0    39.21
+ring|tile|bfp8|DRAM|[1,1,2048,8192]|dim3|L2|AllGather           17.8MB   20      153.27      5.6     146.80    95.8     8.60
+ring|tile|bfp8|DRAM|[1,1,2048,8192]|dim3|L2|AllGatherAsync      17.8MB   20      309.31      1.2     146.80    47.5    17.35
+
+wrote ag_data/ag9_baseline/baseline_page_size_tile.csv

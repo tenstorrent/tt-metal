@@ -4,7 +4,17 @@
 
 #pragma once
 
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "api/dataflow/dataflow_api.h"
+#else
+// Host build (unit tests): the includer may supply these first, e.g. a throwing ASSERT.
+#ifndef FORCE_INLINE
+#define FORCE_INLINE inline __attribute__((always_inline))
+#endif
+#ifndef ASSERT
+#define ASSERT(condition, ...) ((void)0)
+#endif
+#endif
 
 #include <cstdint>
 
@@ -39,13 +49,21 @@
 // cap (0 = no cap). A cap trades packet fill for DRAM bank spread. Hardware already bounds a
 // transfer at min(fabric packet, NOC_MAX_BURST_SIZE) -- 7616 B on Wormhole, 15232 B on Blackhole --
 // so a host cap only bites below that figure.
-constexpr uint32_t chunks_per_transfer(uint32_t packet_size, uint32_t chunk_size, uint32_t run_cap_bytes = 0) {
-    uint32_t cap = packet_size < NOC_MAX_BURST_SIZE ? packet_size : NOC_MAX_BURST_SIZE;
+// `burst` is NOC_MAX_BURST_SIZE; it is a parameter only so a host test can model either arch.
+constexpr uint32_t chunks_per_transfer(
+    uint32_t packet_size, uint32_t chunk_size, uint32_t run_cap_bytes, uint32_t burst) {
+    uint32_t cap = packet_size < burst ? packet_size : burst;
     if (run_cap_bytes != 0 && run_cap_bytes < cap) {
         cap = run_cap_bytes;
     }
     return cap < chunk_size ? 1u : cap / chunk_size;
 }
+
+#if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(NOC_MAX_BURST_SIZE)
+constexpr uint32_t chunks_per_transfer(uint32_t packet_size, uint32_t chunk_size, uint32_t run_cap_bytes = 0) {
+    return chunks_per_transfer(packet_size, chunk_size, run_cap_bytes, NOC_MAX_BURST_SIZE);
+}
+#endif
 
 // Whether a tensor's contiguity lines up with the walk, so a run can hold more than one chunk.
 struct RunSource {

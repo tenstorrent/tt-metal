@@ -4,6 +4,7 @@
 
 #include "all_gather_device_operation.hpp"
 #include "all_gather_device_operation_types.hpp"
+#include "all_gather_geometry.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/math.hpp"
@@ -240,6 +241,26 @@ AllGatherDeviceOperation::create_op_performance_model(
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
+    // TEST HOOK — remove before merge. A forced factory still has to respect the topology limitations below.
+    if (args.tuning.force_factory.has_value()) {
+        const bool force_unicast = *args.tuning.force_factory == AllGatherAlgorithm::Unicast;
+        if (force_unicast) {
+            TT_FATAL(
+                !args.is_true_2d(),
+                "TT_AG_TUNING factory=unicast: the unicast algorithm does not support true 2D topologies");
+        } else {
+            TT_FATAL(
+                args.is_true_2d() || !tt::tt_fabric::is_2d_fabric_config(args.fabric_config) ||
+                    args.axis_is_straight[args.get_1d_axis()],
+                "TT_AG_TUNING factory=multicast: multicast cannot handle a 2D topology view that bends the axis");
+            TT_FATAL(
+                args.fabric_config != tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE,
+                "TT_AG_TUNING factory=multicast: NeighborExchange fabric only permits 1-hop unicast");
+        }
+        return force_unicast ? program_factory_t{AllGatherUnicastFactory{}}
+                             : program_factory_t{AllGatherMulticastFactory{}};
+    }
+
     // Pick the kernel algorithm based on limitations and heuristics
     bool use_unicast = false;
     if (args.is_true_2d()) {
@@ -258,8 +279,18 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const uint32_t axis = args.get_1d_axis();
         const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
         // Packed bytes of the gathered output crossing one link.
-        const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
-        const uint64_t per_link_bytes = args.output_spec.compute_packed_buffer_size_bytes() / num_links;
+        const uint64_t per_link_bytes =
+            ::ttnn::operations::ccl::per_link_bytes(args.output_spec, args.axis_num_links[axis]);
+        {
+            // SHADOW COMPARE — remove after review: the pre-wiring derivation.
+            const uint64_t old_num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
+            const uint64_t old_per_link_bytes = args.output_spec.compute_packed_buffer_size_bytes() / old_num_links;
+            TT_FATAL(
+                old_per_link_bytes == per_link_bytes,
+                "shadow: per_link_bytes old {} != new {}",
+                old_per_link_bytes,
+                per_link_bytes);
+        }
 
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
@@ -312,17 +343,27 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         // Heuristic branch only: the branches above have no alternative, and the unicast factory
         // TT_FATALs there instead.
         if (use_unicast) {
-            const auto& in_buf = *input_tensor.buffer();
-            const uint32_t in_page = in_buf.page_size();
-            const uint32_t out_page = args.output_spec.compute_page_size_bytes();
-            // Mirrors the copy-mode derivation in AllGatherUnicastFactory.
-            const bool is_split = in_page > out_page;
-            const uint32_t chunk = is_split ? out_page : in_buf.aligned_page_size();
-            const uint32_t chunks_per_page = is_split ? 1u : out_page / in_page;
-            const uint32_t out_align = args.output_spec.memory_config().is_dram()
-                                           ? tt::tt_metal::hal::get_dram_alignment()
-                                           : tt::tt_metal::hal::get_l1_alignment();
-            use_unicast = tt::align(out_page, out_align) == chunks_per_page * chunk;
+            const bool new_use_unicast =
+                GatherGeometry::make(input_tensor, args.output_spec, args.dim_from_end, args.num_devices).out_packed;
+            {
+                // SHADOW COMPARE — remove after review: the pre-wiring mirror of the factory's copy mode.
+                const auto& in_buf = *input_tensor.buffer();
+                const uint32_t in_page = in_buf.page_size();
+                const uint32_t out_page = args.output_spec.compute_page_size_bytes();
+                const bool is_split = in_page > out_page;
+                const uint32_t chunk = is_split ? out_page : in_buf.aligned_page_size();
+                const uint32_t chunks_per_page = is_split ? 1u : out_page / in_page;
+                const uint32_t out_align = args.output_spec.memory_config().is_dram()
+                                               ? tt::tt_metal::hal::get_dram_alignment()
+                                               : tt::tt_metal::hal::get_l1_alignment();
+                const bool old_use_unicast = tt::align(out_page, out_align) == chunks_per_page * chunk;
+                TT_FATAL(
+                    old_use_unicast == new_use_unicast,
+                    "shadow: select out_packed old {} != new {}",
+                    old_use_unicast,
+                    new_use_unicast);
+            }
+            use_unicast = new_use_unicast;
         }
     }
 
@@ -409,7 +450,8 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             num_devices,
             packet_size,
             subdevice_id,
-            sub_core_grid},
+            sub_core_grid,
+            Tuning::from_env()},  // TEST HOOK — remove before merge
         AllGatherInputs{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor}};
 }
 

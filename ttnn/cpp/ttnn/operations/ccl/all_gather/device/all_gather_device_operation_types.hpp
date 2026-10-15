@@ -14,6 +14,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "all_gather_tuning.hpp"  // TEST HOOK — remove before merge
 
 namespace ttnn::operations::ccl {
 
@@ -43,6 +44,9 @@ struct AllGatherParams {
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
     std::optional<CoreRangeSet> sub_core_grid;
 
+    // TEST HOOK — remove before merge. Env overrides (TT_AG_TUNING), part of the program-cache key.
+    Tuning tuning{};
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim_from_end",
         "output_spec",
@@ -55,7 +59,8 @@ struct AllGatherParams {
         "num_devices",
         "packet_size",
         "subdevice_id",
-        "sub_core_grid");
+        "sub_core_grid",
+        "tuning");  // TEST HOOK — remove before merge
     auto attribute_values() const {
         return std::forward_as_tuple(
             dim_from_end,
@@ -69,7 +74,8 @@ struct AllGatherParams {
             num_devices,
             packet_size,
             subdevice_id,
-            sub_core_grid);
+            sub_core_grid,
+            tuning);  // TEST HOOK — remove before merge
     }
 
     // "true 2D" = a 2D fabric config with both axes active
