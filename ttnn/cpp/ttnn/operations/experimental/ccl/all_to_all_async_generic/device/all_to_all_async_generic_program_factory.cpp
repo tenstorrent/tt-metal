@@ -4,6 +4,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 #include "all_to_all_async_generic_program_factory.hpp"
