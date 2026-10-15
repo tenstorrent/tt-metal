@@ -528,6 +528,7 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuSituGlu,
     MathOperation.SfpuLogaddexp,
     MathOperation.SfpuLogaddexp2,
+    MathOperation.SfpuGcd,
     MathOperation.SfpuElwRightShift,
     MathOperation.SfpuElwLeftShift,
     MathOperation.SfpuElwLogicalRightShift,
@@ -553,6 +554,15 @@ class QuasarUnarySfpuMathSchema(UnarySfpuMathSchema):
 class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_cls: ClassVar = BinarySfpu
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
+    _sign_magnitude_ops: ClassVar = {
+        "SfpuElwadd",
+        "SfpuElwmul",
+        "SfpuElwGt",
+        "SfpuElwLt",
+        "SfpuElwLe",
+        "SfpuElwGe",
+        "SfpuGcd",
+    }
 
 
 class QuasarTernarySfpuMathSchema(TernarySfpuMathSchema):

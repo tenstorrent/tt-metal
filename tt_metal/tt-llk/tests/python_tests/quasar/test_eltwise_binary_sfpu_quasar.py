@@ -242,7 +242,7 @@ def _run_sfpu_binary_llk_golden(
 
 
 # ===========================================================================
-# Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32 only.
+# Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd), Int32 only.
 # Ported from test_sfpu_binary_quasar.py.
 # ===========================================================================
 def _prepare_int_stimuli(
@@ -267,6 +267,13 @@ def _prepare_int_stimuli(
     return src_A, tile_cnt_A, src_B
 
 
+_INT31_MAX = 2**31 - 1
+
+_INT_CLAMP = {
+    MathOperation.SfpuElwmulInt: 1000,
+    MathOperation.SfpuGcd: _INT31_MAX,
+}
+
 # Shared with perf_eltwise_binary_sfpu_quasar.py. tile_indices stays functional-only.
 INT_SWEEP = dict(
     formats=input_output_formats([DataFormat.Int32], same=True),
@@ -279,6 +286,7 @@ INT_SWEEP = dict(
         MathOperation.SfpuElwLe,
         MathOperation.SfpuElwGe,
         MathOperation.SfpuCopyDest,
+        MathOperation.SfpuGcd,
     ],
 )
 
@@ -300,9 +308,10 @@ def test_eltwise_binary_sfpu_int_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32."""
+    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd), Int32."""
     binary_op = mathop.cpp_enum_value
-    clamp_inputs = 1000 if mathop == MathOperation.SfpuElwmulInt else None
+    # GCD excludes INT_MIN: SFPABS saturates it.
+    clamp_inputs = _INT_CLAMP.get(mathop)
     _run_sfpu_binary_llk_golden(
         formats,
         dest_acc,
