@@ -379,16 +379,47 @@ inline void _llk_math_mul_reduce_scalar_clear_dvalid_()
 }
 
 /*************************************************************************
- * Interleaved LoFi row of 32x32 tiles: in each face's SrcA/SrcB bank turn the FPU multiplies that face of tile i
- * (SrcA/SrcB rows 0 to 15) and pools one face of product i - 1, which MOVD2A put beside it (SrcA rows 16 to 47), with
- * the scaler in SrcB rows 16 to 19 of both banks. The pooling runs product by product, faces in order, as in the
- * two-phase row.
+ * Compiled row of 32x32 tiles, two faces per SrcA/SrcB bank: the unpacker writes faces 2h and 2h + 1 of tile i to
+ * SrcA/SrcB rows 0 to 31. At LoFi each bank turn multiplies them and pools the same two faces of product i - 1, which
+ * MOVD2A puts in SrcA rows 32 to 63, with the scaler in SrcB rows 32 to 35 of both banks. The pooling runs product by
+ * product, faces in order, as in the two-phase row.
  *************************************************************************/
 
 // Two to eight 32x32 tiles.
-inline bool _llk_math_mul_reduce_scalar_interleaves_(const ckernel::TensorShape tensor_shape, const std::uint32_t num_tiles)
+inline bool _llk_math_mul_reduce_scalar_two_face_banks_(const ckernel::TensorShape tensor_shape, const std::uint32_t num_tiles)
 {
     return num_tiles >= 2 && tensor_shape.face_r_dim == ckernel::MAX_FACE_R_DIM && tensor_shape.total_num_faces() == 4;
+}
+
+// Multiplies tile i at any fidelity, each bank's fidelity phases in the order the binary MOP runs them per face.
+template <MathFidelity math_fidelity>
+inline void _llk_math_mul_reduce_scalar_mul_two_face_banks_(const std::uint32_t tile_index)
+{
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "mul_two_face_banks: Src zero-substitution flag is not in DEFAULT state");
+    constexpr std::uint32_t phases = is_high_fidelity(math_fidelity) ? to_underlying(math_fidelity) : 1;
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(tile_index);
+#pragma GCC unroll 2
+    for (std::uint32_t bank = 0; bank < 2; bank++)
+    {
+#pragma GCC unroll 4
+        for (std::uint32_t phase = 0; phase < phases; phase++)
+        {
+            TTI_ELWMUL(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0, 0);
+            TTI_ELWMUL(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0, 0);
+            TTI_ELWMUL(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0, 0);
+            if (phase + 1 < phases)
+            {
+                TTI_ELWMUL(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+            }
+            else
+            {
+                TTI_ELWMUL(p_setrwc::CLR_AB, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
+            }
+        }
+    }
+    math::clear_dst_reg_addr();
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -397,39 +428,34 @@ inline void _llk_math_mul_reduce_scalar_interleaved_init_()
     _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MathFidelity::LoFi>();
     addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 8}, .dest = {.incr = 0}}.set(ADDR_MOD_3);
     addr_mod_t {.srca = {.incr = 24}, .srcb = {.incr = 8}, .dest = {.incr = 0}}.set(ADDR_MOD_4);
+    addr_mod_t {.srca = {.incr = 32}, .srcb = {.incr = 32}, .dest = {.incr = 0}}.set(ADDR_MOD_5);
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dest_offset_id * DEST_REGISTER_HALF_SIZE);
 }
 
-// Multiplies the face at DEST row dst; the second ELWMUL's address mode leaves SrcA at the pooled face.
-template <std::uint32_t dst, std::uint32_t second_addr_mod = ADDR_MOD_3>
-inline void _llk_math_mul_reduce_scalar_mul_face_()
+// Multiplies the two faces at DEST row dst. SrcA and SrcB address only their low six bits, so from 64 the four steps
+// read rows 0 to 31 and leave SrcA at 48 and SrcB at 32, the second pooled face and the scaler.
+template <std::uint32_t dst>
+inline void _llk_math_mul_reduce_scalar_mul_two_faces_()
 {
     TTI_ELWMUL(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, dst);
-    TTI_ELWMUL(0, 0, p_elwise::SRCB_NO_BCAST, second_addr_mod, dst + 8);
-    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB);
+    TTI_ELWMUL(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, dst + 8);
+    TTI_ELWMUL(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, dst + 16);
+    TTI_ELWMUL(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_4, dst + 24);
 }
 
-// Moves the face at DEST row src to SrcA rows srca to srca + 15.
-template <std::uint32_t src, std::uint32_t srca>
-inline void _llk_math_mul_reduce_scalar_move_face_()
+// Moves the two faces at DEST row src to SrcA rows 32 to 63.
+template <std::uint32_t src, std::uint32_t last_addr_mod>
+inline void _llk_math_mul_reduce_scalar_move_two_faces_()
 {
-    TTI_MOVD2A(0, srca, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, src);
-    TTI_MOVD2A(0, srca + 8, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, src + 8);
+    TTI_MOVD2A(0, 32, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, src);
+    TTI_MOVD2A(0, 40, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, src + 8);
+    TTI_MOVD2A(0, 48, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, src + 16);
+    TTI_MOVD2A(0, 56, last_addr_mod, p_movd2a::MOV_8_ROWS, src + 24);
 }
 
-// Multiplies the face at DEST row dst and pools the moved face its second ELWMUL left SrcA at.
-template <std::uint32_t dst, std::uint32_t second_addr_mod = ADDR_MOD_3>
-inline void _llk_math_mul_reduce_scalar_mul_pool_face_()
-{
-    TTI_ELWMUL(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, dst);
-    TTI_ELWMUL(0, 0, p_elwise::SRCB_NO_BCAST, second_addr_mod, dst + 8);
-    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB);
-}
-
-// The scaler fills pool rows 0 to 3, once product 0's first face has left them, and rows 8 to 11 for the other bank
-// and the last product; only pool row 0 reaches the result.
-inline void _llk_math_mul_reduce_scalar_scaler_to_bank_(const float scaler)
+// Fills pool rows 0 to 3 and 8 to 11 with the scaler once product 0's first two faces have left them; only pool row 0
+// reaches the result.
+inline void _llk_math_mul_reduce_scalar_fill_scaler_(const float scaler)
 {
     _llk_math_eltwise_sfpu_start_(0);
     sfpi::vFloat value = scaler;
@@ -443,58 +469,69 @@ inline void _llk_math_mul_reduce_scalar_scaler_to_bank_(const float scaler)
     sfpi::dst_reg[0] = value;
     _llk_math_eltwise_sfpu_done_();
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-    TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 0);
-    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 0);
 }
 
-// Tile i. Faces f and f + 2 of product i - 1 move in turn f, so turns 2 and 3 pool SrcA rows 32 to 47 with no move.
-template <std::uint32_t i>
-inline void _llk_math_mul_reduce_scalar_interleaved_tile_ct_(const float scaler)
+// Bank turn h of tile i: multiplies faces 2h and 2h + 1 and, from tile 1 on, pools the same faces of product i - 1.
+template <std::uint32_t i, std::uint32_t h>
+inline void _llk_math_mul_reduce_scalar_interleaved_turn_(const float scaler)
 {
-    constexpr std::uint32_t cur = 64 * i;
-    if constexpr (i == 0)
-    {
-        _llk_math_mul_reduce_scalar_mul_face_<0>();
-        _llk_math_mul_reduce_scalar_mul_face_<16>();
-        _llk_math_mul_reduce_scalar_mul_face_<32>();
-        _llk_math_mul_reduce_scalar_mul_face_<48>();
-    }
-    else
+    constexpr std::uint32_t cur = 64 * i + 32 * h;
+    if constexpr (i > 0)
     {
         constexpr std::uint32_t prev = cur - 64;
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
-        _llk_math_mul_reduce_scalar_move_face_<prev, 16>();
-        _llk_math_mul_reduce_scalar_move_face_<prev + 32, 32>();
         if constexpr (i == 1)
         {
-            _llk_math_mul_reduce_scalar_scaler_to_bank_(scaler);
+            _llk_math_mul_reduce_scalar_move_two_faces_<prev, ADDR_MOD_0>();
+            if constexpr (h == 0)
+            {
+                _llk_math_mul_reduce_scalar_fill_scaler_(scaler);
+            }
+            // Scaler to SrcB rows 32 to 35; ADDR_MOD_5 takes SrcA and SrcB to the pooled rows as the last move does.
+            TTI_MOVD2B(0, 32, ADDR_MOD_5, p_movd2b::MOV_4_ROWS, 8 * h);
+            if constexpr (h == 0)
+            {
+                TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 0);
+            }
         }
-        _llk_math_mul_reduce_scalar_mul_pool_face_<cur>();
-
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
-        if constexpr (i == 1)
+        else
         {
-            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 8);
+            _llk_math_mul_reduce_scalar_move_two_faces_<prev, ADDR_MOD_5>();
         }
-        _llk_math_mul_reduce_scalar_move_face_<prev + 16, 16>();
-        _llk_math_mul_reduce_scalar_move_face_<prev + 48, 32>();
-        _llk_math_mul_reduce_scalar_mul_pool_face_<cur + 16>();
-
-        _llk_math_mul_reduce_scalar_mul_pool_face_<cur + 32, ADDR_MOD_4>();
-        _llk_math_mul_reduce_scalar_mul_pool_face_<cur + 48, ADDR_MOD_4>();
+        // The second pool waits for the first one's DEST write either way, so the multiply goes between them.
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_5, p_gpool::INDEX_DIS, 0);
+        _llk_math_mul_reduce_scalar_mul_two_faces_<cur>();
+        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
     }
+    else
+    {
+        _llk_math_mul_reduce_scalar_mul_two_faces_<cur>();
+    }
+    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB);
+}
+
+template <std::uint32_t i>
+inline void _llk_math_mul_reduce_scalar_interleaved_tile_ct_(const float scaler)
+{
+    _llk_math_mul_reduce_scalar_interleaved_turn_<i, 0>(scaler);
+    _llk_math_mul_reduce_scalar_interleaved_turn_<i, 1>(scaler);
 }
 
 template <std::uint32_t... is>
-inline void _llk_math_mul_reduce_scalar_interleaved_tile_n_(const std::uint32_t i, const float scaler, std::integer_sequence<std::uint32_t, is...>)
+inline void _llk_math_mul_reduce_scalar_interleaved_tiles_(const float scaler, std::integer_sequence<std::uint32_t, is...>)
 {
-    ((i == is && (_llk_math_mul_reduce_scalar_interleaved_tile_ct_<is>(scaler), true)) || ...);
+    (_llk_math_mul_reduce_scalar_interleaved_tile_ct_<is>(scaler), ...);
 }
 
-// Multiplies tile i and, from tile 1 on, pools product i - 1 in the same face turns.
-inline void _llk_math_mul_reduce_scalar_interleaved_tile_(const std::uint32_t i, const float scaler)
+// Multiplies the row's tiles and, from tile 1 on, pools product i - 1 in the same bank turns, unrolled so the math
+// thread never waits on a per-tile dispatch. Rows of fewer than two tiles do not interleave.
+template <std::uint32_t row_tiles>
+inline void _llk_math_mul_reduce_scalar_interleaved_row_(const float scaler)
 {
-    _llk_math_mul_reduce_scalar_interleaved_tile_n_(i, scaler, std::make_integer_sequence<std::uint32_t, 8> {});
+    if constexpr (row_tiles >= 2)
+    {
+        _llk_math_mul_reduce_scalar_interleaved_tiles_(scaler, std::make_integer_sequence<std::uint32_t, row_tiles> {});
+    }
 }
 
 // Pools the last product in the bank the unpacker zeroed, then collapses the pool row to the scalar.

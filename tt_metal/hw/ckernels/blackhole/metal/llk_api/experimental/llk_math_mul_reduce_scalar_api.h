@@ -102,9 +102,15 @@ inline void llk_math_mul_reduce_scalar_move_product(
     _llk_math_mul_reduce_scalar_move_product_<share_slots>(i, num_products, tensor_shape);
 }
 
-inline bool llk_math_mul_reduce_scalar_interleaves(const std::uint32_t icb0, const std::uint32_t num_tiles) {
+inline bool llk_math_mul_reduce_scalar_two_face_banks(const std::uint32_t icb0, const std::uint32_t num_tiles) {
     const std::uint32_t operand_id = get_operand_id(icb0);
-    return _llk_math_mul_reduce_scalar_interleaves_(get_operand_tensor_shape(operand_id), num_tiles);
+    return _llk_math_mul_reduce_scalar_two_face_banks_(get_operand_tensor_shape(operand_id), num_tiles);
+}
+
+template <MathFidelity math_fidelity>
+inline void llk_math_mul_reduce_scalar_mul_two_face_banks(const std::uint32_t tile_index) {
+    SAN_HOOK(unsupported());
+    _llk_math_mul_reduce_scalar_mul_two_face_banks_<math_fidelity>(tile_index);
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -113,9 +119,10 @@ inline void llk_math_mul_reduce_scalar_interleaved_init() {
     _llk_math_mul_reduce_scalar_interleaved_init_<is_fp32_dest_acc_en>();
 }
 
-inline void llk_math_mul_reduce_scalar_interleaved_tile(const std::uint32_t i, const float scaler) {
+template <std::uint32_t row_tiles>
+inline void llk_math_mul_reduce_scalar_interleaved_row(const float scaler) {
     SAN_HOOK(unsupported());
-    _llk_math_mul_reduce_scalar_interleaved_tile_(i, scaler);
+    _llk_math_mul_reduce_scalar_interleaved_row_<row_tiles>(scaler);
 }
 
 inline void llk_math_mul_reduce_scalar_interleaved_tail(const std::uint32_t num_tiles) {

@@ -71,6 +71,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // mul_reduce_scalar_init: unpack A and B, no broadcast/transpose.
     _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
 
+    // A compiled row of two or more 32x32 tiles takes two faces per SrcA/SrcB bank, as the API runs it.
+    const bool two_face_banks = ROW_TILES >= 2 && _llk_unpack_mul_reduce_scalar_two_face_banks_(tensor_shape);
+    if (two_face_banks)
+    {
+        _llk_unpack_mul_reduce_scalar_two_face_banks_init_();
+    }
+
     // Multiply phase: stream A[i] and B[i] into SrcA/SrcB for each tile.
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
@@ -80,6 +87,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Switch to the reduce phase: reset counters and re-arm SrcA/SrcB DVALID so
     // MATH can reuse DEST as source operands.
     _llk_unpack_mul_reduce_scalar_switch_to_reduce_();
+    if (two_face_banks)
+    {
+        _llk_unpack_mul_reduce_scalar_two_face_banks_uninit_();
+    }
 }
 
 #endif
@@ -116,19 +127,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // once-init before the reduce-phase _calculate_fill_ SFPU stores.
     _llk_math_eltwise_unary_sfpu_init_once_();
 
-    // mul_reduce_scalar_init: element-wise multiply, no accumulate-to-dest.
-    _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-        tensor_shape, 0 /* acc_to_dest */);
+    LLK_ASSERT(ROW_TILES == 0 || ROW_TILES == tile_cnt, "ROW_TILES must equal TILE_CNT");
+    const bool two_face_banks = ROW_TILES >= 2 && _llk_math_mul_reduce_scalar_two_face_banks_(tensor_shape, ROW_TILES);
+    const bool interleave     = two_face_banks && MATH_FIDELITY == MathFidelity::LoFi;
+
+    // mul_reduce_scalar_init: element-wise multiply, no accumulate-to-dest; the interleaved row sets its own state.
+    if (!interleave)
+    {
+        _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+            tensor_shape, 0 /* acc_to_dest */);
+    }
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
-    if (MATH_FIDELITY == MathFidelity::LoFi && _llk_math_mul_reduce_scalar_interleaves_(tensor_shape, tile_cnt))
+    if (interleave)
     {
         _llk_math_mul_reduce_scalar_interleaved_init_<is_fp32_dest_acc_en>();
-        for (std::uint32_t i = 0; i < tile_cnt; ++i)
-        {
-            _llk_math_mul_reduce_scalar_interleaved_tile_(i, REDUCE_SCALER);
-        }
+        _llk_math_mul_reduce_scalar_interleaved_row_<ROW_TILES>(REDUCE_SCALER);
         _llk_math_mul_reduce_scalar_interleaved_tail_(tile_cnt);
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
         return;
@@ -138,6 +153,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
         LLK_ASSERT((i < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Multiply tile index exceeds maximum destination tiles");
+        if (two_face_banks)
+        {
+            _llk_math_mul_reduce_scalar_mul_two_face_banks_<MATH_FIDELITY>(i);
+            continue;
+        }
         if (_llk_math_mul_reduce_scalar_shares_slot_(tensor_shape))
         {
             _llk_math_mul_reduce_scalar_mul_half_slot_<MATH_FIDELITY>(tensor_shape, i);

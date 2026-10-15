@@ -34,6 +34,7 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    ROW_TILES,
     TILE_COUNT,
 )
 from helpers.tile_shape import construct_tile_shape
@@ -71,13 +72,21 @@ def _num_tiles_for_format(formats):
     )
 
 
+def _row_tiles(num_tiles, tile_dimensions):
+    """0 keeps the row length at run time; a compiled row of two or more 32x32 tiles takes two faces per bank."""
+    return [0, num_tiles] if tile_dimensions == [32, 32] and num_tiles >= 2 else [0]
+
+
 @parametrize(
     formats=FORMATS,
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
     num_tiles=_num_tiles_for_format,
     tile_dimensions=TILE_DIMENSIONS,
+    row_tiles=_row_tiles,
 )
-def test_mul_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions):
+def test_mul_reduce_scalar(
+    formats, math_fidelity, num_tiles, tile_dimensions, row_tiles
+):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("mul_reduce_scalar is a Blackhole-only experimental LLK")
 
@@ -114,6 +123,7 @@ def test_mul_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions):
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
+            ROW_TILES(row_tiles, tile_shape.num_faces_r_dim),
         ],
         runtimes=[
             TILE_COUNT(num_tiles),

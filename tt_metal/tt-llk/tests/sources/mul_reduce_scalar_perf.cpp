@@ -22,6 +22,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr DstSync DST_SYNC        = DstSync::SyncHalf;
 static constexpr std::uint32_t DST_INDEX = 0;
+// A compiled row of two or more 32x32 tiles takes two faces per SrcA/SrcB bank, as the API runs it.
+static constexpr bool TWO_FACE_BANKS = ROW_TILES >= 2 && ROW_FACES_R_DIM == 2;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -60,6 +62,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces,
             num_faces);
         _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
+        if constexpr (TWO_FACE_BANKS)
+        {
+            _llk_unpack_mul_reduce_scalar_two_face_banks_init_();
+        }
         PROFILER_SYNC();
     }
     {
@@ -71,7 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t i = 0; i < TILE_CNT * num_faces; ++i)
+                for (std::uint32_t i = 0; i < TILE_CNT * (TWO_FACE_BANKS ? 2 : num_faces); ++i)
                 {
                     _perf_unpack_set_valid(ckernel::SrcA);
                     _perf_unpack_set_valid(ckernel::SrcB);
@@ -92,6 +98,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
         PROFILER_SYNC();
+    }
+    if constexpr (TWO_FACE_BANKS)
+    {
+        _llk_unpack_mul_reduce_scalar_two_face_banks_uninit_();
     }
 }
 
@@ -121,24 +131,23 @@ __attribute__((always_inline)) inline void reduce_later_tiles(const ckernel::Ten
 __attribute__((always_inline)) inline void row_math(const std::uint32_t runtime_tile_cnt, const ckernel::TensorShape& tensor_shape)
 {
     const std::uint32_t tile_cnt = ROW_TILES > 0 ? ROW_TILES : runtime_tile_cnt;
+    // The compiled rows give the API their length, as the DeepSeek RMSNorm does; the interleaved row skips the multiply init.
+    if constexpr (TWO_FACE_BANKS && MATH_FIDELITY == MathFidelity::LoFi)
+    {
+        _llk_math_mul_reduce_scalar_interleaved_init_<is_fp32_dest_acc_en>();
+        _llk_math_mul_reduce_scalar_interleaved_row_<ROW_TILES>(REDUCE_SCALER);
+        _llk_math_mul_reduce_scalar_interleaved_tail_(tile_cnt);
+        return;
+    }
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
         tensor_shape, 0 /* acc_to_dest */);
-    // The compiled rows give the API their length, as the DeepSeek RMSNorm does.
-    if constexpr (ROW_TILES >= 2)
-    {
-        if (MATH_FIDELITY == MathFidelity::LoFi && _llk_math_mul_reduce_scalar_interleaves_(tensor_shape, tile_cnt))
-        {
-            _llk_math_mul_reduce_scalar_interleaved_init_<is_fp32_dest_acc_en>();
-            for (std::uint32_t i = 0; i < tile_cnt; ++i)
-            {
-                _llk_math_mul_reduce_scalar_interleaved_tile_(i, REDUCE_SCALER);
-            }
-            _llk_math_mul_reduce_scalar_interleaved_tail_(tile_cnt);
-            return;
-        }
-    }
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
+        if constexpr (TWO_FACE_BANKS)
+        {
+            _llk_math_mul_reduce_scalar_mul_two_face_banks_<MATH_FIDELITY>(i);
+            continue;
+        }
         if (_llk_math_mul_reduce_scalar_shares_slot_(tensor_shape))
         {
             _llk_math_mul_reduce_scalar_mul_half_slot_<MATH_FIDELITY>(tensor_shape, i);
@@ -212,7 +221,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t i = 0; i < tile_cnt * num_faces; ++i)
+                for (std::uint32_t i = 0; i < tile_cnt * (TWO_FACE_BANKS ? 2 : num_faces); ++i)
                 {
                     _perf_math_clear_valid(ckernel::SrcA);
                     _perf_math_clear_valid(ckernel::SrcB);
