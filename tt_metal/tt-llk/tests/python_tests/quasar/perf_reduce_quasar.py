@@ -13,11 +13,12 @@ from helpers.llk_params import (
 )
 from helpers.param_config import parametrize
 from quasar.test_reduce_quasar import (
+    POOL_TYPES,
     REDUCE_FORMATS,
     reduce_dest_acc_modes,
     reduce_dest_sync_modes,
     reduce_implied_math_formats,
-    reduce_pool_type_and_math_fidelity_combinations,
+    reduce_math_fidelities,
     reduce_tile_dimensions,
 )
 from quasar.test_reduce_quasar import test_reduce_quasar as run_reduce_quasar
@@ -32,10 +33,11 @@ from quasar.test_reduce_quasar import (
 @parametrize(
     formats=REDUCE_FORMATS,
     tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=True),
-    dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
+    dest_acc=reduce_dest_acc_modes,
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type_and_math_fidelity=lambda formats: reduce_pool_type_and_math_fidelity_combinations(
-        formats, is_perf=True
+    pool_type=POOL_TYPES,
+    math_fidelity=lambda formats, pool_type: reduce_math_fidelities(
+        formats, pool_type, is_perf=True
     ),
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=True),
     implied_math_format=lambda formats: reduce_implied_math_formats(
@@ -51,7 +53,8 @@ def test_perf_reduce_quasar(
     tile_dimensions,
     dest_acc,
     reduce_dim,
-    pool_type_and_math_fidelity,
+    pool_type,
+    math_fidelity,
     dest_sync_mode,
     implied_math_format,
     run_types,
@@ -63,7 +66,8 @@ def test_perf_reduce_quasar(
         tile_dimensions,
         dest_acc,
         reduce_dim,
-        pool_type_and_math_fidelity,
+        pool_type,
+        math_fidelity,
         dest_sync_mode,
         implied_math_format,
         run_types=run_types,
@@ -93,7 +97,7 @@ def test_perf_reduce_quasar(
             register_format_hint=register_format_hint,
         ),
     ],
-    dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
+    dest_acc=reduce_dest_acc_modes,
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=lambda formats: get_valid_math_fidelities(formats),
