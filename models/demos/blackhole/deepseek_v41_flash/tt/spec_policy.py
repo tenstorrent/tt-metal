@@ -147,6 +147,10 @@ def resolve(batch, mesh_rows=4, max_seq_len=None, env=None):
     c.ring_rows = RING_ROWS_SPEC
     if not c.explicit and max_seq_len is not None:
         lim = min(SPEC_MAX_CTX.get(U, SPEC_MAX_CTX[8]), SPEC_MAX_CTX_BACKEND)
+        if _get(
+            env, "DSV41_SPEC_MAX_CTX"
+        ):  # experiment: lift the measured context cap (DRAM / matmul-indexer bound) for this build
+            lim = int(_get(env, "DSV41_SPEC_MAX_CTX"))
         if max_seq_len > lim:
             return SpecChoice(
                 "plain", reason=f"context too long for spec: max_seq_len {max_seq_len} > {lim} at B={batch}", rows=False

@@ -686,15 +686,13 @@ class DSV41PrefillSparse:
 
     @staticmethod
     def _build_hook(ctx):
-        """once per chunk inside the trace: vis[r] [1,1,C,L] = 1 where 0 <= slot - off < lim[row]."""
+        """once per chunk inside the trace: vis[r] [1,1,C,L] = 1 where 0 <= slot - off < lim[row] (built in column chunks, tt/prefill_dyn.visibility_mask)."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_dyn import visibility_mask
+
         for r in ctx.sp_win:
-            L, C = ctx.L[r], ctx.C
-            j = ttnn.subtract(ctx.pcol[r], ctx.off[r])
-            ge0 = ttnn.ge(j, 0.0)
-            lt = ttnn.lt(ttnn.repeat(j, [1, 1, C, 1]), ttnn.repeat(ctx.lim[r], [1, 1, 1, L]))
             if r in ctx.sp_vis:
                 ttnn.deallocate(ctx.sp_vis[r])
-            ctx.sp_vis[r] = ttnn.typecast(ttnn.multiply(lt, ttnn.repeat(ge0, [1, 1, C, 1])), ttnn.bfloat16)
+            ctx.sp_vis[r] = visibility_mask(ctx.pcol[r], ctx.off[r], ctx.lim[r], ctx.C, ctx.L[r])
 
     def attend_dyn(self, qh, kv, halo, lat, lat_pre, h, qr):
         pa, ctx, U = self.pa, self.ctx, self.U
