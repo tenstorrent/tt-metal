@@ -670,10 +670,11 @@ def test_reduce_scatter_composite_collapsed_replicate(mesh_device, strict_ccl_to
 @pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
 def test_reduce_scatter_prim_collapsed_shard_same_dim_inner_axis(mesh_device, strict_ccl_topology):
     """{N}, [Shard(3)] reduce-scattered on dim 3 along the innermost axis: row r sums its `cols` pieces and splits
-    the sum back across the row -- row-major hierarchical sharding, i.e. the collapsed label again (rule (c)), with
-    the bytes to match. The pre-change label (the input's, by fallback) happened to spell the same, so this is not
-    a negative control on its own: it pins that under strict mode the helper's collapse rule produces the label (a
-    refusal would raise) and the bytes it describes; the N-D form of the same case below is the negative control."""
+    the sum back across the row -- row-major hierarchical sharding, i.e. the collapsed label again
+    (reduce_scatter_output_topology's same-dim inner-axis collapse), with the bytes to match. The pre-change label
+    (the input's, by fallback) happened to spell the same, so this is not a negative control on its own: it pins that
+    under strict mode the helper's collapse rule produces the label (a refusal would raise) and the bytes it
+    describes; the N-D form of the same case below is the negative control."""
     torch.manual_seed(21)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * num_devices * cols])
@@ -691,11 +692,11 @@ def test_reduce_scatter_prim_collapsed_shard_same_dim_inner_axis(mesh_device, st
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
 @pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
 def test_reduce_scatter_prim_nd_same_dim_inner_axis_collapses(mesh_device, strict_ccl_topology):
-    """Rule (c): ShardTensor2dMesh dims=(3, None) holds chunk r of dim 3 on row r; reduce-scattering dim 3 along the
-    columns splits each row's (summed) chunk into C -- device (r, c) holds piece Cr+c of C * T: the collapsed
-    {N}, [Shard(3)]. Negative control: before this change the output kept the input's [Shard(3), Replicate], which
-    claims the columns identical; composing it fails the identical-bytes check (the serialiser would have kept
-    column 0 only)."""
+    """reduce_scatter_output_topology collapses a same-dim scatter along the inner axis. ShardTensor2dMesh
+    dims=(3, None) holds chunk r of dim 3 on row r; reduce-scattering dim 3 along the columns splits each row's
+    (summed) chunk into C -- device (r, c) holds piece Cr+c of C * T: the collapsed {N}, [Shard(3)]. Negative
+    control: before this change the output kept the input's [Shard(3), Replicate], which claims the columns
+    identical; composing it fails the identical-bytes check (the serialiser would have kept column 0 only)."""
     torch.manual_seed(22)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * num_devices])
@@ -738,10 +739,10 @@ def test_reduce_scatter_prim_nd_other_dim_keeps_other_axis(mesh_device, cluster_
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
 @pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
 def test_reduce_scatter_prim_collapsed_shard_outer_axis_is_refused(mesh_device, strict_ccl_topology, expect_error):
-    """Rule (c) as amended, negative control: {N}, [Shard(3)] puts piece Cr+c on device (r, c); reduce-scattering
-    dim 3 along the rows leaves device (r, c) with part r of its column's summed piece -- column-major, which no
-    row-major label describes, so strict mode refuses before any device work. Before this change the output
-    silently kept the input's {N}, [Shard(3)]."""
+    """Negative control: reduce_scatter_output_topology refuses a same-dim scatter along the outer axis. {N},
+    [Shard(3)] puts piece Cr+c on device (r, c); reduce-scattering dim 3 along the rows leaves device (r, c) with
+    part r of its column's summed piece -- column-major, which no row-major label describes, so strict mode refuses
+    before any device work. Before this change the output silently kept the input's {N}, [Shard(3)]."""
     torch.manual_seed(24)
     rows, _, num_devices = _mesh(mesh_device)
     tt_input = _from_torch(
@@ -786,7 +787,7 @@ def test_reduce_scatter_prim_whole_mesh(mesh_device, strict_ccl_topology):
     """cluster_axis=None. On a line the wrapper hands the prim the whole mesh: every device ends up with a distinct
     piece in coordinate order, the collapsed {N}, [Shard(3)]. On a 2-D mesh the wrapper runs one reduce_scatter per
     axis (cluster_axis 0, then 1): the first gives [Shard(3), Replicate], the second scatters dim 3 again along the
-    inner axis and collapses to {N}, [Shard(3)] (rule (c)) -- device (r, c) holds piece Cr+c of N * T. Negative
+    inner axis and the helper collapses it to {N}, [Shard(3)] -- device (r, c) holds piece Cr+c of N * T. Negative
     control: before this change both paths returned the input's {N}, [Replicate]; composing it asserts identical
     bytes everywhere."""
     torch.manual_seed(26)
