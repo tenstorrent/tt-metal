@@ -353,7 +353,9 @@ static uint32_t block_sharded_act_rm_extra_bytes_qsr(
     const DeviceComputeKernelConfig& compute_config,
     const Conv2dConfig& conv_config,
     const std::optional<ttnn::MemoryConfig>& halo_input_memory_config = std::nullopt) {
-    if (conv_config.shard_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+    // A 1x1 / matmul-shaped conv never runs the sharded conv factory: conv2d_L1 routes it to
+    // quasar matmul::linear (the `!mm_conv` branch below), so no ACT_ROW_MAJOR DFB exists to charge for.
+    if (is_mm_conv || conv_config.shard_layout != TensorMemoryLayout::BLOCK_SHARDED) {
         return 0;
     }
     if (is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias)) {
