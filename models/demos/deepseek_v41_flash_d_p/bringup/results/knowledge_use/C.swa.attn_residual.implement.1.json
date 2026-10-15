@@ -1,0 +1,52 @@
+{
+ "used": [
+  {
+   "id": "K-20",
+   "how": "checked comb vs comb^T: DS41's comb is (j input, k output), so mhc_post's default comb_transposed=True, not xing40's False (tt/residual.py)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "kept every residual product / sum on the SFPU in fp32 (mhc_post weighted sum, addcmul alternative), no FPU read of the fp32 streams",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "read the pcc=0 FAIL block before the real pass as the precompile collect pass, not a module failure",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "OV-1",
+   "answer": "done",
+   "evidence": "DS41-12 in bringup/known_issues.md is a single line of 352 characters (shortened in S.swa.06; awk length 355 incl. the '12:' grep prefix)"
+  }
+ ],
+ "cited_only": [
+  "DS41-12"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.attn_residual",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T15:46:11",
+  "head": "e94e7bbe8f0",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.attn_residual.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/residual.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

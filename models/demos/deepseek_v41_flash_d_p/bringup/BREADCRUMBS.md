@@ -330,3 +330,21 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   lane matmuls run at ~25 TFLOP/s), or WINDOW_SDPA=high_precision (judge end to end).
 - OV-1: DS41-12 shortened to one line (352 chars); the detail heading renamed to match.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_06_attention.py`
+
+## C.swa.attn_residual implement (attempt 1)
+- `tt/residual.py` (new): `TtHcResidual(x streams [1,1,S/SP,4 x H/TP] fp32, mixes [1,1,S/SP,24] fp32 row-split +
+  TP-replicated, y [1,1,S/SP,H/TP] fp32) -> h_mid streams [1,1,S/SP,4 x H/TP] fp32`. Local per chip: no CCL, no
+  weight, no host work. post = mixes[:, 4:8], comb = mixes[:, 8:24] (row-major (j input, k output)); DS41's
+  out_k = post_k y + sum_j comb[j*4 + k] x_j is `ttnn.bringup.mhc_post`'s DEFAULT (comb_transposed=True), unlike
+  xing40 (comb_transposed=False).
+- Setting RESIDUAL_MIX: fused (default, mhc_post in one program) | addcmul (multiply + 4 x addcmul per stream).
+  Both fp32 SFPU; both give identical numbers on the gate (the fused kernel keeps the chain's rounding order). Not a
+  precision switch, so not in MAX_PRECISION.
+- hooks.py: `_residual_host_fn` (harness boundary: streams_to_device(x) drops the pending pre, row_split_to_device(mix),
+  hidden_split_to_device(y), streams_to_host back); DEVICE_STEPS["swa"] += attn_residual. ffn_residual can reuse the
+  module (then pack mix[:, :4] as the pending pre).
+- Gate: PASS. pcc 0.999998; vs CPU rel 1.7e-8 (limit 0.0049); vs golden 0.0022; second inputs rel <= 3.5e-8;
+  A,B,A bit-identical. The FAIL lines with pcc 0 before the real pass are the precompile collect pass (K-52).
+- OV-1: already done (DS41-12 is one line, 352 chars).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_residual.py`
+  (DS41_RESIDUAL_MIX=addcmul for the op chain).
