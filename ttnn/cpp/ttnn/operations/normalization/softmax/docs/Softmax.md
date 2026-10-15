@@ -433,7 +433,7 @@ attention_weights = ttnn.scale_mask_softmax(
 from ttnn import MathFidelity
 config = ttnn.DeviceComputeKernelConfig(
     math_fidelity=MathFidelity.HiFi4,
-    fp32_dest_acc_en=True  # FP32 accumulation for FLOAT32 inputs
+    fp32_dest_acc_en=True  # FP32 destination accumulation, for any input dtype
 )
 ```
 
@@ -734,7 +734,7 @@ The implementation automatically selects the optimal execution path based on:
 ### Numerical Stability
 - **Stable Softmax**: Optional max subtraction prevents overflow
 - **Mixed Precision**: Support for different data types with appropriate accumulation
-- **FP32 Accumulation**: Automatic enabling for FLOAT32 inputs
+- **FP32 Accumulation**: On by default for the row sum, whatever the input dtype. Sharded program configs keep the FLOAT32-input-only default
 
 ## Memory Requirements and Constraints
 
@@ -787,7 +787,7 @@ The implementation includes comprehensive validation:
 **Problem**: NaN or infinity values in output
 **Solutions**:
 - Enable numerical stability: `numeric_stable=True`
-- Use FP32 accumulation for FLOAT32 inputs:
+- Pass FP32 accumulation explicitly if you use a sharded program config, whose default enables it for FLOAT32 inputs only:
   ```python
   config = ttnn.DeviceComputeKernelConfig(fp32_dest_acc_en=True)
   ```
