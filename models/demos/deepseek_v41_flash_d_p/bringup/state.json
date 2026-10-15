@@ -480,7 +480,7 @@
   ],
   "attempt": 2,
   "attempts": 2,
-  "duration_s": 12.6,
+  "duration_s": 5185.1,
   "history": [
    {
     "status": "FAIL",
@@ -497,27 +497,29 @@
    {
     "status": "RESUMED",
     "t": "2026-10-15T08:14:28"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-10-15T12:32:40"
    }
   ],
-  "last_run": "2026-10-15T07:33:57",
+  "last_run": "2026-10-15T12:32:40",
   "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/SG.1.log",
   "metrics": {
+   "cpu_seconds": 5169.8,
+   "golden_chunks": 27,
+   "golden_hash_ok": 1,
+   "golden_layers": 8,
    "scale_errors": 0,
    "scale_tensors_cut": 250,
    "scale_tensors_dropped": 43200,
    "scale_tensors_total": 58399
   },
-  "rc": 1,
-  "reason": [
-   "  cmd rc=1 (13s), log: /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/SG.1.log",
-   "  ok       scale_errors = 0 (need == 0)",
-   "  ok       scale_tensors_total = 58399 (need >= 1)",
-   "  MISSING  golden_layers (need == 8)",
-   "  MISSING  golden_hash_ok (need == 1)"
-  ],
+  "rc": 0,
+  "reason": [],
   "role": "scale",
-  "started": "2026-10-15T07:37:16",
-  "status": "TODO",
+  "started": "2026-10-15T11:06:15",
+  "status": "PASS",
   "waiting": null
  },
  "_run": {

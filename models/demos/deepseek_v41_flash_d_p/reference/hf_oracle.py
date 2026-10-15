@@ -32,7 +32,6 @@ fit in host RAM unpacked, so the stock loader cannot run it. Instead:
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
 import sys
 import types
@@ -88,7 +87,9 @@ class _Proxy(types.ModuleType):
 def inference_module(model_path: str):
     """model.py from ``<checkpoint>/inference``, importing our CPU kernels as ``kernel`` (sys.modules restored), its
     GEMMs (``F.linear``, ``torch.einsum``) tiled as the reference's are (kernels.py "GEMM tiling")."""
-    d = os.path.join(model_path, "inference")
+    from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import inference_dir
+
+    d = inference_dir(model_path)
     bare = ("kernel", "engram", "image_processor", "vision")
     saved = {n: sys.modules.get(n) for n in bare}
     try:
@@ -222,8 +223,9 @@ def build_oracle(model_path: str, num_layers: int | None = None, dtype=torch.bfl
     from transformers import AutoTokenizer
 
     mod = inference_module(model_path)
-    with open(os.path.join(model_path, "inference", "config.json")) as f:
-        raw = json.load(f)
+    from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import inference_config
+
+    raw = inference_config(model_path)  # a scaled checkpoint: the source's with the cut counts
     args = mod.ModelArgs(**raw)
     args.max_batch_size = 1
     args.max_seq_len = max_seq_len

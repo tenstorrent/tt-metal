@@ -105,6 +105,72 @@ PACK_PRE = 4  # pre weights packed after the streams
 
 
 # ============================================================================================= config
+# HF ``config.json`` (text_config) key -> inference ``config.json`` key, for the counts a scaled checkpoint
+# (plan/scale.py, bringup/scaling.yaml) may cut. scale.py rewrites only the top-level config.json; the inference
+# config of a scaled dir is the source's with these counts taken from the scaled config.json.
+HF_TO_INFERENCE = {
+    "num_attention_heads": "n_heads",
+    "o_groups": "o_groups",
+    "n_routed_experts": "n_routed_experts",
+    "num_experts_per_tok": "n_activated_experts",
+    "moe_intermediate_size": "moe_inter_dim",
+    "hidden_size": "dim",
+    "vocab_size": "vocab_size",
+    "num_hidden_layers": "n_layers",
+    "q_lora_rank": "q_lora_rank",
+    "o_lora_rank": "o_lora_rank",
+    "head_dim": "head_dim",
+    "index_n_heads": "index_n_heads",
+    "index_head_dim": "index_head_dim",
+    "index_topk": "index_topk",
+    "engram_n_heads": "engram_n_heads",
+    "engram_head_dim": "engram_head_dim",
+}
+SCALE_MARKER = "bringup_scale.json"  # plan/scale.py MARKER
+
+
+def _text_config(path: str) -> dict:
+    with open(os.path.join(path, "config.json")) as f:
+        cfg = json.load(f)
+    return cfg.get("text_config", cfg)
+
+
+def inference_dir(model_path: str) -> str:
+    """The ``inference/`` code dir of a checkpoint; a scaled checkpoint's is its source's (bringup_scale.json)."""
+    d = os.path.join(model_path, "inference")
+    marker = os.path.join(model_path, SCALE_MARKER)
+    if not os.path.isdir(d) and os.path.exists(marker):
+        with open(marker) as f:
+            d = os.path.join(json.load(f)["source"], "inference")
+    return d
+
+
+def inference_config(model_path: str) -> dict:
+    """The inference ModelArgs dict of a checkpoint dir: its ``inference/config.json``; for a scaled checkpoint (no
+    ``inference/``, a ``bringup_scale.json`` naming its source), the source's with every count the cut changed in
+    ``config.json`` applied (an unmapped changed key fails loudly)."""
+    own = os.path.join(model_path, "inference", "config.json")
+    if os.path.exists(own):
+        with open(own) as f:
+            return json.load(f)
+    marker = os.path.join(model_path, SCALE_MARKER)
+    if not os.path.exists(marker):
+        raise FileNotFoundError(f"{own} (and no {SCALE_MARKER}: not a scaled checkpoint)")
+    with open(marker) as f:
+        src = json.load(f)["source"]
+    with open(os.path.join(src, "inference", "config.json")) as f:
+        raw = json.load(f)
+    hf_src, hf_dst = _text_config(src), _text_config(model_path)
+    for k in sorted(set(hf_src) | set(hf_dst)):
+        if hf_src.get(k) == hf_dst.get(k):
+            continue
+        assert k in HF_TO_INFERENCE, f"scaled config.json changes {k!r}, which has no inference config key"
+        ik = HF_TO_INFERENCE[k]
+        assert raw[ik] == hf_src[k], (k, ik, raw[ik], hf_src[k])  # the two configs of the source agree
+        raw[ik] = hf_dst[k]
+    return raw
+
+
 class Config:
     """The inference ModelArgs (``inference/config.json``) plus the per-layer roles derived from them."""
 
@@ -157,8 +223,7 @@ class Config:
 
     @classmethod
     def from_dir(cls, model_path: str) -> "Config":
-        with open(os.path.join(model_path, "inference", "config.json")) as f:
-            return cls(json.load(f))
+        return cls(inference_config(model_path))
 
     # roles
     def ratio(self, i: int) -> int:
