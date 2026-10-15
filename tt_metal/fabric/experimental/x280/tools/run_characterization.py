@@ -70,21 +70,19 @@ def validate_test_report(path, expected):
 
 def record_host_label(campaign, label):
     """Record the campaign's host label on first use. `label` None collects unlabelled: nothing is
-    written, and a campaign that already has a host.json is refused. Raise ValueError naming both
-    labels when they differ, and when an existing host.json is not a JSON object holding a string
-    host_label."""
+    written or checked, even on a campaign that already has a host.json. Raise ValueError naming
+    both labels when they differ, and when an existing host.json is not a JSON object holding a
+    string host_label."""
+    if label is None:
+        return
     path = campaign / "host.json"
     if path.exists():
         recorded = json.loads(path.read_text())
         if not isinstance(recorded, dict) or not isinstance(recorded.get("host_label"), str):
             raise ValueError(f"{path} does not record a host_label")
         recorded = recorded["host_label"]
-        if label is None:
-            raise ValueError(f"campaign was collected on host {recorded!r}, and this run names no host")
         if recorded != label:
             raise ValueError(f"campaign was collected on host {recorded!r}, not {label!r}")
-        return
-    if label is None:
         return
     with path.open("x") as output:
         output.write(json.dumps({"host_label": label}, indent=2) + "\n")
@@ -151,7 +149,7 @@ def main():
     parser.add_argument("--id", action="append", required=True)
     parser.add_argument(
         "--host-label",
-        help="names the collecting host in the campaign record; a campaign started with one requires it",
+        help="names the collecting host in the campaign record; a campaign refuses a second label",
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

@@ -372,8 +372,8 @@ needs a reset before it runs. The runner never resets a device.
 Metal paths, visible device, campaign directory and an optional `--host-label`
 naming the host. A label is recorded in the campaign's `host.json` and in every
 attempt record, and a campaign refuses a second label. Without one the runner
-writes no `host.json` and no attempt carries `host_label`; a campaign that
-already has a `host.json` refuses an unlabelled run. The manifest contains only
+writes no `host.json` and no attempt carries `host_label`, including on a
+campaign that already has a `host.json`. The manifest contains only
 inputs consumed by execution or validation:
 
 | Field | Consumer |

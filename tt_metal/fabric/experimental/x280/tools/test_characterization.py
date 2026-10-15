@@ -703,8 +703,9 @@ class AttemptLogging(unittest.TestCase):
         self.assertTrue(run_one(self.manifest, self.config, {}, self.root, self.engine, "host-a"))
         attempt = next((self.root / "attempts").iterdir())
         self.assertEqual(json.loads((attempt / "attempt.json").read_text())["host_label"], "host-a")
-        with self.assertRaisesRegex(ValueError, "collected on host 'host-a', and this run names no host"):
-            record_host_label(self.root, None)
+        # An unlabelled run on a labelled campaign goes through and records no label.
+        record_host_label(self.root, None)
+        self.assertEqual(json.loads((self.root / "host.json").read_text()), {"host_label": "host-a"})
 
     def test_an_unlabelled_campaign_records_no_host(self):
         record_host_label(self.root, None)
