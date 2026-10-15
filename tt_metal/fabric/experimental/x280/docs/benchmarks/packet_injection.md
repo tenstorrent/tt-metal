@@ -1,6 +1,6 @@
 # Packet Injection Characterization
 
-The [2026-09-23 rerun](../../benchmarks/campaigns/20260923-measurement-unification/MASTER_RESULTS.md)
+The 2026-09-23 rerun (archived record `benchmarks/campaigns/20260923-measurement-unification/`)
 includes both throughput families and all four latency/backpressure variants.
 Its worker records retain native CPU measurements where the interval is local.
 Current schema-2 records retain raw wall ticks and per-run AICLK evidence for
@@ -911,8 +911,8 @@ ticks, and one writer's wall delta over the aggregate interval implies about
 nine points and reproduced them within 0.09%.
 
 **Scaling campaign (2026-09-30).** Card 0 as above, three runs per point through
-`run_characterization.py`; provenance and raw JSONL in
-[`benchmarks/campaigns/20260929-erisc-header-ingress-scaling/`](../../benchmarks/campaigns/20260929-erisc-header-ingress-scaling/VERIFICATION.md).
+`run_characterization.py`; provenance and raw JSONL are the archived record
+`benchmarks/campaigns/20260929-erisc-header-ingress-scaling/` ([results.md](../results.md#erisc---x280-header-ingress)).
 Rates are X280 `mtime` aggregates, mean [min, max] over the runs; stall
 episodes, counter writes and wall ticks are per writer. W is calibrated per point.
 ERISC ticks are shown raw and convert offline under each run's clean AICLK
@@ -920,7 +920,7 @@ evidence, taken on writer 0's ERISC wall clock.
 Every figure is for inactive idle ERISCs and does not show that an ERISC doing
 live Ethernet receive and router work has the same cycles left. No target is
 asserted. The re-run C=1, K=1 table, the derivations and the Tensix cross-check
-are in [`CHARACTERIZATION_RESULTS.md` section 4.4](../../CHARACTERIZATION_RESULTS.md#44-erisc---x280-packet-header-ingress-96-b).
+are in [`docs/results.md`](../results.md#erisc---x280-header-ingress).
 
 The consumer-settings sweep (S=16, N=1024, B=1):
 

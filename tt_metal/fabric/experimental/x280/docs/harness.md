@@ -836,7 +836,7 @@ With translation enabled, a NIU translates all four multicast corners before
 choosing the spans (tt-isa-documentation `BlackholeA0/NoC/MemoryMap.md`,
 `NOC_TARG_ADDR`). The L2CPU TLB window documentation does not say whether that
 holds for its windows; the renumbered-column case below observed it on a
-harvested part ([CHARACTERIZATION_RESULTS.md § 5.9](../CHARACTERIZATION_RESULTS.md#59-core-synchronization-release-characterization)).
+harvested part ([results.md](results.md#core_sync)).
 
 Every other core-sync case sits at logical x < 6, where virtual and NOC0
 coincide on the parts in use, except
@@ -1158,7 +1158,7 @@ BDF `0000:41:00.0` is node `1`.
 - **Resolve identity by BDF**, via `env -u TT_VISIBLE_DEVICES tt-smi -ls`, when
   a result is going to be attributed to a specific part.
 - **Verify state by measurement, not by inference.** Every single-action probe
-  trial behind `CHARACTERIZATION_RESULTS.md` § 3.2 survived this bug precisely
+  trial behind the posted-mode finding in [results.md](results.md#p2p_latency) survived this bug precisely
   because it measured a clean baseline instead of assuming the preceding reset
   had worked. Prefer a probe
   that proves the precondition over a procedure believed to establish it.
@@ -1183,11 +1183,11 @@ The session fixture already takes chip ids as an argument
    loudly when the shim is used.
 2. Have the option resolve to a BDF and print it, so every run's output records
    which physical part produced it. A result that cannot be attributed to a BDF
-   should not be quotable in `CHARACTERIZATION_RESULTS.md`.
+   should not be quotable in [results.md](results.md).
 3. Make the fixture take the device from that option rather than reading the
    environment, so a case cannot be retargeted by ambient state.
 4. Once every caller passes `--device`, and the recorded procedures in
-   `CHARACTERIZATION_RESULTS.md` no longer export `TT_VISIBLE_DEVICES`, refuse
+   [results.md](results.md) no longer export `TT_VISIBLE_DEVICES`, refuse
    to start when it is set at all, rather than honouring it. A hard refusal
    is correct here: the variable's presence is what made a silent
    mis-measurement possible, and a warning would be ignored.
@@ -1368,7 +1368,7 @@ result.
   prepares a selected set of tiles, establishes the safe clock, and releases
   all of them in one write to `L2CPU_RESET`, inside the all-in-reset window the
   per-tile gate proves. Several L2CPUs leaving reset in one write is confirmed
-  on silicon: `CHARACTERIZATION_RESULTS.md` § 3.3 measures ID 3 across three
+  on silicon: the `x280_peer_tile` placement sweep in [results.md](results.md#p2p_latency) measures ID 3 across three
   complexes cold-booted as one batch. It is also the sanctioned bringup flow
   rather than a tolerated one, which is what retired this entry as a blocker.
   `tt-bh-linux`, `boot.py:76-85` implements the same algorithm — PLL to 200,

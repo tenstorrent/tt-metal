@@ -10,9 +10,9 @@ compressed-route lookup design summarized under
 [Historical design and measurement boundary](#historical-design-and-measurement-boundary).
 
 Fixed-source silicon evidence for X280 is recorded in
-[`CHARACTERIZATION_RESULTS.md` § 5.7](../../CHARACTERIZATION_RESULTS.md#57-schema-5-fixed-source-run).
+[`docs/results.md`](../results.md#pipeline_stage).
 X280 micro-benchmark figures move with firmware code layout alone (2026-10-02
-pad probe, [§ 5.10](../../CHARACTERIZATION_RESULTS.md#510-tip-pass-2026-10-02)), so a
+pad probe, [results.md](../results.md#pipeline_stage)), so a
 figure compares only against a run of the same image.
 
 Host lifecycle, device ownership, shape admission, argument extents, STOP, and
@@ -443,7 +443,7 @@ A host build does NOT demonstrate:
 2. Device silicon correctness; or
 3. Measured timing performance on hardware.
 Silicon correctness and timing observations are recorded in
-[`CHARACTERIZATION_RESULTS.md` § 5](../../CHARACTERIZATION_RESULTS.md#5-pipeline_stage).
+[`docs/results.md`](../results.md#pipeline_stage).
 
 ## Historical design and measurement boundary
 
@@ -463,9 +463,9 @@ the fixed source and three-case registration set; neither predicts
 the current members, whose table representation, accesses, fixture, and cache
 policy differ. DECIDE survives from the ID 7
 design. Current fixed-source measurements are recorded in
-`CHARACTERIZATION_RESULTS.md` § 5.10.
+[`docs/results.md`](../results.md#pipeline_stage).
 
-The firmware-size/ECC incident in `CHARACTERIZATION_RESULTS.md` § 5.5 remains
+The firmware-size/ECC incident (an image past the primed LIM window faulted on fetch) remains
 useful evidence about the platform. It does not restore a retired workload
 axis.
 

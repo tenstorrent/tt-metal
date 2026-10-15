@@ -132,3 +132,30 @@ them into tables and `tools/run_characterization.py` collects a campaign from
 | [docs/benchmarks/pipeline_stage.md](docs/benchmarks/pipeline_stage.md) | pipeline_stage: routing lookup and forwarding micro-ops over the prepared input |
 | [docs/benchmarks/packet_injection.md](docs/benchmarks/packet_injection.md) | packet_injection: Tensix and ERISC producers into an X280 consumer, protocol, layout, running it |
 | [docs/benchmarks/eth_credit.md](docs/benchmarks/eth_credit.md) | eth_credit: credit flow control across a direct Ethernet link |
+| [docs/results.md](docs/results.md) | the recorded results of every family, with their conditions |
+
+## 4. Results
+
+Recorded on a Blackhole p150b at X280 PLL 1750 MHz with images built by gcc 15.2, before the tree
+moved into tt-metal; conditions, ranges and records are in [docs/results.md](docs/results.md).
+
+- **p2p_latency.** Two X280 harts on one tile round-trip a 4-byte token in 140 ns (7 `mtime`
+  ticks) with a 40 ns turnaround. Across tiles every non-posted store crosses one full 12-hop
+  lap whatever the placement, 260-340 ns round trip. To a Tensix, idle-ERISC or DRISC peer the
+  X280 sees 360-420 ns. ([details](docs/results.md#p2p_latency))
+- **transport_bandwidth.** X280 -> Tensix u32 posted stores run at 0.250 GB/s, bound by the
+  X280's store issue. Tensix -> X280 is Tensix-issue-bound at 17.8 ns per write through 256 B
+  (14.4 GB/s), then the X280 sink holds about 17.5 GB/s from 384 B to 16 KiB at 1750 MHz; below
+  about 1.44 GHz the sink binds at 256 B too. ([details](docs/results.md#transport_bandwidth))
+- **pipeline_stage.** A routing-table lookup costs about 74 X280 cycles per item and a forward
+  decision 42; recorded on the 4,160-byte prepared region, before it grew to 4,288 bytes.
+  ([details](docs/results.md#pipeline_stage))
+- **core_sync.** An X280 director's multicast release spreads 16 Tensix workers' exits over
+  about 122 debug-timer ticks, against about 11,600 for unicast. ([details](docs/results.md#core_sync))
+- **packet_injection.** One Tensix producer sustains about 1.38 M headers/s at one credit per
+  header; at C=8, K=16 the X280 consumer plateaus at about 4.9 M headers/s from Tensix and
+  about 4.8 M from four or more idle ERISCs, bound by X280 service.
+  ([details](docs/results.md#packet_injection))
+- **eth_credit.** Each X280 forwarder moves 0.30-0.35 M packets/s across the Ethernet link,
+  flat in slot size, bound by its header write into the ERISC; 5.8 GB/s per forwarder at 16 KiB
+  slots. ([details](docs/results.md#eth_credit))

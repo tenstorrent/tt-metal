@@ -60,7 +60,7 @@ prototype's `DRAINED` point took 420.17 ERISC wall ticks per header and
 header there. 992 of 1,024 measured headers entered the credit wait: the writer
 is paced by X280 service and credit return, not by its own publication code.
 Conditions, both intervals and the evidence are in
-[CHARACTERIZATION_RESULTS.md § 4.4](../../CHARACTERIZATION_RESULTS.md#44-erisc---x280-packet-header-ingress-96-b).
+[results.md](../results.md#erisc---x280-header-ingress).
 
 ## Prototype Member (Superseded)
 

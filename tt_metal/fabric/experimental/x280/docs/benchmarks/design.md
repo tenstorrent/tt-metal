@@ -522,7 +522,7 @@ that member published into successive X280 FIFO slots with a sideband
 `pkt_valid` word and never waited for its consumer. Its per-header cost against
 the unified point, the cost of the credit protocol, and its historical results
 are in
-[`CHARACTERIZATION_RESULTS.md`](../../CHARACTERIZATION_RESULTS.md#44-erisc---x280-packet-header-ingress-96-b);
+[`docs/results.md`](../results.md#erisc---x280-header-ingress);
 its contract is kept in
 [`docs/benchmarks/packet_header_ingress.md`](packet_header_ingress.md#prototype-member-superseded).
 

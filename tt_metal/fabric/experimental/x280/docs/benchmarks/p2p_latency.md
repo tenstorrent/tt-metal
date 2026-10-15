@@ -1,8 +1,7 @@
 # Cross-Cluster Signalling Characterization
 
-**Status:** Measured on silicon. The numbers, the placement sweep and the run
-environment are in
-[`CHARACTERIZATION_RESULTS.md`](../../CHARACTERIZATION_RESULTS.md) § 3.3 and § 6.
+**Status:** Measured on silicon. The numbers and the placement sweep are in
+[`docs/results.md`](../results.md#p2p_latency); running it is below.
 
 **Scope:** Phase 0 feasibility benchmark ID 3 (priority P2): hart-to-hart
 signal latency where the two harts sit on different X280 complexes. This is
@@ -114,8 +113,8 @@ live. The device cases that require a reset-held tile
 `tests/device/test_x280_device_hw.cpp`) then skip until the next ASIC reset. Extra live tiles
 do not perturb the measurement — the resident idle touches no DRAM, AXI, or
 MMIO outside its own L2CPU tile (`src/lim_idle.c:20-22`) — and cost only
-power. Images, environment knobs and the full sequence are in
-`CHARACTERIZATION_RESULTS.md` § 6.
+power. Images and environment knobs are under § Metal peers and in
+[harness.md](../harness.md#running-benchmarks).
 
 ## Metal peers
 

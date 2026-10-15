@@ -297,7 +297,7 @@ the others are open.
   (`PI_ASSUMED_BRIDGE_COMPLETION`, the store-to-BRESP TURN). No X280 document
   says the store, rather than a later fence, waits for BRESP. Evidence: the
   X280 TURN falls from 440 to 76 ticks on a tile whose completion blocking a
-  mode-3 store disabled (`CHARACTERIZATION_RESULTS.md` § 3.2).
+  mode-3 store disabled ([results.md](results.md#p2p_latency)).
 - Item 5, owner decision: `rdcycle` counts the cycles the hart executes and
   does not advance while the hart stalls on memory, a NoC transaction or a
   BRESP, so every X280 CPU-cycle column is executed cycles, not elapsed time;
@@ -313,7 +313,7 @@ the others are open.
   `PI_ASSUMED_MTIME_HZ`). Manual §5.13.1 defers the `rtc_toggle` rate to an
   X280 MC User Guide. Evidence: a PLL sweep fits X280 TURN as a fixed cycle
   count plus a clock-independent time in `mtime` ticks
-  (`CHARACTERIZATION_RESULTS.md` § 3.2).
+  ([results.md](results.md#p2p_latency)).
 - Item 8, owner assumption: a write in flight through an L2CPU TLB window lands
   at its old target when the window is cleared (core_sync release).
   No L2CPU document states it. Evidence:
