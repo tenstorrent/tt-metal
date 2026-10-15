@@ -68,7 +68,12 @@ void kernel_main() {
         0,
         InterleavedAddrGen<true>{
             .bank_base_address = get_arg_val<uint32_t>(get_compile_time_arg_val(7)), .page_size = 4});
+#ifdef XRD_IDX_ALL
+    // the call's whole token index in this relay's arena (RT CT 7 + 1), read once below, after the schedule
+    const uint32_t idx_l1 = get_arg_val<uint32_t>(get_compile_time_arg_val(7) + 1);
+#else
     const uint32_t idx_l1 = get_write_ptr(tt::CBIndex::c_7);  // MT x 32 words (<= 512 B <= 2 SE_DYN_HALF)
+#endif
 #endif
     uint32_t in_batch = 0, l1 = 0;
     auto flush = [&]() {
@@ -106,6 +111,19 @@ void kernel_main() {
             tot > soff ? (tot - soff + stride - 1) / stride : 0;
         cb_push_back(tt::CBIndex::c_6, 1);
     }
+#if defined(XRD_INDEXED) && defined(XRD_IDX_ALL)
+    {  // every row this call reads: up to the end of the last active region (regions are padded to 32 rows)
+        uint32_t rows = 0;
+        for (uint32_t a = 0; a < dyn.n_act; ++a) {
+            const uint32_t end = dyn.off[a] + (dyn.cnt[a] + 31) / 32 * 32;
+            rows = end > rows ? end : rows;
+        }
+        if (rows) {
+            noc_async_read(idx_base, idx_l1, rows * 4);
+            noc_async_read_barrier();
+        }
+    }
+#endif
     for (uint32_t a = 0; a < dyn.n_act; ++a) {
         const uint32_t off = dyn.off[a], count = dyn.cnt[a];
 #else
@@ -114,7 +132,10 @@ void kernel_main() {
 #endif
         const uint32_t subs = (count + mt * 32 - 1) / (mt * 32);
         for (uint32_t s = 0; s < subs; ++s) {
-#ifdef XRD_INDEXED
+#if defined(XRD_INDEXED) && defined(XRD_IDX_ALL)
+            volatile tt_l1_ptr uint32_t* idx =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1) + off + s * mt * 32;
+#elif defined(XRD_INDEXED)
             volatile tt_l1_ptr uint32_t* idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
             {
                 bool mine = false;  // does this relay take any of the sub-block's super-blocks

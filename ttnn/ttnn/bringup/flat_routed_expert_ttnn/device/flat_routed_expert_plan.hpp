@@ -122,6 +122,8 @@ struct FlatRoutedExpertPlan {
     // x read once with forwarding (MIMO_FL_XFWD): the relays' forward ring (FW_SLOTS super-blocks at fw_off)
     bool xfwd = false;
     uint32_t fw_off = 0, fw_slots = 2;
+    // the relays' copy of the call's token index (indexed x): 4 B per capacity row at ti_off, read once per call
+    uint32_t ti_off = 0;
     bool drisc_slot(uint32_t r) const { return drisc && r < drisc_n; }
     bool tensix_reader(uint32_t r) const { return !drisc_slot(r) || dual; }
     // down
