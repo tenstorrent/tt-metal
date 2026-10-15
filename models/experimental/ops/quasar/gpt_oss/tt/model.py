@@ -7,7 +7,7 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
-from models.common.utility_functions import nearest_32
+from models.common.utility_functions import is_quasar, nearest_32
 from models.experimental.ops.quasar.gpt_oss.config import MeshConfig, Mode, ModeConfig
 from models.experimental.ops.quasar.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
 from models.experimental.ops.quasar.gpt_oss.utils.substate import substate
@@ -159,14 +159,28 @@ class Model:
         else:
             embedding_weight = None
 
-        self.embedding_weight = ttnn.as_tensor(
-            embedding_weight,
-            dtype=ttnn.bfloat16,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Quasar has no UInt32 data format, so no device op can read the UInt32 token IDs, and the table
+        # would also take about 1 GiB of device DRAM. On Quasar the table stays on the host, and
+        # _embed_on_host() looks the token IDs up there.
+        self.embedding_weight = None
+        self.embedding_weight_host = None
+        if is_quasar():
+            host_weight = ttnn.as_tensor(
+                embedding_weight,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
+            )
+            self.embedding_weight_host = ttnn.to_torch(host_weight).reshape(-1, host_weight.shape[-1])
+        else:
+            self.embedding_weight = ttnn.as_tensor(
+                embedding_weight,
+                dtype=ttnn.bfloat16,
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         self.layers = [
             DecoderLayer(
                 mesh_device,
@@ -516,13 +530,17 @@ class Model:
         """
         # For non-row-sharded b<32, token buffer is padded to 32 — only embed real tokens
         actual_batch = current_pos.shape[-1]
-        if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
-            tokens_for_embed = tokens[:, :, :, :actual_batch]
+        if self.embedding_weight_host is not None:
+            num_tokens = actual_batch if not self.users_row_sharded else None
+            input_embeds = self._embed_on_host(tokens, num_tokens=num_tokens)
         else:
-            tokens_for_embed = tokens
-        input_embeds = ttnn.embedding(
-            tokens_for_embed, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
-        )
+            if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
+                tokens_for_embed = tokens[:, :, :, :actual_batch]
+            else:
+                tokens_for_embed = tokens
+            input_embeds = ttnn.embedding(
+                tokens_for_embed, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+            )
         input_embeds = ttnn.unsqueeze(input_embeds, 0)
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
         rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
@@ -1041,6 +1059,27 @@ class Model:
         )
         return host_inputs
 
+    def _embed_on_host(self, tokens, num_tokens=None):
+        """Look the token IDs up in the host embedding table and upload the result.
+
+        Takes the token IDs as a ttnn tensor of shape [batch, 1, 1, seq] (on the host or the device) and
+        returns a bf16 TILE tensor of shape [batch, seq, hidden] on the device, as ttnn.embedding does.
+        If num_tokens is given, only the first num_tokens IDs along seq are used.
+        """
+        ids = ttnn.to_torch(tokens).to(torch.long)
+        ids = ids.reshape(ids.shape[0], ids.shape[-1])
+        if num_tokens is not None:
+            ids = ids[:, :num_tokens]
+        embeds = self.embedding_weight_host[ids]
+        return ttnn.from_torch(
+            embeds,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
     def transform_and_embed_prefill_inputs_device(
         self,
         tokens,
@@ -1049,7 +1088,10 @@ class Model:
         tt_chunk_start_idx=None,
     ):
         """Transform and embed tokens on device"""
-        tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        if self.embedding_weight_host is not None:
+            tokens_embd = self._embed_on_host(tokens)
+        else:
+            tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         # Keep `tokens` allocated: trace replay updates this same device buffer via copy_host_to_device.
         # Deallocating it here breaks prefill trace replay with "Buffer must be allocated on device".
         if len(tokens_embd.shape) == 3:
@@ -1099,7 +1141,12 @@ class Model:
             tokens = ttnn.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         if not trace_enabled:
-            tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+            if self.embedding_weight_host is not None:
+                tokens_embd = self._embed_on_host(tokens)
+            else:
+                tokens_embd = ttnn.embedding(
+                    tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+                )
             tokens.deallocate(True)
 
             # Ensure proper 4D shape
