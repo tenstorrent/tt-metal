@@ -1657,3 +1657,24 @@ def test_sort_tied_values_indices_are_a_permutation(descending, device):
     ), f"indices out of range [0, {n}): min={int(indices.min())}, max={int(indices.max())}"
     unique_count = indices.unique().numel()
     assert unique_count == n, f"{n - unique_count} duplicated indices"
+
+
+
+@pytest.mark.parametrize("n", [1000, 3000])
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("nan_bits", [0x7FC00000, 0xFFC00000 - (1 << 32)])
+@pytest.mark.parametrize("stable", [False, True])
+def test_sort_fp32_nan_index_range_every_factory(n, descending, nan_bits, stable, device):
+    """Regression test for #60613: fp32 NaNs must not sort past padding and leak out-of-range indices."""
+    torch.manual_seed(0)
+    num_nan = 4
+
+    input = torch.randn(1, n) * 8.0
+    input.view(torch.int32)[0, torch.randperm(n)[:num_nan]] = nan_bits
+
+    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=stable)
+
+    indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    assert (indices >= 0).all() and (indices < n).all(), f"out-of-range indices emitted for n={n}"
+    assert torch.equal(torch.sort(indices, dim=-1).values, torch.arange(n).unsqueeze(0)), "indices not a permutation"
