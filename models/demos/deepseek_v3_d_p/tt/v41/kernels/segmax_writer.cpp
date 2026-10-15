@@ -11,8 +11,10 @@
 //
 // Pin: row i of this chip (chunk query index q = query_first + i, query_first read from the per-chip pin tensor) has
 // its newest element at column e = (pin_base + q) & pin_mask of the input; if e < W the output e / SEG becomes +inf.
+// With PIN_ROWS > 0 the pin tensor holds one entry per row instead (PIN_ROWS uint32, read whole): q = pin[i], and a
+// SENTINEL entry pins nothing (the decode tile: entry u is user u's newest row, or the sentinel when it is idle).
 //
-// compile_time_args = [cb_out, cb_pin, SEG, BLOCK, OUT_WIDTH, VALID_OUT, TensorAccessorArgs(out)...,
+// compile_time_args = [cb_out, cb_pin, SEG, BLOCK, OUT_WIDTH, VALID_OUT, PIN_ROWS, TensorAccessorArgs(out)...,
 //                      TensorAccessorArgs(pin)...]
 // runtime args      = [dst_addr, row_start, row_count, chunks_per_row, pin_addr, pin_base, pin_mask]
 
@@ -36,8 +38,12 @@ void kernel_main() {
     constexpr uint32_t BLOCK = get_compile_time_arg_val(3);
     constexpr uint32_t OUT_WIDTH = get_compile_time_arg_val(4);
     constexpr uint32_t VALID_OUT = get_compile_time_arg_val(5);
-    constexpr auto out_args = TensorAccessorArgs<6>();
+    constexpr uint32_t PIN_ROWS = get_compile_time_arg_val(6);
+    constexpr auto out_args = TensorAccessorArgs<7>();
     constexpr auto pin_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t SENTINEL = 0xFFFFFFFFu;
+    constexpr uint32_t PIN_BYTES = PIN_ROWS == 0 ? 32 : PIN_ROWS * 4;
+    constexpr uint32_t PIN_SLOT = (PIN_BYTES + 63) & ~63u;
 
     constexpr uint32_t PER_TILE = SEG == 8 ? 4 : 1;
     constexpr uint32_t RESULTS = BLOCK * PER_TILE;
@@ -47,19 +53,22 @@ void kernel_main() {
 
     const auto out = TensorAccessor(out_args, dst_addr);
     DataflowBuffer res(cb_out);
-    DataflowBuffer scratch(cb_pin);  // [0, 64): the pin page; [64, 64 + 2 * OUT_PER_CHUNK * 2): two output chunks
+    // [0, PIN_SLOT): the pin page (64-byte aligned: a DRAM read); then two output chunks
+    DataflowBuffer scratch(cb_pin);
 
-    const uint32_t base_l1 = scratch.get_write_ptr();
+    const uint32_t base_l1 = (scratch.get_write_ptr() + 63) & ~63u;
     const auto pin = TensorAccessor(pin_args, pin_addr);
-    noc_async_read(pin.get_noc_addr(0, 0), base_l1, 32);
+    noc_async_read(pin.get_noc_addr(0, 0), base_l1, PIN_BYTES);
     noc_async_read_barrier();
-    const uint32_t query_first = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_l1)[0];
-    const uint32_t buf_l1[2] = {base_l1 + 64, base_l1 + 64 + OUT_PER_CHUNK * 2};
+    volatile tt_l1_ptr uint32_t* pins = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_l1);
+    const uint32_t query_first = pins[0];
+    const uint32_t buf_l1[2] = {base_l1 + PIN_SLOT, base_l1 + PIN_SLOT + OUT_PER_CHUNK * 2};
 
     uint32_t slot = 0;
     for (uint32_t row = row_start; row < row_start + row_count; ++row) {
-        const uint32_t e = (pin_base + query_first + row) & pin_mask;
-        const uint32_t pin_col = e / SEG < VALID_OUT ? e / SEG : 0xFFFFFFFFu;
+        const uint32_t q = PIN_ROWS == 0 ? query_first + row : pins[row];
+        const uint32_t e = (pin_base + q) & pin_mask;
+        const uint32_t pin_col = (q != SENTINEL || PIN_ROWS == 0) && e / SEG < VALID_OUT ? e / SEG : 0xFFFFFFFFu;
         const uint64_t row_addr = out.get_noc_addr(row, 0);
         for (uint32_t c = 0; c < chunks; ++c) {
             const uint32_t first = c * OUT_PER_CHUNK;

@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41.kernel_cpu import fp4_act_quant
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import dequant
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import SENTINEL, CandidateBlocks, TtV41Indexer, TtV41IndexKeys
@@ -44,6 +45,8 @@ MESH_2X4 = [
         id="fabric2d-mesh-2x4",
     )
 ]
+# the kernel tests derive every shape from the mesh: they run on the Galaxy layouts too (the 2x4 cases skip there)
+KERNEL_MESHES = MESH_2X4 + galaxy_meshes()
 
 
 def _per_query(t):
@@ -318,6 +321,18 @@ def _pin_table(mesh_device, rows: int):
     )
 
 
+def _pin_rows(mesh_device, newest: torch.Tensor, rows: int):
+    """Per-chip uint32 [1, 1, 1, rows] per-row pin page: entry i the chip's row i's value of ``newest`` [seq]."""
+    sp, tp = tuple(mesh_device.shape)
+    return ttnn.from_torch(
+        newest.to(torch.int64).reshape(sp, tp, 1, rows).to(torch.int32),  # the sentinel wraps to -1: its bits
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, (sp, tp), dims=(0, 1)),
+    )
+
+
 def _kernel_rows(seq: int, width: int, g) -> torch.Tensor:
     """[seq, width] bf16 rows with negatives, zeros, repeated values and -inf runs (whole blocks, partial blocks and
     a -inf row tail)."""
@@ -331,7 +346,7 @@ def _kernel_rows(seq: int, width: int, g) -> torch.Tensor:
 
 
 @pytest.mark.parametrize("width", [1056, 8288, 16384], ids=lambda w: f"W{w}")
-@pytest.mark.parametrize("mesh_device, device_params", MESH_2X4, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
 def test_v41_segment_max(mesh_device, device_params, width):
     """segment_max vs torch (exact, every chip): seg 8 / 32, partial last chunk and padded output widths,
     negative / -inf / tied values, pins inside, at the edge of and past the row, and the rank-0 (masked) pin."""
@@ -358,6 +373,18 @@ def test_v41_segment_max(mesh_device, device_params, width):
             assert torch.equal(dev, ref), (seg, pin_base, pin_mask, (dev != ref).nonzero()[:8].tolist())
             again = _per_query(segment_max(feed, seg, pin, pin_base, pin_mask))[0, 0].float()
             assert torch.equal(again, dev), "segment_max is not deterministic"
+        # the per-row pin page (the decode tile): row i pinned at its own entry, sentinel rows not pinned
+        newest = torch.randint(0, width + 64, (seq,))  # some past the row: not pinned
+        newest[1::7] = SENTINEL
+        for pin_base, pin_mask in ((0, 0xFFFFFFFF), (0, 31)):
+            ref = torch.full((seq, out_width), float("-inf"))
+            ref[:, : width // seg] = base
+            e = (pin_base + newest) & pin_mask
+            hit = (e < width) & (newest != SENTINEL)
+            ref[q[hit], e[hit] // seg] = float("inf")
+            dev = _per_query(segment_max(feed, seg, _pin_rows(mesh_device, newest, rows), pin_base, pin_mask))
+            dev = dev[0, 0].float()
+            assert torch.equal(dev, ref), ("per-row", seg, pin_mask, (dev != ref).nonzero()[:8].tolist())
 
 
 @pytest.mark.parametrize("k", [96, 2048], ids=lambda k: f"K{k}")
@@ -423,7 +450,7 @@ def _candidate_score_ref(q, w, k, ids, positions) -> torch.Tensor:
 
 
 @pytest.mark.parametrize("nk, start", [(96, 2048), (2048, 131072)], ids=["K96", "K2048"])
-@pytest.mark.parametrize("mesh_device, device_params", MESH_2X4, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
 def test_v41_candidate_scores(mesh_device, device_params, nk, start):
     """candidate_scores vs torch (every chip): the newest block pinned first (partly past the query), random blocks
     with a repeat, a sentinel tail on some queries; FP4-like q / index-K, bf16 head weights. The finite pattern must
@@ -487,3 +514,21 @@ def test_v41_candidate_scores(mesh_device, device_params, nk, start):
     assert bool((diff <= bound).all()), float((diff / bound).max())
     assert pcc >= 0.9999, pcc
     assert torch.equal(again, dev), "candidate_scores is not deterministic"
+    # the per-row pin page: each row's own position (here: the chunk's, so the same finite pattern), then a row
+    # whose entry is the sentinel sees every candidate row, and rows with earlier positions see fewer
+    with phase("per-row pins", what="device candidate scores with a per-row pin page"):
+        newest = positions - start
+        dev2 = _per_query(candidate_scores(*args[:4], _pin_rows(mesh_device, newest, rows), start, t_rows))
+        assert torch.equal(dev2[0, 0].float(), dev), "the per-row page with the chunk's positions differs"
+        newest = newest.clone()
+        newest[::5] = SENTINEL
+        newest[1::5] = (newest[1::5] - 37).clamp(min=0)
+        ref2, magnitude2 = _candidate_score_ref(q, w, k, ids, torch.where(newest == SENTINEL, 1 << 40, start + newest))
+        dev2 = _per_query(candidate_scores(*args[:4], _pin_rows(mesh_device, newest, rows), start, t_rows))
+        dev2 = dev2[0, 0].float()
+        finite2 = torch.isfinite(ref2)
+        assert torch.equal(torch.isfinite(dev2), finite2), (torch.isfinite(dev2) != finite2).nonzero()[:8].tolist()
+        assert torch.equal(dev2[finite2 & finite], dev[finite2 & finite]), "visible scores changed with the pin page"
+        diff2 = (dev2[finite2] - ref2[finite2]).abs()
+        bound2 = ref2[finite2].abs() * 2**-7 + magnitude2[finite2] * 2**-6 + 1e-6
+        assert bool((diff2 <= bound2).all()), float((diff2 / bound2).max())

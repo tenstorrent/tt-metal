@@ -20,6 +20,8 @@ import ttnn
 _KERNEL_DIR = "models/demos/deepseek_v3_d_p/tt/v41/kernels"
 _TILE_BYTES = 32 * 32 * 2  # bf16 tile
 SEGMAX_BLOCK = 4  # tiles per segment-max chunk: 4096 consecutive row elements
+PIN_PAGE = 8  # entries of the per-chip ``query_first`` pin page (V41ChunkTables.query_first)
+SENTINEL = 0xFFFFFFFF
 GATHER_SEGMENT_BYTES = 64 << 10  # gather_runs streams each source row through L1 in segments of this size
 GATHER_MAX_SEGMENTS = 64  # gather_runs.cpp MAX_SEGS
 
@@ -62,17 +64,32 @@ def _check_row_major(t, dtype, what: str):
     assert memory.buffer_type == ttnn.BufferType.DRAM and not memory.is_sharded(), f"{what} must be DRAM-interleaved"
 
 
+def _pin_rows(pin, rows: int) -> int:
+    """The pin contract of a writer kernel: 0 for the per-chip ``query_first`` page ([1, 1, 1, 8]: ``q_i = query_first
+    + i``), else the entries of a per-row page ([1, 1, 1, P] with P >= rows: ``q_i = pin[i]``, the sentinel pins
+    nothing; the decode tile's ``newest`` rows)."""
+    _check_row_major(pin, ttnn.uint32, "pin")
+    assert pin.shape[2] == 1, tuple(pin.shape)
+    if pin.shape[3] == PIN_PAGE:
+        return 0
+    assert pin.shape[3] >= rows, (tuple(pin.shape), rows)
+    return pin.shape[3]
+
+
 def segment_max(x, seg: int, pin, pin_base: int, pin_mask: int):
     """Row-major bf16 ``x`` [1, 1, R, W] (DRAM-interleaved, W a multiple of 32) -> row-major bf16
     [1, 1, R, round_up(W / seg, 32)]: output j of row i is ``max(x[i, seg * j : seg * (j + 1)])`` (-inf past W / seg),
     except the row's pinned output: +inf at ``e // seg`` with ``e = (pin_base + q_i) & pin_mask`` when ``e < W``,
-    ``q_i`` the chunk query index of the chip's row i (``pin``: ``V41ChunkTables.query_first()``). ``seg`` 8 or 32.
-    One fused op (kernels/segmax_*): per 4096-element chunk a tilize and a MAX row reduce (for 8, after adding four
-    column masks)."""
+    ``q_i`` the chunk query index of the chip's row i (``pin``: ``V41ChunkTables.query_first()``), or, with a per-row
+    ``pin`` (``_pin_rows``), ``q_i = pin[i]`` (none when it is the sentinel). ``seg`` 8 or 32. One fused op
+    (kernels/segmax_*): per 4096-element chunk a tilize and a MAX row reduce (for 8, after adding four column
+    masks)."""
     assert seg in (8, 32)
     _check_row_major(x, ttnn.bfloat16, "segment_max input")
     rows, width = x.shape[2], x.shape[3]
     assert width % 32 == 0, f"row width {width} is not a multiple of 32"
+    pin_rows = _pin_rows(pin, rows)
+    pin_slot = _round_up(max(32, pin_rows * 4), 64)
     out_width = _round_up(width // seg, 32)
     device = x.device()
     out = ttnn.allocate_tensor_on_device(
@@ -99,7 +116,7 @@ def segment_max(x, seg: int, pin, pin_base: int, pin_mask: int):
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNEL_DIR}/segmax_writer.cpp",
             core_ranges=cores,
-            compile_time_args=[16, 5, seg, block, out_width, width // seg]
+            compile_time_args=[16, 5, seg, block, out_width, width // seg, pin_rows]
             + ttnn.TensorAccessorArgs(out).get_compile_time_args()
             + ttnn.TensorAccessorArgs(pin).get_compile_time_args(),
             runtime_args=writer_args,
@@ -115,7 +132,7 @@ def segment_max(x, seg: int, pin, pin_base: int, pin_mask: int):
             ),
         ),
     ]
-    scratch = 64 + 2 * out_per_chunk * 2
+    scratch = 64 + pin_slot + 2 * out_per_chunk * 2  # 64: the writer aligns the pin page
     cbs = [
         _cb(0, 2 * block * _TILE_BYTES, cores),
         _cb(1, _TILE_BYTES, cores),
@@ -192,7 +209,8 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int):
     ``q`` [1, 1, R, 32 * 128] bf16 row-major (the query's 32 heads, head-major, after RoPE and QDQ), ``w`` [1, 1, R, 32]
     bf16 row-major (scaled head weights), ``k`` [1, 1, T, 128] bf16 row-major (the index-K cache, T a multiple of 8),
     ``ids`` [1, 1, R, K] uint32 row-major (candidate block ids, sentinel tail), all DRAM-interleaved; ``pin`` the
-    per-chip ``V41ChunkTables.query_first()``; ``start`` the chunk start; ``rows_visible`` the index-K rows any query
+    per-chip ``V41ChunkTables.query_first()`` or a per-row page (``_pin_rows``: ``p_i = start + pin[i]``, every
+    row visible to a sentinel entry); ``start`` the chunk start; ``rows_visible`` the index-K rows any query
     of the chunk can see (a multiple of 8, at most T). -> bf16 row-major [1, 1, R, K * 8]: element
     8 r + j of row i is ``sum_h w[i, h] * relu(q[i, h] . k[t])`` for ``t = 8 ids[i, r] + j``, -inf where
     ``ids[i, r]`` is the sentinel or ``t > p_i`` (the query's position, ``start + query_first + i``), i.e.
@@ -205,6 +223,8 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int):
         _check_row_major(t, dtype, f"candidate_scores {what}")
     _check_row_major(ids, ttnn.uint32, "candidate_scores ids")
     rows, nk = q.shape[2], ids.shape[3]
+    pin_rows = _pin_rows(pin, rows)
+    pin_slot = _round_up(max(32, pin_rows * 4), 64)
     assert q.shape[3] == 32 * 128 and (w.shape[2], w.shape[3]) == (rows, 32) and ids.shape[2] == rows
     assert k.shape[3] == 128 and rows_visible % CANDSCORE_BLOCK == 0 and rows_visible <= k.shape[2]
     tile_rows = nk * CANDSCORE_BLOCK // 32
@@ -260,7 +280,7 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int):
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNEL_DIR}/candscore_writer.cpp",
             core_ranges=cores,
-            compile_time_args=[16, 8, nk]
+            compile_time_args=[16, 8, nk, pin_rows]
             + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
             + ttnn.TensorAccessorArgs(out).get_compile_time_args()
             + ttnn.TensorAccessorArgs(pin).get_compile_time_args(),
@@ -277,7 +297,7 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int):
             ),
         ),
     ]
-    writer_scratch = 64 + nk * 4 + 2 * nk * CANDSCORE_BLOCK * 2
+    writer_scratch = 64 + pin_slot + nk * 4 + 2 * nk * CANDSCORE_BLOCK * 2  # 64: the writer aligns the pin page
     cbs = [
         _cb(0, 2 * 4 * _TILE_BYTES, cores),  # query rows (two queries)
         _cb(1, 2 * _TILE_BYTES, cores),  # head-weight row pages (row 0; rows 1-31 zero)
