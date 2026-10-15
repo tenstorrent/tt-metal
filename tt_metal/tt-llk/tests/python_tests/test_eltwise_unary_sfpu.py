@@ -74,9 +74,9 @@ SUPPORTED_FAST_MODE_OPS = [
 # The unary op sweep: two coverage profiles, one test. Every op takes its stimuli from its
 # registered domain in _OP_DOMAIN_REGISTRY; the profiles differ only in how much of the
 # format/mode matrix each op is worth. BROAD_SWEEP_OPS gets the full format matrix, both
-# approximation modes and both tile shapes; STANDARD_SWEEP_OPS is every other registered
-# unary op, on Float16_b + Float32 with approximation off. To opt an op out of the sweep
-# entirely, list it in sfpu_domains._UNARY_OPS_NOT_SWEPT.
+# approximation modes and the multi-block tile shape; STANDARD_SWEEP_OPS is every other
+# registered unary op, on Float16_b + Float32 with approximation off. To opt an op out of
+# the sweep entirely, list it in sfpu_domains._UNARY_OPS_NOT_SWEPT.
 
 BROAD_SWEEP_OPS = [
     MathOperation.Abs,
@@ -134,7 +134,10 @@ BROAD_FORMATS = input_output_formats(
 # and fp32 for full precision.
 STANDARD_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
-BROAD_DIMENSIONS = [[64, 64], [128, 256]]
+# 128x256 is 32 tiles, so it runs several Dest blocks and swaps Dest halves between them.
+# The single-block path (64x64 fits in one) is left to the standard profile and the 64x64
+# edge sweeps below.
+BROAD_DIMENSIONS = [[128, 256]]
 STANDARD_DIMENSIONS = [[64, 64]]
 
 # Bfp4_b is only exercised as an input format, so the input is pinned to Bfp4_b here
