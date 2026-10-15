@@ -22,6 +22,32 @@ struct SelectiveReduceCombineWorkerLayout {
     uint32_t num_worker_cores = 0;
 };
 
+struct FusedSourceBufferLayout {
+    uint32_t rows_per_buffer = 0;             // token-segment rows per ring entry
+    uint32_t buffer_block_size_bytes = 0;     // rows_per_buffer * token_segment_size_bytes
+    uint32_t circular_buffer_size_bytes = 0;  // num_buffers * buffer_block_size_bytes == the shard
+};
+
+// Fused source: the producer (moe_compute dm1) and the combine writer alias one
+// height-sharded L1 tensor as a num_buffers-entry ring. Each core's shard is
+// [source_shard_height, source_shard_width] elements, but both sides address it in
+// rows of one token segment (token_segment_width = hidden_size / num_data_parallel_cores
+// elements, token_segment_size_bytes each): dm1's token_expert_row_offset and the
+// writer's block stride count token-segment rows, not shard rows. A ring entry holds
+// source_shard_height / num_buffers shard rows, each source_shard_width /
+// token_segment_width segments wide, so
+//   rows_per_buffer = source_shard_height / num_buffers * (source_shard_width / token_segment_width)
+// (equal to the shard height split when the shard is one segment wide). The shard
+// height must divide by num_buffers, the shard width by the segment width, and the
+// ring (== the shard's bytes) must fit the L1 bank (source_buffer_size_bytes).
+FusedSourceBufferLayout compute_fused_source_buffer_layout(
+    uint32_t source_shard_height,
+    uint32_t source_shard_width,
+    uint32_t token_segment_width,
+    uint32_t source_buffer_size_bytes,
+    uint32_t token_segment_size_bytes,
+    uint32_t num_buffers);
+
 SelectiveReduceCombineWorkerLayout compute_worker_layout(
     const Tensor& input_tensor,
     uint32_t hidden_size,
@@ -37,7 +63,7 @@ struct SelectiveReduceCombineProgramArtifacts {
     tt::tt_metal::CBHandle data_cb_handle{};
     std::vector<tt::tt_metal::CoreCoord> cores;
     // Owned by the artifacts for the standalone UnifiedSelectReduce op. nullopt for the
-    // fused moe_compute FullLocal path (writer compiles out init/final barrier handling),
+    // fused moe_compute SingleDevice path (writer compiles out init/final barrier handling),
     // in which case the kernel runtime args carry a placeholder address of 0.
     std::optional<GlobalSemaphore> init_semaphore;
     std::optional<GlobalSemaphore> cross_device_semaphore;
@@ -79,7 +105,7 @@ private:
 // Builder function that creates kernels and returns artifacts.
 // `init_semaphore` / `cross_device_semaphore` are passed as optionals: the builder uses their
 // addresses (0 when nullopt) for writer kernel runtime args, and stores them in the returned
-// artifacts for ownership. nullopt is used by the fused moe_compute FullLocal path, whose
+// artifacts for ownership. nullopt is used by the fused moe_compute SingleDevice path, whose
 // writer compiles out all init/final barrier handling.
 SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_artifacts(
     tt::tt_metal::Program& program,
@@ -97,7 +123,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const std::optional<std::vector<std::vector<CoreCoord>>>& compute_cores_by_combine_column = std::nullopt);
 
 // Runtime argument override function. Semaphore kernel runtime-arg slots are written as
-// raw addresses; pass 0 for the fused moe_compute FullLocal path (unused by the writer).
+// raw addresses; pass 0 for the fused moe_compute SingleDevice path (unused by the writer).
 void selective_reduce_combine_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
     tt::tt_metal::KernelHandle reader_kernel_id,
