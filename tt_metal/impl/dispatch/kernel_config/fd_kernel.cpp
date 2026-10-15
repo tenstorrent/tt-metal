@@ -89,11 +89,6 @@ const DispatchQueryManager& FDKernel::get_dispatch_query_manager_ref() const {
     return get_dispatch_query_manager_();
 }
 
-uint32_t FDKernel::get_max_num_eth_cores() const {
-    TT_ASSERT(static_cast<bool>(get_max_num_eth_cores_), "Max num eth cores accessor not set");
-    return get_max_num_eth_cores_();
-}
-
 const DispatchMemMap& FDKernel::get_dispatch_mem_map() const { return descriptor_.metal_context().dispatch_mem_map(); }
 
 FDKernel* FDKernel::Generate(
@@ -108,7 +103,6 @@ FDKernel* FDKernel::Generate(
     int tunnel_index,
     const GetControlPlaneFn& get_control_plane,
     const GetDispatchQueryManagerFn& get_dispatch_query_manager,
-    const GetMaxNumEthCoresFn& get_max_num_eth_cores,
     const GetReadsDispatchCoresFn& get_reads_dispatch_cores) {
     switch (type) {
         case PREFETCH_HD:
@@ -124,7 +118,6 @@ FDKernel* FDKernel::Generate(
                 dispatch_core_manager,
                 get_control_plane,
                 get_dispatch_query_manager,
-                get_max_num_eth_cores,
                 get_reads_dispatch_cores);
         case PREFETCH_H:
             return new PrefetchKernel(
@@ -139,7 +132,6 @@ FDKernel* FDKernel::Generate(
                 dispatch_core_manager,
                 get_control_plane,
                 get_dispatch_query_manager,
-                get_max_num_eth_cores,
                 get_reads_dispatch_cores);
         case PREFETCH_D:
             return new PrefetchKernel(
@@ -154,7 +146,6 @@ FDKernel* FDKernel::Generate(
                 dispatch_core_manager,
                 get_control_plane,
                 get_dispatch_query_manager,
-                get_max_num_eth_cores,
                 get_reads_dispatch_cores);
         case DISPATCH_HD:
             return new DispatchKernel(
@@ -169,7 +160,6 @@ FDKernel* FDKernel::Generate(
                 dispatch_core_manager,
                 get_control_plane,
                 get_dispatch_query_manager,
-                get_max_num_eth_cores,
                 get_reads_dispatch_cores);
         case DISPATCH_H:
             return new DispatchKernel(
@@ -184,7 +174,6 @@ FDKernel* FDKernel::Generate(
                 dispatch_core_manager,
                 get_control_plane,
                 get_dispatch_query_manager,
-                get_max_num_eth_cores,
                 get_reads_dispatch_cores);
         case DISPATCH_D:
             return new DispatchKernel(
@@ -199,7 +188,6 @@ FDKernel* FDKernel::Generate(
                 dispatch_core_manager,
                 get_control_plane,
                 get_dispatch_query_manager,
-                get_max_num_eth_cores,
                 get_reads_dispatch_cores);
         case DISPATCH_S:
             return new DispatchSKernel(
@@ -212,7 +200,6 @@ FDKernel* FDKernel::Generate(
                 dispatch_core_manager,
                 get_control_plane,
                 get_dispatch_query_manager,
-                get_max_num_eth_cores,
                 get_reads_dispatch_cores);
         case FABRIC_MUX:
             return new tt::tt_metal::RelayMux(
