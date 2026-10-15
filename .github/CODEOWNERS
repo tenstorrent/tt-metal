@@ -147,7 +147,7 @@ tt_metal/hw/inc/hostdev/profiler_zone_id.h @mo-tenstorrent @yusufbashiTT
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT
 tt_metal/hw/ckernels/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT
 tt_metal/hw/ckernels/*/metal/llk_api/experimental/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT @atatuzunerTT
-tt_metal/hw/ckernels/**/llk_api/llk_sfpu @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT @nmauriceTT @atatuzunerTT
+tt_metal/hw/ckernels/**/llk_api/llk_sfpu @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT @nmauriceTT @atatuzunerTT @mateusznowakTT
 tt_metal/hw/firmware/src/tt-1xx/*erisc* @aliuTT @ubcheema
 tt_metal/hw/firmware/ @abhullar-tt @arikTT @jbaumanTT @nathan-TT @kstevensTT
 tt_metal/hw/inc/ @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @arikTT
@@ -617,7 +617,7 @@ models/demos/gemma4_d_p @svuckovicTT @amilovanovicTT @sdjordjevicTT
 models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @djordje-tt @handrewsTT
 models/demos/gpt_oss_d_p @mdragulaTT @philei-tt @vmelnykovTT @ayerofieiev-tt @jmalone-tt
 models/demos/llama_3p1_8b_d_p @mgiermakowskiTT @djordje-tt
-models/demos/minimax_m3 @philei-tt @vmelnykovTT @zbaczewskiTT @ayerofieiev-tt
+models/demos/minimax_m3 @philei-tt @vmelnykovTT @zbaczewskiTT @ayerofieiev-tt @sumant-TT
 models/demos/multimodal/gemma3* @ppetrovicTT @handrewsTT @arginugaTT @tenstorrent/metalium-models-maintainers
 models/demos/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt
 models/demos/vision/classification/classification_eval @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
@@ -639,7 +639,7 @@ models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
 
 models/experimental/ @tenstorrent/metalium-models-maintainers
-models/experimental/bevformer/ @mbezuljTT @njovanovicTT @tenstorrent/metalium-models-maintainers
+models/experimental/bevformer/ @mbezuljTT @njovanovicTT @ctr-ikasicTT @ctr-mdukicTT @ctr-mmicicTT @tenstorrent/metalium-models-maintainers
 models/experimental/exaone45_vl @changh95 @tenstorrent/metalium-models-maintainers
 models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-models-maintainers
 /models/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT @tenstorrent/metalium-models-maintainers
