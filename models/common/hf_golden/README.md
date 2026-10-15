@@ -49,6 +49,15 @@ uv run --no-project --python python_env/bin/python --with transformers==5.19.0 p
 **MiMo-V2.6-Flash-RL:** the script passes its selftest and a full-depth run completes, but that run peaked at ~525 GB
 of host memory at isl 256, so layer weights are not all being released yet. Check memory before a long run.
 
+**MiniMax-M3 at long ISL:** the upstream lightning indexer builds a whole [4, N, N] fp32 score matrix (~105 GB peak at
+isl 56320 with its masked copy). `HF_GOLDEN_INDEXER_CHUNK=4096` builds it 4096 query rows at a time (~4 GB); every op
+after the projections reads only its own query row, so the trace is bit-identical (checked against the unchunked run
+at isl 10240, all 468 tensors). At startup the script checks the chunked forward against the installed transformers'
+`MiniMaxM3VLIndexer.forward` on a tiny random indexer and exits if upstream has changed. isl 56320 on one H200:
+2.4 min, ~9 GB GPU peak, 50 GB on disk.
+
+**`--device cuda` under torch 2.11:** `torch.cuda.set_device` rejects a device without an index; pass `cuda:0`.
+
 `generate_golden_whole_model.py` is the original script behind the Qwen, Llama and Mistral traces. It loads the whole
 model, runs one forward, and writes the older format the device-side grader (`galaxy_prefill_kv_pcc.py`) reads:
 `kv_cache/layer_<i>.safetensors` (`key_cache_layer_<i>`, `value_cache_layer_<i>`, or GDN conv/recurrent state) and
@@ -67,6 +76,12 @@ Anything already on disk is used in place, with no hub access needed: a local ch
 `$HF_GOLDEN_SHARED_CACHE` (default `/mnt/models/huggingface/hub`). That covers shards, config, tokenizer and remote
 code. A branch such as `main` pins to the commit of the copy on disk; pass `--revision <commit>` to choose another.
 Any shard not on disk is downloaded to `--tmp` and deleted after its last use.
+
+On a CUDA device each stage's tensors are read with parallel `O_DIRECT` preads into a pinned host buffer, copied to
+the device in one transfer, and routed experts are fused there (`direct_read` in `common.py`; bytes unchanged,
+checked bit-identical against the safetensors path). safe_open's mmap faults one 4 KiB page at a time, which in a
+memory-limited container whose page cache is full ran at ~0.3 GB/s: ~45 s per MiniMax-M3 MoE layer, now ~2 s.
+`HF_GOLDEN_DIRECT_READ=0` restores the safetensors path; `HF_GOLDEN_READ_THREADS` sets the read threads (default 8).
 
 A script subclasses `LayerwiseGolden` and overrides only what its model needs:
 - what the upstream text model passes each layer (`prepare`, `layer_kwargs`)
@@ -110,7 +125,7 @@ Defaults:
   whole (needed past ~10k for eager attention, and for MLA models whose head sizes keep sdpa on its math path). Each
   query row's softmax reads only its own row, so traces are bit-identical to unchunked ones (checked at isl 8192 on
   Gemma-4, gpt-oss and Xing4.0, and by every selftest with chunking forced). It does not cover N^2 work outside the
-  attention function, such as DSA indexers.
+  attention function, such as DSA indexers (for MiniMax-M3's, see `HF_GOLDEN_INDEXER_CHUNK` above).
 - A script's `prefix` (literal text, special tokens included) is prefilled before the token cache, recorded as
   `prefix_ids` in `metadata.json`. Instruct checkpoints set it to their chat template up to the assistant turn, so the
   text reads as the model's own reply: raw wikitext is far out of distribution for them (Gemma-4-26B-A4B-it: ppl ~400

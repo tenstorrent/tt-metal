@@ -405,6 +405,7 @@ class LayerwiseGolden:
         args.tmp.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=args.tmp, prefix="hf_golden_") as tmp:
             shards = Shards(args.hf_repo, pinned, Path(tmp), [prefix for _, _, prefix in stages])
+            shards.device = device
 
             def load(s: int) -> torch.nn.Module:
                 _, module, prefix = stages[s]

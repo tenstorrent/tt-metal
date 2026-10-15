@@ -57,6 +57,8 @@ casts them to the compute dtype, so under bf16 compute the expert choice uses a 
 
 from __future__ import annotations
 
+import copy
+import os
 import sys
 from pathlib import Path
 
@@ -132,6 +134,85 @@ RENAMES = (
 EXPERT_LEAVES = {".w1.weight": ".gate_proj.weight", ".w3.weight": ".up_proj.weight", ".w2.weight": ".down_proj.weight"}
 
 
+def chunked_indexer_forward(chunk: int):
+    """MiniMaxM3VLIndexer.forward with the [heads, N, N] fp32 score matrix built ``chunk`` query rows at a time.
+
+    Upstream materializes scores for every (query, key) pair at once: 4 heads x N^2 x 4 B, ~51 GB at N = 56320, plus a
+    masked copy. Every op after the projections reads only its own query row (the causal mask, the block max, the local
+    block forcing, the top-k), so running them on a slice of query rows is the same function; the projections, norms,
+    RoPE and the cache update run once on the whole sequence exactly as upstream."""
+    import torch.nn.functional as F
+    from transformers.models.minimax_m3_vl.modeling_minimax_m3_vl import apply_rotary_pos_emb
+
+    def forward(self, hidden_states, position_embeddings, past_key_values, position_ids):
+        batch, q_len, _ = hidden_states.shape
+        idx_q = self.q_proj(hidden_states).view(batch, q_len, -1, self.head_dim)
+        idx_q = self.q_norm(idx_q).transpose(1, 2)
+        idx_k = self.k_proj(hidden_states).view(batch, q_len, 1, self.head_dim)
+        idx_k = self.k_norm(idx_k).transpose(1, 2)
+        cos, sin = position_embeddings
+        idx_q, idx_k = apply_rotary_pos_emb(idx_q, idx_k, cos[..., : self.head_dim], sin[..., : self.head_dim])
+        if past_key_values is not None:
+            idx_k = past_key_values.layers[self.layer_idx].update_index(idx_k)
+
+        k_len = idx_k.shape[2]
+        num_key_blocks = -(-k_len // self.block_size)
+        pad = num_key_blocks * self.block_size - k_len
+        k_float_t = idx_k.float().transpose(-1, -2)
+        k_positions = torch.arange(k_len, device=idx_q.device)
+        topk = min(self.topk_blocks, num_key_blocks)
+        out = []
+        for s in range(0, q_len, chunk):
+            e = min(s + chunk, q_len)
+            pos = position_ids[:, s:e]
+            scores = torch.matmul(idx_q[:, :, s:e].float(), k_float_t)
+            token_future = k_positions[None, None, None, :] > pos[:, None, :, None]
+            scores = scores.masked_fill(token_future, float("-inf"))
+            if pad:
+                scores = F.pad(scores, (0, pad), value=float("-inf"))
+            scores = scores.view(batch, self.num_heads, e - s, num_key_blocks, self.block_size)
+            block_scores = scores.amax(dim=-1).amax(dim=1)
+            del scores, token_future
+            q_block = pos // self.block_size
+            if self.local_blocks > 0:
+                local = torch.arange(self.local_blocks, device=idx_q.device)
+                local_idx = (q_block[..., None] - local.view(1, 1, -1)).clamp(min=0)
+                block_scores.scatter_(-1, local_idx, float("inf"))
+            topk_scores, topk_indices = block_scores.topk(topk, dim=-1)
+            out.append(topk_indices.masked_fill(topk_scores == float("-inf"), -1))
+        return torch.cat(out, dim=1)
+
+    forward.chunk = chunk
+    return forward
+
+
+def check_chunked_indexer(upstream, text_config) -> None:
+    """chunked_indexer_forward copies upstream's forward; fail loudly if the installed transformers has changed it.
+    A random tiny indexer (16-key blocks, 4 kept, so the selection cuts) must give identical block ids for chunk
+    sizes that do and do not divide the sequence."""
+    from transformers.models.minimax_m3_vl.modeling_minimax_m3_vl import MiniMaxM3VLIndexer
+
+    cfg = copy.deepcopy(text_config)
+    cfg.index_block_size, cfg.index_topk_blocks = 16, 4
+    gen = torch.Generator().manual_seed(0)
+    indexer = MiniMaxM3VLIndexer(cfg, layer_idx=0).to(torch.bfloat16)
+    for p in indexer.parameters():
+        p.data = torch.randn(p.shape, generator=gen).to(p.dtype) * 0.5
+    n = 300
+    x = torch.randn(1, n, cfg.hidden_size, generator=gen).to(torch.bfloat16)
+    pos = torch.arange(n)[None]
+    angles = pos[..., None].float() * torch.rand(cfg.index_head_dim, generator=gen)
+    pe = (angles.cos().to(torch.bfloat16), angles.sin().to(torch.bfloat16))
+    with torch.no_grad():
+        ref = upstream(indexer, x, pe, None, pos)
+        for chunk in (1, 64, 77, 4096):
+            if not torch.equal(chunked_indexer_forward(chunk)(indexer, x, pe, None, pos), ref):
+                raise SystemExit(
+                    f"chunked indexer (chunk {chunk}) differs from this transformers' MiniMaxM3VLIndexer.forward: "
+                    "upstream changed; update chunked_indexer_forward"
+                )
+
+
 class MiniMaxM3Golden(LayerwiseGolden):
     hf_repo = "MiniMaxAI/MiniMax-M3"
     checkpoint_prefix = "language_model.model."  # the VLM stores the text backbone under language_model.model
@@ -191,6 +272,15 @@ class MiniMaxM3Golden(LayerwiseGolden):
         from transformers import AutoModelForCausalLM, MiniMaxM3SparseForConditionalGeneration, MiniMaxM3VLConfig
 
         AutoModelForCausalLM.register(MiniMaxM3VLConfig, MiniMaxM3SparseForConditionalGeneration, exist_ok=True)
+
+        # HF_GOLDEN_INDEXER_CHUNK=<rows>: build the indexer's score matrix that many query rows at a time (see
+        # chunked_indexer_forward); needed for long prefills, where upstream's whole [4, N, N] fp32 matrix OOMs.
+        if chunk := int(os.environ.get("HF_GOLDEN_INDEXER_CHUNK", "0")):
+            from transformers.models.minimax_m3_vl.modeling_minimax_m3_vl import MiniMaxM3VLIndexer
+
+            check_chunked_indexer(MiniMaxM3VLIndexer.forward, self.tiny_config().text_config)
+            MiniMaxM3VLIndexer.forward = chunked_indexer_forward(chunk)
+            print(f"[indexer] scores built {chunk} query rows at a time", flush=True)
 
     def convert(self, sd, prefix, module):
         out = {}

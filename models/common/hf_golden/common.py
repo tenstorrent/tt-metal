@@ -205,18 +205,95 @@ class Shards:
     def files(self, prefix: str) -> list[str]:
         return sorted({f for k, f in self.weight_map.items() if k.startswith(prefix)})
 
+    # Set by the engine: a cuda device switches load() to direct_read (bulk reads straight to the device).
+    device: torch.device | None = None
+
     def load(self, stage: int, prefix: str) -> dict[str, torch.Tensor]:
         """Every checkpoint tensor under ``prefix``, keys relative to it, in the checkpoint's own dtype."""
         sd = {}
+        direct = getattr(self.device, "type", None) == "cuda" and os.environ.get("HF_GOLDEN_DIRECT_READ", "1") != "0"
         for f in self.files(prefix):
             path = self.fetch(f)
-            with safe_open(str(path), "pt") as h:
-                for k in h.keys():
-                    if k.startswith(prefix):
-                        sd[k[len(prefix) :]] = h.get_tensor(k)
+            if direct:
+                sd.update({k[len(prefix) :]: v for k, v in direct_read(path, prefix, self.device).items()})
+            else:
+                with safe_open(str(path), "pt") as h:
+                    for k in h.keys():
+                        if k.startswith(prefix):
+                            sd[k[len(prefix) :]] = h.get_tensor(k)
             if self.last_use[f] <= stage and path.is_relative_to(self.tmp):  # never delete a cached copy
                 path.unlink()
         return sd
+
+
+SAFETENSORS_DTYPES = {
+    "BF16": torch.bfloat16, "F16": torch.float16, "F32": torch.float32, "F64": torch.float64,
+    "I64": torch.int64, "I32": torch.int32, "I16": torch.int16, "I8": torch.int8, "U8": torch.uint8, "BOOL": torch.bool,
+    "F8_E4M3": torch.float8_e4m3fn, "F8_E5M2": torch.float8_e5m2,
+}  # fmt: skip
+DIRECT_ALIGN = 4096  # O_DIRECT offset/length/buffer alignment
+DIRECT_CHUNK = 64 << 20
+DIRECT_THREADS = int(os.environ.get("HF_GOLDEN_READ_THREADS", "8"))
+_pinned: torch.Tensor | None = None  # one reusable pinned staging buffer, grown on demand
+
+
+def direct_read(path: Path, prefix: str, device: torch.device) -> dict[str, torch.Tensor]:
+    """The tensors of ``path`` under ``prefix`` (full checkpoint names), on ``device``, bytes unchanged.
+
+    safe_open reads through an mmap, one 4 KiB page fault at a time; in a memory-limited container whose page cache
+    is full every fault waits on reclaim, which measured ~0.3 GB/s on a 15 GB MiniMax-M3 layer. Here the byte span
+    holding those tensors is read with parallel O_DIRECT preads into a pinned buffer (no page cache), copied to the
+    device in one transfer, and sliced there. Tensors that fuse_experts will copy out (``.experts.<e>.``) stay views
+    of the span; every other one is cloned so the span is freed once the experts are fused."""
+    global _pinned
+    with open(path, "rb") as fh:
+        n = int.from_bytes(fh.read(8), "little")
+        header = json.loads(fh.read(n))
+    base = 8 + n
+    entries = {k: v for k, v in header.items() if k != "__metadata__" and k.startswith(prefix)}
+    if not entries:
+        return {}
+    lo = base + min(v["data_offsets"][0] for v in entries.values())
+    hi = base + max(v["data_offsets"][1] for v in entries.values())
+    start = lo // DIRECT_ALIGN * DIRECT_ALIGN
+    end = min(-(-hi // DIRECT_ALIGN) * DIRECT_ALIGN, -(-path.stat().st_size // DIRECT_ALIGN) * DIRECT_ALIGN)
+    span = end - start
+    if _pinned is None or _pinned.numel() < span:
+        _pinned = None
+        _pinned = torch.empty(span, dtype=torch.uint8, pin_memory=True)
+    buf = _pinned[:span].numpy()
+
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECT)
+    except OSError:
+        fd = os.open(path, os.O_RDONLY)
+
+    def read(off: int) -> None:
+        length = min(DIRECT_CHUNK, span - off)
+        view = memoryview(buf[off : off + length])
+        got = 0
+        while got < length:
+            r = os.preadv(fd, [view[got:]], start + off + got)
+            if r == 0:  # EOF: the last block's tail past the file end stays unread (never referenced)
+                break
+            got += r
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(DIRECT_THREADS) as ex:
+            list(ex.map(read, range(0, span, DIRECT_CHUNK)))
+    finally:
+        os.close(fd)
+
+    on_device = _pinned[:span].to(device, non_blocking=True)
+    torch.cuda.current_stream(device).synchronize()  # the pinned buffer is reused by the next read
+    out = {}
+    for k, v in entries.items():
+        a, b = (base + o - start for o in v["data_offsets"])
+        t = on_device[a:b].view(SAFETENSORS_DTYPES[v["dtype"]]).view(v["shape"])
+        out[k] = t if re.search(r"\.experts\.\d+\.", k) else t.clone()
+    return out
 
 
 def fuse_experts(sd: dict[str, torch.Tensor], dtype: torch.dtype) -> dict[str, torch.Tensor]:
@@ -231,8 +308,9 @@ def fuse_experts(sd: dict[str, torch.Tensor], dtype: torch.dtype) -> dict[str, t
     for pre, g in groups.items():
         n = len(g["down"])
         inter, hidden = sd[g["gate"][0]].shape
-        gate_up = torch.empty(n, 2 * inter, hidden, dtype=dtype)
-        down = torch.empty(n, hidden, inter, dtype=dtype)
+        device = sd[g["gate"][0]].device  # on the GPU when direct_read loaded the experts there
+        gate_up = torch.empty(n, 2 * inter, hidden, dtype=dtype, device=device)
+        down = torch.empty(n, hidden, inter, dtype=dtype, device=device)
         for e in range(n):
             gate_up[e, :inter] = sd.pop(g["gate"][e])
             gate_up[e, inter:] = sd.pop(g["up"][e])
@@ -258,6 +336,8 @@ class Loader:
         if any(k.endswith("experts.gate_up_proj") for k in module.state_dict()):
             sd = fuse_experts(sd, self.dtype)
         sd = {k: v.to(self.device, self.dtype_of(prefix + k, v)) for k, v in sd.items()}
+        # A direct_read expert view that no fuse consumed would pin its whole read span: own its bytes instead.
+        sd = {k: v.clone() if v.untyped_storage().nbytes() > 2 * v.nbytes else v for k, v in sd.items()}
         module.load_state_dict(sd, strict=True, assign=True)  # strict: any key HF and the checkpoint disagree on fails
         for t in module.state_dict(keep_vars=True).values():
             t._is_hf_initialized = True
