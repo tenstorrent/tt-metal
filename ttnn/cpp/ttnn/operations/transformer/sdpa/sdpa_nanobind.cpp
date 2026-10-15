@@ -767,11 +767,10 @@ void bind_sdpa(nb::module_& mod) {
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe (see
-                tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Not supported: sliding windows, attention
-                sinks, KV-pad rotation, circular caches. logical_n/logical_l may be scalars or device tensors. When
-                omitted, BF16 DEST runs the streaming kernel and FP32 DEST runs ACCURATE unless the call uses one of
-                the unsupported features. compute_kernel_config and exp_approx_mode are accepted and ignored; scale
-                is honored.
+                tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Without KV-pad rotation, circular caches,
+                sinks or sliding windows; logical_n/logical_l may be scalars or device tensors. When omitted, BF16
+                DEST runs the streaming kernel and FP32 DEST runs ACCURATE (an error with those features).
+                compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -983,8 +982,8 @@ void bind_sdpa(nb::module_& mod) {
                 tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Each Q chunk's online-softmax state stays
                 in L1 across ring steps and is normalized once, on the last. logical_n may be a scalar or a
                 device tensor. When omitted, the streaming kernel runs; FP32 DEST, or a blocking it cannot build,
-                runs STANDARD (ACCURATE with FP32 DEST) on Blackhole at op-chosen chunks on the program_config
-                grid. compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
+                runs STANDARD (ACCURATE with FP32 DEST) at op-chosen chunks on the program_config grid.
+                compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -1042,8 +1041,7 @@ void bind_sdpa(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
                 `scaled_dot_product_attention` (V and the output are head_dim_v wide; without input_tensor_v, V is
-                K's first head_dim_v columns). When omitted, FP32 DEST runs ACCURATE. Defaults to
-                `None`.
+                K's first head_dim_v columns). When omitted, FP32 DEST runs ACCURATE. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].

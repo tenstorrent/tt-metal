@@ -402,6 +402,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     validate_metadata_tensors(tensor_args);
 
+    // The ring joint kernel accumulates in BF16 DEST only; FP32-DEST calls run the ACCURATE recipe.
+    TT_FATAL(
+        args.precision.has_value() || !get_fp32_dest_acc_en(args.compute_kernel_config),
+        "Ring joint SDPA without a precision recipe requires fp32_dest_acc_en=false (FP32 DEST runs "
+        "SDPAPrecision.ACCURATE)");
+
     // The sliding-window halo and the per-device slab checks below divide by the chunk sizes.
     TT_FATAL(
         args.get_q_chunk_size() > 0 && args.get_q_chunk_size() % tt::constants::TILE_WIDTH == 0,
@@ -640,7 +646,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "Named ring recipes require K's head dim to be Q's and a tile-aligned V head dim of at most Q's");
         TT_FATAL(
             !args.has_sliding_window(),
-            "Named ring recipes do not support sliding_window_size yet; omit precision for the legacy kernel");
+            "Named ring recipes do not support sliding_window_size yet; omit precision to run the streaming kernel "
+            "(fp32_dest_acc_en=False)");
         TT_FATAL(
             !kv_pad_rotation_active(args, tensor_args) && !args.circular_kv_cache && !tensor_args.attention_sink,
             "Named ring recipes do not support KV-pad rotation (kv_actual_isl, or the metadata tensors on chunked "
