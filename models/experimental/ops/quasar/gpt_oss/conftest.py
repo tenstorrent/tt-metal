@@ -42,14 +42,15 @@ def quasar_host_cast_fp32_to_bf16(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def quasar_block_float_to_bf16(monkeypatch, quasar_host_cast_fp32_to_bf16):
+def quasar_block_float_to_bf16(monkeypatch, quasar_host_cast_fp32_to_bf16, quasar_ops):
     """On Quasar, use bfloat16 wherever the model asks for bfloat8_b or bfloat4_b.
 
     Quasar does not support the Bfp8_b and Bfp4_b data formats, so any op that sets up a dataflow
     buffer in one of them fails program validation. The model sets these dtypes at many call sites,
     so the wrappers below change them where they reach ttnn: tensor uploads, and the ops that take an
     output dtype. This fixture depends on quasar_host_cast_fp32_to_bf16 so that its from_torch wrapper
-    is the outer one: it changes the dtype to bfloat16 first, and the float32 host cast then applies.
+    is the outer one: it changes the dtype to bfloat16 first, and the float32 host cast then applies. It
+    depends on quasar_ops so that it wraps the Quasar versions of the ops that quasar_ops routes.
 
     bfloat16 weights take about 1.9x (Bfp8_b) to 3.6x (Bfp4_b) more DRAM. They are cached in a separate
     weight cache directory. A directory that a block float build marked complete makes the model skip
@@ -107,7 +108,8 @@ def quasar_ops(monkeypatch):
     """On Quasar, route the mainline ops that Quasar cannot run to their ttnn.experimental.quasar versions.
 
     The program factories of these mainline ops build DataMovementKernel kernels, which Quasar does not
-    support. The Quasar versions take the same arguments: the binary ops accept a scalar second input and
+    support. ttnn.linear fails the same way when it has a bias, because it adds the bias with the mainline
+    binary op. The Quasar versions take the same arguments: the binary ops accept a scalar second input and
     output_tensor, and the SDPA ops accept attention_sink. All Quasar op routing is done here, so the
     model code keeps calling the mainline ops, as in models/demos/gpt_oss.
     """
@@ -122,6 +124,8 @@ def quasar_ops(monkeypatch):
         (ttnn, "multiply", quasar_ops, "multiply"),
         (ttnn, "subtract", quasar_ops, "subtract"),
         (ttnn, "sub", quasar_ops, "subtract"),
+        (ttnn, "linear", quasar_ops, "linear"),
+        (ttnn, "sparse_matmul", quasar_ops, "sparse_matmul"),
         (ttnn.transformer, "scaled_dot_product_attention", quasar_ops.transformer, "scaled_dot_product_attention"),
         (
             ttnn.transformer,
