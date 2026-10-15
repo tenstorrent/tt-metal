@@ -51,3 +51,19 @@ Design constraints found while reading the code: the key slab is a sliding FIFO 
 the tiny ratio-128 group which stays replicated) so every column shifts its local FIFO by Cc/8 with no cross-column traffic; the staircase mask of the current chunk and the visibility mask become per-column strided
 constants; the final ids are global FIFO slots into the REPLICATED kv table (sparse_sdpa still reads all 8 columns' worth of entries: the kv table itself (2.5 KiB / token / user) cannot be sharded without the (max, sum)
 kernel output). Selection ties at the 512th score can differ from the replicated path (bf16 scores tie often), so validation is by quality (needle / GSM8K), not bit-exactness.
+
+## 6. Gather instead of merge: sharding a user's compressed KV over mesh rows / columns WITHOUT the (max, sum) kernel output  [added 2026-10-15]
+The merge design of sections 2 and 4 needs `sparse_sdpa` to return (max, sum). But the attention is SPARSE: a query reads only its top-512 selected compressed rows (+ the 128-window, which stays in the local ring). So the pool can
+be sharded by page over the shard group (columns, mesh rows, or both) and the selected rows GATHERED to every chip that computes the attention: each owner looks its rows up locally (rows it does not own are masked to zero)
+and ONE all-gather over the group + a sum rebuilds the 512 rows (exact: one non-zero partial + zeros - the same trick as the column-sharded RoPE lookup, tt/rope_compact.py). Attention then runs unchanged on the local copy.
+Decode cost (tests/test_rowgather_microbench.py, host .40, 512 selected rows of 512 bf16 per token, gathered over the 4 mesh rows):
+| tokens per user | local lookup + mask | + all-gather over 4 mesh rows + sum |
+|---|---|---|
+| 1 (plain decode) | 20 us | 62 us per layer |
+| 6 (spec block) | 61 us | 234 us per layer |
+~38 attention layers: ~2.4 ms per plain decode step (~4 %), ~9 ms per spec round (~8 %); a row PAIR (B = 2) is cheaper than the 4-row measurement. Acceptable as a long-context-only mode (DSV41_KV_SHARD).
+Row pairs: B = 2 -> user A on rows {0, 1}, user B on rows {2, 3}: each row owns half of the user's pages (decode pool + index keys /2 per chip, /4 for B = 1), both rows compute the same attention (redundant, as the
+padded rows do today), MoE unchanged, max_num_seqs = 2. Per chip, B = 2 at 1M then holds what B = 4 at 512k holds for the DECODE pool. NOT covered: prefill - the per-user prefill kv table (~2.5 GiB at 1M), the key FIFO and the
+indexer score / visibility buffers scale with the user's full length and must be sharded too (columns for the indexer: section 5; the kv table by the same gather per chunk: C x 512 rows x 1 KiB = ~0.5 GiB of traffic per chunk
+and layer at C = 512, ~ms each, to be measured).
+Also note: B = 4 at 1M is already the same layout as B = 2 / B = 1 (padding), so if the B = 4 1M probe boots, B = 2 and B = 1 at 1M need no new code.
