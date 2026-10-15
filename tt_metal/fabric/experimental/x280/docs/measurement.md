@@ -28,7 +28,7 @@ the 18 `bw.tensix_to_x280` points that extend its transfer-size axis to 128, 320
 384, 512, 1024, 2048, 4096, 8192 and 16384 B under both boundaries, which no
 campaign has yet measured, and the 20 `bw.x280_to_tensix` points that add 4096
 and 65536 B transfers and the `sd` (8 B) and `vse32.v` (64 B) store widths
-under both boundaries, which no campaign has yet measured. An ERISC point's record count comes from
+under both boundaries, measured in [results.md](results.md#transport_bandwidth). An ERISC point's record count comes from
 its gtest filter, or for `writers_all` from its run record. An
 ERISC point the device cannot host -- more writers than inactive Ethernet cores,
 none at all, or `IDLE_ETH` not enabled -- is an availability skip, and like every

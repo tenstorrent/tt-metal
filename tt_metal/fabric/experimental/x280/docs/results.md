@@ -160,6 +160,30 @@ Records: `L9b-final/campaign-tip/attempts/bw.*`; the size sweep in
 `tabulated/ab.md`); the whole-suite pass in `later-runs/records/full-suite-20261014/`
 (`tabulated/size-sweep.md`).
 
+**X280 -> Tensix store width and transfer size** (register-sourced, 2026-10-15):
+`bw.x280_to_tensix.{,sd.,vse32.}{64,256,4096,65536}.{retired,injection}`, `W=128, N=16384`,
+X280 PLL 1750 MHz, 15 LIM ways. GB/s from `mtime`, median of 3 runs (4 for the two `sw` 64 B
+points); every min-max range is within 0.03%, and rdcycle/mtime is 35.000 +- 0.013 on every run.
+Each run's L1 readback matched the pattern byte for byte.
+
+| Store | 64 B | 256 B | 4 KiB | 64 KiB | Cycles per store |
+|---|---:|---:|---:|---:|---:|
+| `sw` (4 B) | 1.800 / 1.799 | 1.800 / 1.800 | 1.800 / 1.800 | 1.800 / 1.800 | 3.89 |
+| `sd` (8 B) | 3.598 / 3.596 | 3.600 / 3.599 | 3.600 / 3.600 | 3.600 / 3.600 | 3.89 |
+| `vse32.v` (64 B) | 14.388 / 14.340 | 14.396 / 14.385 | 14.400 / 14.399 | 14.400 / 14.400 | 7.78 |
+
+- Cells are INJECTION / RETIRED GB/s. A scalar store costs 3.89 cycles whatever its width, and a
+  64 B vector store 7.78, so the rate scales with bytes per store, not with transfer size or
+  destination footprint.
+- An earlier harness's System Port figures to Tensix at 1 MB (vector write 14.39 GB/s, scalar
+  write 3.60 GB/s) are these per-store costs: that image ran from cached GDDR, so its source
+  loads hit L1D. The same 1 MiB streams over a 64 KiB footprint (`N=16` at 65536 B, RETIRED)
+  measure 14.329 GB/s (`vse32.v`) and 3.595 GB/s (`sd`) here. The 0.250 GB/s it was compared
+  against is the LIM load described above.
+
+Records: `later-runs/records/x2t-store-width-20261015/` (`results/sweep-regsrc/`, summarised in
+`results/sweep-regsrc-summary.md`; the factor-by-factor runs in `README.md`).
+
 ## pipeline_stage
 
 The routing image is emulated: the X280 runs the same instruction sequence over the same table
