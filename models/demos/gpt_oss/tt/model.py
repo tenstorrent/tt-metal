@@ -283,6 +283,12 @@ class Model:
 
         # Initialize on-device sampling (supported when padded per-device vocab fits in 64K)
         self._supports_on_device_sampling = per_device_padded <= 64 * 1024
+        if not self._supports_on_device_sampling and self.decode_terminal is not None and mesh_device.shape[1] == 1:
+            # One chip with the fused decode: decode samples from the fused LM head's candidates; prefill (and requests
+            # the candidates do not serve) use the common sampler's single-device reduction over vocab splits.
+            from models.common.sampling.tt_sampling import TTSampling
+
+            self._supports_on_device_sampling = TTSampling.num_single_device_vocab_splits(per_device_padded) is not None
         self._prefill_sampling_active = False
         # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
         self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
