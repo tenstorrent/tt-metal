@@ -15,6 +15,18 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.batch_metadata import (
+    MAX_WIRE_CHUNKS,
+    RECORD_BYTES,
+    SHUTDOWN_WORD,
+    WARMUP_WORD,
+    ChunkRecord,
+    decode,
+    encode_words,
+    is_sentinel,
+    metadata_size_bytes,
+    sentinel_words,
+)
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter
@@ -75,8 +87,8 @@ def d2d_worker_cores(mesh_device) -> ttnn.CoreRange:
 
 LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4 * 1024))
 
-SHUTDOWN_METADATA_WORD = -1
-WARMUP_METADATA_WORD = -2
+SHUTDOWN_METADATA_WORD = SHUTDOWN_WORD
+WARMUP_METADATA_WORD = WARMUP_WORD
 
 H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
 
@@ -109,9 +121,18 @@ assert MTP_LEVELS >= 0, f"PREFILL_MTP_LEVELS must be >= 0, got {MTP_LEVELS}"
 NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 TOKEN_ID_BYTES = 4
 _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
+# Chunks per forward (tt-d-gen's max_chunks_per_batch). Above 1 the H2D payload is MAX_CHUNKS_PER_BATCH chunks laid
+# out [sp_row][chunk][chunk_size / sp], the metadata is the batched layout, and each push is run one record at a
+# time through prefill_chunk until the models take a whole batch per forward.
+MAX_CHUNKS_PER_BATCH = int(os.environ.get("PREFILL_MAX_CHUNKS_PER_BATCH", 1))
+assert (
+    1 <= MAX_CHUNKS_PER_BATCH <= MAX_WIRE_CHUNKS
+), f"PREFILL_MAX_CHUNKS_PER_BATCH must be in [1, {MAX_WIRE_CHUNKS}], got {MAX_CHUNKS_PER_BATCH}"
+BATCHED = MAX_CHUNKS_PER_BATCH > 1
+FORWARD_TOKENS = CHUNK_SIZE * MAX_CHUNKS_PER_BATCH
+CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(MAX_CHUNKS_PER_BATCH)
 
-D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
+D2D_METADATA_SIZE_BYTES = CHUNK_METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
@@ -149,13 +170,24 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
-def _decode_metadata(metadata_msg: ttnn.Tensor) -> dict:
-    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-    return {
-        "slot_id": int(m[0]),
-        "actual_start": int(m[1]),
-        "actual_end": int(m[2]),
-    }
+def _metadata_words(metadata_msg: ttnn.Tensor) -> list:
+    return ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten().tolist()
+
+
+def _decode_records(words) -> list:
+    """One dict per chunk of the push, in payload (chunk index) order."""
+    return [
+        {"slot_id": r.slot_id, "actual_start": r.actual_start, "actual_end": r.actual_end}
+        for r in decode(words, MAX_CHUNKS_PER_BATCH)
+    ]
+
+
+def _describe(words) -> str:
+    if is_sentinel(words, SHUTDOWN_WORD):
+        return "shutdown"
+    if is_sentinel(words, WARMUP_WORD):
+        return "warm-up"
+    return " ".join(f"slot={m['slot_id']} [{m['actual_start']},{m['actual_end']})" for m in _decode_records(words))
 
 
 def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
@@ -180,20 +212,12 @@ def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
     return provided
 
 
-def _is_shutdown_sentinel(meta: dict) -> bool:
-    return (
-        meta["slot_id"] == SHUTDOWN_METADATA_WORD
-        and meta["actual_start"] == SHUTDOWN_METADATA_WORD
-        and meta["actual_end"] == SHUTDOWN_METADATA_WORD
-    )
+def _is_shutdown_sentinel(words) -> bool:
+    return is_sentinel(words, SHUTDOWN_WORD)
 
 
-def _is_warmup_sentinel(meta: dict) -> bool:
-    return (
-        meta["slot_id"] == WARMUP_METADATA_WORD
-        and meta["actual_start"] == WARMUP_METADATA_WORD
-        and meta["actual_end"] == WARMUP_METADATA_WORD
-    )
+def _is_warmup_sentinel(words) -> bool:
+    return is_sentinel(words, WARMUP_WORD)
 
 
 def _socket_next(h2d_service, n_mtp: int = 0) -> tuple:
@@ -205,8 +229,7 @@ def _socket_next(h2d_service, n_mtp: int = 0) -> tuple:
     else:
         tt_mtp_tokens = None
         tt_ids, tt_metadata = outs
-    meta = _decode_metadata(tt_metadata)
-    return tt_ids, tt_mtp_tokens, meta, tt_metadata
+    return tt_ids, tt_mtp_tokens, _metadata_words(tt_metadata), tt_metadata
 
 
 def build_d2d_pipeline_endpoints(
@@ -260,17 +283,20 @@ def _d2d_recv(inbound) -> tuple:
     act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound, metadata_size_bytes=D2D_METADATA_SIZE_BYTES
     )
-    meta = _decode_metadata(metadata_msg)
-    if MTP_LEVELS:
-        words = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-        meta["provided_levels"] = max(0, int(words[3]))
-    where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}"
-    logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
-    return act, meta, metadata_msg
+    words = _metadata_words(metadata_msg)
+    logger.info(f"[pp] RECV-d2d {_describe(words)} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
+    return act, words, metadata_msg
 
 
 def _d2d_send(
-    outbound, activation: ttnn.Tensor, rank: int, meta: Optional[dict], *, deallocate: bool = True, metadata_msg=None
+    outbound,
+    activation: ttnn.Tensor,
+    rank: int,
+    records: Optional[list],
+    *,
+    deallocate: bool = True,
+    metadata_msg=None,
+    words: Optional[list] = None,
 ) -> None:
     t0 = time.perf_counter()
 
@@ -278,11 +304,15 @@ def _d2d_send(
         md_tensor = metadata_msg
     else:
         backing = outbound.get_backing_tensor()
-        words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
-        if MTP_LEVELS:
-            words.append(int(meta["provided_levels"]))
+        if words is None:
+            words = encode_words(
+                [ChunkRecord(m["slot_id"], m["actual_start"], m["actual_end"]) for m in records], MAX_CHUNKS_PER_BATCH
+            )
+            if MTP_LEVELS:
+                words.append(int(records[0]["provided_levels"]))
+        signed = [w - (1 << 32) if w >= 1 << 31 else w for w in words]
         md_tensor = ttnn.from_torch(
-            torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
+            torch.tensor(signed, dtype=torch.int32).reshape(1, 1, 1, -1),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=backing.device(),
@@ -295,7 +325,7 @@ def _d2d_send(
     ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
     if deallocate:
         ttnn.deallocate(activation)
-    where = f"[{meta['actual_start']},{meta['actual_end']})" if meta is not None else "(on-device)"
+    where = _describe(words) if words is not None else "(on-device)"
     logger.info(f"[pp rank {rank}] SEND-d2d {where} [xfer] push={(time.perf_counter() - t0) * 1000.0:.2f}ms")
 
 
@@ -310,13 +340,8 @@ def _forward_shutdown(d2d_out, rank: int, d2d_rows: int, d2d_width: int, planes:
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.create_mesh_mapper(dev, D2D_MAPPER_CONFIG),
     )
-    sentinel = {
-        "slot_id": SHUTDOWN_METADATA_WORD,
-        "actual_start": SHUTDOWN_METADATA_WORD,
-        "actual_end": SHUTDOWN_METADATA_WORD,
-        "provided_levels": 0,
-    }
-    _d2d_send(d2d_out, dummy, rank, sentinel)
+    words = sentinel_words(SHUTDOWN_WORD, MAX_CHUNKS_PER_BATCH) + ([0] if MTP_LEVELS else [])
+    _d2d_send(d2d_out, dummy, rank, None, words=words)
     d2d_out.release_fabric_links()
     logger.info(f"[pp rank {rank}] forwarded SHUTDOWN sentinel to rank {rank + 1}")
 
@@ -362,13 +387,106 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
         pass
 
 
+def _record_rows(inp: ttnn.Tensor, k: int, rows: int) -> ttnn.Tensor:
+    """Chunk index k's rows of this chip's forward. Dim 2 is the sequence on both the first rank's
+    (1, 1, tokens) token row and a later rank's (1, planes, rows, hidden) activation."""
+    shape = list(inp.shape)
+    start = [0] * len(shape)
+    end = list(shape)
+    start[2] = k * rows
+    end[2] = (k + 1) * rows
+    return ttnn.slice(inp, start, end, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+_zero_columns: dict = {}
+
+
+def _zero_rows(like: ttnn.Tensor, rows: int) -> ttnn.Tensor:
+    """A persistent all-zero activation of `rows` sequence rows in `like`'s shape, one per shape."""
+    shape = list(like.shape)
+    shape[2] = rows
+    key = tuple(shape)
+    if key not in _zero_columns:
+        dev = like.device()
+        _zero_columns[key] = ttnn.from_torch(
+            torch.zeros(*shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                dev, ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
+            ),
+        )
+    return _zero_columns[key]
+
+
+def _record_metadata(meta: dict, like: ttnn.Tensor) -> ttnn.Tensor:
+    """One record as the three-word single-chunk metadata tensor, replicated like the push's own, so a model
+    sees exactly what a one-chunk push hands it (the trace stages it, the D2H ack op sends it) and may free it."""
+    dev = like.device()
+    return ttnn.from_torch(
+        torch.tensor([meta["slot_id"], meta["actual_start"], meta["actual_end"]], dtype=torch.int32).reshape(
+            1, 1, 1, -1
+        ),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=dev,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            dev, ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
+        ),
+    )
+
+
+def _prefill_records(runtime, kv_caches, inp, records: list, c: int, d2h_service=None, metadata_msg=None):
+    """Run a batched push one record at a time through the single-chunk model entry and hand back the
+    forward's activation in the batched layout (None on the last rank). Each call carries its own slot, range
+    and metadata tensor, so every record gets its own per-layer completions and ack records. The push's own
+    input and metadata tensors stay the caller's."""
+    rows = CHUNK_SIZE // _sp
+    prefill_batch = getattr(runtime, "prefill_batch", None)
+    if prefill_batch is not None:
+        # The model takes the whole forward: the batched input as it arrived plus the records in chunk index
+        # order, and returns the activation in the same layout (None on the last rank). It owns the input.
+        return prefill_batch(inp, kv_caches, records, request_id=c)
+    outs = []
+    for k, meta in enumerate(records):
+        md = _record_metadata(meta, metadata_msg)
+        out = runtime.prefill_chunk(
+            _record_rows(inp, k, rows),
+            kv_caches,
+            slot_id=meta["slot_id"],
+            actual_start=meta["actual_start"],
+            actual_end=meta["actual_end"],
+            request_id=c + k,
+            d2h_service=d2h_service,
+            metadata_msg=md,
+        )
+        if md.is_allocated():  # a traced runtime consumes it; the others leave it to us
+            ttnn.deallocate(md)
+        if out is not None:
+            outs.append(out)
+    ttnn.deallocate(inp)
+    if not outs:
+        return None
+    missing = MAX_CHUNKS_PER_BATCH - len(records)
+    parts = outs + ([_zero_rows(outs[0], missing * rows)] if missing else [])
+    if len(parts) == 1:
+        return outs[0]
+    act = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for o in outs:
+        ttnn.deallocate(o)
+    return act
+
+
 def _compute_and_send(
     runtime,
     kv_caches,
     rank: int,
     c: int,
     inp,
-    meta: Optional[dict],
+    records: list,
     d2d_out,
     d2h_service=None,
     metadata_msg=None,
@@ -378,42 +496,52 @@ def _compute_and_send(
         ttnn.synchronize_device(runtime.mesh_device)
     t_start = time.time()
     t_perf = time.perf_counter()
-    where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
+    meta = records[0]
+    where = " ".join(f"slot={m['slot_id']} [{m['actual_start']},{m['actual_end']})" for m in records)
     logger.info(
         f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where} "
         f"provided={meta.get('provided_levels')}"
     )
 
-    mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
-    out = runtime.prefill_chunk(
-        inp,
-        kv_caches,
-        slot_id=meta["slot_id"],
-        actual_start=meta["actual_start"],
-        actual_end=meta["actual_end"],
-        request_id=c,
-        d2h_service=d2h_service,
-        metadata_msg=metadata_msg,
-        **mtp_kwargs,
-    )
+    if BATCHED:
+        out = _prefill_records(runtime, kv_caches, inp, records, c, d2h_service=d2h_service, metadata_msg=metadata_msg)
+    else:
+        mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
+        out = runtime.prefill_chunk(
+            inp,
+            kv_caches,
+            slot_id=meta["slot_id"],
+            actual_start=meta["actual_start"],
+            actual_end=meta["actual_end"],
+            request_id=c,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
+            **mtp_kwargs,
+        )
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
         _record_chunk_timing(rank, c, t_start, compute_ms)
     if not runtime.config.is_last_rank:
-        forward_md = None
-        if runtime.config.use_trace and not (MTP_LEVELS and runtime.config.is_first_rank):
-            persistent_md = getattr(runtime, "trace_metadata_msg", None)
-            forward_md = persistent_md if persistent_md is not None else metadata_msg
+        if BATCHED and not MTP_LEVELS:
+            # The push's own metadata tensor is already the next rank's layout and size.
+            forward_md = metadata_msg
+        else:
+            forward_md = None
+            if runtime.config.use_trace and not (MTP_LEVELS and runtime.config.is_first_rank):
+                persistent_md = getattr(runtime, "trace_metadata_msg", None)
+                forward_md = persistent_md if persistent_md is not None else metadata_msg
         _d2d_send(
             d2d_out,
             out,
             rank,
-            meta,
+            records,
             deallocate=not runtime.config.use_trace,
             metadata_msg=forward_md,
         )
+    if BATCHED:
+        ttnn.deallocate(metadata_msg)
     if d2d_out is not None:
         d2d_out.release_fabric_links()
     return t_start
@@ -457,12 +585,11 @@ def run_request_loop(
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            inp, mtp_tokens, meta, metadata_msg = _socket_next(h2d_service, NUM_MTP_TOKENS)
-            meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
+            inp, mtp_tokens, words, metadata_msg = _socket_next(h2d_service, NUM_MTP_TOKENS)
         else:
-            inp, meta, metadata_msg = _d2d_recv(d2d_in)
+            inp, words, metadata_msg = _d2d_recv(d2d_in)
             mtp_tokens = None
-        if _is_shutdown_sentinel(meta):
+        if _is_shutdown_sentinel(words):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_msg)
@@ -471,7 +598,7 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, d2d_rows, d2d_width, outbound_planes)
             break
-        warmup = _is_warmup_sentinel(meta)
+        warmup = _is_warmup_sentinel(words)
         if warmup:
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_msg)
@@ -480,13 +607,18 @@ def run_request_loop(
             before_first_chunk = None
         if warmup:
             continue
+        records = _decode_records(words)
+        if MTP_LEVELS:
+            records[0]["provided_levels"] = (
+                mtp_provided_levels(mtp_tokens, records[0]) if cfg.is_first_rank else max(0, int(words[3]))
+            )
         t = _compute_and_send(
             runtime,
             kv_caches,
             rank,
             c,
             inp,
-            meta,
+            records,
             d2d_out,
             d2h_service=d2h_service,
             metadata_msg=metadata_msg,
@@ -494,7 +626,7 @@ def run_request_loop(
         )
         if first is None:
             first = t
-        c += 1
+        c += len(records)
         if layer_ack_service is not None:
             layer_ack_service.check()  # a lost D2H record is fatal for the run; surface it here, not at exit
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
@@ -519,6 +651,7 @@ def _print_config() -> None:
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
+        ("PREFILL_MAX_CHUNKS_PER_BATCH", f"{MAX_CHUNKS_PER_BATCH} (forward = {FORWARD_TOKENS} tokens)"),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
@@ -553,6 +686,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "adapter": ADAPTER.name,
         "num_layers": NUM_LAYERS,
         "chunk_size": CHUNK_SIZE,
+        "max_chunks_per_batch": MAX_CHUNKS_PER_BATCH,
         "max_seq_len": MAX_SEQ_LEN,
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
@@ -650,7 +784,7 @@ def main() -> None:
 
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
-    d2d_activation_rows = d2d_rows_for(CHUNK_SIZE, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
+    d2d_activation_rows = d2d_rows_for(FORWARD_TOKENS, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
     d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED)
     # Planes on dim 1 of the D2D payload, evaluated at BOTH edges of this rank's slice: what it
     # receives and what it sends on. Read off the runtime's own config rather than recomputing the
@@ -680,7 +814,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             return service
 
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-        h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, CHUNK_SIZE, MTP_LEVELS), service_id)
+        h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS, MTP_LEVELS), service_id)
 
     d2d_in = d2d_out = None
     if num_ranks > 1:
@@ -747,7 +881,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             global_spec=None,
             fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
             worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=(CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES),
+            # One chunk's metadata per ack record: the push's own tensor on a single-chunk forward, the
+            # per-record tensor the loop hands each prefill_chunk on a batched one.
+            metadata_size_bytes=(
+                RECORD_BYTES if BATCHED else (CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES)
+            ),
         )
         # The D2H record is the chunk's metadata {slot_id, actual_start, actual_end}; LayerAckService labels it
         # and detects a dropped record from it.

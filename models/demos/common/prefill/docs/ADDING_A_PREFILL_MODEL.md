@@ -199,6 +199,33 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
 
 ---
 
+### Batched forwards (several chunks per push)
+
+With `PREFILL_MAX_CHUNKS_PER_BATCH=K` (K up to 16) the scheduler packs up to K chunks, from up to K
+requests, into one push. The wire is in `models/demos/common/prefill/batch_metadata.py` and mirrors
+tt-d-gen's `PrefillBatchMetadata`: `num_chunks`, a reserved word, then 16 records of
+`(slot_id, actual_start, actual_end)`; records past `num_chunks` are `INVALID_SLOT`. Record k owns chunk
+index k of the payload, which is laid out `[sp_row][chunk][chunk_size / sp]`, so each chip's input row is
+K columns of `chunk_size / sp` ids and a later rank's activation is K blocks of `chunk_size / sp` rows.
+Chunks of one request are consecutive records in ascending KV order and must run in record order. The
+H2D and D2D services carry the forward's full width and the batched metadata; a push with fewer than K
+records leaves the remaining columns as PAD (tokens) or zeros (activation).
+
+The runner needs nothing from a model to serve a batched push: it slices record k's rows out of the
+forward and calls `prefill_chunk` once per record, so every record gets its own per-layer completions,
+then concatenates the activations back into the forward's layout for the next rank. A model that wants
+the whole forward at once implements
+
+```python
+def prefill_batch(self, input_tensor, kv_cache, records, *, request_id=0):
+    # records: list of {"slot_id", "actual_start", "actual_end"} in chunk index order.
+    # input_tensor: the push as it arrived (owned by this call). Returns the activation in the same
+    # layout on a non-last rank, None on the last one. Per-layer completions: one per record.
+```
+
+and the runner prefers it. The MTP lookahead, the trace capture, the DFlash drafter and the D2H ack
+transport are laid out for one chunk per forward and have not been exercised with a batched push yet.
+
 ## 3. Register it
 
 Add one line to `ADAPTER_PATHS` in `models/demos/common/prefill/adapter.py`, mapping

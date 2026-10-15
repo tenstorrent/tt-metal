@@ -1,0 +1,152 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+"""The prefill H2D interface on a device, with no model: the service exported at the forward's width with the
+layout's metadata, a push packed by the producer and received the way the runner receives it, the records
+decoded, each record's rows sliced out of the forward on device, and the per-record loop's activation
+rebuilt with zero columns for a partial push. Geometry comes from the PREFILL_* env (K=1 is the unbatched wire)."""
+
+import os
+
+# The runner and the producer read their geometry at import.
+os.environ.setdefault("PREFILL_SP", "4")
+os.environ.setdefault("PREFILL_TP", "1")
+os.environ.setdefault("PREFILL_CHUNK_SIZE", "256")
+os.environ.setdefault("PREFILL_MAX_CHUNKS_PER_BATCH", "2")
+
+import pytest
+import torch
+
+import ttnn
+from models.demos.common.prefill.batch_metadata import INVALID_SLOT, SHUTDOWN_WORD, sentinel
+from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
+from models.demos.common.prefill.runners import prefill_producer as producer
+from models.demos.common.prefill.runners import prefill_runner as runner
+from models.demos.common.prefill.runners.runner_utils import build_h2d_service, make_h2d_spec
+
+SP, TP = int(os.environ["PREFILL_SP"]), int(os.environ["PREFILL_TP"])
+C = int(os.environ["PREFILL_CHUNK_SIZE"])
+K = int(os.environ["PREFILL_MAX_CHUNKS_PER_BATCH"])
+W = C // SP
+HIDDEN = 64
+
+
+def _per_row_ids(t: ttnn.Tensor) -> list:
+    """Chip (row, column) -> its ids; the H2D mapper shards SP over mesh axis 0 and replicates over axis 1."""
+    devs = ttnn.get_device_tensors(t)
+    assert len(devs) == SP * TP
+    return [(i // TP, ttnn.to_torch(d).view(torch.int32).flatten().tolist()) for i, d in enumerate(devs)]
+
+
+def _activation(mesh_device, full: torch.Tensor) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        full,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            mesh_device, ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(2), ttnn.PlacementReplicate()])
+        ),
+    )
+
+
+class _Echo:
+    """A model whose forward is the identity: the loop's slicing and reassembly are what is under test."""
+
+    class config:
+        is_last_rank = False
+
+    def prefill_chunk(
+        self, inp, kv, *, slot_id, actual_start, actual_end, request_id=0, d2h_service=None, metadata_msg=None
+    ):
+        self.calls = getattr(self, "calls", []) + [(slot_id, actual_start, actual_end, request_id)]
+        return inp
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((SP, TP), id=f"sp{SP}-tp{TP}")], indirect=True)
+def test_batched_push_is_decoded_and_sliced_per_record(mesh_device):
+    producer._load_env_config()
+    assert (runner.MAX_CHUNKS_PER_BATCH, runner.CHUNK_SIZE, runner._sp, runner.FORWARD_TOKENS) == (K, C, SP, K * C)
+    assert runner.CHUNK_METADATA_SIZE_BYTES == producer.CHUNK_METADATA_SIZE_BYTES == (12 if K == 1 else 200)
+
+    service = build_h2d_service(
+        mesh_device,
+        global_spec=make_h2d_spec((SP, TP), runner.FORWARD_TOKENS, 0),
+        mapper_config=runner.H2D_MAPPER_CONFIG,
+        worker_cores=runner.SYNC_WORKER_CORES,
+        metadata_size_bytes=runner.CHUNK_METADATA_SIZE_BYTES,
+    )
+
+    try:
+        # A full push: slot 1 starting mid-ring (rotated), then slot 2 at 0 (identity) when K allows it.
+        a, b = list(range(1000, 1000 + C)), list(range(2000, 2000 + C))
+        chunks = [(a, 49), (b, 0)][:K]
+        records = [(1, 49, 49 + 40), (2, 0, C)][:K]
+        service.forward_to_tensor_bytes(producer._h2d_rows_batch(chunks), metadata=producer._pack_metadata(*records))
+
+        tt_ids, _mtp, words, tt_md = runner._socket_next(service)
+        assert not runner._is_shutdown_sentinel(words) and not runner._is_warmup_sentinel(words)
+        assert runner._decode_records(words) == [
+            {"slot_id": s, "actual_start": lo, "actual_end": hi} for s, lo, hi in records
+        ]
+        for k, (toks, start) in enumerate(chunks):
+            sl = runner._record_rows(tt_ids, k, W)
+            rot = rotate_chunk_tokens(toks, start, SP)
+            for r, got in _per_row_ids(sl):
+                assert got == rot[r * W : (r + 1) * W], f"record {k} row {r}"
+            if K > 1:  # at K=1 the full-range slice is the push's own tensor
+                ttnn.deallocate(sl)
+        ttnn.deallocate(tt_ids)
+
+        if K > 1:
+            # The per-record loop over an activation (the runner's path only when batched): slice per record,
+            # concat back in the batched layout, zeros for the columns the push did not fill.
+            full = torch.arange(SP * K * W * HIDDEN, dtype=torch.float32).reshape(1, 1, SP * K * W, HIDDEN) % 251
+            n = len(records)
+            echo = _Echo()
+            recs = [{"slot_id": s, "actual_start": lo, "actual_end": hi} for s, lo, hi in records]
+            out = runner._prefill_records(echo, None, _activation(mesh_device, full), recs, 7, metadata_msg=tt_md)
+            assert [c[3] for c in echo.calls] == list(range(7, 7 + n))
+            for i, dev in enumerate(ttnn.get_device_tensors(out)):
+                r = i // TP
+                got = ttnn.to_torch(dev).float().reshape(K * W, HIDDEN)
+                want = full[0, 0, r * K * W : r * K * W + n * W].to(torch.bfloat16).float()
+                assert torch.equal(got[: n * W], want), f"chip {i} records"
+                assert torch.all(got[n * W :] == 0), f"chip {i} unfilled columns"
+            ttnn.deallocate(out)
+
+            # A partial push: one record, the other columns PAD on every chip, zeros in the rebuilt activation.
+            service.forward_to_tensor_bytes(
+                producer._h2d_rows_batch([(b, 0)]), metadata=producer._pack_metadata((3, 0, 100))
+            )
+            tt_ids, _mtp, words, tt_md2 = runner._socket_next(service)
+            assert runner._decode_records(words) == [{"slot_id": 3, "actual_start": 0, "actual_end": 100}]
+            assert words[0] == 1 and (words[5] & 0xFFFFFFFF) == INVALID_SLOT
+            for k in range(1, K):
+                pad = runner._record_rows(tt_ids, k, W)
+                for _r, got in _per_row_ids(pad):
+                    assert set(got) == {-1}, f"column {k} is PAD"
+                ttnn.deallocate(pad)
+            ttnn.deallocate(tt_ids)
+
+            out = runner._prefill_records(
+                _Echo(), None, _activation(mesh_device, full), recs[:1], 0, metadata_msg=tt_md2
+            )
+            for i, dev in enumerate(ttnn.get_device_tensors(out)):
+                r = i // TP
+                got = ttnn.to_torch(dev).float().reshape(K * W, HIDDEN)
+                want = full[0, 0, r * K * W : r * K * W + W].to(torch.bfloat16).float()
+                assert torch.equal(got[:W], want), f"chip {i} record 0"
+                assert torch.all(got[W:] == 0), f"chip {i} zero columns"
+            ttnn.deallocate(out)
+            ttnn.deallocate(tt_md2)
+
+        # The shutdown sentinel reads under the batched layout.
+        service.forward_to_tensor_bytes(producer._h2d_rows_batch([(b, 0)]), metadata=sentinel(SHUTDOWN_WORD, K))
+        tt_ids, _mtp, words, tt_md3 = runner._socket_next(service)
+        assert runner._is_shutdown_sentinel(words)
+        for t in (tt_ids, tt_md, tt_md3):
+            ttnn.deallocate(t)
+    finally:
+        service = None
