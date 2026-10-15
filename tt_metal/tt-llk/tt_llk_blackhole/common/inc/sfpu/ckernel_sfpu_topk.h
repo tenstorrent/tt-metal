@@ -1287,9 +1287,22 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
         // transposes preserve CC state.
         TOPK_SFPENCC_ALL_LANES_ON();
     }
-    // Not under TILE0_SORTED: on its half passes the thread would idle between the first-swap groups.
-    constexpr bool first_swaps = TOPK_STEP_LOADMACRO && !STABLE_SORT && !TILE0_SORTED;
-    if constexpr (TOPK_STEP_LOADMACRO && !STABLE_SORT)
+    // Under TILE0_SORTED the half passes (tile 1 only) would idle between first-swap groups; only its full passes
+    // (phase 5 and up) take them, in steps 4 to 1.
+    constexpr bool first_swaps                 = TOPK_STEP_LOADMACRO && !STABLE_SORT && !TILE0_SORTED;
+    constexpr bool tile0_full_pass_first_swaps = TOPK_STEP_LOADMACRO && !STABLE_SORT && TILE0_SORTED;
+    if constexpr (tile0_full_pass_first_swaps)
+    {
+        if (i_end_phase >= 5)
+        {
+            _topk_step_macros_init_<FUSED, true>();
+        }
+        else if (i_end_phase >= 4)
+        {
+            _topk_step_macros_init_<FUSED, false>();
+        }
+    }
+    else if constexpr (TOPK_STEP_LOADMACRO && !STABLE_SORT)
     {
         if (i_end_phase >= (first_swaps ? 2 : 4))
         {
@@ -1685,27 +1698,35 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         bool init_rev   = true;
                         while (datums_compared < total_datums_to_compare)
                         {
-                            if constexpr (first_swaps)
+                            if constexpr (first_swaps || tile0_full_pass_first_swaps)
                             {
-                                if (dir == static_cast<bool>(SortDir::ArgMin))
+                                if (first_swaps || !tile1_only)
                                 {
-                                    if (init_load)
+                                    if (dir == static_cast<bool>(SortDir::ArgMin))
                                     {
-                                        load_replay_buf<NoExec>(0, ldst_count, [] { bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8); });
-                                        init_load = false;
+                                        if (init_load)
+                                        {
+                                            load_replay_buf<NoExec>(0, ldst_count, [] { bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8); });
+                                            init_load = false;
+                                        }
+                                        lltt::replay(0, ldst_count);
+                                        if (init_rev)
+                                        {
+                                            load_replay_buf<NoExec>(24, 5, [] { bitonic_topk_ph3_half_body<true, false>(); });
+                                            init_rev = false;
+                                        }
+                                        lltt::replay(24, 5);
+                                        lltt::replay(24, 5);
                                     }
-                                    lltt::replay(0, ldst_count);
-                                    if (init_rev)
+                                    else
                                     {
-                                        load_replay_buf<NoExec>(24, 5, [] { bitonic_topk_ph3_half_body<true, false>(); });
-                                        init_rev = false;
+                                        bitonic_topk_ph3_group_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dir, init_phase, 16);
                                     }
-                                    lltt::replay(24, 5);
-                                    lltt::replay(24, 5);
                                 }
                                 else
                                 {
-                                    bitonic_topk_ph3_group_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dir, init_phase, 16);
+                                    lltt::replay(0, ldst_count);
+                                    bitonic_topk_ph3_st4_to_1<STABLE_SORT, TIE_ORDER>(dir, init_phase, 16, 21);
                                 }
                             }
                             else
@@ -1726,6 +1747,22 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
         set_dst_write_addr(dst_addr_offset);
     }
     topk_replay_init = -1;
+}
+
+// The TILE0_SORTED local sort with its call tree inlined: out of line the phase arguments stay runtime values and the loop
+// code between replays idles the SFPU. The other instantiations keep the compiler's inlining choice.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool STABLE_SORT       = false,
+    bool FUSED             = false,
+    bool RANK_STAMPED      = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
+inline __attribute__((always_inline, flatten)) void _bitonic_topk_phases_steps_tile0_sorted_(
+    const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
+{
+    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true>(
+        idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
 }
 
 // One merge compare-exchange group: rows offset and offset + ld_dist of the slab and of its index tiles, relative to the dest counter.

@@ -169,10 +169,11 @@ inline void issue_local_sort(const int end_phase)
 {
     if constexpr (TILE0_SORTED)
     {
+        // The TILE0_SORTED entry itself: compute kernels inline calculate_bitonic_topk_local_sort, this kernel keeps it out of line.
         SFPU_UNARY_CALL(
             dest_sync,
             is_fp32_dest_acc_en,
-            calculate_bitonic_topk_local_sort,
+            _bitonic_topk_phases_steps_tile0_sorted_,
             (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
             dst_index,
             vector_mode,
@@ -180,8 +181,7 @@ inline void issue_local_sort(const int end_phase)
             end_phase,
             0 /* start_phase */,
             0 /* end_step */,
-            0 /* start_step */,
-            1u /* tile0_sorted */);
+            0 /* start_step */);
     }
     else
     {
