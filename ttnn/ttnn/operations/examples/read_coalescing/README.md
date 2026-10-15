@@ -105,6 +105,24 @@ not change. Bank groups are interspersed across row-major core positions.
 Unlike bank staggering, which changes when each core visits each bank,
 affinity keeps each core with one source bank for the entire kernel.
 
+### Opportunity: coalescing across blocks
+
+Affinity can also enable larger coalesced reads by assigning a core consecutive
+blocks within one bank. In the 3328×512 example above, without affinity a core
+owns one 4 KiB block from each of eight banks. With affinity it owns eight
+consecutive 4 KiB blocks in one bank: a contiguous 32 KiB source region that
+could potentially be fetched with one read call. Staggering only reorders a
+core's existing blocks, so it does not create this ownership opportunity.
+
+This example does **not** coalesce across blocks: all four variants retain the
+same 32-row block size and CB capacity, and coalescing combines only the reads
+within each block. Exploiting the larger region would require enough reserved,
+contiguous L1 space and a matching buffering and consumption schedule. Affinity
+enables the opportunity through work ownership; physical source contiguity and
+destination capacity are still required. A larger read call can still split
+into multiple hardware bursts, and its performance benefit would need to be
+measured separately.
+
 ## A/B controls
 
 All four variants use the same active cores, CB capacity, bytes copied, output
