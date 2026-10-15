@@ -108,7 +108,7 @@ def _build_vision_state_dict(full_state_dict, vision_args):
     return {f"visual.{k}": v for k, v in vision_sd.items()}
 
 
-VISION_KEY_PREFIXES = ("model.vision_tower.", "model.vision_embedder.", "model.embed_vision.")
+VISION_KEY_PREFIXES = ("model.vision_tower.", "model.vision_embedder.", "model.embed_vision.", "model.embed_audio.")
 
 
 def load_vision_state_dict(model_path):
@@ -122,7 +122,6 @@ def load_vision_state_dict(model_path):
     index, selecting only the vision keys. Hub ids resolve to the local snapshot.
     """
     import glob
-    import json as _json
     from pathlib import Path
 
     path = Path(model_path)

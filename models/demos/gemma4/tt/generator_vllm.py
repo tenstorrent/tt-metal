@@ -13,13 +13,14 @@ from vllm.model_executor.models.gemma4_mm import (
     Gemma4MultiModalProcessor,
     Gemma4ProcessingInfo,
 )
+from vllm.model_executor.models.gemma4_unified import Gemma4UnifiedProcessingInfo
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.model_executor.models.gemma4_unified import Gemma4UnifiedProcessingInfo
 
 import ttnn
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import _RING_HEADROOM_BLOCK, SPEC_RING_HEADROOM_ENV
+from models.demos.gemma4.tt.audio.unified_audio_embedder import Gemma4UnifiedAudioEmbedder, has_unified_audio_weights
 from models.demos.gemma4.tt.common import (
     GEMMA4_CP_PREFILL_CHUNK,
     create_tt_model,
@@ -28,7 +29,6 @@ from models.demos.gemma4.tt.common import (
 )
 from models.demos.gemma4.tt.dflash_constants import VERIFY_WIDTH_MARGIN
 from models.demos.gemma4.tt.generator import (
-    vision_state_dict_for,
     SDPA_CHUNK_ALIGN,
     ChunkedPrefillPageTableGuardMixin,
     _build_vision_state_dict,
@@ -37,6 +37,7 @@ from models.demos.gemma4.tt.generator import (
     mask_page_table_columns_past_allocation,
     max_batched_prefill_users,
     resolve_batched_prefill_chunk_users,
+    vision_state_dict_for,
 )
 from models.demos.gemma4.tt.generator_trace import (
     maybe_disable_pli_prefill_trace,
@@ -48,9 +49,9 @@ from models.demos.gemma4.tt.generator_trace import (
 )
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4.tt.vision.multimodal_embedder import Gemma4MultimodalEmbedder
+from models.demos.gemma4.tt.vision.unified_embedder import Gemma4UnifiedVisionEmbedder, has_unified_vision_weights
 from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
 from models.demos.gemma4.tt.vision.vision_tower import VisionTower
-from models.demos.gemma4.tt.vision.unified_embedder import Gemma4UnifiedVisionEmbedder, has_unified_vision_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES, create_submeshes
@@ -297,9 +298,7 @@ def _gemma4_position_ids(kwargs):
 def _gemma4_has_vision_weights(state_dict) -> bool:
     """True when the checkpoint ships a ``model.vision_tower.*`` sub-tree (SigLIP,
     31B) or the unified encoder-free embedder (``model.vision_embedder.*``, 12B)."""
-    return has_unified_vision_weights(state_dict) or any(
-        k.startswith("model.vision_tower.") for k in state_dict.keys()
-    )
+    return has_unified_vision_weights(state_dict) or any(k.startswith("model.vision_tower.") for k in state_dict.keys())
 
 
 def _build_gemma4_vision(
@@ -362,6 +361,78 @@ def _build_gemma4_vision(
         weight_cache_path=vision_args.weight_cache_path(ttnn.bfloat16),
     )
     return vision_tower, embed_vision, image_token_id, pad_token_id
+
+
+def _build_gemma4_audio(mesh_device, state_dict, model_path, text_hidden_size, weight_cache_path=None):
+    """Build the on-device encoder-free audio embedder of a unified Gemma-4
+    checkpoint (12B). Returns ``(embed_audio, audio_token_id)`` or ``(None, None)``
+    when the checkpoint carries no audio projection (31B: ``audio_config`` is None)."""
+    hf_config = Gemma4ModelArgs.load_hf_config(model_path)
+    audio_token_id = getattr(hf_config, "audio_token_id", None)
+    audio_config = getattr(hf_config, "audio_config", None)
+    if audio_token_id is None or audio_config is None:
+        return None, None
+    state_dict = vision_state_dict_for(state_dict, model_path)
+    if not has_unified_audio_weights(state_dict):
+        return None, None
+    embedder = Gemma4UnifiedAudioEmbedder(
+        mesh_device,
+        state_dict,
+        text_hidden_size=text_hidden_size,
+        rms_eps=float(getattr(audio_config, "rms_norm_eps", 1e-6)),
+        weight_cache_path=weight_cache_path,
+    )
+    return embedder, audio_token_id
+
+
+def merge_soft_tokens(input_ids: torch.Tensor, soft_tokens, pad_token_id: int):
+    """Line up every modality's soft tokens with its placeholder slots in one prompt.
+
+    ``soft_tokens`` is a list of ``(placeholder_token_id, embeds)`` with ``embeds`` a
+    host ``[num_valid, text_hidden]`` tensor in prompt order for that modality.
+    Returns ``(llm_ids, positions, merged_embeds)``: the prompt ids with every
+    placeholder replaced by ``pad_token_id``, the placeholder positions sorted
+    ascending across modalities (``int32 [num_valid]``) and the soft tokens in
+    that same order (``bf16 [num_valid, text_hidden]``), ready for one scatter.
+    Raises when a modality's placeholder count differs from its soft-token count.
+    """
+    input_ids = input_ids.reshape(-1).to(torch.long)
+    placeholder_mask = torch.zeros_like(input_ids, dtype=torch.bool)
+    positions_per_modality = []
+    embeds_per_modality = []
+    for token_id, embeds in soft_tokens:
+        if token_id is None:
+            raise ValueError("soft tokens for a modality this checkpoint has no placeholder id for")
+        slot_mask = input_ids == token_id
+        n_slots = int(slot_mask.sum().item())
+        if n_slots != int(embeds.shape[0]):
+            raise ValueError(
+                f"Placeholder count for token id {token_id} ({n_slots}) != soft tokens ({int(embeds.shape[0])}). "
+                "The processor's placeholder run lengths and the embedder's valid-token counts must agree."
+            )
+        positions_per_modality.append(torch.where(slot_mask)[0])
+        embeds_per_modality.append(embeds.to(torch.bfloat16))
+        placeholder_mask |= slot_mask
+    if not positions_per_modality:
+        raise ValueError("no soft tokens to merge")
+    positions = torch.cat(positions_per_modality)
+    order = torch.argsort(positions)
+    positions = positions[order].to(torch.int32)
+    merged_embeds = torch.cat(embeds_per_modality, dim=0)[order].contiguous()
+    llm_ids = input_ids.clone()
+    llm_ids[placeholder_mask] = pad_token_id
+    return llm_ids, positions, merged_embeds
+
+
+def _gemma4_has_mm_inputs(kwargs) -> bool:
+    """True when the plugin forwarded any multimodal feature for this prefill batch:
+    images (``pixel_values`` + positions), videos (``pixel_values_videos``) or audio
+    (``input_features``; vLLM's own parser spells it ``input_features_padded``)."""
+    if kwargs.get("pixel_values") is not None and _gemma4_position_ids(kwargs) is not None:
+        return True
+    if kwargs.get("pixel_values_videos") is not None:
+        return True
+    return kwargs.get("input_features") is not None or kwargs.get("input_features_padded") is not None
 
 
 class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCausalLM):
@@ -506,6 +577,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         self.image_token_id = None
         self.pad_token_id = None
         self.is_multimodal = False
+        # Audio (12B unified: encoder-free projection) and video (frames through the
+        # image path) share the scatter merge with images, keyed by placeholder id.
+        self.embed_audio = None
+        self.audio_token_id = None
+        self.video_token_id = None
         # Prefer the flag baked into the TT model at create time (resolve + env);
         # fall back to hybrid-default env when the model was built elsewhere.
         model0 = self.model[0] if getattr(self, "model", None) else None
@@ -721,6 +797,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             projected_tt = self.embed_vision(pooled_tt)  # [1, batch, output_length, text_hidden]
             if hasattr(pooled_tt, "deallocate"):
                 pooled_tt.deallocate(True)
+        return self._gather_valid_soft_tokens(projected_tt, mask)
+
+    def _gather_valid_soft_tokens(self, projected_tt, mask: torch.Tensor):
+        """On-device gather of the VALID rows of ``projected_tt`` (``[1, 1, N_padded,
+        text_hidden]``) per the host mask ``[1, N_padded]`` -> ttnn ``[num_valid, text_hidden]``."""
         valid_indices = torch.where(mask[0])[0].to(torch.uint16)  # [num_valid]
         num_valid = int(valid_indices.numel())
         text_hidden = projected_tt.shape[-1]
@@ -733,10 +814,22 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self._replicate_mapper(),
         )
-        image_embeds_tt = ttnn.gather(projected_tt, 2, index=gather_index_tt)  # [1,1,num_valid,text_hidden]
+        embeds_tt = ttnn.gather(projected_tt, 2, index=gather_index_tt)  # [1,1,num_valid,text_hidden]
         if hasattr(projected_tt, "deallocate"):
             projected_tt.deallocate(True)
-        return ttnn.reshape(image_embeds_tt, (num_valid, text_hidden))
+        return ttnn.reshape(embeds_tt, (num_valid, text_hidden))
+
+    def encode_audio(self, input_features: torch.Tensor, input_features_mask: torch.Tensor = None):
+        """Project one audio clip's raw-waveform frames (``[T, 640]`` or ``[1, T, 640]``,
+        HF ``Gemma4UnifiedAudioFeatureExtractor``) and return the VALID soft tokens on
+        device as ``[num_valid, text_hidden]`` (bf16). ``input_features_mask`` (``[T]``,
+        True = real frame) drops the extractor's padding frames."""
+        if self.embed_audio is None:
+            raise RuntimeError("encode_audio requires a Gemma-4 checkpoint with an audio projection (12B unified).")
+        features = input_features.unsqueeze(0) if input_features.dim() == 2 else input_features
+        mask = input_features_mask.reshape(1, -1).bool() if input_features_mask is not None else None
+        projected_tt, valid = self.embed_audio(features, mask)
+        return self._gather_valid_soft_tokens(projected_tt, valid)
 
     def _vision_to_host(self, embeds_tt):
         """ttnn ``[num_valid, text_hidden]`` -> host bf16 tensor (device 0's replica)."""
@@ -796,7 +889,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 vision_args = self.vision_tower.args
                 vcfg = vision_args.hf_config.vision_config
                 in_dim = int(getattr(vcfg, "patch_size", 16)) ** 2 * 3  # raw patch, not hidden_size
-                num_patches = max(1, int(getattr(vcfg, "default_output_length", 280))) * int(getattr(vcfg, "pooling_kernel_size", 3)) ** 2
+                num_patches = (
+                    max(1, int(getattr(vcfg, "default_output_length", 280)))
+                    * int(getattr(vcfg, "pooling_kernel_size", 3)) ** 2
+                )
             pixel_values = torch.zeros(1, num_patches, in_dim, dtype=torch.bfloat16)
             image_position_ids = torch.zeros(1, num_patches, 2, dtype=torch.long)
         image_embeds_tt = self.encode_vision(pixel_values, image_position_ids)
@@ -807,20 +903,27 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     def _prefill_single_user_multimodal(
         self,
         user_tokens: torch.Tensor,
-        image_embeds_tt,
+        soft_tokens,
         page_table_u: torch.Tensor,
         kv_cache,
         prompt_len_u: int,
         model_id: int = 0,
     ) -> torch.Tensor:
-        """Prefill one image+text user with precomputed on-device vision soft tokens.
+        """Prefill one multimodal user with precomputed soft tokens.
+
+        ``soft_tokens`` is a list of ``(placeholder_token_id, embeds)`` pairs, one per
+        modality present in the prompt (image / video / audio). Each ``embeds`` is a
+        host ``[num_valid, text_hidden]`` bf16 tensor holding that modality's valid
+        soft tokens in prompt order (every image of the user concatenated, every
+        video frame, every audio clip). A single ttnn ``[num_valid, text_hidden]``
+        tensor is still accepted and taken as the image soft tokens.
 
         Mirrors ``Gemma4Generator.prefill_forward_multimodal``: build ``llm_ids``
-        (image_token_id -> pad), embed on device via ``model.embed_tokens``, scatter
-        the vision soft tokens into the image_token slots, then feed the merged
-        embeddings straight into ``Gemma4Model.ttnn_prefill_forward`` (bypassing
-        ``embed_tokens`` in the decoder). Returns host logits ``[1, vocab]`` for the
-        last prompt token.
+        (placeholders -> pad), embed on device via ``model.embed_tokens``, scatter
+        every modality's soft tokens into its placeholder slots in one scatter (in
+        prompt order), then feed the merged embeddings straight into
+        ``Gemma4Model.ttnn_prefill_forward`` (bypassing ``embed_tokens`` in the
+        decoder). Returns host logits ``[1, vocab]`` for the last prompt token.
         """
         model = self.model[model_id]
         if getattr(model, "hidden_size_per_layer_input", 0):
@@ -828,24 +931,19 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 "Multimodal prefill + per-layer inputs (PLI) is not supported. "
                 "Use a non-PLI multimodal checkpoint (gemma-4 12B / 26B-A4B / 31B IT)."
             )
+        if not isinstance(soft_tokens, (list, tuple)):
+            soft_tokens = [(self.image_token_id, soft_tokens)]
         prompt_len = int(user_tokens.shape[-1])
         last_token_idx = prompt_len_u - 1
         prefill_seq_len = get_padded_prefill_len(prompt_len)
-
-        num_valid = int(image_embeds_tt.shape[0])
-        text_hidden = int(image_embeds_tt.shape[1])
-
         input_ids = user_tokens[0].to(torch.long) if user_tokens.dim() == 2 else user_tokens.to(torch.long)
-        image_mask = input_ids == self.image_token_id
-        n_image = int(image_mask.sum().item())
-        if n_image != num_valid:
-            raise ValueError(
-                f"Image placeholder count ({n_image}) != vision soft tokens ({num_valid}). "
-                "The processor's image_seq_length and the image processor's max_soft_tokens must agree."
-            )
-        image_positions = torch.where(image_mask)[0].to(torch.int32)  # [num_valid]
-        llm_ids = input_ids.clone()
-        llm_ids[image_mask] = self.pad_token_id
+        soft_tokens = [
+            (token_id, embeds if isinstance(embeds, torch.Tensor) else self._vision_to_host(embeds))
+            for token_id, embeds in soft_tokens
+        ]
+        llm_ids, positions, merged_embeds = merge_soft_tokens(input_ids, soft_tokens, self.pad_token_id)
+        num_valid = int(positions.numel())
+        text_hidden = int(merged_embeds.shape[1])
         pad = prefill_seq_len - prompt_len
         if pad > 0:
             llm_ids = torch.cat([llm_ids, torch.full((pad,), self.pad_token_id, dtype=torch.long)], dim=0)
@@ -861,7 +959,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         text_embeds_tt = ttnn.reshape(text_embeds_tt, (prefill_seq_len, text_hidden))
         text_embeds_tt = ttnn.to_layout(text_embeds_tt, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        scatter_index = image_positions.view(num_valid, 1).expand(num_valid, text_hidden).contiguous()
+        scatter_index = positions.view(num_valid, 1).expand(num_valid, text_hidden).contiguous()
         scatter_index_tt = ttnn.from_torch(
             scatter_index,
             device=self.mesh_device,
@@ -870,11 +968,18 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self._replicate_mapper(),
         )
-        merged_tt = ttnn.scatter(text_embeds_tt, 0, scatter_index_tt, image_embeds_tt)  # [prefill_seq, text_hidden]
+        soft_embeds_tt = ttnn.from_torch(
+            merged_embeds,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._replicate_mapper(),
+        )
+        merged_tt = ttnn.scatter(text_embeds_tt, 0, scatter_index_tt, soft_embeds_tt)  # [prefill_seq, text_hidden]
         if hasattr(text_embeds_tt, "deallocate"):
             text_embeds_tt.deallocate(True)
-        if hasattr(image_embeds_tt, "deallocate"):
-            image_embeds_tt.deallocate(True)
+        if hasattr(soft_embeds_tt, "deallocate"):
+            soft_embeds_tt.deallocate(True)
         merged_tt = ttnn.reshape(merged_tt, (1, 1, prefill_seq_len, text_hidden))
 
         tt_page_table = None
@@ -908,72 +1013,94 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     def _prefill_multimodal_batch(self, tokens, kwargs, page_table, kv_cache, prompt_lens):
         """Per-user multimodal prefill for a vLLM prefill batch.
 
-        The plugin forwards ``pixel_values`` and (per the Gemma-4 processor contract)
-        ``image_position_ids`` in ``kwargs``, indexed per batch slot (None for text-only
-        users). Users that share the same patch geometry are encoded together via
-        ``encode_vision_batch`` (data-parallel); each user is then prefilled with the
-        on-device scatter merge (``_prefill_single_user_multimodal``). Text-only users
-        in the same batch fall back to the inherited single-user text prefill.
+        The plugin forwards the processor's multimodal fields in ``kwargs``, each a
+        per-batch-slot list (None for slots without that modality) whose entries are
+        per-item tensors in prompt order:
+          * images: ``pixel_values`` ``[P, D]`` + ``pixel_position_ids`` ``[P, 2]``
+            (vLLM's name for the processor's ``image_position_ids``);
+          * videos: ``pixel_values_videos`` ``[frames, P, D]`` +
+            ``pixel_position_ids_videos`` ``[frames, P, 2]``; every frame runs through
+            the image path and the frames' soft tokens fill the video placeholders;
+          * audio (12B unified): ``input_features`` ``[T, 640]`` raw-waveform frames
+            + ``input_features_mask`` ``[T]``.
+        Each user is prefilled with the on-device scatter merge
+        (``_prefill_single_user_multimodal``); text-only users in the same batch fall
+        back to the inherited single-user text prefill.
 
         Returns host logits ``[batch, 1, vocab]`` (no on-device sampling for the
-        multimodal step — sampling is left to the host runner, matching the demo).
+        multimodal step; sampling is left to the host runner, matching the demo).
         """
         batch_size = int(tokens.shape[0])
         model_id = 0
         vocab_size = self.model[model_id].vocab_size
         output_logits = torch.zeros(batch_size, 1, vocab_size, dtype=torch.float32)
 
-        pixel_values = kwargs.get("pixel_values")
-        image_position_ids = _gemma4_position_ids(kwargs)
-        # Normalize to per-slot lists (None for text-only slots).
-        pv_per_user = list(pixel_values) if pixel_values is not None else [None] * batch_size
-        ip_per_user = list(image_position_ids) if image_position_ids is not None else [None] * batch_size
-        if len(pv_per_user) < batch_size:
-            pv_per_user += [None] * (batch_size - len(pv_per_user))
-        if len(ip_per_user) < batch_size:
-            ip_per_user += [None] * (batch_size - len(ip_per_user))
+        def _per_slot(*keys):
+            for key in keys:
+                value = kwargs.get(key)
+                if value is not None:
+                    items = list(value)
+                    return items + [None] * (batch_size - len(items))
+            return [None] * batch_size
 
-        # The plugin hands each slot a LIST of per-image tensors (one entry per
-        # multimodal feature of the request, None where a feature has no data);
-        # the demo hands a single [1, P, D] tensor. Encode every image of a slot
-        # in order and concatenate its valid soft tokens: the text stream carries
-        # the images' placeholder runs in the same order, so one scatter merges
-        # them all.
-        def _images(v):
-            if v is None:
+        def _items(value):
+            if value is None:
                 return []
-            items = list(v) if isinstance(v, (list, tuple)) else [v]
+            items = list(value) if isinstance(value, (list, tuple)) else [value]
             return [t for t in items if t is not None]
 
-        image_idxs = []
-        per_user_embeds: dict[int, torch.Tensor] = {}
+        def _batched(t):
+            return t.unsqueeze(0) if t.dim() == 2 else t
+
+        pv_per_user = _per_slot("pixel_values")
+        ip_per_user = _per_slot("pixel_position_ids", "image_position_ids")
+        vpv_per_user = _per_slot("pixel_values_videos")
+        vip_per_user = _per_slot("pixel_position_ids_videos", "video_position_ids")
+        af_per_user = _per_slot("input_features", "input_features_padded")
+        am_per_user = _per_slot("input_features_mask")
+
+        per_user_soft: dict[int, list] = {}
         for u in range(batch_size):
-            pvs, ips = _images(pv_per_user[u]), _images(ip_per_user[u])
-            if not pvs or len(pvs) != len(ips):
-                continue
-            chunks = []
-            for pv, ip in zip(pvs, ips):
-                pv = pv.unsqueeze(0) if pv.dim() == 2 else pv
-                ip = ip.unsqueeze(0) if ip.dim() == 2 else ip
-                embeds_tt = self.encode_vision(pv, ip)  # ttnn [num_valid, text_hidden]
-                chunks.append(self._vision_to_host(embeds_tt))
-            per_user_embeds[u] = torch.cat(chunks, dim=0)
-            image_idxs.append(u)
+            soft = []
+            pvs, ips = _items(pv_per_user[u]), _items(ip_per_user[u])
+            if pvs:
+                if len(pvs) != len(ips):
+                    raise ValueError(f"user {u}: {len(pvs)} images but {len(ips)} position-id tensors")
+                chunks = [
+                    self._vision_to_host(self.encode_vision(_batched(pv), _batched(ip))) for pv, ip in zip(pvs, ips)
+                ]
+                soft.append((self.image_token_id, torch.cat(chunks, dim=0)))
+            vpvs, vips = _items(vpv_per_user[u]), _items(vip_per_user[u])
+            if vpvs:
+                if self.video_token_id is None:
+                    raise RuntimeError("video input for a checkpoint without a video placeholder id")
+                if len(vpvs) != len(vips):
+                    raise ValueError(f"user {u}: {len(vpvs)} videos but {len(vips)} position-id tensors")
+                chunks = []
+                for vpv, vip in zip(vpvs, vips):
+                    vpv, vip = _batched(vpv), _batched(vip)  # [frames, P, D], [frames, P, 2]
+                    for f in range(int(vpv.shape[0])):
+                        chunks.append(self._vision_to_host(self.encode_vision(vpv[f : f + 1], vip[f : f + 1])))
+                soft.append((self.video_token_id, torch.cat(chunks, dim=0)))
+            afs, ams = _items(af_per_user[u]), _items(am_per_user[u])
+            if afs:
+                if self.embed_audio is None:
+                    raise RuntimeError("audio input for a checkpoint without an audio embedder (31B has no audio)")
+                chunks = []
+                for i, af in enumerate(afs):
+                    am = ams[i] if i < len(ams) else None
+                    chunks.append(self._vision_to_host(self.encode_audio(af, am)))
+                soft.append((self.audio_token_id, torch.cat(chunks, dim=0)))
+            if soft:
+                per_user_soft[u] = soft
 
         for u in range(batch_size):
             user_tokens = tokens[u : u + 1]
             page_table_u = page_table[u : u + 1] if page_table is not None else None
             prompt_len_u = int(prompt_lens[u])
-            if u in per_user_embeds:
-                image_embeds_tt = ttnn.from_torch(
-                    per_user_embeds[u].contiguous(),
-                    device=self.mesh_device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=self._replicate_mapper(),
-                )
+            if u in per_user_soft:
                 user_logits = self._prefill_single_user_multimodal(
-                    user_tokens, image_embeds_tt, page_table_u, kv_cache, prompt_len_u, model_id=model_id
+                    user_tokens, per_user_soft[u], page_table_u, kv_cache, prompt_len_u, model_id=model_id
                 )
             else:
                 # Text-only user in a mixed batch: inherited single-user text prefill.
@@ -986,7 +1113,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                     model_id=model_id,
                 )
             output_logits[u, 0, :] = user_logits.reshape(-1)[:vocab_size]
-        logger.info(f"Gemma4 vLLM: multimodal prefill done for {batch_size} user(s) ({len(image_idxs)} with images)")
+        logger.info(
+            f"Gemma4 vLLM: multimodal prefill done for {batch_size} user(s) ({len(per_user_soft)} with multimodal inputs)"
+        )
         return output_logits
 
     def prefill_forward_text(self, *args, enable_trace=True, **kwargs):
@@ -1524,11 +1653,24 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             instance.is_multimodal = instance.vision_tower is not None and (
                 instance.embed_vision is not None or getattr(instance.vision_tower, "projects_to_text", False)
             )
+            instance.embed_audio, instance.audio_token_id = _build_gemma4_audio(
+                mesh_device,
+                state_dict,
+                model_path,
+                text_hidden_size,
+                weight_cache_path=model_args[0].weight_cache_path(ttnn.bfloat16),
+            )
+            instance.video_token_id = getattr(Gemma4ModelArgs.load_hf_config(model_path), "video_token_id", None)
+            instance.is_multimodal = instance.is_multimodal or instance.embed_audio is not None
             logger.info(
-                "Gemma4 vLLM: multimodal enabled (image_token_id={}, pad_token_id={}, vision_dtype={})",
+                "Gemma4 vLLM: multimodal enabled (image_token_id={}, video_token_id={}, audio_token_id={}, "
+                "pad_token_id={}, vision_dtype={}, audio={})",
                 instance.image_token_id,
+                instance.video_token_id,
+                instance.audio_token_id,
                 instance.pad_token_id,
                 vision_dtype_name,
+                "unified-embedder" if instance.embed_audio is not None else "none",
             )
         return instance
 
@@ -2144,12 +2286,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             for m in self.model:
                 if hasattr(m, "_active_page_tables_per_layer"):
                     del m._active_page_tables_per_layer
-        # Multimodal branch: when vision inputs are present (``pixel_values`` +
-        # ``image_position_ids`` forwarded by the plugin), run the per-user
-        # on-device merge path (``_prefill_multimodal_batch``). The per-layer
+        # Multimodal branch: when image, video or audio inputs are present (the
+        # processor fields forwarded by the plugin), run the per-user on-device
+        # merge path (``_prefill_multimodal_batch``). The per-layer
         # page-table routing above is reused so hybrid KV layers stay correct.
         # Text-only batches fall through to the inherited batched text prefill.
-        if self.is_multimodal and kwargs.get("pixel_values") is not None and _gemma4_position_ids(kwargs) is not None:
+        if self.is_multimodal and _gemma4_has_mm_inputs(kwargs):
             mm_t0 = time.perf_counter()
             out = self._prefill_multimodal_batch(
                 tokens,
@@ -6164,4 +6306,3 @@ class Gemma4UnifiedVisionForConditionalGeneration(Gemma4VisionForConditionalGene
     processor registration is keyed on. The encoder-free embedder is picked by
     the checkpoint's weights (``model.vision_embedder.*``), not by this class.
     """
-
