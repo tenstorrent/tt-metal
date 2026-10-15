@@ -9,7 +9,7 @@
 namespace ttml::schedulers {
 
 CosineAnnealingScheduler::CosineAnnealingScheduler(optimizers::OptimizerBase* optimizer, size_t T_max, float eta_min) :
-    LRSchedulerBase(optimizer), m_T_max(T_max), m_eta_min(eta_min) {
+    ClosedFormLRScheduler(optimizer), m_T_max(T_max), m_eta_min(eta_min) {
     TT_FATAL(T_max > 0, "T_max = {} must be greater than zero.", T_max);
 
     // At step 0 the cosine factor is 1, so every group's LR is (re)set to its base LR.
@@ -25,7 +25,7 @@ float CosineAnnealingScheduler::compute_lr(float base_lr) const {
 }
 
 serialization::StateDict CosineAnnealingScheduler::get_state_dict() const {
-    auto res = LRSchedulerBase::get_state_dict();
+    auto res = ClosedFormLRScheduler::get_state_dict();
     res["m_T_max"] = m_T_max;
     res["m_eta_min"] = m_eta_min;
     return res;

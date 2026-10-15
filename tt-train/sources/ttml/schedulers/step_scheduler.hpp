@@ -10,7 +10,7 @@
 
 namespace ttml::schedulers {
 
-class StepScheduler : public LRSchedulerBase {
+class StepScheduler : public ClosedFormLRScheduler {
 public:
     StepScheduler(optimizers::OptimizerBase *optimizer, size_t step_size, float gamma = 0.1f);
 

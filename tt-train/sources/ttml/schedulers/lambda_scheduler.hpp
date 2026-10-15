@@ -9,7 +9,7 @@
 #include "scheduler_base.hpp"
 
 namespace ttml::schedulers {
-class LambdaScheduler : public LRSchedulerBase {
+class LambdaScheduler : public ClosedFormLRScheduler {
 public:
     explicit LambdaScheduler(optimizers::OptimizerBase *optimizer, std::function<float(int)> lr_lambda);
 

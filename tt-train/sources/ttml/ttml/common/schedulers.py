@@ -53,9 +53,8 @@ class SpeedrunScheduler:
 class _SchedulerBase:
     """Base class for stateful LR schedulers (mirrors the C++ ``LRSchedulerBase``).
 
-    Scheduler keeps one base LR per optimizer param group and, every step, sets
-    each group's LR to ``_compute_lr(that group's base LR)``. Subclasses implement
-    ``_compute_lr`` for ``self._last_step``.
+    Scheduler keeps one base LR per optimizer param group and, every step, updates
+    each group's LR. Subclasses implement ``step``.
 
     ``optimizer`` must expose ``get_initial_group_lrs()``, ``get_group_lrs()``
     and ``set_group_lrs()`` (every subclass of ``ttml.optimizers.OptimizerBase``
@@ -73,26 +72,9 @@ class _SchedulerBase:
         self._last_lrs = list(self._base_lrs)
         self._last_step = 0
 
-    def _compute_lr(self, base_lr: float) -> float:
-        """LR of one param group at ``self._last_step``, given the group's base LR."""
-        raise NotImplementedError
-
-    def _apply_lrs(self):
-        """Set every group's LR to ``_compute_lr`` of its base LR and record them as the last LRs.
-
-        The only place a scheduler writes to the optimizer (same contract as
-        the C++ ``LRSchedulerBase::apply_lrs``): step() calls it after
-        advancing the step, and constructors call it once, mirroring PyTorch's
-        construction-time initial step (each scheduler applies its step-0 LRs
-        at construction).
-        """
-        lrs = [self._compute_lr(base_lr) for base_lr in self._base_lrs]
-        self._optimizer.set_group_lrs(lrs)
-        self._last_lrs = lrs
-
     def step(self):
-        self._last_step += 1
-        self._apply_lrs()
+        """Advance the schedule by one step and apply the new LR of every param group."""
+        raise NotImplementedError
 
     def get_last_lrs(self) -> list:
         return list(self._last_lrs)
@@ -129,7 +111,34 @@ class _SchedulerBase:
         """
 
 
-class CosineAnnealingScheduler(_SchedulerBase):
+class _ClosedFormScheduler(_SchedulerBase):
+    """Scheduler whose LR for each group is a function of that group's base LR and the step count
+    (mirrors the C++ ``ClosedFormLRScheduler``). Subclasses implement ``_compute_lr`` for ``self._last_step``.
+    """
+
+    def _compute_lr(self, base_lr: float) -> float:
+        """LR of one param group at ``self._last_step``, given the group's base LR."""
+        raise NotImplementedError
+
+    def _apply_lrs(self):
+        """Set every group's LR to ``_compute_lr`` of its base LR and record them as the last LRs.
+
+        The only place a scheduler writes to the optimizer (same contract as
+        the C++ ``ClosedFormLRScheduler::apply_lrs``): step() calls it after
+        advancing the step, and constructors call it once, mirroring PyTorch's
+        construction-time initial step (each scheduler applies its step-0 LRs
+        at construction).
+        """
+        lrs = [self._compute_lr(base_lr) for base_lr in self._base_lrs]
+        self._optimizer.set_group_lrs(lrs)
+        self._last_lrs = lrs
+
+    def step(self):
+        self._last_step += 1
+        self._apply_lrs()
+
+
+class CosineAnnealingScheduler(_ClosedFormScheduler):
     def __init__(self, optimizer, T_max: int, eta_min: float = 0.0):
         if T_max <= 0:
             raise ValueError(f"T_max = {T_max} must be greater than zero.")
@@ -154,7 +163,7 @@ class CosineAnnealingScheduler(_SchedulerBase):
         self._T_max, self._eta_min = state["m_T_max"], state["m_eta_min"]
 
 
-class StepScheduler(_SchedulerBase):
+class StepScheduler(_ClosedFormScheduler):
     def __init__(self, optimizer, step_size: int, gamma: float = 0.1):
         if step_size <= 0:
             raise ValueError(f"step_size = {step_size} must be greater than zero.")
@@ -180,7 +189,7 @@ class StepScheduler(_SchedulerBase):
         self._step_size, self._gamma = state["m_step_size"], state["m_gamma"]
 
 
-class LinearScheduler(_SchedulerBase):
+class LinearScheduler(_ClosedFormScheduler):
     def __init__(self, optimizer, start_factor: float, end_factor: float, total_steps: int):
         if total_steps <= 0:
             raise ValueError(f"total_steps = {total_steps} must be greater than zero.")
@@ -216,7 +225,7 @@ class LinearScheduler(_SchedulerBase):
         )
 
 
-class LambdaScheduler(_SchedulerBase):
+class LambdaScheduler(_ClosedFormScheduler):
     def __init__(self, optimizer, lr_lambda):
         super().__init__(optimizer)
         self._lr_lambda = lr_lambda
@@ -280,9 +289,6 @@ class SequentialScheduler(_SchedulerBase):
         # the optimizer currently holds the LAST child's construction-time LRs.
         # Only the first child is active; redo its initial step.
         self._apply_lrs()
-
-    def _compute_lr(self, base_lr: float) -> float:
-        raise RuntimeError("SequentialScheduler computes no LR of its own; its active child does.")
 
     def _apply_lrs(self):
         """Write the current child's last LRs to the optimizer and record them.

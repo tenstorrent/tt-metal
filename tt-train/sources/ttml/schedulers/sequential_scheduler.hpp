@@ -27,13 +27,11 @@ public:
     [[nodiscard]] serialization::StateDict get_state_dict() const override;
 
 protected:
-    [[nodiscard]] float compute_lr(float base_lr) const override;
-
-    void apply_lrs() override;
-
     void restore_own_state(const serialization::StateDict &dict) override;
 
 private:
+    void apply_lrs();
+
     std::vector<std::unique_ptr<LRSchedulerBase>> m_schedulers;
     std::vector<size_t> m_milestones;
     // The child that wrote the optimizer's current LRs.

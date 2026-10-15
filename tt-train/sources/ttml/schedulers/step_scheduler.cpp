@@ -9,7 +9,7 @@
 namespace ttml::schedulers {
 
 StepScheduler::StepScheduler(optimizers::OptimizerBase *optimizer, size_t step_size, float gamma) :
-    LRSchedulerBase(optimizer), m_step_size(step_size), m_gamma(gamma) {
+    ClosedFormLRScheduler(optimizer), m_step_size(step_size), m_gamma(gamma) {
     TT_FATAL(step_size > 0, "step_size = {} must be greater than zero.", step_size);
     TT_FATAL(gamma > 0.0f, "gamma = {} must be greater than zero.", gamma);
 
@@ -31,7 +31,7 @@ void StepScheduler::restore_own_state(const serialization::StateDict &dict) {
 }
 
 serialization::StateDict StepScheduler::get_state_dict() const {
-    auto res = LRSchedulerBase::get_state_dict();
+    auto res = ClosedFormLRScheduler::get_state_dict();
     res["m_step_size"] = m_step_size;
     res["m_gamma"] = m_gamma;
     return res;

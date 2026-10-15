@@ -11,7 +11,7 @@ namespace ttml::schedulers {
 
 LinearScheduler::LinearScheduler(
     optimizers::OptimizerBase* optimizer, float start_factor, float end_factor, size_t total_steps) :
-    LRSchedulerBase(optimizer),
+    ClosedFormLRScheduler(optimizer),
     m_start_factor(start_factor),
     m_end_factor(end_factor),
     m_total_steps(static_cast<int>(total_steps)) {
@@ -48,7 +48,7 @@ void LinearScheduler::restore_own_state(const serialization::StateDict& dict) {
 }
 
 serialization::StateDict LinearScheduler::get_state_dict() const {
-    auto res = LRSchedulerBase::get_state_dict();
+    auto res = ClosedFormLRScheduler::get_state_dict();
     res["m_start_factor"] = m_start_factor;
     res["m_end_factor"] = m_end_factor;
     res["m_total_steps"] = m_total_steps;

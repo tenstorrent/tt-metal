@@ -8,7 +8,7 @@
 
 namespace ttml::schedulers {
 
-class LinearScheduler : public LRSchedulerBase {
+class LinearScheduler : public ClosedFormLRScheduler {
 public:
     LinearScheduler(optimizers::OptimizerBase *optimizer, float start_factor, float end_factor, size_t total_steps);
 

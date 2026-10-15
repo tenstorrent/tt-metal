@@ -13,7 +13,7 @@ namespace ttml::schedulers {
 // Cosine annealing: decays LR from base_lr to eta_min following a cosine curve
 // over T_max steps, then optionally restarts (SGDR-style) if step() is called
 // beyond T_max.  eta_min defaults to 0.
-class CosineAnnealingScheduler : public LRSchedulerBase {
+class CosineAnnealingScheduler : public ClosedFormLRScheduler {
 public:
     CosineAnnealingScheduler(optimizers::OptimizerBase* optimizer, size_t T_max, float eta_min = 0.F);
 

@@ -7,7 +7,7 @@
 namespace ttml::schedulers {
 
 LambdaScheduler::LambdaScheduler(optimizers::OptimizerBase *optimizer, std::function<float(int)> lr_lambda) :
-    LRSchedulerBase(optimizer), m_lr_lambda(std::move(lr_lambda)) {
+    ClosedFormLRScheduler(optimizer), m_lr_lambda(std::move(lr_lambda)) {
     // Mirror PyTorch's LambdaLR, which applies lr_lambda(0) at construction.
     apply_lrs();
 }

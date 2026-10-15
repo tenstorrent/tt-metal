@@ -20,23 +20,8 @@ core::not_null<optimizers::OptimizerBase *> LRSchedulerBase::get_optimizer() con
     return m_optimizer;
 }
 
-void LRSchedulerBase::step() {
-    m_last_step += 1;
-    apply_lrs();
-}
-
 std::vector<float> LRSchedulerBase::get_last_lrs() const {
     return m_last_lrs;
-}
-
-void LRSchedulerBase::apply_lrs() {
-    std::vector<float> lrs;
-    lrs.reserve(m_base_lrs.size());
-    for (const float base_lr : m_base_lrs) {
-        lrs.push_back(compute_lr(base_lr));
-    }
-    m_optimizer->set_group_lrs(lrs);
-    m_last_lrs = std::move(lrs);
 }
 
 serialization::StateDict LRSchedulerBase::get_state_dict() const {
@@ -67,6 +52,24 @@ void LRSchedulerBase::set_state_dict(const serialization::StateDict &dict) {
 }
 
 void LRSchedulerBase::restore_own_state(const serialization::StateDict & /*dict*/) {
+}
+
+ClosedFormLRScheduler::ClosedFormLRScheduler(optimizers::OptimizerBase *optimizer) : LRSchedulerBase(optimizer) {
+}
+
+void ClosedFormLRScheduler::step() {
+    m_last_step += 1;
+    apply_lrs();
+}
+
+void ClosedFormLRScheduler::apply_lrs() {
+    std::vector<float> lrs;
+    lrs.reserve(m_base_lrs.size());
+    for (const float base_lr : m_base_lrs) {
+        lrs.push_back(compute_lr(base_lr));
+    }
+    get_optimizer()->set_group_lrs(lrs);
+    m_last_lrs = std::move(lrs);
 }
 
 }  // namespace ttml::schedulers

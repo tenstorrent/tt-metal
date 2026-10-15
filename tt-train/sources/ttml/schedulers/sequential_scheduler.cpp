@@ -50,10 +50,6 @@ SequentialScheduler::SequentialScheduler(
     apply_lrs();
 }
 
-float SequentialScheduler::compute_lr(float /*base_lr*/) const {
-    throw std::logic_error("SequentialScheduler computes no LR of its own; its active child does.");
-}
-
 void SequentialScheduler::apply_lrs() {
     m_last_lrs = m_schedulers[m_current_scheduler_index]->get_last_lrs();
     get_optimizer()->set_group_lrs(m_last_lrs);

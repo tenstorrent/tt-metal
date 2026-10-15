@@ -24,7 +24,7 @@ public:
     virtual ~LRSchedulerBase() = default;
 
     // Advances the step count and applies the new LR of every param group.
-    virtual void step();
+    virtual void step() = 0;
 
     // LRs this scheduler last computed, one per param group.
     [[nodiscard]] virtual std::vector<float> get_last_lrs() const;
@@ -46,12 +46,6 @@ protected:
     // Reads and assigns the derived scheduler's own state.
     virtual void restore_own_state(const serialization::StateDict &dict);
 
-    // LR of one param group at m_last_step, given the group's base LR.
-    [[nodiscard]] virtual float compute_lr(float base_lr) const = 0;
-
-    // Sets every group's LR to compute_lr(its base LR) at m_last_step and records them as the last LRs.
-    virtual void apply_lrs();
-
     // Per-group base LRs, taken from the optimizer's initial LRs so that several schedulers on one optimizer
     // (e.g. a warmup/decay chain) share the same base.
     std::vector<float> m_base_lrs;
@@ -59,6 +53,21 @@ protected:
     // Per-group LRs this scheduler last wrote. Initialized to the base LRs.
     std::vector<float> m_last_lrs;
     size_t m_last_step = 0;
+};
+
+// Scheduler whose LR for each group is a function of that group's base LR and the step count.
+class ClosedFormLRScheduler : public LRSchedulerBase {
+public:
+    explicit ClosedFormLRScheduler(optimizers::OptimizerBase *optimizer);
+
+    void step() override;
+
+protected:
+    // LR of one param group at m_last_step, given the group's base LR.
+    [[nodiscard]] virtual float compute_lr(float base_lr) const = 0;
+
+    // Sets every group's LR to compute_lr(its base LR) at m_last_step and records them as the last LRs.
+    void apply_lrs();
 };
 
 }  // namespace ttml::schedulers
