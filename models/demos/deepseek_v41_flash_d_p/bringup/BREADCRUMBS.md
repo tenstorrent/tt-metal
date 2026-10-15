@@ -397,3 +397,55 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   vs golden overlap 0.99902; layer24 / mixed overlap 0.99967 / 0.99943; A,B,A bit-identical.
 - OV-4: already done by C.swa.ffn_norm (DS41-20 marked resolved by F73).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_router.py`
+
+## C.swa.experts test review (attempt 1)
+- Freeze without review failed: the CPU reference failed `auto_experts_L00_vs_golden` (worst row 0.0798 > 0.0776,
+  row norm ratio [0.976, 1.058] outside 1 +- 0.0498); pcc 0.99986 and every other check ok.
+- Cause (DS41-22): the golden is the fp32 reference output stored bf16, its inputs (ffn_norm, dense router weights) bf16.
+  The fp8 act quants of x and h around the fp4 GEMMs turn the input rounding into whole e4m3 steps (DS41-1, DS41-14):
+  fp32 step on golden inputs vs golden rel 0.0169 / row 0.0798; inputs jittered by half a bf16 ulp vs the step rel
+  0.0168, row 0.054-0.075, ratio down to 0.945. Not a reference bug. The built-in checks add this golden error to the
+  vs-golden rel and column limits only.
+- Test change (CHECKS="auto" kept): `_Expect(CC.Expect)` also adds the CPU step's own worst-row error and ratio
+  deviation vs the golden to the vs-golden row / ratio limits (now 0.157 / 0.108); installed as `CC.Expect` for the
+  call only. vs_cpu and the second inputs keep the built-in limits (golden rel 0.0150, row 0.0776, ratio 0.0498).
+- Mutation sweep: every mistake caught except noise1e-2. Not fixable by precision limits: the bf16 precision model is
+  rel 0.0125 / row 0.065 on the golden (0.014-0.018 on the second inputs), 1 % noise is rel 0.010 / row 0.013-0.035,
+  so it sits below a correct bf16 step's floor (owner rule: accuracy against the noise floor). The output has no grid
+  (fp32 sum of GEMMs). Only the row-error-vs-row-norm slope separates them (model 0.65-0.96, noise ~0); not added, a
+  statistic, not a structural property. The freeze after a review needs reference PASS + stub FAIL only.
+- Results: reference PASS (pcc 0.999857, vs_golden rel 0.0169 / row 0.0798 within 0.0320 / 0.157), stub FAIL.
+- For the implementer: a correct device is expected well below the model (gate/up at HiFi4 + fp32 DEST round ~1e-4,
+  not 2e-3, so fewer fp8 flips in h); the vs_cpu rel limit is 0.015.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py`
+
+## C.swa.experts implement (attempt 1)
+- tt/experts.py:TtExperts, the components entry's interim loop path (setting EXPERTS_IMPL=loop; the
+  unified_routed_expert_ffn fork option that decodes in the op is still to come). Pipeline as xing40's TtExperts:
+  masked_bincount -> ttnn.bringup.offset_cumsum / dispatch / combine along axis 0, one dispatch group per mesh column
+  (2x2: 192 experts per group, 96 per chip), cap = the whole chunk, dispatch buffer K = 6 x cap (all 6 on one chip).
+- Weights: the checkpoint's e2m1 codes + e8m0 scales only (DS41-10, never bfp8 / bfp4). Each W [N, K] is held as
+  W^T in 8 nibble planes (int32 [K/8, N], a lossless re-pack at load, `pack_planes`) + bf16 2^e scales [K/32, N].
+  Per chunk and expert: (P >> 4i) & 15 -> ttnn.gather from the 16-value e2m1 table -> concat -> x (Rep @ scales).
+  Probed bit-exact vs reference/weights.py:fp4_dequant (0 of 11.8M differ), 4.0 ms per matrix (arith variant 6.4 ms,
+  setting EXPERTS_DECODE) (DS41-24). Load of layer 0: ~12 s (page-cached checkpoint), ~1.9 GB per chip.
+- Routing weight before q(h) (reference _swiglu; q(r h) != r q(h)): dispatch metadata has only [src chip, token,
+  slot], so the dispatched row is [q(x) | p0 | p1 | p2]: the column group's dense fp32 weights split into three
+  truncated bf16 pieces (exact); per local expert a bf16 0/1 selector [3 Egp, 32] matmul sums its three pieces
+  exactly (one product per tile-dot, DS41-16), max over the 32 equal columns -> [cap, 1] fp32 (DS41-23).
+- Expert math: ttnn.linear q(x) @ W1^T / W3^T (HiFi4 + fp32 acc, fp32 out) -> min(g, 10), clamp(u, +-10) ->
+  silu * u * r (fp32 SFPU) -> tt/quant.fp8_qdq -> @ W2^T fp32 -> bf16 (insert / combine are bf16-only) -> insert.
+  combine (init_zeros) -> [s, 6, H] -> fp32 SFPU sum of the 6 slots -> group partial; groups summed over axis 1 by
+  all_gather + SFPU add (EXPERTS_SUM=gather_add, K-30), the chip's hidden slice kept. `partial()` is exposed so the
+  assembled model can add the shared expert's partial before the one exchange.
+- hooks.py: `_experts_host_fn` (row_split_to_device(x), row_split_to_device(dense) -> hidden_split_to_host),
+  `_device_step_fn` "experts", DEVICE_STEPS["swa"] += experts. The component path takes top-k of the dense routing
+  on device; the assembled model passes the router's idx.
+- Probe (not kept): 256 random rows vs ds41_ref._experts: rel 0.0028, warm 1.3 s.
+- Gate: PASS. pcc 0.999855; vs CPU rel 0.00223 (limit 0.0150), worst row 0.039, ratio [0.983, 1.001]; vs golden rel
+  0.0170 (limit 0.0320); layer24 / mixed / small / big rel <= 0.0028; A,B,A bit-identical; ~2.6 s per call (2048
+  tokens). The gate takes ~12 min (precompile collect pass ~550 s, K-52).
+- Gotchas: insert / extract take 2D slabs (ttnn.linear of a 2D x by a 4D weight returns 4D: reshape); the probe dir
+  under tests/ttnn/unit_tests/operations/ds41_experts was deleted (K-56).
+- OV-4: DS41-20 already states the F73 fix (done earlier); nothing left to change.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py`
