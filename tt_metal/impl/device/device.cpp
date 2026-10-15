@@ -487,8 +487,7 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
     if (context_->get_dispatch_query_manager().fds_signalling_enabled()) {
         TT_FATAL(active_eth_cores.empty(), "FDS worker signalling does not support ACTIVE_ETH cores");
     }
-    const uint32_t default_sub_device_worker_count =
-        compute_grid_size.x * compute_grid_size.y + static_cast<uint32_t>(active_eth_cores.size());
+    const uint32_t default_sub_device_worker_count = compute_grid_size.x * compute_grid_size.y;
     std::vector<uint32_t> workers_per_sub_device(num_sub_devices(), default_sub_device_worker_count);
     for (auto& command_queue : command_queues_) {
         command_queue->set_dispatch_sems(num_sub_devices(), workers_per_sub_device);
