@@ -711,12 +711,12 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer workspace_3(dfb::workspace_3);
 
     compute_kernel_hw_startup(dfb::q, dfb::k, dfb::workspace_3);
-    eye.wait_front(chunk_matrix_tiles);
-    tril.wait_front(chunk_matrix_tiles);
-    block_masks.wait_front(2);
+    // The reader generates the constants after publishing the first work item, the inverse's last; those are
+    // awaited at first use and never popped, so later waits return immediately.
     ones.wait_front(chunk_matrix_tiles);
     gate_tril.wait_front(chunk_matrix_tiles);
     gate_ones.wait_front(chunk_matrix_tiles);
+    tril.wait_front(chunk_matrix_tiles);
 
     for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
         if ((work_item_start + work_item) % num_chunks >= valid_chunks) {
@@ -779,6 +779,8 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         // All inverse scratch transactions are one tile. tile_workspace_1 has two entries so each
         // level can enqueue its replacement before popping the old value; its four transactions
         // per work item also return both cursors to their starting slot.
+        eye.wait_front(chunk_matrix_tiles);
+        block_masks.wait_front(3);
         prepare_t_inv<Ct>(
             akk,
             tril,
