@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 MODE = os.environ["FLASH_EXPERT_ROWS_CASES"]
-EXPECTED = {"blackhole": 10, "n150": 1, "n300": 1}
+EXPECTED = {"blackhole": 13, "n150": 1, "n300": 1}
 
 
 def pytest_collection_modifyitems(session, config, items):
@@ -15,6 +15,7 @@ def pytest_collection_modifyitems(session, config, items):
         if MODE == "blackhole":
             match = name in (
                 "test_moe_compute_expert_rows_deterministic",
+                "test_moe_compute_expert_rows_rejects_activation_limit",
                 "test_moe_compute_expert_rows_many_jobs_per_group",
             ) or (name == "test_moe_compute_expert_rows_row_tiles" and p["shape"] == "flash_next_e32_t128")
         elif MODE == "n150":
