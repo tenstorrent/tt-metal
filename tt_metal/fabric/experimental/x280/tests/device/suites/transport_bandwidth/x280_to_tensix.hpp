@@ -22,6 +22,7 @@
 #include "harness/regions/tensix_l1.hpp"
 #include "harness/runner.hpp"
 #include "tests/device/suites/transport_bandwidth/records.hpp"
+#include "tests/device/suites/transport_bandwidth/tensix_to_x280.hpp"
 
 #include "transport_bandwidth_common.h"
 #include "x280_hart_protocol.h"
@@ -128,7 +129,6 @@ inline void run_axis(
     ASSERT_GT(total, 0u);
     ASSERT_EQ(total % harts, 0u) << "TRANSPORT_BW_N=" << total << " does not split evenly over " << harts << " harts";
     const uint32_t N = total / harts;
-    const uint64_t logical_bytes = static_cast<uint64_t>(N) * static_cast<uint64_t>(transfer_size);
 
     const TensixL1Layout TL = TensixL1Layout::compute();
     const ttm::CoreCoord worker{0, 0};
@@ -211,19 +211,9 @@ inline void run_axis(
         const auto& hr = results.back();
         const auto& result = hr.common;
         SCOPED_TRACE("hart " + std::to_string(h));
-        EXPECT_EQ(result.backend_id, TRANSPORT_BW_BACKEND_ID_X280_TO_TENSIX);
-        EXPECT_EQ(result.boundary, boundary);
-        ASSERT_EQ(result.terminal_state, static_cast<uint32_t>(TRANSPORT_BW_STATE_DONE))
-            << "terminal state: " << state_name(result.terminal_state) << " (path_sentinel=0x" << std::hex
-            << result.path_sentinel << std::dec << ")";
-        EXPECT_EQ(result.transfer_size, transfer_size);
-        EXPECT_EQ(result.transfer_count, N);
-        EXPECT_EQ(result.warmup_completed, W);
-        EXPECT_EQ(result.logical_bytes, logical_bytes);
-        ASSERT_GT(result.raw_batch_delta, 0ull);
+        ASSERT_NO_FATAL_FAILURE(tensix_to_x280::check_result(
+            result, TRANSPORT_BW_BACKEND_ID_X280_TO_TENSIX, transfer_size, boundary, W, N));
         ASSERT_GT(result.secondary_batch_delta, 0ull);
-        ASSERT_NE(result.raw_batch_delta, UINT64_MAX) << "mtime interval refused on device";
-        ASSERT_NE(result.secondary_batch_delta, UINT64_MAX) << "rdcycle interval refused on device";
         ASSERT_EQ(hr.wall_end - hr.wall_start, result.raw_batch_delta) << "mtime endpoints disagree with the delta";
     }
 
