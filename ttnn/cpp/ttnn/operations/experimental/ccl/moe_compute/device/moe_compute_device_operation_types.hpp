@@ -98,6 +98,9 @@ struct MoEComputeParams {
     }
 };
 
+// Both moe_compute programs check it: CLAMPED_SILU needs a finite, positive limit, the other activations take none.
+void validate_activation_limit(detail::MoEActivationFunction activation_type, std::optional<float> activation_limit);
+
 struct MoEComputeInputs {
     const ttnn::Tensor& tilize_input_tensor;
     const ttnn::Tensor& tilize_expert_indices_tensor;
