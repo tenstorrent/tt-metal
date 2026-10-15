@@ -29,6 +29,8 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bank_receivers_strided as _bank_receivers_strided,
     bank_receivers_contiguous as _bank_receivers_contiguous,
     make_recv_contig_weight as _make_recv_contig_weight,
+    make_krow_major_weight as _make_krow_major_weight,
+    make_tensor_prefetcher_pipes as _make_tensor_prefetcher_pipes,
     tensor_prefetcher_session,
     require_tensor_prefetcher,
 )
@@ -42,18 +44,6 @@ def _require_tensor_prefetcher(device):
 
 
 _RING_DEPTH_PAGES = 4  # small ring so the validator stresses the credit handshakes
-
-
-def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int, row_offset: int = 0):
-    """CoreRangeSet for bank `bank_idx`'s receivers, laid out row-major on a
-    ring_cols-wide grid. Matches the bench's gather_in0 receiver layout."""
-    cores = []
-    for k in range(recv_per_bank):
-        ring_pos = bank_idx * recv_per_bank + k
-        col = ring_pos % ring_cols
-        row = ring_pos // ring_cols + row_offset
-        cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
-    return ttnn.CoreRangeSet(cores)
 
 
 def _receiver_rows(num_dram_banks: int, recv_per_bank: int) -> int:
@@ -87,19 +77,9 @@ def _krow_major_weight_and_bank_map(device, K, N, dtype, recv_per_bank, row_offs
     pt_weight = torch.zeros(1, 1, K_padded, N)
     pt_weight[:, :, :K, :] = torch.randn(1, 1, K, N)
 
-    dram_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
-    )
-    weight_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(dram_core_range_set, [K_padded, N // num_dram_banks], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    tt_weight = ttnn.as_tensor(
-        pt_weight, device=device, dtype=dtype, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
-    )
+    tt_weight = _make_krow_major_weight(device, pt_weight, num_dram_banks, dtype)
     bank_to_receivers = [
-        (b, _bank_receivers_row_major(b, recv_per_bank, ring_cols=ring_cols, row_offset=row_offset))
+        (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols, row_offset=row_offset))
         for b in range(num_dram_banks)
     ]
     return tt_weight, bank_to_receivers, push_page_size, ring_size
@@ -143,7 +123,7 @@ def _setup_weight_and_gcb_worker_sender(device, K, N, dtype, recv_per_bank, num_
         {ttnn.CoreRange(ttnn.CoreCoord(0, ring_rows), ttnn.CoreCoord(num_dram_banks - 1, ring_rows))}
     )
     sender_receiver_mapping = [
-        (ttnn.CoreCoord(b, ring_rows), _bank_receivers_row_major(b, recv_per_bank, ring_cols=ring_cols))
+        (ttnn.CoreCoord(b, ring_rows), _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols))
         for b in range(num_dram_banks)
     ]
     # Worker prefetcher validates max_tensor_size <= gcb.size() — a full layer's per-recv bytes.
@@ -200,7 +180,7 @@ def test_validator_pipe_krow_major_rejects_dual_senders(device, expect_error):
     tt_weight, bank_to_receivers, push_page_size, ring_size = _krow_major_weight_and_bank_map(
         device, 2048, 3584, ttnn.bfloat8_b, recv_per_bank=2
     )
-    pipes, _space = _make_pipes(device, bank_to_receivers, _RING_DEPTH_PAGES * push_page_size, dual_senders=True)
+    _space, pipes = _make_tensor_prefetcher_pipes(device, bank_to_receivers, _RING_DEPTH_PAGES * push_page_size)
     with tensor_prefetcher_session(device):
         with expect_error(RuntimeError, "requires exactly one primary sender per DRAM bank"):
             ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
@@ -384,34 +364,11 @@ def _setup_weight_and_pipes_recv_contig(
     tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
         device, K, N, dtype, recv_per_bank, distribution_strategy=distribution_strategy, row_offset=row_offset
     )
-    pipes, pipe_space = _make_pipes(
-        device, bank_to_receivers, (push_page_size // entry_divisor) * num_entries, dual_senders=dual_senders
+    pipe_space, pipes = _make_tensor_prefetcher_pipes(
+        device, bank_to_receivers, (push_page_size // entry_divisor) * num_entries, single_sender=not dual_senders
     )
     result = (tt_weight, pipes, bank_to_receivers, push_page_size, ring_size)
     return (*result, pipe_space) if return_space else result
-
-
-def _make_pipes(device, bank_to_receivers, ring_size_bytes, dual_senders=False):
-    """A PrefetcherPipeSpace over exactly the receivers in ``bank_to_receivers`` and the Tensor-prefetcher
-    pipes carved from it, every ring ``ring_size_bytes``. Returns (pipes, space); the space must outlive
-    the pipes."""
-    receiver_domain = ttnn.CoreRangeSet(
-        {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
-    )
-    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
-        device,
-        sender_cores=ttnn.CoreRangeSet(set()),
-        receiver_domain=receiver_domain,
-        ring_size=ring_size_bytes,
-        max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
-        num_dram_senders=2 * len(bank_to_receivers),
-    )
-    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
-        pipe_space,
-        bank_to_receivers,
-        support_multi_receiver_shards=not dual_senders,
-    )
-    return pipes, pipe_space
 
 
 def _setup_weight_and_pipes_krow_major(device, K, N, dtype, recv_per_bank, row_offset=0, num_entries=_RING_DEPTH_PAGES):
@@ -423,7 +380,9 @@ def _setup_weight_and_pipes_krow_major(device, K, N, dtype, recv_per_bank, row_o
     tt_weight, bank_to_receivers, push_page_size, ring_size = _krow_major_weight_and_bank_map(
         device, K, N, dtype, recv_per_bank, row_offset=row_offset
     )
-    pipes, _space = _make_pipes(device, bank_to_receivers, push_page_size * num_entries)
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, bank_to_receivers, push_page_size * num_entries, single_sender=True
+    )
     return tt_weight, pipes, bank_to_receivers, push_page_size, ring_size
 
 
@@ -456,18 +415,8 @@ def test_validator_pipe_recv_contig(device, K, N, dtype, recv_per_bank, num_laye
     # supplied rotation rather than the bare ring index. Empty == batched.
     rotation = [(g + 1) % ring_size for g in range(ring_size)] if streaming else []
     with tensor_prefetcher_session(device):
-        ttnn.experimental.queue_tensor_prefetcher_request(
-            device, [(tt_weight, ring_size, rotation)] * num_layers, prefetcher_pipes=pipes
-        )
-        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
-            device,
-            tt_weight,
-            num_layers=num_layers,
-            print_stride=max(1, ring_size // 4),
-            prefetcher_pipes=pipes,
-            bank_to_receivers=bank_to_receivers,
-            streaming=streaming,
-            rotation=rotation,
+        _queue_and_validate_pipes(
+            device, tt_weight, pipes, bank_to_receivers, ring_size, num_layers=num_layers, rotation=rotation
         )
 
 
@@ -505,19 +454,7 @@ def test_validator_pipe_recv_contig_shard_contiguous(device, K, N, dtype, recv_p
     # the matching contiguous-order delivery.
     rotation = [(g + 1) % ring_size for g in range(ring_size)] if streaming else []
     with tensor_prefetcher_session(device):
-        ttnn.experimental.queue_tensor_prefetcher_request(
-            device, [(tt_weight, ring_size, rotation)], prefetcher_pipes=pipes
-        )
-        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
-            device,
-            tt_weight,
-            num_layers=1,
-            print_stride=max(1, ring_size // 4),
-            prefetcher_pipes=pipes,
-            bank_to_receivers=bank_to_receivers,
-            streaming=streaming,
-            rotation=rotation,
-        )
+        _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, ring_size, rotation=rotation)
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
@@ -768,10 +705,12 @@ def test_validator_pipe_ring_holds_one_block(device, K, N, dtype, recv_per_bank,
         _queue_and_validate_pipes(device, tt_weight, shallow_pipes, bank_to_receivers, ring_size, num_layers=1)
 
 
-def _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, ring_size, num_layers=1):
-    """One PrefetcherPipe request plus the validator that drains it."""
+def _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, ring_size, num_layers=1, rotation=()):
+    """One PrefetcherPipe request plus the validator that drains it. A non-empty ``rotation`` streams the
+    request and has the validator expect that rotation's delivery order."""
+    rotation = list(rotation)
     ttnn.experimental.queue_tensor_prefetcher_request(
-        device, [(tt_weight, ring_size)] * num_layers, prefetcher_pipes=pipes
+        device, [(tt_weight, ring_size, rotation)] * num_layers, prefetcher_pipes=pipes
     )
     ttnn.experimental.test_tensor_prefetcher_pipe_validator(
         device,
@@ -780,6 +719,8 @@ def _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, ring_
         print_stride=max(1, ring_size // 4),
         prefetcher_pipes=pipes,
         bank_to_receivers=bank_to_receivers,
+        streaming=bool(rotation),
+        rotation=rotation,
     )
 
 
@@ -962,7 +903,9 @@ def test_validator_pipe_recv_contig_page_size_switch(device):
     weight_b, page_b = make_weight(K=1024, n_per_recv_tiles=5, seed=0xB0B)
     assert (ring_size * page_a) % page_b != 0
 
-    pipes, _space = _make_pipes(device, bank_to_receivers, ring_size * max(page_a, page_b))
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, bank_to_receivers, ring_size * max(page_a, page_b), single_sender=True
+    )
 
     with tensor_prefetcher_session(device):
         _queue_and_validate_pipes(device, weight_a, pipes, bank_to_receivers, ring_size)

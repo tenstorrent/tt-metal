@@ -33,6 +33,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bank_receivers_contiguous,
     bytes_per_tile,
+    make_tensor_prefetcher_pipes,
     require_tensor_prefetcher,
     ring_grid_cols,
     tensor_prefetcher_session,
@@ -637,16 +638,7 @@ def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
         (bank, bank_receivers_contiguous(bank, recv_per_bank=1, ring_cols=ring_grid_cols(num_dram_banks, ring_size)))
         for bank in range(num_dram_banks)
     ]
-    receiver_domain = ttnn.CoreRangeSet({r for _, receivers in bank_to_receivers for r in receivers.ranges()})
-    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
-        mesh_device,
-        sender_cores=ttnn.CoreRangeSet(set()),
-        receiver_domain=receiver_domain,
-        ring_size=4 * push_page_size,
-        max_receivers_per_pipe=1,
-        num_dram_senders=2 * num_dram_banks,
-    )
-    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(pipe_space, bank_to_receivers)
+    _pipe_space, pipes = make_tensor_prefetcher_pipes(mesh_device, bank_to_receivers, 4 * push_page_size)
 
     with tensor_prefetcher_session(mesh_device):
         ttnn.experimental.queue_tensor_prefetcher_request(mesh_device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)

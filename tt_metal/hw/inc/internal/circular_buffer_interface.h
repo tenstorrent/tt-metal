@@ -37,7 +37,7 @@ struct RemoteSenderCBInterface {
     uint32_t receiver_noc_xy_ptr;
 
     // Points to an array of size num_receivers, stored as pages_sent, pages_acked pairs
-    // for each receiver. Per-receiver stride is REMOTE_CB_LOCAL_PAGES_STRIDE (2 * L1_ALIGNMENT).
+    // for each receiver. Each entry is L1 aligned.
     uint32_t aligned_pages_sent_ptr;
 
     // Packed: bits [23:0] are the remote pages_sent address on the receiver's L1,

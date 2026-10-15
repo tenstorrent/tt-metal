@@ -36,7 +36,6 @@ namespace experimental {
 
 // Working copy of a DRAM-sender PrefetcherPipe endpoint, loaded from its DRISC-L1 config page.
 struct PipeSenderCtx {
-    uint32_t config_ptr;           // the config page itself, in DRISC L1
     uint32_t fifo_start_addr;      // ring base, in receiver (worker) L1
     uint32_t ring_bytes;           // ring size in bytes; need not be a multiple of entry_bytes
     uint32_t entry_bytes;          // push granularity
@@ -47,26 +46,17 @@ struct PipeSenderCtx {
     uint32_t remote_sent_base;     // receiver-side SENT block (word[9])
 };
 
-// Base of the ACKED block on a sender's config page: where this pipe's receivers aim their ack
-// atomics, and so what the sender reads them from. Takes the page address rather than a
-// PipeSenderCtx so the prefetcher can find it per request without building a context.
-FORCE_INLINE uint32_t pipe_local_acked_base(uint32_t config_page_addr) {
-    volatile tt_l1_ptr uint32_t* cfg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_page_addr);
-    return config_page_addr + cfg[PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET];
-}
-
 FORCE_INLINE void pipe_load_sender_ctx(PipeSenderCtx& ctx, uint32_t config_page_addr) {
     volatile tt_l1_ptr uint32_t* cfg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_page_addr);
     ASSERT(static_cast<bool>(cfg[REMOTE_DFB_CFG_IS_SENDER]));
 
-    ctx.config_ptr = config_page_addr;
     ctx.num_receivers = cfg[REMOTE_DFB_CFG_NUM_RECEIVERS];
     ctx.fifo_start_addr = cfg[REMOTE_DFB_CFG_FIFO_START];
     ctx.ring_bytes = cfg[REMOTE_DFB_CFG_FIFO_SIZE];
     ctx.entry_bytes = cfg[PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE];
     ctx.receiver_noc_xy_ptr = config_page_addr + cfg[PREFETCHER_PIPE_CFG_NOC_XY_OFFSET];
     ctx.local_sent_base = config_page_addr + cfg[PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET];
-    ctx.local_acked_base = pipe_local_acked_base(config_page_addr);
+    ctx.local_acked_base = config_page_addr + cfg[PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET];
     ctx.remote_sent_base = config_page_addr + cfg[PREFETCHER_PIPE_CFG_PEER_COUNTER_OFFSET];
 
     ASSERT(ctx.entry_bytes != 0);
