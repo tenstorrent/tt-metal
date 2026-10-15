@@ -98,9 +98,7 @@ class TtQa:
 
 
 def build_q_a(mesh, ck, cfg, layer: int) -> TtQa:
-    p = f"layers.{layer}.attn."
-    proj = TtAttnInProj(
-        mesh,
-        {"wq_a": ck.weight(p + "wq_a.weight", torch.float32), "wkv": ck.weight(p + "wkv.weight", torch.float32)},
-    )
-    return TtQa(mesh, proj, ck.weight(p + "q_norm.weight", torch.float32), cfg.eps)
+    from .kv import attn_in_weights  # the shared [wq_a | wkv] projection (wkv's rope rows in tt/kv.py's order)
+
+    proj = TtAttnInProj(mesh, attn_in_weights(ck, cfg, layer))
+    return TtQa(mesh, proj, ck.weight(f"layers.{layer}.attn.q_norm.weight", torch.float32), cfg.eps)
