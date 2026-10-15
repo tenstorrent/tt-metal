@@ -1045,6 +1045,7 @@ void MoEExpertRowsDeviceOperation::validate_on_program_cache_hit(
 
 void MoEExpertRowsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_activation_limit(args.activation_type, args.activation_limit);
     const auto& s = args.shape;
     TT_FATAL(
         s.tokens % s.num_sources == 0, "moe_compute expert rows: {} tokens over {} sources", s.tokens, s.num_sources);
