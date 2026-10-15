@@ -242,7 +242,7 @@ bool find_pair_for_direction(
 // ============================================================================
 // Fixture: Fabric1D with channel trimming capture enabled before fabric setup
 // ============================================================================
-class Fabric1DChannelTrimmingFixture : public BaseFabricFixture {
+class ChannelTrimming1DFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
@@ -275,17 +275,17 @@ protected:
 };
 
 // ============================================================================
-// Tests using Fabric1DChannelTrimmingFixture (capture enabled at fabric setup)
+// Tests using ChannelTrimming1DFixture (capture enabled at fabric setup)
 // ============================================================================
 
 // Test: Runtime option is enabled as set by the fixture
-TEST_F(Fabric1DChannelTrimmingFixture, RuntimeOptionEnabled) {
+TEST_F(ChannelTrimming1DFixture, RuntimeOptionEnabled) {
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     EXPECT_TRUE(rtoptions.get_enable_channel_trimming_capture());
 }
 
 // Test: Config allocates L1 buffer when capture is enabled
-TEST_F(Fabric1DChannelTrimmingFixture, ConfigAllocatesL1Buffer) {
+TEST_F(ChannelTrimming1DFixture, ConfigAllocatesL1Buffer) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& config = control_plane.get_fabric_context().get_builder_context().get_fabric_router_config();
 
@@ -296,7 +296,7 @@ TEST_F(Fabric1DChannelTrimmingFixture, ConfigAllocatesL1Buffer) {
 }
 
 // Test: L1 allocation placed before handshake address
-TEST_F(Fabric1DChannelTrimmingFixture, L1AllocationOrdering) {
+TEST_F(ChannelTrimming1DFixture, L1AllocationOrdering) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& config = control_plane.get_fabric_context().get_builder_context().get_fabric_router_config();
 
@@ -306,7 +306,7 @@ TEST_F(Fabric1DChannelTrimmingFixture, L1AllocationOrdering) {
 }
 
 // Test: DiagnosticBufferMap shows channel_trimming_capture enabled via FabricBuilderContext
-TEST_F(Fabric1DChannelTrimmingFixture, DiagnosticBufferMapViaBuilderContext) {
+TEST_F(ChannelTrimming1DFixture, DiagnosticBufferMapViaBuilderContext) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
     auto buffer_map = builder_ctx.get_telemetry_and_metadata_buffer_map();
@@ -319,7 +319,7 @@ TEST_F(Fabric1DChannelTrimmingFixture, DiagnosticBufferMapViaBuilderContext) {
 }
 
 // Test: DiagnosticBufferMap regions are non-overlapping and ordered
-TEST_F(Fabric1DChannelTrimmingFixture, DiagnosticBufferMapRegionsNonOverlapping) {
+TEST_F(ChannelTrimming1DFixture, DiagnosticBufferMapRegionsNonOverlapping) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
     auto buffer_map = builder_ctx.get_telemetry_and_metadata_buffer_map();
@@ -351,12 +351,12 @@ TEST_F(Fabric1DChannelTrimmingFixture, DiagnosticBufferMapRegionsNonOverlapping)
 }
 
 // ============================================================================
-// Tests using Fabric1DChannelTrimmingFixture (capture disabled — tests disabled path and
+// Tests using ChannelTrimming1DFixture (capture disabled — tests disabled path and
 // pure struct logic that don't need the runtime option set at setup time)
 // ============================================================================
 
 // Test: Runtime option getter/setter interface
-TEST_F(Fabric1DChannelTrimmingFixture, ChannelTrimmingCapture_RuntimeOptionGetterSetter) {
+TEST_F(ChannelTrimming1DFixture, ChannelTrimmingCapture_RuntimeOptionGetterSetter) {
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     bool original = rtoptions.get_enable_channel_trimming_capture();
 
@@ -371,7 +371,7 @@ TEST_F(Fabric1DChannelTrimmingFixture, ChannelTrimmingCapture_RuntimeOptionGette
 // ============================================================================
 // Fixture: Fabric2D with channel trimming capture enabled before fabric setup
 // ============================================================================
-class Fabric2DChannelTrimmingFixture : public BaseFabricFixture {
+class ChannelTrimming2DFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
@@ -404,11 +404,11 @@ protected:
 };
 
 // ============================================================================
-// Device-Level Tests: Fabric1DChannelTrimmingFixture
+// Device-Level Tests: ChannelTrimming1DFixture
 // ============================================================================
 
 // Test 1: 1-hop unicast — verify both source and destination routers recorded traffic
-TEST_F(Fabric1DChannelTrimmingFixture, UnicastSenderAndReceiverChannelUsed) {
+TEST_F(ChannelTrimming1DFixture, UnicastSenderAndReceiverChannelUsed) {
     clear_all_capture_buffers(this);
 
     // Use mesh coordinates to find a 1-hop neighbor pair (any direction on the chain)
@@ -502,7 +502,7 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastSenderAndReceiverChannelUsed) {
 }
 
 // Test 2: 2-hop unicast — verify intermediate router forwarding
-TEST_F(Fabric1DChannelTrimmingFixture, UnicastMultiHopForwarding) {
+TEST_F(ChannelTrimming1DFixture, UnicastMultiHopForwarding) {
     clear_all_capture_buffers(this);
 
     // Use mesh coordinates to find a 2-hop path (scans all positions and directions)
@@ -634,7 +634,7 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastMultiHopForwarding) {
 }
 
 // Test 3: 1-hop unicast — verify min/max packet size tracking
-TEST_F(Fabric1DChannelTrimmingFixture, UnicastPacketSizeTracking) {
+TEST_F(ChannelTrimming1DFixture, UnicastPacketSizeTracking) {
     clear_all_capture_buffers(this);
 
     auto path_result = find_1d_path_with_hops(1);
@@ -727,11 +727,11 @@ TEST_F(Fabric1DChannelTrimmingFixture, UnicastPacketSizeTracking) {
 }
 
 // ============================================================================
-// Device-Level Tests: Fabric2DChannelTrimmingFixture
+// Device-Level Tests: ChannelTrimming2DFixture
 // ============================================================================
 
 // Test 4: Exercise each directional channel (E/W/N/S)
-TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelLiveness) {
+TEST_F(ChannelTrimming2DFixture, DirectionalChannelLiveness) {
     clear_all_capture_buffers(this);
 
     std::vector<RoutingDirection> directions = {
@@ -824,7 +824,7 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelLiveness) {
 }
 
 // Test 5: Verify forwarding relationships in 2D (sender_channel_forwarded_to_bitfield)
-TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
+TEST_F(ChannelTrimming2DFixture, DirectionalChannelForwardedTo) {
     clear_all_capture_buffers(this);
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -914,7 +914,7 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
 // applied standalone (no capture profile). Verifies that override-only mode
 // correctly loads overrides and that traffic still flows through the fabric.
 // ============================================================================
-class Fabric1DChannelTrimmingOverrideFixture : public BaseFabricFixture {
+class ChannelTrimming1DOverrideFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
@@ -977,7 +977,7 @@ protected:
 //
 // This tests the full end-to-end flow: capture → export → reimport + override.
 // ============================================================================
-class Fabric1DChannelTrimmingCaptureAndOverrideFixture : public BaseFabricFixture {
+class ChannelTrimming1DCaptureAndOverrideFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
@@ -1077,11 +1077,11 @@ protected:
 };
 
 // ============================================================================
-// Tests: Fabric1DChannelTrimmingOverrideFixture (override-only, no capture profile)
+// Tests: ChannelTrimming1DOverrideFixture (override-only, no capture profile)
 // ============================================================================
 
 // Test: Global overrides are loaded into the builder context
-TEST_F(Fabric1DChannelTrimmingOverrideFixture, GlobalOverridesLoaded) {
+TEST_F(ChannelTrimming1DOverrideFixture, GlobalOverridesLoaded) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
     const auto& global_overrides = builder_ctx.get_channel_trimming_global_overrides();
@@ -1096,7 +1096,7 @@ TEST_F(Fabric1DChannelTrimmingOverrideFixture, GlobalOverridesLoaded) {
 }
 
 // Test: Runtime option getter/setter for override path
-TEST_F(Fabric1DChannelTrimmingOverrideFixture, RuntimeOptionOverridePath) {
+TEST_F(ChannelTrimming1DOverrideFixture, RuntimeOptionOverridePath) {
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     EXPECT_TRUE(rtoptions.has_fabric_trimming_override());
     EXPECT_FALSE(rtoptions.get_fabric_trimming_override_path().empty());
@@ -1105,7 +1105,7 @@ TEST_F(Fabric1DChannelTrimmingOverrideFixture, RuntimeOptionOverridePath) {
 // Test: 1-hop unicast traffic works with override-only mode (no capture profile)
 // The override applies to a fully-enabled baseline, so all channels remain available.
 // This verifies that override-only mode doesn't break normal traffic flow.
-TEST_F(Fabric1DChannelTrimmingOverrideFixture, UnicastTrafficWithOverride) {
+TEST_F(ChannelTrimming1DOverrideFixture, UnicastTrafficWithOverride) {
     auto path_result = find_1d_path_with_hops(1);
     if (!path_result.found) {
         GTEST_SKIP() << "No 1-hop neighbor pair found on the mesh";
@@ -1124,7 +1124,7 @@ TEST_F(Fabric1DChannelTrimmingOverrideFixture, UnicastTrafficWithOverride) {
 // Verifies that unicast traffic (which uses channel 0) still works when
 // all other channels are trimmed via override.
 // ============================================================================
-class Fabric1DChannelTrimmingOverrideChannel0OnlyFixture : public BaseFabricFixture {
+class ChannelTrimming1DOverrideChannel0OnlyFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
@@ -1180,7 +1180,7 @@ protected:
 };
 
 // Test: Override loads correctly — only VC0 has sender/receiver overrides
-TEST_F(Fabric1DChannelTrimmingOverrideChannel0OnlyFixture, OverrideLoaded) {
+TEST_F(ChannelTrimming1DOverrideChannel0OnlyFixture, OverrideLoaded) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
 
@@ -1205,7 +1205,7 @@ TEST_F(Fabric1DChannelTrimmingOverrideChannel0OnlyFixture, OverrideLoaded) {
 
 // Test: 1-hop unicast traffic works with only channel 0 enabled
 // Unicast uses sender channel 0, so this restrictive override should not block traffic.
-TEST_F(Fabric1DChannelTrimmingOverrideChannel0OnlyFixture, UnicastTrafficWithChannel0Only) {
+TEST_F(ChannelTrimming1DOverrideChannel0OnlyFixture, UnicastTrafficWithChannel0Only) {
     auto path_result = find_1d_path_with_hops(1);
     if (!path_result.found) {
         GTEST_SKIP() << "No 1-hop neighbor pair found on the mesh";
@@ -1216,11 +1216,11 @@ TEST_F(Fabric1DChannelTrimmingOverrideChannel0OnlyFixture, UnicastTrafficWithCha
 }
 
 // ============================================================================
-// Tests: Fabric1DChannelTrimmingCaptureAndOverrideFixture (capture + override)
+// Tests: ChannelTrimming1DCaptureAndOverrideFixture (capture + override)
 // ============================================================================
 
 // Test: Both capture overrides and global overrides are loaded
-TEST_F(Fabric1DChannelTrimmingCaptureAndOverrideFixture, BothOverridesLoaded) {
+TEST_F(ChannelTrimming1DCaptureAndOverrideFixture, BothOverridesLoaded) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
 
@@ -1246,7 +1246,7 @@ TEST_F(Fabric1DChannelTrimmingCaptureAndOverrideFixture, BothOverridesLoaded) {
 }
 
 // Test: 1-hop unicast traffic works with capture + override
-TEST_F(Fabric1DChannelTrimmingCaptureAndOverrideFixture, UnicastTrafficWithCaptureAndOverride) {
+TEST_F(ChannelTrimming1DCaptureAndOverrideFixture, UnicastTrafficWithCaptureAndOverride) {
     auto path_result = find_1d_path_with_hops(1);
     if (!path_result.found) {
         GTEST_SKIP() << "No 1-hop neighbor pair found on the mesh";
@@ -1718,7 +1718,7 @@ TEST(ChannelTrimmingGlobalOverride, ApplyVC0S0S1AndVC1AllToEmptyBaseline) {
 // Override-only mode (no capture profile) — the builder context constructs a
 // fully-enabled baseline and applies the override with replacement semantics.
 // ============================================================================
-class Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture : public BaseFabricFixture {
+class ChannelTrimming2DOverrideVC0S0S1VC1AllFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) {
@@ -1775,11 +1775,11 @@ protected:
 };
 
 // ============================================================================
-// Tests: Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture
+// Tests: ChannelTrimming2DOverrideVC0S0S1VC1AllFixture
 // ============================================================================
 
 // Test: Global overrides are loaded and match the YAML specification
-TEST_F(Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture, OverrideLoadedCorrectly) {
+TEST_F(ChannelTrimming2DOverrideVC0S0S1VC1AllFixture, OverrideLoadedCorrectly) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
     const auto& global_overrides = builder_ctx.get_channel_trimming_global_overrides();
@@ -1807,7 +1807,7 @@ TEST_F(Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture, OverrideLoadedCorrec
 // Test: Max channel counts from builder context are consistent with 2D mesh topology
 // Note: VC1 channel counts depend on whether inter-mesh routing is active; on a
 // single-mesh 2D fabric they may be 0.  We only assert VC0 minimums here.
-TEST_F(Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture, ChannelCountsConsistentWith2DMesh) {
+TEST_F(ChannelTrimming2DOverrideVC0S0S1VC1AllFixture, ChannelCountsConsistentWith2DMesh) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
 
@@ -1822,7 +1822,7 @@ TEST_F(Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture, ChannelCountsConsist
 
 // Test: Override-only mode (no capture profile) creates a fully-enabled baseline.
 // Verify that no per-router capture profile is loaded (override-only mode).
-TEST_F(Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture, StandaloneOverrideCreatesFullyEnabledBaseline) {
+TEST_F(ChannelTrimming2DOverrideVC0S0S1VC1AllFixture, StandaloneOverrideCreatesFullyEnabledBaseline) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
 
@@ -1840,7 +1840,7 @@ TEST_F(Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture, StandaloneOverrideCr
 // Uses a T3k 2x2 mesh descriptor (two 2x2 meshes with inter-mesh connectivity),
 // which enables VC1. Per-test SetUp/TearDown because custom mesh graph requires it.
 // ============================================================================
-class T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture : public BaseFabricFixture {
+class ChannelTrimmingT3kIntermeshOverrideVC0S0S1VC1AllFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
@@ -1897,11 +1897,11 @@ protected:
 };
 
 // ============================================================================
-// Tests: T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture
+// Tests: ChannelTrimmingT3kIntermeshOverrideVC0S0S1VC1AllFixture
 // ============================================================================
 
 // Test: Global overrides are loaded and match the YAML specification (with intermesh VC1)
-TEST_F(T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture, OverrideLoadedCorrectly) {
+TEST_F(ChannelTrimmingT3kIntermeshOverrideVC0S0S1VC1AllFixture, OverrideLoadedCorrectly) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
     const auto& global_overrides = builder_ctx.get_channel_trimming_global_overrides();
@@ -1927,7 +1927,7 @@ TEST_F(T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture, OverrideLoadedCo
 }
 
 // Test: VC1 channel counts are non-zero in an intermesh topology
-TEST_F(T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture, IntermeshVC1ChannelCountsNonZero) {
+TEST_F(ChannelTrimmingT3kIntermeshOverrideVC0S0S1VC1AllFixture, IntermeshVC1ChannelCountsNonZero) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
 
@@ -1945,7 +1945,7 @@ TEST_F(T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture, IntermeshVC1Chan
 }
 
 // Test: Override-only mode has no per-router profile, but global overrides are active
-TEST_F(T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture, StandaloneOverrideNoProfile) {
+TEST_F(ChannelTrimmingT3kIntermeshOverrideVC0S0S1VC1AllFixture, StandaloneOverrideNoProfile) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
 
