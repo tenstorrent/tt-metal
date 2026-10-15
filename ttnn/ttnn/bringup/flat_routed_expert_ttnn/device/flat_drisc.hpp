@@ -29,8 +29,11 @@ uint32_t flat_drisc_base();
 uint32_t flat_drisc_size();
 // MIMO_FL_DRISC_TILES (1, 2, or 3 = switch): DRISC tiles used per bank
 uint32_t flat_drisc_tiles();
-// MIMO_FL_DRISC_PURE: every slot on DRISC (switch tiles; reader cells keep only reader down columns)
+// MIMO_FL_DRISC_PURE: every slot on DRISC (switch tiles; reader cells keep only reader down columns). Default: the
+// plan's choice (flat_drisc_set_auto_pure: plans without reader down columns), else dual slots
 bool flat_drisc_pure();
+// set by the plan before the DRISC senders start (process-wide, as the senders: one mode per process)
+void flat_drisc_set_auto_pure(bool pure);
 // switch mode: slot r's alternate {tile, job} (job ~0u: none)
 std::pair<tt::tt_metal::CoreCoord, uint32_t> flat_drisc_alt(tt::tt_metal::IDevice* device, uint32_t r, uint32_t banks);
 // reader slot r's DRISC: in bank r % banks (where its weights are); with one tile per bank the tile that is no endpoint

@@ -4,6 +4,7 @@
 
 #include "flat_drisc.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -107,8 +108,20 @@ uint32_t mpfe_port(IDevice* device, const CoreCoord& logical) {
 // second slot per tile would go on NOC0, but one tile sends ~21-28 GB/s: with MIMO_FL_DRISC_SLOTS 8 the other slots keep
 // Tensix readers); 2 - both Metal tiles of a bank, a slot each (tile 1, its bank's NOC1 endpoint, sends on NOC0)
 // MIMO_FL_DRISC_PURE=1: every slot's gate/up from the DRAM cores (no Tensix weight reads; the reader cells keep only
-// reader down columns where the plan has them), tiles in switch mode (3)
-bool flat_drisc_pure() { return env_or("MIMO_FL_DRISC_PURE", 0) != 0; }
+// reader down columns where the plan has them), tiles in switch mode (3). Default (unset): pure for plans without
+// reader down columns - then with the readers' gate/up assignment and Tensix readers on calls above 96 tokens per expert
+// (flat_routed_expert_plan.cpp) - and dual slots for the others (12 x 10 grid, us / expert dual -> pure, M 32 / 64 / 128
+// / 256 / 512: K3 E56 40.1 / 45.1 / 49.3 / 58.3 / 96.0 -> 39.3 / 41.4 / 47.9 / 56.9 / 96.0, K3 E12 43.6 / 46.6 / 52.3 /
+// 63.4 / 101.2 -> 41.5 / 44.3 / 49.5 / 60.0 / 101.2, GLM-Flash 32.9 / 35.3 / 38.7 / 47.9 / 68.3 -> 33.3 / 33.8 / 38.2 /
+// 46.4 / 68.3; K2.7 E12, reader down columns, pure 60.1 / 63.6 / 69.9 / 85.6 vs dual 56.2 / 60.2 / 68.5 / 83.8)
+namespace {
+std::atomic<bool> auto_pure{false};
+}
+void flat_drisc_set_auto_pure(bool pure) { auto_pure = pure; }
+bool flat_drisc_pure() {
+    const char* v = std::getenv("MIMO_FL_DRISC_PURE");
+    return v != nullptr ? std::atoi(v) != 0 : auto_pure.load();
+}
 
 uint32_t flat_drisc_tiles() { return env_or("MIMO_FL_DRISC_TILES", flat_drisc_pure() ? 3 : 1); }
 
