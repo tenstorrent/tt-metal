@@ -221,13 +221,8 @@ _TERNARY_RECIP_NEWTON_OPS = [
     mathop=_TERNARY_RECIP_NEWTON_OPS,
 )
 def test_sfpu_ternary_approx_after_lreg_clobber(formats, dest_acc, mathop):
-    """APPROX_MODE=Yes, with the SFPU registers clobbered before the op's init.
-
-    clobber_sfpu_lregs() leaves 0x42424242 (about 48.56) in vConstFloatPrgm0, as another op's
-    init would leave its own value in a fused kernel. On Blackhole, sfpu_reciprocal_init<true>
-    leaves vConstFloatPrgm0 alone (the approximate reciprocal runs no Newton step), so an init
-    that forwarded APPROX_MODE there handed the Newton step 48.56 instead of 2.0, and 1/c came
-    out about 47.6 times too large.
+    """APPROX_MODE=Yes with the SFPU registers clobbered first: the init must program the
+    Newton step's 2.0 (vConstFloatPrgm0) itself, or 1/c comes out about 47.6x too large.
     """
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip(
