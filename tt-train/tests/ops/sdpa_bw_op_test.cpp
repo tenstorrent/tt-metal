@@ -10,10 +10,12 @@
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ops/scaled_dot_product_attention.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -587,7 +589,7 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
 
     // ========== Optional gate ==========
     // Forward: Y = O * s with s = sigmoid(G), G shaped like grad_output (B, qNH, S, vD).
-    // Backward receives dY (grad_output) and Y (attn_output). The ungated references below are
+    // Backward receives dY (grad_output) and Y (attn_output). The ungated float reference below is
     // fed dO = dY * s, which is the gradient that reaches the attention block. The gate gradient
     // is dG = dY * O * s * (1 - s). Use a different seed so G != dY (same shape, same seed would
     // produce identical tensors and make the gate check vacuous).
@@ -595,7 +597,6 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     xt::xarray<float> gate_sigmoid;
     xt::xarray<float> effective_grad_output_tensor = grad_output_tensor;
     std::optional<ttnn::Tensor> gate = std::nullopt;
-    auto effective_grad_output = grad_output;
     if (use_gate) {
         const xt::xarray<float> gate_tensor =
             config.gate_min == config.gate_max ? xt::xarray<float>(xt::full_like(grad_output_tensor, config.gate_min))
@@ -604,7 +605,6 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         gate_sigmoid = 1.0F / (1.0F + xt::exp(-gate_tensor));
         effective_grad_output_tensor = grad_output_tensor * gate_sigmoid;
         gate = core::from_xtensor(gate_tensor, device);
-        effective_grad_output = core::from_xtensor(effective_grad_output_tensor, device);
     }
 
     // ========== Pure Float Reference (Ground Truth) ==========
@@ -617,14 +617,20 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const auto& float_attn_output = float_gradients[4];  // ungated O
 
     // ========== Composite Implementation (uses ttnn ops) ==========
-    auto composite_output =
-        composite_sdpa(query, key, value, effective_grad_output, attn_mask, /*return_intermediate=*/true);
-    const auto composite_attn_output = /* attn_output */ composite_output[0];
-    [[maybe_unused]] auto composite_lse = /* logsumexp */ composite_output[1];
-    const auto dL_dQ = /* dL_dQ */ composite_output[2];
-    const auto dL_dK = /* dL_dK */ composite_output[3];
-    const auto dL_dV = /* dL_dV */ composite_output[4];
-    [[maybe_unused]] const auto attention_weights = /* attention_weights */ composite_output[5];
+    // Ungated rows only. Only the composite's forward output is asserted; its gradients feed shape checks and
+    // the informational comparisons below. Gated rows already check the forward against the float reference,
+    // so they skip the composite and the full set of ttnn backward compiles it costs per row.
+    xt::xarray<float> composite_attn_output_cpu;
+    xt::xarray<float> composite_dQ;
+    xt::xarray<float> composite_dK;
+    xt::xarray<float> composite_dV;
+    if (!use_gate) {
+        auto composite_output = composite_sdpa(query, key, value, grad_output, attn_mask, /*return_intermediate=*/true);
+        composite_attn_output_cpu = core::to_xtensor(/* attn_output */ composite_output[0]);
+        composite_dQ = core::to_xtensor(/* dL_dQ */ composite_output[2]);
+        composite_dK = core::to_xtensor(/* dL_dK */ composite_output[3]);
+        composite_dV = core::to_xtensor(/* dL_dV */ composite_output[4]);
+    }
 
     // ========== SDPA Forward Kernel (get attn_output and intermediates) ==========
     const auto sdpa_fw_result = ttml::metal::sdpa_fw(
@@ -660,38 +666,35 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     // Convert forward kernel outputs for comparison
     const xt::xarray<float> kernel_attn_output_cpu = core::to_xtensor(kernel_attn_output);
     const xt::xarray<float> kernel_intermediates_cpu = core::to_xtensor(kernel_intermediates);
-    const xt::xarray<float> composite_attn_output_cpu = core::to_xtensor(composite_attn_output);
 
-    // The kernel forward output is gated; the float / composite references are not.
+    // The kernel forward output is gated; the float reference is not.
     const xt::xarray<float> expected_float_attn_output =
         use_gate ? xt::eval(float_attn_output * gate_sigmoid) : float_attn_output;
-    const xt::xarray<float> expected_composite_attn_output =
-        use_gate ? xt::eval(composite_attn_output_cpu * gate_sigmoid) : composite_attn_output_cpu;
 
     const auto& [kernel_dQ, kernel_dK, kernel_dV, kernel_dGate] = op_result;
     const xt::xarray<float> sdpa_bw_dQ = core::to_xtensor(kernel_dQ);  // dL_dQ
     const xt::xarray<float> sdpa_bw_dK = core::to_xtensor(kernel_dK);  // dL_dK
     const xt::xarray<float> sdpa_bw_dV = core::to_xtensor(kernel_dV);  // dL_dV
 
-    const xt::xarray<float> composite_dQ = core::to_xtensor(dL_dQ);
-    const xt::xarray<float> composite_dK = core::to_xtensor(dL_dK);
-    const xt::xarray<float> composite_dV = core::to_xtensor(dL_dV);
-
     // Verify shapes match
-    ASSERT_EQ(sdpa_bw_dQ.shape(), composite_dQ.shape()) << "kernel_dQ shape != composite_dQ shape";
     ASSERT_EQ(sdpa_bw_dQ.shape(), float_dQ.shape()) << "kernel_dQ shape != float_dQ shape";
-    ASSERT_EQ(sdpa_bw_dK.shape(), composite_dK.shape()) << "kernel_dK shape != composite_dK shape";
     ASSERT_EQ(sdpa_bw_dK.shape(), float_dK.shape()) << "kernel_dK shape != float_dK shape";
-    ASSERT_EQ(sdpa_bw_dV.shape(), composite_dV.shape()) << "kernel_dV shape != composite_dV shape";
     ASSERT_EQ(sdpa_bw_dV.shape(), float_dV.shape()) << "kernel_dV shape != float_dV shape";
+    if (!use_gate) {
+        ASSERT_EQ(sdpa_bw_dQ.shape(), composite_dQ.shape()) << "kernel_dQ shape != composite_dQ shape";
+        ASSERT_EQ(sdpa_bw_dK.shape(), composite_dK.shape()) << "kernel_dK shape != composite_dK shape";
+        ASSERT_EQ(sdpa_bw_dV.shape(), composite_dV.shape()) << "kernel_dV shape != composite_dV shape";
+    }
 
     // Check for NaN/Inf values
     EXPECT_TRUE(xt::all(xt::isfinite(float_dQ))) << "float_dQ contains NaN or Inf values";
     EXPECT_TRUE(xt::all(xt::isfinite(float_dK))) << "float_dK contains NaN or Inf values";
     EXPECT_TRUE(xt::all(xt::isfinite(float_dV))) << "float_dV contains NaN or Inf values";
-    EXPECT_TRUE(xt::all(xt::isfinite(composite_dQ))) << "composite_dQ contains NaN or Inf values";
-    EXPECT_TRUE(xt::all(xt::isfinite(composite_dK))) << "composite_dK contains NaN or Inf values";
-    EXPECT_TRUE(xt::all(xt::isfinite(composite_dV))) << "composite_dV contains NaN or Inf values";
+    if (!use_gate) {
+        EXPECT_TRUE(xt::all(xt::isfinite(composite_dQ))) << "composite_dQ contains NaN or Inf values";
+        EXPECT_TRUE(xt::all(xt::isfinite(composite_dK))) << "composite_dK contains NaN or Inf values";
+        EXPECT_TRUE(xt::all(xt::isfinite(composite_dV))) << "composite_dV contains NaN or Inf values";
+    }
     EXPECT_TRUE(xt::all(xt::isfinite(sdpa_bw_dQ))) << "kernel_dQ contains NaN or Inf values";
     EXPECT_TRUE(xt::all(xt::isfinite(sdpa_bw_dK))) << "kernel_dK contains NaN or Inf values";
     EXPECT_TRUE(xt::all(xt::isfinite(sdpa_bw_dV))) << "kernel_dV contains NaN or Inf values";
@@ -701,7 +704,7 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     // output don't propagate to dQ/dK/dV at the same magnitude, so the gradient checks
     // below stay on the tighter atol/rtol).
     const bool fw_attn_output_matches =
-        xt::allclose(kernel_attn_output_cpu, expected_composite_attn_output, fw_rtol, fw_atol);
+        use_gate || xt::allclose(kernel_attn_output_cpu, composite_attn_output_cpu, fw_rtol, fw_atol);
     // Kernel forward attn output vs FLOAT reference — the bf16-free check that tells us
     // whether the kernel is the outlier (vs composite which is also bf16).
     const bool fw_attn_output_matches_float =
@@ -713,9 +716,12 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const bool kernel_dQ_matches_float = xt::allclose(sdpa_bw_dQ, float_dQ, rtol, atol);
     const bool kernel_dK_matches_float = xt::allclose(sdpa_bw_dK, float_dK, rtol, atol);
     const bool kernel_dV_matches_float = xt::allclose(sdpa_bw_dV, float_dV, rtol, atol);
-    [[maybe_unused]] const bool composite_dQ_matches_float = xt::allclose(composite_dQ, float_dQ, rtol, atol);
-    [[maybe_unused]] const bool composite_dK_matches_float = xt::allclose(composite_dK, float_dK, rtol, atol);
-    [[maybe_unused]] const bool composite_dV_matches_float = xt::allclose(composite_dV, float_dV, rtol, atol);
+    [[maybe_unused]] const bool composite_dQ_matches_float =
+        use_gate || xt::allclose(composite_dQ, float_dQ, rtol, atol);
+    [[maybe_unused]] const bool composite_dK_matches_float =
+        use_gate || xt::allclose(composite_dK, float_dK, rtol, atol);
+    [[maybe_unused]] const bool composite_dV_matches_float =
+        use_gate || xt::allclose(composite_dV, float_dV, rtol, atol);
 
     // Assertions
     EXPECT_TRUE(fw_attn_output_matches) << "Forward attn output (vs composite) mismatch in " << config.test_name;
@@ -1065,7 +1071,7 @@ INSTANTIATE_TEST_SUITE_P(
             .value_dim = 32U,  // 2 heads * 16
             .num_query_heads = 2U,
             .num_kv_heads = 2U,
-            .test_name = "SmallV_Causal",
+            .test_name = "NIGHTLY_SmallV_Causal",
             .mask_type = ttml::metal::AttentionMaskType::Causal,
             .use_gate = true},
         // Same shape as above (program-cache hit) with |G| up to 10: s -> 0 closes the gate (dO -> 0),
@@ -1079,7 +1085,7 @@ INSTANTIATE_TEST_SUITE_P(
             .value_dim = 32U,  // 2 heads * 16
             .num_query_heads = 2U,
             .num_kv_heads = 2U,
-            .test_name = "SmallV_Causal_SaturatedGate",
+            .test_name = "NIGHTLY_SmallV_Causal_SaturatedGate",
             .mask_type = ttml::metal::AttentionMaskType::Causal,
             .use_gate = true,
             .gate_min = -10.0F,
@@ -1094,7 +1100,7 @@ INSTANTIATE_TEST_SUITE_P(
             .key_value_dim = 64U,
             .num_query_heads = 4U,
             .num_kv_heads = 2U,
-            .test_name = "Arbitrary_GQA_3B",
+            .test_name = "NIGHTLY_Arbitrary_GQA_3B",
             .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
             .use_gate = true},
         // Dh_v = 128 -> vWt = 4 with Dh_qk = 32: the gate helper loops over four tiles per row and the dP
@@ -1108,7 +1114,7 @@ INSTANTIATE_TEST_SUITE_P(
             .value_dim = 256U,  // 2 heads * 128
             .num_query_heads = 2U,
             .num_kv_heads = 2U,
-            .test_name = "LargeV_NoMask",
+            .test_name = "NIGHTLY_LargeV_NoMask",
             .mask_type = ttml::metal::AttentionMaskType::None,
             .use_gate = true},
         // Balanced-parallelism path combined with GQA: heavy and light rows of a pair belong to the same
@@ -1278,31 +1284,6 @@ TEST_F(SDPABackwardTest, Validation_RejectsRowMajorGate) {
         << "sdpa_bw should reject a ROW_MAJOR gate";
 }
 
-TEST_F(SDPABackwardTest, Validation_AcceptsValidGateAndReturnsGradGate) {
-    using namespace ttml;
-    const auto in = make_minimal_sdpa_bw_inputs();
-    auto* device = &autograd::ctx().get_device();
-
-    // Positive control for the rejection tests above: a well-formed gate must be accepted and
-    // produce a grad_gate with grad_output's shape. Values are not checked here.
-    const std::array<std::size_t, 4> shape{1U, 1U, 32U, 32U};
-    const auto gate = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U), device);
-    const auto [dQ, dK, dV, dGate] = metal::sdpa_bw(
-        in.grad_output,
-        in.attn_output,
-        in.query,
-        in.key,
-        in.value,
-        in.intermediates,
-        metal::AttentionMaskType::None,
-        std::nullopt,
-        0.0F,
-        gate);
-    ASSERT_TRUE(dGate.has_value()) << "sdpa_bw must return grad_gate when a gate is passed";
-    EXPECT_EQ(dGate->logical_shape(), in.grad_output.logical_shape());
-    EXPECT_EQ(dGate->dtype(), in.grad_output.dtype());
-}
-
 TEST_F(SDPABackwardTest, GateTest_ProgramCacheHitReadsNewGate) {
     // On a program-cache hit, override_runtime_arguments patches three gate-related addresses in the Q kernel:
     // the gate input, the grad_gate output and the gated-dO buffer handed to the KV kernel. Run the gated
@@ -1387,6 +1368,93 @@ TEST_F(SDPABackwardTest, GateTest_ProgramCacheHitReadsNewGate) {
         << "Cache-hit run reproduced the first gate's dQ: stale gate address";
     EXPECT_FALSE(xt::allclose(dG_b_host, core::to_xtensor(dG_a.value()), rtol, atol))
         << "Cache-hit run reproduced the first gate's grad_gate: stale gate address";
+}
+
+TEST_F(SDPABackwardTest, GateTest_AutogradGateGradMatchesKernel) {
+    // ops::scaled_dot_product_attention must route the gate through autograd: the backward node passes it to
+    // sdpa_bw and adds grad_gate to gate->get_grad(). The second case leaves only the gate requiring grad, so the
+    // node must not be pruned. The op runs the same kernels on the same inputs as the direct calls below, so the
+    // gradients must be bit-identical, even though the op writes grad_gate into the forward output's buffer and
+    // the gated dO into the output gradient's buffer. That second reuse overwrites the tensor passed to set_grad,
+    // so each case uploads its own copy of dY. Shapes match GateTest_ProgramCacheHitReadsNewGate, so the kernels
+    // are already built when both tests run.
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+
+    constexpr std::size_t B = 1U, H = 2U, S = 64U, D = 64U;
+    constexpr auto mask_type = metal::AttentionMaskType::Causal;  // what the op uses when no mask is passed
+    const std::array<std::size_t, 4> shape{B, H, S, D};
+    auto& rng = autograd::ctx().get_generator();
+    const uint32_t seed = rng();
+
+    const auto q = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), device);
+    const auto k =
+        core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 1U), device);
+    const auto v =
+        core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 2U), device);
+    const auto dY =
+        core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 3U), device);
+    const auto gate =
+        core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -4.0F, 4.0F, seed + 4U), device);
+    const xt::xarray<float> dY_host = core::to_xtensor(dY);
+    const xt::xarray<float> gate_host = core::to_xtensor(gate);
+    const xt::xarray<float> dO_host = dY_host / (1.0F + xt::exp(-gate_host));
+
+    // Direct kernel reference.
+    const auto fw = metal::sdpa_fw(q, k, v, mask_type, std::nullopt, 0.0F, true, gate);
+    const auto [dQ_ref, dK_ref, dV_ref, dG_ref] =
+        metal::sdpa_bw(dY, fw[0].value(), q, k, v, fw[1].value(), mask_type, std::nullopt, 0.0F, gate);
+    ASSERT_TRUE(dG_ref.has_value());
+    const xt::xarray<float> dQ_ref_host = core::to_xtensor(dQ_ref);
+    const xt::xarray<float> dK_ref_host = core::to_xtensor(dK_ref);
+    const xt::xarray<float> dV_ref_host = core::to_xtensor(dV_ref);
+    const xt::xarray<float> dG_ref_host = core::to_xtensor(dG_ref.value());
+
+    for (const bool qkv_requires_grad : {true, false}) {
+        SCOPED_TRACE(qkv_requires_grad ? "Q, K, V and gate require grad" : "only the gate requires grad");
+        auto q_t = autograd::create_tensor(q, qkv_requires_grad);
+        auto k_t = autograd::create_tensor(k, qkv_requires_grad);
+        auto v_t = autograd::create_tensor(v, qkv_requires_grad);
+        auto gate_t = autograd::create_tensor(gate, /*requires_grad=*/true);
+
+        auto out = ops::scaled_dot_product_attention(q_t, k_t, v_t, std::nullopt, 0.0F, gate_t);
+        ASSERT_TRUE(out->get_node().has_value()) << "the gate requires grad, so the backward node must not be pruned";
+        out->set_grad(core::from_xtensor(dY_host, device));
+        out->backward();
+
+        ASSERT_TRUE(gate_t->is_grad_initialized()) << "backward did not populate gate->get_grad()";
+        EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(gate_t->get_grad()), dG_ref_host)))
+            << "gate->get_grad() differs from metal::sdpa_bw's grad_gate";
+        EXPECT_EQ(gate_t->get_grad().buffer()->address(), out->get_value().buffer()->address())
+            << "grad_gate should be written into the forward output's buffer";
+        // One SFPU sigmoid and one bf16 rounding away from the host dY * sigmoid(gate).
+        EXPECT_TRUE(xt::allclose(core::to_xtensor(out->get_grad()), dO_host, 8e-3F, 1e-4F))
+            << "the gated dO should be written into the output gradient's buffer";
+        if (qkv_requires_grad) {
+            EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(q_t->get_grad()), dQ_ref_host)));
+            EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(k_t->get_grad()), dK_ref_host)));
+            EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(v_t->get_grad()), dV_ref_host)));
+        } else {
+            EXPECT_FALSE(q_t->is_grad_initialized());
+            EXPECT_FALSE(k_t->is_grad_initialized());
+            EXPECT_FALSE(v_t->is_grad_initialized());
+        }
+        autograd::ctx().reset_graph();
+    }
+
+    // The first gated backward overwrites Y with dG, so a second one over a retained graph must throw rather
+    // than hand dG to sdpa_bw as Y.
+    {
+        auto q_t = autograd::create_tensor(q, /*requires_grad=*/true);
+        auto k_t = autograd::create_tensor(k, /*requires_grad=*/true);
+        auto v_t = autograd::create_tensor(v, /*requires_grad=*/true);
+        auto gate_t = autograd::create_tensor(gate, /*requires_grad=*/true);
+        auto out = ops::scaled_dot_product_attention(q_t, k_t, v_t, std::nullopt, 0.0F, gate_t);
+        out->set_grad(core::from_xtensor(dY_host, device));
+        out->backward(/*retain_graph=*/true);
+        EXPECT_THROW(out->backward(/*retain_graph=*/true), std::runtime_error);
+        autograd::ctx().reset_graph();
+    }
 }
 
 TEST_F(SDPABackwardTest, Validation_RejectsMalformedIntermediates) {

@@ -46,7 +46,8 @@ void kernel_main() {
     constexpr auto grad_query_args = TensorAccessorArgs<3>();
     constexpr auto u_scaler_args = TensorAccessorArgs<grad_query_args.next_compile_time_args_offset()>();
     constexpr auto grad_gate_args = TensorAccessorArgs<u_scaler_args.next_compile_time_args_offset()>();
-    constexpr auto gated_grad_output_args = TensorAccessorArgs<grad_gate_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto gated_grad_output_args =
+        TensorAccessorArgs<grad_gate_args.next_compile_time_args_offset()>();
 
     // Create TensorAccessor generators
     const auto grad_query_addr_generator = TensorAccessor(grad_query_args, grad_query_addr);

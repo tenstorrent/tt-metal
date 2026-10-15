@@ -21,6 +21,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>
     const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,  // attention mask (only for Arbitrary)
     const float dropout_probability = 0.0F,
     const std::optional<ttnn::Tensor>& gate =
-        std::nullopt);  // out = sdpa(Q, K, V) * sigmoid(gate); gate shape (B, H, S, Dv)
+        std::nullopt,  // out = sdpa(Q, K, V) * sigmoid(gate); gate shape (B, H, S, Dv)
+    const std::optional<ttnn::Tensor>& preallocated_grad_gate =
+        std::nullopt,  // grad_gate output buffer, shape (B, H, S, Dv); may alias attn_output
+    const std::optional<ttnn::Tensor>& preallocated_gated_grad_output =
+        std::nullopt);  // dO = dY * sigmoid(gate) buffer, shape (B, H, S, Dv); may alias grad_output
 
 }  // namespace ttml::metal

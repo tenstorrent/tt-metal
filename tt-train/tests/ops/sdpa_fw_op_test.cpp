@@ -615,7 +615,7 @@ void run_sdpa_test(const SDPATestConfig& config) {
 
         // (1) gated == ungated * sigmoid(gate)
         xt::xarray<float> expected_from_ungated = apply_gate_reference(ungated_xtensor, gate_tensor.value());
-        EXPECT_TRUE(xt::allclose(result_xtensor, expected_from_ungated, kGateAtol, kGateRtol))
+        EXPECT_TRUE(xt::allclose(result_xtensor, expected_from_ungated, kGateRtol, kGateAtol))
             << "Gated kernel output != ungated kernel output * sigmoid(gate) in " << config.test_name
             << " (MSE: " << compute_mse(expected_from_ungated, result_xtensor) << ")";
 
@@ -1159,7 +1159,7 @@ INSTANTIATE_TEST_SUITE_P(
             .num_key_heads = 2U,
             .mask_type = ttml::metal::AttentionMaskType::Causal,
             .use_gate = true,
-            .test_name = "Dv96_Causal"},
+            .test_name = "NIGHTLY_Dv96_Causal"},
         // Dh_v = 128 -> vWt = 4 -> block_size = 2: copy_tile must offset by tile_idx into the second block.
         // Two batches and a DRAM mask: the gate address follows the mask runtime args, and batch 1 must read
         // gate[1], not gate[0].
@@ -1173,7 +1173,7 @@ INSTANTIATE_TEST_SUITE_P(
             .num_key_heads = 2U,
             .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
             .use_gate = true,
-            .test_name = "Dv128_Arbitrary_2B"},
+            .test_name = "NIGHTLY_Dv128_Arbitrary_2B"},
         // Dh_v = 160 -> vWt = 5 -> block_size = 1: five single-tile blocks, no mask CB traffic at all.
         SDPATestConfig{
             .batch_size = 1U,
@@ -1185,7 +1185,7 @@ INSTANTIATE_TEST_SUITE_P(
             .num_key_heads = 2U,
             .mask_type = ttml::metal::AttentionMaskType::None,
             .use_gate = true,
-            .test_name = "Dv160_NoMask"},
+            .test_name = "NIGHTLY_Dv160_NoMask"},
         // GQA: 4 query heads share 2 KV heads. The gate has num_query_heads heads and is indexed by query head.
         SDPATestConfig{
             .batch_size = 1U,
@@ -1196,7 +1196,7 @@ INSTANTIATE_TEST_SUITE_P(
             .num_key_heads = 2U,
             .mask_type = ttml::metal::AttentionMaskType::Causal,
             .use_gate = true,
-            .test_name = "GQA_4Q_2KV"},
+            .test_name = "NIGHTLY_GQA_4Q_2KV"},
         // Balanced parallelism: causal, even St, and B*H*St/2 >= number of cores (B=4, H=12, S=256 gives 192
         // light/heavy row pairs), so the program factory selects the paired reader/compute/writer loops and the
         // gate is read inside the paired read_row lambda.
@@ -1209,7 +1209,7 @@ INSTANTIATE_TEST_SUITE_P(
             .num_key_heads = 12U,
             .mask_type = ttml::metal::AttentionMaskType::Causal,
             .use_gate = true,
-            .test_name = "BalancedParallelism_4B_12H_256S"}),
+            .test_name = "NIGHTLY_BalancedParallelism_4B_12H_256S"}),
     [](const ::testing::TestParamInfo<SDPATestConfig>& info) { return info.param.test_name; });
 
 // --- Structured gates with analytically known results ------------------------
@@ -1296,7 +1296,7 @@ TEST_F(SDPAForwardTest, GateTest_IsElementwiseNotBroadcast) {
     EXPECT_NEAR(gated(1, 1, 0, 0), ungated(1, 1, 0, 0), 1e-2F) << "(b=1,h=1,s=0,d=0) is open";
 }
 
-TEST_F(SDPAForwardTest, GateTest_WorksWithoutIntermediates) {
+TEST_F(SDPAForwardTest, NIGHTLY_GateTest_WorksWithoutIntermediates) {
     // Gate path with return_intermediates = false must still produce the gated output and no intermediates.
     using namespace ttml;
     auto t = make_gate_fixture();
@@ -1394,9 +1394,9 @@ TEST_F(SDPAForwardTest, GateTest_ProgramCacheHitReadsNewGate) {
     const xt::xarray<float> out_a_host = core::to_xtensor(out_a[0].value());
     const xt::xarray<float> out_b_host = core::to_xtensor(out_b[0].value());
     const xt::xarray<float> expected_b = apply_gate_reference(ungated_host, gate_b_host);
-    EXPECT_TRUE(xt::allclose(out_b_host, expected_b, 1e-4F, 8e-3F))
+    EXPECT_TRUE(xt::allclose(out_b_host, expected_b, 8e-3F, 1e-4F))
         << "Cache-hit run did not apply the second gate (MSE vs expected: " << compute_mse(expected_b, out_b_host)
         << ")";
-    EXPECT_FALSE(xt::allclose(out_b_host, out_a_host, 1e-4F, 8e-3F))
+    EXPECT_FALSE(xt::allclose(out_b_host, out_a_host, 8e-3F, 1e-4F))
         << "Cache-hit run reproduced the first gate's output: stale gate address";
 }
