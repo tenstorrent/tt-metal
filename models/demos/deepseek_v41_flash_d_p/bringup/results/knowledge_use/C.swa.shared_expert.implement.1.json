@@ -1,0 +1,61 @@
+{
+ "used": [
+  {
+   "id": "K-25",
+   "how": "fp32 g / u / h intermediates and fp32 partial out (ttnn.linear dtype=float32), HiFi4 + fp32 acc",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "TP partial sum by gather_add (all_gather + SFPU add) by default, not reduce_scatter's FPU add",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-13",
+   "how": "q(x) and q(h) with tt/quant.fp8_qdq (bit-exact), blocks of 32 inside the chip's I/TP slice",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-25",
+   "how": "kept the w2 partials fp32 before the TP sum so the output stays in w2's column span (0.00014 vs limit 0.003)",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "n/a",
+   "evidence": "this task does not touch known_issues.md; DS41-20 already reads '(RESOLVED by the framework, F73)' with the 2 x component-error limit"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "K-52"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.shared_expert",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T18:52:21",
+  "head": "c79ea56e501",
+  "touched": [
+   "models/demos/common/bringup/knowledge/known_issues.md",
+   "models/demos/common/bringup/knowledge/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.shared_expert.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/shared_expert.py"
+  ]
+ }
+}

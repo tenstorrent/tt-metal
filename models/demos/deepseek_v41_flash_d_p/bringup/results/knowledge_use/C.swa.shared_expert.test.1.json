@@ -1,0 +1,65 @@
+{
+ "used": [
+  {
+   "id": "DS41-14",
+   "how": "copied the kv test's pattern: a structural check of the output on every built-in input plus the test's own mutation sweep, instead of tightening the calibrated rel limit",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-22",
+   "how": "explained why noise1e-2 slips: the fp8 q-dq of x and h puts the bf16 precision model's rel near 1 %, so no rel limit can separate it",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-36",
+   "how": "1 % noise sits below the device floor: added a structural check (w2 column span) rather than a tighter limit",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-44",
+   "how": "span metric in float64, non-finite outputs fail, `not e <= limit` so NaN fails",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "read the first 'FAIL pcc 0.000000' block of each run as the precompile collect pass and judged the real pass",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a GEMM-last step's output lies in the weight's column span (K < N): a cheap noise detector (added as DS41-25)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "n/a",
+   "evidence": "DS41-20 in known_issues.md already says '(RESOLVED by the framework, F73) ... the limit is now 2 x the step's own component error, no cap'; this task needed no change to it"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "DS41-25"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.shared_expert",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T18:48:06",
+  "head": "f6df2f274a5",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.shared_expert.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_shared_expert.py"
+  ]
+ }
+}

@@ -68,7 +68,8 @@ TABLE = {
     "EXPERTS_SUM": Setting(
         "gather_add",
         ("gather_add", "reduce_scatter"),
-        "the dispatch groups' expert partials [S/SP, H] fp32 summed over axis 1: gather_add = all_gather + SFPU "
+        "the dispatch groups' expert partials (and the shared expert's TP partials, tt/shared_expert.py) [S/SP, H] fp32 "
+        "summed over axis 1: gather_add = all_gather + SFPU "
         "ttnn.add, then the chip's hidden slice (exact fp32, K-30); reduce_scatter = one CCL whose FPU add reads fp32 "
         "at about TF32",
     ),
