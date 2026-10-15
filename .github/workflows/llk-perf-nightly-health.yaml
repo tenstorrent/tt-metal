@@ -1,6 +1,8 @@
 name: "LLK perf nightly health"
 
 on:
+  push:
+    branches: [perf-trial/nightly-health]
   workflow_run:
     workflows: ["LLK perf", "LLK perf gate"]
     types: [completed]
@@ -18,7 +20,6 @@ permissions:
 jobs:
   health:
     name: "Check the nightlies and report"
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'schedule'
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -38,7 +39,7 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           OWNER_SLACK_ID: U0BCPNHUF43
           SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
-          DAY: ${{ inputs.date || github.event.workflow_run.created_at }}
+          DAY: ${{ inputs.date || github.event.workflow_run.created_at || '2026-10-15' }}
           TRIGGER_RUN: ${{ github.event.workflow_run.id }}
         run: |
           python3 tt_metal/tt-llk/perf/nightly_health.py \
