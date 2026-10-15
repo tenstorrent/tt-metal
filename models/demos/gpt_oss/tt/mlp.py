@@ -170,8 +170,9 @@ class MLP:
             )
 
         # Routed top-k prefill experts (experts/prefill_routed.py): only the routed (token, expert) pairs are computed,
-        # with local expert parallelism over the mesh row. GPT_OSS_ROUTED_PREFILL=0 keeps the dense prefill path;
-        # prefills shorter than GPT_OSS_ROUTED_PREFILL_MIN_SEQ (or not a multiple of 64, or batch > 1) still run dense.
+        # with local expert parallelism over the mesh row. On by default on Blackhole 1xN meshes;
+        # GPT_OSS_ROUTED_PREFILL=0 selects the dense prefill path. Prefills shorter than GPT_OSS_ROUTED_PREFILL_MIN_SEQ
+        # (default 128), not a multiple of 64, or with batch > 1 still run dense.
         # With the flag on, missing routed weights (no HF expert weights and an incomplete routed cache) raise
         # RoutedWeightsUnavailable instead of silently falling back to dense.
         self.routed_prefill = None

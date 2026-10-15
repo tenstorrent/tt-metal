@@ -44,8 +44,9 @@ ROUTED_PREFILL_ENV = "GPT_OSS_ROUTED_PREFILL"
 ROUTED_PREFILL_MIN_SEQ_ENV = "GPT_OSS_ROUTED_PREFILL_MIN_SEQ"
 ROUTED_PREFILL_CHUNK_ENV = "GPT_OSS_ROUTED_PREFILL_CHUNK"
 ROUTED_PREFILL_BF8_LAYERS_ENV = "GPT_OSS_ROUTED_PREFILL_BF8_LAYERS"
-# Set GPT_OSS_ROUTED_PREFILL=1 for the routed path, 0 for the dense all-expert prefill path.
-ROUTED_PREFILL_DEFAULT = "0"
+# The routed path is the default where the mesh supports it (Blackhole, one mesh row: routed_prefill_mesh_supported);
+# GPT_OSS_ROUTED_PREFILL=0 selects the dense all-expert prefill path instead.
+ROUTED_PREFILL_DEFAULT = "1"
 # Shortest prefill (tokens) that takes the routed path; shorter ones run dense.
 ROUTED_PREFILL_MIN_SEQ_DEFAULT = 128
 # Tokens per routed chunk: bounds the dispatch / combine buffers ([4C, H] and [C, 4, H] bf16 per device).

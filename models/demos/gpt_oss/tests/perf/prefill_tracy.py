@@ -46,7 +46,8 @@ MAX_SEQ_LEN = max(PREFILL_LENGTHS)
 @pytest.mark.timeout(6 * 3600)
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_prefill_tracy(mesh_device, device_params, monkeypatch):
-    assert os.getenv("GPT_OSS_ROUTED_PREFILL", "0") in ("", "0"), "baseline capture is the dense expert path"
+    # The routed path is the default on Blackhole 1xN, so the dense baseline needs the flag set explicitly.
+    assert os.getenv("GPT_OSS_ROUTED_PREFILL") == "0", "dense baseline capture: set GPT_OSS_ROUTED_PREFILL=0"
     num_layers = int(os.getenv("PREFILL_TRACY_LAYERS", "2"))
     lengths = parse_lengths(os.getenv("PREFILL_LENGTHS", "all"))
 
