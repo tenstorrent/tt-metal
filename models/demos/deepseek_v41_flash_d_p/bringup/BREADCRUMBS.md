@@ -571,3 +571,15 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - OV-4: DS41-20 already states the F73 fix; known_issues.md not touched.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_kv.py`
   (add `BRINGUP_IMPL=reference|stub|mutations` for the freeze checks).
+
+## C.swa_engram.attention implement (attempt 1)
+- The window attention of layer 1 is the swa module (`tt/attention.py:TtWindowAttention` via `build_attention(...,
+  layer)`, layer 1 weights and sink); device_component was already generic, so the frozen component test passed
+  before any change (pcc 0.9997). The orchestrator's pre-run failed only the contract: the hybrid's
+  `DEVICE_STEPS["swa_engram"]` held the engram steps alone, so layer 1 had no device window cache (DS41-28).
+- hooks.py: `DEVICE_STEPS["swa_engram"]` += attn_hc, attn_collapse, attn_norm, q_a, kv, attention (all passed their
+  component gates and the swap tests S.swa_engram.01-08 on the same swa modules). No tt/ change, no fork change.
+- Gate: PASS. pcc_attention_L01 0.999704 (vs CPU rel 0.0222, limit 0.0301); test_cache_starts 4/4 (layer 1,
+  0 failures each). The pcc-0 FAIL lines before the real pass are the precompile collect pass (K-52).
+- OV-4: DS41-20 already states the F73 fix; unchanged.
+- Re-run: `PYTHONPATH=$PWD BRINGUP_TASK=C.swa_engram.attention scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attention.py && PYTHONPATH=$PWD BRINGUP_TASK=C.swa_engram.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`
