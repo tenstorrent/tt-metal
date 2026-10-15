@@ -1358,6 +1358,14 @@ tasks:
     kind: op
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-10-15T19:59:29'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_collapse.py: 3161b21cafa187a654445c8083f91c6ab8edda18fe343ca30350347e51a68c57
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.05
   title: 'swa_engram block with steps 1-5 on device (last: attn_collapse)'
   step: implement
