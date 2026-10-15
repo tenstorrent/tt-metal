@@ -30,13 +30,17 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <string>
 #include <thread>
 #include <tuple>
 #include <vector>
+
+#include <unistd.h>
 
 #include "gtest/gtest.h"
 
@@ -63,6 +67,7 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/tensor/d2d_pipeline_descriptor.hpp"
 #include "ttnn/tensor/d2d_stream_service.hpp"
 #include "ttnn/services/h2d_socket_service.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -2647,6 +2652,92 @@ TEST_F(D2DStreamServiceTest, StageGateWorkerKeepOpenSingleChipPair) {
 TEST_F(D2DStreamServiceTest, StageGateWorkerKeepOpenRowPair) {
     D2D_ROW_PAIR_GUARD();
     verify_stage_gate_worker_keep_open(sender_mesh, receiver_mesh);
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline descriptor
+// ---------------------------------------------------------------------------
+
+TEST(D2DPipelineDescriptorTest, RoundTrip) {
+    using tt::tt_metal::distributed::MeshCoreCoord;
+    using tt::tt_metal::distributed::PCIeCoreLocation;
+    ttnn::D2DPipelineDescriptor desc;
+    // Rank 0 has no inbound socket; rank 1 receives from rank 0.
+    desc.ranks.push_back(ttnn::D2DRankDescriptor{.rank = 0, .host_name = "host0"});
+    desc.ranks.push_back(ttnn::D2DRankDescriptor{
+        .rank = 1,
+        .host_name = "host1",
+        .inbound = ttnn::D2DReceiverDescriptor{
+            .sender_rank = 0,
+            .metadata_size_bytes = 20,
+            .stage_gate =
+                ttnn::D2DStageGateConfig{.num_gates = 4, .slot_id_offset_bytes = 0, .gate_mode_offset_bytes = 16},
+            .coords = {ttnn::D2DReceiverCoordDescriptor{
+                .service_core =
+                    PCIeCoreLocation{
+                        .pcie_device_id = 7,
+                        .core = MeshCoreCoord(MeshCoordinate(0, 1), CoreCoord(2, 3)),
+                        .virtual_core = CoreCoord(18, 19)},
+                .fabric_node_id = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{1}, 3),
+                .sender_fabric_node_id = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 3),
+                .backing_tensor_addr = 0x1'0000'0040ull,
+                .stage_gate_base_addr = 0x2000u}}}});
+    EXPECT_EQ(ttnn::D2DPipelineDescriptor::deserialize(desc.serialize()), desc);
+
+    const auto path = ttnn::d2d_pipeline_descriptor_path("gtest_round_trip_" + std::to_string(getpid()));
+    desc.write_to_file(path);
+    EXPECT_EQ(ttnn::D2DPipelineDescriptor::wait_and_read(path), desc);
+    std::filesystem::remove(path);
+    EXPECT_ANY_THROW((void)ttnn::D2DPipelineDescriptor::wait_and_read(path, /*timeout_ms=*/10));
+}
+
+// describe() reports the receiver's own addresses, and a single-rank export round-trips through the file.
+void verify_pipeline_descriptor_export(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const std::shared_ptr<MeshDevice>& receiver_mesh) {
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
+    const auto rd = receiver->describe();
+    EXPECT_EQ(rd.metadata_size_bytes, kGateMetadataBytes);
+    EXPECT_EQ(
+        rd.stage_gate,
+        (ttnn::D2DStageGateConfig{
+            .num_gates = kGateNumGates,
+            .slot_id_offset_bytes = kGateSlotOffsetBytes,
+            .gate_mode_offset_bytes = kGateModeOffsetBytes}));
+    ASSERT_FALSE(rd.coords.empty());
+    for (const auto& rc : rd.coords) {
+        const auto& coord = rc.service_core.core.device_coord;
+        EXPECT_EQ(rc.fabric_node_id, receiver_mesh->get_fabric_node_id(coord));
+        EXPECT_EQ(rc.sender_fabric_node_id, sender_mesh->get_fabric_node_id(coord));
+        const auto gate = receiver->get_stage_gate_descriptor(coord);
+        EXPECT_EQ(rc.stage_gate_base_addr, gate.gate_base_addr);
+        EXPECT_EQ(rc.service_core.virtual_core, gate.service_core_noc);
+        EXPECT_EQ(
+            rc.service_core.virtual_core,
+            receiver_mesh->worker_core_from_logical_core(rc.service_core.core.core_coord));
+        EXPECT_EQ(
+            rc.backing_tensor_addr, receiver->get_backing_tensor().mesh_buffer().get_device_buffer(coord)->address());
+    }
+
+    const auto path =
+        D2DStreamService::export_pipeline_descriptor("gtest_export_" + std::to_string(getpid()), receiver.get());
+    ASSERT_TRUE(path.has_value());
+    const auto desc = ttnn::D2DPipelineDescriptor::wait_and_read(*path);
+    std::filesystem::remove(*path);
+    ASSERT_EQ(desc.ranks.size(), 1u);
+    EXPECT_FALSE(desc.ranks[0].host_name.empty());
+    ASSERT_TRUE(desc.ranks[0].inbound.has_value());
+    EXPECT_EQ(*desc.ranks[0].inbound, rd);
+}
+
+TEST_F(D2DStreamServiceTest, PipelineDescriptorExportSingleChipPair) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    verify_pipeline_descriptor_export(sender_mesh, receiver_mesh);
+}
+
+TEST_F(D2DStreamServiceTest, PipelineDescriptorExportRowPair) {
+    D2D_ROW_PAIR_GUARD();
+    verify_pipeline_descriptor_export(sender_mesh, receiver_mesh);
 }
 
 }  // namespace

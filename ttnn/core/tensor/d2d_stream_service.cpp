@@ -4,12 +4,16 @@
 
 #include "tensor/d2d_stream_service.hpp"
 
+#include <array>
 #include <chrono>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
+
+#include <unistd.h>
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
@@ -23,6 +27,8 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/pcie_core_location.hpp>
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <internal/service/service_core_manager.hpp>
@@ -37,6 +43,7 @@
 #include <tt-metalium/math.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/tensor/d2d_pipeline_descriptor.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -143,10 +150,39 @@ std::map<distributed::MeshCoordinate, DeviceAddr> collect_backing_addrs(
     return addrs;
 }
 
+// One D2DReceiverDescriptor entry per coord of a receiver.
+std::vector<D2DReceiverCoordDescriptor> describe_receiver_coords(
+    distributed::MeshDevice& mesh,
+    const distributed::MeshSocket& socket,
+    const Tensor& backing,
+    const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
+    const std::map<distributed::MeshCoordinate, DeviceAddr>& stage_gate_addrs) {
+    using distributed::SocketEndpoint;
+    std::vector<distributed::MeshCoordinate> coords;
+    for (const auto& [coord, core] : service_cores) {
+        coords.push_back(coord);
+    }
+    const auto backing_addrs = collect_backing_addrs(backing, coords);
+    std::vector<D2DReceiverCoordDescriptor> out;
+    for (const auto& [coord, core] : service_cores) {
+        const auto gate = stage_gate_addrs.find(coord);
+        out.push_back(D2DReceiverCoordDescriptor{
+            .service_core = distributed::PCIeCoreLocation::resolve(mesh, distributed::MeshCoreCoord(coord, core)),
+            .fabric_node_id = socket.get_fabric_node_id(SocketEndpoint::RECEIVER, coord),
+            .sender_fabric_node_id = socket.get_fabric_node_id(SocketEndpoint::SENDER, coord),
+            .backing_tensor_addr = backing_addrs.at(coord),
+            .stage_gate_base_addr = gate == stage_gate_addrs.end() ? 0 : gate->second,
+        });
+    }
+    return out;
+}
+
 // DistributedContext tag for the multi-host service-core exchange. Distinct from
 // any MeshSocket descriptor-exchange tag; the exchange is fully sequential before
 // the handshake, so there is no concurrent (source, tag) collision.
 constexpr int kServiceCoreExchangeTag = 0x44324443;  // 'D2DC'
+// DistributedContext tag for gathering pipeline descriptors onto the root rank.
+constexpr int kPipelineDescriptorTag = 0x44325044;  // 'D2PD'
 
 // Result of the pre-handshake exchange: the peer's per-coord service cores and
 // per-coord backing tensor base addresses. The sender uses the receiver's backing
@@ -875,6 +911,16 @@ bool D2DStreamServiceReceiver::is_stage_gate_open(
         sizeof(uint32_t),
         word);
     return word.at(0) == static_cast<uint32_t>(d2d_stream::GateState::Open);
+}
+
+D2DReceiverDescriptor D2DStreamServiceReceiver::describe() const {
+    return D2DReceiverDescriptor{
+        .sender_rank = *impl_->socket->get_config().sender_rank,
+        .metadata_size_bytes = impl_->metadata_size_bytes,
+        .stage_gate = impl_->stage_gate.value_or(D2DStageGateConfig{}),
+        .coords = CMAKE_UNIQUE_NAMESPACE::describe_receiver_coords(
+            *impl_->mesh_device, *impl_->socket, impl_->backing_tensor, impl_->service_cores, impl_->stage_gate_addrs),
+    };
 }
 
 // ===========================================================================
@@ -1787,6 +1833,65 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
 
     committed = true;
     return receiver_handle;
+}
+
+std::optional<std::string> D2DStreamService::export_pipeline_descriptor(
+    const std::string& service_id,
+    const D2DStreamServiceReceiver* inbound,
+    tt::tt_metal::distributed::multihost::Rank root,
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> ctx) {
+    using tt::tt_metal::distributed::multihost::Rank;
+    using tt::tt_metal::distributed::multihost::Tag;
+    if (!ctx) {
+        ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    }
+    const int rank = *ctx->rank();
+    const int world_size = *ctx->size();
+    TT_FATAL(
+        *root >= 0 && *root < world_size,
+        "D2DStreamService::export_pipeline_descriptor: root {} outside world of size {}",
+        *root,
+        world_size);
+
+    std::array<char, 256> host{};
+    gethostname(host.data(), host.size() - 1);
+    D2DRankDescriptor local{.rank = rank, .host_name = host.data()};
+    if (inbound != nullptr) {
+        local.inbound = inbound->describe();
+    }
+
+    // Every rank sends its one-rank descriptor to the root, which merges them in rank order.
+    const Tag tag{CMAKE_UNIQUE_NAMESPACE::kPipelineDescriptorTag};
+    const auto as_bytes = [](auto& v) {
+        return ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(v.data()), v.size() * sizeof(v[0]));
+    };
+    auto payload = D2DPipelineDescriptor{.ranks = {std::move(local)}}.serialize();
+    if (rank != *root) {
+        uint64_t size = payload.size();
+        auto size_span = ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&size), sizeof(size));
+        ctx->send(size_span, root, tag);
+        ctx->send(as_bytes(payload), root, tag);
+        return std::nullopt;
+    }
+
+    D2DPipelineDescriptor pipeline;
+    for (int r = 0; r < world_size; ++r) {
+        if (r == rank) {
+            pipeline.ranks.push_back(D2DPipelineDescriptor::deserialize(payload).ranks.at(0));
+            continue;
+        }
+        uint64_t size = 0;
+        auto size_span = ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&size), sizeof(size));
+        ctx->recv(size_span, Rank{r}, tag);
+        std::vector<uint8_t> bytes(size);
+        ctx->recv(as_bytes(bytes), Rank{r}, tag);
+        pipeline.ranks.push_back(D2DPipelineDescriptor::deserialize(bytes).ranks.at(0));
+    }
+    const auto path = d2d_pipeline_descriptor_path(service_id);
+    pipeline.write_to_file(path);
+    // Removed at process exit, like the H2D service descriptor.
+    tt::tt_metal::distributed::ShmResourceTracker::instance().track_file(path);
+    return path;
 }
 
 }  // namespace ttnn

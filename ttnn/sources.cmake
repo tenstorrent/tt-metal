@@ -46,6 +46,7 @@ set(TTNN_CORE_SRCS
     core/services/h2d_socket_service.cpp
     core/services/d2h_socket_service.cpp
     core/services/layer_ack_service.cpp
+    core/tensor/d2d_pipeline_descriptor.cpp
     core/tensor/d2d_stream_service.cpp
     cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
     core/tensor/tensor_utils.cpp

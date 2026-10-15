@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -29,6 +30,8 @@ class MeshDevice;
 
 namespace ttnn {
 
+struct D2DReceiverDescriptor;  // ttnn/tensor/d2d_pipeline_descriptor.hpp
+
 // Receiver stage gate: the receiver holds each landed transfer until the gate selected
 // by the slot id in its metadata is open. Slot ids >= num_gates (e.g.
 // d2d_stream::kUngatedSlot) pass ungated. The two offsets must name different metadata
@@ -37,6 +40,8 @@ struct D2DStageGateConfig {
     uint32_t num_gates = 0;  // enabled when > 0
     uint32_t slot_id_offset_bytes = 0;
     uint32_t gate_mode_offset_bytes = 0;  // d2d_stream::GateMode
+
+    bool operator==(const D2DStageGateConfig&) const = default;
 };
 
 // Location of one coord's gates.
@@ -291,6 +296,9 @@ public:
     void set_stage_gate(const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate, bool open);
     bool is_stage_gate_open(const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate) const;
 
+    // This receiver's entry in a D2DPipelineDescriptor.
+    D2DReceiverDescriptor describe() const;
+
 private:
     friend class D2DStreamService;
 
@@ -348,6 +356,15 @@ public:
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver_mesh,
         D2DStreamConfig cfg,
         const D2DEndpointConfig& endpoints);
+
+    // Collective over `ctx` (default: world): every rank calls it with its inbound receiver
+    // (null if it has none). `root` gathers them and writes them to
+    // d2d_pipeline_descriptor_path(service_id). Returns that path on `root`, nullopt elsewhere.
+    static std::optional<std::string> export_pipeline_descriptor(
+        const std::string& service_id,
+        const D2DStreamServiceReceiver* inbound,
+        tt::tt_metal::distributed::multihost::Rank root = tt::tt_metal::distributed::multihost::Rank{0},
+        std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> ctx = nullptr);
 
 private:
     // Shared per-side tail of all three factories. Given an already-constructed
