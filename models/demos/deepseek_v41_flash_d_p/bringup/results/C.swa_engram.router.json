@@ -1,0 +1,77 @@
+{
+ "metrics": {
+  "auto_router_L01_layer24_matched": {
+   "t": "2026-10-15T21:22:35",
+   "value": 0.99853515625
+  },
+  "auto_router_L01_layer24_overlap": {
+   "t": "2026-10-15T21:22:35",
+   "value": 0.999755859375
+  },
+  "auto_router_L01_layer24_rel": {
+   "t": "2026-10-15T21:22:35",
+   "value": 6.806462624808773e-05
+  },
+  "auto_router_L01_layer24_rowsum": {
+   "t": "2026-10-15T21:22:35",
+   "value": 2.980232238769531e-07
+  },
+  "auto_router_L01_mixed_matched": {
+   "t": "2026-10-15T21:22:35",
+   "value": 0.998046875
+  },
+  "auto_router_L01_mixed_overlap": {
+   "t": "2026-10-15T21:22:35",
+   "value": 0.9996744990348816
+  },
+  "auto_router_L01_mixed_rel": {
+   "t": "2026-10-15T21:22:35",
+   "value": 4.18963136326056e-05
+  },
+  "auto_router_L01_mixed_rowsum": {
+   "t": "2026-10-15T21:22:35",
+   "value": 2.980232238769531e-07
+  },
+  "auto_router_L01_vs_cpu_matched": {
+   "t": "2026-10-15T21:22:35",
+   "value": 0.99951171875
+  },
+  "auto_router_L01_vs_cpu_overlap": {
+   "t": "2026-10-15T21:22:35",
+   "value": 0.9999186396598816
+  },
+  "auto_router_L01_vs_cpu_rel": {
+   "t": "2026-10-15T21:22:35",
+   "value": 4.8822043027030304e-05
+  },
+  "auto_router_L01_vs_cpu_rowsum": {
+   "t": "2026-10-15T21:22:35",
+   "value": 3.5762786865234375e-07
+  },
+  "auto_router_L01_vs_golden_matched": {
+   "t": "2026-10-15T21:22:35",
+   "value": 0.99609375
+  },
+  "auto_router_L01_vs_golden_overlap": {
+   "t": "2026-10-15T21:22:35",
+   "value": 0.9993489980697632
+  },
+  "auto_router_L01_vs_golden_rel": {
+   "t": "2026-10-15T21:22:35",
+   "value": 0.0016539720818400383
+  },
+  "auto_router_L01_vs_golden_rowsum": {
+   "t": "2026-10-15T21:22:35",
+   "value": 0.0022734403610229492
+  },
+  "det_router_L01": {
+   "t": "2026-10-15T21:22:35",
+   "value": 1.0
+  },
+  "pcc_router_L01": {
+   "t": "2026-10-15T21:22:35",
+   "value": 0.9997758128187415
+  }
+ },
+ "task": "C.swa_engram.router"
+}
