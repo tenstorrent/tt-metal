@@ -160,6 +160,11 @@ template <unsigned Mask> struct constant_mask { enum : unsigned { value = Mask }
 // leaving it out keeps the masks constant when only the operand is runtime.
 #define TT_LLK_SFPU_ISSUE_TT_AS(word, effect_word) \
     do { ckernel::instrn_buffer[0] = word; TT_LLK_SFPU_EFFECT(effect_word); } while (0)
+// Issue a constant WORD that programs a LoadMacroConfig instruction template:
+// VD 12..15 with backdoor loads enabled, which every SFPLOADMACRO setup relies
+// on. The word is captured rather than executed, so it touches no LREG.
+#define TT_LLK_SFPU_ISSUE_TTI_TEMPLATE(word) \
+    do { INSTRUCTION_WORD(word); TT_LLK_SFPRAWLREG_EFFECT(0u, 0u); } while (0)
 // Issue an SFPLOADMACRO WORD whose configured template the caller knows: the
 // word does not carry the template, so it decodes as touching every LREG.
 // READS and WRITES are constant masks of the LREGs the loaded macro reads and
