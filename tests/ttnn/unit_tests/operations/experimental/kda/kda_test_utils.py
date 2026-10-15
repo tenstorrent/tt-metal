@@ -78,8 +78,10 @@ def nrmse(
     actual = _as_float64("actual", actual)
     keep = sorted(dim % expected.ndim for dim in keep_dims) if expected.ndim else []
     reduce = tuple(dim for dim in range(expected.ndim) if dim not in keep)
-    error = (actual - expected).square().sum(dim=reduce).sqrt()
-    norm = expected.square().sum(dim=reduce).sqrt()
+    error_squared, norm_squared = (actual - expected).square(), expected.square()
+    if reduce:  # sum(dim=()) would sum the whole tensor, not nothing
+        error_squared, norm_squared = error_squared.sum(dim=reduce), norm_squared.sum(dim=reduce)
+    error, norm = error_squared.sqrt(), norm_squared.sqrt()
     floor = golden_floor(norm) if floor is None else floor
     denominator = norm.clamp_min(floor)
     return torch.where(error == 0, torch.zeros_like(error), error / denominator)
@@ -118,16 +120,21 @@ class TokenErrorAccumulator:
     def expected_norms(self) -> torch.Tensor:
         return self._sums()[1].sqrt()
 
+    @staticmethod
+    def _ratio(error: torch.Tensor, expected: torch.Tensor) -> torch.Tensor:
+        # As ``nrmse``: an exact match is 0 (also on an all-zero golden), any error on a zero golden is inf.
+        return error.new_zeros(()) if error == 0 else (error / expected).sqrt()
+
     def nrmse(self) -> float:
         error, expected = self._sums()
-        return float((error.sum() / expected.sum()).sqrt())
+        return float(self._ratio(error.sum(), expected.sum()))
 
     def window_nrmse(self, window: int) -> torch.Tensor:
         """NRMSE of consecutive ``window``-token windows; the last may be partial."""
         error, expected = self._sums()
         return torch.stack(
             [
-                (error[start : start + window].sum() / expected[start : start + window].sum()).sqrt()
+                self._ratio(error[start : start + window].sum(), expected[start : start + window].sum())
                 for start in range(0, error.numel(), window)
             ]
         )
@@ -156,8 +163,9 @@ def assert_accurate(
     PCC 1.0). NRMSE (``nrmse``) measures the error's energy against the expected signal, so
     it sees scale errors and precision regressions. ``nrmse_threshold`` is required: pass
     the clean NRMSE measured for the tensor at hand plus headroom, rounded down to one significant
-    digit (0.0X5 if that leaves under 10%), or ``None`` with the reason it cannot be measured. With ``nrmse_keep_dims`` the gate applies to the worst slice (e.g. per head of a
-    recurrent state), so one drifting slice is not averaged away.
+    digit (0.0X5 if that leaves under 10%), or ``None`` to skip the NRMSE gate.
+    With ``nrmse_keep_dims`` the gate applies to the worst slice (e.g. per head of a recurrent
+    state), so one drifting slice is not averaged away.
 
     Both still average: eleven wrong rows in 1280 held PCC at 0.9996 and lifted NRMSE only
     from 1.3e-2 to 1.6e-2, inside the BF16 output's own noise. Relative L-inf does not

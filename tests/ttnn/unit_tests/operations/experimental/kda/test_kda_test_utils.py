@@ -259,6 +259,14 @@ def test_nrmse_is_reported_per_kept_slice() -> None:
     )
 
 
+def test_nrmse_keeping_every_dimension_is_per_element() -> None:
+    expected = torch.tensor([2.0, 4.0])
+    actual = torch.tensor([2.0, 5.0])
+    torch.testing.assert_close(
+        nrmse(expected, actual, keep_dims=(0,)), torch.tensor([0.0, 0.25], dtype=torch.float64), rtol=1e-15, atol=0
+    )
+
+
 def test_nrmse_floor_belongs_to_the_whole_golden() -> None:
     expected = torch.tensor([[3.0, 4.0], [0.0, 0.0], [6.0, 8.0], [30.0, 40.0]], dtype=torch.float64)  # 5, 0, 10, 50
     actual = expected + torch.tensor([[0.0, 0.0], [0.0, 0.01], [0.0, 0.0], [0.0, 0.0]], dtype=torch.float64)
@@ -309,6 +317,20 @@ def test_streamed_token_errors_equal_the_batch_nrmse() -> None:
     torch.testing.assert_close(
         accumulator.token_nrmse(floor), nrmse(expected, actual, keep_dims=(0,)), rtol=1e-14, atol=0
     )
+
+
+def test_streamed_token_errors_on_exact_zeros_equal_the_batch_nrmse() -> None:
+    silent = TokenErrorAccumulator()
+    silent.update(torch.zeros(4, 3), torch.zeros(4, 3))
+    assert silent.nrmse() == nrmse(torch.zeros(4, 3), torch.zeros(4, 3)).item() == 0.0
+    assert silent.window_nrmse(2).tolist() == [0.0, 0.0]
+
+    expected = torch.tensor([[3.0, 4.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])  # a matching silent window, then
+    actual = torch.tensor([[3.0, 5.0], [0.0, 0.0], [0.0, 0.0], [0.0, 1.0]])  # an error on a silent token
+    mixed = TokenErrorAccumulator()
+    mixed.update(expected, actual)
+    batch = [nrmse(expected[i : i + 1], actual[i : i + 1]).item() for i in range(4)]
+    assert mixed.window_nrmse(1).tolist() == batch == [0.2, 0.0, 0.0, float("inf")]
 
 
 def test_token_error_accumulator_rejects_mismatched_chunks_and_empty_reads(expect_error) -> None:
