@@ -52,6 +52,57 @@ FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, Dataflow
     output.push_back(Mt * Nt);
 }
 
+// output = operand OP (a @ b), with the product kept in DST: each row group's matmul accumulates into DST and the
+// destination-reuse binary op takes it from there, so the product never round-trips through a buffer. The operand
+// takes source A and the product source B, as in the two-operand op on a packed product. The carried state is
+// unchanged; the chunk output's last bits can differ.
+// The operand's tile for output tile t is t % OperandTiles (the summary's two paths share one value row).
+template <EltwiseBinaryType Op, uint32_t Mt, uint32_t Kt, uint32_t Nt, uint32_t OperandTiles>
+FORCE_INLINE void matrix_multiply_then(
+    DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& operand, DataflowBuffer& output) {
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    static_assert(Nt <= dst_tiles, "one output row must fit in destination registers");
+    constexpr uint32_t group_rows = dst_tiles / Nt < Mt ? dst_tiles / Nt : Mt;
+    static_assert(Mt % group_rows == 0);
+    const uint32_t a_id = a.get_id();
+    const uint32_t b_id = b.get_id();
+    const uint32_t operand_id = operand.get_id();
+    const uint32_t output_id = output.get_id();
+
+    output.reserve_back(Mt * Nt);
+    for (uint32_t first_row = 0; first_row < Mt; first_row += group_rows) {
+        reconfig_data_format<SrcOrder::Reverse>(a_id, b_id);
+        matmul_block_init(a_id, b_id, false, Nt, 1, Kt);
+        tile_regs_acquire();
+        for (uint32_t row = 0; row < group_rows; ++row) {
+            for (uint32_t k = 0; k < Kt; ++k) {
+                matmul_block(a_id, b_id, (first_row + row) * Kt + k, k * Nt, row * Nt, false, Nt, 1, Kt);
+            }
+        }
+        if constexpr (Op == EltwiseBinaryType::ELWADD) {
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(operand_id);
+        } else {
+            sub_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(operand_id);
+        }
+        for (uint32_t tile = 0; tile < group_rows * Nt; ++tile) {
+            const uint32_t operand_tile = (first_row * Nt + tile) % OperandTiles;
+            if constexpr (Op == EltwiseBinaryType::ELWADD) {
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(operand_id, operand_tile, tile);
+            } else {
+                sub_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(operand_id, operand_tile, tile);
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < group_rows * Nt; ++tile) {
+            pack_tile(tile, output_id, first_row * Nt + tile);
+        }
+        tile_regs_release();
+    }
+    output.push_back(Mt * Nt);
+}
+
 // Inputs remain resident; PacketTiles specifies output publication granularity.
 template <ElementwiseOperation Operation, uint32_t Count, uint32_t PacketTiles>
 FORCE_INLINE void elementwise(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& output) {
@@ -115,34 +166,6 @@ FORCE_INLINE void copy(DataflowBuffer& input, DataflowBuffer& output) {
         }
         output.push_back(PacketTiles);
     }
-}
-
-// difference[path * Vt + v] = values[v] - projection[path * Vt + v] for one tile row of Paths value groups.
-template <uint32_t Vt, uint32_t Paths>
-FORCE_INLINE void subtract_from_values(DataflowBuffer& values, DataflowBuffer& projection, DataflowBuffer& difference) {
-    constexpr uint32_t count = Vt * Paths;
-    constexpr uint32_t dst_tiles =
-        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
-    const uint32_t values_id = values.get_id();
-    const uint32_t projection_id = projection.get_id();
-    const uint32_t difference_id = difference.get_id();
-    reconfig_data_format(values_id, projection_id);
-    sub_init(values_id, projection_id);
-    difference.reserve_back(count);
-    for (uint32_t first = 0; first < count; first += dst_tiles) {
-        const uint32_t block = first + dst_tiles <= count ? dst_tiles : count - first;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block; ++tile) {
-            sub_tiles(values_id, projection_id, (first + tile) % Vt, first + tile, tile);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t tile = 0; tile < block; ++tile) {
-            pack_tile(tile, difference_id, first + tile);
-        }
-        tile_regs_release();
-    }
-    difference.push_back(count);
 }
 
 // The summary carries the zero-seeded state B and the identity-seeded state A + B side by side: a [Kt, 2 * Vt]
@@ -257,22 +280,17 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         // The decayed state reads only the incoming state, so it is issued between kd S and the subtraction that
         // waits on it. The operations and their operand order are those of compute_value_new and update_state.
         current.wait_front(key_pair_tiles);
-        matrix_multiply<Ct, Kt, pair_columns>(kd, current, scratch);  // kd S
+        matrix_multiply_then<EltwiseBinaryType::ELWSUB, Ct, Kt, pair_columns, Vt>(
+            kd, current, v_beta, value_new);  // v_beta - kd S
         multiply_by_decay(current, final_decay, state_temporary, Kt, pair_columns);
-        scratch.wait_front(Ct * pair_columns);
-        subtract_from_values<Vt, 2>(v_beta, scratch, value_new);
         value_new.wait_front(Ct * pair_columns);
-        scratch.pop_front(Ct * pair_columns);
         matrix_multiply<Ct, Ct, pair_columns>(t_inv, value_new, scratch);  // v_new
         scratch.wait_front(Ct * pair_columns);
         value_new.pop_front(Ct * pair_columns);
-        matrix_multiply<Kt, Ct, pair_columns>(k_decay_transposed, scratch, state_update);
-        state_update.wait_front(key_pair_tiles);
         state_temporary.wait_front(key_pair_tiles);
-        elementwise<ElementwiseOperation::ADD, key_pair_tiles, key_pair_tiles>(
-            state_temporary, state_update, last ? final_state : state_ring);
+        matrix_multiply_then<EltwiseBinaryType::ELWADD, Kt, Ct, pair_columns, key_pair_tiles>(
+            k_decay_transposed, scratch, state_temporary, last ? final_state : state_ring);  // dl S + k_dec_t v_new
         state_temporary.pop_front(key_pair_tiles);
-        state_update.pop_front(key_pair_tiles);
         scratch.pop_front(Ct * pair_columns);
         current.pop_front(key_pair_tiles);
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
@@ -351,7 +369,9 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         // a pack. The operations and their operand order are those of the straight-line recurrence.
         current_state.wait_front(key_value_tiles);
         kd.wait_front(chunk_key_tiles);
-        matrix_multiply<Ct, Kt, Vt>(kd, current_state, scratch);  // kd S
+        v_beta.wait_front(chunk_value_tiles);
+        matrix_multiply_then<EltwiseBinaryType::ELWSUB, Ct, Kt, Vt, chunk_value_tiles>(
+            kd, current_state, v_beta, output_intermediate);  // v_beta - kd S
         q_decay.wait_front(chunk_key_tiles);
         matrix_multiply<Ct, Kt, Vt>(q_decay, current_state, query_projection);  // q_decay S
         final_decay.wait_front(Kt);
@@ -361,13 +381,8 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         final_decay.pop_front(Kt);
 
         // v_new = T_inv (v_beta - kd S).
-        scratch.wait_front(chunk_value_tiles);
-        v_beta.wait_front(chunk_value_tiles);
-        elementwise<ElementwiseOperation::SUBTRACT, chunk_value_tiles, chunk_value_tiles>(
-            v_beta, scratch, output_intermediate);
         output_intermediate.wait_front(chunk_value_tiles);
         v_beta.pop_front(chunk_value_tiles);
-        scratch.pop_front(chunk_value_tiles);
         t_inv.wait_front(chunk_chunk_tiles);
         matrix_multiply<Ct, Ct, Vt>(t_inv, output_intermediate, value_new);
         value_new.wait_front(chunk_value_tiles);
@@ -378,15 +393,12 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         // each packed to FP32 and then added: accumulating the matmul onto the decayed state in DST instead changes
         // the result enough that Kimi-K3's chunked prefill drifts from the reference over consecutive calls.
         k_decay_transposed.wait_front(key_chunk_tiles);
-        matrix_multiply<Kt, Ct, Vt>(k_decay_transposed, value_new, state_update);
+        state_temporary.wait_front(key_value_tiles);
+        matrix_multiply_then<EltwiseBinaryType::ELWADD, Kt, Ct, Vt, key_value_tiles>(
+            k_decay_transposed, value_new, state_temporary, destination);  // dl S + k_dec_t v_new
         intra.wait_front(chunk_chunk_tiles);
         matrix_multiply<Ct, Ct, Vt>(intra, value_new, scratch);  // intra v_new
-        state_update.wait_front(key_value_tiles);
-        state_temporary.wait_front(key_value_tiles);
-        elementwise<ElementwiseOperation::ADD, key_value_tiles, key_value_tiles>(
-            state_temporary, state_update, destination);
         state_temporary.pop_front(key_value_tiles);
-        state_update.pop_front(key_value_tiles);
         k_decay_transposed.pop_front(key_chunk_tiles);
         intra.pop_front(chunk_chunk_tiles);
         value_new.pop_front(chunk_value_tiles);
