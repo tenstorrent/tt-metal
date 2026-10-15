@@ -31,8 +31,8 @@ void kernel_main() {
     constexpr uint32_t depth_handoff = get_compile_time_arg_val(5);
     constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
     constexpr uint32_t chunks_per_core = (P + chunk_tiles - 1) / chunk_tiles;
-    constexpr uint32_t MAX_CORES = 256;
-    constexpr uint32_t MAILBOX_STRIDE = 16;
+    constexpr uint32_t mailbox_stride = get_compile_time_arg_val(6);  // bytes per matmul core in the mailbox
+    constexpr uint32_t max_cores = get_compile_time_arg_val(7);       // matmul cores this port serves (upper bound)
 
     uint32_t arg = 0;
     const uint32_t finished_base = get_arg_val<uint32_t>(arg++);  // staging address (cb_finished slot 0) on every core
@@ -43,8 +43,9 @@ void kernel_main() {
     const uint32_t cores_idx = arg;                    // per core: x | y << 8 | half << 16 | k << 20
     const uint32_t units_idx = cores_idx + num_cores;  // per unit: entry | half_mask << 8 | slots (sender side)
     const uint32_t consumed_addr = get_semaphore(consumed_id);
+    ASSERT(num_cores <= max_cores);
 
-    uint32_t handoffs[MAX_CORES];
+    uint32_t handoffs[max_cores];
     for (uint32_t i = 0; i < num_cores; ++i) {
         handoffs[i] = 0;
     }
@@ -82,7 +83,7 @@ void kernel_main() {
             }
             const uint32_t k = cw >> 20;
             volatile tt_l1_ptr uint32_t* mbox =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_base + k * MAILBOX_STRIDE);
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_base + k * mailbox_stride);
             const uint32_t target = ++handoffs[i];
             invalidate_l1_cache();
             if (*mbox < target && c > 0) {
@@ -117,6 +118,6 @@ void kernel_main() {
     // Re-arm: every increment of this call has landed (each slot was waited to its final count).
     for (uint32_t i = 0; i < num_cores; ++i) {
         const uint32_t k = get_arg_val<uint32_t>(cores_idx + i) >> 20;
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_base + k * MAILBOX_STRIDE) = 0;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_base + k * mailbox_stride) = 0;
     }
 }

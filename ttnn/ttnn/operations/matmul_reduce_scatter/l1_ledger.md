@@ -59,7 +59,10 @@ F(kb, resident) = tA·(rA ? core_m·Kt : 3·core_m·kb)          // scales with 
 
 Port core: `2048·2·port_group·chunk_tiles` (112 KiB at the defaults; independent of shape).
 
-Worked example: the focus case on QB2. scatter -1, G=4 ring balanced, `core_m=2, core_n=6, P=12, Kt=64`, W bf8b. `slots_fwd = slots_bwd = 2`. With resident A and `kb=32`: `256 KiB (A) + 408 KiB (W window) + 96 KiB (hold) + 144 KiB (staging: 2+2+2 slots × 24 KiB) = 904 KiB`. `kb=64` adds 408 KiB (1.31 MiB), which is selected only if the device's `L1_budget` allows.
+Worked examples on QB2 (11x10 grid, row transport strip, `L1_budget` ~1.33 MiB; verifier, recomputed from `choose_grid` / `choose_k_block` / `footprint`):
+
+- Focus (640x2048x7168, scatter -1, G=4 ring balanced, W bf8b): grid 10x8 = 80 matmul cores, `core_m=2, core_n=7, P=14`, subblock 1x7, `slots_fwd = slots_bwd = 2`, resident A, `kb=16`: `256 KiB (A, core_m·Kt) + 357 KiB (W window, 3·16·7·1088 B) + 112 KiB (hold, 2·14·4 KiB) + 168 KiB (staging, (2+2+2)·14·2 KiB) = 893 KiB`.
+- MiMo (2048x2048x4096, scatter -2, W bf8b): grid 8x11 = 88 cores, `core_m=2, core_n=12, P=24`, **stream** W, `kb=16`: `192 KiB (A window) + 612 KiB (W window) + 192 KiB (hold) + 288 KiB (staging) = 1284 KiB`. Resident W would need `Kt·core_n·1088 B = 816 KiB` in place of the 612 KiB window, i.e. 1488 KiB, which misses the budget by ~125 KiB, so W crosses DRAM G=4 times on this case (see the data-movement budget).
 
 ## Data-movement budget (per chip, chosen split)
 

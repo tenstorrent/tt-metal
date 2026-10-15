@@ -666,7 +666,17 @@ def create_mesh_program_descriptor(ctx):
         G,
     ]
     writer_ct = [CB_FINISHED, P, core_n, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, G] + o_ct
-    port_ct = [CB_PORT_CHUNKS, P, chunk_tiles, PORT_GROUP, STAGE_TILE_BYTES, DEPTH_HANDOFF]
+    max_port_cores = -(-n_cores // L)  # matmul cores one port serves (link(k) = k mod L)
+    port_ct = [
+        CB_PORT_CHUNKS,
+        P,
+        chunk_tiles,
+        PORT_GROUP,
+        STAGE_TILE_BYTES,
+        DEPTH_HANDOFF,
+        MAILBOX_STRIDE,
+        max_port_cores,
+    ]
 
     src = ttnn.KernelDescriptor.SourceType.FILE_PATH
     # Perf-only ablation switches (debug scaffolding; output is wrong by design when set): MRS_ABLATE=compute,dram
