@@ -8,14 +8,19 @@ identity, eviction and reuse, span summing, side-queue work conservation, produc
 detection and the teardown invariant.
 """
 
+import threading
+import time
 from collections import deque
 
 import pytest
 
 from models.demos.common.prefill.runners.layer_completion_ring_reader import (
     Completion,
+    LayerCompletionDrain,
     LayerCompletionRingReader,
     scheduler_shm_name,
+    start_layer_completion_drain,
+    wait_for_layer_completions,
 )
 
 NUM_LAYERS = 4  # small model for tests
@@ -91,6 +96,20 @@ def test_acks_past_the_model_layers_fit_a_widened_bound():
     assert d.completed_chunks == 1
 
 
+def test_hybrid_chunk_retires_on_its_sparse_coverage_and_comes_round_again():
+    """A hybrid stack acks only its KV-writing layers: coverage is chunk_layers, spans stay in [0, num_layers)."""
+    kv_layers = [3, 7, 11, 15, 19, 23]
+    ring = FakeRing(per_layer(layers=kv_layers) + per_layer(layers=kv_layers))
+    d = LayerCompletionRingReader(ring, num_layers=24, chunk_layers=len(kv_layers))
+    assert d.wait_for(2 * len(kv_layers), timeout_s=5) == 2 * len(kv_layers)
+    assert d.completed_chunks == 2 and d.chunks == {}
+
+
+def test_chunk_layers_past_the_bound_is_rejected():
+    with pytest.raises(ValueError, match="chunk_layers"):  # allow-pytest.raises: host-only, no device error
+        LayerCompletionRingReader(FakeRing(), num_layers=NUM_LAYERS, chunk_layers=NUM_LAYERS + 1)
+
+
 def test_blocked_message_side_queues_without_stalling_others():
     """Slot 0's completion is blocked; slot 1 must still advance (no HoL)."""
     seen = []
@@ -159,15 +178,53 @@ def test_wait_for_timeout_reports_open_chunks():
         d.wait_for(NUM_LAYERS, timeout_s=0.2)
 
 
-def test_wait_for_layer_completions_routes_the_ring_through_the_reader():
-    """The channel helper reads the ring through the work-conserving reader with the caller's bound."""
-    import models.demos.common.prefill.runners.layer_completion_ring_reader as reader_mod
+class BoundedRing:
+    """Thread-safe ring with the runner's backpressure: push blocks while `capacity` messages are queued."""
 
-    ring = FakeRing(per_layer(layers=[0, 1]) + per_layer(slot_id=1) + per_layer(layers=[2, 3]))
-    assert (
-        reader_mod.wait_for_layer_completions(ring, 2 * NUM_LAYERS, num_layers=NUM_LAYERS, timeout_s=5)
-        == 2 * NUM_LAYERS
-    )
+    def __init__(self, capacity):
+        self._q = deque()
+        self._capacity = capacity
+        self._lock = threading.Lock()
+
+    def push(self, m, timeout_s=5.0):
+        deadline = time.monotonic() + timeout_s
+        while True:
+            with self._lock:
+                if len(self._q) < self._capacity:
+                    self._q.append(m)
+                    return
+            if time.monotonic() > deadline:
+                raise TimeoutError("ring stayed full: nothing drained it")
+            time.sleep(0.001)
+
+    def try_pop(self):
+        with self._lock:
+            return self._q.popleft() if self._q else None
+
+
+def test_drain_keeps_a_bounded_ring_moving_while_the_caller_produces():
+    """More completions than the ring holds: the producer only finishes because the drain runs alongside it."""
+    ring = BoundedRing(capacity=2)
+    drain = start_layer_completion_drain(ring, num_layers=NUM_LAYERS, chunk_layers=NUM_LAYERS)
+    for slot in range(5):
+        for m in per_layer(slot_id=slot):
+            ring.push(m)
+    assert wait_for_layer_completions(drain, 5 * NUM_LAYERS, timeout_s=5) == 5 * NUM_LAYERS
+    assert drain.stop() == 5 * NUM_LAYERS
+    assert drain.reader.completed_chunks == 5
+
+
+def test_drain_surfaces_a_producer_bug_on_the_callers_thread():
+    drain = LayerCompletionDrain(FakeRing([msg(0, 3), msg(2, 4)]), num_layers=NUM_LAYERS).start()
+    with pytest.raises(ValueError, match="overlaps"):  # allow-pytest.raises: host-only, no device error
+        drain.wait_for(NUM_LAYERS, timeout_s=5)
+    with pytest.raises(ValueError, match="overlaps"):  # allow-pytest.raises: host-only, no device error
+        drain.stop()
+
+
+def test_no_channel_means_no_drain():
+    assert start_layer_completion_drain(None, num_layers=NUM_LAYERS, chunk_layers=NUM_LAYERS) is None
+    assert wait_for_layer_completions(None, NUM_LAYERS) == 0
 
 
 def test_scheduler_segment_name():

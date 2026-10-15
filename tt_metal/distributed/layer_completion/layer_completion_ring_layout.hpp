@@ -36,7 +36,8 @@ struct LayerCompletionRingHeader {
     // Validated by connectors at attach.
     uint32_t capacity;
     uint32_t magic;
-    // Records one chunk produces across all ranks; the consumer retires a chunk at this count.
+    // Layers one chunk covers across all ranks, summed over its completions' spans; the consumer retires a
+    // chunk once its spans cover this many.
     uint32_t completions_per_chunk;
 };
 

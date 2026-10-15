@@ -841,6 +841,7 @@ def main() -> None:
 
     from models.demos.common.prefill.runners.layer_completion_ring_reader import (
         connect_layer_completion_channel,
+        start_layer_completion_drain,
         wait_for_layer_completions,
     )
 
@@ -865,16 +866,22 @@ def main() -> None:
         )
         return (time.perf_counter() - push_start) * 1000.0
 
-    stats = producer.run_schedule(cfg, push_fn=push_chunk)
-    service.barrier()
-    logger.info(
-        f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
-        f"requests={stats.completed}"
-    )
     chunk_layers = producer._completion_layers_per_chunk(kv_table)
-    wait_for_layer_completions(
-        completion_channel, chunk_layers * stats.total_pushes, num_layers=producer._completion_layer_bound(chunk_layers)
+    # Drains while the schedule runs; see prefill_producer.main.
+    drain = start_layer_completion_drain(
+        completion_channel, num_layers=producer._completion_layer_bound(chunk_layers), chunk_layers=chunk_layers
     )
+    try:
+        stats = producer.run_schedule(cfg, push_fn=push_chunk)
+        service.barrier()
+        logger.info(
+            f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
+            f"requests={stats.completed}"
+        )
+        wait_for_layer_completions(drain, chunk_layers * stats.total_pushes)
+    finally:
+        if drain is not None:
+            drain.stop()
 
     if world_size > 1:
         producer._mr_bcast_resident(mr_rank, stats.resident)

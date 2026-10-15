@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class LayerCompletionLayout:
-    completions_per_chunk: int  # records one chunk produces across all ranks; published in the ring header
+    completions_per_chunk: int  # layers one chunk covers across all ranks; published in the ring header
     rank_first_record: int  # index of this rank's first record in a chunk's record sequence
     rank_record_count: int  # records this rank emits per chunk
     rank_layer_ids: list  # this rank's records as global layers, in emission order; [] when dense
