@@ -125,8 +125,9 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
 - **Rule** (`resolve_native_config`): `NativeMoves::sfpu`; the SFPU compute batch is `kNativeSfpuMaxTilesPerCycle`
   (4). The settings line names it.
 - **Factory**: the host precondition admits the SFPU kernel; a set batch above 4 is refused for it.
-- **Kernels**: `kernels_qsr/compute/eltwise_binary_sfpu_no_bcast_dfb.cpp` and `eltwise_utils_sfpu_dfb.hpp`. The
-  DataflowBuffer objects live in `kernel_main` and are passed by reference, as on main since #60207.
+- **Kernels**: `kernels_qsr/compute/eltwise_binary_sfpu_no_bcast_dfb.cpp`, which shares the FPU kernel's
+  preprocess helper, `eltwise_utils_dfb.hpp`. The DataflowBuffer objects live in `kernel_main` and are passed
+  by reference, as on main since #60207.
 - **Tests**: an `op` option in the arm child (subtract, multiply, fast multiply, divide), with each kernel's
   rounding as the oracle; the prediction model gives the SFPU its batch of 4.
 

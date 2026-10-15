@@ -28,7 +28,7 @@
 #include "eltwise_utils_common.hpp"
 #if HAS_MAIN_RING
 // Its format reference names dfb::pre_lhs, which a program with no borrowed ring does not have.
-#include "eltwise_utils_sfpu_dfb.hpp"
+#include "eltwise_utils_dfb.hpp"
 
 // The DataflowBuffer arguments are kernel_main's objects: an object built here would drain at every return.
 FORCE_INLINE void process_sfpu_tiles(

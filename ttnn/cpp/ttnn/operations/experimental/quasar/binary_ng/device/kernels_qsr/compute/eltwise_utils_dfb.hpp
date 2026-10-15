@@ -4,7 +4,8 @@
 
 #pragma once
 
-// DataflowBuffer (DFB) port of kernels/compute/eltwise_utils.hpp (FPU preprocess).
+// DataflowBuffer (DFB) port of kernels/compute/eltwise_utils.hpp. Both native compute kernels use it: in the DFB
+// tree the FPU and the SFPU kernel restore the same physical-LHS SrcA format.
 //
 // Mechanically identical to the CircularBuffer helper, with the CB->DFB swap: the helper takes the kernel's
 // DataflowBuffer objects, reads each operand id with get_id(), and syncs through them. See the CB original for
@@ -18,10 +19,10 @@
 
 // Reads `per_core_block_size` tiles from dfb_pre, runs the per-operand activation chain on each tile
 // in DST, writes the results into dfb_post. dfb_out's id is used only to briefly retarget the packer
-// at dfb_post and then restore it to dfb_out's data format. FPU variant: also reconfigures the
-// unpacker SrcA temporarily, then restores the physical-LHS format for the next pass.
+// at dfb_post and then restore it to dfb_out's data format. It also reconfigures the unpacker SrcA
+// temporarily, then restores the physical-LHS format for the next pass.
 template <typename ActivationFn>
-ALWI void preprocess_fpu_impl_dfb(
+ALWI void preprocess_impl_dfb(
     DataflowBuffer& dfb_pre,
     DataflowBuffer& dfb_post,
     uint32_t dfb_out_id,
@@ -78,5 +79,5 @@ ALWI void preprocess_fpu_impl_dfb(
 #define PREPROCESS_0(...)
 
 #define PREPROCESS_1(op, dfb_pre, dfb_post, dfb_out, per_core_block_size) \
-    preprocess_fpu_impl_dfb(                                              \
+    preprocess_impl_dfb(                                                  \
         (dfb_pre), (dfb_post), (dfb_out), (per_core_block_size), [&](uint32_t i) { PROCESS_ACTIVATIONS(op, i); })
