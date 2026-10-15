@@ -10,7 +10,9 @@
 //   y = t^2 * (3 - 2t)
 // The kernel contract passes edge0 and the precomputed 1/(edge1-edge0)
 // (inv_delta) as fp32 scalars; the clamp is stated with typed min/max.
-// bf16 RNE store per the fresh float-body convention.
+// y is stored as fp32 and the bf16 Dst store truncates it.  y always lies in
+// [0, 1], so truncation is at most one bf16 ulp from the golden's RNE cast and
+// can never reach inf or NaN.
 #include <cstdint>
 
 namespace ckernel::sfpu
@@ -27,7 +29,7 @@ __attribute__((noinline)) void calculate_smoothstep_fresh_cpp(const std::uint32_
         sfpi::vFloat t       = (x - edge0) * inv_delta;
         t                    = sfpi::max(sfpi::min(t, 1.0f), 0.0f);
         const sfpi::vFloat y = t * t * (3.0f - 2.0f * t);
-        sfpi::dst_reg[0]     = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[0]     = y;
         sfpi::dst_reg++;
     }
 }
