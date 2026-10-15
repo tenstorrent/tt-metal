@@ -9,7 +9,9 @@
 #include <string>
 #include <vector>
 
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
@@ -229,6 +231,20 @@ ttnn::device_operation::ProgramArtifacts GraphKernelProgramFactory::create_progr
 
     // ---- Window size: fill the allocatable L1 with num_dfbs equally deep buffers ----
     const uint32_t num_dfbs = num_inputs + num_interm + 1;
+    // Every buffer lives on every core, so the whole set must fit the per-core device slots (32 on
+    // Wormhole, 64 on Blackhole); the ProgramSpec validator enforces the same bound with a less
+    // actionable message. With n inputs the expression has n - 1 nodes, so the count is 2n - 1.
+    const uint32_t max_dfbs = tt::tt_metal::hal::get_num_dataflow_buffers();
+    TT_FATAL(
+        num_dfbs <= max_dfbs,
+        "graph_kernel: \"{}\" needs {} dataflow buffers ({} inputs + {} intermediates + output) but this device has "
+        "{} slots per core; use at most {} inputs",
+        operation_attributes.text,
+        num_dfbs,
+        num_inputs,
+        num_interm,
+        max_dfbs,
+        (max_dfbs + 1) / 2);
     const uint64_t l1_budget =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const uint32_t dfb_length =
@@ -269,15 +285,14 @@ ttnn::device_operation::ProgramArtifacts GraphKernelProgramFactory::create_progr
 
     // ---- Compute hardware config: fp32 dest for float32, HiFi4, no approx ----
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
-        device->arch(),
         ttnn::init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, false, is_fp_32));
-    if (auto* gen1 = std::get_if<ComputeGen1Config>(&compute_hw); gen1 != nullptr && gen1->enable_32_bit_dest) {
+    if (compute_hw.enable_32_bit_dest) {
         // Every buffer the FPU consumes is Float32 here, so each one takes the SrcA/SrcB unpack path.
         for (const auto& name : input_names) {
-            gen1->unpack_modes.emplace(DFBSpecName{name}, UnpackMode::UnpackToSrc);
+            compute_hw.unpack_modes.emplace(DFBSpecName{name}, UnpackMode::UnpackToSrc);
         }
         for (const auto& name : interm_names) {
-            gen1->unpack_modes.emplace(DFBSpecName{name}, UnpackMode::UnpackToSrc);
+            compute_hw.unpack_modes.emplace(DFBSpecName{name}, UnpackMode::UnpackToSrc);
         }
     }
 
@@ -331,7 +346,7 @@ ttnn::device_operation::ProgramArtifacts GraphKernelProgramFactory::create_progr
             .tensor_bindings = std::move(reader_tensors),
             .compile_time_args = ctas,
             .runtime_arg_schema = {.runtime_arg_names = rta_names},
-            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_reader_datamovement_config(),
         });
         spec.kernels.push_back(KernelSpec{
             .unique_id = compute_name,
@@ -352,7 +367,7 @@ ttnn::device_operation::ProgramArtifacts GraphKernelProgramFactory::create_progr
                 .tensor_parameter_name = TensorParamName{out_name}, .accessor_name = out_name}},
             .compile_time_args = ctas,
             .runtime_arg_schema = {.runtime_arg_names = rta_names},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         });
         spec.work_units.push_back(WorkUnitSpec{
             .name = "graph_" + suffix, .kernels = {reader_name, compute_name, writer_name}, .target_nodes = cores});

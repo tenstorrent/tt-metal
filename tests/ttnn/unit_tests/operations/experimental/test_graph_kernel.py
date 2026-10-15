@@ -76,14 +76,21 @@ def test_graph_kernel_long_stream(device, dtype):
     run_and_check(device, "a*b+c", dtype, (8, 2048, 2048))
 
 
+# Every input, intermediate and output buffer lives on every core, so 2n - 1 buffers for n inputs must
+# fit the device's per-core slots: 32 on Wormhole (16 inputs), 64 on Blackhole (all 26 letters).
+def _max_inputs():
+    return 16 if ttnn.get_arch_name() == "wormhole_b0" else 26
+
+
 # Stress: L1. The factory sizes the window to fill the allocatable L1 (~1.43 MB on Blackhole) with
 # one buffer per input, intermediate and output. 26 inputs summed pairwise is 26 + 24 + 1 = 51
 # buffers, so the window shrinks to the smallest legal 8 pages for bf16 (816 KB); the fp32 variant
 # with 16 inputs (31 buffers, 4 KB tiles) lands at 8 pages too (992 KB). Both stream several windows
-# per input.
+# per input. Wormhole caps bf16 at 16 inputs as well (31 buffers x 16 pages x 2 KB = 992 KB).
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("dtype, num_inputs", [(ttnn.bfloat16, 26), (ttnn.float32, 16)])
 def test_graph_kernel_l1_stress(device, dtype, num_inputs):
+    num_inputs = min(num_inputs, _max_inputs())
     letters = [chr(ord("a") + i) for i in range(num_inputs)]
     # Alternate + and - so the running sum stays O(sqrt(n)) instead of drifting.
     expression = letters[0] + "".join(("+" if i % 2 else "-") + letter for i, letter in enumerate(letters[1:]))
@@ -94,6 +101,8 @@ def test_graph_kernel_l1_stress(device, dtype, num_inputs):
 
 def test_graph_kernel_rejects_l1_overflow(device, expect_error):
     # 26 float32 inputs: 51 buffers x 8 pages x 4 KB = 1.6 MB, more than the whole L1.
+    if _max_inputs() < 26:
+        pytest.skip("with at most 16 inputs and 4 KB tiles the buffers always fit L1; the slot cap fires first")
     letters = [chr(ord("a") + i) for i in range(26)]
     expression = "+".join(letters)
     inputs = [
@@ -101,6 +110,21 @@ def test_graph_kernel_rejects_l1_overflow(device, expect_error):
         for _ in letters
     ]
     with expect_error(RuntimeError, "does not fit"):
+        ttnn.graph_kernel(inputs, expression)
+
+
+def test_graph_kernel_rejects_too_many_inputs(device, expect_error):
+    # One more input than the per-core dataflow buffer slots allow (2n - 1 buffers for n inputs).
+    num_inputs = _max_inputs() + 1
+    if num_inputs > 26:
+        pytest.skip("every expression of a..z fits this device's per-core dataflow buffer slots")
+    letters = [chr(ord("a") + i) for i in range(num_inputs)]
+    expression = "+".join(letters)
+    inputs = [
+        ttnn.from_torch(torch.randn(32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in letters
+    ]
+    with expect_error(RuntimeError, f"use at most {num_inputs - 1} inputs"):
         ttnn.graph_kernel(inputs, expression)
 
 
