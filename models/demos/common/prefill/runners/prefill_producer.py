@@ -23,6 +23,7 @@ from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
 from models.demos.common.prefill.runners.layer_completion_ring_reader import (
     connect_layer_completion_channel,
+    start_layer_completion_drain,
     wait_for_layer_completions,
 )
 from models.demos.common.prefill.runners.migration import (
@@ -1598,18 +1599,27 @@ def main() -> None:
         )
         return (time.perf_counter() - push_start) * 1000.0
 
-    warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
-    if warmup_chunks > 0:
-        logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
-        for cidx in range(warmup_chunks):
-            push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
-        service.barrier()
-        if completion_channel is not None:
-            wait_for_layer_completions(completion_channel, chunk_layers * warmup_chunks, num_layers=layer_bound)
-        logger.info("[producer] warmup complete; starting the measured request")
+    # Drains from the first push to the last barrier: the completion rings are bounded, so a drain that waited
+    # for the barrier would leave the runner blocked on a full ring and the barrier waiting on the runner.
+    drain = start_layer_completion_drain(completion_channel, num_layers=layer_bound, chunk_layers=chunk_layers)
+    try:
+        warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
+        if warmup_chunks > 0:
+            logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
+            for cidx in range(warmup_chunks):
+                push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
+            service.barrier()
+            wait_for_layer_completions(drain, chunk_layers * warmup_chunks)
+            logger.info("[producer] warmup complete; starting the measured request")
 
-    stats = run_schedule(cfg, push_fn=push_chunk)
-    service.barrier()
+        stats = run_schedule(cfg, push_fn=push_chunk)
+        service.barrier()
+        # One completion per layer per chunk; chunk_layers is what the runner emits (KV-writing layers plus
+        # MTP/DFlash extras), not NUM_LAYERS. The count is cumulative, so it includes the warm-up.
+        wait_for_layer_completions(drain, chunk_layers * (max(warmup_chunks, 0) + stats.total_pushes))
+    finally:
+        if drain is not None:
+            drain.stop()
 
     sorted_ms = sorted(stats.push_ms)
     total_tokens = stats.total_pushes * CHUNK_SIZE
@@ -1619,10 +1629,6 @@ def main() -> None:
         f"push_ms p50={_percentile(sorted_ms, 0.5):.1f} p90={_percentile(sorted_ms, 0.9):.1f} "
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
-
-    # One completion per layer per chunk; chunk_layers is what the runner emits (KV-writing layers plus
-    # MTP/DFlash extras), not NUM_LAYERS.
-    wait_for_layer_completions(completion_channel, chunk_layers * stats.total_pushes, num_layers=layer_bound)
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)

@@ -4,18 +4,25 @@
 """Consumer side of the layer-completion ring for host tools (prefill_producer, migration drivers, verifiers):
 
     channel = connect_layer_completion_channel(timeout_s)
-    wait_for_layer_completions(channel, expected_layers, num_layers=...)
+    drain = start_layer_completion_drain(channel, num_layers=..., chunk_layers=...)
+    ...submit the chunks...
+    wait_for_layer_completions(drain, expected_layers)
+    drain.stop()
 
-LayerCompletionRingReader keys each chunk on (slot_id, pos_start, pos_end). A chunk is complete when its disjoint
-layer spans tile [0, num_layers) and is then evicted, so the same key can come round again. A completion that
-`can_process` rejects waits in its chunk's side queue instead of stalling the ring; finish() raises on anything
-still waiting.
+LayerCompletionRingReader keys each chunk on (slot_id, pos_start, pos_end). Spans must be disjoint and lie in
+[0, num_layers); a chunk is complete once they cover chunk_layers layers, and is then evicted, so the same key can
+come round again. A hybrid model covers fewer layers than the global bound. A completion that `can_process` rejects
+waits in its chunk's side queue instead of stalling the ring; finish() raises on anything still waiting.
+
+The rings are bounded, so a caller submitting input must drain concurrently: LayerCompletionDrain runs the reader
+on a thread, which progresses while the caller blocks in an H2D call (those release the GIL).
 
 ttnn is imported lazily inside the connect helper, so the reader is unit-testable without the device stack. The
 ring is any object with `try_pop() -> tuple | None` in the wire order of LayerCompletionQueue.try_pop().
 """
 
 import os
+import threading
 import time
 from collections import deque, namedtuple
 
@@ -57,8 +64,8 @@ class ChunkCoverage:
         self.intervals.sort()
         self.layers_accounted += end - start
 
-    def is_complete(self, num_layers: int) -> bool:
-        return self.layers_accounted == num_layers
+    def is_complete(self, chunk_layers: int) -> bool:
+        return self.layers_accounted == chunk_layers
 
 
 class LayerCompletionRingReader:
@@ -66,13 +73,16 @@ class LayerCompletionRingReader:
 
     Args:
         ring: anything with try_pop() -> tuple | None in the wire order.
-        num_layers: global ack-layer count per chunk: the model's layers plus the MTP /
-            DFlash rows acked past them (the coverage bound).
+        num_layers: global ack-layer axis: the model's layers plus the MTP / DFlash rows acked
+            past them. Every span must lie in [0, num_layers).
+        chunk_layers: layers one chunk covers when complete (the ring header's
+            completions_per_chunk). Default: num_layers. A hybrid stack acks only its
+            KV-writing layers, so it covers fewer than num_layers.
         can_process(completion) -> bool: readiness predicate; blocked messages are
             side-queued per chunk instead of stalling the ring. Default: always ready.
         on_completion(completion): action for each processed message. Default: none.
-        on_chunk_complete(key, coverage): fired when a chunk tiles [0, num_layers), just
-            before it is evicted. Default: none.
+        on_chunk_complete(key, coverage): fired when a chunk covers chunk_layers layers,
+            just before it is evicted. Default: none.
         poll_idle_s: sleep quantum for wait_for when nothing is actionable.
     """
 
@@ -81,6 +91,7 @@ class LayerCompletionRingReader:
         ring,
         *,
         num_layers: int,
+        chunk_layers: int | None = None,
         can_process=None,
         on_completion=None,
         on_chunk_complete=None,
@@ -88,6 +99,9 @@ class LayerCompletionRingReader:
     ):
         self._ring = ring
         self._num_layers = num_layers
+        self._chunk_layers = num_layers if chunk_layers is None else chunk_layers
+        if not 0 < self._chunk_layers <= num_layers:
+            raise ValueError(f"[ring-reader] chunk_layers={self._chunk_layers} outside (0, {num_layers}]")
         self._can_process = can_process or (lambda c: True)
         self._on_completion = on_completion or (lambda c: None)
         self._on_chunk_complete = on_chunk_complete or (lambda key, cov: None)
@@ -115,7 +129,7 @@ class LayerCompletionRingReader:
         self._on_completion(c)
         self.total_layers += c.layer_end - c.layer_start
         self.processed += 1
-        if cov.is_complete(self._num_layers):
+        if cov.is_complete(self._chunk_layers):
             self._on_chunk_complete(cov.key, cov)
             if cov.side_queue:
                 raise RuntimeError(
@@ -164,7 +178,7 @@ class LayerCompletionRingReader:
             if not self.step():
                 if time.perf_counter() > deadline:
                     snapshot = ", ".join(
-                        f"chunk {key}: {cov.layers_accounted}/{self._num_layers} layers"
+                        f"chunk {key}: {cov.layers_accounted}/{self._chunk_layers} layers"
                         + (f" (+{len(cov.side_queue)} blocked)" if cov.side_queue else "")
                         for key, cov in self._chunks.items()
                     )
@@ -174,6 +188,61 @@ class LayerCompletionRingReader:
                     )
                 time.sleep(self._poll_idle_s)
         return self.finish()
+
+
+class LayerCompletionDrain:
+    """Runs a LayerCompletionRingReader on a background thread from start() to finish(), so the runner never
+    blocks on a full ring while the caller is submitting or waiting on H2D input."""
+
+    def __init__(self, ring, *, num_layers: int, chunk_layers: int | None = None, poll_idle_s: float = 0.001):
+        self.reader = LayerCompletionRingReader(
+            ring, num_layers=num_layers, chunk_layers=chunk_layers, poll_idle_s=poll_idle_s
+        )
+        self._poll_idle_s = poll_idle_s
+        self._stop = threading.Event()
+        self._error = None
+        self._thread = threading.Thread(target=self._run, name="layer-completion-drain", daemon=True)
+
+    def start(self) -> "LayerCompletionDrain":
+        self._thread.start()
+        return self
+
+    def _run(self) -> None:
+        try:
+            while not self._stop.is_set():
+                if not self.reader.step():
+                    time.sleep(self._poll_idle_s)
+        except BaseException as e:  # surfaced on the caller's thread by wait_for() / stop()
+            self._error = e
+
+    def wait_for(self, expected_layers: int, timeout_s: float = 600.0) -> int:
+        """Block until `expected_layers` (span-summed, cumulative since start()) are processed."""
+        deadline = time.perf_counter() + timeout_s
+        while self.reader.total_layers < expected_layers:
+            if self._error is not None:
+                raise self._error
+            if not self._thread.is_alive():
+                raise RuntimeError("[ring-reader] drain thread stopped before the expected completions arrived")
+            if time.perf_counter() > deadline:
+                snapshot = ", ".join(
+                    f"chunk {key}: {cov.layers_accounted}/{self.reader._chunk_layers} layers"
+                    for key, cov in list(self.reader.chunks.items())
+                )
+                raise TimeoutError(
+                    f"[ring-reader] timed out at {self.reader.total_layers}/{expected_layers} layers "
+                    f"after {timeout_s}s; open chunks: [{snapshot}]"
+                )
+            time.sleep(0.01)
+        return self.reader.total_layers
+
+    def stop(self) -> int:
+        """Join the thread, rethrow its failure, then check the teardown invariant. Idempotent."""
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join()
+        if self._error is not None:
+            raise self._error
+        return self.reader.finish()
 
 
 # Channel connect/wait: consumers hold one `completion_channel`.
@@ -200,17 +269,21 @@ def connect_layer_completion_channel(timeout_s: int):
     return ring
 
 
-def wait_for_layer_completions(
-    completion_channel, expected_layers: int, *, num_layers: int, timeout_s: float = 600.0
-) -> int:
-    """Work-conserving drain until `expected_layers` (span-summed) are accounted; a
-    producer-side inconsistency (overlap, out of bounds) raises. `num_layers` is the global
-    ack-layer count per chunk (the coverage bound)."""
+def start_layer_completion_drain(completion_channel, *, num_layers: int, chunk_layers: int):
+    """A started LayerCompletionDrain on the channel, or None when there is no channel."""
     if completion_channel is None:
+        return None
+    return LayerCompletionDrain(completion_channel, num_layers=num_layers, chunk_layers=chunk_layers).start()
+
+
+def wait_for_layer_completions(drain, expected_layers: int, *, timeout_s: float = 600.0) -> int:
+    """Wait on a running drain until `expected_layers` (span-summed, cumulative) are accounted; a
+    producer-side inconsistency (overlap, out of bounds) raises. A timeout is logged, not raised."""
+    if drain is None:
         return 0
-    reader = LayerCompletionRingReader(completion_channel, num_layers=num_layers)
+    reader = drain.reader
     try:
-        reader.wait_for(expected_layers, timeout_s=timeout_s)
+        drain.wait_for(expected_layers, timeout_s=timeout_s)
     except TimeoutError as e:
         logger.warning(f"[layer-completion] {e}")
     logger.info(
