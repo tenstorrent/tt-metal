@@ -369,6 +369,32 @@ def test_situ_glu(input_shape, ttnn_dtype, device):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize(
+    "gate_layout, up_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["rm_gate", "rm_up", "rm_both"],
+)
+def test_situ_glu_layouts(device, gate_layout, up_layout):
+    torch.manual_seed(0)
+    # The native op goes through the binary ops' shared entry point, which tilizes a mixed pair. Handed
+    # to the device op directly, a row-major operand next to a tiled one was read as if it were tiled.
+    shape = torch.Size([1, 1, 64, 96])
+    gate = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=gate_layout, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=up_layout, device=device)
+
+    out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2)
+    tt_res = ttnn.to_torch(out)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+    _check_situ_glu(golden, tt_res, ttnn.bfloat16, SITU_GLU_BETA1, SITU_GLU_BETA2, ulp=SITU_GLU_NATIVE_ULP)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
 @pytest.mark.parametrize("input_shape, ttnn_dtype", SITU_GLU_CASES[:2], ids=["hidden_le_3072", "hidden_gt_3072"])
 def test_situ_glu_fallback_betas(input_shape, ttnn_dtype, device):
     torch.manual_seed(0)

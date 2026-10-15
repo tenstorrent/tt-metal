@@ -1352,17 +1352,18 @@ Tensor situ_glu(
 
     // Native path: one binary_ng SFPU launch (situ_glu_tile), reading gate and up once and writing the
     // result once, with no intermediates. The LLK compiles Kimi K3's betas in, so any other betas --
-    // and the architectures without the LLK -- keep the composite below and its numerics.
+    // and the architectures without the LLK -- keep the composite below and its numerics. It goes
+    // through the same entry point as the public binary ops, so layout normalization, output
+    // placement and dtype handling are theirs rather than a second copy here.
     const auto arch = gate.device()->arch();
     if ((arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) && beta1 == SITU_GLU_NATIVE_BETA_GATE &&
         beta2 == SITU_GLU_NATIVE_BETA_UP && gate.dtype() == up.dtype()) {
-        return ttnn::prim::binary_ng(
+        return ttnn::detail::invoke_binary_ng(
             gate,
             up,
             binary::BinaryOpType::SITU_GLU,
             std::nullopt,
             output_mem_config,
-            std::nullopt,
             std::nullopt,
             {},
             {},
