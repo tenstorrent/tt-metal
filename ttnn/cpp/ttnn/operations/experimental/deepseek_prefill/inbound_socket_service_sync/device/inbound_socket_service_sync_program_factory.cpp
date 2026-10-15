@@ -94,6 +94,7 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = worker_crs;
     writer.compile_time_args = ct_args;
+    writer.named_compile_time_args = {{"head_entry_addr_l1", static_cast<uint32_t>(args.head_entry_addr_l1)}};
     writer.config = WriterConfigDescriptor{};
 
     // Distribute pages across workers

@@ -45,6 +45,9 @@ constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(5);
 // 0 = no split: the whole page goes to `tokens`.
 constexpr uint32_t overhang_size_bytes = get_compile_time_arg_val(6);
 constexpr uint32_t trunk_size_bytes = page_size - overhang_size_bytes;
+// Nonzero: L1 word holding the DRAM address to read from, written by the service before
+// data_ready (a D2D receiver with more than one input-FIFO entry).
+constexpr uint32_t head_entry_addr_l1 = get_named_compile_time_arg_val("head_entry_addr_l1");
 
 // Templated for the same reason as snapshot_metadata: an `if constexpr` in the non-template kernel_main
 // still type-checks its discarded branch, so the unused accessor would be built.
@@ -114,7 +117,6 @@ void kernel_main() {
     constexpr uint32_t metadata_accessor_offset =
         TensorAccessorArgs<overhang_accessor_offset>().next_compile_time_args_offset();
 
-    auto backing = TensorAccessor(backing_accessor_args, backing_tensor_addr);
     auto output = TensorAccessor(output_accessor_args, output_tensor_addr);
 
     Noc noc;
@@ -129,6 +131,12 @@ void kernel_main() {
         invalidate_l1_cache();
     }
     *data_ready = 0;
+
+    uint32_t backing_addr = backing_tensor_addr;
+    if constexpr (head_entry_addr_l1 != 0) {
+        backing_addr = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(head_entry_addr_l1);
+    }
+    auto backing = TensorAccessor(backing_accessor_args, backing_addr);
 
     // 2. (Optional) Snapshot metadata from this worker's local L1 into the
     //    metadata output tensor on DRAM. Gated on `start_page == 0` so a

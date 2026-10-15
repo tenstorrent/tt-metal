@@ -24,6 +24,9 @@ struct InboundSocketServiceSyncParams {
     uint32_t metadata_size_bytes = 0;  // 0 disables the metadata path
     tt::tt_metal::DeviceAddr metadata_l1_addr = 0;
     uint32_t overhang_size_bytes = 0;  // trailing bytes of every page split into a second output; 0 disables
+    // Worker-L1 word holding the DRAM address of the entry to read (a D2D receiver with
+    // buffer_depth > 1). 0 reads the backing tensor's own address.
+    tt::tt_metal::DeviceAddr head_entry_addr_l1 = 0;
     tt::tt_metal::CoreRange worker_cores{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}};
 
     // Per-mesh-coordinate state, indexed row-major as (row * mesh_num_cols + col).

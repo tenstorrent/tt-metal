@@ -101,6 +101,9 @@ constexpr uint32_t done_count_addr = get_compile_time_arg_val(28);  // shared L1
 // the (vestigial) socket chunk plan; the host sizes the scratch CB to match.
 constexpr uint32_t num_read_slots = get_compile_time_arg_val(29);
 constexpr auto input_tensor_accessor_args = TensorAccessorArgs<30>();
+// Entries in the receiver's input FIFO. Transfer i lands in entry i % buffer_depth, both
+// its pages and its metadata.
+constexpr uint32_t buffer_depth = get_named_compile_time_arg_val("buffer_depth");
 
 // Emit `size` bytes from a contiguous L1 source to a single remote NoC address over
 // fabric, split into <= fabric_max_payload_size packets. Used for both a tensor page
@@ -228,9 +231,12 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    // Per-coord base address of the receiver's DRAM backing tensor (the direct
-    // fabric-write destination). Appended after the fabric-connection args; per device.
-    const uint32_t receiver_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    // Per-coord base address of each receiver input-FIFO entry (the direct fabric-write
+    // destinations). Appended after the fabric-connection args; per device.
+    uint32_t receiver_entry_addrs[buffer_depth];
+    for (uint32_t e = 0; e < buffer_depth; ++e) {
+        receiver_entry_addrs[e] = get_arg_val<uint32_t>(rt_args_idx++);
+    }
 
     // This lane's two fabric headers (its own header CB): one for the bulk page
     // writes, one for the data-landed atomic-inc. Routed once below (L1 writes only).
@@ -250,10 +256,9 @@ void kernel_main() {
     const uint32_t receiver_noc_x = downstream_enc.d2d.downstream_noc_x;
     const uint32_t receiver_noc_y = downstream_enc.d2d.downstream_noc_y;
 
-    // Sender backing (read source) and receiver backing (fabric-write destination)
-    // share the per-shard spec: one set of accessor args, two base addresses.
+    // Sender backing (read source) and the receiver entries (fabric-write destinations)
+    // share the per-shard spec: one set of accessor args, different base addresses.
     auto input_tensor_accessor = TensorAccessor(input_tensor_accessor_args, input_tensor_addr);
-    auto output_tensor_accessor = TensorAccessor(input_tensor_accessor_args, receiver_tensor_addr);
     Noc noc(noc_index);
     CircularBuffer scratch_cb(scratch_cb_index);
     const uint32_t cb_l1_addr = scratch_cb.get_write_ptr();
@@ -304,14 +309,11 @@ void kernel_main() {
         uint32_t my_sent = 0;
         uint32_t go_local = 0;
         uint32_t last_done = 0;
-        // Max transfers outstanding (sent but not yet consumed). Single buffer in
-        // Step 1; Step 3 (double-buffer) raises this.
-        constexpr uint32_t kBufferDepth = 1;
         bool terminated = false;
         while (!terminated) {
             // 1. Idle wait. Proceed only when ALL hold (iteration boundary, no transfer
             //    in flight): (a) LEASE grant, (b) workers produced (num_workers more
-            //    data_ready), (c) OVERWRITE GATE — fewer than kBufferDepth transfers
+            //    data_ready), (c) OVERWRITE GATE — fewer than buffer_depth transfers
             //    outstanding (sent - acked, wrap-safe). Or break on termination.
             bool ready = false;
             while (!ready) {
@@ -325,7 +327,7 @@ void kernel_main() {
                         continue;
                     }
                 }
-                if (static_cast<uint32_t>(my_sent - *bytes_acked) >= kBufferDepth) {
+                if (static_cast<uint32_t>(my_sent - *bytes_acked) >= buffer_depth) {
                     continue;
                 }
                 const uint32_t cur = *data_ready_counter;
@@ -350,12 +352,13 @@ void kernel_main() {
                 go_count[0] = go_local;
             }
 
-            // 4. Stream the master's half directly into the receiver DRAM tensor.
+            // 4. Stream the master's half directly into this transfer's receiver entry.
+            const uint32_t entry = my_sent % buffer_depth;
             stream_half(
                 noc,
                 fabric_connection,
                 input_tensor_accessor,
-                output_tensor_accessor,
+                TensorAccessor(input_tensor_accessor_args, receiver_entry_addrs[entry]),
                 cb_l1_addr,
                 page_start,
                 page_end,
@@ -367,8 +370,8 @@ void kernel_main() {
             //     Ships metadata_span_bytes — the staging buffer's size — so metadata
             //     capacity is bounded by the FIFO, not by the flow-control socket page.
             if constexpr (metadata_enabled) {
-                const uint64_t md_dst =
-                    get_noc_addr(receiver_noc_x, receiver_noc_y, sender_socket.downstream_fifo_addr);
+                const uint64_t md_dst = get_noc_addr(
+                    receiver_noc_x, receiver_noc_y, sender_socket.downstream_fifo_addr + entry * metadata_span_bytes);
                 fabric_write_bytes(
                     fabric_connection, md_dst, sender_metadata_l1_addr, metadata_span_bytes, data_packet_header_addr);
             }
@@ -415,6 +418,7 @@ void kernel_main() {
         }
 
         uint32_t last_go = 0;
+        uint32_t sub_sent = 0;  // tracks the master's my_sent: same transfers, same order
         bool terminated = false;
         while (!terminated) {
             // Wait for the master's go (it has passed the per-transfer gates), or break
@@ -443,11 +447,12 @@ void kernel_main() {
                 noc,
                 fabric_connection,
                 input_tensor_accessor,
-                output_tensor_accessor,
+                TensorAccessor(input_tensor_accessor_args, receiver_entry_addrs[sub_sent % buffer_depth]),
                 cb_l1_addr,
                 page_start,
                 page_end,
                 data_packet_header_addr);
+            sub_sent += 1;
 
             flush_inc_data_landed(fabric_connection, socket_packet_header_addr, recv_bytes_sent_noc_addr);
 

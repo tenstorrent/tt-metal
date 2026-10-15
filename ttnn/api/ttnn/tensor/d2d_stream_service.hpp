@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -127,6 +128,11 @@ struct D2DStreamConfig {
     // link topology, so the receiver knows how many data-landed increments to await.
     uint32_t max_sender_lanes = 2;
 
+    // Entries in the receiver's input FIFO (1 or 2). With 2, the sender can land the
+    // next transfer while the receiver still holds the previous one (e.g. at a stage
+    // gate). Both sides must agree.
+    uint32_t buffer_depth = 1;
+
     // Receiver only.
     std::optional<D2DStageGateConfig> stage_gate;
 };
@@ -242,8 +248,15 @@ public:
     D2DStreamServiceReceiver(D2DStreamServiceReceiver&&) = delete;
     D2DStreamServiceReceiver& operator=(D2DStreamServiceReceiver&&) = delete;
 
-    // Receiver-side workers read per-shard slices here.
+    // Receiver-side workers read per-shard slices here. With buffer_depth > 1 this is
+    // FIFO entry 0; the transfer being handed to the workers is in the entry named by
+    // get_head_entry_addr_l1().
     const Tensor& get_backing_tensor() const;
+
+    // Worker-L1 address (uniform across the receiver workers) of a word holding the
+    // DRAM base address of the FIFO entry being handed to the workers. Written before
+    // data_ready. 0 when buffer_depth == 1.
+    tt::tt_metal::DeviceAddr get_head_entry_addr_l1() const;
 
     // Per-shard tt::tt_metal::TensorSpec; same as get_backing_tensor().tensor_spec().
     const tt::tt_metal::TensorSpec& get_per_shard_spec() const;
@@ -360,14 +373,15 @@ private:
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
         tt::tt_metal::distributed::MeshSocket socket,
         std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord> service_cores,
-        const std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::DeviceAddr>& receiver_tensor_addrs,
+        const std::map<tt::tt_metal::distributed::MeshCoordinate, std::vector<tt::tt_metal::DeviceAddr>>&
+            receiver_entry_addrs,
         const Tensor& backing,
         const D2DStreamConfig& cfg);
     static std::unique_ptr<D2DStreamServiceReceiver> finalize_receiver(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
         tt::tt_metal::distributed::MeshSocket socket,
         std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord> service_cores,
-        const Tensor& backing,
+        std::vector<Tensor> entries,
         const D2DStreamConfig& cfg);
 };
 
