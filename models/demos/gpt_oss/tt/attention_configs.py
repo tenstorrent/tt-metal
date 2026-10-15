@@ -23,6 +23,8 @@ class GPTOSSAttentionProgramConfig(ProgramConfig):
     # From 4K up: the fastest config of a standalone sweep of the op at the 1x4 per-device shapes (16 Q / 2 KV heads,
     # head_dim 64, sink, bf16 Q, bf8 K/V, HiFi4) on the full Blackhole grid (11x10), 4K-64K. Below 4K the original
     # 32/32 and 256/256 stay: the run is host-bound there and smaller chunks gave no measurable TTFT gain.
+    # Blackhole only: on other architectures get_prefill_sdpa_config ignores these tables and uses the base class
+    # small/large rule (32/32 below 2048, 256/256 from 2048) on an 8x8 grid.
     prefill_chunk_regimes: tuple[tuple[int, int, int], ...] | None = (
         (0, 32, 32),
         (2048, 256, 256),

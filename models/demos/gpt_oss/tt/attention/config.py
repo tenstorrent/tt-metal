@@ -124,8 +124,11 @@ class ProgramConfig:
 
     def get_prefill_sdpa_config(self, mesh_device, seq_len: int, sliding_window=None) -> ttnn.SDPAProgramConfig:
         """Get SDPA config for prefill mode based on sequence length and layer type (sliding_window set or None)"""
-        regimes = self.prefill_chunk_regimes
-        if sliding_window is not None and self.prefill_sliding_chunk_regimes is not None:
+        # The per-length chunk tables and the full compute grid were tuned on Blackhole only; other architectures
+        # keep the small/large chunk rule on an 8x8 grid.
+        blackhole = ttnn.device.is_blackhole(mesh_device)
+        regimes = self.prefill_chunk_regimes if blackhole else None
+        if blackhole and sliding_window is not None and self.prefill_sliding_chunk_regimes is not None:
             regimes = self.prefill_sliding_chunk_regimes
         if regimes is not None:
             _, q_chunk, k_chunk = [r for r in regimes if r[0] <= seq_len][-1]
@@ -136,10 +139,11 @@ class ProgramConfig:
             q_chunk = self.prefill_q_chunk_size_small
             k_chunk = self.prefill_k_chunk_size_small
 
-        # Prefill SDPA spreads batch x heads x q-chunks over the whole compute grid (Blackhole P150: 11x10 = 110
+        # On Blackhole, prefill SDPA spreads batch x heads x q-chunks over the whole compute grid (P150: 11x10 = 110
         # cores, not 64), so long sequences get ~1.7x the cores.
+        grid = mesh_device.compute_with_storage_grid_size() if blackhole else ttnn.CoreCoord(8, 8)
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=grid,
             exp_approx_mode=False,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
