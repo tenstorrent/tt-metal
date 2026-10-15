@@ -594,7 +594,7 @@
   owner_id: U084B1CES7M
   team: ttnn
   budget_type: unit
-  category: flash_author_device2
+  category: flash_wh_size
 - name: Flash author Device2 n300 comparison
   cmd: 'FLASH_EXPERT_ROWS_CASES=n300 PYTHONPATH="/work/tests/campaign_validation:$PYTHONPATH" pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_compute_expert_rows.py -p expert_rows_selection -vv -s --timeout=600 --junitxml=generated/flash-expert.xml'
   skus:
