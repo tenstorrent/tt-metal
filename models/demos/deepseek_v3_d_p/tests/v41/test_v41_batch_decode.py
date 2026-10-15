@@ -124,7 +124,13 @@ def test_v41_batch_decode(mesh_device, device_params):
     lengths = [base - (s * 5) % 32 for s in range(n_slots)]
     assert min(lengths) >= C.SLIDING_WINDOW
     stride = base + steps + 8
-    text = orc.text_tokens(n_slots * stride)[0]
+    try:
+        text = orc.text_tokens(n_slots * stride)[0]
+    except ValueError as e:  # the book is shorter than the slots' windows laid end to end: overlap them
+        have = int(str(e).split()[0])
+        stride = max(C.SLIDING_WINDOW, (have - stride) // max(n_slots - 1, 1))
+        text = orc.text_tokens((n_slots - 1) * stride + base + steps + 8)[0]
+        logger.info(f"batch decode: {have} tokens of text, the slots' windows overlap at a stride of {stride}")
     prompts = {s: text[s * stride : s * stride + lengths[s]] for s in range(n_slots)}
     books = {s: text[s * stride + lengths[s] : s * stride + lengths[s] + steps + 1] for s in range(n_slots)}
     if os.environ.get("V41_BATCH_SAME_PROMPT", "0") == "1":  # every slot the same request: identical expert routing

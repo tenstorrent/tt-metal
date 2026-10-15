@@ -111,6 +111,19 @@ class CandidateBlocks:
     ids: ttnn.Tensor | None
 
 
+@dataclass(frozen=True)
+class DecodePins:
+    """What ``select`` needs of ``V41ChunkTables`` for the decode tile: a per-row pin page ``[1, 1, 1, ROWS]`` uint32
+    (``indexer_kernels._pin_rows``), entry ``i`` the newest compressed row of row ``i``'s user in the scored source
+    (its visible count less one; the sentinel when the row is idle, which pins nothing). ``start`` is 0 with it: a
+    row's pin is its absolute row."""
+
+    newest: ttnn.Tensor
+
+    def query_first(self):
+        return self.newest
+
+
 def _is_sentinel(t):
     """uint32 1 where ``t`` is the 0xFFFFFFFF sentinel, else 0 (valid ids are below 2^31)."""
     return ttnn.bitwise_right_shift(t, 31)

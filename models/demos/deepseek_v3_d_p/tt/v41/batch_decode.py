@@ -39,7 +39,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.attention import TOPK_ALIGN, TtV41Atten
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.decode import MOE_ROWS, ROWS, TtV41Decoder
 from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
-from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer
+from models.demos.deepseek_v3_d_p.tt.v41.indexer import DecodePins, TtV41Indexer
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
 from models.demos.deepseek_v3_d_p.tt.v41.pool import RING, V41DecodePool, scatter_rows
@@ -313,6 +313,9 @@ class TtV41BatchDecoder(TtV41Decoder):
             inputs[f"visible{ratio}"] = self.pool.per_rank(
                 visible.view(sp, 1, ROWS, 1), ttnn.float32, ttnn.TILE_LAYOUT, device=False
             )
+            # the selection's per-row pins: each row's newest compressed row, the sentinel for an idle or empty row
+            newest = torch.where(visible > 0, visible - 1, torch.full_like(visible, -1)).to(torch.int32)
+            inputs[f"newest{ratio}"] = self.pool.per_rank(newest.view(sp, 1, 1, ROWS), ttnn.uint32, device=False)
             writes = active & (positions % ratio == ratio - 1)
             comp = torch.where(writes, positions // ratio, torch.full_like(positions, -1)).to(
                 torch.int32
@@ -590,14 +593,17 @@ class TtV41BatchDecoder(TtV41Decoder):
         ttnn.copy(score, s0)
         return ttnn.rms_norm(ttnn.typecast(pooled, ttnn.bfloat16), weight=compressor.norm, epsilon=compressor.eps)
 
-    def _index(self, indexer: TtV41Indexer, x, qr, source: int, mask, candidates):
+    def _index(self, indexer: TtV41Indexer, x, qr, source: int, mask, candidates: dict | None):
         """The indexer of every slot's user over its index keys -> (top-k rows ``[1, 1, ROWS, INDEX_TOPK]`` uint32
-        row-major, row u slot u's selection (the pad rows all sentinels); published candidates or None)."""
+        row-major, row u slot u's selection (the pad rows all sentinels); the candidate source's published
+        ``CandidateBlocks`` per user, else None). The selection is the prefill's (``TtV41Indexer.select``) with the
+        tile's per-row pins (``DecodePins``): the candidate source publishes each user's candidate blocks (none
+        below CANDIDATE_TOPK_BLOCKS blocks of capacity: every block is a candidate), and a candidate index source
+        selects inside its user's published blocks (``candidates[u]``)."""
         cfg, pool = self.config, self.pool
         cap = pool.slots[source].cap
-        assert (
-            cap // cfg.CANDIDATE_BLOCK_SIZE <= cfg.CANDIDATE_TOPK_BLOCKS
-        ), f"decode over {cap} compressed rows needs the candidate-block selection (not implemented)"
+        assert (cap + 32) % 32 == 0, cap  # the score's width, a segment_max input
+        pins = DecodePins(self.buffers[f"newest{cfg.compress_ratio(source)}"])
         cos, sin = self.buffers["ropec"]
         q = ttnn.linear(fp8_qdq(qr), indexer.wq_b, compute_kernel_config=indexer.compute_kernel_config)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -607,15 +613,19 @@ class TtV41BatchDecoder(TtV41Decoder):
         w = indexer.ccl.tp_all_reduce(ttnn.linear(x, indexer.weights_proj))
         k = pool.index_k[source]  # [users, 1, cap + 32, idim], tiled by every write: no conversion of the history
         config = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=min(256, cap + 32), head_group_size=0)
-        parts, published = [], None
+        parts, published = [], {} if indexer.is_candidate_source else None
         for u in range(self.users):
             # every row sees every key (the causal window starts past the slot's rows); the mask then hides the rows
-            # past each user's visible count, and the pad tile
+            # past each user's visible count, and the pad tile. Row u is the user's; the other rows' selections
+            # (and pins) are other users' queries against this user's keys, discarded
             score = ttnn.experimental.indexer_score_dsa(
                 q, k, w, chunk_start_idx=cap, seq_shard_axes=[], program_config=config, cache_batch_idx=u
             )
             score = ttnn.to_layout(ttnn.add(ttnn.to_layout(score, ttnn.TILE_LAYOUT), mask), ttnn.ROW_MAJOR_LAYOUT)
-            topk, published = indexer.select(score, None, 0, cfg.INDEX_TOPK, candidates)
+            mine = candidates[u] if candidates is not None else None
+            topk, blocks = indexer.select(score, pins, 0, cfg.INDEX_TOPK, mine)
+            if published is not None:
+                published[u] = blocks
             parts.append(ttnn.slice(topk, [0, 0, u, 0], [1, 1, u + 1, topk.shape[3]]))
         if self.users < ROWS:
             parts.append(self.pad_topk)

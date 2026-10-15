@@ -30,7 +30,13 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes
 from models.demos.deepseek_v3_d_p.tests.v41.reference_weights import dequant
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables
-from models.demos.deepseek_v3_d_p.tt.v41.indexer import SENTINEL, CandidateBlocks, TtV41Indexer, TtV41IndexKeys
+from models.demos.deepseek_v3_d_p.tt.v41.indexer import (
+    SENTINEL,
+    CandidateBlocks,
+    DecodePins,
+    TtV41Indexer,
+    TtV41IndexKeys,
+)
 from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import candidate_scores, gather_runs, segment_max
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -305,6 +311,109 @@ def test_v41_indexer_selection_long(mesh_device, device_params, start):
         _check_selection(mesh_device, C, tables, scores, start, results, f"start{start}")
     print(f"indexer selection: {results}")
     assert all(results.values()), results
+
+
+def _decode_scores(rows: int, cap: int, visible: torch.Tensor, g) -> torch.Tensor:
+    """[rows, cap + 32] scores of a decode tile over a pool of ``cap`` rows (the pad tile after them): row i sees
+    its first ``visible[i]`` rows, -inf beyond; an idle row (0) is all -inf. Tie-free where it matters: up to 4096
+    of a row's blocks hold one distinct positive bf16 code each (at a random row of the block), the rest of the
+    visible rows are -100, so the top-2048 blocks by maximum, the top-k rows and the top-k inside the candidate
+    blocks are unambiguous. The codes stay below 2^32: the segment max's -inf column masks saturate against values
+    above ~1e36 on the FPU (`-inf + x` -> `-bf16max + x`), which real scores never reach."""
+    width = cap + 32
+    out = torch.full((rows, width), float("-inf"))
+    for i in range(rows):
+        n = int(visible[i])
+        if n == 0:
+            continue
+        out[i, :n] = -100.0
+        nblocks = -(-n // 8)
+        blocks = torch.randperm(nblocks, generator=g)[: min(nblocks, 4096)]
+        pos = (blocks * 8 + torch.randint(0, 8, (blocks.numel(),), generator=g)).clamp(max=n - 1)
+        # and enough distinct positives for a tie-free top-k (INDEX_TOPK) wherever the row has that many rows
+        pos = torch.unique(torch.cat([pos, torch.randperm(n, generator=g)[: min(n, 8192)]]))
+        codes = torch.randperm(0x4F00 - 0x0080, generator=g)[: pos.numel()] + 0x0080
+        out[i, pos] = codes.to(torch.int16).view(torch.bfloat16).float()
+    return out
+
+
+def _replicated(mesh_device, host: torch.Tensor, dtype):
+    return ttnn.from_torch(
+        host,
+        device=mesh_device,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _chip0(t) -> torch.Tensor:
+    return ttnn.to_torch(ttnn.get_device_tensors(t)[0])[0, 0]
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("cap", [8192, 16384, 20480, 69632, 1048576], ids=lambda c: f"cap{c}")
+@pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
+def test_v41_decode_selection(mesh_device, device_params, cap):
+    """The decode tile's selection (``TtV41Indexer.select`` with ``DecodePins``) against the reference: 32 rows at
+    their own visible counts (idle rows, a row below INDEX_TOPK, block and superblock boundaries, the full pool),
+    the candidate source's published blocks vs ``select_candidate_blocks`` with that row's count, its top-k vs the
+    dense top-k, a consumer's top-k vs its dense score masked by the published blocks. Capacities on the
+    all-candidates, one-level and two-level paths (the last two below and above SUBSET_TOPK_MIN_WIDTH)."""
+    rows, cfg = 32, C
+    g = torch.Generator().manual_seed(cap)
+    visible = torch.randint(1, cap + 1, (rows,), generator=g)
+    visible[0], visible[1] = 0, 0  # idle users: the sentinel pin, an all -inf row
+    visible[2] = 300  # fewer visible rows than INDEX_TOPK: a sentinel tail
+    visible[3] = cap  # the whole pool
+    visible[4] = 8 * (cap // 16)  # a block boundary (the newest block is full)
+    visible[5] = 8 * (cap // 16) + 1  # the row after it (a one-row newest block)
+    visible[6] = 32 * (cap // 64) + 5  # inside a superblock
+    visible[7] = min(cap, 2048 * 8 + 3)  # just past the budget of one level
+    with phase("reference", what="tie-free decode scores + reference selection"):
+        scores = _decode_scores(rows, cap, visible, g)
+        k = cfg.INDEX_TOPK
+        ref_blocks, ref_src, ref_cons = [], [], []
+        for i in range(rows):
+            n = int(visible[i])
+            if n == 0:
+                ref_blocks.append(None), ref_src.append(None), ref_cons.append(None)
+                continue
+            mask = v41.select_candidate_blocks(
+                scores[i : i + 1].clone(), n, cfg.CANDIDATE_TOPK_BLOCKS, cfg.CANDIDATE_BLOCK_SIZE
+            )
+            ref_blocks.append(_ref_blocks(mask, cfg.CANDIDATE_BLOCK_SIZE)[0])
+            ref_src.append(_ref_rows(scores[i : i + 1], k)[0])
+            ref_cons.append(_ref_rows(scores[i : i + 1].masked_fill(~mask, float("-inf")), k)[0])
+    with phase("compute", what="device selection"):
+        weights = {
+            "wq_b": torch.zeros(cfg.INDEX_N_HEADS * cfg.INDEX_HEAD_DIM, cfg.Q_LORA_RANK),
+            "weights_proj": torch.zeros(cfg.INDEX_N_HEADS, cfg.EMB_SIZE),
+        }
+        source = TtV41Indexer(mesh_device, cfg, cfg.CANDIDATE_SOURCE_LAYER, weights)
+        consumer = TtV41Indexer(mesh_device, cfg, 24, weights)
+        feed = _replicated(mesh_device, scores.to(torch.bfloat16)[None, None], ttnn.bfloat16)
+        newest = torch.where(visible > 0, visible - 1, torch.full_like(visible, -1)).to(torch.int32)
+        pins = DecodePins(_replicated(mesh_device, newest.view(1, 1, 1, rows), ttnn.uint32))
+        idx, published = source.select(feed, pins, 0, k)
+        assert isinstance(published, CandidateBlocks)
+        src_rows = _rows(_chip0(idx))
+        dev_blocks = None if published.ids is None else _rows(_chip0(published.ids))
+        idx, _ = consumer.select(feed, pins, 0, k, published)
+        cons_rows = _rows(_chip0(idx))
+    results = {}
+    for i in range(rows):
+        if ref_src[i] is None:
+            continue
+        if dev_blocks is None:
+            results[f"row{i}_blocks"] = cap // cfg.CANDIDATE_BLOCK_SIZE <= cfg.CANDIDATE_TOPK_BLOCKS
+        else:
+            results[f"row{i}_blocks"] = dev_blocks[i] == ref_blocks[i]
+        results[f"row{i}_source"] = src_rows[i] == ref_src[i]
+        results[f"row{i}_consumer"] = cons_rows[i] == ref_cons[i]
+    bad = {key: value for key, value in results.items() if not value}
+    print(f"decode selection cap {cap}: {len(results)} checks, {len(bad)} wrong: {sorted(bad)[:12]}")
+    assert not bad, sorted(bad)
 
 
 def _pin_table(mesh_device, rows: int):
