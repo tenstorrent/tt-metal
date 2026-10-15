@@ -121,7 +121,10 @@ inline void launch(
     hreg::Arena arena(hreg::Region{avail.begin, avail.size()});
     const hreg::Region dst = arena.allocate(uint64_t{P} * TB_TX2X_STAGING_MAX_BYTES);
     const hreg::Region verify = arena.allocate(uint64_t{P} * hreg::kCacheLineBytes);
-    hreg::zero_region(*f.tile, dst);
+    // Each writer's first transfer_size bytes are what it writes and what is checked.
+    for (uint32_t w = 0; w < P; ++w) {
+        hreg::zero_region(*f.tile, hreg::Region{dst.addr + uint64_t{w} * TB_TX2X_STAGING_MAX_BYTES, transfer_size});
+    }
     hreg::zero_region(*f.tile, verify);
     ASSERT_TRUE(ubench_noc_congruent(l1_base + TL.staging_offset, dst.addr))
         << "staging and LIM destination are not congruent mod " << UBENCH_NOC_UNIT_BYTES;
@@ -227,10 +230,10 @@ inline void launch(
             out.results[w], TRANSPORT_BW_BACKEND_ID_ERISC_TO_X280, transfer_size, boundary, W, N));
     }
 
-    const auto lim = f.tile->read_available_lim(dst.addr, dst.bytes);
-    ASSERT_EQ(lim.size(), dst.bytes);
     for (uint32_t w = 0; w < P; ++w) {
-        const uint8_t* range = lim.data() + uint64_t{w} * TB_TX2X_STAGING_MAX_BYTES;
+        const auto lim = f.tile->read_available_lim(dst.addr + uint64_t{w} * TB_TX2X_STAGING_MAX_BYTES, transfer_size);
+        ASSERT_EQ(lim.size(), transfer_size);
+        const uint8_t* range = lim.data();
         uint32_t mismatches = 0;
         uint32_t first = 0;
         uint32_t first_read = 0;
