@@ -498,7 +498,8 @@ new campaign evidence.
 
 Tabulate current-format JSONL records of the p2p_latency, transport_bandwidth,
 pipeline_stage, packet_injection, core_sync and eth_credit members, one result
-table per member and record shape:
+table per member and record shape, and for each Metal p2p peer a `TURN split`
+table across its records:
 
 ```bash
 # Tabulate suite results to stdout:
