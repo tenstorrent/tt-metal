@@ -1,0 +1,3 @@
+models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py::test_sampling_topk_single_device[test_1]
+models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py::test_sampling_topk_single_device[test_2]
+models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py::test_sampling_topk_single_device[test_4]
