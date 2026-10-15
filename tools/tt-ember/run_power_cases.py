@@ -52,20 +52,26 @@ import math
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib
 
 from common import (
+    LONG_MATMUL_APP,
+    POWER_CASES_TRIM_MS,
     RUN_COMPLETE_FILE,
     auto_py_command,
     environ_with,
+    exit_reason,
+    long_matmul_args,
     reset_hardware,
     run_settings,
     run_status,
     shell_join,
 )
+from compare_cases import grouped_bar_chart
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -73,7 +79,7 @@ import numpy as np
 
 
 # POWER_CASE -> (subdir name, legend label). See long_matmul's README for what each case does. Case 3 (reader AND compute
-# both idle) is not in the default sweep below -- it's a two-variable case, and the four
+# both idle) is not in the default sweep below -- it's a two-variable case, and the three
 # single-variable ablations already isolate each engine's own contribution to dynamic power.
 # Case 5 (LONG_MATMUL_DISABLE_WRITER) is the writer's idle case, symmetric with case 2 (compute idle)
 # and case 4 (reader idle): all three compare "full real work" against "zero real work" for
@@ -91,9 +97,10 @@ POWER_CASE_SPECS: Dict[int, Tuple[str, str]] = {
     4: ("reader_idle2", "Reader idle"),
     5: ("writer_idle", "Writer idle"),
 }
+SUBDIR_TO_POWER_CASE: Dict[str, int] = {subdir: case for case, (subdir, _label) in POWER_CASE_SPECS.items()}
 
-# The four single-variable ablations: each idles exactly one engine relative to case 1 (all
-# active), with the other two engines held real (and write amplification at 100%) on both
+# Case 1 (all active) and the three single-variable ablations: each idles exactly one engine
+# relative to case 1, with the other two engines held real (and write amplification at 100%) on both
 # sides, so (case 1 - case X) isolates engine X's own contribution to dynamic power.
 DEFAULT_POWER_CASES: List[int] = [5, 1, 2, 4]
 
@@ -138,23 +145,21 @@ def write_cross_op_cases_file(
     path: Path,
     ops: List[str],
     cases_in_order: List[Tuple[str, str]],
-    output_root: Path,
+    runs: "Runs",
 ) -> List[Tuple[str, str]]:
     """Pairs every (op, case) combination into one cases list, subdir paths relative to
     output_root (e.g. "matmul/regular"), grouped by case so same-case entries across ops sit
-    next to each other as adjacent bars. Skips any pair whose program_intervals.csv doesn't
-    exist yet -- e.g. a case that failed, or wasn't run for that op -- so one missing run
+    next to each other as adjacent bars. Skips any pair that is not a complete run with this
+    sweep's settings -- e.g. a case that failed, or wasn't run for that op -- so one missing run
     doesn't block comparing everything else. Returns the entries actually written.
     """
     entries: List[Tuple[str, str]] = []
     for subdir, label in cases_in_order:
         for op in ops:
             rel = f"{op}/{subdir}"
-            csv_path = output_root / rel / "program_intervals.csv"
-            if not csv_path.exists():
+            if not runs.complete(op, subdir):
                 print(
-                    f"[CROSS-OP] note: no program_intervals.csv for '{rel}' yet -- "
-                    "skipping it in the cross-op comparison",
+                    f"[CROSS-OP] note: no complete '{rel}' run yet -- skipping it in the cross-op comparison",
                     flush=True,
                 )
                 continue
@@ -183,9 +188,40 @@ ENGINE_ABLATIONS: List[Tuple[str, str, str]] = [
     ("compute", "compute_idle", "Compute"),
 ]
 
+PJ_PER_J = 1e12
 
 # LONG_MATMUL_MODE, the same switch long_matmul and parser.py read (see long_matmul's README).
 LEGACY_MODE = os.environ.get("LONG_MATMUL_MODE") == "legacy"
+
+
+@dataclass
+class Runs:
+    """Reads the runs of this sweep's settings. A run made with other settings (another shape or
+    mode), or one that did not finish, is treated as missing, so it never reaches a chart."""
+
+    output_root: Path
+    app_args: List[str]
+    telemetry_freq: int
+    trim_ms: float
+    slot_ms: int
+    device_id: Optional[int]
+
+    def settings(self, op: str, subdir: str) -> Dict[str, object]:
+        power_case = SUBDIR_TO_POWER_CASE[subdir]
+        env = environ_with({"POWER_CASE": str(power_case), "LONG_MATMUL_OP": op})
+        return run_settings(self.app_args, env, self.telemetry_freq, self.trim_ms, self.slot_ms, self.device_id)
+
+    def complete(self, op: str, subdir: str) -> bool:
+        return run_status(self.output_root / op / subdir, self.settings(op, subdir)) == "done"
+
+    def rows(self, op: str, subdir: str, note_prefix: str) -> Optional[Dict[str, Dict[str, str]]]:
+        """program_intervals.csv of op/subdir by grid, or None (with a note) if that run is not a
+        complete run with this sweep's settings."""
+        if not self.complete(op, subdir):
+            print(f"{note_prefix} note: no complete '{op}/{subdir}' run with these settings, skipping it", flush=True)
+            return None
+        with (self.output_root / op / subdir / "program_intervals.csv").open(newline="") as f:
+            return {row["grid"]: row for row in csv.DictReader(f)}
 
 
 def _whole_run_value(row: Dict[str, str], column: str) -> float:
@@ -207,41 +243,21 @@ def _whole_run_value(row: Dict[str, str], column: str) -> float:
     return value * run_s / window_s if window_s > 0 else float("nan")
 
 
-def _load_program_intervals(csv_path: Path) -> Optional[Dict[str, Dict[str, str]]]:
-    if not csv_path.exists():
-        return None
-    with csv_path.open(newline="") as f:
-        return {row["grid"]: row for row in csv.DictReader(f)}
-
-
-def compute_energy_by_engine(
-    op_output_root: Path,
-    note_prefix: str = "[ENERGY]",
-) -> Optional[Dict[str, Dict[str, float]]]:
+def compute_energy_by_engine(runs: Runs, op: str) -> Optional[Dict[str, Dict[str, float]]]:
     """Dynamic energy [J] per engine (reader/writer/compute) for one op's case sweep, per grid:
-    (all-active dynamic avg charge - idle-case dynamic avg charge) x V_core. This is the
-    shared ablation both compute_energy_per_flop_by_engine() and the stacked total-energy chart
-    are built from. Returns None if the all-active case is missing entirely; skips (with a
-    note) any engine whose idle case is missing, so callers still get whatever engines have
-    data.
+    (all-active dynamic avg charge - idle-case dynamic avg charge) x V_core. Returns None if the
+    all-active case is missing; skips (with a note) any engine whose idle case is missing, so
+    callers still get whatever engines have data.
     """
-    active = _load_program_intervals(op_output_root / ALL_ACTIVE_CASE / "program_intervals.csv")
+    note_prefix = f"[ENERGY][{op}]"
+    active = runs.rows(op, ALL_ACTIVE_CASE, note_prefix)
     if active is None:
-        print(
-            f"{note_prefix} note: no {ALL_ACTIVE_CASE}/program_intervals.csv under " f"{op_output_root}, skipping",
-            flush=True,
-        )
         return None
 
     per_engine: Dict[str, Dict[str, float]] = {}
     for engine, idle_case, _label in ENGINE_ABLATIONS:
-        idle = _load_program_intervals(op_output_root / idle_case / "program_intervals.csv")
+        idle = runs.rows(op, idle_case, note_prefix)
         if idle is None:
-            print(
-                f"{note_prefix} note: no {idle_case}/program_intervals.csv under "
-                f"{op_output_root}, skipping '{engine}'",
-                flush=True,
-            )
             continue
         per_grid: Dict[str, float] = {}
         for grid, active_row in active.items():
@@ -264,20 +280,14 @@ def compute_energy_by_engine(
     return per_engine or None
 
 
-def compute_energy_per_flop_by_engine(
-    op_output_root: Path,
-    flops: float,
-) -> Optional[Dict[str, Dict[str, float]]]:
-    """pJ/FLOP per engine (reader/writer/compute) for one op's case sweep -- compute_energy_by_engine()'s
-    Joule figures divided by the fixed per-interval FLOP count (split mode gives every grid the
-    same total work).
-    """
-    per_engine_j = compute_energy_by_engine(op_output_root, note_prefix="[ENERGY/FLOP]")
-    if per_engine_j is None:
-        return None
-    return {
-        engine: {grid: j / flops * 1e12 for grid, j in per_grid.items()} for engine, per_grid in per_engine_j.items()
-    }
+def to_pj_per_flop(per_key_j: Dict[str, Dict[str, float]], flops: float) -> Dict[str, Dict[str, float]]:
+    """Joules per grid -> pJ per FLOP, with the fixed per-interval FLOP count (split mode gives
+    every grid the same total work)."""
+    return {key: {grid: j / flops * PJ_PER_J for grid, j in per_grid.items()} for key, per_grid in per_key_j.items()}
+
+
+def grids_with_data(grid_order: List[str], per_key: Dict[str, Dict[str, float]]) -> List[str]:
+    return [g for g in grid_order if any(g in vals for vals in per_key.values())]
 
 
 def plot_energy_per_flop_by_engine(
@@ -286,33 +296,20 @@ def plot_energy_per_flop_by_engine(
     out_path: Path,
     dpi: int,
 ) -> None:
-    grids = [g for g in grid_order if any(g in vals for vals in per_engine.values())]
-    x = np.arange(len(grids))
-    width = 0.8 / max(len(ENGINE_ABLATIONS), 1)
-
-    fig, ax = plt.subplots(figsize=(max(10, len(grids) * 1.0), 6))
-    for i, (engine, _idle_case, label) in enumerate(ENGINE_ABLATIONS):
-        if engine not in per_engine:
-            continue
-        vals = [per_engine[engine].get(g, float("nan")) for g in grids]
-        offset = (i - (len(ENGINE_ABLATIONS) - 1) / 2) * width
-        ax.bar(x + offset, vals, width, label=label)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(grids, rotation=45, ha="right")
-    ax.set_xlabel("Grid size (core combination)")
-    ax.set_ylabel("Energy per FLOP [pJ], dynamic avg-charge basis")
-    ax.set_title("Energy per FLOP by engine (reader / writer / compute)")
-    ax.legend()
-    ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
-    print(f"Wrote: {out_path}", flush=True)
+    grouped_bar_chart(
+        grids_with_data(grid_order, per_engine),
+        [(engine, label) for engine, _idle_case, label in ENGINE_ABLATIONS if engine in per_engine],
+        per_engine,
+        title="Energy per FLOP by engine (reader / writer / compute)",
+        ylabel="Energy per FLOP [pJ], dynamic avg-charge basis",
+        out_path=out_path,
+        dpi=dpi,
+    )
 
 
 def compute_energy_per_flop_per_core(
-    op_output_root: Path,
+    runs: Runs,
+    op: str,
     cases_in_order: List[Tuple[str, str]],
     flops: float,
 ) -> Dict[str, Dict[str, float]]:
@@ -324,16 +321,12 @@ def compute_energy_per_flop_per_core(
     efficiency figure. Dividing by cores means a case whose energy is dominated by the
     (per-board, not per-core) idle floor will show falling pJ/FLOP/core as cores increase, even
     if its raw pJ/FLOP is flat -- that dilution is the point of the metric, not an artifact.
-    Cases whose CSV is missing are skipped with a note.
+    Missing cases are skipped with a note.
     """
     per_case: Dict[str, Dict[str, float]] = {}
     for subdir, _label in cases_in_order:
-        rows = _load_program_intervals(op_output_root / subdir / "program_intervals.csv")
+        rows = runs.rows(op, subdir, "[ENERGY/FLOP/CORE]")
         if rows is None:
-            print(
-                f"[ENERGY/FLOP/CORE] note: no {subdir}/program_intervals.csv under " f"{op_output_root}, skipping it",
-                flush=True,
-            )
             continue
         per_grid: Dict[str, float] = {}
         for grid, row in rows.items():
@@ -344,7 +337,7 @@ def compute_energy_per_flop_per_core(
                 continue
             if cores <= 0 or not math.isfinite(energy_j):
                 continue
-            per_grid[grid] = energy_j / flops * 1e12 / cores
+            per_grid[grid] = energy_j / flops * PJ_PER_J / cores
         if per_grid:
             per_case[subdir] = per_grid
     return per_case
@@ -357,28 +350,39 @@ def plot_energy_per_flop_per_core(
     out_path: Path,
     dpi: int,
 ) -> None:
-    grids = [g for g in grid_order if any(g in vals for vals in per_case.values())]
-    x = np.arange(len(grids))
-    active_cases = [(s, l) for s, l in cases_in_order if s in per_case]
-    width = 0.8 / max(len(active_cases), 1)
+    grouped_bar_chart(
+        grids_with_data(grid_order, per_case),
+        [(s, l) for s, l in cases_in_order if s in per_case],
+        per_case,
+        title="Energy per FLOP per core, per profile",
+        ylabel="Energy per FLOP per core [pJ]",
+        out_path=out_path,
+        dpi=dpi,
+    )
 
-    fig, ax = plt.subplots(figsize=(max(10, len(grids) * 1.0), 6))
-    for i, (subdir, label) in enumerate(active_cases):
-        vals = [per_case[subdir].get(g, float("nan")) for g in grids]
-        offset = (i - (len(active_cases) - 1) / 2) * width
-        ax.bar(x + offset, vals, width, label=label)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(grids, rotation=45, ha="right")
-    ax.set_xlabel("Grid size (core combination)")
-    ax.set_ylabel("Energy per FLOP per core [pJ]")
-    ax.set_title("Energy per FLOP per core, per profile")
-    ax.legend()
-    ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
-    print(f"Wrote: {out_path}", flush=True)
+def clip_negative(values: Dict[str, float], grids: List[str], name: str, unit: str, clipped: List[str]) -> List[float]:
+    """values per grid in grid order, with a missing grid as 0 and a negative value clipped to 0
+    (and recorded in `clipped`). A stacked bar can't show a negative slice as a share of the
+    whole; these are an idle case measured slightly above the all-active one, which happens for
+    cheap ops like add, where the difference is within noise."""
+    out = []
+    for g in grids:
+        v = values.get(g, 0.0)
+        if v < 0:
+            clipped.append(f"{name}@{g} ({v:.4g} {unit})")
+            v = 0.0
+        out.append(v)
+    return out
+
+
+def report_clipped(clipped: List[str], chart: str) -> None:
+    if clipped:
+        print(
+            f"[ENERGY] note: clipped {len(clipped)} negative value(s) to 0 for the {chart} "
+            f"(noise floor, not a real negative energy): {clipped}",
+            file=sys.stderr,
+        )
 
 
 def plot_energy_by_engine_stacked(
@@ -388,47 +392,24 @@ def plot_energy_by_engine_stacked(
     dpi: int,
 ) -> None:
     """One stacked bar per grid: reader/writer/compute dynamic energy [J] stacked to show each
-    engine's share of the total. Negative per-engine values (an idle case measured slightly above
-    the all-active one, which happens for cheap ops like add, where the difference is within
-    noise) are clipped to 0 for the stack -- a negative slice has no "share of the whole"
-    meaning -- and reported on stderr instead of silently dropped.
+    engine's share of the total. Negative per-engine values are clipped to 0 for the stack and
+    reported on stderr (see clip_negative).
     """
-    grids = [g for g in grid_order if any(g in vals for vals in per_engine.values())]
+    grids = grids_with_data(grid_order, per_engine)
     x = np.arange(len(grids))
 
     clipped: List[str] = []
-    stacks: Dict[str, List[float]] = {}
-    for engine, _idle_case, _label in ENGINE_ABLATIONS:
-        if engine not in per_engine:
-            continue
-        vals = []
-        for g in grids:
-            v = per_engine[engine].get(g, 0.0)
-            if v < 0:
-                clipped.append(f"{engine}@{g} ({v:.4g} J)")
-                v = 0.0
-            vals.append(v)
-        stacks[engine] = vals
-
-    if clipped:
-        print(
-            f"[ENERGY] note: clipped {len(clipped)} negative engine/grid value(s) to 0 for the "
-            f"stacked total-energy chart (noise floor, not a real negative energy): {clipped}",
-            flush=True,
-        )
-
     fig, ax = plt.subplots(figsize=(max(10, len(grids) * 1.0), 6))
     bottom = np.zeros(len(grids))
-    totals = np.zeros(len(grids))
     for engine, _idle_case, label in ENGINE_ABLATIONS:
-        if engine not in stacks:
+        if engine not in per_engine:
             continue
-        vals = np.array(stacks[engine])
-        ax.bar(x, vals, 0.6, bottom=bottom, label=label)
+        vals = np.array(clip_negative(per_engine[engine], grids, engine, "J", clipped))
+        ax.bar(x, vals, width=0.6, bottom=bottom, label=label)
         bottom += vals
-        totals += vals
+    report_clipped(clipped, "stacked total-energy chart")
 
-    for i, total in enumerate(totals):
+    for i, total in enumerate(bottom):
         ax.annotate(
             f"{total:.3g} J",
             (x[i], total),
@@ -457,7 +438,7 @@ def plot_energy_by_engine_stacked(
 OP_HATCHES = ["", "//", "xx", "\\\\", "oo", "..", "++"]
 
 
-def _plot_cross_op_stacked_by_engine(
+def plot_cross_op_stacked_by_engine(
     per_op_engine: Dict[str, Dict[str, Dict[str, float]]],
     ops: List[str],
     grid_order: List[str],
@@ -467,11 +448,11 @@ def _plot_cross_op_stacked_by_engine(
     title: str,
     value_unit: str,
     normalize_pct: bool = False,
-) -> bool:
-    """Shared plotting body for the cross-op stacked-by-engine charts (raw Joules, pJ/FLOP, and
-    percentage-share) -- for every grid, one stacked reader/writer/compute bar *per op*, side by
-    side, so the operations can be compared like-for-like at each grid. Color encodes engine
-    (shared legend across ops); hatch encodes op.
+) -> None:
+    """The cross-op stacked-by-engine charts (raw Joules, pJ/FLOP, and percentage share): for
+    every grid, one stacked reader/writer/compute bar *per op*, side by side, so the operations
+    can be compared like-for-like at each grid. Color encodes engine (shared legend across ops);
+    hatch encodes op.
 
     normalize_pct=True rescales each (op, grid) bar's own three engine values to sum to 100 --
     every bar is the same height, only the internal split varies -- so the *share* each engine
@@ -480,9 +461,6 @@ def _plot_cross_op_stacked_by_engine(
     from raw Joules or pJ/FLOP, since FLOPS is a per-grid constant shared by all three engines at
     that grid and cancels out of the ratio -- so callers can pass either.
     """
-    if not per_op_engine:
-        return False
-
     grids = [
         g for g in grid_order if any(g in vals for per_engine in per_op_engine.values() for vals in per_engine.values())
     ]
@@ -499,23 +477,15 @@ def _plot_cross_op_stacked_by_engine(
         per_engine = per_op_engine[op]
         offset = (op_idx - (len(ops_with_data) - 1) / 2) * width
 
-        raw: Dict[str, List[float]] = {}
-        for engine, _idle_case, _label in ENGINE_ABLATIONS:
-            if engine not in per_engine:
-                continue
-            vals = []
-            for g in grids:
-                v = per_engine[engine].get(g, 0.0)
-                if v < 0:
-                    clipped.append(f"{op}/{engine}@{g} ({v:.4g} {value_unit})")
-                    v = 0.0
-                vals.append(v)
-            raw[engine] = vals
+        raw = {
+            engine: clip_negative(per_engine[engine], grids, f"{op}/{engine}", value_unit, clipped)
+            for engine, _idle_case, _label in ENGINE_ABLATIONS
+            if engine in per_engine
+        }
 
         if normalize_pct:
-            engines_present = list(raw.keys())
-            totals = [sum(raw[e][gi] for e in engines_present) for gi in range(len(grids))]
-            for engine in engines_present:
+            totals = [sum(vals[gi] for vals in raw.values()) for gi in range(len(grids))]
+            for engine in raw:
                 raw[engine] = [
                     (raw[engine][gi] / totals[gi] * 100.0) if totals[gi] > 0 else 0.0 for gi in range(len(grids))
                 ]
@@ -536,13 +506,7 @@ def _plot_cross_op_stacked_by_engine(
                 linewidth=0.5,
             )
             bottom += vals
-
-    if clipped:
-        print(
-            f"[ENERGY] note: clipped {len(clipped)} negative op/engine/grid value(s) to 0 for "
-            f"the cross-op stacked chart (noise floor, not a real negative value): {clipped}",
-            flush=True,
-        )
+    report_clipped(clipped, "cross-op stacked chart")
 
     engine_handles = [plt.Rectangle((0, 0), 1, 1, fc=engine_colors[engine]) for engine, _i, _l in ENGINE_ABLATIONS]
     engine_labels = [label for _e, _i, label in ENGINE_ABLATIONS]
@@ -567,204 +531,61 @@ def _plot_cross_op_stacked_by_engine(
     fig.savefig(out_path, dpi=dpi)
     plt.close(fig)
     print(f"Wrote: {out_path}", flush=True)
-    return True
-
-
-def plot_cross_op_energy_by_engine_stacked(
-    ops: List[str],
-    output_root: Path,
-    grid_order: List[str],
-    out_path: Path,
-    dpi: int,
-) -> bool:
-    """Cross-op version of plot_energy_by_engine_stacked, in raw dynamic Joules. Returns False
-    (and prints a note) if no op has any per-engine data at all.
-    """
-    per_op_engine: Dict[str, Dict[str, Dict[str, float]]] = {}
-    for op in ops:
-        per_engine = compute_energy_by_engine(output_root / op, note_prefix=f"[ENERGY][{op}]")
-        if per_engine is not None:
-            per_op_engine[op] = per_engine
-
-    if not per_op_engine:
-        print(
-            f"[ENERGY] note: no op has energy-by-engine data under {output_root}; skipping the cross-op stacked chart",
-            flush=True,
-        )
-        return False
-
-    return _plot_cross_op_stacked_by_engine(
-        per_op_engine,
-        ops,
-        grid_order,
-        out_path,
-        dpi,
-        ylabel="Dynamic energy [J]",
-        title="Total dynamic energy by engine",
-        value_unit="J",
-    )
-
-
-def plot_cross_op_energy_per_flop_by_engine_stacked(
-    ops: List[str],
-    output_root: Path,
-    grid_order: List[str],
-    flops: float,
-    out_path: Path,
-    dpi: int,
-) -> bool:
-    """pJ/FLOP version of plot_cross_op_energy_by_engine_stacked -- same stacked
-    reader/writer/compute-per-op layout, but normalized by the fixed FLOP count instead of raw
-    Joules. Reader/writer NoC traffic is identical regardless of which per-tile instruction
-    runs, so as core count rises and the reader+writer share of the stack stops shrinking while
-    compute's share does, that's the NoC (not the FPU) becoming the bottleneck. Returns False (and
-    prints a note) if no op has any per-engine data at all.
-    """
-    per_op_engine: Dict[str, Dict[str, Dict[str, float]]] = {}
-    for op in ops:
-        per_engine = compute_energy_per_flop_by_engine(output_root / op, flops)
-        if per_engine is not None:
-            per_op_engine[op] = per_engine
-
-    if not per_op_engine:
-        print(
-            f"[ENERGY/FLOP] note: no op has per-engine pJ/FLOP data under {output_root}; skipping the cross-op pJ/FLOP stacked chart",
-            flush=True,
-        )
-        return False
-
-    return _plot_cross_op_stacked_by_engine(
-        per_op_engine,
-        ops,
-        grid_order,
-        out_path,
-        dpi,
-        ylabel="Energy per FLOP [pJ]",
-        title="Energy per FLOP by engine (matmul's 2*M*N*K FLOPs for every op)",
-        value_unit="pJ/FLOP",
-    )
-
-
-def plot_cross_op_energy_share_by_engine_stacked(
-    ops: List[str],
-    output_root: Path,
-    grid_order: List[str],
-    out_path: Path,
-    dpi: int,
-) -> bool:
-    """Percentage-share version: every op's bar at every grid is rescaled to sum to 100%, so the
-    only thing varying is how the reader/writer/compute *split* changes -- e.g. compute's share
-    shrinking and reader+writer's share growing as core count rises is the NoC-bottleneck signal
-    made directly visible, without total pJ/FLOP magnitude (which differs a lot between ops)
-    competing for attention. Returns False (and prints a note) if no op has any per-engine data.
-    """
-    per_op_engine: Dict[str, Dict[str, Dict[str, float]]] = {}
-    for op in ops:
-        per_engine = compute_energy_by_engine(output_root / op, note_prefix=f"[ENERGY][{op}]")
-        if per_engine is not None:
-            per_op_engine[op] = per_engine
-
-    if not per_op_engine:
-        print(
-            f"[ENERGY] note: no op has energy-by-engine data under {output_root}; skipping the cross-op share chart",
-            flush=True,
-        )
-        return False
-
-    return _plot_cross_op_stacked_by_engine(
-        per_op_engine,
-        ops,
-        grid_order,
-        out_path,
-        dpi,
-        ylabel="Share of dynamic energy [%]",
-        title="Reader/Writer/Compute share of dynamic energy",
-        value_unit="J",
-        normalize_pct=True,
-    )
 
 
 def compute_total_energy_per_flop_by_op(
+    runs: Runs,
     ops: List[str],
-    output_root: Path,
     case: str,
     flops: float,
 ) -> Dict[str, Dict[str, float]]:
     """pJ/FLOP per op (not broken down by engine) for one profile/case: each op's total energy
     (energy_j_vi, including the idle floor) for that case, divided by the fixed FLOP count, per
-    grid, read once per op here so the operations can be compared directly. Ops missing this case's CSV
-    are skipped with a note.
+    grid, read once per op here so the operations can be compared directly. Ops missing this
+    case are skipped with a note.
     """
     per_op: Dict[str, Dict[str, float]] = {}
     for op in ops:
-        rows = _load_program_intervals(output_root / op / case / "program_intervals.csv")
+        rows = runs.rows(op, case, "[ENERGY/FLOP]")
         if rows is None:
-            print(
-                f"[ENERGY/FLOP] note: no {op}/{case}/program_intervals.csv under "
-                f"{output_root}, skipping '{op}' for '{case}' in the total-energy-per-FLOP-by-op chart",
-                flush=True,
-            )
             continue
         per_grid: Dict[str, float] = {}
         for grid, row in rows.items():
             energy_j = _whole_run_value(row, "energy_j_vi")
             if not math.isfinite(energy_j):
                 continue
-            per_grid[grid] = energy_j / flops * 1e12
+            per_grid[grid] = energy_j / flops * PJ_PER_J
         if per_grid:
             per_op[op] = per_grid
     return per_op
 
 
 def plot_total_energy_per_flop_by_op(
+    per_op: Dict[str, Dict[str, float]],
     ops: List[str],
-    output_root: Path,
     grid_order: List[str],
-    flops: float,
     out_path: Path,
     dpi: int,
-) -> bool:
-    """One figure, same layout as plot_cross_op_energy_by_engine_stacked: for every grid, one
-    plain bar per op, side by side. No stacking, no hatching -- just each op's total energy
-    (energy_j_vi for ALL_ACTIVE_CASE, including the idle floor) divided by the fixed FLOP count,
-    one color per op. This is the un-stacked, un-broken-down total that
-    plot_cross_op_energy_by_engine_stacked's bars sum to (plus the shared idle floor that chart
-    ablates away). Returns False (and prints a note) if no op has data.
+) -> None:
+    """For every grid, one plain bar per op, side by side: each op's total energy (energy_j_vi
+    for ALL_ACTIVE_CASE, including the idle floor) divided by the fixed FLOP count. This is the
+    un-broken-down total that the cross-op stacked chart's bars sum to (plus the shared idle
+    floor that chart ablates away).
     """
-    per_op = compute_total_energy_per_flop_by_op(ops, output_root, ALL_ACTIVE_CASE, flops)
-    if not per_op:
-        print(
-            f"[ENERGY/FLOP] note: no op has {ALL_ACTIVE_CASE} data under {output_root}; skipping the total-energy-per-FLOP-by-op chart",
-            flush=True,
-        )
-        return False
-
-    grids = [g for g in grid_order if any(g in per_op.get(op, {}) for op in ops)]
-    x = np.arange(len(grids))
     ops_with_data = [op for op in ops if op in per_op]
-    width = 0.8 / max(len(ops_with_data), 1)
-
-    fig, ax = plt.subplots(figsize=(max(12, len(grids) * 1.3), 6.5))
-    for i, op in enumerate(ops_with_data):
-        vals = [per_op[op].get(g, float("nan")) for g in grids]
-        offset = (i - (len(ops_with_data) - 1) / 2) * width
-        ax.bar(x + offset, vals, width, label=op)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(grids, rotation=45, ha="right")
-    ax.set_xlabel("Grid size (core combination)")
-    ax.set_ylabel("Total energy per FLOP [pJ]")
-    ax.set_title(
-        f"Total energy per FLOP, per op ({' vs '.join(ops_with_data)}), all-active case\n"
-        "every op divided by matmul's 2*M*N*K FLOPs, so this compares energy at equal data movement"
+    grouped_bar_chart(
+        grids_with_data(grid_order, per_op),
+        [(op, op) for op in ops_with_data],
+        per_op,
+        title=(
+            f"Total energy per FLOP, per op ({' vs '.join(ops_with_data)}), all-active case\n"
+            "every op divided by matmul's 2*M*N*K FLOPs, so this compares energy at equal data movement"
+        ),
+        ylabel="Total energy per FLOP [pJ]",
+        out_path=out_path,
+        dpi=dpi,
+        figsize=(max(12, len(grid_order) * 1.3), 6.5),
     )
-    ax.legend()
-    ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
-    print(f"Wrote: {out_path}", flush=True)
-    return True
 
 
 def run_compare(
@@ -829,7 +650,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--output-root", required=True, type=Path)
     ap.add_argument("--slot-ms", type=int, default=1)
     ap.add_argument("--device-id", type=int, default=0)
-    ap.add_argument("--trim-ms", type=float, default=1.0)
+    ap.add_argument(
+        "--trim-ms",
+        type=float,
+        default=POWER_CASES_TRIM_MS,
+        help=f"Default: {POWER_CASES_TRIM_MS}, not auto.py's default: the published POWER_CASE results "
+        "were made with it. A run made with another value counts as different settings.",
+    )
     ap.add_argument("--tt-smi", default="tt-smi", help="tt-smi executable name or path. Default: tt-smi")
     ap.add_argument("--dpi", type=int, default=150, help="DPI for comparison figures. Default: 150")
     ap.add_argument(
@@ -870,48 +697,44 @@ def main(argv: Optional[List[str]] = None) -> int:
     if misplaced:
         ap.error(f"--app-args must come last; these options follow it: {' '.join(misplaced)}")
     # Same check auto.py makes, done here so a bad sweep fails before the first reset.
-    if args.app_exe.name == "metal_example_long_matmul" and len(args.app_args) not in (4, 5):
-        ap.error("long_matmul needs --app-args M N K iterations [fixed_blocks_per_core]")
+    fixed_blocks_per_core = 0
+    mnk_iters: Optional[Tuple[int, int, int, int]] = None
+    if args.app_exe.name == LONG_MATMUL_APP:
+        try:
+            m, n, k, iterations, fixed_blocks_per_core = long_matmul_args(args.app_args)
+        except ValueError as e:
+            ap.error(str(e))
+        mnk_iters = (m, n, k, iterations)
 
     output_root = args.output_root.expanduser().resolve()
     if not args.dry_run:
         output_root.mkdir(parents=True, exist_ok=True)
 
     cases_in_order: List[Tuple[str, str]] = [POWER_CASE_SPECS[i] for i in args.power_cases]
+    runs = Runs(output_root, list(args.app_args), args.telemetry_freq, args.trim_ms, args.slot_ms, args.device_id)
 
     print(f"Output root: {output_root}", flush=True)
     print(f"Ops sweep: {args.ops}", flush=True)
     print(f"POWER_CASE sweep: {args.power_cases} -> {[s for s, _ in cases_in_order]}", flush=True)
 
-    # FLOPs per interval, for the energy-per-FLOP-by-engine chart -- fixed regardless of grid
-    # since split mode divides the same total work across however many cores are active.
-    # --app-args is M N K num_iterations [fixed_blocks_per_core]; the chart is skipped (with a
-    # note) if fewer than 4 positional args were given.
+    # FLOPs per interval, for the energy-per-FLOP charts -- the same on every grid, since split
+    # mode divides the same total work across however many cores are active.
     flops: Optional[float] = None
-    if len(args.app_args) >= 5 and args.app_args[4] != "0":
+    if fixed_blocks_per_core != 0:
         # Fixed mode: total work grows with the core count, so one FLOP count per run is wrong.
         print(
             "[ENERGY/FLOP] note: fixed_blocks_per_core is set, so the FLOP count depends on the grid; "
             "skipping the energy-per-FLOP charts",
             flush=True,
         )
-    elif len(args.app_args) >= 4:
-        try:
-            M, N, K, iters = (int(args.app_args[i]) for i in range(4))
-            flops = 2.0 * M * N * K * iters
-        except ValueError:
-            print(
-                "[ENERGY/FLOP] note: could not parse M N K num_iterations from --app-args; "
-                "skipping the energy-per-FLOP-by-engine chart",
-                flush=True,
-            )
+    elif mnk_iters is not None:
+        m, n, k, iterations = mnk_iters
+        flops = 2.0 * m * n * k * iterations
     else:
-        print(
-            "[ENERGY/FLOP] note: --app-args has fewer than 4 values (M N K num_iterations); "
-            "skipping the energy-per-FLOP-by-engine chart",
-            flush=True,
-        )
+        print(f"[ENERGY/FLOP] note: the app is not {LONG_MATMUL_APP}; skipping the energy-per-FLOP charts", flush=True)
 
+    per_op_engine_j: Dict[str, Dict[str, Dict[str, float]]] = {}
+    cross_op_grid_order: List[str] = []
     for op in args.ops:
         op_output_root = output_root / op
         if not args.dry_run:
@@ -926,15 +749,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             # A run is done only if auto.py recorded it as complete with the same settings: a
             # run that failed part way is redone, and one made with another shape or mode stops
             # the sweep instead of being mixed in.
-            settings = run_settings(
-                list(args.app_args),
-                environ_with({"POWER_CASE": str(power_case), "LONG_MATMUL_OP": op}),
-                args.telemetry_freq,
-                args.trim_ms,
-                args.slot_ms,
-                args.device_id,
-            )
-            status = run_status(run_dir, settings)
+            status = run_status(run_dir, runs.settings(op, subdir))
             if status == "done" and not args.force:
                 print(f"\n[SKIP] '{op}/{subdir}' is already complete. Skipping (use --force to re-run).", flush=True)
                 continue
@@ -972,7 +787,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             rc = run_case(cmd, power_case, op, args.dry_run)
             if rc != 0:
                 print(
-                    f"ERROR: op={op} POWER_CASE={power_case} ({subdir}) failed with return code {rc}. Aborting.",
+                    f"ERROR: op={op} POWER_CASE={power_case} ({subdir}) failed with return code {exit_reason(rc)}. Aborting.",
                     file=sys.stderr,
                 )
                 return rc
@@ -987,37 +802,35 @@ def main(argv: Optional[List[str]] = None) -> int:
             return rc
 
         if not args.dry_run:
-            active = _load_program_intervals(op_output_root / ALL_ACTIVE_CASE / "program_intervals.csv")
+            active = runs.rows(op, ALL_ACTIVE_CASE, "[ENERGY]")
             grid_order = list(active.keys()) if active else []
+            cross_op_grid_order = cross_op_grid_order or grid_order
+            out_dir = op_output_root / "compare_runs_out"
 
-            if flops is not None:
-                per_engine_pj = compute_energy_per_flop_by_engine(op_output_root, flops)
-                if per_engine_pj is not None:
+            per_engine_j = compute_energy_by_engine(runs, op)
+            if per_engine_j is not None:
+                per_op_engine_j[op] = per_engine_j
+                plot_energy_by_engine_stacked(
+                    per_engine_j, grid_order, out_dir / "energy_by_engine_stacked.png", args.dpi
+                )
+                if flops is not None:
                     plot_energy_per_flop_by_engine(
-                        per_engine_pj,
+                        to_pj_per_flop(per_engine_j, flops),
                         grid_order,
-                        op_output_root / "compare_runs_out" / "energy_per_flop_by_engine.png",
+                        out_dir / "energy_per_flop_by_engine.png",
                         args.dpi,
                     )
 
-                per_case_pj_core = compute_energy_per_flop_per_core(op_output_root, cases_in_order, flops)
+            if flops is not None:
+                per_case_pj_core = compute_energy_per_flop_per_core(runs, op, cases_in_order, flops)
                 if per_case_pj_core:
                     plot_energy_per_flop_per_core(
                         per_case_pj_core,
                         cases_in_order,
                         grid_order,
-                        op_output_root / "compare_runs_out" / "energy_per_flop_per_core.png",
+                        out_dir / "energy_per_flop_per_core.png",
                         args.dpi,
                     )
-
-            per_engine_j = compute_energy_by_engine(op_output_root)
-            if per_engine_j is not None:
-                plot_energy_by_engine_stacked(
-                    per_engine_j,
-                    grid_order,
-                    op_output_root / "compare_runs_out" / "energy_by_engine_stacked.png",
-                    args.dpi,
-                )
 
     cross_op_done = False
     if len(args.ops) > 1 and not args.dry_run:
@@ -1026,7 +839,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"{'#' * 60}", flush=True)
 
         cross_cases_file = output_root / args.cross_op_cases_file_name
-        entries = write_cross_op_cases_file(cross_cases_file, args.ops, cases_in_order, output_root)
+        entries = write_cross_op_cases_file(cross_cases_file, args.ops, cases_in_order, runs)
         if len(entries) < 2:
             print(
                 f"[CROSS-OP] only {len(entries)} run(s) have results; need at least 2 to compare. Skipping.",
@@ -1042,44 +855,55 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return rc
             cross_op_done = True
 
-            active = None
-            for op in args.ops:
-                active = _load_program_intervals(output_root / op / ALL_ACTIVE_CASE / "program_intervals.csv")
-                if active is not None:
-                    break
-            grid_order = list(active.keys()) if active else []
-            plot_cross_op_energy_by_engine_stacked(
-                args.ops,
-                output_root,
-                grid_order,
-                output_root / "compare_runs_out" / "energy_by_engine_stacked_cross_op.png",
-                args.dpi,
-            )
-            plot_cross_op_energy_share_by_engine_stacked(
-                args.ops,
-                output_root,
-                grid_order,
-                output_root / "compare_runs_out" / "energy_share_by_engine_stacked_cross_op.png",
-                args.dpi,
-            )
+            grid_order = cross_op_grid_order
+            out_dir = output_root / "compare_runs_out"
+            if not per_op_engine_j:
+                print(
+                    f"[ENERGY] note: no op has energy-by-engine data under {output_root}; skipping the cross-op charts"
+                )
+            else:
+                plot_cross_op_stacked_by_engine(
+                    per_op_engine_j,
+                    args.ops,
+                    grid_order,
+                    out_dir / "energy_by_engine_stacked_cross_op.png",
+                    args.dpi,
+                    ylabel="Dynamic energy [J]",
+                    title="Total dynamic energy by engine",
+                    value_unit="J",
+                )
+                plot_cross_op_stacked_by_engine(
+                    per_op_engine_j,
+                    args.ops,
+                    grid_order,
+                    out_dir / "energy_share_by_engine_stacked_cross_op.png",
+                    args.dpi,
+                    ylabel="Share of dynamic energy [%]",
+                    title="Reader/Writer/Compute share of dynamic energy",
+                    value_unit="J",
+                    normalize_pct=True,
+                )
+                if flops is not None:
+                    # Reader/writer NoC traffic is the same whichever per-tile instruction runs, so
+                    # if the reader+writer share stops shrinking as cores rise while compute's
+                    # does, the NoC (not the FPU) is becoming the bottleneck.
+                    plot_cross_op_stacked_by_engine(
+                        {op: to_pj_per_flop(per_engine, flops) for op, per_engine in per_op_engine_j.items()},
+                        args.ops,
+                        grid_order,
+                        out_dir / "energy_per_flop_by_engine_stacked_cross_op.png",
+                        args.dpi,
+                        ylabel="Energy per FLOP [pJ]",
+                        title="Energy per FLOP by engine (matmul's 2*M*N*K FLOPs for every op)",
+                        value_unit="pJ/FLOP",
+                    )
 
             if flops is not None:
-                plot_total_energy_per_flop_by_op(
-                    args.ops,
-                    output_root,
-                    grid_order,
-                    flops,
-                    output_root / "compare_runs_out" / "total_energy_per_flop_by_op.png",
-                    args.dpi,
-                )
-                plot_cross_op_energy_per_flop_by_engine_stacked(
-                    args.ops,
-                    output_root,
-                    grid_order,
-                    flops,
-                    output_root / "compare_runs_out" / "energy_per_flop_by_engine_stacked_cross_op.png",
-                    args.dpi,
-                )
+                per_op = compute_total_energy_per_flop_by_op(runs, args.ops, ALL_ACTIVE_CASE, flops)
+                if per_op:
+                    plot_total_energy_per_flop_by_op(
+                        per_op, args.ops, grid_order, out_dir / "total_energy_per_flop_by_op.png", args.dpi
+                    )
 
     print(f"\n{'=' * 60}", flush=True)
     print(f" Done. Results are under: {output_root}/<op>/ for op in {args.ops}", flush=True)

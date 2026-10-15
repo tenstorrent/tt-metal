@@ -35,7 +35,7 @@ are written.
 ## 3. Device-side markers (what the kernels emit)
 
 Each kernel marks its own start/end plus an aggregate wait-vs-active cycle count, once per
-invocation (not per-iteration — see §7 for why):
+invocation (not per iteration):
 
 | Kernel  | Markers | "Wait" = blocked in... | "Active" = time in... |
 |---------|---------|-------------------------|------------------------|
@@ -56,8 +56,9 @@ one recorded it (the `RISC processor type` column). Only TRISC1 calls `matmul_ti
 roles have very different wait/active profiles and must **not** be averaged together (see §6).
 
 **To capture the markers**, set `TT_METAL_DEVICE_PROFILER=1`. `parser.py` converts device cycles
-to wall-clock time itself, from each grid's printed start/end times, so
-`TT_METAL_PROFILER_SYNC` is not needed. Without the profiler the app runs as usual and writes no
+to wall-clock time itself, so `TT_METAL_PROFILER_SYNC` is not needed: each grid's first marker is
+pinned to the grid's printed start time, and cycles are converted with the profiler CSV's
+`CHIP_FREQ` (in `legacy` mode, with a rate fitted from the grid's printed start/end times instead). Without the profiler the app runs as usual and writes no
 `profile_log_device.csv`; `auto.py` then skips the kernel-level analysis.
 
 Keep profiler runs and power runs separate. With the profiler on, the kernels read the timer in
@@ -103,7 +104,9 @@ Written to `<output-root>/<subdir>/` alongside the existing `program_intervals.c
 | Function | Purpose |
 |---|---|
 | `load_device_kernel_markers()` | Parses `profile_log_device.csv`. Note: `skipinitialspace=True` is required — the CSV header uses `", "` separators, which otherwise makes every column key have a leading space. |
-| `compute_run_windows()` / `find_run_index()` | Establishes a per-run `(anchor_cycle, freq_hz)` fit from the *global* min(`*_KERNEL_START`)/max(`*_KERNEL_END`) across all 3 kernels for that run, then assigns any marker to a run by checking which run's cycle window contains it (**not** by core-coordinate range — `core_x`/`core_y` in the CSV are physical NOC coordinates, not the logical grid coordinates used to launch kernels). |
+| `check_marker_counts()` | Checks that every run recorded `cores x 1` reader/writer and `cores x 3` compute start/end markers. If not, the kernel analysis is skipped and the run is marked incomplete. |
+| `compute_run_windows()` | Gives each run its markers by count, in cycle order (`cores x 1` or `x 3` per kernel, with each run's core count from the program log). Anchors the run at the *global* min(`*_KERNEL_START`) across all 3 kernels, pinned to the run's start time, and returns its cycle window and `freq_hz`: `CHIP_FREQ` from the profiler CSV, or in `legacy` mode the cycle span divided by the host start-to-end time. Core coordinates are not used — `core_x`/`core_y` in the CSV are physical NOC coordinates, not the logical grid coordinates used to launch kernels. |
+| `find_run_index()` | Assigns any other marker to the run whose cycle window contains it. |
 | `compute_kernel_intervals()` | Collapsed per-kernel view → `kernel_intervals.csv`. |
 | `compute_kernel_utilization_rows()` | Per-core view → `kernel_utilization.csv`, including the derived-overhead calculation and the sanity clamp described in §7. |
 | `aggregate_kernel_utilization()` / `plot_kernel_utilization()` | Per-`(grid, kernel, risc)` averages and the 5 individual charts. |
