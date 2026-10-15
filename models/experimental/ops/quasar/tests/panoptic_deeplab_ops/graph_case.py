@@ -92,6 +92,19 @@ DTYPE = {
     "UINT8": ttnn.uint8,
 }
 
+# Quasar has no block-float formats (``is_supported_quasar`` in tt_backend_api_types.cpp), so a
+# captured bfloat8_b / bfloat4_b case is rejected before the op runs. With
+# ``TTNN_GRAPH_OPS_BF8_AS_BF16=1`` those tensors — and a ``DataType::BFLOAT8_B`` inside a
+# ``Conv2dConfig`` (``_CPP_ENUM_OVERRIDES``) — are materialized and checked as bfloat16 instead;
+# the PCC floor keeps the block-float allowance because ``_PCC_BY_DTYPE`` is keyed on the
+# capture string, not on the ttnn dtype. Same switch as the qwen3_vl / gpt_oss suites (#59575).
+BF8_AS_BF16 = os.environ.get("TTNN_GRAPH_OPS_BF8_AS_BF16", "") not in ("", "0", "false", "False")
+_CPP_ENUM_OVERRIDES = {}
+if BF8_AS_BF16:
+    DTYPE["BFLOAT8_B"] = ttnn.bfloat16
+    DTYPE["BFLOAT4_B"] = ttnn.bfloat16
+    _CPP_ENUM_OVERRIDES = {"DataType::BFLOAT8_B": ttnn.bfloat16, "DataType::BFLOAT4_B": ttnn.bfloat16}
+
 LAYOUT = {"TILE": ttnn.TILE_LAYOUT, "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT}
 
 MEM_LAYOUT = {
@@ -421,6 +434,8 @@ def _unary_with_param(spec):
 
 
 def _cpp_enum(kind, name, raw):
+    if str(raw) in _CPP_ENUM_OVERRIDES:
+        return _CPP_ENUM_OVERRIDES[str(raw)]
     namespace, _, value = str(raw).partition("::")
     enum = _CPP_ENUMS.get(namespace)
     member = getattr(enum, value, None) if enum is not None else None
@@ -1213,21 +1228,22 @@ LOSSLESS = frozenset(
 
 # Dtypes each dtype converts into without rounding (block-float values are a 7- or 3-bit
 # mantissa under a shared exponent, which bfloat16 holds exactly).
+# Keyed on the ttnn dtypes actually built (``DTYPE``), so a ``TTNN_GRAPH_OPS_BF8_AS_BF16`` run
+# judges the bfloat16 it really ran.
 _EXACT_INTO = {
-    "BFLOAT4_B": {"BFLOAT4_B", "BFLOAT8_B", "BFLOAT16", "FLOAT32"},
-    "BFLOAT8_B": {"BFLOAT8_B", "BFLOAT16", "FLOAT32"},
-    "BFLOAT16": {"BFLOAT16", "FLOAT32"},
-    "FLOAT32": {"FLOAT32"},
+    ttnn.bfloat4_b: {ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32},
+    ttnn.bfloat8_b: {ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32},
+    ttnn.bfloat16: {ttnn.bfloat16, ttnn.float32},
+    ttnn.float32: {ttnn.float32},
 }
 
 
 def _holds_exactly(case, out):
     """Whether ``out``'s dtype can represent every value of every float input."""
-    want = next((name for name, dt in DTYPE.items() if dt == out.dtype), None)
     for spec in _tensor_specs(case):
         if spec["dtype"] in _INT_DTYPES:
             continue
-        if want not in _EXACT_INTO.get(spec["dtype"], ()):
+        if out.dtype not in _EXACT_INTO.get(DTYPE[spec["dtype"]], ()):
             return False
     return True
 
@@ -1635,6 +1651,7 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
             alias if alias is not None else _build_value(spec, mesh_device, case, op_name, name, torch_inputs)
         )
 
+    op = U.quasar_routed(op_name, op)
     for name, value in U.default_kwargs(op_name, mesh_device).items():
         kwargs.setdefault(name, value)
 

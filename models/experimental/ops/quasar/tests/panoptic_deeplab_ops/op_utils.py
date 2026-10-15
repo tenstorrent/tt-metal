@@ -24,6 +24,8 @@ The ``ttnn_mesh_device`` fixture itself comes from ``tests/conftest.py`` one lev
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch  # noqa: F401
 
@@ -80,3 +82,28 @@ _DEFAULT_KWARGS = {"ttnn.conv2d": {"compute_config": _conv_compute_config}}
 def default_kwargs(op_name, mesh_device):
     """Keyword arguments the model passed to ``op_name`` that the capture could not record."""
     return {name: build(mesh_device) for name, build in _DEFAULT_KWARGS.get(op_name, {}).items()}
+
+
+# Ops whose mainline implementation fails on Quasar with "DataMovementKernel is not supported on
+# Quasar" (legacy ProgramDescriptor ops) and whose Metal 2.0 copy under ``ttnn.experimental.quasar``
+# takes the same arguments — measured on craq-sim 8x4 with this suite. The same routing as
+# ``tests/yolo_ops/op_utils.py`` (#60455). Only ops that fail on mainline are routed, so the suite
+# keeps reporting which mainline ops work on Quasar; everything else runs the mainline op.
+# ``TTNN_GRAPH_OPS_QUASAR_FORKS=1|0`` forces either choice (the forks also run on WH/BH).
+_QUASAR_FORKED_OPS = ("ttnn.conv2d", "ttnn.add", "ttnn.multiply", "ttnn.max_pool2d", "ttnn.avg_pool2d", "ttnn.move")
+
+
+def quasar_forks_enabled() -> bool:
+    v = os.environ.get("TTNN_GRAPH_OPS_QUASAR_FORKS", "auto").lower()
+    if v in ("1", "true", "yes"):
+        return True
+    if v in ("0", "false", "no"):
+        return False
+    return "quasar" in ttnn.get_arch_name()
+
+
+def quasar_routed(op_name, op):
+    """``ttnn.experimental.quasar``'s copy of ``op`` when it is routed (see above), else ``op``."""
+    if op_name not in _QUASAR_FORKED_OPS or not quasar_forks_enabled():
+        return op
+    return getattr(ttnn.experimental.quasar, op_name.removeprefix("ttnn."))
