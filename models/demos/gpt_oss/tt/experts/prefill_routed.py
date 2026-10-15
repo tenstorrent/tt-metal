@@ -49,7 +49,7 @@ ROUTED_PREFILL_BF8_LAYERS_ENV = "GPT_OSS_ROUTED_PREFILL_BF8_LAYERS"
 ROUTED_PREFILL_DEFAULT = "1"
 # Shortest prefill (tokens) that takes the routed path; shorter ones run dense.
 ROUTED_PREFILL_MIN_SEQ_DEFAULT = 128
-# Tokens per routed chunk: bounds the dispatch / combine buffers ([4C, H] and [C, 4, H] bf16 per device).
+# Tokens per routed chunk: bounds the dispatch / expert-output buffers ([4C, H] bf16 per device).
 ROUTED_PREFILL_CHUNK_DEFAULT = 8192
 # masked_bincount splits the token rows over a fixed 64-core grid.
 ROUTED_PREFILL_SEQ_MULTIPLE = 64
@@ -58,6 +58,10 @@ ROUTED_PREFILL_SEQ_MULTIPLE = 64
 # on separate cores into their own copy of the buffer, then a max over the copies merges them.
 ROUTED_SCATTER_SPLIT_MIN_C = 1024
 ROUTED_SCATTER_GROUPS = 32
+# The combine gather writes k rows per token ([Cs, k, H] bf16) that post_combine_reduce reads straight back. It runs on
+# token blocks of at most this many tokens so that intermediate (47 MB at 2048) and the reduced block live in L1 instead
+# of a DRAM round trip; at C = 8192 this measured 2.39 -> 1.91 ms per layer for gather + reduce + bf8 cast (one device).
+ROUTED_COMBINE_BLOCK = 2048
 # Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py).
 ROUTED_PREFILL_WEIGHTS_VERSION = 1
 ROUTED_CACHE_SUBDIR = "experts_routed_ep"
@@ -566,7 +570,8 @@ class RoutedPrefillExperts:
         """Partial MoE output of this device's experts for one chunk.
 
         x: [1, 1, C, H] (any float dtype, TILE); indices: [C, k] uint16 TILE; weights: [C, k] bf16 TILE.
-        Returns [1, 1, C, H] bf16 TILE (zero rows where no top-k expert is local)."""
+        Returns the [1, 1, Cs, H] bf8 TILE blocks of the output in token order (ROUTED_COMBINE_BLOCK tokens each, the
+        last one shorter; zero rows where no top-k expert is local)."""
         C = x.shape[-2]
         H = self.hidden_size
         k = self.top_k
@@ -648,32 +653,53 @@ class RoutedPrefillExperts:
             local_expert_id=0,
         )
 
-        # Combine: gather each pair's expert output row back to [C, k, H]; post_combine_reduce weights the slots and
+        # Combine: gather each pair's expert output row back to [Cs, k, H]; post_combine_reduce weights the slots and
         # skips the non-local ones (dispatch table -1), so the spare-tile rows they point at never contribute.
         out_rm = ttnn.to_layout(expert_out, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
         if out_rm is not expert_out:
             ttnn.deallocate(expert_out)
-        # padding_idx=spare: the non-local pairs (about (N-1)/N of them) all point at the spare row and are served from
-        # a per-core L1 copy of it instead of DRAM; same values, and post_combine_reduce skips them anyway.
-        combined = ttnn.embedding(
-            pos_tm, out_rm, padding_idx=consts["spare"], layout=ttnn.ROW_MAJOR_LAYOUT
-        )  # [C, k, H]
+        # One token block (ROUTED_COMBINE_BLOCK) at a time: the [Cs, k, H] gather output and the reduced [Cs, H] block
+        # stay in L1 (interleaved), so only the bf8 block is written to DRAM. Bit-identical to one DRAM-resident pass.
+        Cs = min(C, ROUTED_COMBINE_BLOCK)
+        pieces = []
+        for s in range(0, C, Cs):
+            e = min(s + Cs, C)
+            if s == 0 and e == C:
+                pos_s, w_s, idx_s = pos_tm, w_5d, idx_rm
+            else:
+                pos_s = ttnn.slice(pos_tm, (s, 0), (e, k))
+                w_s = ttnn.slice(w_5d, (0, 0, s, 0, 0), (1, 1, e, k, 1))
+                idx_s = ttnn.slice(idx_rm, (0, s, 0), (1, e, k))
+            # padding_idx=spare: the non-local pairs (about (N-1)/N of them) all point at the spare row and are served
+            # from a per-core L1 copy of it instead of DRAM; same values, and post_combine_reduce skips them anyway.
+            combined = ttnn.embedding(
+                pos_s,
+                out_rm,
+                padding_idx=consts["spare"],
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )  # [Cs, k, H]
+            combined = ttnn.reshape(combined, (1, 1, e - s, k, H))
+            part = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+                combined,
+                w_s,
+                idx_s,
+                self.dispatch_table,
+                expert_dim=3,
+                output_memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(combined)
+            if pos_s is not pos_tm:
+                ttnn.deallocate(pos_s)
+                ttnn.deallocate(w_s)
+                ttnn.deallocate(idx_s)
+            pieces.append(ttnn.typecast(part, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            ttnn.deallocate(part)
         ttnn.deallocate(out_rm)
         ttnn.deallocate(pos_tm)
-        combined = ttnn.reshape(combined, (1, 1, C, k, H))
-
-        out = ttnn.experimental.deepseek_prefill.post_combine_reduce(
-            combined,
-            w_5d,
-            idx_rm,
-            self.dispatch_table,
-            expert_dim=3,
-            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(combined)
         ttnn.deallocate(w_rm)
         ttnn.deallocate(idx_rm)
-        return out
+        return pieces
 
     def __call__(self, hidden_states, topk_indices, topk_weights):
         """hidden_states: [1, 1, S, H] replicated; topk_indices / topk_weights: [S, k] (router top-k path).
@@ -696,14 +722,11 @@ class RoutedPrefillExperts:
                 x_c = ttnn.slice(x, (0, 0, start, 0), (1, 1, end, self.hidden_size))
                 i_c = ttnn.slice(topk_indices, (start, 0), (end, self.top_k))
                 w_c = ttnn.slice(topk_weights, (start, 0), (end, self.top_k))
-            part = self._chunk(x_c, i_c, w_c)
+            outputs.extend(self._chunk(x_c, i_c, w_c))
             if x_c is not x:
                 ttnn.deallocate(x_c)
                 ttnn.deallocate(i_c)
                 ttnn.deallocate(w_c)
-            part_bf8 = ttnn.typecast(part, ttnn.bfloat8_b)
-            ttnn.deallocate(part)
-            outputs.append(part_bf8)
         if len(outputs) == 1:
             out = outputs[0]
         else:
