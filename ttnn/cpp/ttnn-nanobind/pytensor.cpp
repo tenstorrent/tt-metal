@@ -15,6 +15,8 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <unordered_set>
+#include <tt-metalium/allocator.hpp>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
@@ -68,6 +70,15 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::tensor {
+using tt::tt_metal::experimental::per_core_allocation::L1TensorExtent;
+using tt::tt_metal::experimental::per_core_allocation::L1TensorViewPlacement;
+
+struct L1TensorGeometry {
+    DeviceAddr packed_size, page_size, aligned_shard_size, allocation_shard_size;
+    DeviceAddr page_alignment, allocation_alignment;
+    std::vector<CoreCoord> cores;
+    bool per_core;
+};
 namespace CMAKE_UNIQUE_NAMESPACE {
 namespace {
 
@@ -427,6 +438,27 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 void pytensor_module_types(nb::module_& mod) {
+    nb::class_<L1TensorExtent>(mod, "L1TensorExtent", "Physical half-open L1 owner extent on one device/core.")
+        .def_ro("device_coord", &L1TensorExtent::device_coord)
+        .def_ro("core_coord", &L1TensorExtent::core_coord)
+        .def_ro("address", &L1TensorExtent::address)
+        .def_ro("size", &L1TensorExtent::size);
+    nb::class_<L1TensorViewPlacement>(
+        mod, "L1TensorViewPlacement", "Owner tensor index and byte offset on one device/core.")
+        .def(nb::init<distributed::MeshCoordinate, CoreCoord, size_t, DeviceAddr>())
+        .def_ro("device_coord", &L1TensorViewPlacement::device_coord)
+        .def_ro("core_coord", &L1TensorViewPlacement::core_coord)
+        .def_ro("owner_index", &L1TensorViewPlacement::owner_index)
+        .def_ro("offset", &L1TensorViewPlacement::offset);
+    nb::class_<L1TensorGeometry>(mod, "L1TensorGeometry", "Logical shard footprint and physical allocator alignment.")
+        .def_ro("packed_size", &L1TensorGeometry::packed_size)
+        .def_ro("page_size", &L1TensorGeometry::page_size)
+        .def_ro("aligned_shard_size", &L1TensorGeometry::aligned_shard_size)
+        .def_ro("allocation_shard_size", &L1TensorGeometry::allocation_shard_size)
+        .def_ro("page_alignment", &L1TensorGeometry::page_alignment)
+        .def_ro("allocation_alignment", &L1TensorGeometry::allocation_alignment)
+        .def_ro("cores", &L1TensorGeometry::cores)
+        .def_ro("per_core", &L1TensorGeometry::per_core);
     // Tensor constructors that accept device and .to_device() function use keep alive call policy to communicate that
     // Device needs to outlive Tensor. This is because when tensors on device are destroyed they need to deallocate
     // their buffers via device. keep_alive increases the ref count of the Device object being passed into the
@@ -467,6 +499,96 @@ void pytensor_module_types(nb::module_& mod) {
 }
 
 void pytensor_module(nb::module_& mod) {
+    mod.def(
+        "experimental_l1_tensor_geometry",
+        [](distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord, const TensorSpec& spec) {
+            auto* device = mesh.get_device(coord);
+            TT_FATAL(
+                device != nullptr && spec.memory_config().buffer_type() == BufferType::L1,
+                "L1 tensor geometry requires a local device and L1 TensorSpec");
+            const auto args = spec.compute_buffer_sharding_args();
+            TT_FATAL(is_sharded(args.buffer_layout()), "L1 tensor geometry requires sharded memory");
+            L1TensorGeometry geometry{};
+            geometry.packed_size = spec.compute_packed_buffer_size_bytes();
+            geometry.page_size = spec.compute_page_size_bytes();
+            geometry.per_core = tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(args);
+            size_t pages;
+            if (const auto& distribution = args.buffer_distribution_spec(); distribution.has_value()) {
+                geometry.cores = distribution->cores_with_data();
+                pages = distribution->max_num_dev_pages_per_core();
+            } else {
+                TT_FATAL(args.shard_spec().has_value(), "L1 tensor geometry requires a shard specification");
+                const auto& shard = *args.shard_spec();
+                geometry.cores =
+                    corerange_to_cores(shard.grid(), std::nullopt, shard.orientation() == ShardOrientation::ROW_MAJOR);
+                pages = shard.num_pages();
+            }
+            geometry.page_alignment = device->allocator()->get_alignment(BufferType::L1);
+            geometry.allocation_alignment = device->allocator()->get_l1_allocation_alignment();
+            const auto aligned_page = ((geometry.page_size + geometry.page_alignment - 1) / geometry.page_alignment) *
+                                      geometry.page_alignment;
+            geometry.aligned_shard_size = pages * aligned_page;
+            geometry.allocation_shard_size = tt::tt_metal::detail::calculate_bank_size_spread(
+                geometry.aligned_shard_size, aligned_page, 1, geometry.allocation_alignment);
+            return geometry;
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        nb::arg("tensor_spec"),
+        "Return Metal-derived L1 page, shard and allocation geometry without allocating.");
+    mod.def(
+        "experimental_l1_tensor_owned_extents",
+        [](const Tensor& tensor) {
+            TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "L1 owner must be a device tensor");
+            const auto& storage = tensor.device_storage();
+            return tt::tt_metal::experimental::per_core_allocation::get_l1_tensor_owner_extents(
+                storage.get_mesh_buffer(), {storage.get_coords().begin(), storage.get_coords().end()});
+        },
+        nb::arg("tensor"),
+        "Return exact physical L1 owner extents; views expose only their logical bytes.");
+    mod.def(
+        "experimental_create_l1_tensor_view",
+        [](distributed::MeshDevice& mesh,
+           const TensorSpec& spec,
+           const std::vector<Tensor>& owners,
+           const std::vector<L1TensorViewPlacement>& placements) {
+            std::vector<std::vector<L1TensorExtent>> extents;
+            for (const auto& owner : owners) {
+                TT_FATAL(owner.storage_type() == StorageType::DEVICE, "L1 view owner must be a device tensor");
+                const auto& storage = owner.device_storage();
+                TT_FATAL(&storage.get_mesh_tensor().device() == &mesh, "L1 view owner uses a different MeshDevice");
+                extents.push_back(tt::tt_metal::experimental::per_core_allocation::get_l1_tensor_owner_extents(
+                    storage.get_mesh_buffer(), {storage.get_coords().begin(), storage.get_coords().end()}));
+            }
+            auto buffer = tt::tt_metal::experimental::per_core_allocation::create_l1_tensor_view(
+                mesh,
+                tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
+                tt::tt_metal::distributed::DeviceLocalBufferConfig{
+                    .page_size = spec.compute_page_size_bytes(),
+                    .buffer_type = spec.memory_config().buffer_type(),
+                    .sharding_args = spec.compute_buffer_sharding_args()},
+                extents,
+                placements,
+                std::make_shared<std::vector<Tensor>>(owners));
+            std::vector<distributed::MeshCoordinate> coords;
+            std::unordered_set<distributed::MeshCoordinate> seen;
+            for (const auto& placement : placements) {
+                if (seen.insert(placement.device_coord).second) {
+                    coords.push_back(placement.device_coord);
+                }
+            }
+            TensorTopology topology(
+                distributed::MeshShape(coords.size()), {distributed::MeshMapperConfig::Replicate{}}, coords);
+            return Tensor(DeviceStorage(
+                mesh_tensor_from_buffer_with_topology(std::move(*buffer), spec, std::move(topology)), coords));
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("tensor_spec"),
+        nb::arg("owners"),
+        nb::arg("placements"),
+        nb::keep_alive<0, 1>(),
+        "Create a native L1 tensor view; retains owners through ordinary lifetime. Explicit deallocation of borrowed "
+        "owners is prohibited.");
     mod.def(
         "decorate_external_operation",
         [](const nb::callable& function, const std::optional<std::string>& function_name) -> nb::object {

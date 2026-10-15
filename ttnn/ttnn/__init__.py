@@ -334,6 +334,8 @@ from ttnn.device import (
     get_memory_view,
     get_allocator_base_address,
     experimental_get_l1_occupied_ranges,
+    experimental_get_l1_free_ranges,
+    experimental_get_l1_lockstep_occupied_ranges,
     get_max_worker_l1_unreserved_size,
     get_dram_alignment,
     get_l1_alignment,
@@ -391,6 +393,13 @@ from ttnn.core import (
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
+L1TensorExtent = ttnn._ttnn.tensor.L1TensorExtent
+L1TensorViewPlacement = ttnn._ttnn.tensor.L1TensorViewPlacement
+L1TensorGeometry = ttnn._ttnn.tensor.L1TensorGeometry
+experimental_l1_tensor_geometry = ttnn._ttnn.tensor.experimental_l1_tensor_geometry
+experimental_l1_tensor_owned_extents = ttnn._ttnn.tensor.experimental_l1_tensor_owned_extents
+experimental_create_l1_tensor_view = ttnn._ttnn.tensor.experimental_create_l1_tensor_view
+experimental_to_single_device = ttnn._ttnn.tensor.experimental_to_single_device
 element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
