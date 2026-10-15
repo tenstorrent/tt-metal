@@ -219,11 +219,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // ========== Compute Kernel Config ==========
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
-    const bool exp_approx_mode = program_config.has_value() && program_config->exp_approx_mode.has_value()
-                                     ? program_config->exp_approx_mode.value()
-                                     : true;
     // FP32 online-softmax state (SDPAProgramConfig::fp32_accumulation, kernels/compute/fp32_accumulation.hpp).
     const bool fp32_accumulation = program_config.has_value() && program_config->fp32_accumulation;
+    // The approximate exponential is the default, except under fp32_accumulation (validation rejects it there).
+    const bool exp_approx_mode = program_config.has_value() && program_config->exp_approx_mode.has_value()
+                                     ? program_config->exp_approx_mode.value()
+                                     : !fp32_accumulation;
     TT_FATAL(
         !fp32_accumulation || !has_block_padding,
         "fp32_accumulation needs a paged KV block size of at least {} tokens, got {}",

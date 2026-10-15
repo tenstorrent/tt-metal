@@ -68,6 +68,18 @@ def test_fp32_accumulation_rejects_unsupported_configs(device, expect_error):
             q, kv, kv, is_causal=False, compute_kernel_config=compute_config(device), program_config=config
         )
 
+    approx = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=0,
+        k_chunk_size=128,
+        exp_approx_mode=True,
+        fp32_accumulation=True,
+    )
+    with expect_error(RuntimeError, "fp32_accumulation uses the accurate exponential"):
+        ttnn.transformer.scaled_dot_product_attention_decode(
+            q, kv, kv, cur_pos_tensor=pos, compute_kernel_config=compute_config(device), program_config=approx
+        )
+
     prefill_q = ttnn.from_torch(
         torch.randn(1, 8, 1024, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )

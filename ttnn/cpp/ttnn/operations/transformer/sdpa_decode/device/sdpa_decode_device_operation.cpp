@@ -30,6 +30,9 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         const auto fp32_dest_acc_en = std::get<2>(ttnn::get_compute_kernel_config_args(
             tensor_args.q.device()->arch(), operation_attributes.compute_kernel_config));
         TT_FATAL(fp32_dest_acc_en, "fp32_accumulation requires fp32_dest_acc_en in the compute kernel config");
+        TT_FATAL(
+            !operation_attributes.program_config->exp_approx_mode.value_or(false),
+            "fp32_accumulation uses the accurate exponential; leave exp_approx_mode unset or false");
         TT_FATAL(operation_attributes.is_causal, "fp32_accumulation supports causal decode only");
         TT_FATAL(tensor_args.q.layout() == Layout::TILE, "fp32_accumulation requires a TILE layout Q tensor");
         TT_FATAL(!tensor_args.attn_mask.has_value(), "fp32_accumulation is not supported with an explicit attn_mask");

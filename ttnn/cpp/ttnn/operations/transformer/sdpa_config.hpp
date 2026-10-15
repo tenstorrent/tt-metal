@@ -33,10 +33,10 @@ struct SDPAProgramConfig {
     // online-softmax state (scores, running sum, output accumulator and the tree-reduction exchange) in FP32 and
     // update it on the SFPU from lossless (UnpackToDestFp32) reads. The default path rounds that state through BF16
     // at every K chunk and tree merge, so its error grows with context length (relative L2 vs FP64 at 64K-512K:
-    // 2.0-2.7% with 64 cores per head, up to 7% with 16; 0.18-0.33% with this option). Also uses full tiles, so
-    // exp_approx_mode=false selects the accurate exponential. Needs fp32_dest_acc_en; supports causal, tiled-Q
-    // decode without mask, sink, sliding window, MLA or speculative positions. SDPA prefill rejects it; the other
-    // SDPA ops do not read it.
+    // 2.0-2.7% with 64 cores per head, up to 7% with 16; 0.18-0.33% with this option). Also uses full tiles and the
+    // accurate exponential (exp_approx_mode must stay unset or false). Needs fp32_dest_acc_en; supports causal,
+    // tiled-Q decode without mask, sink, sliding window, MLA or speculative positions. SDPA prefill rejects it; the
+    // other SDPA ops do not read it.
     bool fp32_accumulation = false;
 };
 
