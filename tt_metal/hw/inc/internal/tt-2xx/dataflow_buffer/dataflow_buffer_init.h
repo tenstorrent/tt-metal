@@ -348,11 +348,32 @@ FORCE_INLINE void dfb_publish_producer_ready(
 
 #ifndef COMPILE_FOR_TRISC
 
+// Disarm every implicit-sync transaction id a prior launch may have left armed: the DFB halves of the per-id interrupt
+// enables (the read buffer's upper word, the write buffer's lower word). A per-id pending bit is a latch that only a
+// write of 0 to it, clearing its enable, or reset drops; clearing the id's tiles-to-process count does not. An id that
+// a prior launch armed and whose count reached its threshold stays pending, so without this, an id this launch arms
+// again fires the moment the ISR is enabled and posts or acks the prior launch's tile count to this launch's counters.
+FORCE_INLINE void disarm_dfb_implicit_sync() {
+    disable_dfb_tile_isr();
+    uint64_t reg_val = __builtin_riscv_ttrocc_cmdbuf_rd_reg(
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET / 8);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_RD_CMD_BUF,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET / 8,
+        reg_val & 0x00000000FFFFFFFFULL);
+    reg_val = __builtin_riscv_ttrocc_cmdbuf_rd_reg(
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET / 8);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_WR_CMD_BUF,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET / 8,
+        reg_val & 0xFFFFFFFF00000000ULL);
+}
+
 FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
-    // No DFB config was serialized; host will not read timing slots. Still disarm ISR
-    // so a prior launch cannot leak into this one.
+    disarm_dfb_implicit_sync();
+    // No DFB config was serialized; host will not read timing slots. The prior launch's ISR
+    // state is already disarmed above.
     if (num_dfbs == 0) {
-        disable_dfb_tile_isr();
         return;
     }
 
