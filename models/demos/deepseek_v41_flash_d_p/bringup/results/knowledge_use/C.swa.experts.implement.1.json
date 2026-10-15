@@ -1,0 +1,94 @@
+{
+ "used": [
+  {
+   "id": "DS41-10",
+   "how": "kept the checkpoint's packed e2m1 codes + e8m0 scales on device (re-packed as nibble planes), decoded per chunk; no bfp8 / bfp4",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-16",
+   "how": "carried the fp32 routing weight as 3 bf16 pieces in different K tiles so the selector matmul sums them exactly (one product per tile-dot)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-13",
+   "how": "used int32 bit ops (truncate to bf16 by & 0xFFFF0000) and fp32 ttnn.max over 32 columns as exact steps; reused tt/quant.fp8_qdq for q(x) and q(r h)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-1",
+   "how": "kept the dispatched buffer and the insert slab alive until combine; inserted into a separate bf16 slab",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-2",
+   "how": "counts / region offsets from offset_cumsum used as [1, E] global ids with the global expert idx table",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-25",
+   "how": "fp32 gate / up / h intermediates and HiFi4 + fp32 acc for every expert matmul",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "summed the 6 combine slots and the two dispatch groups with SFPU fp32 adds (all_gather + add), not ttnn.sum / reduce_scatter (setting EXPERTS_SUM)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-56",
+   "how": "deleted the tt-probe directory tests/ttnn/unit_tests/operations/ds41_experts before finishing",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "explained the gate's ~12 min runtime and the stubbed first metrics block (collect pass)",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how to get a per-(token, expert) fp32 routing weight into the expert math when the weight must be applied before an activation quant (dispatch carries no weight)",
+  "extract / insert take 2D [rows, H] TILE slabs and bf16 / bfp8 only; combine is bf16-only, so expert outputs round to bf16 before the slot sum"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "DS41-20 in bringup/known_issues.md already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x (swap_step_calib) the step's own component error, no cap' (updated by C.swa.ffn_norm / the experts test review); nothing model-specific left to change in this task"
+  }
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.experts",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T18:25:45",
+  "head": "8316eb30fa5",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.experts.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ },
+ "cited_only": [
+  "DS41-20",
+  "DS41-23",
+  "DS41-24"
+ ]
+}

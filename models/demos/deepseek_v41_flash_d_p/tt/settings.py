@@ -50,6 +50,28 @@ TABLE = {
         "the wo_b partial-sum exchange over axis 1 ([S/SP, H] fp32): gather_add = all_gather + SFPU ttnn.add, then "
         "the chip's hidden slice (exact fp32, K-30); reduce_scatter = one CCL whose FPU add reads fp32 at about TF32",
     ),
+    # ---- routed experts (tt/experts.py)
+    "EXPERTS_IMPL": Setting(
+        "loop",
+        ("loop",),
+        "routed experts: loop = per local expert extract -> decode the expert's packed fp4 planes into bf16 W^T "
+        "(composed chain, every chunk) -> ttnn.linear SwiGLU with the routing weight and fp8 q(h) before w2 -> insert "
+        "(components.yaml note: a temporary departure from agent rule 5 until the unified_routed_expert_ffn fork "
+        "decodes the packed weights in the op)",
+    ),
+    "EXPERTS_DECODE": Setting(
+        "gather",
+        ("gather", "arith"),
+        "the e2m1 code -> value step of the expert weight decode: gather = ttnn.gather from the 16-entry table "
+        "(4.0 ms per [2304, 5120] matrix); arith = composed float arithmetic (6.4 ms); both bit-exact",
+    ),
+    "EXPERTS_SUM": Setting(
+        "gather_add",
+        ("gather_add", "reduce_scatter"),
+        "the dispatch groups' expert partials [S/SP, H] fp32 summed over axis 1: gather_add = all_gather + SFPU "
+        "ttnn.add, then the chip's hidden slice (exact fp32, K-30); reduce_scatter = one CCL whose FPU add reads fp32 "
+        "at about TF32",
+    ),
     # ---- mHC (tt/mhc.py, tt/residual.py)
     "RESIDUAL_MIX": Setting(
         "fused",
@@ -74,6 +96,7 @@ MAX_PRECISION = {
     "WINDOW_SDPA": "high_precision",  # owner 2026-10-15 (OV-3); "exact" only for comparison
     "WINDOW_PIECES": 3,
     "ATTN_O_SUM": "gather_add",
+    "EXPERTS_SUM": "gather_add",
 }
 
 settings = Settings("DS41_", TABLE, max_precision=MAX_PRECISION)
