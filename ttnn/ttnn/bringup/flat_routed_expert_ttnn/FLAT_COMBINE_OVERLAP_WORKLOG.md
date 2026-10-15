@@ -1285,6 +1285,18 @@ ND 32 = its default within 1%). After it, E56 ms per call M 46 / 128: full 2.246
 no x 2.239 / 2.405, neither 2.081 / 2.231 (weights alone 2.054 / 2.190): x and y together cost 165 / 330 us against
 108 / 300 us of their bytes at 512 GB/s.
 
+**Schedule inputs read once per call (2026-10-15, galaxy-unified `e5b5687841e`).** counts / regions / expert ids are
+one DRAM page each (bank 0) and every se_dyn_load read them itself: 144 calls per launch (E1), schedule ready at
+median 5.0 / p90 15.8 / max 16.2 us after kernel start (x reader BRISC 15.9, gate/up receivers 12.1 median: their NOC1
+path into bank 0 shares the endpoint with the DRISC streams). (1) Leader + pull: reader 0's BRISC reads them,
+compacts the chip's per-expert count / region into CB 9, sets semaphore 13 (reset every launch); everyone else polls it
+over the NoC and pulls the copy. Ready median 1.7 / p90 2.3 us (E1), 3.0 / 3.5 (E12). us per call M 32 / 64 / 128 /
+256: E1 68.4 / 82.2 / 95.7 / 122.0 -> 63.2 / 74.7 / 88.5 / 114.3, E12 493 / 525 / 584 / 689 -> 490 / 519 / 580 / 682, E56
+and GLM-Flash within 0.4% (never slower); bit-identical, 100k-call 2x4 stress passes. (3) The relays reading the call's
+whole token index once (MIMO_FL_XIDX_ALL=1): no gain with or without (1) (E1 / E12 / E56 within 0.3 us) - the first
+x rows themselves wait behind the weight flood, not the index. (2), the inputs already in L1 from the producer (gate /
+dispatch op), would save the leader's DRAM read + the poll: ~2-3 us more per call.
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
