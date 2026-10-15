@@ -32,6 +32,7 @@
 // as of 2026-08-23 (lane GB recon).  Coefficients unchanged by lane GC.
 
 #include <cstdint>
+#include <limits>
 
 #include "fresh_cpp/helpers.h"
 
@@ -76,13 +77,14 @@ __attribute__((noinline)) void calculate_sigmoid_fitted_cpp()
         // (g(0)=c0 may sit just off 1.0, so a bare setexp would mis-scale).
         const sfpi::vInt pe  = sfpi::exexp(p, sfpi::ExponentMode::Biased);
         const sfpi::vFloat y = sfpi::setexp(p, ep + pe - 127); // == exp(-x)
-        sfpi::vFloat s = fresh_recip<1>(1.0f + y);
-        v_if (sfpi::is_nan(x))
+        const sfpi::vFloat s = fresh_recip<1>(1.0f + y);
+        // The exponent clamps send a NaN to a finite endpoint; leave NaN lanes
+        // untouched in Dest (every NaN sorts above +inf once its sign is cleared).
+        v_if (sfpi::setsgn(x, 0) <= std::numeric_limits<float>::infinity())
         {
-            s = x;
+            sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(s, sfpi::RoundMode::Nearest);
         }
         v_endif;
-        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(s, sfpi::RoundMode::Nearest);
         sfpi::dst_reg++;
     }
 }
