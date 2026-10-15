@@ -1297,6 +1297,14 @@ whole token index once (MIMO_FL_XIDX_ALL=1): no gain with or without (1) (E1 / E
 x rows themselves wait behind the weight flood, not the index. (2), the inputs already in L1 from the producer (gate /
 dispatch op), would save the leader's DRAM read + the poll: ~2-3 us more per call.
 
+**x transactions and x staging (K3, 2026-10-15).** Same x bytes in bigger requests (MIMO_FL_XRD_BIG=k, garbage
+layout), us / expert M 32 / 64 / 128 / 256 / 512: E56 1 KB 39.1 / 41.0 / 45.6 / 53.0 / 95.8, 2 KB 39.1 / 41.0 / 46.1 /
+53.3 / 95.9, 7 KB (whole rows) 39.9 / 47.2 / 47.0 / 55.1 / 100.5; E12 1 KB 40.8 / 43.3 / 48.2 / 56.8 / 100.4, 2 KB 40.7
+/ 43.2 / 48.7 / 57.1 / 100.6, 7 KB 40.7 / 49.8 / 49.6 / 59.3 / 104.8 - whole rows put a sub-block's x (448 KB) into one
+burst against the weight streams. Deeper x staging (relay row-major chunks 4 -> 8 + tilized slots 3 -> 6, gate/up x
+ring 24 -> 32 / 48 slots, both): all within +-0.3 us of the default at E56 and E12. x does not starve the pipeline;
+neither is worth relay / gate-up L1.
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
