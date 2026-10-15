@@ -72,6 +72,7 @@ DEVICE_STEPS = {
         "moe_add",
         "ffn_residual",
     },
+    "swa_engram": {"engram_rows"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -374,6 +375,37 @@ def _two_hidden_host_fn(mesh, module):
     return fn
 
 
+def _engram_rows_host_fn(mesh, module):
+    """fn(ctx) -> engram rows host [S, 24 x 256] fp32 (the host hash + lookup, the one transfer to the device, then
+    the harness boundary read-back from mesh column 0). The tail (3 compressed ids before ctx.start) is the reference
+    state's when the context carries one (the hybrid model: it is updated there, host state per slot), else the
+    golden state_prefix's (component tests); at start 0 there is none. ctx.extra["end"] = actual_end: rows past it
+    are pad (zero, not hashed)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import row_split_to_host
+
+    def fn(ctx):
+        start, layer = int(ctx.start), module.layer
+        st = ctx.state
+        own = st is not None and layer in getattr(st, "tail", {})
+        if start == 0:
+            tail = module.new_tail()
+        elif own:
+            tail = st.tail[layer]
+        else:
+            tail = (ctx.extra.get("state_prefix") or {})["engram_tail"]
+        end = ctx.extra.get("end")
+        rd, new_tail = module(ctx.extra["tokens"], tail.long(), None if end is None else int(end) - start)
+        if own:
+            st.tail[layer] = new_tail
+        out = row_split_to_host(mesh, rd).float()
+        ttnn.deallocate(rd)
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _chunk(spec):
     """The serving chunk the window tables are built for (the run's target chunk; every ladder rung uses it)."""
     return int(spec.get("target.chunk"))
@@ -398,6 +430,10 @@ def _max_seq(spec):
 
 def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
     shared = {} if shared is None else shared
+    if step == "engram_rows":
+        from models.demos.deepseek_v41_flash_d_p.tt.engram import build_engram_rows
+
+        return _engram_rows_host_fn(mesh, build_engram_rows(mesh, ck, cfg, layer, shared.get("engram_hasher")))
     if step == "attention":
         from models.demos.deepseek_v41_flash_d_p.tt.attention import build_attention
 
@@ -529,7 +565,7 @@ class HybridDeviceModel:
         self.ref = reference(spec, layers=layers, dtype=torch.float32)
         self.cfg = self.ref.cfg
         ck = _checkpoint(spec)
-        self.overrides, self.shared = {}, {}
+        self.overrides, self.shared = {}, {"engram_hasher": self.ref.hasher}
         for i in self.ref.layer_ids:
             steps = sorted(DEVICE_STEPS.get(spec.block_type_of(i), ()))
             self.overrides[i] = {st: _device_step_fn(mesh, spec, i, st, ck, self.cfg, self.shared) for st in steps}
