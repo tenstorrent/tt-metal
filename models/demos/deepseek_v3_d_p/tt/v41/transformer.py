@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -347,6 +348,7 @@ class TtV41Transformer(LightweightModule):
         t0 = time.perf_counter()
         host = next(chunks)
         t["prepare"] = t.get("prepare", 0.0) + time.perf_counter() - t0
+        chunk_log = os.environ.get("TT_V41_PREFILL_CHUNK_LOG", "0") == "1"
         for c in range(-(-total // self.chunk)):
             t0 = time.perf_counter()
             token_ids, engram_inputs = self._stage(host, buffers)
@@ -357,6 +359,12 @@ class TtV41Transformer(LightweightModule):
             )
             t0 = time.perf_counter()
             scored += step(c, forward)
+            if chunk_log:  # the chunk's wall time, device included: a measurement, not the serving path (it
+                # waits for the device before preparing the next chunk's host inputs)
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(
+                    f"prefill chunk {c} at {host.start} ({host.length} tokens): {time.perf_counter() - t0:.3f} s"
+                )
             t["step"] = t.get("step", 0.0) + time.perf_counter() - t0
             length = host.length
             t0 = time.perf_counter()

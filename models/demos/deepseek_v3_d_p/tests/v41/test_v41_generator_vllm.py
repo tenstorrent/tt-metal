@@ -106,7 +106,14 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
         f"{result['prefill_traces']} prefill traces, trace region {result['trace_after_warmup_bytes']} B"
     )
 
-    text = orc.text_tokens(2 * prompt + 2 * steps + 2)[0]
+    need = 2 * prompt + 2 * steps + 2
+    try:
+        text = orc.text_tokens(need)[0]
+    except ValueError as e:  # a prompt beyond the book (the long points): the book repeated end to end
+        have = int(str(e).split()[0])
+        book = orc.text_tokens(have)[0]
+        text = book.repeat(-(-need // have))[:need]
+        logger.info(f"generator: {have} tokens of text repeated {-(-need // have)} times for prompts of {prompt}")
     book_a, other = text[: prompt + steps + 1], text[prompt + steps + 1 :]
     tokenizer = model.tokenizer
 
