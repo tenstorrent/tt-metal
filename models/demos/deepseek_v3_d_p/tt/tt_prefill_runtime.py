@@ -104,10 +104,10 @@ class TtPrefillRuntimeConfig:
     # ~2*(MoE layers) host load/clear round-trips per replay. Set False (PREFILL_OVERLAP_SHARED_EXPERT=0) to
     # capture the forward as ONE trace segment (no per-chunk swaps -> faster replay); costs the overlap.
     overlap_shared_expert_with_dispatch: bool = True
-    # MoE dispatch and combine ops, each "direct" or "fabric2d" (PREFILL_MOE_DISPATCH /
-    # PREFILL_MOE_COMBINE). See TtMoe.
-    dispatch_impl: str = "direct"
-    combine_impl: str = "direct"
+    # MoE dispatch and combine ops, each "direct", "fabric2d" or None for fabric2d wherever it runs
+    # (PREFILL_MOE_DISPATCH / PREFILL_MOE_COMBINE). See TtMoe.
+    dispatch_impl: Optional[str] = None
+    combine_impl: Optional[str] = None
     # KV dedup: also shard the KV/index caches across tp_axis, so each of the sp*tp devices stores a
     # distinct 1/(sp*tp) slice instead of tp copies. Must match how the caches were allocated and how the
     # KV chunk address table was built; sparse (DSA) path only.

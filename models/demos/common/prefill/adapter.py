@@ -78,10 +78,10 @@ class PrefillRunParams:
     # MoE shared-expert ∥ dispatch overlap (default on). Off => single-segment trace (no per-chunk
     # sub-device swaps), faster replay at the cost of the overlap. See TtPrefillRuntimeConfig.
     overlap_shared_expert_with_dispatch: bool = True
-    # MoE dispatch and combine ops, each "direct" or "fabric2d". See TtMoe. Models whose MoE is not
-    # TtMoe ignore them.
-    dispatch_impl: str = "direct"
-    combine_impl: str = "direct"
+    # MoE dispatch and combine ops, each "direct", "fabric2d" or None for fabric2d wherever it runs. See TtMoe.
+    # Models whose MoE is not TtMoe ignore them.
+    dispatch_impl: Optional[str] = None
+    combine_impl: Optional[str] = None
     # Build the DFlash drafter context-KV cache during prefill. Opt-in / default False so adding this
     # feature never breaks existing PrefillRunParams constructors (which need not pass it); the runner
     # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.

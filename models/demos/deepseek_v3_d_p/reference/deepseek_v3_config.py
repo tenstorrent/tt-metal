@@ -15,7 +15,9 @@ class DeepSeekV3Config:
 
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    # Max fabric packet payload; must stay in sync with migration code. Half a bf16 token plus 64 B of routing tail:
+    # the least dispatch_fabric2d and combine_fabric2d run on, each token as two packets.
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE + 64
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 

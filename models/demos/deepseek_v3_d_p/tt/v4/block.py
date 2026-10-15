@@ -88,8 +88,8 @@ class TtV4Block(LightweightModule):
         is_balanced: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
-        dispatch_impl: str = "direct",
-        combine_impl: str = "direct",
+        dispatch_impl: Optional[str] = None,
+        combine_impl: Optional[str] = None,
     ):
         """``seq_len`` is the padded per-chunk length; ``max_seq_len`` the full per-user length the
         attention state must span, defaulting to one chunk. ``attn_reference`` is the torch attention

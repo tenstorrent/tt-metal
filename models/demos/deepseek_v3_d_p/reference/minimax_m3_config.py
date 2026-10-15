@@ -15,7 +15,9 @@ class MiniMaxM3Config:
 
     # Core dimensions
     EMB_SIZE = 6144
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # Implementation-specific; keep in sync with migration code
+    # Implementation-specific; keep in sync with migration code. Half a bf16 token plus 64 B of routing tail: the
+    # least dispatch_fabric2d and combine_fabric2d run on, each token as two packets.
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE + 64
 
     # FFN dimensions
     MOE_INTERMEDIATE_SIZE = 3072  # Routed-expert FFN hidden dimension

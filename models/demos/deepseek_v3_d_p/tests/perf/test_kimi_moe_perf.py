@@ -58,7 +58,7 @@ _SEQ_LEN_PER_CHIP = PREFILL_CHUNK_TOKENS_PER_CHIP
 # slots (top-8 -> top-16), so per-chip dispatch bytes are roughly unchanged.
 _DISPATCH_BUFFER_CAPACITY_FACTOR = 5
 
-# Both generations carry FABRIC_PAYLOAD_SIZE = EMB_SIZE = 7168, so one device_params axis serves both. This test
+# Both generations carry FABRIC_PAYLOAD_SIZE = EMB_SIZE + 64 = 7232, so one device_params axis serves both. This test
 # drives TtMoe through run_model, so on Blackhole it opens room for the overlap instead; see moe_fabric_payload.
 _FABRIC_PAYLOAD_SIZE = moe_fabric_payload(KimiK27Config)
 

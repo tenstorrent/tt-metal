@@ -118,12 +118,11 @@ if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
-# Which ops the MoE layers dispatch and combine with. Temporary, for comparing the two; removed when
-# the default changes.
-# A copy of tt_moe.MOE_TRANSPORT_IMPLS, because this generic runner must not import DeepSeek MoE code.
-_MOE_IMPLS = ("direct", "fabric2d")
-MOE_DISPATCH_IMPL = os.environ.get("PREFILL_MOE_DISPATCH", "direct").strip().lower()
-MOE_COMBINE_IMPL = os.environ.get("PREFILL_MOE_COMBINE", "direct").strip().lower()
+# Which ops the MoE layers dispatch and combine with. "auto" leaves it to the model: fabric2d wherever it runs.
+# A copy of tt_moe.MOE_TRANSPORT_IMPLS plus "auto", because this generic runner must not import DeepSeek MoE code.
+_MOE_IMPLS = ("auto", "direct", "fabric2d")
+MOE_DISPATCH_IMPL = os.environ.get("PREFILL_MOE_DISPATCH", "auto").strip().lower()
+MOE_COMBINE_IMPL = os.environ.get("PREFILL_MOE_COMBINE", "auto").strip().lower()
 for _var, _impl in (("PREFILL_MOE_DISPATCH", MOE_DISPATCH_IMPL), ("PREFILL_MOE_COMBINE", MOE_COMBINE_IMPL)):
     if _impl not in _MOE_IMPLS:
         raise ValueError(f"{_var} must be one of {_MOE_IMPLS}, got {_impl!r}")
@@ -682,8 +681,8 @@ def main() -> None:
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
         overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",
-        dispatch_impl=MOE_DISPATCH_IMPL,
-        combine_impl=MOE_COMBINE_IMPL,
+        dispatch_impl=None if MOE_DISPATCH_IMPL == "auto" else MOE_DISPATCH_IMPL,
+        combine_impl=None if MOE_COMBINE_IMPL == "auto" else MOE_COMBINE_IMPL,
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)

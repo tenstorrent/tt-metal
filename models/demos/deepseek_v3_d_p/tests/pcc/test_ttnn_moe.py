@@ -174,10 +174,10 @@ def run_model(
     gate_up_scale=1.0,
     score_func=None,
     skip_upstream_reference=False,
-    dispatch_impl="direct",
-    combine_impl="direct",
+    dispatch_impl=None,
+    combine_impl=None,
     overlap_routed_expert_with_combine=None,
-    overlap_routed_expert_with_combine_eager=False,
+    overlap_routed_expert_with_combine_eager=None,
     hybrid_token_threshold_model_config=None,
     overlap_shared_expert_with_dispatch=True,
     traced_replays=0,
@@ -210,9 +210,9 @@ def run_model(
     per-token ids are built here and handed to both sides, and the torch reference takes the
     resulting route instead of running its own gate.
 
-    ``dispatch_impl`` / ``combine_impl`` pick TtMoe's dispatch and combine ops ("direct" or "fabric2d").
-    ``overlap_routed_expert_with_combine`` / ``overlap_routed_expert_with_combine_eager`` pass through to
-    TtMoe; this forward is untraced, so it overlaps only with the eager one set.
+    ``dispatch_impl`` / ``combine_impl`` pick TtMoe's dispatch and combine ops ("direct" or "fabric2d"; None
+    is fabric2d wherever it runs). ``overlap_routed_expert_with_combine`` / ``overlap_routed_expert_with_combine_eager``
+    pass through to TtMoe; this forward is untraced, so it overlaps unless the eager one is False.
     ``hybrid_token_threshold_model_config`` takes the routed experts' hybrid threshold from that model's
     dimension-constants class instead of the variant's, for a row that runs one model's dims under
     another's gate. ``overlap_shared_expert_with_dispatch`` passes through to TtMoe.

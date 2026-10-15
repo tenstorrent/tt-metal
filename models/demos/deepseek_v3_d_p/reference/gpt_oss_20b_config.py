@@ -91,4 +91,5 @@ class GptOss20BConfig:
     QUANT_METHOD = "mxfp4"
 
     # Implementation-specific, not from the HF model config
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE
+    # Half a bf16 token plus 64 B of routing tail: the least dispatch_fabric2d and combine_fabric2d run on.
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE + 64

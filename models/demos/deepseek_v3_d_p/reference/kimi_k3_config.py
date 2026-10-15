@@ -40,7 +40,9 @@ class KimiK3Config:
 
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    # Max fabric packet payload; must stay in sync with migration code. Half a bf16 token plus 64 B of routing tail:
+    # the least dispatch_fabric2d and combine_fabric2d run on, each token as two packets.
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE + 64
     # The one definition of K3's l1_small pool, read by the adapter (and so by the runner) and by
     # the pytest gates, whose mesh fixture is built before any adapter is resolved. Only a CEILING
     # is known: 24576 (this package's usual value) starves MLA chunked attention of circular

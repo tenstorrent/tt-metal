@@ -66,8 +66,8 @@ class TtKimiK3Block(LightweightModule):
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
-        dispatch_impl: str = "direct",
-        combine_impl: str = "direct",
+        dispatch_impl: Optional[str] = None,
+        combine_impl: Optional[str] = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device

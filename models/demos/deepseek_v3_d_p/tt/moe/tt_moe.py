@@ -236,9 +236,9 @@ class TtMoe(LightweightModule):
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
         overlap_routed_expert_with_combine: Optional[bool] = None,
-        overlap_routed_expert_with_combine_eager: bool = False,
-        dispatch_impl: str = "direct",
-        combine_impl: str = "direct",
+        overlap_routed_expert_with_combine_eager: Optional[bool] = None,
+        dispatch_impl: Optional[str] = None,
+        combine_impl: Optional[str] = None,
     ):
         """
         Initialize TtMoe module.
@@ -328,19 +328,20 @@ class TtMoe(LightweightModule):
                 fits half a bf16 token plus combine_fabric2d's routing tail -- open the mesh with
                 init_helpers.moe_fabric_payload_size for that; with the model's own EMB_SIZE payload MoE runs
                 the routed expert then combine. Also needs a threshold that leaves the unified half
-                some experts. Even when enabled, a forward only overlaps while a trace controller is
-                attached (set_trace_controller): eager it runs the routed expert then combine, since the
-                overlapped program is host-bound when dispatched op by op. Its four global semaphores live in the mesh's TT_CCL; everything else it
+                some experts. An untraced forward overlaps too unless overlap_routed_expert_with_combine_eager
+                is False, in which case it only overlaps while a trace controller is attached
+                (set_trace_controller). Its four global semaphores live in the mesh's TT_CCL; everything else it
                 places in L1 is freed when the op returns.
             overlap_routed_expert_with_combine_eager: overlap an untraced forward too, when the overlap is on.
-                Host-bound, so only for measuring device time.
-            dispatch_impl: Which op dispatch runs, "direct" (default, TtDispatchModule) or
-                "fabric2d" (TtDispatch2dModule).
+                Host-bound. None means on, so every forward runs the overlapped program.
+            dispatch_impl: Which op dispatch runs, "direct" (TtDispatchModule) or "fabric2d"
+                (TtDispatch2dModule). None means "fabric2d" wherever it can run (Blackhole, a Ring axis 0 on a
+                2D fabric that wraps it, and the checks below), else "direct".
                   "direct": the fabric carries each token straight to its destination chip.
                   "fabric2d": each chip on the way stores the token in DRAM and passes it on.
                 With overlap_shared_expert_with_dispatch on, "fabric2d" gives dispatch two core rows
                 instead of one, which leaves the shared expert one row fewer.
-            combine_impl: The same choice for combine (TtCombineModule or TtCombine2dModule).
+            combine_impl: The same choice for combine (TtCombineModule or TtCombine2dModule), None alike.
                 Independent of dispatch_impl. A forward that overlaps the routed expert with combine runs
                 combine_fabric2d inside the overlapped program whatever this is; it picks the combine of
                 every other forward.
@@ -382,8 +383,14 @@ class TtMoe(LightweightModule):
             self.row_topology = self.col_topology = topology
 
         for name, impl in (("dispatch_impl", dispatch_impl), ("combine_impl", combine_impl)):
-            if impl not in MOE_TRANSPORT_IMPLS:
+            if impl is not None and impl not in MOE_TRANSPORT_IMPLS:
                 raise ValueError(f"TtMoe: {name} must be one of {MOE_TRANSPORT_IMPLS}, got {impl!r}")
+        if dispatch_impl is None:
+            dispatch_impl = (
+                "fabric2d" if self._fabric2d_runs(mesh_device, metadata_len, num_experts_per_tok) else "direct"
+            )
+        if combine_impl is None:
+            combine_impl = "fabric2d" if self._fabric2d_runs(mesh_device, metadata_len, None) else "direct"
         self.dispatch_impl = dispatch_impl
         self.combine_impl = combine_impl
         self.uses_fabric2d = "fabric2d" in (dispatch_impl, combine_impl)
@@ -635,7 +642,7 @@ class TtMoe(LightweightModule):
             )
         logger.info(
             f"TtMoe: routed expert overlapped with combine_fabric2d: {overlap_routed_expert_with_combine} when traced, "
-            f"{bool(overlap_routed_expert_with_combine and overlap_routed_expert_with_combine_eager)} eager "
+            f"{bool(overlap_routed_expert_with_combine and overlap_routed_expert_with_combine_eager is not False)} eager "
             f"(axis 0 {'ring' if ring_axis_wraps else 'linear'}, fabric payload {fabric_payload} B, "
             f"overlap needs {overlap_payload} B)"
         )
@@ -647,8 +654,8 @@ class TtMoe(LightweightModule):
         self.combine_overlap_semaphores = (
             self.tt_ccl.get_combine_overlap_semaphores() if overlap_routed_expert_with_combine else None
         )
-        self.overlap_routed_expert_with_combine_eager = (
-            overlap_routed_expert_with_combine and overlap_routed_expert_with_combine_eager
+        self.overlap_routed_expert_with_combine_eager = overlap_routed_expert_with_combine and (
+            overlap_routed_expert_with_combine_eager is not False
         )
         # Fetched in set_trace_controller, the last point before a traced forward, unless an eager forward
         # overlaps too.
@@ -745,6 +752,20 @@ class TtMoe(LightweightModule):
         self.debug_token_count = os.getenv("TT_DS_PREFILL_DEBUG_TOKEN_COUNT", "0").lower() in ("1", "true", "yes")
 
         logger.debug("TtMoe initialization complete")
+
+    def _fabric2d_runs(self, mesh_device, metadata_len, num_experts_per_tok) -> bool:
+        """Whether the fabric2d ops run on this mesh: Blackhole, a Ring axis 0, three metadata fields, and whatever
+        check_fabric2d_setup checks (ring size, a fabric that wraps axis 0, the payload, and dispatch's top-k when
+        num_experts_per_tok is given)."""
+        if not is_blackhole() or self.row_topology != ttnn.Topology.Ring or metadata_len != 3:
+            return False
+        try:
+            check_fabric2d_setup(
+                mesh_device, cluster_axis=0, emb_dim=self.routed_emb_dim, num_experts_per_tok=num_experts_per_tok
+            )
+        except ValueError:
+            return False
+        return True
 
     def set_trace_controller(self, controller):
         """Attach (or clear with None) a SubDeviceTraceController. While set, the shared-expert/

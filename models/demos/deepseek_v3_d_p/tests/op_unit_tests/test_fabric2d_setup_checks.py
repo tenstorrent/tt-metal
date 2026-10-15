@@ -228,7 +228,7 @@ def test_tt_moe_fabric2d_dispatch_rejects_top_k_above_16(expect_error, fabric, m
 
 
 # A token of the routed width in bf16, rounded up to 64 B, plus 64 B of forwarding metadata. Kimi-K3 routes
-# at its 3584 latent width, so its 7168 B own payload is too small by the 64 B of metadata.
+# at its 3584 latent width, whose whole token plus metadata is exactly its own 7232 B payload.
 @pytest.mark.parametrize(
     "model_cfg, expected",
     [

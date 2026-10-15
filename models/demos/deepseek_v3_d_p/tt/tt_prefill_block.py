@@ -274,8 +274,8 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
-        dispatch_impl: str = "direct",
-        combine_impl: str = "direct",
+        dispatch_impl: Optional[str] = None,
+        combine_impl: Optional[str] = None,
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
         use_fused_rmsnorm: Optional[bool] = None,
@@ -459,8 +459,8 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores=False,
         is_balanced=False,
         overlap_shared_expert_with_dispatch=True,
-        dispatch_impl="direct",
-        combine_impl="direct",
+        dispatch_impl=None,
+        combine_impl=None,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
