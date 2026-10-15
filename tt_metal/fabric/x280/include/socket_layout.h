@@ -55,7 +55,6 @@
  *   0x000000 firmware .text/.data/.bss       (~tens of KiB)
  *   ...
  *   0x0FFF80 stack bottom (4 x 32 KiB)       (boot/entry.S, x280.ld)
- *   0x100000 X280_SENTINEL_ADDR              (x280_address_map.h)
  *   0x120000 spike mailbox region            (PCIe NoC-write spike)
  *
  *   0x130000 migration control mailboxes     (8 KiB; STATUS / CMD_COUNT /

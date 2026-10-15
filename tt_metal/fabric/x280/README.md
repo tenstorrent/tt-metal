@@ -827,7 +827,6 @@ aborts cleanly with `AMO-to-LIM supported: False`.
 // From x280_address_map.h
 #define X280_LOCAL_DDR_TILE_BASE 0x400030000000ULL
 #define X280_LIM_BASE            0x08000000ULL
-#define X280_SENTINEL_ADDR       0x08100000ULL
 #define X280_CLINT_BASE          0x02000000ULL
 ```
 
