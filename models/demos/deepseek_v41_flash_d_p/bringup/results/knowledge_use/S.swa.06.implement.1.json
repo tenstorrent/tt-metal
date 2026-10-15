@@ -1,0 +1,111 @@
+{
+ "used": [
+  {
+   "id": "DS41-16",
+   "how": "the FPU's in-tile dot rounding is why fp32 operands alone cannot pass; moved ExactMatmul's one-product-per-tile-dot masks to the keys / values with lanes along K summed in DEST (tt/window_exact.py)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-18",
+   "how": "started from its emulation numbers; fp32 output alone measured insufficient (tail 0.013), so went to exact products",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-1",
+   "how": "the fp8 q-dq after the un-RoPE turns any rounding into e4m3 steps: emulated the whole chain to size the error budget",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-13",
+   "how": "fp32 bit ops / SFPU arithmetic exact on BH: pieces by typecast + fp32 subtract, softmax on the SFPU",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "no fp32 operand through the FPU: q and probs split into bf16 pieces, lane sums with ttnn.add (SFPU)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-27",
+   "how": "kept 512^-0.5 folded into q; the sink now enters as fp32 in exp(sink - max)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "deleted tests/ttnn/unit_tests/operations/ds41_window_exact after the probes",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-57",
+   "how": "probes opened the whole 2x2 mesh with FABRIC_2D, never one card",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-58",
+   "how": "hand-run gate metrics read from the log; results/ left to the orchestrator",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-17",
+   "how": "kept the cache write / carry path; the exact path reads the same [carry | chunk] table",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-18",
+   "evidence": "its Fix says an fp32-output fork option is the next precision step; CPU emulation of the device arithmetic (S.swa.06) gives attention rel 0.0126 and tail 0.0132 with an fp32 output, still over the 0.01 tail limit; updated the entry to point at DS41-19",
+   "cited": true
+  },
+  {
+   "id": "DS41-16",
+   "evidence": "says the FPU rounds each in-tile partial dot to ~TF32 (11 bits): a single bf16 x e4m3 product (12 significant bits) alone in a tile-dot comes out exact (probe, rel 7.5e-9 vs fp64); the rounding is of in-tile sums, not single products (recorded in DS41-19)",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the hand-run test_cache_starts needs BRINGUP_TASK=C.swa.attention (or the step's task) to restrict it to the device layers; without it it fails on layer 1",
+  "ttnn binary ops broadcast fp32 / bf16 operands over dims 0 and 1 (both operands) exactly; useful for building masked copies in one op"
+ ],
+ "overseer": [
+  {
+   "id": "OV-1",
+   "answer": "done",
+   "evidence": "DS41-12 is now one 352-character line pointing at known_issues_detail.md (heading renamed to match); knowledge.check reports no problem"
+  }
+ ],
+ "cited_only": [
+  "DS41-12",
+  "DS41-19"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.swa.06",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T15:35:23",
+  "head": "c6ae714cb93",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.swa.06.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/window_exact.py"
+  ]
+ }
+}

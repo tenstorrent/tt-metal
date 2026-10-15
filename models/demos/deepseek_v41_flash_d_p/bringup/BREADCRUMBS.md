@@ -301,3 +301,32 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Next steps: the ladder's state check reads window_kv as the ring view of the device cache; the cache is sized by
   the spec's target.chunk (WindowTables asserts S == chunk).
 - Re-run: `PYTHONPATH=$PWD BRINGUP_TASK=C.swa.attention scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py && PYTHONPATH=$PWD BRINGUP_TASK=C.swa.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`
+
+## S.swa.06 implement (attempt 1)
+- Previous attempt (orchestrator gate run of the C.swa.attention module) failed two step checks: attention vs the CPU
+  step rel 0.0212 > 0.02 and the tail (block out with the device vs the CPU attention output) 0.0163 > 0.01.
+- CPU emulation of the device roundings (outside the tree; reference block on the golden chunk 1 of layer 0): the
+  fork path reproduced (0.0207 / 0.0158). fp32 output alone: 0.0126 / 0.0132; fp32 operands but the FPU's in-tile
+  dot rounding (DS41-16) in both matmuls: 0.0095 / 0.0106; exact products, q / probs as 3 bf16 pieces: 0.0004 /
+  0.0015; plus the device's plain wq_b / wo_a / wo_b matmuls: 0.0039 / 0.0070 (exact wq_b would give 0.0059).
+- Fix (DS41-19): `tt/window_exact.py:ExactWindow` (new), setting WINDOW_SDPA = "exact" (default and max precision;
+  "high_precision" / "source" keep the sparse_sdpa paths), WINDOW_PIECES = 3 (max; 2 = 16 bits). Per chip, its own
+  heads (TP) and rows (SP), no all_to_all: q fp32 -> blocks of 32 queries [1, nb, Hc 32, 512]; keys = 160 table rows
+  per block (5 shifted 32-row slices of the replicated [carry | chunk] table, mesh_partition over SP); scores and
+  P @ [V | ones] as lane matmuls (operand x0/1-masked to K columns k % 32 == u by one broadcast multiply, L lanes
+  repeated along K so DEST sums them, G along N summed on the SFPU; L, G from a 256 MB transient cap); band bias
+  (0 / -1e30) per start class 0/32/64/96/>=128 built at load, sharded over SP; fp32 max / exp / sink (fp32, was
+  bf16 in the fork path: not bf16-exact) / divide. Output fp32 heads -> the existing inverse RoPE / fp8 / wo_a / wo_b.
+- Probes (2x2 FABRIC_2D, dir deleted, K-56): lane-masked matmul rel 5e-9 vs fp64 (plain 3e-4); a single bf16 x e4m3
+  product (12 bits) in a tile-dot is exact (DS41-16 rounds the in-tile sums, not single products); bit-round, broadcast
+  add over dims 0 / 1, permute (1,0,2,3), fp32 exp (rel 7e-8, exp(-1e30) = 0), fp32 max: exact. ExactWindow vs fp64
+  at starts 0/32/64/96/128/960: rel 4e-7 (3 pieces), 3.7e-6 (2). Time per call (S 2048, 32 heads / chip): 64 ms
+  (3 pieces), 45 ms (2); was 101 ms with lanes only along N (32x fp32 output + slices).
+- Gate: PASS. pcc_swap_out 0.999958; attention vs CPU rel 0.0039 (limit 0.02), row 0.013; tail 0.00798 (limit 0.01;
+  the plain wq_b projection is most of the rest). C.swa.attention component: PASS (vs CPU 0.0039, second inputs
+  <= 0.0051, A,B,A bit-identical). test_cache_starts with BRINGUP_TASK=C.swa.attention: 4 / 4, 0 failures (without
+  BRINGUP_TASK it runs all layers and fails on layer 1, not on the device yet).
+- Perf for later: 64 ms / layer on 2x2 (half on 4x4); levers: WINDOW_PIECES=2, matmul program configs (the batched
+  lane matmuls run at ~25 TFLOP/s), or WINDOW_SDPA=high_precision (judge end to end).
+- OV-1: DS41-12 shortened to one line (352 chars); the detail heading renamed to match.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_06_attention.py`
