@@ -33,7 +33,7 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
                     return std::bit_cast<uint32_t>(static_cast<float>(pad_value));
                 }
                 if (tensor.dtype() == DataType::INT32) {
-                    return std::bit_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value));
+                    return static_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value));
                 }
                 if (tensor.dtype() == DataType::FP8_E4M3) {  // 4 fp8 bytes per word
                     const float8_e4m3 v(static_cast<float>(pad_value));

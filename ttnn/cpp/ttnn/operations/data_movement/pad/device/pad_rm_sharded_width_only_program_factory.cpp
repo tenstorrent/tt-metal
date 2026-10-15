@@ -113,7 +113,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT16) {
         padding_value_as_u32 = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::INT32) {
-        padding_value_as_u32 = std::bit_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value));
+        padding_value_as_u32 = static_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value));
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT32) {
         padding_value_as_u32 = tt::saturating_cast<uint32_t>(pad_value);
     } else {

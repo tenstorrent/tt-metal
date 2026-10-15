@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <bit>
-
 #include <tt-metalium/math.hpp>
 #include "pad_rm_sharded_height_only_program_factory.hpp"
 
@@ -326,7 +324,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
 
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32) {
-        packed_pad_value = std::bit_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value));
+        packed_pad_value = static_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value));
     } else if (a.dtype() == DataType::UINT32) {
         packed_pad_value = tt::saturating_cast<uint32_t>(pad_value);
     } else if (a.dtype() == DataType::UINT16) {

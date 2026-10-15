@@ -91,9 +91,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     uint32_t packed_pad_value;
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     switch (a.dtype()) {
-        case DataType::INT32:
-        packed_pad_value = std::bit_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value));
-        break;
+        case DataType::INT32: packed_pad_value = static_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value)); break;
         case DataType::UINT32: packed_pad_value = tt::saturating_cast<uint32_t>(pad_value); break;
         case DataType::BFLOAT16:
             packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
