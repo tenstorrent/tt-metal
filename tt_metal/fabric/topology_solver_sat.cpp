@@ -40,6 +40,9 @@ struct SatSearchBackend::Impl {
     TopologySatSolver solver;
     TopologySatHardEncoding enc;
     bool cap_active = false;
+    // Soft-capable encoding (wide domains, realized literals); seams_hard => assume prune + every realized literal.
+    bool soft_encoded = false;
+    bool seams_hard = false;
     // Per-solve conflict budget applied uniformly to every solve() call. Default 1M; adjustable per session.
     int conflict_cap = kDefaultConflictCap;
     size_t solve_calls = 0;
@@ -1357,6 +1360,36 @@ bool topology_sat_encode_hard_constraints(
     // 3. Create assignment variables (preferred globals listed first in each row).
     topology_sat_create_assignment_variables(solver, constraint_data, enc, domain);
 
+    // 3b. Soft-capable: the hard (pruned) domains sit behind prune_active_lit so a session can flip to hard seams.
+    if (constraint_data.allow_unmatched_target_edges) {
+        TopologySatConstraintView hard_view = constraint_data;
+        hard_view.allow_unmatched_target_edges = false;
+        TopologySatHardEncoding scratch;
+        scratch.allowed_global_idx.resize(nt);
+        scratch.assign_lit.resize(nt);
+        std::vector<std::vector<size_t>> narrow;
+        const bool hard_feasible =
+            topology_sat_build_initial_domains(graph_data, hard_view, scratch, narrow) &&
+            topology_sat_apply_arc_consistency(graph_data, hard_view, validation_mode, scratch, narrow);
+        if (!hard_feasible) {
+            narrow.assign(nt, {});
+        }
+        enc.prune_active_lit = solver.declare_one_more_variable();
+        for (size_t t = 0; t < nt; ++t) {
+            std::vector<bool> keep(graph_data.n_global, false);
+            for (size_t g : narrow[t]) {
+                keep[g] = true;
+            }
+            for (size_t k = 0; k < enc.allowed_global_idx[t].size(); ++k) {
+                if (!keep[enc.allowed_global_idx[t][k]]) {
+                    solver.add(-enc.prune_active_lit);
+                    solver.add(-enc.assign_lit[t][k]);
+                    solver.add(0);
+                }
+            }
+        }
+    }
+
     // 4. Exactly one global choice per target.
     topology_sat_encode_exactly_one_per_target(solver, enc);
 
@@ -1693,6 +1726,8 @@ bool SatSearchBackend::start(
     s.unique_shapes = unique_shapes;
     s.global_adj_idx = &graph_data.global_adj_idx;
     s.validation_mode = validation_mode;
+    s.soft_encoded = constraint_data.allow_unmatched_target_edges;
+    s.seams_hard = false;
     s.enc = {};
     if (!topology_sat_encode_hard_constraints(s.solver, graph_data, constraint_data, s.enc, validation_mode)) {
         if (error_out != nullptr) {
@@ -1886,6 +1921,16 @@ bool SatSearchBackend::refresh_constraints(const TopologySatConstraintView& cons
             return false;
         }
     }
+    // In-session seam toggle (#56762): a soft-capable encoding flips to hard seams and back by assumption.
+    auto& s = *impl_;
+    const bool want_hard = !constraint_data.allow_unmatched_target_edges;
+    if (!s.soft_encoded) {
+        return want_hard;  // encoded with hard edges: soft edges need a new session
+    }
+    if (want_hard != s.seams_hard) {
+        s.seams_hard = want_hard;
+        s.stage = 0;  // an optional objective dropped under one mode may hold under the other
+    }
     return true;
 }
 
@@ -1921,10 +1966,22 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
         return false;
     }
     auto& s = *impl_;
+    // Hard seams on a soft-capable encoding: pruned pairs off, every realized literal on.
+    auto assume_mode = [&]() {
+        if (s.soft_encoded && s.seams_hard) {
+            if (s.enc.prune_active_lit != 0) {
+                s.solver.assume(s.enc.prune_active_lit);
+            }
+            for (int r : s.enc.edge_realized_lits) {
+                s.solver.assume(r);
+            }
+        }
+    };
     auto solve_and_decode = [&]() -> bool {
         for (; s.stage < s.stages.size(); ++s.stage) {
             const auto& optional_lits = s.stages[s.stage];
             auto solve_once = [&](bool with_symmetry_hint) -> bool {
+                assume_mode();
                 if (with_symmetry_hint) {
                     s.solver.assume(s.symmetry_lit);
                 }
@@ -1946,7 +2003,7 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
         return false;
     }
     // Zero-link tolerance: maximize the realized soft edges on the warm session, best effort.
-    if (!s.edge_threshold_lits.empty()) {
+    if (!s.edge_threshold_lits.empty() && !s.seams_hard) {
         // The realized literal can under-count; under RELAXED also credit physically adjacent endpoints.
         const auto count_realized = [&]() -> size_t {
             size_t realized = 0;
@@ -1979,6 +2036,7 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
         bool symmetry_hint_usable = s.symmetry_lit != 0;
         const auto solve_threshold = [&](int threshold_lit) -> int {
             auto attempt = [&](bool with_symmetry_hint) -> int {
+                assume_mode();
                 if (with_symmetry_hint) {
                     s.solver.assume(s.symmetry_lit);
                 }

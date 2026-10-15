@@ -1508,6 +1508,18 @@ std::vector<int> TopologyMappingEnumerationSession<TargetNode, GlobalNode>::to_i
 }
 
 template <typename TargetNode, typename GlobalNode>
+bool TopologyMappingEnumerationSession<TargetNode, GlobalNode>::set_allow_unmatched_target_edges(bool enable) {
+    if (!ready_) {
+        return false;
+    }
+    if (snap_constraints_.allow_unmatched_target_edges() == enable) {
+        return true;
+    }
+    snap_constraints_.set_allow_unmatched_target_edges(enable);
+    return refresh_constraints();
+}
+
+template <typename TargetNode, typename GlobalNode>
 MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNode, GlobalNode>::next() {
     const auto next_start = std::chrono::steady_clock::now();
     auto stamp_elapsed = [&](MappingResult<TargetNode, GlobalNode> result) {

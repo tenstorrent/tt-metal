@@ -999,6 +999,8 @@ struct TopologySatHardEncoding {
     // Soft target edges: realized literal per edge (empty when edges are hard) and its (t1, t2) endpoints.
     std::vector<int> edge_realized_lits;
     std::vector<std::pair<size_t, size_t>> edge_realized_edges;
+    // Soft-capable encoding: assumed => every (target, global) pair that degree/AC-3 pruning removes is false.
+    int prune_active_lit = 0;
 };
 
 /**
@@ -1664,6 +1666,9 @@ public:
     bool add_forbidden_constraint(const std::set<TargetNode>& targets, const std::set<GlobalNode>& globals);
     bool add_required_constraint(TargetNode target, GlobalNode global);
     bool add_required_constraint(TargetNode target, const std::set<GlobalNode>& globals);
+    /** In-session seam toggle (#56762): a session started with soft edges flips to hard seams and back without
+     *  re-encoding. False => the change needs a new session (the session was encoded with hard edges). */
+    bool set_allow_unmatched_target_edges(bool enable);
 
     bool exclude_mappings(const std::vector<std::map<TargetNode, GlobalNode>>& additional_excluded);
     bool exclude_mapping(const std::map<TargetNode, GlobalNode>& mapping);

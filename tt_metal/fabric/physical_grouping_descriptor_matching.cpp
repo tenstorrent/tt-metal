@@ -3232,7 +3232,7 @@ void SatPlacementEnumerationSession::finish_init(
 bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, bool drop_cap) {
     reset();
     // build_sat_placement_constraints rebuilds constraints_, so capture the rung's seam softness and re-apply it.
-    const bool soft_seams = owner_->constraints_.allow_unmatched_target_edges();
+    const bool soft_seams_wanted = owner_->constraints_.allow_unmatched_target_edges();
     AdjacencyGraph<const Candidate*> seat_graph =
         build_sat_placement_seat_graph(*owner_->pools_, owner_->mesh_level_graph_);
     const bool built =
@@ -3245,7 +3245,7 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
     if (drop_cap) {
         owner_->constraints_.set_max_same_rank_groups_used(0);
     }
-    owner_->constraints_.set_allow_unmatched_target_edges(soft_seams);
+    owner_->constraints_.set_allow_unmatched_target_edges(soft_seams_wanted);
     const auto encode_start = std::chrono::steady_clock::now();
     session = std::make_unique<TopologyMappingEnumerationSession<MeshId, const Candidate*>>(
         owner_->mesh_level_graph_,
@@ -3266,6 +3266,7 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
     }
     relaxed = relaxed_mode;
     drop_host_cap = drop_cap;
+    soft_seams = soft_seams_wanted;
     return true;
 }
 
@@ -3274,8 +3275,17 @@ MappingResult<MeshId, const Candidate*> SatPlacementEnumerationSession::MasterSo
     failure.success = false;
     const bool relaxed_mode = owner_->relaxed_inter_mesh_policy_ || owner_->constraints_.allow_unmatched_target_edges();
     // Unchanged mode and host cap: another model from the session already encoded.
-    if (!matches(relaxed_mode, drop_cap) && !restart(relaxed_mode, drop_cap)) {
-        return failure;
+    const bool soft = owner_->constraints_.allow_unmatched_target_edges();
+    // A seam-softness change is an in-session toggle when the live session can absorb it; a mode or host-cap
+    // change (or a session encoded with hard edges) rebuilds as before.
+    const bool toggled = matches(relaxed_mode, drop_cap) && soft != soft_seams && session->started() &&
+                         session->set_allow_unmatched_target_edges(soft);
+    if (toggled) {
+        soft_seams = soft;
+    } else if (!matches(relaxed_mode, drop_cap) || soft != soft_seams) {
+        if (!restart(relaxed_mode, drop_cap)) {
+            return failure;
+        }
     }
     ++owner_->attempts_;
     const auto solve_start = std::chrono::steady_clock::now();
@@ -3470,7 +3480,7 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     if (solved_) {
         return {};
     }
-    // Walk kSolveLadder at the current pool; the encoding is reset when the seam softness changes.
+    // Walk kSolveLadder at the current pool; MasterSolve applies each rung as in-session toggles.
     bool solved_with_soft_seams = false;
     auto solve_at_current_pool = [&]() -> MappingResult<MeshId, const Candidate*> {
         MappingResult<MeshId, const Candidate*> r;
@@ -3480,7 +3490,6 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
                 break;  // STRICT inter-mesh policy: no soft-seam rungs
             }
             if (constraints_.allow_unmatched_target_edges() != rung.soft_seams) {
-                master_solve_->reset();
                 constraints_.set_allow_unmatched_target_edges(rung.soft_seams);
             }
             r = master_solve_->next(rung.drop_host_cap);
