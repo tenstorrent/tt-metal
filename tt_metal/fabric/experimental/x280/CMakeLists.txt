@@ -482,7 +482,8 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${X280_TEST_OUTPUT_DIR}
 )
-_x280_uses_images(x280_bench_host_tests)
+# The image-lookup rule is tested on the path alone; no image is opened.
+target_compile_definitions(x280_bench_host_tests PRIVATE X280_IMAGE_DIR="${X280_IMAGE_DIR}")
 add_test(NAME x280_bench_host_tests COMMAND x280_bench_host_tests)
 
 # Harness device tests; most need hardware. test_fabric_shadow_layout.cpp is static
