@@ -285,7 +285,8 @@ The optimizer is configured inline under `training_config.optimizer`.
 Every optimizer takes `param_groups`: a list where each entry has `modules` plus the per-group
 options it overrides. A param joins the first group where any `/`-separated segment of its name is listed in
 `modules`, so module names like `tok_emb` and leaf names like `gamma`/`bias` both work. Params in no group use the
-top-level values. LR schedulers drive every group from its own base LR.
+top-level values. They form group 0, which always exists (empty if every param is grouped), so the listed groups are
+groups 1, 2, ... in order. LR schedulers drive every group from its own base LR.
 
 | Optimizer | Per-group options | Optimizer-wide only |
 |-----------|-------------------|---------------------|
