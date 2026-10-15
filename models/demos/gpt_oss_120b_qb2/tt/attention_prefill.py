@@ -17,6 +17,34 @@ from models.demos.gpt_oss.tt.attention.operations import (
 from models.demos.gpt_oss.tt.attention.weights import AttentionWeights
 
 
+def _project_qkv(hidden_states, weights, batch_size, compute_kernel_config):
+    """Keep short batched users on the same projection shape as single-user prefill."""
+    kwargs = dict(bias=weights.wqkv_bias, dtype=ttnn.bfloat16, compute_kernel_config=compute_kernel_config)
+    if batch_size <= 1 or tuple(hidden_states.shape) != (1, 1, batch_size * 128, 2880):
+        return ttnn.linear(hidden_states, weights.wqkv, **kwargs)
+
+    # Each independent user uses the measured 128-row projection. The caller
+    # retains ownership of hidden_states; only slices and intermediate outputs
+    # belong to this helper. Concatenation restores the original packed layout.
+    outputs = []
+    try:
+        for user in range(batch_size):
+            slab = ttnn.slice(
+                hidden_states,
+                [0, 0, user * 128, 0],
+                [1, 1, (user + 1) * 128, 2880],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            try:
+                outputs.append(ttnn.linear(slab, weights.wqkv, **kwargs))
+            finally:
+                slab.deallocate(True)
+        return ttnn.concat(outputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    finally:
+        for output in outputs:
+            output.deallocate(True)
+
+
 def prefill_forward(
     hidden_states,
     rope_mats,
@@ -73,13 +101,7 @@ def prefill_forward(
         raise ValueError(f"Prefill mode requires seq_len>1, got {seq_len}. Use decode mode for single tokens.")
 
     # QKV projection
-    xqkv_fused = ttnn.linear(
-        hidden_states,
-        weights.wqkv,
-        bias=weights.wqkv_bias,
-        dtype=ttnn.bfloat16,
-        compute_kernel_config=projection_compute_kernel_config,
-    )
+    xqkv_fused = _project_qkv(hidden_states, weights, batch_size, projection_compute_kernel_config)
     hidden_states.deallocate(True)  # Free input activations after projection
 
     # Reshape for batch: [1, 1, B*S, QKV] -> [B, 1, S, QKV]
