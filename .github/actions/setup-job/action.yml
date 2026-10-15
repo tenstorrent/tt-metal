@@ -25,6 +25,10 @@ inputs:
     description: 'Enable LLK asserts'
     default: false
     type: boolean
+  enable-llk-sanitizer:
+    description: 'Enable LLK sanitizer'
+    default: false
+    type: boolean
   enable-kernel-ccache:
     description: 'Enable kernel ccache for JIT compilation at runtime'
     default: false
@@ -34,7 +38,7 @@ inputs:
     required: false
     default: ''
   use-evaluation-image:
-    description: 'Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image'
+    description: 'Skip download and installation of build artifacts and wheel as they are pre-installed in evaluation image'
     default: false
     type: boolean
   env-from-image:
@@ -121,6 +125,21 @@ runs:
       run: |
         echo "Enabling TT Metal LLK Asserts"
         echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
+      shell: bash
+
+    # LLK sanitizer:
+    # - Reports via LLK_ASSERT (stops) and/or DPRINT (continues); won't compile without one.
+    # - Both are enabled here, so callers don't have to.
+    # - DPRINT goes to /dev/null: the run is judged on asserts only.
+    - name: Set up env vars for LLK sanitizer
+      if: ${{ inputs.enable-llk-sanitizer == 'true' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling TT Metal LLK Sanitizer"
+        echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
+        echo "TT_METAL_LLK_SANITIZER=1" >> $GITHUB_ENV
+        echo "TT_METAL_DPRINT_CORES=all" >> $GITHUB_ENV
+        echo "TT_METAL_DPRINT_FILE=/dev/null" >> $GITHUB_ENV
       shell: bash
 
     # Kernel ccache configuration for JIT compilation at test runtime
