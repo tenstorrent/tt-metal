@@ -406,6 +406,22 @@ std::optional<TensorTopology> scatter_output_topology(
 
     if (!cluster_axis.has_value()) {
         if (collapsed) {
+            // The collapsed form of the partition refusal below: {N}, [Shard{other}] partitioned on scatter_dim
+            // leaves device k with chunk k of the other dim next to piece k of scatter_dim, which no label states. A
+            // reduction consumes the chunks (the sum is one tensor), so only a partition refuses.
+            const auto* held = std::get_if<Shard>(&in.placements().front());
+            if (kind == ScatterKind::Partition && held != nullptr && in.distribution_shape().mesh_size() > 1 &&
+                !placement_shards_tensor_dim(in.placements().front(), *normalized_dim, tensor_rank)) {
+                return fail(
+                    fmt::format(
+                        "a whole-mesh {} of tensor dim {} on a tensor still sharded on dim {} (label {}) is not "
+                        "expressible",
+                        op,
+                        *normalized_dim,
+                        held->dim,
+                        describe(in)),
+                    Family::Scatter);
+            }
             // Whole-mesh scatter of a 1-D label: piece i lands on ring rank i, which is the label's own order.
             return TensorTopology(in.distribution_shape(), TopologyPlacements{shard}, in.mesh_coords());
         }
@@ -441,7 +457,9 @@ std::optional<TensorTopology> scatter_output_topology(
         // tile the input). A Shard on a size-1 axis holds the whole extent and passes too. A reduction never reaches
         // this check: the sum is one tensor whose other dims are whole on every device. With a cluster_axis the
         // output stays N-D and the other dim's Shard keeps its own axis, so only the whole-mesh collapse loses it.
-        // mesh_partition's own hook applies the same restriction (shards_another_dim_on_a_nontrivial_axis).
+        // A collapsed {N}, [Shard{other}] input is the same case with one placement and is refused above, before the
+        // collapsed early return. mesh_partition's own hook applies the same restriction
+        // (shards_another_dim_on_a_nontrivial_axis).
         const auto& axis_shape = in.distribution_shape();
         if (kind == ScatterKind::Partition) {
             for (size_t axis = 0; axis < expanded->size(); ++axis) {
