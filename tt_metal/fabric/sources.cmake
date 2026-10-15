@@ -16,7 +16,7 @@ set(FABRIC_JIT_API_HEADERS
     hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
 )
 
-# Runtime-free topology sources — compiled into the lean TT::FabricTopologyUtils static library
+# Runtime-free topology sources — compiled into the TT::FabricTopologyUtils shared library
 # (see tt_metal/fabric/CMakeLists.txt). NOTE: mesh_graph.cpp, routing_table_generator.cpp and topology_mapper.cpp
 # stay in FABRIC_SOURCES below (MeshGraph, the routing-table builder and the runtime TopologyMapper stay in fabric).
 set(FABRIC_TOPOLOGY_UTILS_SOURCES

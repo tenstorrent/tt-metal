@@ -63,12 +63,13 @@ endforeach()
 
 # ---------------------------------------------------------------------------
 # TT::FabricTopologyUtils: runtime-free topology library (MGD/PSD/PGD + protos, topology solver, mapper utils,
-# FSD->PSD builder). fabric links it into libtt_metal.so; external consumers (Fabric Manager) link it from the
-# installed package without libtt_metal.
+# FSD->PSD builder). A shared library: libtt_metal.so links it, and an external consumer (Fabric Manager) links it
+# from the installed package without libtt_metal. protobuf, yaml-cpp, cadical and scaleout_tools are linked in
+# privately and stay out of the exported interface, as they do for libtt_metal.so.
 # ---------------------------------------------------------------------------
 add_library(
     tt_fabric_topology_utils
-    STATIC
+    SHARED
     ${FABRIC_TOPOLOGY_UTILS_SOURCES}
     ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS}
 )
@@ -80,12 +81,12 @@ set_target_properties(
             FabricTopologyUtils
         OUTPUT_NAME
             tt-fabric-topology-utils
+        INSTALL_RPATH
+            "$ORIGIN"
 )
-# Generated protos and the one TU that uses the FSD proto stay out of the unity batch, so a consumer that never
-# calls the FSD->PSD builder does not link the FSD schema (protobuf rejects a second registration of a schema).
+# Generated protos have conflicting static symbols, so they stay out of the unity batch.
 set_source_files_properties(
     ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS}
-    physical_descriptor_builder.cpp
     PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION
             TRUE
@@ -115,9 +116,6 @@ target_include_directories(
         ${CMAKE_CURRENT_BINARY_DIR} # generated proto headers
         ${Metalium_BINARY_DIR}/tools/scaleout # FSD proto header
 )
-# yaml-cpp and protobuf are not bundled (a consumer with its own copy would get every symbol twice). The installed
-# target names them and tt-metalium-config.cmake finds them; $<1:> keeps the export from binding the names to this
-# build's CPM targets, which cannot be exported.
 target_link_libraries(
     tt_fabric_topology_utils
     PUBLIC
@@ -129,27 +127,14 @@ target_link_libraries(
         TT::ScaleoutTools
         enchantum::enchantum
         tt-logger::tt-logger
-        $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>$<INSTALL_INTERFACE:$<1:yaml-cpp>::$<1:yaml-cpp>>
-        $<BUILD_INTERFACE:protobuf::libprotobuf>$<INSTALL_INTERFACE:$<1:protobuf>::$<1:libprotobuf>>
-        $<BUILD_INTERFACE:cadical::cadical>
+        yaml-cpp::yaml-cpp
+        protobuf::libprotobuf
+        cadical::cadical
 )
 target_compile_features(tt_fabric_topology_utils PUBLIC cxx_std_20)
 TT_ENABLE_UNITY_BUILD(tt_fabric_topology_utils)
 tt_reuse_precompile_headers(tt_fabric_topology_utils TT::CommonPCH)
-# cadical (SAT solver) is bundled so a consumer does not have to build it; in-tree libtt_metal.so links libcadical.a
-# itself, so these members are never pulled there. A consumer links EITHER tt_metal OR TT::FabricTopologyUtils,
-# never both: the descriptor protos would register twice.
-target_sources(tt_fabric_topology_utils PRIVATE $<TARGET_OBJECTS:cadical>)
-install(TARGETS tt_fabric_topology_utils EXPORT Metalium ARCHIVE COMPONENT metalium-dev)
-# Consumers use these generated headers rather than compiling the .proto schemas again.
-set(FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_HDRS ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS})
-list(FILTER FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_HDRS INCLUDE REGEX "\\.pb\\.h$")
-install(
-    FILES
-        ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_HDRS}
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metalium/protobuf
-    COMPONENT metalium-dev
-)
+install(TARGETS tt_fabric_topology_utils EXPORT Metalium LIBRARY COMPONENT metalium-runtime)
 
 # --- fabric: remaining runtime protos + link the topology lib -------
 add_custom_target(fabric_generated_protos DEPENDS ${FABRIC_GENERATED_PROTO_SRCS})
@@ -191,7 +176,6 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
         protobuf::libprotobuf
-        cadical::cadical
 )
 
 tt_reuse_precompile_headers(fabric TT::CommonPCH)

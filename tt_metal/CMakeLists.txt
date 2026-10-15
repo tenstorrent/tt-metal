@@ -114,12 +114,13 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         TT::STL
         tt-logger::tt-logger
+        TT::Metalium::Types
+        TT::FabricTopologyUtils
         ${EXECINFO_LIB}
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs
         common
-        TT::Metalium::Types
         jit_build
         llrt
         detail
@@ -178,13 +179,11 @@ include_directories(
 )
 
 # ---------------------------------------------------------------------------
-# TT::Metalium::Types — runtime-free value types shared by libtt_metal and TT::FabricTopologyUtils: MeshShape /
-# MeshCoordinate and ShapeBase (common/), FabricNodeId & friends and PhysicalNodeId (fabric/). Each owning directory
-# adds its sources with target_sources; the headers are in tt_metal's api file set. tt_metal and the topology
-# library both link it: libtt_metal.so carries one copy, and an external consumer gets libtt-metalium-types.a through
-# the exported interface.
+# TT::Metalium::Types: runtime-free value types shared by libtt_metal and TT::FabricTopologyUtils (MeshShape /
+# MeshCoordinate / ShapeBase, FabricNodeId & friends, PhysicalNodeId). A shared library so there is exactly one copy:
+# libtt_metal.so and libtt-fabric-topology-utils.so both link it. Sources are added by common/ and fabric/.
 # ---------------------------------------------------------------------------
-add_library(tt_metalium_types STATIC)
+add_library(tt_metalium_types SHARED)
 add_library(TT::Metalium::Types ALIAS tt_metalium_types)
 set_target_properties(
     tt_metalium_types
@@ -193,6 +192,8 @@ set_target_properties(
             Metalium::Types
         OUTPUT_NAME
             tt-metalium-types
+        INSTALL_RPATH
+            "$ORIGIN"
 )
 target_include_directories(
     tt_metalium_types
@@ -210,12 +211,12 @@ target_link_libraries(
         fmt::fmt-header-only
     PRIVATE
         enchantum::enchantum
-        $<BUILD_INTERFACE:Boost::asio> # boost/move header included by common/mesh_coord.cpp
+        Boost::asio # boost/move header included by common/mesh_coord.cpp
 )
 target_compile_features(tt_metalium_types PUBLIC cxx_std_20)
 TT_ENABLE_UNITY_BUILD(tt_metalium_types)
 tt_reuse_precompile_headers(tt_metalium_types TT::CommonPCH)
-install(TARGETS tt_metalium_types EXPORT Metalium ARCHIVE COMPONENT metalium-dev)
+install(TARGETS tt_metalium_types EXPORT Metalium LIBRARY COMPONENT metalium-runtime)
 
 add_subdirectory(logging)
 add_subdirectory(hw)
