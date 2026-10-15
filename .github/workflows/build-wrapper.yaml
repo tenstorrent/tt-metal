@@ -46,6 +46,7 @@ jobs:
           timeout 600 uv build --wheel --out-dir ../wheelhouse
           sha256sum ../wheelhouse/*.whl > ../evidence/wheel.sha256
           uv pip install --python /opt/venv/bin/python -e .
+          uv pip install --python /opt/venv/bin/python transformers==5.16.1
           uv pip freeze --python /opt/venv/bin/python > ../evidence/environment.txt
           git diff --exit-code HEAD
       - name: Actual current-source imports and original host controls, no devices
@@ -54,6 +55,7 @@ jobs:
           set -euo pipefail
           export TT_METAL_HOME="$PWD" LD_LIBRARY_PATH="$PWD/build/lib" PYTHONPATH="$PWD:$PWD/ttnn"
           export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+          timeout 120 /opt/venv/bin/python ../validation/.ci/flash-current-runtime/model_config.py ../evidence/model-config
           timeout 600 /opt/venv/bin/python ../validation/.ci/flash-current-runtime/runtime_host.py "$PWD" ../evidence/host
           /opt/venv/bin/python - <<'PY'
           import json
