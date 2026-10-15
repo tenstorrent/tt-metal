@@ -703,6 +703,15 @@ class AttemptLogging(unittest.TestCase):
         self.assertTrue(run_one(self.manifest, self.config, {}, self.root, self.engine, "host-a"))
         attempt = next((self.root / "attempts").iterdir())
         self.assertEqual(json.loads((attempt / "attempt.json").read_text())["host_label"], "host-a")
+        with self.assertRaisesRegex(ValueError, "collected on host 'host-a', and this run names no host"):
+            record_host_label(self.root, None)
+
+    def test_an_unlabelled_campaign_records_no_host(self):
+        record_host_label(self.root, None)
+        self.assertFalse((self.root / "host.json").exists())
+        self.assertTrue(run_one(self.manifest, self.config, {}, self.root, self.engine))
+        attempt = next((self.root / "attempts").iterdir())
+        self.assertNotIn("host_label", json.loads((attempt / "attempt.json").read_text()))
 
     def test_a_malformed_host_record_is_refused_as_a_value_error(self):
         for content in ("not json", "[]", "{}", '{"host_label": 7}'):

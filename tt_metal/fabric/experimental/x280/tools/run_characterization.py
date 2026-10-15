@@ -69,31 +69,36 @@ def validate_test_report(path, expected):
 
 
 def record_host_label(campaign, label):
-    """Record the campaign's host label on first use; raise ValueError naming both when it differs,
-    and when an existing host.json is not a JSON object holding a string host_label."""
+    """Record the campaign's host label on first use. `label` None collects unlabelled: nothing is
+    written, and a campaign that already has a host.json is refused. Raise ValueError naming both
+    labels when they differ, and when an existing host.json is not a JSON object holding a string
+    host_label."""
     path = campaign / "host.json"
     if path.exists():
         recorded = json.loads(path.read_text())
         if not isinstance(recorded, dict) or not isinstance(recorded.get("host_label"), str):
             raise ValueError(f"{path} does not record a host_label")
         recorded = recorded["host_label"]
+        if label is None:
+            raise ValueError(f"campaign was collected on host {recorded!r}, and this run names no host")
         if recorded != label:
             raise ValueError(f"campaign was collected on host {recorded!r}, not {label!r}")
+        return
+    if label is None:
         return
     with path.open("x") as output:
         output.write(json.dumps({"host_label": label}, indent=2) + "\n")
 
 
 def run_one(manifest, config, values, campaign, engine, host_label=None):
-    """Retain one attempt and validate its exact record set; never reset hardware."""
+    """Retain one attempt and validate its exact record set; never reset hardware. The attempt
+    record carries `host_label` only when one is given."""
     attempt = Path(tempfile.mkdtemp(prefix=config["id"] + ".", dir=campaign / "attempts"))
     values = dict(values, CAMPAIGN=str(attempt))
-    record = {
-        "configuration": config["id"],
-        "host_label": host_label,
-        "status": "running",
-        "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-    }
+    record = {"configuration": config["id"]}
+    if host_label is not None:
+        record["host_label"] = host_label
+    record.update(status="running", started_utc=datetime.datetime.now(datetime.timezone.utc).isoformat())
     write_attempt(attempt / "attempt.json", record)
     try:
         argv, environment = command_for(manifest, config, values)
@@ -144,7 +149,10 @@ def main():
     parser.add_argument("--metal-src", type=Path, required=True)
     parser.add_argument("--device", required=True)
     parser.add_argument("--id", action="append", required=True)
-    parser.add_argument("--host-label", help="names the collecting host in the campaign record; required to collect")
+    parser.add_argument(
+        "--host-label",
+        help="names the collecting host in the campaign record; a campaign started with one requires it",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
@@ -184,8 +192,8 @@ def main():
                 )
             )
         return 0
-    if not args.host_label:
-        parser.error("--host-label is required to collect a campaign")
+    if args.host_label == "":
+        parser.error("--host-label must not be empty")
     if subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=engine).returncode:
         parser.error("commit producer changes before collection")
     untracked = subprocess.check_output(

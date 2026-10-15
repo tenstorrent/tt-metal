@@ -369,9 +369,11 @@ left at 14 ways skips the 15-way members, and each pipeline_stage configuration
 needs a reset before it runs. The runner never resets a device.
 
 `tools/run_characterization.py` accepts explicit `--id` selections, build/firmware/
-Metal paths, visible device, campaign directory and, to collect, a `--host-label`
-naming the host. The label is recorded in the campaign's `host.json` and in every
-attempt record, and a campaign refuses a second label. The manifest contains only
+Metal paths, visible device, campaign directory and an optional `--host-label`
+naming the host. A label is recorded in the campaign's `host.json` and in every
+attempt record, and a campaign refuses a second label. Without one the runner
+writes no `host.json` and no attempt carries `host_label`; a campaign that
+already has a `host.json` refuses an unlabelled run. The manifest contains only
 inputs consumed by execution or validation:
 
 | Field | Consumer |
@@ -415,7 +417,7 @@ or establish exclusive ownership. C++ fixtures own device admission.
 a fresh directory containing `attempt.json`, `run.log`, `gtest.xml` and `raw/`.
 The attempt record is atomically updated from `running` to `passed` or `failed`;
 `running` means no terminal outcome was recorded, including interrupted runs.
-It records the command/environment, host label, start/end times, checkout SHA, executable
+It records the command/environment, host label (when given), start/end times, checkout SHA, executable
 and firmware hashes, outcome, and one hash list for captured files. The existing
 `producer_sha` field identifies the checkout at launch; it does not attest that
 a supplied binary was built from that revision.
