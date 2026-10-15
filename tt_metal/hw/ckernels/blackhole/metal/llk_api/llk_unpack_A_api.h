@@ -37,7 +37,9 @@ inline void llk_unpack_A_init_impl(
 
     SAN_HOOK(init<OperationUnpackUnary>(
         StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType)),
-        StateVal<OperationUnpackUnary::AccumulateToDest>(acc_to_dest),
+        // The (non-broadcast) transpose MOP ignores acc_to_dest; only llk_unpack_A with false matches it (#59276).
+        StateVal<OperationUnpackUnary::AccumulateToDest>(
+            acc_to_dest && !(BType == BroadcastType::NONE && transpose_of_faces)),
         StateVal<OperationUnpackUnary::BinaryReuseDest>(to_underlying(binary_reuse_dest)),
         StateVal<OperationUnpackUnary::UnpackToDest>(unpack_to_dest),
         StateVal<Operand<Exu::Unpack>::InputFormatA>(src_format),
