@@ -289,11 +289,13 @@ def _isolated(ctx):
     return c
 
 
-def _capturing(st, mut, cpu, dctx, into: dict, snapshot: dict | None = None):
+def _capturing(st, mut, cpu, dctx, into: dict, snapshot: dict | None = None, ref=None):
     """Override for a swapped step that first runs the CPU step on the same inputs (into[step]). With ``snapshot``,
-    the context as the steps after this one see it is kept too (snapshot["ctx"], its state a deep copy)."""
+    the context as the steps after this one see it is kept too (snapshot["ctx"], its state a deep copy), and with
+    ``ref`` the step's bf16 precision model on the same inputs (snapshot["model"], F72: the tail check's limit)."""
 
     def fn(ctx, *x):
+        pre = _isolated(ctx) if snapshot is not None and ref is not None else None
         try:
             cctx = _isolated(ctx) if st.stateful else ctx
             into[st.name] = cpu(cctx, *[t.clone() if isinstance(t, torch.Tensor) else t for t in x])
@@ -302,6 +304,18 @@ def _capturing(st, mut, cpu, dctx, into: dict, snapshot: dict | None = None):
         y = mut(ctx, dctx, *x)
         if snapshot is not None:
             snapshot["ctx"] = _isolated(ctx)
+            if pre is not None and isinstance(into[st.name], torch.Tensor) and into[st.name].is_floating_point():
+                from models.demos.common.bringup.testing import component_checks as CC
+
+                xs = [t.clone() if isinstance(t, torch.Tensor) else t for t in x]
+                try:
+                    snapshot["model"] = CC.precision_model(
+                        ref, cpu, CC.Case("tail", xs, 0, lambda: _isolated(pre), None)
+                    )
+                except Exception as e:  # noqa: BLE001 - no model: the tail check keeps its fixed limit
+                    print(
+                        f"note: no precision model for {st.name} ({type(e).__name__}: {e}); the tail check uses its fixed limit"
+                    )
         return y
 
     return fn
@@ -379,23 +393,45 @@ def _check_tail(s, ref, layer: int, steps, last, seen: dict, cpu, snapshot: dict
     tail = steps[[st.name for st in steps].index(last.name) + 1 :]
     if not tail or isinstance(cpu, Exception) or not seen["out"].is_floating_point():
         return True
+    from models.demos.common.bringup.testing import component_checks as CC
+
     tag, lim = f"swap_{last.name}_out", s.threshold("swap_out_rel", SWAP_STEP_DEFAULTS["swap_out_rel"])
-    env = dict(seen)
-    env[last.output] = cpu
-    ctx = snapshot["ctx"]  # a private copy: the context the steps after the last swapped one saw
-    try:
+
+    def run_tail(first: torch.Tensor) -> torch.Tensor:
+        env = dict(seen)
+        env[last.output] = first
+        ctx = _isolated(snapshot["ctx"])  # the context the steps after the last swapped one saw, per run
         for st in tail:
             env[st.output] = ref.component(layer, st.name)(ctx, *[env[i] for i in st.inputs])
+        return env["out"].float()
+
+    try:
+        want = run_tail(cpu)
     except Exception as e:  # noqa: BLE001
         print(f"FAIL {tag}: the CPU tail after {last.name} raised {type(e).__name__}: {e}")
         return False
-    e = step_errors(seen["out"], env["out"].float())
+    e = step_errors(seen["out"], want)
     metrics.record(f"{tag}_rel", e["rel"])
     metrics.record(f"{tag}_row", e["row"])  # diagnosis only: a routing flip moves single rows
+    # F72: the limit is the noise floor, not a fixed number: what a correct bf16 device step does to the block out
+    # (the model's own rounding steps amplify it), i.e. the same tail from the step's bf16 precision model, times
+    # the one calibration margin. swap_out_rel only when the model cannot run
+    how = "fixed"
+    model = snapshot.get("model")
+    if isinstance(model, torch.Tensor):
+        try:
+            em = CC.rel(run_tail(model.float()), want)
+            res = CC.rel(want.to(torch.bfloat16).float(), want)  # the smallest difference a bf16 output can show
+            metrics.record(f"{tag}_model_rel", em)
+            k = CC.limits(s)["component_calib"]  # one margin over the noise floor; no fixed floor or cap (owner)
+            lim, how = k * max(em, res), f"{k} x the precision model's {em:.6f} (bf16 resolution {res:.6f})"
+        except Exception as ex:  # noqa: BLE001
+            print(f"note: the tail from {last.name}'s precision model raised {type(ex).__name__}: {ex}; fixed limit")
+    metrics.record(f"{tag}_rel_limit", lim)
     ok = e["rel"] <= lim
     print(
         f"{'ok  ' if ok else 'FAIL'} {tag}: block out vs the same block with the CPU {last.name} output: "
-        f"rel={e['rel']:.6f} (<= {lim}) worst row={e['row']:.6f}"
+        f"rel={e['rel']:.6f} (<= {lim:.6f}, {how}) worst row={e['row']:.6f}"
     )
     return ok
 
@@ -429,7 +465,9 @@ def run_swap_test(
         bridged[name] = impl_mode() == "device" and getattr(mut, "cpu_bridge", False)
         if checks:
             snap = snapshot if st.name == last.name else None
-            overrides[name] = _capturing(st, mut, ref.component(layer, name), dctx, same_input, snap)
+            overrides[name] = _capturing(
+                st, mut, ref.component(layer, name), dctx, same_input, snap, ref if snap is not None else None
+            )
         else:
             overrides[name] = lambda ctx, *x, mut=mut: mut(ctx, dctx, *x)
     gl = g.layer(c, layer)
