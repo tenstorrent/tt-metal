@@ -214,3 +214,32 @@ Build fixes after fork_op.py (no behaviour change):
 
 ### Tests: glm53_flash_d_p sparse_sdpa case re-captured (O.1, 2026-10-13)
 - GLM's replicated-cache sparse_sdpa case replaced by its block-cyclic striped-latent call (kv [1, 1, 81920, 512], block_cyclic_sp_axis 0 / chunk_local 2560 / cache_tp_sharded, natural ids); `tests/test_sdpa.py` lays kv out striped and passes the block_cyclic_* arguments, `tests/reference.py` gains the natural <- physical map. No op change.
+
+### sparse_sdpa: attention_sink under high_precision
+- What: `ttnn.bringup.sparse_sdpa(..., high_precision=True, attention_sink=sink)` runs (the fork refused the pair).
+  Two changes, both under the `SPARSE_SDPA_HIGH_PRECISION` define (absent when the option is off):
+  - `normalize_row_streaming` (compute_streaming.hpp, sink-per-row branch): `reconfig_data_format(max, sink)` before
+    the `max - sink` subtraction. Under high_precision the unpacker's srcB is still the Float32 row-sum the
+    identity matmul just read; the bf16 max and sink were unpacked with that format (rel 0.17-1.39 vs float32 without
+    the reconfig, measured);
+  - the sink's exp takes the scale as the scores' exact exp does: bf16, rounded to nearest (was truncated, K-27).
+  The device op no longer refuses an attention_sink with high_precision. No new argument: the switch is the
+  combination the fork refused.
+- Default unchanged: with high_precision off the define is absent, so the kernels, CBs and arguments are the source's
+  (the option was already in the program hash). Unit suite 32 passed / 10 skipped (28 + the 4 new sink cases; the
+  refusal test no longer expects the sink refusal); source-test check 216 tests, 0 regressions; model cases 5 passed /
+  1 skipped (the 8-device Xing case), as recorded.
+- Why: DeepSeek-V4.1 window attention (64 heads, K = V = 512, 128 window ids per query, a per-head sink) needs the
+  sink, and the source path's bf16 running state / approximate exp (K-31) costs accuracy before two fp8 quantizers.
+  The model passes scale 1 (512^-0.5 folded into q, exact) and the sink as is. Component test: pcc 0.99975, rel vs
+  the CPU step 0.0212 (limit 0.0292), as a CPU emulation of the device arithmetic predicted (0.0206; most of it the
+  bf16 output before the fp8 quantization).
+- Tests: `tests/unit/test_sparse_sdpa_high_precision.py::test_high_precision_sink` (4 cases vs a float32 torch
+  reference with the sink in the denominator): DeepSeek-V4.1 window geometry at scale 1 and 512^-0.5, a sink that
+  dominates short rows, and 4 k_chunks (the sink on the SALAD-combined row-sum); rel L2 0.0023-0.0068, rows within
+  [0.985, 1.012]; each case asserts the sink moves its golden by more than 3x the limit (a dropped sink fails).
+  Removing the reconfig fails all 4.
+- Needed by: deepseek_v41_flash_d_p C.swa.attention (`tt/attention.py:TtWindowAttention`; setting WINDOW_SDPA=source
+  keeps ttnn.transformer.sparse_sdpa)
+- Files: `device/kernels/compute/compute_streaming.hpp`, `device/sparse_sdpa_device_operation.cpp`, `sparse_sdpa.hpp`,
+  `sdpa_nanobind.cpp`, `tests/unit/test_sparse_sdpa_high_precision.py`

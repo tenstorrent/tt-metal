@@ -55,7 +55,7 @@ def state_sources(spec, layer):
 # Device steps of the hybrid model, per block type: every step listed passed its component gate on the device.
 # Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "swa": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "kv"},
+    "swa": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "kv", "attention"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -167,6 +167,55 @@ def _kv_host_fn(mesh, module):
     return fn
 
 
+def _attention_host_fn(mesh, module):
+    """fn(ctx, q_resid_host [S, 1280], kv_host [S, 512]) -> attn_out host [S, H] fp32 (harness boundary: both inputs
+    row-split over axis 0, replicated over axis 1; the output's rows over axis 0, hidden over axis 1). The served
+    window cache is ctx.extra["window_cache"] (the hybrid model's state); without one (component tests) a cache for
+    ctx.extra["max_seq"] positions is made for the call and loaded with the golden ring (state_prefix window_kv) of
+    positions [start - 128, start). ctx.extra["end"] = actual_end (default: the whole chunk)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import TtWindowCache
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_host, row_split_to_device
+
+    def fn(ctx, qr, kv):
+        start, s = int(ctx.start), qr.shape[0]
+        end = ctx.extra.get("end")
+        end = start + s if end is None else int(end)
+        cache = ctx.extra.get("window_cache")
+        own = cache is None
+        if own:
+            cache = TtWindowCache(mesh, module.tables, max(int(ctx.extra.get("max_seq") or 0), start + s))
+            prefix = ctx.extra.get("state_prefix") or {}
+            if start and "window_kv" in prefix:
+                cache.load_ring(prefix["window_kv"], start)
+        qd = row_split_to_device(mesh, qr)
+        kd = row_split_to_device(mesh, kv, dtype=ttnn.bfloat16)
+        od = module(qd, kd, start, end, cache)
+        out = hidden_split_to_host(mesh, od).float()
+        for t in (qd, kd, od):
+            ttnn.deallocate(t)
+        if own:
+            cache.free()
+        return out
+
+    fn.module = module
+    return fn
+
+
+def _chunk(spec):
+    """The serving chunk the window tables are built for (the run's target chunk; every ladder rung uses it)."""
+    return int(spec.get("target.chunk"))
+
+
+def _window_tables(mesh, spec, shared):
+    """One set of load-time window tables per model (tt/attention.WindowTables)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import WindowTables
+
+    if "window_tables" not in shared:
+        shared["window_tables"] = WindowTables(mesh, _chunk(spec))
+    return shared["window_tables"]
+
+
 def _max_seq(spec):
     """Positions the load-time tables (RoPE) cover: the longest sequence this run's ladders reach."""
     seqs = [int(spec.get("target.seq", 0) or 0)]
@@ -175,7 +224,15 @@ def _max_seq(spec):
     return max(seqs)
 
 
-def _device_step_fn(mesh, spec, layer, step, ck, cfg):
+def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
+    shared = {} if shared is None else shared
+    if step == "attention":
+        from models.demos.deepseek_v41_flash_d_p.tt.attention import build_attention
+
+        tables = _window_tables(mesh, spec, shared)
+        return _attention_host_fn(
+            mesh, build_attention(mesh, ck, cfg, layer, _max_seq(spec), _chunk(spec), tables=tables)
+        )
     if step == "kv":
         from models.demos.deepseek_v41_flash_d_p.tt.kv import build_kv
 
@@ -207,16 +264,51 @@ def device_component(mesh, spec, layer, step):
 
 
 class _HybridState:
-    """The CPU reference state (every cache on the host until the stateful steps move to the device)."""
+    """The CPU reference state, plus the served window cache (tt/attention.TtWindowCache, 0_window_kv) of every layer
+    whose attention runs on the device: the reference's window ring is then a view of that cache (to_torch /
+    load_prefix), and state.served reads it (serving_contract.md "KV cache")."""
 
-    def __init__(self, ref, max_seq):
+    def __init__(self, ref, max_seq, mesh=None, tables=None, window_layers=()):
+        from models.demos.deepseek_v41_flash_d_p.tt.attention import TtWindowCache
+
         self.ref, self.s = ref, ref.new_state(max_seq)
+        self.window = {i: TtWindowCache(mesh, tables, max_seq) for i in window_layers}
+        self.tokens = None
 
     def load_prefix(self, layer, tensors, length):
         self.ref.load_state(self.s, layer, tensors, length)
+        if layer in self.window:
+            self.window[layer].load_ring(tensors["window_kv"], length)
 
     def to_torch(self, layer, length):
-        return self.ref.state_tensors(self.s, layer, length)
+        out = self.ref.state_tensors(self.s, layer, length)
+        if layer in self.window:
+            out["window_kv"] = self.window[layer].ring_host(length)
+        return out
+
+    def served(self, layer, length):
+        """{config name: natural-order rows of positions [0, ceil32(length))} (tests/bringup/contract/parts.py)."""
+        if layer not in self.window:
+            raise NotImplementedError(f"layer {layer}: its attention (and served caches) is not on the device yet")
+        return {"0_window_kv": self.window[layer].to_host(length)}
+
+    def load_served(self, layer, tensors, length):
+        if layer not in self.window:
+            raise NotImplementedError(f"layer {layer}: its attention (and served caches) is not on the device yet")
+        self.window[layer].load_host(tensors["0_window_kv"][:length], 0)
+
+    def load_tokens(self, ids):
+        self.tokens = ids
+
+    def formats(self):
+        import ttnn
+
+        return {"0_window_kv": ttnn.bfloat16}
+
+    def free(self):
+        for c in self.window.values():
+            c.free()
+        self.window = {}
 
 
 class HybridDeviceModel:
@@ -232,36 +324,44 @@ class HybridDeviceModel:
         self.ref = reference(spec, layers=layers, dtype=torch.float32)
         self.cfg = self.ref.cfg
         ck = _checkpoint(spec)
-        self.overrides = {}
+        self.overrides, self.shared = {}, {}
         for i in self.ref.layer_ids:
             steps = sorted(DEVICE_STEPS.get(spec.block_type_of(i), ()))
-            self.overrides[i] = {st: _device_step_fn(mesh, spec, i, st, ck, self.cfg) for st in steps}
+            self.overrides[i] = {st: _device_step_fn(mesh, spec, i, st, ck, self.cfg, self.shared) for st in steps}
             missing = [st for st, f in self.overrides[i].items() if f is None]
             assert not missing, f"layer {i}: no device module for {missing}"
+        self.window_layers = [i for i in self.ref.layer_ids if "attention" in self.overrides[i]]
         self._tokens = None
         self.load_seconds = time.time() - t0
 
     def new_state(self, max_seq):
-        return _HybridState(self.ref, max_seq)
+        return _HybridState(self.ref, max_seq, self.mesh, self.shared.get("window_tables"), self.window_layers)
 
     def begin_chunk(self, tokens, start):
         self._tokens = tokens.reshape(-1).long()
 
-    def embed(self, tokens):
-        return self.ref.first_block_input(self.ref.embed(tokens.reshape(-1).long()))
+    def embed(self, tokens, start=0):
+        """Natural-order ids of the chunk at ``start`` (PAD_ID past actual_end, clamped into the vocabulary, K-72:
+        those rows are pad and never reach a cache)."""
+        ids = tokens.reshape(-1).long().clamp(0, self.cfg.vocab_size - 1)
+        return self.ref.first_block_input(self.ref.embed(ids))
 
-    def from_host(self, h):
+    def from_host(self, h, start=0):
         return h.float()
 
     def to_host(self, h):
         return h
 
-    def layer(self, i, h, start, state):
+    def layer(self, i, h, start, state, end=None):
+        """``end`` = actual_end (rows at or past it are pad: they never reach a served cache)."""
         from models.demos.common.bringup.reference.interface import run_block
 
         ctx = self.ref.chunk_context(i, start, h.shape[0], state.s)
         if self._tokens is not None:
             ctx.extra["tokens"] = self._tokens
+        ctx.extra["end"] = end
+        if i in state.window:
+            ctx.extra["window_cache"] = state.window[i]
         return run_block(
             self.ref.block_graph(i), lambda n: self.ref.component(i, n), ctx, h, overrides=self.overrides[i]
         )

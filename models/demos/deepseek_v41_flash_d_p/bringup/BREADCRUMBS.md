@@ -265,3 +265,39 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   (PASS). Probe dir deleted (K-56).
 - Perf note for later: the exact projection is ~20x the plain matmul; ATTN_IN_MM=fpu restores it (judge end to end).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_05_kv.py`
+
+## C.swa.attention implement (attempt 1)
+- `tt/attention.py` (new): `TtWindowAttention(q_resid [1,1,S/SP,1280] fp32, kv [1,1,S/SP,512] bf16, start, end, cache)
+  -> attn_out [1,1,S/SP,H/TP] fp32`; `TtWindowCache` (served 0_window_kv per layer and slot: init_kvpe_cache bf16
+  ROW_MAJOR, ND shard per 32-token record, TP-dedup); `WindowTables` (load-time, shared per model: server-order row
+  index per (start mod S)/32, attention index lists per start class 0/32/64/96/>=128, pad-mask iota, zero carry).
+  Chain: kv all_gather axis 0 -> rows >= end zeroed -> cache write (embedding into server order +
+  update_padded_kv_cache(kv_actual_global=start, valid_global=end, tp_axis=1)) -> carry [start-128, start) read from
+  the cache (same local slice on every chip, all_gather both axes, owner block) -> table [carry | chunk] RM, tail
+  de-interleaved -> q: fp8_qdq -> wq_b linear (heads over TP, rope rows de-interleaved at load) -> heads -> rope_heads
+  (fp32 SFPU) -> x 512^-0.5 -> bf16 -> all_to_all head->seq -> ttnn.bringup.sparse_sdpa(high_precision, sink, scale 1,
+  128 ids per query) -> all_to_all back -> fp32 -> inverse RoPE + re-interleave -> fp8_qdq -> nlp_concat_heads per
+  group -> batched wo_a -> fp8_qdq -> wo_b K-split -> tp_sum gather_add -> mesh_partition. No host work per chunk.
+- Fork `ttnn/ttnn/bringup/sdpa`: sparse_sdpa high_precision now takes attention_sink (kernel: unpack reconfig to the
+  bf16 max / sink before the subtraction; the Float32 row-sum format was still in srcB: rel 0.17-1.39 without it;
+  sink exp scale rounded like the scores'). 4 new unit cases; regression: unit 32 passed / 10 skipped, fork_source
+  216 tests 0 regressions, model cases 5 passed / 1 skipped (as recorded). CHANGELOG + INDEX updated. K-31 now out of
+  date (reported).
+- Settings: WINDOW_SDPA (high_precision | source), ATTN_O_SUM (gather_add | reduce_scatter); max precision = defaults.
+- `tt/rope.py`: `rope_heads` (per-head [B,H,R,W], forward / inverse, optional re-interleave), `interleave_tail`.
+- hooks.py: `_attention_host_fn` (component boundary: makes a cache for ctx.extra max_seq and loads the golden ring),
+  DEVICE_STEPS["swa"] += attention; hybrid model: `_HybridState` holds a `TtWindowCache` per device-attention layer
+  (to_torch / load_prefix map the reference's ring onto it; `served`, `load_served`, `load_tokens`, `formats`, `free`),
+  `embed(tokens, start=)` clamps PAD ids (K-72), `from_host(h, start=)`, `layer(..., end=)` passes end and the cache.
+- Decisions: scale folded into q (K-27); kv table in q's de-interleaved rope order (DS41-15) instead of interleaving
+  q; plain linear for wq_b (DS41-16: q is cast to bf16 anyway); exact wo_b sum (K-30).
+- Probes (2x2, FABRIC_2D; dir deleted, K-56): update_padded_kv_cache with tp_axis=1 from server-order rows equals
+  the plan's position map at start 960 (bit-exact, pad rows zero); ttnn.slice on the ND-sharded RM cache works;
+  ttnn.embedding with per-chip index rows; all_to_all head<->seq has the natural block semantics; fp32 TILE
+  transpose(1,2) exact.
+- Gate: component pcc 0.999752; vs CPU rel 0.0212 (limit 0.0292), worst row 0.0355, bias -0.0009; second inputs
+  rel <= 0.022 (limit 0.03); A,B,A bit-identical. CPU emulation of the device roundings predicted 0.0206 (DS41-18:
+  the bf16 sdpa output is most of it). test_cache_starts: 4 / 4 scenarios, 0 failures (~2.3 min).
+- Next steps: the ladder's state check reads window_kv as the ring view of the device cache; the cache is sized by
+  the spec's target.chunk (WindowTables asserts S == chunk).
+- Re-run: `PYTHONPATH=$PWD BRINGUP_TASK=C.swa.attention scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py && PYTHONPATH=$PWD BRINGUP_TASK=C.swa.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`

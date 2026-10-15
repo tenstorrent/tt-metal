@@ -24,6 +24,20 @@ TABLE = {
         "reference GEMM; ~8 ms vs 0.4 ms per layer at [1024, 2560] x [2560, 1792]); fpu = one ttnn.linear, whose "
         "in-tile partial sums round to ~TF32 (rel 1.8e-4: ~0.8 % fp8 flips in the window KV, DS41-16)",
     ),
+    # ---- attention (tt/attention.py)
+    "WINDOW_SDPA": Setting(
+        "high_precision",
+        ("high_precision", "source"),
+        "the sparse window attention: high_precision = ttnn.bringup.sparse_sdpa(high_precision=True) (Float32 flash "
+        "output / row-sum, exact exp; K-31) with the sink; source = ttnn.transformer.sparse_sdpa (bf16 running state, "
+        "approximate exp), a perf pick",
+    ),
+    "ATTN_O_SUM": Setting(
+        "gather_add",
+        ("gather_add", "reduce_scatter"),
+        "the wo_b partial-sum exchange over axis 1 ([S/SP, H] fp32): gather_add = all_gather + SFPU ttnn.add, then "
+        "the chip's hidden slice (exact fp32, K-30); reduce_scatter = one CCL whose FPU add reads fp32 at about TF32",
+    ),
     # ---- mHC (tt/mhc.py)
     "HC_TP_SUM": Setting(
         "gather_add",
@@ -39,6 +53,8 @@ MAX_PRECISION = {
     "FP32_DEST_ACC": True,
     "HC_TP_SUM": "gather_add",
     "ATTN_IN_MM": "exact",
+    "WINDOW_SDPA": "high_precision",
+    "ATTN_O_SUM": "gather_add",
 }
 
 settings = Settings("DS41_", TABLE, max_precision=MAX_PRECISION)
