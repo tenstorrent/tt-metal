@@ -20,8 +20,7 @@ Description:
     like the kernels do. Global counters live in L1 for the buffer's lifetime, and a global sender
     shows its slowest receiver.
 
-    CB content needs --include-cb-content and shows only at -vv, but --sqlite-output-path always
-    records it if --include-cb-content is present.
+    CB content needs --include-cb-content.
 
 
 Owner:

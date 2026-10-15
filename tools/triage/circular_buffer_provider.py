@@ -13,7 +13,8 @@ Options:
 Description:
     Data provider for the circular buffers of running Tensix cores, one per CB of the program running
     on the core. get_circular_buffers(location) reads them, and get_cached_circular_buffers(location)
-    reads them once and returns the same list after.
+    reads them once and returns the same list after. With --include-cb-content, each is a
+    CircularBufferDataWithContent, which adds the CB's whole FIFO as hex.
 
 Owner:
     onenezicTT
@@ -54,7 +55,11 @@ class CircularBufferData:
     pushed: int = triage_field("Pushed")
     popped: int = triage_field("Popped")
     occupancy: int = triage_field("Occupancy")
-    content: str | None = triage_field("Content", verbose=2)  # whole FIFO as hex, only with --include-cb-content
+
+
+@dataclass
+class CircularBufferDataWithContent(CircularBufferData):
+    content: str | None = triage_field("Content")  # whole FIFO as hex, None for a global sender
 
 
 class CircularBufferProvider:
@@ -85,7 +90,7 @@ class CircularBufferProvider:
         num_cbs, received_reg, acked_reg = arch
         mask = int(kernel_config.local_cb_mask)
         base = config_base + int(kernel_config.local_cb_offset)
-        cbs = []
+        cbs: list[CircularBufferData] = []
         for cb in range(num_cbs):
             if not mask >> cb & 1:
                 continue
@@ -94,10 +99,12 @@ class CircularBufferProvider:
             pushed = read_word_from_device(location, stream + 4 * received_reg)
             popped = read_word_from_device(location, stream + 4 * acked_reg)
             occupancy = (pushed - popped) & 0xFFFF
-            content = read_from_device(location, address, num_bytes=size).hex() if self.include_content else None
-            cbs.append(
-                CircularBufferData(cb, "local", address, size, page_size, pages, pushed, popped, occupancy, content)
-            )
+            row = (cb, "local", address, size, page_size, pages, pushed, popped, occupancy)
+            if self.include_content:
+                content = read_from_device(location, address, num_bytes=size).hex()
+                cbs.append(CircularBufferDataWithContent(*row, content))
+            else:
+                cbs.append(CircularBufferData(*row))
         return cbs
 
     def _read_remote_cbs(
@@ -105,7 +112,7 @@ class CircularBufferProvider:
     ) -> list[CircularBufferData]:
         num_cbs = arch[0]
         base = config_base + int(kernel_config.remote_cb_offset)
-        cbs = []
+        cbs: list[CircularBufferData] = []
         for cb in range(int(kernel_config.min_remote_cb_start_index), num_cbs):
             # Remote configs are laid out from the last CB index down.
             config_addr, page_size = read_words_from_device(location, base + 8 * (num_cbs - 1 - cb), word_count=2)
@@ -127,11 +134,12 @@ class CircularBufferProvider:
             occupancy = ((sent - acked) & 0xFFFFFFFF) // units
             kind = "global sender" if is_sender else "global receiver"
             pages = size // page_size
-            read_content = self.include_content and not is_sender
-            content = read_from_device(location, address, num_bytes=size).hex() if read_content else None
-            cbs.append(
-                CircularBufferData(cb, kind, address, size, page_size, pages, pushed, popped, occupancy, content)
-            )
+            row = (cb, kind, address, size, page_size, pages, pushed, popped, occupancy)
+            if self.include_content:
+                content = None if is_sender else read_from_device(location, address, num_bytes=size).hex()
+                cbs.append(CircularBufferDataWithContent(*row, content))
+            else:
+                cbs.append(CircularBufferData(*row))
         return cbs
 
 
