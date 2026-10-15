@@ -15,6 +15,7 @@ Everything that differs from chunk to chunk lives in persistent device tensors o
     (``latent_mask``) from these two small tensors, so the captured program is identical for every chunk.
 """
 
+import os
 import time
 
 import torch
@@ -27,13 +28,57 @@ HEAD_DIM = 512
 WINDOW = 128
 
 
-def latent_mask(pcol, off, lim, C, L):
-    """Additive mask [1,1,C,L] bf16 on the device: 0 where 0 <= p - off < lim[row], else -1e9. pcol [1,1,1,L] fp32 = arange(L)."""
+LATENT_MASK_COLS = 32768  # column chunk of the [C, L] mask: one eltwise row wider than ~64k tiles' worth of columns needs more static L1 than exists (L > ~131k at ctx > 262144)
+
+
+def _latent_mask_cols(pcol, off, lim, C, L):
     j = ttnn.subtract(pcol, off)  # [1,1,1,L] latent index of every buffer slot
     ge0 = ttnn.ge(j, 0.0)
     lt = ttnn.lt(ttnn.repeat(j, [1, 1, C, 1]), ttnn.repeat(lim, [1, 1, 1, L]))
     vis = ttnn.multiply(lt, ttnn.repeat(ge0, [1, 1, C, 1]))
     return ttnn.typecast(ttnn.multiply(ttnn.subtract(vis, 1.0), -NEG), ttnn.bfloat16)
+
+
+def latent_mask_parts(pcol, off, lim, C, L):
+    """The additive mask [1,1,C,L] bf16 (0 where 0 <= p - off < lim[row], else -1e9; pcol [1,1,1,L] fp32 = arange(L)) as a list of column chunks of
+    at most LATENT_MASK_COLS (identical values): a concat input wider than that overflows L1 at long contexts."""
+    if L <= LATENT_MASK_COLS:
+        return [_latent_mask_cols(pcol, off, lim, C, L)]
+    parts = []
+    for c0 in range(0, L, LATENT_MASK_COLS):
+        c1 = min(L, c0 + LATENT_MASK_COLS)
+        pc = ttnn.slice(pcol, [0, 0, 0, c0], [1, 1, 1, c1])
+        parts.append(_latent_mask_cols(pc, off, lim, C, c1 - c0))
+    return parts
+
+
+def latent_mask(pcol, off, lim, C, L):
+    parts = latent_mask_parts(pcol, off, lim, C, L)
+    if len(parts) == 1:
+        return parts[0]
+    out = ttnn.concat(parts, dim=3)
+    for t in parts:
+        ttnn.deallocate(t)
+    return out
+
+
+def visibility_mask(pcol, off, lim, C, L):
+    """[1,1,C,L] bf16 with 1 where 0 <= p - off < lim[row] else 0 (the visibility of the sparse indexer scores), built in column chunks of at most LATENT_MASK_COLS: the fp32
+    temporaries (two repeats of [C, L]) are ~4 GiB each at a 1M context, ~64 MiB per chunk here; identical values."""
+    parts = []
+    for c0 in range(0, L, LATENT_MASK_COLS):
+        c1 = min(L, c0 + LATENT_MASK_COLS)
+        pc = pcol if (c0, c1) == (0, L) else ttnn.slice(pcol, [0, 0, 0, c0], [1, 1, 1, c1])
+        j = ttnn.subtract(pc, off)
+        ge0 = ttnn.ge(j, 0.0)
+        lt = ttnn.lt(ttnn.repeat(j, [1, 1, C, 1]), ttnn.repeat(lim, [1, 1, 1, c1 - c0]))
+        parts.append(ttnn.typecast(ttnn.multiply(lt, ttnn.repeat(ge0, [1, 1, C, 1])), ttnn.bfloat16))
+    if len(parts) == 1:
+        return parts[0]
+    out = ttnn.concat(parts, dim=3)
+    for t in parts:
+        ttnn.deallocate(t)
+    return out
 
 
 class DynCtx:
@@ -115,10 +160,23 @@ class DynCtx:
         self.t_hooks = getattr(self, "t_hooks", 0.0) + time.perf_counter() - t0
 
     def build_masks(self):
-        """Inside the traced forward, once per chunk: the full additive masks [1,1,C,128+C+L] of every ratio."""
+        """Inside the traced forward, once per chunk: the full additive masks [1,1,C,128+C+L] of every ratio that a DENSE attention layer reads. A ratio whose layers all run the sparse path
+        (``sp_win`` holds the ratio: indexer top-512 + sparse_sdpa with its own visibility mask ``sp_vis``) never reads the dense mask, so it is not built (DSV41_PF_DENSE_MASKS=1 builds all of
+        them as before); a dense layer of such a ratio still gets one on demand from ``mask_for``."""
+        self.masks = (
+            {}
+        )  # per chunk (eager chunks rebuild; a trace captures the ops once): drop the previous chunk's masks as the old overwrite did
         for r in self.ratios:
-            lm = latent_mask(self.pcol[r], self.off[r], self.lim[r], self.C, self.L[r])
-            self.masks[r] = ttnn.concat([self.win_mask, lm], dim=3)
-            ttnn.deallocate(lm)
+            if os.environ.get("DSV41_PF_DENSE_MASKS", "0") == "1" or r not in getattr(self, "sp_win", {}):
+                self.mask_for(r)
         for hk in self.build_hooks:
             hk(self)
+
+    def mask_for(self, r):
+        """The dense mask [1,1,C,128+C+L] of ratio ``r`` (built once per forward, on first use)."""
+        if r not in self.masks:
+            parts = latent_mask_parts(self.pcol[r], self.off[r], self.lim[r], self.C, self.L[r])
+            self.masks[r] = ttnn.concat([self.win_mask] + parts, dim=3)
+            for t in parts:
+                ttnn.deallocate(t)
+        return self.masks[r]

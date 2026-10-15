@@ -457,7 +457,7 @@ class DSV41PrefillAttention:
             full = ttnn.concat([keys, lat_buf], dim=2)
             ttnn.deallocate(keys)
             keys = full
-        kw = dict(is_causal=False, attn_mask=ctx.masks[self.ratio] if self.compressed else ctx.win_mask)
+        kw = dict(is_causal=False, attn_mask=ctx.mask_for(self.ratio) if self.compressed else ctx.win_mask)
         o = self._sdpa(qh, keys, **kw)
         ttnn.deallocate(qh)
         ttnn.deallocate(keys)
