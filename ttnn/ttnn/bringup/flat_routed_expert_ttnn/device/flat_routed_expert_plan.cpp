@@ -394,6 +394,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // DRISC mode: one subgrid, not inside the combine overlap (not validated there)
     p.drisc = flat_drisc_enabled() && p.nsg == 1 && cfg.cmb_rt == 0;
     if (p.drisc) {
+        flat_drisc_set_auto_pure(!p.rdown);  // (flat_drisc.cpp: pure DRISC slots unless the readers compute down columns)
         // default: one DRISC slot per bank (the hybrid: GLM-Flash us / expert vs Tensix readers M 64 34.0 / 35.4, 256
         // 49.0 / 49.7, 512 71.3 / 70.6, 2048 273.9 / 273.4); all 16 (two tiles per bank, MIMO_FL_DRISC_TILES=2): 2048
         // 265.7 but 512 77.0 (half the weights on the x multicast's NOC0). (Clamped to the readers below.)
@@ -841,10 +842,13 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
             // the forwarder: the reader (NOC1), or its DRISC (DRAM tile, writes on NOC0)
             // (perf probe MIMO_FL_DRISC_ASSIGN=0: DRISC mode with the readers' assignment)
-            // (pure: the readers carry no gate/up weights, so by the DRISC too)
-            const bool by_drisc = p.drisc_slot(r) && (!p.dual || flat_drisc_pure()) &&
-                                  !(std::getenv("MIMO_FL_DRISC_ASSIGN") &&
-                                               std::atoi(std::getenv("MIMO_FL_DRISC_ASSIGN")) == 0);
+            // (pure with reader down columns: the readers carry no gate/up weights, so by the DRISC too; pure without
+            // them falls back to the Tensix readers on larger counts, which a DRISC assignment slows by ~14% (K3 E56 M
+            // 256 64.9 vs 56.9 us / expert) while the readers' assignment costs the DRISC calls little (M 32 / 64 39.2
+            // / 41.2 -> 39.3 / 41.4))
+            const char* as = std::getenv("MIMO_FL_DRISC_ASSIGN");
+            const bool by_drisc =
+                p.drisc_slot(r) && (as ? std::atoi(as) != 0 : (!p.dual || (flat_drisc_pure() && p.rdown)));
             // (DRISC: NOC0 coordinates on both ends; a DRAM tile's translated ones are not on the NoC grid)
             const Core rp = by_drisc ? Core(flat_drisc_physical(device, r, p.banks)) : phys(p.readers[r]);
             const int fnoc = by_drisc ? static_cast<int>(flat_drisc_noc(device, r, p.banks, p.rdown)) : 1;

@@ -323,7 +323,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     };
 
     // dual DRISC slots (plan.dual): the per-call switch, the largest per-expert count served by the DRAM cores
-    // (MIMO_FL_DRISC_MAXCNT; default 256 tokens, 128 with reader down columns). us / expert Tensix -> dual, GLM-Flash
+    // (MIMO_FL_DRISC_MAXCNT; default 256 tokens, 128 with reader down columns; pure: 96, none with reader down columns
+    // - K3 E56 M 128 Tensix 47.9 vs pure 48.8 us / expert). us / expert Tensix -> dual, GLM-Flash
     // M 32 / 64 / 128 / 256 33.0 / 35.4 / 40.2 / 49.7 -> 31.5 / 33.9 / 39.3 / 49.6 (384: DRISC 58.8 vs 57.4: Tensix
     // there); K2.7 E12 M 32 / 64 / 128 58.0 / 62.1 / 68.7 -> 56.5 / 60.6 / 67.6 (256: DRISC 85.0 vs 83.7)
     Defines drisc_dual_def = dyn_def;
@@ -331,7 +332,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         const char* mc = std::getenv("MIMO_FL_DRISC_MAXCNT");
         drisc_dual_def["SE_DRISC_DUAL"] = "1";
         drisc_dual_def["SE_DRISC_MAXCNT"] =
-            mc ? std::string(mc) : std::string(flat_drisc_pure() ? "0xFFFFFFFF" : (p.rdown ? "128" : "256"));
+            mc ? std::string(mc)
+               : std::string(flat_drisc_pure() ? (p.rdown ? "0xFFFFFFFF" : "96") : (p.rdown ? "128" : "256"));
         if (flat_drisc_tiles() == 3) {  // switch mode: the alternate tiles serve calls with counts up to this
             const char* am = std::getenv("MIMO_FL_DRISC_ALT_MAXCNT");
             // (two tiles up to: GLM-Flash 224, K2.7 E12 (reader down columns) 384: M 256 85.2 two tiles vs 89.1 / 98.1
