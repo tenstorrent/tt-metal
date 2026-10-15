@@ -334,16 +334,8 @@ static inline void run_gate()
 #ifdef ARCH_BLACKHOLE
     if constexpr (GMG_SFPU_SORT)
     {
-        // The op's Blackhole route (generalized_moe_gate<..., sfpu_sort>): generic sort, the shared finalize tail, step2.
-        if constexpr (GMG_IDENTITY_INDICES)
-        {
-            GMG_SFPU_CALL(_generalized_moe_gate_identity_sort_, (APPROX_MODE));
-        }
-        else
-        {
-            GMG_SFPU_CALL(_generic_moe_gate_topk_, (false, 8, 256, false, true, false), 0u, 0u, 0u);
-        }
-        GMG_SFPU_CALL(generalized_moe_gate_finalize_sorted, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
+        // The op's Blackhole route (generalized_moe_gate<..., sfpu_sort>): generic sort and the shared finalize tail, step2.
+        GMG_SFPU_CALL(generalized_moe_gate_sort_finalize, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX, GMG_IDENTITY_INDICES), GMG_EPS, GMG_SCALE);
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_direct_<is_fp32_dest_acc_en, false /* is_32bit */>();
         return;
     }

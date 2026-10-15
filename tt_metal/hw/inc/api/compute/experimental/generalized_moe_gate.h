@@ -13,9 +13,6 @@
 #include "experimental/llk_sfpu/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 #include "experimental/llk_math_generalized_moe_gate_eltwise_binary_api.h"
 #include "experimental/llk_math_generalized_moe_gate_transpose_dest_single_face_api.h"
-#if defined(ARCH_BLACKHOLE)
-#include "experimental/llk_sfpu/llk_math_generic_moe_gate_topk_api.h"
-#endif
 #endif
 // The gate's own SFPU passes; Blackhole's gate llk_sfpu header defines them without the SFPU drain.
 #ifndef GMG_SFPU_UNARY_CALL
@@ -186,8 +183,8 @@ ALWI void generalized_moe_gate_fpu_copy4rows() {
 // SFPU, and output_tiles=2 to transpose only scores/indices. The default still transposes bias
 // as well, which is required by the multi-block combine. Register setup and synchronization
 // remain those of the shared generalized gate.
-// sfpu_sort (Blackhole, ungrouped single block): the generic gate's SFPU-only sort replaces the merge tree and
-// finalize_sorted the finalize; the output keeps the layout above, and step2 transposes scores and indices only.
+// sfpu_sort (Blackhole, ungrouped single block): the generic gate's SFPU-only sort replaces the merge tree, in one
+// SFPU call with the finalize; the output keeps the layout above, and step2 transposes scores and indices only.
 // identity_indices (with sfpu_sort): the ids are the host's transposed arange, written on the SFPU, so the caller
 // copies no id tile.
 template <
@@ -262,17 +259,12 @@ ALWI void generalized_moe_gate(
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
 #if defined(ARCH_BLACKHOLE)
     if constexpr (sfpu_sort) {
-        // Full sort, no normalize: the descending top-8 lands down column 0 of rows 0-7 for finalize_sorted.
-        if constexpr (identity_indices) {
-            MATH((sfpu::llk_math_sfpu_generalized_moe_gate_identity_sort()));
-        } else {
-            MATH((sfpu::llk_math_sfpu_generic_moe_gate_topk<false, 8, 256, false, true, false>(0, 0)));
-        }
+        // The full sort leaves the descending top-8 down column 0 of rows 0-7, where the finalize normalizes it.
         MATH((SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
-            generalized_moe_gate_finalize_sorted,
-            (APPROX, is_fp32_dest_acc_en, topk, output_softmax),
+            generalized_moe_gate_sort_finalize,
+            (APPROX, is_fp32_dest_acc_en, topk, output_softmax, identity_indices),
             0,
             VectorMode::RC_custom,
             eps,

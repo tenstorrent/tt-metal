@@ -18,11 +18,6 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-// The one-block route with identity ids: the transposed arange written on the SFPU, then the generic SFPU-only sort.
-inline void llk_math_sfpu_generalized_moe_gate_identity_sort() {
-    _llk_math_eltwise_unary_sfpu_params_(_generalized_moe_gate_identity_sort_<false>, 0, VectorMode::RC_custom);
-}
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void generalized_moe_gate_sum_top2() {
     _generalized_moe_gate_sum_top2<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
@@ -87,10 +82,20 @@ inline void _generalized_moe_gate_sfpu_params_(
     _llk_math_eltwise_sfpu_done_();
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, uint32_t topk = 8, bool output_softmax = false>
-inline void generalized_moe_gate_finalize_sorted(uint32_t eps, uint32_t scale) {
-    _generalized_moe_gate_finalize_ungrouped<APPROXIMATION_MODE, is_fp32_dest_acc_en, topk, output_softmax, true>(
-        eps, scale);
+// The one-block route: the generic SFPU-only sort (identity ids written on the SFPU) and the finalize, one SFPU call.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    uint32_t topk = 8,
+    bool output_softmax = false,
+    bool identity_indices = false>
+inline void generalized_moe_gate_sort_finalize(uint32_t eps, uint32_t scale) {
+    _generalized_moe_gate_sort_finalize_<
+        APPROXIMATION_MODE,
+        is_fp32_dest_acc_en,
+        topk,
+        output_softmax,
+        identity_indices>(eps, scale);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
