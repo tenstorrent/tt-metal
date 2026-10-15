@@ -205,7 +205,7 @@ inline __attribute__((always_inline)) void noc_read_with_state_bank(
     }
     if constexpr (send) {
         __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
-        noc_reads_num_issued[noc] += 1;
+        noc_async_read_inc_num_issued(1, noc);
     }
 }
 #endif  // NOC_ATT_ENABLED
