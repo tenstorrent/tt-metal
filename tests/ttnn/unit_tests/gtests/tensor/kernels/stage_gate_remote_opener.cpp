@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Opens a D2D stage gate over fabric using only the receiver's D2DStageGateDescriptor.
-// mode 0: inline write of kStageGateOpen. mode 1: flushed atomic +1.
+// mode 0: inline write of GateState::Open. mode 1: flushed atomic +1.
 //
 // RT args: mode, gate_noc_x, gate_noc_y, gate_addr, dst_dev_id, dst_mesh_id, then the
 // fabric connection args.
@@ -31,8 +31,8 @@ void kernel_main() {
     tt::tt_fabric::fabric_set_unicast_route(header, dst_dev_id, dst_mesh_id);
     const uint64_t gate_noc_addr = get_noc_addr(gate_noc_x, gate_noc_y, gate_addr);
     if (mode == 0) {
-        header->to_noc_unicast_inline_write(
-            tt::tt_fabric::NocUnicastInlineWriteCommandHeader{gate_noc_addr, ttnn::kStageGateOpen});
+        header->to_noc_unicast_inline_write(tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
+            gate_noc_addr, static_cast<uint32_t>(ttnn::d2d_stream::GateState::Open)});
     } else {
         header->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{gate_noc_addr, 1, /*flush=*/true});

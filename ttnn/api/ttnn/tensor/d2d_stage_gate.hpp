@@ -2,18 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// D2D stage-gate word values and flag bits, shared by host and kernels.
+// D2D stage-gate values, shared by host and kernels.
 
 #pragma once
 
 #include <cstdint>
 
-namespace ttnn {
+namespace ttnn::d2d_stream {
 
-inline constexpr uint32_t kStageGateClosed = 0;
-inline constexpr uint32_t kStageGateOpen = 1;
-// Flags in the transfer's metadata.
-inline constexpr uint32_t kStageGateFlagCloseOnTransit = 1u << 0;  // close the gate after this transfer passes
-inline constexpr uint32_t kStageGateFlagBypass = 1u << 31;         // do not gate this transfer
+// Value of a gate word.
+enum class GateState : uint32_t {
+    Closed = 0,
+    Open = 1,
+};
 
-}  // namespace ttnn
+// What a transfer does at its gate. Carried in the transfer's metadata.
+enum class GateMode : uint32_t {
+    KeepOpen = 0,        // wait for the gate, leave it open
+    CloseOnTransit = 1,  // wait for the gate, close it once this transfer passes
+    Bypass = 2,          // don't wait
+};
+
+}  // namespace ttnn::d2d_stream

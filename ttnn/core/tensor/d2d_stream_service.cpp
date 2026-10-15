@@ -105,7 +105,9 @@ std::map<distributed::MeshCoordinate, DeviceAddr> allocate_service_core_words(
     }
     return addrs;
 }
-static_assert(kStageGateClosed == 0, "allocate_service_core_words zero-fills the stage-gate array");
+static_assert(
+    static_cast<uint32_t>(d2d_stream::GateState::Closed) == 0,
+    "allocate_service_core_words zero-fills the stage-gate array");
 
 // Build the SocketConnection list: one connection per participating coord, wiring
 // sender coord (x, y) on its service core 1:1 to receiver coord (x, y) on its
@@ -271,6 +273,14 @@ MapperOutput run_mapper(D2DStreamConfig& cfg) {
         .topology = distributed_dummy.tensor_topology(),
         .coords = distributed_dummy.tensor_topology().mesh_coords(),
     };
+}
+
+// The stage gate, or nullopt when it's off (unset or num_gates == 0).
+std::optional<D2DStageGateConfig> enabled_stage_gate(const D2DStreamConfig& cfg) {
+    if (cfg.stage_gate && cfg.stage_gate->num_gates > 0) {
+        return cfg.stage_gate;
+    }
+    return std::nullopt;
 }
 
 // Chunk plan + sizing shared by both sides, derived from an allocated backing
@@ -811,7 +821,8 @@ D2DStageGateDescriptor D2DStreamServiceReceiver::get_stage_gate_descriptor(
 void D2DStreamServiceReceiver::set_stage_gate(
     const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate, bool open) {
     const DeviceAddr addr = impl_->stage_gate_addr(coord, gate, "set_stage_gate");
-    std::vector<uint32_t> word{open ? kStageGateOpen : kStageGateClosed};
+    std::vector<uint32_t> word{
+        static_cast<uint32_t>(open ? d2d_stream::GateState::Open : d2d_stream::GateState::Closed)};
     tt::tt_metal::detail::WriteToDeviceL1(
         impl_->mesh_device->get_device(coord), impl_->service_cores.at(coord), static_cast<uint32_t>(addr), word);
 }
@@ -826,7 +837,7 @@ bool D2DStreamServiceReceiver::is_stage_gate_open(
         static_cast<uint32_t>(addr),
         sizeof(uint32_t),
         word);
-    return word.at(0) == kStageGateOpen;
+    return word.at(0) == static_cast<uint32_t>(d2d_stream::GateState::Open);
 }
 
 // ===========================================================================
@@ -919,7 +930,7 @@ Program build_receiver_program(
                     {"num_stage_gates", stage_gate ? stage_gate->num_gates : 0},
                     {"stage_gate_addr", stage_gate_addr},
                     {"stage_gate_slot_offset", stage_gate ? stage_gate->slot_id_offset_bytes : 0},
-                    {"stage_gate_flags_offset", stage_gate ? stage_gate->gate_flags_offset_bytes : 0},
+                    {"stage_gate_mode_offset", stage_gate ? stage_gate->gate_mode_offset_bytes : 0},
                 },
         });
 
@@ -1306,12 +1317,11 @@ ReceiverSideResources build_receiver_side(
     auto consumed_counter_addrs = allocate_service_core_words(mesh, service_cores);
     auto link_grant_addrs = allocate_service_core_words(mesh, service_cores);
 
-    const auto& gate = cfg.stage_gate;
+    const auto gate = enabled_stage_gate(cfg);
     std::map<distributed::MeshCoordinate, DeviceAddr> stage_gate_addrs;
     if (gate) {
-        TT_FATAL(gate->num_gates > 0, "D2DStreamService: stage_gate.num_gates must be > 0");
         TT_FATAL(common.metadata_enabled, "D2DStreamService: stage_gate requires metadata_size_bytes > 0");
-        for (const uint32_t offset : {gate->slot_id_offset_bytes, gate->gate_flags_offset_bytes}) {
+        for (const uint32_t offset : {gate->slot_id_offset_bytes, gate->gate_mode_offset_bytes}) {
             TT_FATAL(
                 offset % sizeof(uint32_t) == 0 && offset + sizeof(uint32_t) <= common.metadata_size_bytes,
                 "D2DStreamService: stage-gate metadata offset {} must be 4-byte aligned and within "
@@ -1320,8 +1330,8 @@ ReceiverSideResources build_receiver_side(
                 common.metadata_size_bytes);
         }
         TT_FATAL(
-            gate->slot_id_offset_bytes != gate->gate_flags_offset_bytes,
-            "D2DStreamService: stage-gate slot_id and gate_flags must be distinct metadata words (both at offset {})",
+            gate->slot_id_offset_bytes != gate->gate_mode_offset_bytes,
+            "D2DStreamService: stage-gate slot_id and gate_mode must be distinct metadata words (both at offset {})",
             gate->slot_id_offset_bytes);
         stage_gate_addrs = allocate_service_core_words(mesh, service_cores, gate->num_gates);
     }
@@ -1520,7 +1530,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
         .metadata_size_bytes = common.metadata_size_bytes,
         .metadata_buffer = std::move(res.metadata_buffer),
         .metadata_l1_addr = res.metadata_l1_addr,
-        .stage_gate = cfg.stage_gate,
+        .stage_gate = CMAKE_UNIQUE_NAMESPACE::enabled_stage_gate(cfg),
         .stage_gate_addrs = std::move(res.stage_gate_addrs),
         .workload = std::move(res.workload),
         .launched = false,

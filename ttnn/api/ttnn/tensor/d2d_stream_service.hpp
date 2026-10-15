@@ -30,12 +30,12 @@ class MeshDevice;
 namespace ttnn {
 
 // Receiver stage gate: the receiver holds each landed transfer until the gate selected
-// by the slot id in its metadata is open. Slot ids >= num_gates and kStageGateFlagBypass
+// by the slot id in its metadata is open. Slot ids >= num_gates and GateMode::Bypass
 // pass ungated.
 struct D2DStageGateConfig {
-    uint32_t num_gates = 0;  // must be > 0
+    uint32_t num_gates = 0;  // enabled when > 0
     uint32_t slot_id_offset_bytes = 0;
-    uint32_t gate_flags_offset_bytes = 0;
+    uint32_t gate_mode_offset_bytes = 0;  // d2d_stream::GateMode
 };
 
 // Location of one coord's gates: gate i is the uint32 at gate_base_addr + 4 * i.

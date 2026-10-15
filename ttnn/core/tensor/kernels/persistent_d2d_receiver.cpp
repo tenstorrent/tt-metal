@@ -83,20 +83,18 @@ constexpr auto output_tensor_accessor_args = TensorAccessorArgs<22>();
 constexpr uint32_t num_stage_gates = get_named_compile_time_arg_val("num_stage_gates");
 constexpr uint32_t stage_gate_addr = get_named_compile_time_arg_val("stage_gate_addr");
 constexpr uint32_t stage_gate_slot_word = get_named_compile_time_arg_val("stage_gate_slot_offset") / sizeof(uint32_t);
-constexpr uint32_t stage_gate_flags_word = get_named_compile_time_arg_val("stage_gate_flags_offset") / sizeof(uint32_t);
-using ttnn::kStageGateClosed;
-using ttnn::kStageGateFlagBypass;
-using ttnn::kStageGateFlagCloseOnTransit;
-using ttnn::kStageGateOpen;
+constexpr uint32_t stage_gate_mode_word = get_named_compile_time_arg_val("stage_gate_mode_offset") / sizeof(uint32_t);
+using ttnn::d2d_stream::GateMode;
+using ttnn::d2d_stream::GateState;
 
 // Wait until the gate selected by the transfer's metadata is open, then close it if the
-// transfer carries CloseOnTransit. Returns false if terminated while waiting.
+// transfer's mode is CloseOnTransit. Returns false if terminated while waiting.
 FORCE_INLINE bool pass_stage_gate(uint32_t metadata_addr) {
     invalidate_l1_cache();
     volatile tt_l1_ptr uint32_t* md = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_addr);
     const uint32_t slot = md[stage_gate_slot_word];
-    const uint32_t flags = md[stage_gate_flags_word];
-    if (slot >= num_stage_gates || (flags & kStageGateFlagBypass)) {
+    const auto mode = static_cast<GateMode>(md[stage_gate_mode_word]);
+    if (slot >= num_stage_gates || mode == GateMode::Bypass) {
         return true;
     }
     volatile tt_l1_ptr uint32_t* termination_semaphore =
@@ -107,12 +105,12 @@ FORCE_INLINE bool pass_stage_gate(uint32_t metadata_addr) {
         if (termination_semaphore[0] == terminate_value) {
             return false;
         }
-        if (*gate == kStageGateOpen) {
+        if (*gate == static_cast<uint32_t>(GateState::Open)) {
             break;
         }
     }
-    if (flags & kStageGateFlagCloseOnTransit) {
-        *gate = kStageGateClosed;
+    if (mode == GateMode::CloseOnTransit) {
+        *gate = static_cast<uint32_t>(GateState::Closed);
     }
     return true;
 }

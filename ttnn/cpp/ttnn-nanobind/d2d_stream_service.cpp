@@ -71,21 +71,25 @@ D2DStreamConfig make_config(
 }  // namespace
 
 void py_module_types(nb::module_& mod) {
-    mod.attr("STAGE_GATE_FLAG_CLOSE_ON_TRANSIT") = ttnn::kStageGateFlagCloseOnTransit;
-    mod.attr("STAGE_GATE_FLAG_BYPASS") = ttnn::kStageGateFlagBypass;
+    nb::enum_<ttnn::d2d_stream::GateMode>(mod, "D2DStageGateMode", R"doc(
+        What a transfer does at its stage gate. Written into the transfer's metadata.
+    )doc")
+        .value("KeepOpen", ttnn::d2d_stream::GateMode::KeepOpen)
+        .value("CloseOnTransit", ttnn::d2d_stream::GateMode::CloseOnTransit)
+        .value("Bypass", ttnn::d2d_stream::GateMode::Bypass);
 
     nb::class_<D2DStageGateConfig>(mod, "D2DStageGateConfig", R"doc(
-        Receiver stage gate: num_gates and the metadata byte offsets of the slot id and
-        gate flags.
+        Receiver stage gate: num_gates (enabled when > 0) and the metadata byte offsets of
+        the slot id and gate mode.
     )doc")
         .def(
             nb::init<uint32_t, uint32_t, uint32_t>(),
             nb::arg("num_gates"),
             nb::arg("slot_id_offset_bytes") = 0u,
-            nb::arg("gate_flags_offset_bytes") = 0u)
+            nb::arg("gate_mode_offset_bytes") = 0u)
         .def_rw("num_gates", &D2DStageGateConfig::num_gates)
         .def_rw("slot_id_offset_bytes", &D2DStageGateConfig::slot_id_offset_bytes)
-        .def_rw("gate_flags_offset_bytes", &D2DStageGateConfig::gate_flags_offset_bytes);
+        .def_rw("gate_mode_offset_bytes", &D2DStageGateConfig::gate_mode_offset_bytes);
 
     nb::class_<D2DStageGateDescriptor>(mod, "D2DStageGateDescriptor", R"doc(
         Location of one coord's stage gates: gate i is the uint32 at gate_base_addr + 4 * i.
