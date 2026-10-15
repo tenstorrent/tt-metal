@@ -56,6 +56,15 @@ at isl 10240, all 468 tensors). At startup the script checks the chunked forward
 `MiniMaxM3VLIndexer.forward` on a tiny random indexer and exits if upstream has changed. isl 56320 on one H200:
 2.4 min, ~9 GB GPU peak, 50 GB on disk.
 
+**DeepSeek-V4 (Flash, Pro-0813) at long ISL:** the indexer scorer holds [N, 64 heads, N // 4] fp32 scores (~200 GB
+each at isl 56320). `HF_GOLDEN_INDEXER_CHUNK` builds them a slice of query rows at a time; weights_proj still runs on
+the whole sequence, because that bf16 linear rounds differently by row count and per-slice calls flipped indexer
+top-k and then MoE routing. Checked identical at isl 10240 on the real models (Flash 573/573 tensors, Pro 822/822),
+and against the installed transformers at startup. Eager attention needs `--attn-chunk` too: 1024 on Flash, 256 on
+Pro (128 heads); 4096 OOMs on Flash (55 GiB fp32 logits per slice). `HF_GOLDEN_INDEX_SCORES=0` stores the top-k
+only, not the scores (~3.2 GB per CSA layer at isl 56320). isl 56320: Flash 5.6 min, 83 GB. The 4 mHC streams make
+hidden states large: [N, 4, hidden] per layer, 3.2 GB per Pro layer.
+
 **`--device cuda` under torch 2.11:** `torch.cuda.set_device` rejects a device without an index; pass `cuda:0`.
 
 `generate_golden_whole_model.py` is the original script behind the Qwen, Llama and Mistral traces. It loads the whole

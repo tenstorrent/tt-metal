@@ -86,7 +86,10 @@ What is model-specific, and why it is handled here:
 from __future__ import annotations
 
 import contextlib
+import copy
+import dataclasses
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -210,9 +213,87 @@ class HyperHeadNorm(torch.nn.Module):
         return self.norm(self.hc_head(streams))
 
 
+def chunked_scorer_forward(chunk: int):
+    """DeepseekV4IndexerScorer.forward with its [B, N, 64 heads, N // 4] fp32 scores built ``chunk`` query rows at a
+    time. Upstream holds that tensor (and a relu'd and a weighted copy) whole: ~200 GB each at N = 56320.
+
+    The body is upstream's, applied to row slices, except weights_proj: it runs once on the whole sequence, as
+    upstream does. That bf16 linear (hidden -> 64) rounds differently by row count (cuBLAS picks another kernel for
+    4096 rows than for 10240), and calling upstream per slice let that flip indexer top-k near the cut and then MoE
+    routing (~3-5% of tokens by layer 42 at isl 10240). The fp32 score matmul and the head sum are row-local and
+    exact under slicing. check_chunked_scorer compares this with the installed upstream at startup."""
+
+    def forward(self, q, compressed_kv, hidden_states):
+        weights = self.weights_proj(hidden_states).float() * self.weights_scaling  # [B, S, H], whole sequence
+        kv_t = compressed_kv.transpose(-1, -2).float().unsqueeze(1)
+        out = []
+        for s in range(0, q.shape[1], chunk):
+            scores = torch.matmul(q[:, s : s + chunk].float(), kv_t)  # [B, chunk, H, T]
+            scores = torch.nn.functional.relu(scores) * self.softmax_scale
+            out.append((scores * weights[:, s : s + chunk].unsqueeze(-1)).sum(dim=2))
+        return torch.cat(out, dim=1)
+
+    forward.chunk = chunk
+    return forward
+
+
+def check_chunked_scorer(upstream, text_config, device) -> None:
+    """chunked_scorer_forward copies upstream's body; exit if the installed transformers has changed it. Real index
+    widths (64 heads x 128, weights_proj from 4096), 3000 rows against 750 keys, chunk sizes that do and do not
+    divide them; on ``device``, since kernel choice is what this guards."""
+    from transformers.models.deepseek_v4.modeling_deepseek_v4 import DeepseekV4IndexerScorer
+
+    cfg = copy.deepcopy(text_config)
+    cfg.hidden_size, cfg.index_n_heads, cfg.index_head_dim = 4096, 64, 128
+    gen = torch.Generator().manual_seed(0)
+    scorer = DeepseekV4IndexerScorer(cfg).to(device, torch.bfloat16)
+    scorer.weights_proj.weight.data = (torch.randn(scorer.weights_proj.weight.shape, generator=gen) * 0.02).to(
+        device, torch.bfloat16
+    )
+    n, t = 3000, 750
+    q = torch.randn(1, n, 64, 128, generator=gen).to(device, torch.bfloat16)
+    kv = torch.randn(1, t, 128, generator=gen).to(device, torch.bfloat16)
+    h = torch.randn(1, n, 4096, generator=gen).to(device, torch.bfloat16)
+    with torch.no_grad():
+        ref = upstream(scorer, q, kv, h)
+        for chunk in (256, 1000, 4096):
+            if not torch.equal(chunked_scorer_forward(chunk)(scorer, q, kv, h), ref):
+                raise SystemExit(
+                    f"chunked indexer scorer (chunk {chunk}) differs from this transformers' "
+                    "DeepseekV4IndexerScorer.forward: upstream changed; update chunked_scorer_forward"
+                )
+
+
 class DeepseekV4Golden(LayerwiseGolden):
     hf_repo = "deepseek-ai/DeepSeek-V4-Flash"
     attn, attn_choices = "eager", ("eager",)  # the attention sinks exist only in the eager kernel
+    # The text as the model's own reply: encoding/encoding_dsv4.py's encode_messages(thinking_mode="chat") of one user
+    # turn naming the WikiText format, as for gpt-oss and MiniMax-M3. Wikitext ppl over the same 4000 tokens at isl
+    # 4096: 5.82 raw, 5.73 BOS only, 5.57 this (16384: 5.01 raw, 4.85 this); top-1 accuracy ~61% either way.
+    prefix = (
+        "<｜begin▁of▁sentence｜><｜User｜>Continue this WikiText-2 dump verbatim: a sequence of Wikipedia articles, one "
+        "after another, each starting with a = Title = line, in raw formatting ( @-@ , = = headings = = )."
+        "<｜Assistant｜></think>"
+    )
+
+    def __init__(self):
+        # HF_GOLDEN_INDEX_SCORES=0: store the indexer's top-k only, not its fp32 [1, N, N // 4] scores (~3.2 GB per CSA
+        # layer at isl 56320).
+        if os.environ.get("HF_GOLDEN_INDEX_SCORES", "1") == "0":
+            modules = tuple(m for m in self.recipe.modules if m != "self_attn.compressor.indexer.scorer")
+            self.recipe = dataclasses.replace(self.recipe, modules=modules)
+            print("[indexer] storing top-k only, not scores", flush=True)
+        # HF_GOLDEN_INDEXER_CHUNK=<rows>: score that many query rows at a time (chunked_scorer_forward).
+        if chunk := int(os.environ.get("HF_GOLDEN_INDEXER_CHUNK", "0")):
+            from transformers.models.deepseek_v4.modeling_deepseek_v4 import DeepseekV4IndexerScorer
+
+            upstream = getattr(DeepseekV4IndexerScorer.forward, "upstream", DeepseekV4IndexerScorer.forward)
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            check_chunked_scorer(upstream, self.tiny_config(), device)
+            DeepseekV4IndexerScorer.forward = chunked_scorer_forward(chunk)
+            DeepseekV4IndexerScorer.forward.upstream = upstream
+            print(f"[indexer] scores built {chunk} query rows at a time", flush=True)
+
     recipe = Recipe(
         modules=("self_attn.kv_norm", "self_attn.compressor.indexer.scorer", "mlp.gate"),  # + the indexer's top-k
         sublayers=("self_attn", "mlp"),  # + attn_hc / ffn_hc (post, comb, collapsed), see register_hooks
