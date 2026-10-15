@@ -334,11 +334,14 @@ foreach(_case Unharvested Harvested Disagreement)
             "TT_METAL_MOCK_CLUSTER_DESC_PATH=${_coord_root}/${_fixture}.yaml"
             $<TARGET_FILE:x280_runtime_coordinate_tests> "--gtest_filter=${_filter}"
     )
-    # A filter that selects nothing exits 0; require at least one passed test.
+    # A filter that selects nothing exits 0; require at least one passed test. The pass pattern
+    # replaces the exit-code check, so a failed test must be matched explicitly.
     set_tests_properties(
         x280_coordinates_${_fixture}
         PROPERTIES
             PASS_REGULAR_EXPRESSION
                 "\\[  PASSED  \\] [1-9]"
+            FAIL_REGULAR_EXPRESSION
+                "\\[  FAILED  \\]"
     )
 endforeach()
