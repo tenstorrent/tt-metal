@@ -119,19 +119,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
-    // Integer-ness and parity of the exponent, at every magnitude
-    // A fixed-width integer convert cannot supply them: convert<vSMag16> saturates at
-    // +-32767, so an exponent of 32768 or more read as a non-integer and sent every negative
-    // base to NaN, where IEEE 754 defines the result. The hardware converts fp32 to an integer of at
-    // most 16 bits, so both facts come from the mantissa instead, with no rounding.
-    //
-    // Clamping |pow| to [1/2, 2^24] keeps exexp in [-1, 24], and lets every exponent at or above
-    // 2^24 read as the even integer it must be, since fp32's spacing there is already 2 or more.
-    // Shifting the mantissa, implicit one included, left by exexp + 7 puts the units bit at
-    // bit 30 and the fraction bits below it; the amount stays at 31 or less, as a shift by 32
-    // does not shift at all. Doubling then moves the units bit to bit 31, where copysgn reads a
-    // sign, so (pow_bits + pow_bits) is 0 exactly when pow is an integer.
-    sfpi::vFloat pow_x = sfpi::min(sfpi::max(sfpi::abs(pow), 0.5f), 16777216.0f);
+    // Integer-ness and parity of pow, read from its mantissa at every magnitude: clamping |pow| to
+    // [1/2, 2^24] keeps exexp in [-1, 24] (every |pow| >= 2^24 is an even integer), and shifting the
+    // mantissa left by exexp + 7, then doubling, leaves the units bit at bit 31 and the fraction below it.
+    sfpi::vFloat abs_pow = sfpi::abs(pow);
+    sfpi::vFloat pow_x = sfpi::min(sfpi::max(abs_pow, 0.5f), 16777216.0f);
     sfpi::vInt pow_bits = sfpi::exman(pow_x, sfpi::MantissaMode::ImplicitOne);
     pow_bits = sfpi::shft(pow_bits, sfpi::exexp(pow_x) + 7, sfpi::ShiftMode::Logical);
     pow_bits = pow_bits + pow_bits;
@@ -139,13 +131,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     v_if(base < 0.0f) {  // negative base
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
-        // Bit 31 of pow_bits is the parity, so copysgn takes the sign from it.
         y = sfpi::copysgn(y, sfpi::as<sfpi::vFloat>(pow_bits));
 
         // Check for integer power, if it is not then overwrite result with NaN
-        // The clamp reads a zero exponent as 1/2, so zero, an even integer, is excluded here (on abs(pow):
-        // SFPSETCC's contract excludes negative zero).
-        v_if((pow_bits + pow_bits) != 0 && sfpi::abs(pow) != 0.0f) {  // non-integer power: NaN
+        // The clamp reads zero as 1/2, so zero is excluded (on |pow|: SFPSETCC's == 0 does not match -0).
+        v_if((pow_bits + pow_bits) != 0 && abs_pow != 0.0f) {  // non-integer power: NaN
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
@@ -319,25 +309,13 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
     v_endif;
 
-    // |pow| is computed once here: the parity test, the zero-exponent exclusion and the
-    // zero-base block below all read it.
+    // Read by the parity test, the zero-exponent exclusion and the zero-base block below.
     sfpi::vFloat abs_pow = sfpi::abs(pow);
 
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
-        // Integer-ness and parity of the exponent, at every magnitude
-        // A fixed-width integer convert cannot supply them: convert<vSMag16> saturates at
-        // +-32767, so an exponent of 32768 or more read as a non-integer and sent every negative
-        // base to NaN, where IEEE 754 defines the result. The hardware converts fp32 to an integer of at
-        // most 16 bits, so both facts come from the mantissa instead, with no rounding.
-        //
-        // Clamping |pow| to [1/2, 2^24] keeps exexp in [-1, 24], and lets every exponent at or above
-        // 2^24 read as the even integer it must be, since fp32's spacing there is already 2 or more.
-        // Shifting the mantissa, implicit one included, left by exexp + 7 puts the units bit at
-        // bit 30 and the fraction bits below it; the amount stays at 31 or less, as a shift by 32
-        // does not shift at all. Doubling then moves the units bit to bit 31, where copysgn reads a
-        // sign, so (pow_bits + pow_bits) is 0 exactly when pow is an integer.
+        // Integer-ness and parity of pow: as in _sfpu_binary_power_21f_ above.
         sfpi::vFloat pow_x = sfpi::min(sfpi::max(abs_pow, 0.5f), 16777216.0f);
         sfpi::vInt pow_bits = sfpi::exman(pow_x, sfpi::MantissaMode::ImplicitOne);
         pow_bits = sfpi::shft(pow_bits, sfpi::exexp(pow_x) + 7, sfpi::ShiftMode::Logical);
@@ -345,11 +323,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
-        // Bit 31 of pow_bits is the parity, so copysgn takes the sign from it.
         y = sfpi::copysgn(y, sfpi::as<sfpi::vFloat>(pow_bits));
 
         // Check for integer power, if it is not then overwrite result with NaN
-        // The clamp reads a zero exponent as 1/2, so zero, an even integer, is excluded here.
+        // The clamp reads zero as 1/2, so zero is excluded.
         v_if((pow_bits + pow_bits) != 0 && abs_pow != 0.0f) {  // non-integer power: NaN
             y = std::numeric_limits<float>::quiet_NaN();
         }
