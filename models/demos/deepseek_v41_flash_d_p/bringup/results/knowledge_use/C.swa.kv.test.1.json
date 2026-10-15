@@ -1,0 +1,63 @@
+{
+ "used": [
+  {
+   "id": "K-36",
+   "how": "1 % noise slipped calibrated limits: added structural checks of the fp8 output (on-grid, exact-match fraction) instead of tightening rel",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-35",
+   "how": "mismatch limit 0.15 set between the bf16 precision model (0.043) and the smallest structural mistake measured (RTZ 0.49, unquantized GEMM input 0.30)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-41",
+   "how": "fp8 checks run on every second input of the auto checks (layer24, mixed, small, big), not only the golden",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-44",
+   "how": "limits written `not x <= lim` so NaN fails; non-finite output fails the fp8 check",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "read the collect-pass FAIL pcc=0 lines as the precompile stash, judged the real pass",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-13",
+   "how": "required bit-exact on-grid output, since tt/quant.py:fp8_qdq is bit-exact with act_quant_dequant",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the auto component checks have no structural check for quantized outputs (fp8 grid): noise on a quantized step slips the precision-model limits (now DS41-14)"
+ ],
+ "cited_only": [
+  "DS41-14"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.kv",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T13:14:32",
+  "head": "6a5e1945567",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.kv.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_kv.py"
+  ]
+ }
+}
