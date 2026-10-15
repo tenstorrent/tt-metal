@@ -46,8 +46,12 @@ const char* scope_violation(
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr) {
+    if (input.storage_type() != ttnn::StorageType::DEVICE || !input.is_allocated()) {
         return "input is not an allocated device tensor";
+    }
+    // buffer() throws when no device of the mesh is local; native's launch skips such a mesh instead.
+    if (input.device()->is_remote_only()) {
+        return "the mesh has no local devices";
     }
     // The kernels access NoC-filled L1 through cached RISC pointers and copy within L1 with NoC reads from the core's
     // own L1; Quasar keeps neither coherent, so native runs there.
