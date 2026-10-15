@@ -397,7 +397,7 @@ def run_gate(
         metrics=state_metrics(task["gate"].get("metrics", {}), got),
         log=str(log),
         reason=[] if verdict == "PASS" else res.lines,
-        history_add={"t": now(), "status": verdict},
+        history_add={"t": now(), "status": verdict, "s": round(dur, 1)},  # every gate run's time (F70)
     )
     if commit and verdict == "PASS":
         with ledger.locked():
