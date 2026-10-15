@@ -14,7 +14,7 @@
  *
  * Every issue moves `transfer_size` bytes as `transfer_size / store_width`
  * back-to-back stores of one width: `sw` (4 B), `sd` (8 B) or `vse32.v` at
- * e32/m1 (64 B). BUG-4 forbids memcpy through a NOC window; the three
+ * e32/m1 (64 B). memcpy does not work through a NOC window; the three
  * widths land byte-exact through a posted window into Tensix L1. Every
  * store against the uncached window becomes its own NoC request
  * (TLBWindows.md), so `transfer_size` is a burst of `store_width`-byte

@@ -102,7 +102,7 @@ Three consequences follow from the destination being LIM rather than L1:
 ## Running it
 
 ID 3 needs two complexes in live resident idle, and reset release is one-way
-(D-022), so every tile it uses must leave reset inside one chip-reset
+([harness.md](../harness.md#design-rules)), so every tile it uses must leave reset inside one chip-reset
 lifetime. The harness's session fixture boots every enabled L2CPU of a chip
 whose L2CPUs are all held in reset in one batch ([harness.md](../harness.md#running-benchmarks)),
 and there is one batch per lifetime, so the placement sweep finds every pair

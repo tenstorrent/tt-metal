@@ -11,7 +11,7 @@
  * window is consumed; no address translation is required. The medium selector
  * says whether transmit goes through the coherent cache or an uncached alias.
  *
- * D-032: the runtime tells every hart the same args_addr. ID 2 packs TWO
+ * The runtime tells every hart the same args_addr. ID 2 packs TWO
  * participant sections back to back so hart 0 (participant A) and hart 1
  * (participant B) each read their own section by fixed hartid-scaled offset.
  * See docs/benchmarks/design.md, §Roles and mailbox model.
@@ -120,6 +120,7 @@ UBENCH_LAYOUT_ASSERT(
     sizeof(p2p_latency_x280_same_tile_args_block_t) == 2u * sizeof(p2p_latency_x280_same_tile_section_t),
     "the args block is exactly two participant sections");
 /* The args block as a whole is what the host writes into cache-line aligned
- * available LIM. Round-up padding is the host's responsibility (D-032). */
+ * available LIM. Round-up padding is the host's responsibility: the runtime
+ * checks the block's placement, not its layout. */
 
 #endif /* X280_P2P_LATENCY_X280_SAME_TILE_ARGS_H */

@@ -9,7 +9,7 @@
  * X280 is the initiator. It programs one paired-range NOC TLB slot at the
  * Tensix worker's L1 destination in posted mode, then issues bursts of
  * `transfer_size / StoreWidth` back-to-back stores through the window:
- * `sw`, `sd`, or `vse32.v` at e32/m1. BUG-4 forbids memcpy through the
+ * `sw`, `sd`, or `vse32.v` at e32/m1. memcpy does not work through the
  * window; every width is a straight sequence of one store instruction.
  *
  * The source of every store is a 64 B pattern held in registers across the

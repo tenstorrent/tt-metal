@@ -12,7 +12,7 @@
  * nothing.
  *
  * The args block is one p2p_latency_x280_same_tile_args_block_t. Every hart is told
- * the same base address (D-032), so the two participants pick their section
+ * the same base address, so the two participants pick their section
  * by hartid.
  *
  * Both participant sections have the same layout, so the template

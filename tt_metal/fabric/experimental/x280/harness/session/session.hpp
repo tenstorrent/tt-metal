@@ -81,7 +81,7 @@ struct OpenConfig {
     // paths and JIT include paths from it. `open_or_skip` does not read it.
     std::filesystem::path kernel_dir;
 
-    // Required executables always use the prepared MEM-03 profile; the rest
+    // Required executables always use the prepared pinned-input profile; the rest
     // run at the reset shape. WayEnable cannot decrease without an ASIC reset,
     // so a chip provisioned for the profile refuses the rest.
     bool prepared_suite_requested = false;

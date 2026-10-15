@@ -403,11 +403,8 @@ different things. The x280 side goes unnamed because every member of
 `p2p_latency` has one. Where a member has a backend on each side, that backend
 is `BACKEND_ID_<own side>_<member>`.
 
-**`Row <n>` is retired.** It is repo-internal, it does not appear in the
-feasibility table, and it collides with the IDs: "ID 3" and "ID 3" name the same
-member, and nothing but the correspondence table tells a reader so. It survives
-in no identifier, path, target, environment variable, record key or sentence —
-prose says `ID <n>`, code says the member token.
+Prose names a member `ID <n>`, code by its member token; no identifier, path,
+target, environment variable or record key carries any other numbering.
 
 A member answering no numbered row says so, and names the unnumbered bullet it
 answers if there is one. Silence there reads as an oversight rather than a
@@ -427,10 +424,9 @@ neither side needs an editorial family number.
 
 ## Benchmark IDs
 
-The suites answer the Fabric 2.0 feasibility benchmark table (as read on 2026-09-02),
-which numbers 19 microbenchmarks and lists seven unnumbered
-X280 microbenchmarks beside them. The IDs below are cross-references to that
-table and nothing more: no API, path, selector, or result record carries one.
+The suites answer the Fabric 2.0 feasibility benchmarks, which number 19
+microbenchmarks and list seven unnumbered X280 microbenchmarks beside them. The
+IDs below are cross-references to that numbering and nothing more: no API, path, selector, or result record carries one.
 
 | Feasibility ID | Microbenchmark | Member |
 |---|---|---|
@@ -451,7 +447,7 @@ the X280 image has no peer-type branch. The Metal target is selected at compile
 time, independently of the common 16-word layout cookie. Host member names and
 target counter/lifecycle contracts remain distinct.
 
-The source audit keeps the following splits:
+These sources stay split:
 
 | Sources | Contract requiring the split |
 |---|---|
@@ -461,9 +457,9 @@ The source audit keeps the following splits:
 | Transport-bandwidth direction sources | Different initiator, counter, issue primitive and completion boundary. |
 | DRISC endpoint helper | Owns a resource with no equivalent ERISC/Tensix ownership contract. |
 
-The audit of `include/`, `src/`, `kernels/`, and `tests/device/` found no
-remaining target-specific P2P entry, argument wrapper, source-local target
-definition, or one-caller Metal policy forwarding header. No member reduces
+`include/`, `src/`, `kernels/`, and `tests/device/` carry no target-specific
+P2P entry, argument wrapper, source-local target definition, or one-caller
+Metal policy forwarding header. No member reduces
 its samples: every member records its raw populations, and the tabulator's one
 floor-index rule computes their percentiles (`docs/measurement.md`).
 
@@ -483,11 +479,8 @@ consumer, at writer counts 1, 2, 4, 8 and all available and publication batch
 sizes 1, 4 and 8. Aggregate ingress comes from one X280 `mtime` interval; each
 ERISC keeps raw wall ticks and `rdcycle`. Header creation, Ethernet arrival, the
 packet copy to DRISC, and the wait for that copy are preconditions outside the
-measured bracket. It superseded, at its `writers=1,B=1` point, the single-writer
-prototype `transport_bandwidth/erisc_to_x280_header`, which has been removed:
-that member published into successive X280 FIFO slots with a sideband
-`pkt_valid` word and never waited for its consumer. Its per-header cost against
-the unified point and the cost of the credit protocol are in
+measured bracket. The cost of its credit protocol, against a single-writer
+prototype that never waited for its consumer, is in
 [packet_injection.md](packet_injection.md#credit-protocol-cost).
 
 `p2p_latency` participant entries 3–6 have no numbered counterpart. The IDs
@@ -1417,8 +1410,7 @@ included in a compute-stage measurement.
 Initial subjects are routing, forwarding, credit receive, and credit issue.
 The current routing member does not make route construction, lookup style,
 packet tier, table placement, or working-set size into axes. A future subject
-must justify any new axis from its own measurement question rather than inherit
-the retired lookup matrix.
+must justify any new axis from its own measurement question.
 
 ### Measurement granularities
 
@@ -1529,8 +1521,7 @@ totals provide a perturbation check.
 The current lookup reports fixed packet bytes, fixture identity and header
 count, prepared-input base and extent, admitted `wayenable`, pinned-way and
 way-mask identity, instrumentation, counts, raw counter deltas, per-item
-reductions, a stage witness, and verification state. A result from the retired
-construction/compressed-route profile is not a baseline for this subject.
+reductions, a stage witness, and verification state.
 
 ## Deferred and reference measurements
 

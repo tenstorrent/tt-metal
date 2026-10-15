@@ -296,7 +296,7 @@ by a deadline. Hardware that cannot be restored after a failed firmware run is
 reported as unhealthy; the harness does not pretend restoration succeeded.
 
 `X280Runtime` owns one stable `X280Tile` per physical tile. X280 reset release
-cannot be reversed (D-022), so tiles have explicit boot and inspection
+cannot be reversed, so tiles have explicit boot and inspection
 operations rather than an RAII acquire/release pair. The runtime owner
 serializes case use and manages the chip-global PLL across its tile references.
 
@@ -494,7 +494,7 @@ implementation order in the ubench design's
 It supplies the reusable selection, region, execution, deadline, clock, and
 recording mechanisms those rows consume. Suite configuration, protocol,
 reduction, and extension rules remain in the ubench design. Current host and
-runtime blockers are recorded here in D-021, D-023, D-025, and D-027
+runtime blockers are recorded here under [Design rules](#design-rules)
 rather than duplicated beside the suite order.
 
 ## Kernel and image model
@@ -519,11 +519,6 @@ frontend/backend split on other suites.
 X280 images reuse the bare-metal runtime primitives under `include/rt/`
 rather than copying them into each image. These headers own CPU timing and
 pause primitives, resident-idle return, and device-side PLL measurement.
-
-The 32-byte `x280_result_t` was the firmware-to-host wire record of retired
-images this tree does not carry, with their DRAM-result publication and cache
-eviction. It is not the harness result schema; placement, clock state,
-correctness, and other harness metadata remain host-side concerns.
 
 X280 images are built with the tt-metal build, by `x280_add_image` and the SFPI
 compiler, and located at run time by a caller-supplied path. The component
@@ -726,62 +721,6 @@ Writable outbound-NOC programming remains later-milestone scope. Active images
 are submitted only through the runtime, which owns their sessions and their
 restoration.
 
-### Deferred per-hart programming model
-
-The base component exposes no public hart handle. Harts remain internal state
-of the stable, runtime-owned `X280Tile` until separately placed per-hart images
-demonstrate a caller that needs individual identity and inspection.
-
-That future surface keeps harts as stable children of their tile:
-
-```text
-X280Runtime
-└── X280Tile
-    ├── X280Hart 0
-    ├── X280Hart 1
-    ├── X280Hart 2
-    └── X280Hart 3
-```
-
-The following shape is illustrative, not an approved public contract:
-
-```cpp
-struct HartId {
-    TileId tile;
-    uint32_t index;
-};
-
-class X280Hart {
-public:
-    const HartId& id() const;
-    ActiveHartObservation inspect() const;
-};
-
-class X280Tile {
-public:
-    X280Hart& hart(uint32_t index);
-};
-
-struct HartProgram {
-    X280Hart* hart;
-    std::string image_path;
-    uint64_t entry;
-};
-
-EnqueueResult X280Runtime::enqueue(
-    X280Tile& tile,
-    std::span<const HartProgram> programs);
-```
-
-`X280Hart` owns only stable identity and per-hart observation. `X280Tile`
-retains shared LIM, reset, PLL, NOC windows, health, and session aggregation.
-Submission remains on the runtime rather than moving onto the hart handle.
-
-A public hart API requires demonstrated contracts for disjoint image, stack,
-trap, and argument placement in shared LIM; subset launch and aggregate session
-health; and failure recovery when one hart does not return. It must not imply
-independent reset or PLL control that the hardware does not provide.
-
 ### Host-access gate
 
 The X280 component is a C++ adapter over the cluster already owned by Metal.
@@ -862,8 +801,7 @@ when watcher is enabled; subsequent ARC/L2CPU wrapper access remains subject to
 the Metal sanitizer and fails pending upstream support. Production code does
 not bypass the wrapper for topology, register, or LIM access.
 
-The host-access PR characterization historically demonstrated the following on
-Blackhole Galaxy, before the lean runtime API landed:
+Host access has been demonstrated on Blackhole Galaxy for:
 
 - L2CPU discovery through `SocDescriptor::get_cores(CoreType::L2CPU, …)`, with
   the harvesting mask applied by UMD.
@@ -878,7 +816,7 @@ Blackhole Galaxy, before the lean runtime API landed:
 - Reversible LIM-region perturbations protected by range checks and
   exception-safe restoration guards.
 
-The routine equivalents now create the caller-owned `MeshDevice` first and call
+The routine equivalents create the caller-owned `MeshDevice` first and call
 `X280Runtime::open(...RequirePrepared)` across the full visible mesh. Discovery,
 state, telemetry, and backed-LIM checks use `tile_ids()` and `inspect()`.
 Restoring scratch writes use `read_available_lim()` and
@@ -890,8 +828,8 @@ test, so open reports the chips that require operator action:
 
 - **Primed LIM ECC.** Priming commits `WayEnable = 0xF`, which is increase-only,
   so a tile primed in-process loses the LIM it was about to write and still needs
-  the ASIC reset that completes the prime (D-017).
-- **All L2CPUs in reset.** Reset release is one-way (D-022), so the isolated
+  the ASIC reset that completes the prime.
+- **All L2CPUs in reset.** Reset release is one-way, so the isolated
   PLL characterization skips a running chip rather than attempting to quiet it.
 
 Two transport tests remain explicit exceptions. `x280_arc_test` exercises raw
@@ -917,7 +855,7 @@ existing owner rather than initialize another UMD cluster.
 ### Chip-coordinated resident-idle lifecycle
 
 "Within a chip-reset lifetime" is a hardware bound, not a scoping convenience:
-releasing a tile's harts from reset is a one-way step (D-022), so the whole
+releasing a tile's harts from reset is a one-way step, so the whole
 resident-idle scheme exists to make one release serve every case that follows.
 
 `X280Runtime::open` performs readiness inspection and, under `AutoPrime`, the
@@ -1020,11 +958,7 @@ gone. Later enqueue attempts return `Unhealthy` without hardware access.
 Writable outbound-NOC programming and any public hart object remain outside
 this surface.
 
-The old tile-global active mailbox ABI is deleted and its addresses are
-unallocated. Every image in this tree speaks the per-hart protocol; the Python
-boot flow that drove the old one is retired
-(D-030). A tile already running the old resident image requires an ASIC reset
-before the versioned per-hart resident can be installed.
+Every image in this tree speaks the per-hart protocol.
 
 ### Clock configuration is chip-scoped
 
@@ -1114,89 +1048,21 @@ reusable host mechanism or a new hardware ownership or restoration obligation.
 
 ## Device selection
 
-Every tool and case in this suite currently names its target device through the
-**`TT_VISIBLE_DEVICES` environment variable**. That is a latent correctness
-hazard, and it has already produced one wholly wrong hardware conclusion: a
-poisoned tile recorded as surviving `tt-smi -r` when the reset had never
-landed. This section states
-the failure, the rule that contains it today, and the change that removes it.
-
-### The failure
-
-`TT_VISIBLE_DEVICES` is ambient process state. Three properties combine badly:
-
-1. **It is exported globally.** The operator's shell profile sets
-   `TT_VISIBLE_DEVICES=0`, so it is present in every shell whether or not the
-   command intended it.
-2. **Third-party tools honour it.** `tt-smi` narrows its device view to the
-   filter. On an 8-card host a bare `tt-smi -ls` lists one board, and
-   `tt-smi -r <N>` for any other `N` prints `Resetting UMD logical IDs: [N]`,
-   **exits 0, and resets nothing.**
-3. **The failure is silent and indistinguishable from success.** Same message,
-   same exit status. Nothing in the output says the target was outside the
-   filtered view.
-
-The consequence is a split-brain experiment: a measurement command that sets
-`TT_VISIBLE_DEVICES=<N>` explicitly acts on device `<N>`, while a `tt-smi`
-command in the same script inherits `0` and acts on a different card or none at
-all. Reset and measurement then disagree about which silicon is under test,
-and no individual command reports an error.
-
-Three device numberings on this host are also distinct, which makes eyeballing
-identity unreliable: UMD logical id (BDF sort order), the
-`/dev/tenstorrent/<n>` node index, and PCI BDF. On one eight-card Blackhole host UMD id 2 is
-BDF `0000:41:00.0` is node `1`.
-
-### Rule until the interface changes
+Tools and cases in this suite name their target device through the
+`TT_VISIBLE_DEVICES` environment variable. `tt-smi` honours the same filter: under
+an inherited filter, `tt-smi -r <N>` for a device outside it prints
+`Resetting UMD logical IDs: [N]`, exits 0 and resets nothing.
 
 - **Never let `tt-smi` inherit the filter.** Invoke it as
   `env -u TT_VISIBLE_DEVICES tt-smi ...`, always.
 - **Never treat a reset's exit status as proof it happened.** Read the target
   state back: after `tt-smi -r <N>`, the tile's reset bit must read *held*.
-  A reset regime that is not verified is a reset regime that does not work.
 - **Resolve identity by BDF**, via `env -u TT_VISIBLE_DEVICES tt-smi -ls`, when
-  a result is going to be attributed to a specific part.
-- **Verify state by measurement, not by inference.** Every single-action probe
-  trial behind the posted-mode finding survived this bug precisely
-  because it measured a clean baseline instead of assuming the preceding reset
-  had worked. Prefer a probe
-  that proves the precondition over a procedure believed to establish it.
-
-### The change that removes the hazard
-
-Device selection should be an **explicit argument, not ambient state**, so that
-a command's target is a property of the command and two commands cannot
-silently disagree.
-
-| | Today | Should be |
-|---|---|---|
-| gtest cases | `TT_VISIBLE_DEVICES=2 case` | `case --device 2` (or a `--device` gtest flag) |
-| Reset | `tt-smi -r 2` under an inherited filter | `env -u TT_VISIBLE_DEVICES tt-smi -r 2`, verified |
-
-The session fixture already takes chip ids as an argument
-(`OpenConfig::mesh_device_ids`), so the pattern exists; what is missing is that the *device* (which card) is still ambient while the *chip*
-(which die on that card) is an argument. The work is:
-
-1. Add a `--device <umd-id>` option to every host binary, defaulting to the
-   current `TT_VISIBLE_DEVICES` value **only** as a deprecation shim, and log
-   loudly when the shim is used.
-2. Have the option resolve to a BDF and print it, so every run's output records
-   which physical part produced it. A result that cannot be attributed to a BDF
-   should not be quotable in [results.md](results.md).
-3. Make the fixture take the device from that option rather than reading the
-   environment, so a case cannot be retargeted by ambient state.
-4. Once every caller passes `--device`, and the recorded procedures in
-   [results.md](results.md) no longer export `TT_VISIBLE_DEVICES`, refuse
-   to start when it is set at all, rather than honouring it. A hard refusal
-   is correct here: the variable's presence is what made a silent
-   mis-measurement possible, and a warning would be ignored.
-
-A related change belongs outside this repo: `TT_VISIBLE_DEVICES` should not be
-exported from a shell profile at all. A default that silently narrows every
-tool's view of the hardware is not a convenience — it is a trap that fires
-only when someone targets a second device. Removing it from the profile costs one
-explicit argument per command and removes a whole class of misattributed
-result.
+  a result is going to be attributed to a specific part. UMD logical id (BDF sort
+  order), the `/dev/tenstorrent/<n>` node index and the PCI BDF are distinct
+  numberings.
+- **Verify state by measurement, not by inference.** Prefer a probe that proves
+  a precondition over a procedure believed to establish it.
 
 ## Safety invariants
 
@@ -1236,58 +1102,58 @@ result.
 - Do not compare raw cycle counts without their clock-domain and clock-state
   metadata.
 
-## Current decision index
+## Design rules
 
-- **D-001:** Programming components and concrete target modules own hardware
+- Programming components and concrete target modules own hardware
   mechanism and restoration; the harness owns shared orchestration policy and
   suites own experiment policy.
-- **D-002:** The X280 programming component and Metal APIs have no dependency
+- The X280 programming component and Metal APIs have no dependency
   on harness or suite code. Concrete target modules have no dependency on suite
   implementations.
-- **D-003:** Metal's `tt::Cluster` wrapper is the X280 topology, register, and
+- Metal's `tt::Cluster` wrapper is the X280 topology, register, and
   LIM path. Raw UMD is restricted to ARC telemetry absent from the wrapper.
   Exalens is a separate-process behavioral reference only, and no
   unsupported concurrent owners are permitted.
-- **D-004:** Component types remain concrete and heterogeneous; no common
+- Component types remain concrete and heterogeneous; no common
   virtual base or uniform load API is introduced in v0.
-- **D-005:** `X280Runtime` owns one stable `X280Tile` per discovered physical
+- `X280Runtime` owns one stable `X280Tile` per discovered physical
   tile. Exact repeated lookup returns the same object, whose reference is
   bounded by the runtime lifetime. X280 has no synthetic RAII claim because
   reset release has no in-process inverse; the runtime owner serializes use.
-- **D-006:** Region declaration and finalization precede cross-component view
+- Region declaration and finalization precede cross-component view
   resolution. Local self-views do not require a vacuous cross-view plan.
-- **D-007:** Addresses are resolved for a viewer on the host and passed to
+- Addresses are resolved for a viewer on the host and passed to
   kernels; test-specific addresses are not baked into shared headers.
-- **D-008:** Cases are code; a declarative specification and graph executor are
+- Cases are code; a declarative specification and graph executor are
   deferred.
-- **D-009:** `X280Runtime::open` is Metal's stateful X280 initialization
+- `X280Runtime::open` is Metal's stateful X280 initialization
   boundary. It discovers and initializes all selected chips and returns a
   runtime only for all-chip readiness; X280 is not a first-class Metal
   programmable-core type.
-- **D-010:** The first cross-component case is a symmetric readiness
+- The first cross-component case is a symmetric readiness
   acknowledgement, separate from X280's internal firmware handoff.
-- **D-011:** Every exact invocation has a host deadline. Device-side bounds are
+- Every exact invocation has a host deadline. Device-side bounds are
   suite-owned and may be omitted from a measured loop.
-- **D-012:** Stable lifecycle, resource, execution, and recording mechanisms
+- Stable lifecycle, resource, execution, and recording mechanisms
   are centralized. Suite loops and reductions remain suite-owned; concrete
   implementations validate the shared boundaries.
-- **D-013:** X280 images reuse the shared bare-metal runtime headers; those
+- X280 images reuse the shared bare-metal runtime headers; those
   firmware primitives do not replace the host-side X280 programming path or define
   the harness result schema.
-- **D-014:** Runtime opening may clock a reset-held tile at the safe probe
+- Runtime opening may clock a reset-held tile at the safe probe
   frequency when its initial observation is unusable. It rejects both raw
   all-ones observations and the equivalent per-operation timeout before field
   decoding. Measured on Blackhole, an unclocked tile returns all ones after
   about 55 ms, so UMD may surface either form. Neither may be masked into a
   plausible field value.
-- **D-015:** L2CPU hardware numbering is the `L2CPU_RESET` bit order — bit `4+N`
+- L2CPU hardware numbering is the `L2CPU_RESET` bit order — bit `4+N`
   selects hart group `4N..4N+3` and indexes `L2CPUCLK<N>` telemetry. UMD's L2CPU
   core array is sorted by NoC Y and is a *different* index. UMD shuffles
   `ENABLED_L2CPU` into that ordering as its harvesting mask and omits disabled
   cores before returning the inventory. Components map each returned NOC0
   coordinate back to the hardware index; conflating UMD order with hardware
   order selects the wrong reset bit and telemetry tag while appearing to work.
-- **D-016:** PLL, L3 CSR, and reset-register access uses Metal's
+- PLL, L3 CSR, and reset-register access uses Metal's
   `tt::Cluster::read_reg` / `write_reg` wrapper path (uncached mapping, strict
   ordering, 32-bit chunked) targeting the ARC or L2CPU core, with a readback
   after every write. The
@@ -1298,33 +1164,33 @@ result.
   the helper and leaves the stepping loop running. LIM is memory rather than
   registers and uses the block path, `read_core` / `write_core`. The `arc_apb`
   helpers are avoided on Galaxy, where they resolve to BAR access.
-- **D-017:** LIM ECC priming is a prerequisite for any LIM write, including
+- LIM ECC priming is a prerequisite for any LIM write, including
   firmware loads. A fresh machine has uninitialised ECC, reads are safe but
   partial writes corrupt silently, and priming commits `WayEnable` and then
   requires an ASIC reset to complete. Components verify the prime marker before
   writing LIM rather than assuming it.
-- **D-018:** Resident-idle liveness requires the tile to be out of reset *in
+- Resident-idle liveness requires the tile to be out of reset *in
   addition to* four expected protocol versions, distinct idle heartbeat
   markers, and committed `IDLE` phases. The records live in LIM outside every
   image region, so they survive both a handoff and the tile returning to reset.
   Matching records on a reset-held tile describe the last boot, not current
   liveness.
 
-- **D-019:** `X280Runtime::open` binds weakly to a caller-owned live
+- `X280Runtime::open` binds weakly to a caller-owned live
   `MeshDevice`. Reopening the same mesh reuses its runtime; another live mesh
   receives `Failed` with a busy-owner diagnostic; a recreated mesh gets fresh
   contexts after the first closes. Every operation refuses a closed mesh, and
   destructors perform no device I/O after closure.
-- **D-020:** Chip-scoped coordination is private runtime state, not a public
+- Chip-scoped coordination is private runtime state, not a public
   `X280Chip`. The runtime owns discovery, all-chip readiness, stable tile
   objects, and chip-global PLL programming; chip contexts own hardware
   serialization and reset/ECC coordination; tiles own inspection and explicit
   resident-idle boot.
-- **D-021:** Active images are submitted on the runtime, which owns every
+- Active images are submitted on the runtime, which owns every
   in-flight session, addresses it by `SessionId`, and reaps it on completion.
   Submission accepts only healthy tiles from that same runtime; tiles expose no
   `launch()` method. Writable outbound-NOC remains deferred.
-- **D-022:** Releasing a tile's harts from reset is one-way. A hardware bug means
+- Releasing a tile's harts from reset is one-way. A hardware bug means
   the harts within an L2CPU tile can be brought out of reset only once; putting
   them back requires resetting the whole ASIC (`tt-smi -r`). Asserting the reset
   bit on a running tile therefore does not yield a restartable tile, it yields one
@@ -1335,33 +1201,33 @@ result.
   seize it via RNMI and park it in machine mode, which is what the resident-idle
   firmware stands in for. Source: tt-isa-documentation
   `BlackholeA0/L2CPUTile/README.md`, the L2CPU_RESET section — which is also where
-  the `L2CPU_RESET` bit-to-coordinate table D-015 depends on is defined, and it
+  the `L2CPU_RESET` bit-to-coordinate table the hardware numbering above depends
+  on is defined, and it
   further requires that harts come out of reset with L2SYS at a low clock, raised
   only once running.
   Two details that section understates. `L2CPU_RESET` carries two 4-bit fields:
   bits 0–3 are `l2cpu_reset_n`, the per-tile reset, and bits 4–7 are
   `l2cpu_risc_reset_n`, the per-cluster reset the table describes — the table
   calls bits 0–3 reserved, and the read-modify-write preserves them either way
-  (`reset_unit.L2CPU_RESET`; the bringup scripts treat bits [7:4] as cluster
-  resets and [3:0] as tile resets). And the one-way property is specifically that the cluster bits
+  (`reset_unit.L2CPU_RESET`). And the one-way property is specifically that the cluster bits
   cannot put cores *back* into reset — "the core resets can be used to release
   the x280 cores from reset (after a tile reset), but cannot be used to put the
   cores back into reset". Nothing in this
   tree ever clears a bit, so the NOC hang that clearing one causes is out of reach.
-- **D-023:** There is no public `X280Hart`. Per-hart protocol records remain
+- There is no public `X280Hart`. Per-hart protocol records remain
   internal tile state. A public hart becomes justified only by separately
   placed images and remains a stable child of `X280Tile`; it does not own reset,
   PLL, shared LIM, or submission.
-- **D-024:** The harness establishes the operating PLL once per session through
+- The harness establishes the operating PLL once per session through
   the runtime owner while every live X280 tile is in verified resident idle.
   No active firmware or external device owner may coexist with the move.
   Reset-held probe, bootstrap, and cold-boot changes retain their stronger
   all-tiles-in-reset gate.
-- **D-025:** Characterization uses host-programmed, readback-verified X280
+- Characterization uses host-programmed, readback-verified X280
   device windows prepared before launch. The current host-only range 192–223 is
   a software partition that must be relaxed or repartitioned for the all-L1
   target plan; firmware never races the host or reprograms a timed-loop window.
-- **D-026:** The per-tile `boot()` cannot cold-boot a second reset-held tile
+- The per-tile `boot()` cannot cold-boot a second reset-held tile
   after the first tile leaves reset. Cross-tile X280 execution boots its tiles
   through `X280Runtime::boot_tiles`, a chip-level operation on the runtime that
   prepares a selected set of tiles, establishes the safe clock, and releases
@@ -1369,20 +1235,18 @@ result.
   per-tile gate proves. Several L2CPUs leaving reset in one write is confirmed
   on silicon: the `x280_peer_tile` placement sweep measured ID 3 across three
   complexes cold-booted as one batch. It is also the sanctioned bringup flow
-  rather than a tolerated one, which is what retired this entry as a blocker.
-  `tt-bh-linux`, `boot.py:76-85` implements the same algorithm — PLL to 200,
+  rather than a tolerated one. `tt-bh-linux`, `boot.py:76-85` implements the same algorithm — PLL to 200,
   read `L2CPU_RESET`, `|= 1 << (index + 4)` for every requested index, one
   `axi_write32`, read back, PLL to 1750 — over an arbitrary subset of
-  `[0,1,2,3]`; the bringup scripts write `L2CPU_RESET = 0xf` to take all tiles
-  out of reset; the Zephyr CMFW reset driver writes the whole field as
+  `[0,1,2,3]`; the Zephyr CMFW reset driver writes the whole field as
   `TT_BH_L2CPU_TILE_MASK`; and the boot sequence is a `tt-smi` reset, then one
   to four tiles released in one write, all of them booting at the same time. ARC and CMFW take no action
   on an `L2CPU_RESET` write beyond latching the bit — no source describes
-  either observing it, CMFW is itself a writer through that driver, and the
-  bringup scripts write it directly over JTAG with no ARC coordination. The
+  either observing it, and CMFW is itself a writer through that driver. The
   shared-resource hazard is the clock, not this register: all four share one
-  clock, which must be lowered for the reset and raised after it, which is what D-024's safe clock already handles.
-- **D-027:** Production fabric occupies Ethernet cores through session/cluster
+  clock, which must be lowered for the reset and raised after it, which the
+  runtime's safe clock handles.
+- Production fabric occupies Ethernet cores through session/cluster
   `FabricConfig` and a compiled Metal `Program`. Raw ERISC characterization is
   therefore a session-level configuration transition, not a per-link RAII
   claim that can locally restore one production router. The `p2p_latency`
@@ -1390,29 +1254,22 @@ result.
   only a core reported inactive, launches it in `Eth::IDLE`, and uses same-chip
   NOC traffic without touching the Ethernet link. Active-ERISC and
   production-fabric support remain unimplemented.
-- **D-028:** `X280Runtime` lifecycle state is four homogeneous per-hart records
-  with one shared image, entry, and generation. The tile-global mailbox ABI it
-  replaced is deleted, not reserved.
-- **D-029:** The hart index is an array index and nothing else. No firmware,
+- `X280Runtime` lifecycle state is four homogeneous per-hart records
+  with one shared image, entry, and generation.
+- The hart index is an array index and nothing else. No firmware,
   host, or linker path gives hart 0 a different ABI: every hart sizes its stack
   from the same linker-provided stride, records trap diagnostics in its own
   block, arms its own fault probe, and publishes its own lifecycle record. An
   aggregate wait retains all four records, so every hart must publish — but
   that is the lifecycle harness's job, not the image's, so an image with work
   for one hart simply returns from `main` on the other three. Two consequences
-  are load-bearing. A single probe word let a hart probing an unknown register
-  suppress another hart's real fault report, and a single 32 B trap block let
-  two trapping harts overwrite each other. Both were silent.
-- **D-030:** The Python host flow is retired, not maintained. It drove the
-  tile-global mailboxes D-028 deleted, and the resident-idle image both it and
-  the C++ runtime load stopped implementing them when that image moved to the
-  per-hart protocol — so it was already broken before the addresses went away.
-  The C++ `X280Runtime` is the only supported boot and submission path.
-  Reviving the Python path means rewriting it against the per-hart records, and
-  the entry points are listed in [runtime.md](runtime.md#runtime-ownership). Application mailboxes
-  are not affected: the socket, migration, stress, and atomic-bench control
-  blocks are those protocols' own, and stay.
-- **D-031:** Every active image runs one lifecycle harness
+  are load-bearing. A single probe word would let a hart probing an unknown
+  register suppress another hart's real fault report, and a single 32 B trap
+  block would let two trapping harts overwrite each other, both silently.
+- The C++ `X280Runtime` is the only supported boot and submission path.
+  Application mailboxes are those protocols' own: the socket, migration and
+  atomic-bench control blocks.
+- Every active image runs one lifecycle harness
   (`src/x280_active_start.c`), which publishes RUNNING, calls the image's
   `main`, commits terminal success, waits for the host's STOP, and takes the
   acknowledged return. It carries no hart-to-hart dependency — no director
@@ -1423,7 +1280,7 @@ result.
   require. What the harness cannot enforce is five stated obligations
   ([device_images.md](device_images.md#the-active-image-contract)), enforced by
   `X280ActiveContract`.
-- **D-032:** An active image receives host-computed values through one
+- An active image receives host-computed values through one
   caller-owned argument block whose address and extent are told rather than derived:
   `ActiveRunRequest::args_addr` and `args_bytes`, published into
   `x280_hart_control_t::args` and `args_bytes` and read back beside run value
@@ -1438,7 +1295,7 @@ result.
   the case. Deriving the address on both sides is the alternative, and it
   couples every image to `reserved_lim()`'s internals through two
   `#ifndef`-overridable sizes.
-- **D-033:** A case-owned mailbox layout lives in one header beside the case,
+- A case-owned mailbox layout lives in one header beside the case,
   compiled by all three participants: host C++, the rv64 image, and the rv32
   Tensix kernel, which reaches it through
   `DataMovementConfig::compiler_include_paths`. Beside the case rather than in
@@ -1448,32 +1305,30 @@ result.
   resolved by the host at run time and told to each participant. A copy per
   participant is the alternative, and it drifts with only comments asking that
   it not.
-- **D-034:** A stop path may not write a value some wait is waiting for.
+- A stop path may not write a value some wait is waiting for.
   `wait_or_stop` tests its word before it tests STOP, so GO wins over a STOP
   already latched: a cancel that writes the gate releases an armed participant
   into the work it was cancelling instead of ending it. `test-active-stop-poll`
   does not reach this. It proves every fence-bearing wait can observe STOP,
   which a gate spin does, so an image carrying the defect passes the gate —
   obligation 1 constrains the waiter, and this constrains what the stop path
-  writes. The satisfying shape is one write site per release value:
-  the NoC stress image (not carried in this tree) wrote `ST_GATE_GO` only at
-  the legitimate start and shut down through `ST_WAKE_SHUTDOWN`, which the gate
-  spin does not read.
+  writes. The satisfying shape is one write site per release value: the gate
+  value written only at the legitimate start, and shutdown through a word the
+  gate spin does not read.
   `atomic_bench.c`'s `cancel_run` writes `AB_GATE_GO` and does not satisfy it;
   a helper released that way runs `run_increment_loop` against whatever counter
   address it latched, and on a stale one the access fault CEASEs the hart and
   the tile needs `tt-smi -r`.
-- **D-035:** `p2p_latency` `drisc_peer_tile` is a mechanical same-chip smoke
+- `p2p_latency` `drisc_peer_tile` is a mechanical same-chip smoke
   member for bank 0's free non-endpoint DRISC. It uses NOC0 only and forces
   slow dispatch with the tensor prefetcher inactive. The kernel requires NOC0
   in the stream mode DRISC firmware sets, and switches no NIU. X280 uses the DRISC-local mailbox offset; host access uses the
   corresponding tagged L1 address. DRISC deltas remain raw wall-clock ticks and
   carry host-bracketed AICLK evidence for external conversion. The executable,
-  libraries, runtime assets, JIT headers, and kernel sources use the exact
-  `tt-metal` submodule revision pinned by the superproject commit; combining
-  them from different revisions is unsupported.
+  libraries, runtime assets, JIT headers, and kernel sources come from one
+  tt-metal revision; combining them from different revisions is unsupported.
 
-- **D-036:** Metal P2P peers compile one `metal_peer_entry.cpp` with exact-one
+- Metal P2P peers compile one `metal_peer_entry.cpp` with exact-one
   target definitions supplied by their launch config. `metal_peer_target.hpp`
   owns counter, backend identity, and transport lifecycle policy; the shared
   layout cookie belongs to `metal_peer_args.h`. All three hosts use
@@ -1485,9 +1340,9 @@ result.
   helpers in `tests/device/suites/p2p_latency/metal_peer.hpp`; core selection,
   resources, launch APIs and failure recovery stay in each descriptor.
 
-- **D-037:** Every Metal workload targeting `IDLE_ETH` requires
-  `TT_METAL_SLOW_DISPATCH_MODE=1` before `MeshDevice` construction. The pinned
-  tt-metal fast-dispatch paths do not support idle Ethernet cores: they omit
+- Every Metal workload targeting `IDLE_ETH` requires
+  `TT_METAL_SLOW_DISPATCH_MODE=1` before `MeshDevice` construction. tt-metal's
+  fast-dispatch paths do not support idle Ethernet cores: they omit
   complete runtime-argument and kernel-text writes and do not publish a usable
   `RUN_MSG_GO`, leaving the selected ERISC reset-held even though JIT
   compilation succeeds. The executable owns this requirement by linking the
@@ -1541,7 +1396,7 @@ layouts are headers both halves compile; the framework defines no wire format.
 What the framework supplies is three things: the opaque argument span
 (`ActiveRunRequest::args_addr` and `args_bytes`, read by the image through
 `x280_hart_args` and `x280_hart_args_bytes`,
-validated for placement only — D-032), `noc_open_window_2m`, which refuses an
+validated for placement only), `noc_open_window_2m`, which refuses an
 out-of-range coordinate rather than truncating it into a different real tile
 and reads back the window it programmed, and `X280_TLB_PAIRED_BASE`, the slot
 range a paired case draws its outbound window from.

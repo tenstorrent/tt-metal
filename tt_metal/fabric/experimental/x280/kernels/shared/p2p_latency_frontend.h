@@ -25,7 +25,7 @@
  *   - warmup_max_poll_cycles is a whole 64-bit field, not two halves. Reading
  *     a partial value here would cap warmup polling short of what the host
  *     packed and mask a slow rendezvous as a timeout. Host packs it as one
- *     u64 store into cache-line aligned LIM (D-032); firmware reads it as one
+ *     u64 store into cache-line aligned LIM; firmware reads it as one
  *     u64 load.
  *
  * Every device-side status field is a 32-bit word whose low 16 bits carry the

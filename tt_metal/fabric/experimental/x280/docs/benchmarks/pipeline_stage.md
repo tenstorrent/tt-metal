@@ -4,9 +4,8 @@
 
 This document defines the current `pipeline_stage` contract for the routing
 and forwarding members on the host-booted SiFive X280 RISC-V cores. The lookup
-workload is the MEM-03/LK-03/SZ-01 design: one destination-to-next-hop operation
-over a fixed, suite-prepared input. It supersedes an earlier route-construction and
-compressed-route lookup design, whose measurements no current code reproduces.
+workload is one destination-to-next-hop operation over a fixed, suite-prepared
+input.
 
 Results are in [`docs/results.md`](../results.md).
 X280 micro-benchmark figures move with firmware code layout alone (a code-placement
@@ -38,13 +37,10 @@ Backend IDs are distinct per member
 - `PIPELINE_STAGE_BACKEND_ID_X280_ROUTE_COMPUTE` = `0x10200001u`
 - `PIPELINE_STAGE_BACKEND_ID_X280_ROUTE_FORWARD` = `0x10200002u`
 
-Members 3 and 4 are retired: retained DRISC and idle-ERISC records carry
-`0x40200003u`/`0x30200003u` (`route_compute`) and `0x40200004u`/`0x30200004u`
-(`route_forward`), which no current member publishes.
+Backend IDs `0x40200003u`/`0x30200003u` and `0x40200004u`/`0x30200004u` are
+reserved: no member publishes them.
 
-There is no current route-construction member. The old 36 construction
-registrations and the old 9 compressed-route lookup registrations are retired.
-Lookup has no PACKED/ALIGNED selector, construction style, packet tier,
+There is no route-construction member. Lookup has no PACKED/ALIGNED selector, construction style, packet tier,
 destination-window sweep, table-placement sweep, or header-placement sweep.
 Instrumentation remains a measurement mode, not an implementation alternative.
 
