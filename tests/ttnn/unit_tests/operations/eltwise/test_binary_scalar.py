@@ -190,7 +190,7 @@ def test_binary_scalar_float32_arithmetic(device, op_name, scalar):
     "ttnn_fn",
     [ttnn.eq, ttnn.ne, ttnn.gt, ttnn.lt, ttnn.ge, ttnn.le],
 )
-@pytest.mark.parametrize("scalar", [0, 1, -1, 42, -100])
+@pytest.mark.parametrize("scalar", [0, 1, -1, 42, -100, 2147483647, -2147483648])
 def test_binary_scalar_int32_relational(device, ttnn_fn, scalar):
     """Verify relational ops with int32 tensor and int scalar."""
     torch_input = torch.tensor(
