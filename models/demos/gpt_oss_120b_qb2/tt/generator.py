@@ -815,26 +815,15 @@ class Generator:
                 return True
         return False
 
-    def _replay_prepared_sampling(self, tt_logits, *, enable_trace: bool):
-        """Replay fixed unseeded sampling without host sampling-state mutation."""
+    def _replay_prepared_sampling(self, payload, *, enable_trace: bool):
+        """Consume the shared generator's one-shot fixed-state decode payload."""
 
-        sampled_outputs = []
-        for model_id, logits in enumerate(tt_logits):
-            sampling = self._inner.model[model_id].sampling
-            if sampling is None:
-                raise RuntimeError("fixed sampling replay requires an on-device sampling module")
-            if isinstance(logits, tuple):
-                logits = logits[0]
-            trace_inputs = self._inner.trace_inputs_decode[True][model_id]
-            tt_out_tok = self._inner._decode_token_feedback_buffer(self._inner.model[model_id], trace_inputs)
-            sampled_outputs.append(
-                sampling.sample(
-                    logits=logits,
-                    tt_out_tok=tt_out_tok,
-                    enable_trace=enable_trace,
-                )
-            )
-        return sampled_outputs
+        # The shared generator owns the captured decode commands and pending
+        # payload. Its consumer preserves those commands and rejects duplicate
+        # consumption or further decode after a sampling failure.
+        if payload.enable_trace != enable_trace:
+            raise ValueError("fixed sampling replay must preserve the captured trace mode")
+        return self._inner.sample_deferred_decode(payload, self._prepared_device_sampling_params)
 
     def _replay_prepared_greedy_sampling(self, tt_logits, *, enable_trace: bool):
         """Compatibility wrapper for the original split-greedy helper."""

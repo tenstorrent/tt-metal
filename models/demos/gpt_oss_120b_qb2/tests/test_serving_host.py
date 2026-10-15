@@ -317,6 +317,8 @@ def decode_contract_generator():
         model=[model],
         data_parallel=1,
         mode=Mode.DECODE,
+        _pending_deferred_decode_sampling=None,
+        _deferred_decode_sampling_failed=False,
         _decode_forward_trace_text=Mock(return_value=object()),
         _decode_forward_no_trace_text=Mock(return_value=object()),
         sample_decode_on_device=Mock(side_effect=lambda logits, **kwargs: logits),
@@ -569,3 +571,62 @@ def test_split_token_out_initializes_once_then_uses_current_deferred_contract():
         True,
         False,
     ]
+
+
+@pytest.mark.parametrize("page_only", [False, True])
+def test_fixed_sampling_consumes_real_shared_deferred_payload(page_only):
+    generator = decode_contract_generator()
+    contract_decode(generator, reload_inputs=True, reload_sampling_params=True, reset_sampling_state=True)
+    prepared = generator._prepared_device_sampling_params
+    del generator._replay_prepared_sampling  # Exercise the production adapter, not its fixture mock.
+    inner = generator._inner
+    inner.sample_deferred_decode = MethodType(SharedGenerator.sample_deferred_decode, inner)
+    inner._raise_if_deferred_sampling_failed = MethodType(SharedGenerator._raise_if_deferred_sampling_failed, inner)
+    sampled = object()
+    inner._sample_decode = Mock(return_value=sampled)
+    payloads = []
+    consume = inner.sample_deferred_decode
+
+    def record_payload(payload, params):
+        payloads.append(payload)
+        return consume(payload, params)
+
+    inner.sample_deferred_decode = record_payload
+    for _ in range(2):
+        assert contract_decode(generator, reuse_sampling_state=True, reload_page_table=page_only) is sampled
+        assert inner._pending_deferred_decode_sampling is None
+    assert len(payloads) == 2 and payloads[0] is not payloads[1]
+    call = inner._sample_decode.call_args
+    assert call.args[0] is inner._decode_forward_trace_text.return_value
+    assert call.args[1] is prepared
+    assert call.kwargs["reload_inputs"] is False
+    assert call.kwargs["reload_sampling_params"] is False
+    assert call.kwargs["reset_sampling_state"] is False
+    assert call.kwargs["enable_trace"] is True
+    assert call.kwargs["prompt_tokens"] is None and call.kwargs["output_tokens"] is None
+    assert call.kwargs["slot_remap"] is None
+    assert call.kwargs["grammar_bitmask"] is None
+    assert inner._decode_forward_trace_text.call_args.kwargs["reload_page_table"] is page_only
+    with pytest.raises(RuntimeError, match="stale or was already consumed"):  # allow-pytest.raises: host-only
+        generator._replay_prepared_sampling(payloads[-1], enable_trace=True)
+    assert inner._sample_decode.call_count == 2
+
+
+def test_fixed_sampling_failure_blocks_further_shared_decode():
+    generator = decode_contract_generator()
+    contract_decode(generator, reload_inputs=True, reload_sampling_params=True)
+    del generator._replay_prepared_sampling
+    inner = generator._inner
+    inner.sample_deferred_decode = MethodType(SharedGenerator.sample_deferred_decode, inner)
+    inner._raise_if_deferred_sampling_failed = MethodType(SharedGenerator._raise_if_deferred_sampling_failed, inner)
+    failure = RuntimeError("sampler failed after decode")
+    inner._sample_decode = Mock(side_effect=failure)
+    with pytest.raises(RuntimeError, match="sampler failed after decode") as caught:  # allow-pytest.raises: host-only
+        contract_decode(generator, reuse_sampling_state=True)
+    assert caught.value is failure
+    assert inner._pending_deferred_decode_sampling is None
+    assert inner._deferred_decode_sampling_failed is True
+    submits = inner._decode_forward_trace_text.call_count
+    with pytest.raises(RuntimeError, match="prior deferred"):  # allow-pytest.raises: host-only
+        contract_decode(generator, reuse_sampling_state=True)
+    assert inner._decode_forward_trace_text.call_count == submits
