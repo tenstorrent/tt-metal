@@ -28,6 +28,11 @@
 //            4x[1, 32] pages). The unpack path zeroes rows
 //            [8..16) itself (ZEROSRC over the full srcA span, see
 //            llk_unpack_hadamard.h), so callers need not pad them.
+//            Each hadamard_h128_tile call reads 256 B from in_tile_index,
+//            which may span several pages (4 for bf16 [1, 32] pages). The
+//            caller must wait on and pop 256 B / page_size pages per call,
+//            step in_tile_index by the same count, and keep the window
+//            from wrapping past the CB end.
 //
 //   out_cb : single [16, 16] bfp8 (bfloat8_b) tile. The 1x128 result
 //            lives in face 0 rows [0..8), cols [0..16). The caller
@@ -119,7 +124,7 @@ ALWI void hadamard_h128_init_short(const uint32_t in_cb_id, const uint32_t h16_c
  * |------------------|--------------------------------------------------------------|----------|------------------------------------------------|-----------------------|
  * | in_cb_id         | CB holding the 1x128 input (128 contiguous bf16)             | uint32_t | 0 to 31                                        | True                  |
  * | h16_cb_id        | CB holding the H_16 weight tile (H_16 fills the face)        | uint32_t | 0 to 31                                        | True                  |
- * | in_tile_index    | Page index where the input vector starts in in_cb_id         | uint32_t | < CB size                                      | True                  |
+ * | in_tile_index    | Page index where the 256 B input starts (see in_cb above)    | uint32_t | < CB size                                      | True                  |
  * | h16_tile_index   | Index of the H_16 tile within h16_cb_id                      | uint32_t | < CB size                                      | True                  |
  * | dst_index        | DST register index that will receive the result Y            | uint32_t | < acquired DST size                            | True                  |
  */
