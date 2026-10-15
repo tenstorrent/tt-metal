@@ -382,7 +382,6 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
     const uintptr_t config_cached = reinterpret_cast<uintptr_t>(dfb_config_base);
     const uint8_t has_dm0_isr = *dfb_l1_uncached_byte_ptr(config_cached + offsetof(dfb_global_header_t, has_dm0_isr));
     if (has_dm0_isr == 0) {
-        disable_dfb_tile_isr();
         // Header is valid; preserve prior "DM0 finished setup" signaling for consumers
         // that only gate on has_dm0_isr (they will not wait on ready).
         *dfb_l1_uncached_byte_ptr(config_cached + offsetof(dfb_global_header_t, dm0_isr_ready)) = 1u;
