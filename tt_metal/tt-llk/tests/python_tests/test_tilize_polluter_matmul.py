@@ -16,26 +16,31 @@ cannot mix tile geometries, so this uses a **state-leak** design instead:
            operands read directly from buffer_A[0] / buffer_B[0].
 
 `_llk_unpack_AB_matmul_init_` only reprograms x-end and the ZW *counter*; it does NOT
-reset the SrcA Y-stride / Z-stride / Tile_x_dim that `unpack_tilize` mutates (those are
-restored by `_llk_unpack_tilize_uninit_`). So a tiny tilize that is not properly uninit'd
-leaks its strides into the matmul, corrupting the result.
+reset what `unpack_tilize` mutates: `tileize_mode` and its row pitch in unpack config
+word 0, `Tile_x_dim_cntx0`, and on Blackhole the SrcA tile-descriptor X/Z-dim (those are
+restored by `_llk_unpack_tilize_uninit_`). Tilize leaves no non-canonical stride on either
+arch. So a tilize that is not properly uninit'd leaks that state into the matmul,
+corrupting the result.
 
 The `do_restore` toggle makes this a controlled experiment:
     do_restore=True  -> transition restores the baseline; matmul must match golden.
-    do_restore=False -> no restore; on a correct (PR) build this always exposes the leak
-                        and corrupts the matmul, for every polluter geometry including the
-                        regular G0 (face_r_dim=16). Even when the regular polluter's
-                        Y-stride already matches, `unpack_tilize` leaves `tilize_mode` set
-                        and `Tile_x_dim` covering the whole tile row, which
-                        `_llk_unpack_AB_matmul_init_` does not reset — so divergence is
-                        guaranteed and (16, False) is a valid negative-control point.
+    do_restore=False -> no restore; the leaked tilize state corrupts the matmul, for every
+                        polluter geometry including the regular G0 (face_r_dim=16).
+                        The leaked state that corrupts the matmul is `tilize_mode` with its
+                        row pitch, which _llk_unpack_AB_matmul_init_ does not reset. With a
+                        one-tile-wide polluter the pitch is one tile row: Wormhole's tilize
+                        mode reads 16-datum rows, so that pitch skips every other chunk and
+                        the result is wrong; Blackhole reads 32-datum rows (2/4-byte
+                        formats), so the same pitch reads the tilized tile unchanged and the
+                        result still matches golden, which hides the leak. The polluter is
+                        therefore two tiles wide (POLLUTER_CT_DIM), so the pitch differs from
+                        a tile row on both arches and the control detects the leak on both.
 """
 
 from dataclasses import dataclass
 
 import pytest
 import torch
-from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
@@ -73,10 +78,24 @@ class DO_RESTORE(TemplateParameter):
         return f"constexpr bool DO_RESTORE = {str(self.do_restore).lower()};"
 
 
-@skip_for_blackhole
+@dataclass
+class POLLUTER_CT_DIM(TemplateParameter):
+    """Width of the run-0 tilize polluter in tiles.
+
+    Two tiles, so the leaked tilize row pitch differs from one tile row; with one tile the
+    leak cannot corrupt the Blackhole matmul, so the negative control cannot detect it. The 4-face
+    polluter then reads past buffer_A[0] into buffer_B[0] (reads only; output discarded).
+    """
+
+    polluter_ct_dim: int = 2
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t POLLUTER_CT_DIM = {self.polluter_ct_dim};"
+
+
 @parametrize(
     # Same format for both runs so skipping the restore (do_restore=False) does not
-    # introduce a data-format mismatch — isolating the unpacker-stride leak.
+    # introduce a data-format mismatch — isolating the tilize-state leak.
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -168,6 +187,7 @@ def test_tilize_polluter_matmul(
             generate_input_dim(mm_dimensions, mm_dimensions),
             MATH_FIDELITY(math_fidelity),
             DO_RESTORE(do_restore=do_restore),
+            POLLUTER_CT_DIM(),
         ],
         runtimes=[
             NUM_FACES(polluter_num_faces),
@@ -214,10 +234,9 @@ def test_tilize_polluter_matmul(
         ), "restore (uninit + reconfig) failed: matmul diverged from golden"
     else:
         # Negative control: run-1 performs NO hw_configure and relies entirely on the
-        # restore that we skipped here, so the polluter tilize state (tilize_mode, mutated
-        # Tile_x_dim / Y-stride, and — for tiny polluters — a <4-face descriptor) leaks into
-        # the regular matmul and MUST corrupt the result. This proves the restore is
-        # load-bearing (and that _llk_unpack_AB_matmul_init_ does not reset that state).
+        # restore that we skipped here, so the polluter tilize state (tilize_mode with its row
+        # pitch, and for tiny polluters a <4-face descriptor) leaks into the regular matmul. The divergence shows that _llk_unpack_AB_matmul_init_ does not
+        # reset the leaked tilize mode and row pitch, which is what the matmul read depends on.
         assert (
             not result_matches
         ), "expected a state leak without restore, but the matmul matched golden"

@@ -36,6 +36,15 @@ inline tt::tt_metal::ComputeConfigDescriptor gdn_compute_config(const DeviceComp
         .math_approx_mode = cfg.math_approx_mode};
 }
 
+// The chunk sizes every chunk_gated_delta_rule program (mono, phased, fused) accepts: one or two tile rows per
+// chunk, the only ones the kernels are validated at (the prep kernel's C > 64 fallback is not).
+inline void validate_gdn_chunk_size(uint32_t chunk_size) {
+    TT_FATAL(
+        chunk_size == tt::constants::TILE_HEIGHT || chunk_size == 2 * tt::constants::TILE_HEIGHT,
+        "chunk_gdn: chunk_size must be 32 or 64 (got {})",
+        chunk_size);
+}
+
 // WY-inverse method of the prep compute (the `tinv` attribute of the prep and fused prims): the op's
 // ChunkGdnWyInverse with AUTO resolved for this device and chunk size.
 //   HORNER    : invert_block — quadrant split, two 15-term Horner inverses and an exact off-diagonal on

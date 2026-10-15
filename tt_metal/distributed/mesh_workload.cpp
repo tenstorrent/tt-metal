@@ -97,7 +97,6 @@ void MeshWorkloadImpl::set_finalized(uint32_t max_program_kernels_sizeB, int mes
         auto& program_impl = program.impl();
         metadata.num_program_devices += device_range.shape().mesh_size();
         metadata.runs_on_noc_multicast_only_cores |= program_impl.runs_on_noc_multicast_only_cores();
-        metadata.runs_on_noc_unicast_only_cores |= program_impl.runs_on_noc_unicast_only_cores();
 
         const auto& program_config_sizes = program_impl.get_program_config_sizes();
         if (metadata.program_config_sizes.empty()) {
@@ -320,10 +319,6 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
 
 bool MeshWorkloadImpl::runs_on_noc_multicast_only_cores() {
     return get_finalized_metadata().runs_on_noc_multicast_only_cores;
-}
-
-bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
-    return get_finalized_metadata().runs_on_noc_unicast_only_cores;
 }
 
 // kernels_ is sized to the programmable-core-type count by finalize_offsets, which reaches this

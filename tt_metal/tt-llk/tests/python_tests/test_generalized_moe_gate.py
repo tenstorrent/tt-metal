@@ -448,7 +448,7 @@ def _sigmoid_stimuli(seed, grouped):
     return payload.to(torch.bfloat16), bias.to(torch.bfloat16)
 
 
-# The op's enable_sigmoid front-end, which nothing else reaches: transpose_wh_tile, then sigmoid_tile,
+# The op's enable_sigmoid front-end, which nothing else reaches: transpose_tile, then sigmoid_tile,
 # then a RELOAD binary that takes SrcA back out of DEST through MOVD2A while the unpacker feeds only
 # SrcB under DEST_TO_SRCA reuse. The plain path never instantiates that unpack configuration, so this
 # is also the only cover of RELOAD as production actually drives it.
@@ -474,7 +474,7 @@ def test_generalized_moe_gate_sigmoid(grouped, topk):
                 eps=_bits(EPS),
                 scale=_bits(SCALE),
             ),
-            # Not _payload_tile: the sigmoid front-end does its transpose in transpose_wh_tile on
+            # Not _payload_tile: the sigmoid front-end does its transpose in transpose_tile on
             # the raw L1 tile, so this path uploads the payload as-is and the golden transposes.
             [payload, _id_tile(ids), _zeros(), _zeros()],
             src_b=bias,
