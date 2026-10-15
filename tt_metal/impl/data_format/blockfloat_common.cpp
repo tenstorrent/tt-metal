@@ -6,9 +6,12 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
+#include <bit>
+#include <cstring>
 #include <vector>
 #include <thread>
 #include <future>
+#include <simde/x86/avx2.h>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -123,6 +126,233 @@ template uint32_t create_packed_bfp_packed_as_u32<tt::DataFormat::Bfp4_b>(
 template uint32_t create_packed_bfp_packed_as_u32<tt::DataFormat::Bfp8_b>(
     const std::vector<uint32_t>& u32_vec, uint32_t shared_exp, bool is_exp_a);
 
+// Vectorized 16-element subtile row packer for BFP8/BFP4/BFP2 (#8621).
+// Computes the shared exponent across 16 FP32 bit patterns (lo8, hi8) and converts/packs all 16
+// elements with round-to-nearest-even in SIMD, matching convert_u32_to_bfp bit-for-bit.
+template <tt::DataFormat BfpFormat, bool IsExpA>
+inline void pack_row16_simd(simde__m256i lo8, simde__m256i hi8, uint8_t* out_exp, uint32_t* out_mantissa) {
+    constexpr uint32_t MANTISSA_BFP_WIDTH =
+        (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) ? 1 :
+        (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) ? 3 : 7;
+    constexpr uint32_t MANTISSA_BFP_SHIFT = 24 - MANTISSA_BFP_WIDTH;
+    constexpr uint32_t MANTISSA_BFP_MAX_VAL = (1 << MANTISSA_BFP_WIDTH) - 1;
+    constexpr uint32_t MANTISSA_ROUND_MASK = (1 << MANTISSA_BFP_SHIFT) - 1;
+    constexpr uint32_t TIE_VALUE = 1 << (MANTISSA_BFP_SHIFT - 1);
+
+    const simde__m256i zero = simde_mm256_setzero_si256();
+    const simde__m256i exp_mask = simde_mm256_set1_epi32(0x7f800000);
+    const simde__m256i man_mask = simde_mm256_set1_epi32(0x007fffff);
+
+    simde__m256i exp_lo = simde_mm256_srli_epi32(simde_mm256_and_si256(lo8, exp_mask), 23);
+    simde__m256i exp_hi = simde_mm256_srli_epi32(simde_mm256_and_si256(hi8, exp_mask), 23);
+    simde__m256i is_zero_lo = simde_mm256_cmpeq_epi32(exp_lo, zero);
+    simde__m256i is_zero_hi = simde_mm256_cmpeq_epi32(exp_hi, zero);
+
+    simde__m256i man_lo = simde_mm256_and_si256(lo8, man_mask);
+    simde__m256i man_hi = simde_mm256_and_si256(hi8, man_mask);
+
+    if constexpr (IsExpA) {
+        const simde__m256i bias_diff = simde_mm256_set1_epi32(112);
+        const simde__m256i max31 = simde_mm256_set1_epi32(31);
+        simde__m256i se_lo = simde_mm256_sub_epi32(exp_lo, bias_diff);
+        simde__m256i se_hi = simde_mm256_sub_epi32(exp_hi, bias_diff);
+        man_lo = simde_mm256_or_si256(man_lo, simde_mm256_and_si256(simde_mm256_cmpgt_epi32(se_lo, max31), man_mask));
+        man_hi = simde_mm256_or_si256(man_hi, simde_mm256_and_si256(simde_mm256_cmpgt_epi32(se_hi, max31), man_mask));
+        man_lo = simde_mm256_andnot_si256(simde_mm256_cmpgt_epi32(zero, se_lo), man_lo);
+        man_hi = simde_mm256_andnot_si256(simde_mm256_cmpgt_epi32(zero, se_hi), man_hi);
+        exp_lo = simde_mm256_min_epi32(simde_mm256_max_epi32(se_lo, zero), max31);
+        exp_hi = simde_mm256_min_epi32(simde_mm256_max_epi32(se_hi, zero), max31);
+    }
+
+    simde__m256i max8 = simde_mm256_max_epu32(exp_lo, exp_hi);
+    simde__m128i max4 = simde_mm_max_epu32(simde_mm256_castsi256_si128(max8), simde_mm256_extracti128_si256(max8, 1));
+    max4 = simde_mm_max_epu32(max4, simde_mm_shuffle_epi32(max4, 0x4E));
+    max4 = simde_mm_max_epu32(max4, simde_mm_shuffle_epi32(max4, 0xB1));
+    uint8_t shared_exp = static_cast<uint8_t>(simde_mm_cvtsi128_si32(max4));
+    *out_exp = shared_exp;
+
+    const simde__m256i s_exp = simde_mm256_set1_epi32(static_cast<int32_t>(shared_exp));
+    const simde__m256i hidden_bit = simde_mm256_set1_epi32(1 << 23);
+    const simde__m256i shift_cap = simde_mm256_set1_epi32(31);
+    const simde__m256i r_mask = simde_mm256_set1_epi32(MANTISSA_ROUND_MASK);
+    const simde__m256i one = simde_mm256_set1_epi32(1);
+    const simde__m256i tie = simde_mm256_set1_epi32(TIE_VALUE);
+    const simde__m256i max_val = simde_mm256_set1_epi32(MANTISSA_BFP_MAX_VAL);
+
+    auto convert_half = [&](simde__m256i v, simde__m256i man, simde__m256i exp, simde__m256i is_zero) {
+        man = simde_mm256_or_si256(man, hidden_bit);
+        simde__m256i diff = simde_mm256_min_epu32(simde_mm256_sub_epi32(s_exp, exp), shift_cap);
+        man = simde_mm256_srlv_epi32(man, diff);
+        simde__m256i round_val = simde_mm256_and_si256(man, r_mask);
+        man = simde_mm256_srli_epi32(man, MANTISSA_BFP_SHIFT);
+        simde__m256i guard = simde_mm256_and_si256(man, one);
+        simde__m256i rup = simde_mm256_cmpgt_epi32(simde_mm256_add_epi32(round_val, guard), tie);
+        man = simde_mm256_min_epu32(simde_mm256_sub_epi32(man, rup), max_val);
+        man = simde_mm256_andnot_si256(is_zero, man);
+        simde__m256i sign = simde_mm256_slli_epi32(simde_mm256_srli_epi32(v, 31), MANTISSA_BFP_WIDTH);
+        sign = simde_mm256_andnot_si256(simde_mm256_cmpeq_epi32(man, zero), sign);
+        return simde_mm256_or_si256(sign, man);
+    };
+
+    simde__m256i res_lo = convert_half(lo8, man_lo, exp_lo, is_zero_lo);
+    simde__m256i res_hi = convert_half(hi8, man_hi, exp_hi, is_zero_hi);
+
+    simde__m256i p16 = simde_mm256_packus_epi32(res_lo, res_hi);
+    simde__m256i p8 = simde_mm256_packus_epi16(p16, p16);
+    uint64_t lane0 = static_cast<uint64_t>(simde_mm_cvtsi128_si64(simde_mm256_castsi256_si128(p8)));
+    uint64_t lane1 = static_cast<uint64_t>(simde_mm_cvtsi128_si64(simde_mm256_extracti128_si256(p8, 1)));
+
+    if constexpr (BfpFormat == tt::DataFormat::Bfp8 || BfpFormat == tt::DataFormat::Bfp8_b) {
+        out_mantissa[0] = static_cast<uint32_t>(lane0);
+        out_mantissa[1] = static_cast<uint32_t>(lane1);
+        out_mantissa[2] = static_cast<uint32_t>(lane0 >> 32);
+        out_mantissa[3] = static_cast<uint32_t>(lane1 >> 32);
+    } else if constexpr (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) {
+        auto pack8_nibbles = [](uint64_t w) -> uint32_t {
+            w = (w | (w >> 4)) & 0x00ff00ff00ff00ffULL;
+            w = (w | (w >> 8)) & 0x0000ffff0000ffffULL;
+            return static_cast<uint32_t>(w | (w >> 16));
+        };
+        uint64_t w_lo = (lane0 & 0xffffffffULL) | (lane1 << 32);
+        uint64_t w_hi = (lane0 >> 32) | (lane1 & 0xffffffff00000000ULL);
+        out_mantissa[0] = pack8_nibbles(w_lo);
+        out_mantissa[1] = pack8_nibbles(w_hi);
+    } else {
+        auto pack8_crumbs = [](uint64_t w) -> uint32_t {
+            w = (w | (w >> 6)) & 0x000f000f000f000fULL;
+            w = (w | (w >> 12)) & 0x000000ff000000ffULL;
+            return static_cast<uint32_t>((w | (w >> 24)) & 0xffffULL);
+        };
+        uint64_t w_lo = (lane0 & 0xffffffffULL) | (lane1 << 32);
+        uint64_t w_hi = (lane0 >> 32) | (lane1 & 0xffffffff00000000ULL);
+        out_mantissa[0] = pack8_crumbs(w_lo) | (pack8_crumbs(w_hi) << 16);
+    }
+}
+
+template <tt::DataFormat BfpFormat, typename T, bool RowMajorInput, bool IsExpA>
+void process_tile_range_impl(
+    const T* input_data,
+    int start_tile,
+    int end_tile,
+    int tile_H,
+    int tile_W,
+    int face_H,
+    int face_W,
+    int exp_dwords_per_tile,
+    size_t dwords_per_tile,
+    uint32_t* packed_out) {
+    const int num_float_in_tile = tile_H * tile_W;
+    const int subtiles_in_tile_row = tile_H / face_H;
+    const int subtiles_in_tile_col = tile_W / face_W;
+    const int subtile_rows = face_H;
+    const int subtile_cols = face_W;
+    constexpr int num_mantissas_in_dword =
+        (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) ? 16 :
+        (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) ? 8 : 4;
+    const int dwords_per_row = subtile_cols / num_mantissas_in_dword;
+
+    alignas(16) std::array<uint8_t, 128> exp_bytes{};
+
+    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, bfloat16>) {
+        if (subtile_cols == 16) {
+            for (int tile_index = start_tile; tile_index < end_tile; ++tile_index) {
+                uint32_t* tile_out = packed_out + static_cast<size_t>(tile_index) * dwords_per_tile;
+                uint32_t* mantissa_out = tile_out + exp_dwords_per_tile;
+                size_t fp32_element_base = RowMajorInput ? 0 : (static_cast<size_t>(tile_index) * num_float_in_tile);
+                int row_idx = 0;
+
+                for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
+                    for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
+                        for (int i = 0; i < subtile_rows; ++i, ++row_idx) {
+                            size_t row_base = RowMajorInput
+                                ? static_cast<size_t>(tr * face_H + i) * tile_W + (tc * face_W) +
+                                      (static_cast<size_t>(num_float_in_tile) * tile_index)
+                                : fp32_element_base +
+                                      static_cast<size_t>(tr * subtiles_in_tile_col + tc) *
+                                          (subtile_rows * subtile_cols) +
+                                      i * subtile_cols;
+                            const T* row_ptr = input_data + row_base;
+                            simde__m256i lo8, hi8;
+                            if constexpr (std::is_same_v<T, float>) {
+                                lo8 = simde_mm256_loadu_si256(reinterpret_cast<const simde__m256i*>(row_ptr));
+                                hi8 = simde_mm256_loadu_si256(reinterpret_cast<const simde__m256i*>(row_ptr + 8));
+                            } else {
+                                simde__m256i raw =
+                                    simde_mm256_loadu_si256(reinterpret_cast<const simde__m256i*>(row_ptr));
+                                lo8 = simde_mm256_slli_epi32(
+                                    simde_mm256_cvtepu16_epi32(simde_mm256_castsi256_si128(raw)), 16);
+                                hi8 = simde_mm256_slli_epi32(
+                                    simde_mm256_cvtepu16_epi32(simde_mm256_extracti128_si256(raw, 1)), 16);
+                            }
+                            pack_row16_simd<BfpFormat, IsExpA>(
+                                lo8, hi8, &exp_bytes[row_idx], mantissa_out + row_idx * dwords_per_row);
+                        }
+                    }
+                }
+                std::memcpy(tile_out, exp_bytes.data(), static_cast<size_t>(exp_dwords_per_tile) * sizeof(uint32_t));
+            }
+            return;
+        }
+    }
+
+    // Zero-allocation scalar path for integer types or non-16 subtile_cols
+    std::array<uint32_t, 64> single_row{};
+    constexpr uint32_t mask = (1u << (32 / num_mantissas_in_dword)) - 1u;
+    for (int tile_index = start_tile; tile_index < end_tile; ++tile_index) {
+        uint32_t* tile_out = packed_out + static_cast<size_t>(tile_index) * dwords_per_tile;
+        uint32_t* mantissa_out = tile_out + exp_dwords_per_tile;
+        size_t fp32_element_base = RowMajorInput ? 0 : (static_cast<size_t>(tile_index) * num_float_in_tile);
+        int row_idx = 0;
+        size_t mantissa_slot = 0;
+
+        for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
+            for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
+                for (int i = 0; i < subtile_rows; ++i, ++row_idx) {
+                    size_t row_base = RowMajorInput
+                        ? static_cast<size_t>(tr * face_H + i) * tile_W + (tc * face_W) +
+                              (static_cast<size_t>(num_float_in_tile) * tile_index)
+                        : fp32_element_base +
+                              static_cast<size_t>(tr * subtiles_in_tile_col + tc) * (subtile_rows * subtile_cols) +
+                              i * subtile_cols;
+                    const T* row_ptr = input_data + row_base;
+                    uint32_t max_e = 0;
+                    for (int j = 0; j < subtile_cols; ++j) {
+                        uint32_t u32_num;
+                        if constexpr (std::is_same_v<T, float>) {
+                            u32_num = std::bit_cast<uint32_t>(row_ptr[j]);
+                        } else if constexpr (std::is_same_v<T, bfloat16>) {
+                            u32_num = static_cast<uint32_t>(std::bit_cast<uint16_t>(row_ptr[j])) << 16;
+                        } else {
+                            float f = static_cast<float>(row_ptr[j]);
+                            u32_num = std::bit_cast<uint32_t>(f);
+                        }
+                        single_row[j] = u32_num;
+                        if (j < 16) {
+                            uint32_t e = (u32_num & 0x7f800000) >> 23;
+                            if constexpr (IsExpA) {
+                                int32_t se = std::clamp(static_cast<int32_t>(e) - 112, 0, 31);
+                                e = static_cast<uint32_t>(se);
+                            }
+                            max_e = std::max(e, max_e);
+                        }
+                    }
+                    uint8_t exp = static_cast<uint8_t>(max_e);
+                    exp_bytes[row_idx] = exp;
+                    for (int j = 0; j < subtile_cols; j += num_mantissas_in_dword) {
+                        uint32_t tmp_o = 0;
+                        for (int k = num_mantissas_in_dword - 1; k >= 0; --k) {
+                            uint32_t conv = convert_u32_to_bfp<BfpFormat, false>(single_row[j + k], exp, IsExpA);
+                            tmp_o = (tmp_o << (32 / num_mantissas_in_dword)) | (conv & mask);
+                        }
+                        mantissa_out[mantissa_slot++] = tmp_o;
+                    }
+                }
+            }
+        }
+        std::memcpy(tile_out, exp_bytes.data(), static_cast<size_t>(exp_dwords_per_tile) * sizeof(uint32_t));
+    }
+}
+
 }  // namespace
 
 uint32_t get_byte(uint32_t word, uint32_t index) {
@@ -206,8 +436,6 @@ uint32_t convert_bfp_to_u32(tt::DataFormat bfp_format, uint8_t data, uint8_t sha
             man = 0;
             exp = 0;
         } else {
-            // shift_cnt = 6 - (31 - __builtin_clz(man));
-            // man = (man << (shift_cnt + 1)) & 0x7f;
             while ((man & 0x40) == 0) {
                 man = man << 1;
                 shift_cnt++;
@@ -303,14 +531,6 @@ uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_exp_a) {
         mantissa = mantissa >> MANTISSA_BFP_SHIFT;
     } else {
         // Round mantissa to nearest; ties round to even
-        // Implementation of rounding process (example is for bfp8):
-        // - We want to round 23 bit mantissa to 6 bits with extra hidden bit
-        // - Mantissa is broken down to: <5> bits | guard bit | <17> bits of round value
-        //   * If round value < 0x10000, round down (ie. mantissa is just <5> bits | guard bit)
-        //   * If round value > 0x10000, round up (ie. add 1 to <5> bits | guard bit)
-        //   * If round value = 0x10000, we have a tie and round to nearest even:
-        //     ** If guard bit = 0, mantissa is even so round down
-        //     ** If guard bit = 1, mantissa is odd so round up
         constexpr uint32_t MANTISSA_ROUND_MASK = (1 << MANTISSA_BFP_SHIFT) - 1;
         constexpr uint32_t TIE_VALUE = 1 << (MANTISSA_BFP_SHIFT - 1);
         uint32_t round_value = mantissa & MANTISSA_ROUND_MASK;
@@ -363,7 +583,6 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     auto subtiles_in_tile_row = tile_H / face_H;
     auto subtiles_in_tile_col = tile_W / face_W;
     auto subtile_rows = face_H;
-    auto subtile_cols = face_W;
 
     uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
     bool exponent_padding = (subtile_rows * subtiles_in_tile_col * subtiles_in_tile_row) < l1_alignment;
@@ -371,114 +590,58 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     int num_float_in_tile = tile_HW;
     TT_ASSERT(input_data.size() % num_float_in_tile == 0);
     uint32_t num_tiles = input_data.size() / num_float_in_tile;
-
-    int num_exponents_in_dword = 4;
-    int num_mantissas_in_dword;
-    if constexpr (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) {
-        num_mantissas_in_dword = 16;
-    } else if constexpr (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) {
-        num_mantissas_in_dword = 8;
-    } else {
-        num_mantissas_in_dword = 4;
+    if (num_tiles == 0) {
+        return {};
     }
 
-    // Lambda to process a range of tiles
-    auto process_tile_range = [&](int start_tile, int end_tile) -> std::vector<uint32_t> {
-        const int rows_per_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows;
-        const int mantissa_dwords_per_tile = num_float_in_tile / num_mantissas_in_dword;
-        const int exp_dwords_per_tile =
-            exponent_padding ? static_cast<int>(tt::round_up(static_cast<uint32_t>(rows_per_tile), l1_alignment)) /
-                                   num_exponents_in_dword
-                             : rows_per_tile / num_exponents_in_dword;
-
-        std::vector<uint32_t> local_result;
-        local_result.reserve(
-            static_cast<size_t>(end_tile - start_tile) * (exp_dwords_per_tile + mantissa_dwords_per_tile));
-        std::vector<uint8_t> exponents;
-        exponents.reserve(num_exponents_in_dword);
-        std::vector<uint32_t> data;
-        data.reserve(num_mantissas_in_dword);
-
-        for (int tile_index = start_tile; tile_index < end_tile; ++tile_index) {
-            std::vector<uint32_t> packed_data;
-            packed_data.reserve(mantissa_dwords_per_tile);
-            std::vector<uint8_t> exponents_with_padding;
-            exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
-
-            size_t fp32_element_base = row_major_input ? 0 : (tile_index * num_float_in_tile);
-
-            for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
-                for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
-                    for (int i = 0; i < subtile_rows; ++i) {
-                        std::vector<uint32_t> single_row;
-                        single_row.reserve(subtile_cols);
-                        // populate a single row
-                        for (int j = 0; j < subtile_cols; ++j) {
-                            size_t data_index;
-                            if (row_major_input) {
-                                data_index =
-                                    (tr * face_H + i) * tile_W + (tc * face_W + j) + (num_float_in_tile * tile_index);
-                            } else {
-                                data_index = fp32_element_base +
-                                             (tr * subtiles_in_tile_col + tc) * (subtile_rows * subtile_cols) +
-                                             i * subtile_cols + j;
-                            }
-                            float float_num = static_cast<float>(input_data[data_index]);
-                            uint32_t uint32_num = *reinterpret_cast<uint32_t*>(&float_num);
-                            single_row.push_back(uint32_num);
-                        }
-
-                        uint8_t exp = get_max_exp(single_row, is_exp_a);
-
-                        // check if it satisfies the 16B alignment
-                        if (exponent_padding) {
-                            exponents_with_padding.push_back(exp);
-                        } else {
-                            exponents.push_back(exp);
-                            if (exponents.size() % num_exponents_in_dword == 0) {
-                                local_result.push_back(get_exp_dword(exponents));
-                                exponents.clear();
-                            }
-                        }
-
-                        for (uint32_t u32_datum : single_row) {
-                            data.push_back(u32_datum);
-                            if (data.size() % num_mantissas_in_dword == 0) {
-                                uint32_t datum = create_packed_bfp_packed_as_u32<BfpFormat>(data, exp, is_exp_a);
-                                packed_data.push_back(datum);
-                                data.clear();
-                            }
-                        }
-                    }
-                }
-            }
-            // prepend exponents to follow data packing order:
-            //  16 exponents for sub-tile 0​
-            //      exp_row0, exp_row1, … exp_row15​
-            //  16 exponents for sub-tile 1​
-            //  16 exponents for sub-tile 2​
-            //  16 exponents for sub-tile 3​
-            //  entire sub-tile 0 (RM layout)​
-            //  entire sub-tile 1 (RM layout)​
-            //  entire sub-tile 2 (RM layout)​
-            //  entire sub-tile 3 (RM layout)
-            // align the exponent section to 16B
-            if (exponent_padding) {
-                std::vector<uint8_t> pads(
-                    tt::round_up(exponents_with_padding.size(), l1_alignment) - exponents_with_padding.size(), 0);
-                exponents_with_padding.insert(exponents_with_padding.end(), pads.begin(), pads.end());
-                std::vector<uint32_t> packed = pack_exponents(exponents_with_padding, num_exponents_in_dword);
-                local_result.insert(local_result.end(), packed.begin(), packed.end());
-            }
-            local_result.insert(local_result.end(), packed_data.begin(), packed_data.end());
+    constexpr int num_exponents_in_dword = 4;
+    constexpr int num_mantissas_in_dword = []() {
+        if constexpr (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) {
+            return 16;
+        } else if constexpr (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) {
+            return 8;
+        } else {
+            return 4;
         }
+    }();
 
-        return local_result;
+    const int rows_per_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows;
+    const int mantissa_dwords_per_tile = num_float_in_tile / num_mantissas_in_dword;
+    const int exp_dwords_per_tile =
+        exponent_padding ? static_cast<int>(tt::round_up(static_cast<uint32_t>(rows_per_tile), l1_alignment)) /
+                               num_exponents_in_dword
+                         : rows_per_tile / num_exponents_in_dword;
+    const size_t dwords_per_tile = static_cast<size_t>(exp_dwords_per_tile + mantissa_dwords_per_tile);
+
+    // Pre-allocate the entire output buffer once so worker chunks write directly to their disjoint
+    // tile slices without per-chunk vectors or a final concatenation copy (#8621).
+    std::vector<uint32_t> packed_result(static_cast<size_t>(num_tiles) * dwords_per_tile);
+    uint32_t* packed_out = packed_result.data();
+    const T* raw_in = input_data.data();
+
+    auto process_tile_range = [&](int start_tile, int end_tile) {
+        if (row_major_input) {
+            if (is_exp_a) {
+                process_tile_range_impl<BfpFormat, T, true, true>(
+                    raw_in, start_tile, end_tile, tile_H, tile_W, face_H, face_W, exp_dwords_per_tile, dwords_per_tile, packed_out);
+            } else {
+                process_tile_range_impl<BfpFormat, T, true, false>(
+                    raw_in, start_tile, end_tile, tile_H, tile_W, face_H, face_W, exp_dwords_per_tile, dwords_per_tile, packed_out);
+            }
+        } else {
+            if (is_exp_a) {
+                process_tile_range_impl<BfpFormat, T, false, true>(
+                    raw_in, start_tile, end_tile, tile_H, tile_W, face_H, face_W, exp_dwords_per_tile, dwords_per_tile, packed_out);
+            } else {
+                process_tile_range_impl<BfpFormat, T, false, false>(
+                    raw_in, start_tile, end_tile, tile_H, tile_W, face_H, face_W, exp_dwords_per_tile, dwords_per_tile, packed_out);
+            }
+        }
     };
 
     // Determine how many parallel work items to split the tiles into.
-    // Only parallelize if we have enough tiles to justify the overhead.
-    constexpr uint32_t MIN_TILES_PER_CHUNK = 4;
+    // Only parallelize if we have enough tiles to justify the dispatch overhead.
+    constexpr uint32_t MIN_TILES_PER_CHUNK = 32;
     uint32_t max_chunks = std::thread::hardware_concurrency();
     if (max_chunks == 0) {
         max_chunks = 1;
@@ -487,8 +650,8 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     num_chunks = std::max(1u, num_chunks);
 
     if (num_chunks == 1) {
-        // Single-threaded execution
-        return process_tile_range(0, num_tiles);
+        process_tile_range(0, num_tiles);
+        return packed_result;
     }
 
     log_debug(
@@ -498,7 +661,6 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         num_chunks,
         num_tiles / num_chunks);
 
-    std::vector<std::vector<uint32_t>> chunk_results(num_chunks);
     std::vector<std::shared_future<void>> futures;
     futures.reserve(num_chunks);
 
@@ -510,29 +672,14 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         uint32_t tiles_for_this_chunk = tiles_per_chunk + (t < remainder ? 1 : 0);
         uint32_t end_tile = start_tile + tiles_for_this_chunk;
 
-        futures.emplace_back(
-            tt::tt_metal::detail::async([&chunk_results, &process_tile_range, t, start_tile, end_tile]() {
-                chunk_results[t] = process_tile_range(start_tile, end_tile);
-            }));
+        futures.emplace_back(tt::tt_metal::detail::async(
+            [&process_tile_range, start_tile, end_tile]() { process_tile_range(start_tile, end_tile); }));
 
         start_tile = end_tile;
     }
 
-    // Wait for all chunks to complete. get() also rethrows the first exception raised in any chunk.
     for (auto& future : futures) {
         future.get();
-    }
-
-    // Concatenate results from all chunks
-    std::vector<uint32_t> packed_result;
-    size_t total_size = 0;
-    for (const auto& result : chunk_results) {
-        total_size += result.size();
-    }
-    packed_result.reserve(total_size);
-
-    for (auto& result : chunk_results) {
-        packed_result.insert(packed_result.end(), result.begin(), result.end());
     }
 
     return packed_result;

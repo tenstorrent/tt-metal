@@ -110,3 +110,116 @@ TEST(DataFormatFp8ArchGuard, Fp8E4m3PackSrcFormatPerArch) {
 
     EXPECT_ANY_THROW(tt::get_pack_src_formats(fp8_formats, unpack_dst, true, false, false, tt::ARCH::WORMHOLE_B0));
 }
+
+#include <algorithm>
+#include <random>
+#include <vector>
+#include <tt-metalium/bfloat16.hpp>
+
+namespace {
+
+template <tt::DataFormat BfpFormat, typename T>
+void verify_pack_as_bfp_tiles_parity(bool row_major_input, bool is_exp_a, const tt::tt_metal::Tile& tile, uint32_t num_tiles) {
+    const auto tile_H = tile.get_tile_shape()[0];
+    const auto tile_W = tile.get_tile_shape()[1];
+    const auto face_H = tile.get_face_shape()[0];
+    const auto face_W = tile.get_face_shape()[1];
+    const auto subtiles_in_tile_row = tile_H / face_H;
+    const auto subtiles_in_tile_col = tile_W / face_W;
+    const auto subtile_rows = face_H;
+    const auto subtile_cols = face_W;
+    const size_t num_elements = static_cast<size_t>(num_tiles) * tile_H * tile_W;
+
+    std::mt19937 rng(42 + num_tiles + (row_major_input ? 100 : 0) + (is_exp_a ? 1000 : 0));
+    std::vector<T> input(num_elements);
+    for (size_t i = 0; i < num_elements; ++i) {
+        uint32_t bits = rng();
+        if constexpr (std::is_same_v<T, float>) {
+            input[i] = std::bit_cast<float>(bits);
+        } else if constexpr (std::is_same_v<T, bfloat16>) {
+            input[i] = std::bit_cast<bfloat16>(static_cast<uint16_t>(bits >> 16));
+        } else {
+            input[i] = static_cast<T>((bits % 251) - 125);
+        }
+    }
+
+    auto actual = pack_as_bfp_tiles<BfpFormat, T>(input, row_major_input, is_exp_a, tile);
+    if (num_tiles == 0) {
+        EXPECT_TRUE(actual.empty());
+        return;
+    }
+
+    constexpr int num_mantissas_in_dword =
+        (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) ? 16 :
+        (BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp4_b) ? 8 : 4;
+    const uint32_t rows_per_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows;
+    const size_t mantissa_dwords_per_tile = (tile_H * tile_W) / num_mantissas_in_dword;
+    const size_t exp_dwords_per_tile = actual.size() / num_tiles - mantissa_dwords_per_tile;
+    const size_t dwords_per_tile = exp_dwords_per_tile + mantissa_dwords_per_tile;
+
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+        const uint32_t* tile_ptr = actual.data() + static_cast<size_t>(tile_idx) * dwords_per_tile;
+        const uint32_t* man_ptr = tile_ptr + exp_dwords_per_tile;
+        size_t fp32_base = row_major_input ? 0 : static_cast<size_t>(tile_idx) * tile_H * tile_W;
+        uint32_t row_idx = 0;
+        size_t man_slot = 0;
+
+        for (uint32_t tr = 0; tr < subtiles_in_tile_row; ++tr) {
+            for (uint32_t tc = 0; tc < subtiles_in_tile_col; ++tc) {
+                for (uint32_t i = 0; i < subtile_rows; ++i, ++row_idx) {
+                    uint32_t row_u32[16];
+                    uint32_t max_exp = 0;
+                    for (uint32_t j = 0; j < subtile_cols; ++j) {
+                        size_t idx = row_major_input
+                            ? (tr * face_H + i) * tile_W + (tc * face_W + j) + (static_cast<size_t>(tile_H * tile_W) * tile_idx)
+                            : fp32_base + (tr * subtiles_in_tile_col + tc) * (subtile_rows * subtile_cols) + i * subtile_cols + j;
+                        float f = static_cast<float>(input[idx]);
+                        row_u32[j] = std::bit_cast<uint32_t>(f);
+                        uint32_t e = (row_u32[j] & 0x7f800000) >> 23;
+                        if (is_exp_a) {
+                            int32_t se = std::clamp(static_cast<int32_t>(e) - 112, 0, 31);
+                            e = static_cast<uint32_t>(se);
+                        }
+                        max_exp = std::max(max_exp, e);
+                    }
+                    uint8_t actual_exp = get_byte(tile_ptr[row_idx / 4], row_idx % 4);
+                    ASSERT_EQ(actual_exp, static_cast<uint8_t>(max_exp));
+
+                    uint32_t mask = (1u << (32 / num_mantissas_in_dword)) - 1u;
+                    for (uint32_t j = 0; j < subtile_cols; j += num_mantissas_in_dword) {
+                        uint32_t expected_dword = 0;
+                        for (int k = num_mantissas_in_dword - 1; k >= 0; --k) {
+                            uint32_t c = convert_u32_to_bfp<BfpFormat, false>(row_u32[j + k], max_exp, is_exp_a);
+                            expected_dword = (expected_dword << (32 / num_mantissas_in_dword)) | (c & mask);
+                        }
+                        ASSERT_EQ(man_ptr[man_slot++], expected_dword);
+                    }
+                }
+            }
+        }
+        for (uint32_t pad_idx = rows_per_tile; pad_idx < exp_dwords_per_tile * 4; ++pad_idx) {
+            ASSERT_EQ(get_byte(tile_ptr[pad_idx / 4], pad_idx % 4), 0u);
+        }
+    }
+}
+
+}  // namespace
+
+TEST(BlockfloatHostTilizer, SimdAndMultiThreadedParityAllFormatsAndShapes) {
+    for (auto shape : std::vector<tt::tt_metal::Tile::TileShape>{
+             {1, 16}, {1, 32}, {2, 32}, {4, 32}, {8, 32}, {16, 16}, {16, 32}, {32, 16}, {32, 32}}) {
+        tt::tt_metal::Tile tile(shape);
+        for (bool rm : {true, false}) {
+            for (uint32_t count : {0u, 1u, 129u}) {
+                verify_pack_as_bfp_tiles_parity<tt::DataFormat::Bfp8_b, float>(rm, false, tile, count);
+                verify_pack_as_bfp_tiles_parity<tt::DataFormat::Bfp4_b, float>(rm, false, tile, count);
+                verify_pack_as_bfp_tiles_parity<tt::DataFormat::Bfp2_b, float>(rm, false, tile, count);
+                verify_pack_as_bfp_tiles_parity<tt::DataFormat::Bfp8_b, bfloat16>(rm, false, tile, count);
+                verify_pack_as_bfp_tiles_parity<tt::DataFormat::Bfp4_b, bfloat16>(rm, false, tile, count);
+                verify_pack_as_bfp_tiles_parity<tt::DataFormat::Bfp2_b, bfloat16>(rm, false, tile, count);
+                verify_pack_as_bfp_tiles_parity<tt::DataFormat::Bfp8, float>(rm, true, tile, count);
+                verify_pack_as_bfp_tiles_parity<tt::DataFormat::Bfp8_b, int32_t>(rm, false, tile, count);
+            }
+        }
+    }
+}
