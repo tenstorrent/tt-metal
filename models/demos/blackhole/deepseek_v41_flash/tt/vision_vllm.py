@@ -12,6 +12,7 @@ The checkpoint ships no HF processor, so the processor is written here on top of
     id: ``_get_prompt_updates``); the model tells the positions apart from the grid.
 """
 
+import inspect
 from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 
@@ -29,6 +30,10 @@ from vllm.multimodal.processing.processor import (
 
 from models.demos.blackhole.deepseek_v41_flash.tt import vision_prompt as VP
 from models.demos.blackhole.deepseek_v41_flash.tt.vision_args import vision_args_of
+
+# vLLM >= 0.31: the renderer tokenizes the prompt (the processor only sees token ids) and ``_call_hf_processor(hf_data, hf_kwargs)`` gets
+# the multi-modal data alone; before, it was ``(prompt, mm_data, mm_kwargs, tok_kwargs)`` and also tokenized the text.
+PROCESSOR_TAKES_TOKEN_PROMPT = "hf_data" in inspect.signature(BaseMultiModalProcessor._call_hf_processor).parameters
 
 
 class DSV41ProcessingInfo(BaseProcessingInfo):
@@ -74,16 +79,8 @@ class DSV41DummyInputsBuilder(BaseDummyInputsBuilder[DSV41ProcessingInfo]):
 
 
 class DSV41MultiModalProcessor(BaseMultiModalProcessor[DSV41ProcessingInfo]):
-    def _call_hf_processor(self, prompt, mm_data, mm_kwargs, tok_kwargs) -> BatchFeature:
-        tok = self.info.get_tokenizer()
-        out = BatchFeature(
-            {
-                "input_ids": torch.tensor(
-                    [tok.encode(prompt, add_special_tokens=tok_kwargs.get("add_special_tokens", False))]
-                )
-            }
-        )
-        images = mm_data.get("images", [])
+    def _patchify(self, images) -> BatchFeature:
+        out = BatchFeature({})
         if images:
             va = self.info.vision_args()
             pix, grids = [], []
@@ -93,6 +90,23 @@ class DSV41MultiModalProcessor(BaseMultiModalProcessor[DSV41ProcessingInfo]):
                 grids.append((1, n_h, n_w))
             out["pixel_values"] = torch.cat(pix).to(torch.bfloat16)
             out["image_grid_thw"] = torch.tensor(grids, dtype=torch.int64)
+        return out
+
+    def _call_hf_processor(self, *args, **kwargs) -> BatchFeature:
+        if PROCESSOR_TAKES_TOKEN_PROMPT:  # vLLM >= 0.31: (hf_data, hf_kwargs), the prompt is already token ids
+            hf_data = args[0] if args else kwargs["hf_data"]
+            return self._patchify(hf_data.get("images", []))
+        a = dict(zip(("prompt", "mm_data", "mm_kwargs", "tok_kwargs"), args), **kwargs)  # vLLM 0.26 (keyword call)
+        prompt, mm_data, tok_kwargs = a["prompt"], a["mm_data"], a["tok_kwargs"]
+        tok = self.info.get_tokenizer()
+        out = BatchFeature(
+            {
+                "input_ids": torch.tensor(
+                    [tok.encode(prompt, add_special_tokens=tok_kwargs.get("add_special_tokens", False))]
+                )
+            }
+        )
+        out.update(self._patchify(mm_data.get("images", [])))
         return out
 
     def _hf_processor_applies_updates(self, prompt_text, mm_items, hf_processor_mm_kwargs, tokenization_kwargs) -> bool:
