@@ -99,6 +99,12 @@ Config parse_adamw_config(const YAML::Node& config) {
     adamw_config.epsilon = config["epsilon"].as<float>(adamw_config.epsilon);
     adamw_config.weight_decay = config["weight_decay"].as<float>(adamw_config.weight_decay);
     adamw_config.amsgrad = config["amsgrad"].as<bool>(adamw_config.amsgrad);
+    if constexpr (requires { adamw_config.stochastic_rounding; }) {
+        adamw_config.stochastic_rounding = config["stochastic_rounding"].as<bool>(adamw_config.stochastic_rounding);
+    }
+    if constexpr (requires { adamw_config.kahan_summation; }) {
+        adamw_config.kahan_summation = config["kahan_summation"].as<bool>(adamw_config.kahan_summation);
+    }
     return adamw_config;
 }
 
@@ -114,11 +120,24 @@ Config parse_sgd_config(const YAML::Node& config) {
     return sgd_config;
 }
 
-// Shared by MorehAdamW and AdamWComposite.
-AdamWCompositeConfig adamw_composite_config(const YAML::Node& config) {
-    auto adamw_config = parse_adamw_config<AdamWCompositeConfig>(config);
-    adamw_config.kahan_summation = config["kahan_summation"].as<bool>(adamw_config.kahan_summation);
-    return adamw_config;
+MuonConfig parse_muon_config(const YAML::Node& config) {
+    MuonConfig muon_config;
+    muon_config.lr = config["lr"].as<float>(muon_config.lr);
+    muon_config.momentum = config["momentum"].as<float>(muon_config.momentum);
+    muon_config.ns_steps = config["ns_steps"].as<int>(muon_config.ns_steps);
+    return muon_config;
+}
+
+// Creator for an optimizer constructed from its params, the config parse_config reads from the YAML, and the param
+// groups resolved from the YAML's param_groups.
+template <typename Optimizer, typename ParseConfig>
+OptimizerCreator param_groups_creator(ParseConfig parse_config) {
+    return [parse_config](
+               const YAML::Node& config, serialization::NamedParameters params) -> std::unique_ptr<OptimizerBase> {
+        auto optimizer_config = parse_config(config);
+        auto param_groups = resolve_param_groups(config, params);
+        return std::make_unique<Optimizer>(std::move(params), optimizer_config, std::move(param_groups));
+    };
 }
 }  // namespace
 
@@ -132,51 +151,15 @@ OptimizerRegistry::OptimizerRegistry() {
         return std::make_unique<NoOp>(std::move(params));
     });
 
-    register_optimizer("AdamW", [](const YAML::Node& config, serialization::NamedParameters params) {
-        auto adamw_config = parse_adamw_config<AdamWConfig>(config);
-        adamw_config.stochastic_rounding = config["stochastic_rounding"].as<bool>(adamw_config.stochastic_rounding);
-        auto param_groups = resolve_param_groups(config, params);
-        return std::make_unique<AdamW>(std::move(params), adamw_config, std::move(param_groups));
-    });
-
-    register_optimizer("MorehAdamW", [](const YAML::Node& config, serialization::NamedParameters params) {
-        auto adamw_config = adamw_composite_config(config);
-        auto param_groups = resolve_param_groups(config, params);
-        return std::make_unique<MorehAdamW>(std::move(params), adamw_config, std::move(param_groups));
-    });
-
-    register_optimizer("AdamWComposite", [](const YAML::Node& config, serialization::NamedParameters params) {
-        auto adamw_config = adamw_composite_config(config);
-        auto param_groups = resolve_param_groups(config, params);
-        return std::make_unique<AdamWComposite>(std::move(params), adamw_config, std::move(param_groups));
-    });
-
-    register_optimizer("AdamWFullPrecision", [](const YAML::Node& config, serialization::NamedParameters params) {
-        auto adamw_config = parse_adamw_config<AdamWFullPrecisionConfig>(config);
-        auto param_groups = resolve_param_groups(config, params);
-        return std::make_unique<AdamWFullPrecision>(std::move(params), adamw_config, std::move(param_groups));
-    });
-
-    register_optimizer("SGD", [](const YAML::Node& config, serialization::NamedParameters params) {
-        auto sgd_config = parse_sgd_config<SGDConfig>(config);
-        auto param_groups = resolve_param_groups(config, params);
-        return std::make_unique<SGD>(std::move(params), sgd_config, std::move(param_groups));
-    });
-
-    register_optimizer("MuonComposite", [](const YAML::Node& config, serialization::NamedParameters params) {
-        MuonConfig muon_config;
-        muon_config.lr = config["lr"].as<float>(muon_config.lr);
-        muon_config.momentum = config["momentum"].as<float>(muon_config.momentum);
-        muon_config.ns_steps = config["ns_steps"].as<int>(muon_config.ns_steps);
-        auto param_groups = resolve_param_groups(config, params);
-        return std::make_unique<MuonComposite>(std::move(params), muon_config, std::move(param_groups));
-    });
-
-    register_optimizer("SGDComposite", [](const YAML::Node& config, serialization::NamedParameters params) {
-        auto sgd_config = parse_sgd_config<SGDCompositeConfig>(config);
-        auto param_groups = resolve_param_groups(config, params);
-        return std::make_unique<SGDComposite>(std::move(params), sgd_config, std::move(param_groups));
-    });
+    register_optimizer("AdamW", param_groups_creator<AdamW>(parse_adamw_config<AdamWConfig>));
+    register_optimizer("MorehAdamW", param_groups_creator<MorehAdamW>(parse_adamw_config<AdamWCompositeConfig>));
+    register_optimizer(
+        "AdamWComposite", param_groups_creator<AdamWComposite>(parse_adamw_config<AdamWCompositeConfig>));
+    register_optimizer(
+        "AdamWFullPrecision", param_groups_creator<AdamWFullPrecision>(parse_adamw_config<AdamWFullPrecisionConfig>));
+    register_optimizer("SGD", param_groups_creator<SGD>(parse_sgd_config<SGDConfig>));
+    register_optimizer("MuonComposite", param_groups_creator<MuonComposite>(parse_muon_config));
+    register_optimizer("SGDComposite", param_groups_creator<SGDComposite>(parse_sgd_config<SGDCompositeConfig>));
 }
 
 void OptimizerRegistry::register_optimizer(const std::string& type, OptimizerCreator creator) {

@@ -138,6 +138,7 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
         num_groups = num_muon_groups + len(self._adamw.get_param_groups())
         if len(values) != num_groups:
             raise ValueError(f"MuonWithAdamW has {num_groups} param groups, but got {len(values)} values for '{key}'")
+        # Pre-check only: raises if either inner optimizer lacks `key`, before Muon is changed and AdamW then rejects it.
         self.get_group_options(key)
         self._muon.set_group_options(key, list(values[:num_muon_groups]))
         self._adamw.set_group_options(key, list(values[num_muon_groups:]))

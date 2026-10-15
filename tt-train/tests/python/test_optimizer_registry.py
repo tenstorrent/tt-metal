@@ -4,8 +4,11 @@
 
 """Tests for the optimizer registry with Python-defined optimizers."""
 
+import numpy as np
 import pytest
 import ttml
+import ttnn
+from ttml.modules import AbstractModuleBase, Parameter
 
 
 def _make_python_optimizer_class():
@@ -218,21 +221,19 @@ def test_muon_with_adamw_resolves_param_groups_in_both_sections(expect_error):
         MuonWithAdamW({"muon": {"param_groups": [{"modules": ["block"], "weight_decay": 0.0}]}}, ttml.NamedParameters())
 
 
+def _param():
+    w_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
+    return Parameter(ttml.autograd.Tensor.from_numpy(w_np, new_type=ttnn.DataType.BFLOAT16))
+
+
 def _make_stage_model():
     """A pipeline stage's model: a ``weight`` and a ``bias``, but none of the other stages' modules (tok_emb, fc)."""
-    import numpy as np
-    import ttnn
-    from ttml.modules import AbstractModuleBase, Parameter
-
-    def param():
-        w_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
-        return Parameter(ttml.autograd.Tensor.from_numpy(w_np, new_type=ttnn.DataType.BFLOAT16))
 
     class StageModule(AbstractModuleBase):
         def __init__(self) -> None:
             super().__init__()
-            self.weight = param()
-            self.bias = param()
+            self.weight = _param()
+            self.bias = _param()
 
         def forward(self, x):
             return ttml.ops.binary.mul(x, self.weight.tensor)
@@ -242,19 +243,12 @@ def _make_stage_model():
 
 def _make_block_model():
     """A transformer-block-like model: attention/weight, norm/gamma, mlp/weight and mlp/bias."""
-    import numpy as np
-    import ttnn
-    from ttml.modules import AbstractModuleBase, Parameter
-
-    def param():
-        w_np = np.random.randn(1, 1, 32, 32).astype(np.float32)
-        return Parameter(ttml.autograd.Tensor.from_numpy(w_np, new_type=ttnn.DataType.BFLOAT16))
 
     class Leaf(AbstractModuleBase):
         def __init__(self, *names) -> None:
             super().__init__()
             for name in names:
-                setattr(self, name, param())
+                setattr(self, name, _param())
 
     class Block(AbstractModuleBase):
         def __init__(self) -> None:
