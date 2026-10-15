@@ -10,6 +10,7 @@
 
 #include "kernels/transport_bandwidth/transport_bandwidth_common.h"
 #include "kernels/transport_bandwidth/x280_to_tensix.h"
+#include "tests/device/suites/packet_injection/regions.hpp"
 
 #include <cstdint>
 #include <stdexcept>
@@ -141,12 +142,6 @@ inline x280::harness::output::RecordSpec tensix_to_x280_record(
     };
 }
 
-// An idle-ERISC writer's logical Ethernet coordinate.
-struct WriterAt {
-    uint32_t x = 0;
-    uint32_t y = 0;
-};
-
 /**
  * The erisc_to_x280 record of one point, run by `results.size()` idle ERISCs
  * (writer w at index w of `results` and `at`, at least one, the same count):
@@ -160,7 +155,7 @@ struct WriterAt {
  */
 inline x280::harness::output::RecordSpec erisc_to_x280_record(
     const std::vector<transport_bw_result_t>& results,
-    const std::vector<WriterAt>& at,
+    const std::vector<x280::harness::regions::packet_injection::LogicalCoord>& at,
     const Point& point,
     const x280::harness::measurement::WarmupSelection& selection,
     const x280::harness::measurement::AiclkRunEvidence& clock,

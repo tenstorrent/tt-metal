@@ -295,13 +295,9 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
     EriscLaunch run;
     ASSERT_NO_FATAL_FAILURE(launch(f, spec, point, selection.writers, W, N, true, run));
     ASSERT_TRUE(run.clock.has_value()) << "measured launch assessed no AICLK";
-    std::vector<WriterAt> at;
-    for (const auto& w : selection.writers) {
-        at.push_back({w.x, w.y});
-    }
     const auto body = x280::harness::output::record(erisc_to_x280_record(
         run.results,
-        at,
+        selection.writers,
         {.transfer_size = point.transfer_size, .boundary = TRANSPORT_BW_BOUNDARY_INJECTION, .warmup = W, .samples = N},
         warmup,
         *run.clock,
