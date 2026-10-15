@@ -35,7 +35,9 @@ The native tensor is the source of truth, and the derived copy is refreshed from
   others alone. When that copy is the only owner, it resets in place, so a reference returned earlier by
   `get_tensor(NATIVE)` follows the new tensor. A reference to the derived copy does not.
 - **Limits.** A write that bypasses `get_value_for_update()`, such as a kernel writing through a `get_value()`
-  handle, is not seen. The tensor is driven from one host thread.
+  handle, is not seen. The tensor is driven from one host thread. The ordering also relies on one command queue: the
+  view bumps the version on the host after the kernel is enqueued, and the refresh cast is enqueued later on the same
+  queue, so it runs after the write. tt-train opens one queue (`sources/ttml/core/mesh_device.cpp`).
 
 ## Writing a tensor in place
 
@@ -79,7 +81,7 @@ a new path in an existing one (for example a config option that changes which te
 ## Why this design
 
 - **Dropping the other copy on every write** would be the smallest change, but for fp32 parameters it reallocates the
-  bf16 compute copy every step, and keeping that copy alive needs the same bookkeeping as a version counter.
+  bf16 compute copy every step, and the copy's buffer address moves each time.
 - **No cached copy at all** can never be stale, but a weight is read by several ops per step, so it would be cast
   and allocated several times per step, and `get_value()` could no longer return a reference.
 - **Letting both copies be written** would round the fp32 tensor to bf16 on write and erase its sub-ulp progress.
