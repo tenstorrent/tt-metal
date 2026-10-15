@@ -66,6 +66,13 @@ DramReadPlan get_dram_read_plan(
     uint32_t num_device_cores,
     uint32_t num_dram_banks);
 
+// The same, for an op on input over worker_grid.
+DramReadPlan get_dram_read_plan(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    const Tensor& input,
+    const tt::tt_metal::TensorSpec& output_spec,
+    const tt::tt_metal::CoreRangeSet& worker_grid);
+
 tt::tt_metal::CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,

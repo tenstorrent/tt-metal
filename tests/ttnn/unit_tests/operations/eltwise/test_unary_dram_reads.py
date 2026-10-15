@@ -140,7 +140,8 @@ def test_width_sharded_uneven(device):
 
 @pytest.mark.parametrize("layout", [HEIGHT, WIDTH])
 def test_fewer_tiles_than_cores(device, layout):
-    """Cores without pages get zeroed args and must leave without touching memory."""
+    """Fewer pages than cores: below the smallest measured share every chip keeps main's path, whose idle cores get
+    zeroed args and must leave without touching memory."""
     shape = [1, 1, 64, 1024]
     run_against_main_path(ttnn.relu, random_input(shape), device, dram_sharded(shape, layout, 2))
     run_against_main_path(ttnn.elu, random_input(shape), device, dram_sharded(shape, layout, 2))

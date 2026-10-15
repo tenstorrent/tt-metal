@@ -365,15 +365,7 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         src_shard_vol,
         dst_shard_vol,
         // The DRAM read flow changes defines, CBs and semaphores.
-        get_dram_read_plan(
-            attributes.op_chain,
-            input_tensor.tensor_spec(),
-            output_spec,
-            attributes.worker_grid.num_cores(),
-            input_tensor.device()->compute_with_storage_grid_size().x *
-                input_tensor.device()->compute_with_storage_grid_size().y,
-            input_tensor.device()->num_dram_channels())
-            .flow);
+        get_dram_read_plan(attributes.op_chain, input_tensor, output_spec, attributes.worker_grid).flow);
 }
 
 bool UnaryDeviceOperation::skip_launch(

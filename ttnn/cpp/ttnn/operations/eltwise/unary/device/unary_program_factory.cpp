@@ -239,13 +239,7 @@ void enumerate_core_rt_args(
             k.rows_per_tile = tile_hw / row_width_elements;
         }
     }
-    const auto plan = get_dram_read_plan(
-        operation_attributes.op_chain,
-        input.tensor_spec(),
-        output.tensor_spec(),
-        all_device_cores.num_cores(),
-        input.device()->compute_with_storage_grid_size().x * input.device()->compute_with_storage_grid_size().y,
-        input.device()->num_dram_channels());
+    const auto plan = get_dram_read_plan(operation_attributes.op_chain, input, output.tensor_spec(), all_device_cores);
     const uint32_t out_num_tiles =
         rm_interleaved ? (k.total_rows + k.rows_per_tile - 1) / k.rows_per_tile : output.physical_volume() / tile_hw;
     const uint32_t oWt = output.padded_shape()[-1] / output.tensor_spec().tile().get_width();
@@ -495,13 +489,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
 
     // The input and output CBs hold two bursts, so the next burst moves while compute works on the last one.
-    const auto plan = get_dram_read_plan(
-        ops_chain,
-        input.tensor_spec(),
-        output.tensor_spec(),
-        all_device_cores.num_cores(),
-        input.device()->compute_with_storage_grid_size().x * input.device()->compute_with_storage_grid_size().y,
-        input.device()->num_dram_channels());
+    const auto plan = get_dram_read_plan(ops_chain, input, output.tensor_spec(), all_device_cores);
     const bool dram_flow = plan.flow != DramReadFlow::None;
     const bool work_queue = plan.flow == DramReadFlow::WorkQueue;
 
