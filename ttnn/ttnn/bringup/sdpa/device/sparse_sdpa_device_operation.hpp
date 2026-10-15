@@ -61,6 +61,7 @@ Tensor sparse_sdpa(
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt,
     const std::optional<Tensor>& attention_sink = std::nullopt,
-    bool high_precision = false);
+    bool high_precision = false,
+    bool fp32_output = false);
 
 }  // namespace ttnn::prim::bringup

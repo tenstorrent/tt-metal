@@ -52,6 +52,9 @@ enum class SparseKVFormat : uint8_t {
 // bf16 immediate, rounded to nearest). Needs fp32_dest_acc_en, bf16 q and a BF16 kv. An attention_sink is
 // supported (its exp uses the same rounded-to-nearest bf16 scale).
 //
+// fp32_output (bring-up fork option, default false = output in q's dtype; needs high_precision): return the
+// normalized output in Float32 (the fp32 DEST value, untilized exactly) instead of rounding it to bf16.
+//
 // attention_sink: optional [1,1,1,H] unpadded interleaved ROW_MAJOR BF16 tensor in DRAM.
 // Like classic SDPA, the sink is multiplied by scale and contributes only to the softmax denominator.
 // DeepSeek-V4 stores sinks in the already-scaled logit domain: pass model_sink / scale (scale != 0),
@@ -78,6 +81,7 @@ ttnn::Tensor sparse_sdpa(
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
     bool block_cyclic_cache_tp_sharded = false,
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
-    bool high_precision = false);
+    bool high_precision = false,
+    bool fp32_output = false);
 
 }  // namespace ttnn::transformer::bringup

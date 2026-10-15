@@ -422,8 +422,11 @@ void bind_sdpa(nb::module_& mod) {
                 computes the softmax exp exactly (the source always uses the fast approximate exp; the scale is then
                 a bf16 immediate, rounded to nearest). Needs fp32_dest_acc_en, bf16 q and kv_format BF16. Takes an
                 attention_sink (its exp uses the same rounded-to-nearest bf16 scale).
+            fp32_output (bool): bring-up fork option, default False (output in q's dtype). True (needs
+                high_precision) returns the normalized output in Float32 instead of rounding it to bf16.
         Returns:
-            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
+            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8), or
+            Float32 with fp32_output.
         )doc",
         &ttnn::transformer::bringup::sparse_sdpa,
         nb::arg("q").noconvert(),
@@ -440,7 +443,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_chunk_local") = nb::none(),
         nb::arg("block_cyclic_cache_tp_sharded") = false,
         nb::arg("attention_sink") = nb::none(),
-        nb::arg("high_precision") = false);
+        nb::arg("high_precision") = false,
+        nb::arg("fp32_output") = false);
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.bringup.">(
         mod,
