@@ -291,6 +291,36 @@ _x280_device_test(x280_pinned_input_test tests/device/test_x280_pinned_input_hw.
 _x280_device_test(x280_arc_test tests/device/test_x280_arc_hw.cpp)
 _x280_device_test(x280_pll_test tests/device/test_x280_pll_hw.cpp)
 
+# _x280_gtest_ctest(<name> <target> <filter> [ENV <cmake -E env argument>...]): a CTest running <target>
+# with --gtest_filter=<filter>. A filter that selects nothing exits 0, so the test passes only when
+# at least one test passed. The pass pattern replaces the exit-code check, so a failed test is
+# matched explicitly; the fail pattern takes precedence.
+function(_x280_gtest_ctest name target filter)
+    cmake_parse_arguments(PARSE_ARGV 3 ARG "" "" "ENV")
+    set(env "")
+    if(ARG_ENV)
+        set(env
+            ${CMAKE_COMMAND}
+            -E
+            env
+            ${ARG_ENV}
+        )
+    endif()
+    add_test(
+        NAME ${name}
+        COMMAND
+            ${env} $<TARGET_FILE:${target}> "--gtest_filter=${filter}"
+    )
+    set_tests_properties(
+        ${name}
+        PROPERTIES
+            PASS_REGULAR_EXPRESSION
+                "\\[  PASSED  \\] [1-9]"
+            FAIL_REGULAR_EXPRESSION
+                "\\[  FAILED  \\]"
+    )
+endfunction()
+
 # Mock-cluster runtime root for the coordinate tests. Mock mode reads the SoC descriptor YAML, and
 # blackhole_140_arch.yaml lists the L2CPU tiles under router_only, so the tests run on an overlay
 # of this tree whose descriptor names them; the source tree is untouched.
@@ -365,22 +395,9 @@ foreach(_case Unharvested Harvested Disagreement)
     else()
         set(_filter "X280Coordinates.${_case}*")
     endif()
-    add_test(
-        NAME x280_coordinates_${_fixture}
-        COMMAND
-            ${CMAKE_COMMAND} -E env --unset=TT_VISIBLE_DEVICES "TT_METAL_RUNTIME_ROOT=${_coord_root}"
+    _x280_gtest_ctest(x280_coordinates_${_fixture} x280_runtime_coordinate_tests "${_filter}"
+        ENV --unset=TT_VISIBLE_DEVICES "TT_METAL_RUNTIME_ROOT=${_coord_root}"
             "TT_METAL_MOCK_CLUSTER_DESC_PATH=${_coord_root}/${_fixture}.yaml"
-            $<TARGET_FILE:x280_runtime_coordinate_tests> "--gtest_filter=${_filter}"
-    )
-    # A filter that selects nothing exits 0; require at least one passed test. The pass pattern
-    # replaces the exit-code check, so a failed test must be matched explicitly.
-    set_tests_properties(
-        x280_coordinates_${_fixture}
-        PROPERTIES
-            PASS_REGULAR_EXPRESSION
-                "\\[  PASSED  \\] [1-9]"
-            FAIL_REGULAR_EXPRESSION
-                "\\[  FAILED  \\]"
     )
 endforeach()
 
@@ -479,34 +496,16 @@ _x280_device_test(x280_bench_device_tests
 )
 # Its two offline suites need no device: the PLL knob and the DRISC endpoint choice against the
 # Blackhole SoC descriptor under Metal's runtime root.
-add_test(
-    NAME x280_bench_device_offline
-    COMMAND
-        ${CMAKE_COMMAND} -E env "TT_METAL_RUNTIME_ROOT=${PROJECT_SOURCE_DIR}" $<TARGET_FILE:x280_bench_device_tests>
-        "--gtest_filter=X280PllMhzFromEnv.*:MetalTargetOffline.*"
-)
-set_tests_properties(
-    x280_bench_device_offline
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION
-            "\\[  PASSED  \\] 2 tests"
+_x280_gtest_ctest(x280_bench_device_offline x280_bench_device_tests "X280PllMhzFromEnv.*:MetalTargetOffline.*"
+    ENV "TT_METAL_RUNTIME_ROOT=${PROJECT_SOURCE_DIR}"
 )
 
 # The release selector on the unharvested-L2CPU coordinate overlay, whose chip 0 keeps the
 # descriptor's harvested Tensix columns.
 _x280_device_test(x280_bench_release_selector_tests tests/device/test_release_selector.cpp KERNELS shared)
-add_test(
-    NAME x280_release_selector
-    COMMAND
-        ${CMAKE_COMMAND} -E env --unset=TT_VISIBLE_DEVICES "TT_METAL_RUNTIME_ROOT=${_coord_root}"
+_x280_gtest_ctest(x280_release_selector x280_bench_release_selector_tests "ReleaseSelector.*"
+    ENV --unset=TT_VISIBLE_DEVICES "TT_METAL_RUNTIME_ROOT=${_coord_root}"
         "TT_METAL_MOCK_CLUSTER_DESC_PATH=${_coord_root}/unharvested.yaml"
-        $<TARGET_FILE:x280_bench_release_selector_tests> "--gtest_filter=ReleaseSelector.*"
-)
-set_tests_properties(
-    x280_release_selector
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION
-            "\\[  PASSED  \\] [1-9]"
 )
 
 # ---------------------------------------------------------------------------
@@ -636,17 +635,7 @@ target_sources(x280_bench_host_tests PRIVATE tests/host/test_core_sync_director_
 target_include_directories(x280_bench_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/core_sync)
 target_sources(x280_bench_device_tests PRIVATE tests/device/test_core_sync_hw.cpp)
 # Its memory-binding and probe-argument suites need no device.
-add_test(
-    NAME x280_core_sync_offline
-    COMMAND
-        x280_bench_device_tests "--gtest_filter=CoreSyncMemoryBindings.*:CoreSyncProbeArgs.*"
-)
-set_tests_properties(
-    x280_core_sync_offline
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION
-            "\\[  PASSED  \\] 4 tests"
-)
+_x280_gtest_ctest(x280_core_sync_offline x280_bench_device_tests "CoreSyncMemoryBindings.*:CoreSyncProbeArgs.*")
 # The director's DRISC worker launches only under slow dispatch.
 _x280_device_test(x280_core_sync_director
     tests/device/test_core_sync_x280_director_hw.cpp
@@ -783,17 +772,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 # manifest in this source tree.
 target_sources(x280_bench_host_tests PRIVATE tests/host/test_record_round_trip.cpp)
 target_compile_definitions(x280_bench_host_tests PRIVATE X280_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-add_test(
-    NAME x280_record_round_trip
-    COMMAND
-        x280_bench_host_tests --gtest_filter=RecordRoundTrip.*
-)
-set_tests_properties(
-    x280_record_round_trip
-    PROPERTIES
-        PASS_REGULAR_EXPRESSION
-            "\\[  PASSED  \\] [1-9]"
-)
+_x280_gtest_ctest(x280_record_round_trip x280_bench_host_tests "RecordRoundTrip.*")
 add_test(
     NAME x280_characterization
     COMMAND
