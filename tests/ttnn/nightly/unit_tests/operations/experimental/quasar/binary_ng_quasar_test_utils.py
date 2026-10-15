@@ -290,6 +290,7 @@ def _run_mixed(
     post_act=None,
     pcc=None,
     output_tensor_mem=None,
+    ulp_threshold=None,
 ):
     # Like _run, but with an INDEPENDENT memory config per operand (a, b, output) so the borrow-vs-NoC
     # routing in the DFB factory is exercised across mixed sharded/interleaved layouts (borrow only when
@@ -350,12 +351,26 @@ def _run_mixed(
         assert (
             out_torch.float().std() > 0.1 * golden_std
         ), "output is ~constant while the golden varies (wrong tile pairing?)"
-    _assert_output(out_torch, golden, dtype_tt, op_name, (lhs_act, rhs_act, post_act), pcc, keep)
+    if ulp_threshold is not None:
+        _assert_ulp(out_torch, golden, dtype_tt, ulp_threshold)
+    else:
+        _assert_output(out_torch, golden, dtype_tt, op_name, (lhs_act, rhs_act, post_act), pcc, keep)
     return out_tt
 
 
 def _run_scalar(
-    device, op_name, mem_config, dtype_tt, shape, scalar, lhs_act=None, post_act=None, pcc=None, out_mem=None
+    device,
+    op_name,
+    mem_config,
+    dtype_tt,
+    shape,
+    scalar,
+    lhs_act=None,
+    post_act=None,
+    pcc=None,
+    out_mem=None,
+    infer_output_config=False,
+    ulp_threshold=None,
 ):
     # Tensor-SCALAR sibling of _run: operand A is a tensor, the RHS is a Python number (not a tensor),
     # and the golden uses that same scalar. Same op->torch map, PCC thresholds, and degenerate-constant
@@ -374,7 +389,11 @@ def _run_scalar(
     # The golden uses a as the device holds it, and the Python scalar as is.
     golden, keep = _golden(torch_fn, ttnn.to_torch(a_tt).float(), scalar, dtype_tt, lhs_act, None, post_act)
 
-    kwargs = {"memory_config": out_mem if out_mem is not None else mem_config, "dtype": dtype_tt}
+    # infer_output_config omits memory_config so the op derives the output config from a's, which routes through
+    # the default-config path instead of an explicit one. out_mem overrides the output config explicitly.
+    kwargs = {"dtype": dtype_tt}
+    if not infer_output_config:
+        kwargs["memory_config"] = out_mem if out_mem is not None else mem_config
     if post_act is not None:
         kwargs["activations"] = _act(post_act)
     if lhs_act is not None:
@@ -388,5 +407,8 @@ def _run_scalar(
     golden_std = golden.float().std()
     if golden_std > 0.1:
         assert out_torch.float().std() > 0.1 * golden_std, "output is ~constant while the golden varies (scalar fill?)"
-    _assert_output(out_torch, golden, dtype_tt, op_name, (lhs_act, post_act), pcc, keep)
+    if ulp_threshold is not None:
+        _assert_ulp(out_torch, golden, dtype_tt, ulp_threshold)
+    else:
+        _assert_output(out_torch, golden, dtype_tt, op_name, (lhs_act, post_act), pcc, keep)
     return out_tt
