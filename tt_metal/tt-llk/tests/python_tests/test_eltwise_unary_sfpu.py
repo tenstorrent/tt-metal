@@ -2,13 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
 import os
 import struct
-from itertools import chain, product
+from itertools import product
 
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import distinct_dest_accumulation_modes
+from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -45,7 +48,7 @@ from helpers.sfpu_domains import (
     specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -54,6 +57,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_POLYGAMMA_ORDER,
     SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
@@ -204,31 +208,33 @@ def _sweep_params(formats, mathops, approx_modes, input_dimensions):
     """Build (formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions) tuples.
 
     Fast-mode-capable ops are swept with FastMode.No and FastMode.Yes; every other op
-    runs with FastMode.No only. dest_acc always sweeps both values.
+    runs with FastMode.No only. dest_acc sweeps both values, except where TestConfig
+    promotes No to Yes for the format combination; those run as Yes only.
     """
-    dest_accs = [DestAccumulation.No, DestAccumulation.Yes]
     fast_ops = [op for op in mathops if op in SUPPORTED_FAST_MODE_OPS]
     non_fast_ops = [op for op in mathops if op not in SUPPORTED_FAST_MODE_OPS]
-    return list(
-        chain(
-            product(
-                formats,
-                approx_modes,
-                fast_ops,
-                [FastMode.No, FastMode.Yes],
-                dest_accs,
-                input_dimensions,
-            ),
-            product(
-                formats,
-                approx_modes,
-                non_fast_ops,
-                [FastMode.No],
-                dest_accs,
-                input_dimensions,
-            ),
+    params = []
+    for fmt in formats:
+        dest_accs = distinct_dest_accumulation_modes(
+            fmt, [DestAccumulation.No, DestAccumulation.Yes]
         )
-    )
+        params += product(
+            [fmt],
+            approx_modes,
+            fast_ops,
+            [FastMode.No, FastMode.Yes],
+            dest_accs,
+            input_dimensions,
+        )
+        params += product(
+            [fmt],
+            approx_modes,
+            non_fast_ops,
+            [FastMode.No],
+            dest_accs,
+            input_dimensions,
+        )
+    return params
 
 
 def _assert_broad_profile_valid():
@@ -285,6 +291,29 @@ UNARY_SWEEP_PARAMS = (
 
 
 _assert_broad_profile_valid()
+
+
+def _assert_dest_acc_ids_match_kernels():
+    """Every sweep id must name the Dest width its kernel is built with.
+
+    TestConfig promotes dest_acc to Yes for an outlier format combination, so a dest_acc:No id for
+    one would run the dest_acc:Yes kernel while the golden and tolerances assume No.
+    """
+    promoted = sorted(
+        {
+            f"{formats.input_format.name}->{formats.output_format.name}"
+            for formats, _, _, _, dest_acc, _ in UNARY_SWEEP_PARAMS
+            if effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
+            != dest_acc
+        }
+    )
+    assert not promoted, (
+        "These format combinations are swept with a dest_acc the kernel does not run with "
+        f"(TestConfig promotes it): {promoted}"
+    )
+
+
+_assert_dest_acc_ids_match_kernels()
 
 
 def _skip_bh_unsupported_float_combo(formats, dest_acc):
@@ -1051,6 +1080,55 @@ def test_eltwise_unary_sfpu_int_shift(
     )
 
 
+# Every polygamma order ttnn accepts. psi^(n)(x) ~ (n-1)! / x^n for large x, so each order is
+# swept from 0.5 up to where the result is 2^-125, just inside the normal range. The bottom of
+# that range is where the unscaled partial sums sit n! below the result, and atol is 0 because
+# any absolute tolerance would accept a zero there.
+_POLYGAMMA_ORDERS = list(range(1, 12))
+
+
+def _polygamma_stimuli_spec(order):
+    high = (math.factorial(order - 1) * 2.0**125) ** (1.0 / order)
+    return StimuliSpec(distribution=DistributionKind.LOG_UNIFORM, low=0.5, high=high)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    polygamma_order=_POLYGAMMA_ORDERS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_polygamma_order(
+    formats: InputOutputFormat,
+    polygamma_order: int,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    _skip_bh_unless_fp32(formats, dest_acc)
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip(
+            reason="Float32 reaches a 16-bit Dest as Float16_b, which is swept already"
+        )
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.Polygamma,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_polygamma_stimuli_spec(polygamma_order),
+        custom_atol=0.0,
+        # atol is 0 so a flushed lane fails outright at a relative error of 1. The rtol is loose
+        # because the sweep reaches the last binades before underflow, where the Euler-Maclaurin
+        # corrections themselves flush: measured worst case there is 2.0% for float32 at order 11
+        # and 1.4% for bfloat16, against 32.6 float32 ULP and 0.74 bfloat16 ULP above 2^-100.
+        custom_rtol=0.05 if formats.output_format == DataFormat.Float32 else 0.02,
+        polygamma_order=polygamma_order,
+    )
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     approx_mode=[ApproximationMode.No],
@@ -1366,6 +1444,7 @@ def eltwise_unary_sfpu(
     shift_amount=None,
     relu_min_int_threshold=None,
     relu_max_threshold=None,
+    polygamma_order=None,
     twos_complement=False,
     gate_on_step_budget=False,
 ):
@@ -1418,6 +1497,7 @@ def eltwise_unary_sfpu(
             if relu_max_threshold is None
             else {"relu_max_threshold": relu_max_threshold}
         ),
+        **({} if polygamma_order is None else {"polygamma_order": polygamma_order}),
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -1450,6 +1530,11 @@ def eltwise_unary_sfpu(
                 []
                 if relu_max_threshold is None
                 else [SFPU_RELU_MAX_THRESHOLD(relu_max_threshold)]
+            ),
+            *(
+                []
+                if polygamma_order is None
+                else [SFPU_POLYGAMMA_ORDER(polygamma_order)]
             ),
         ],
         runtimes=[
