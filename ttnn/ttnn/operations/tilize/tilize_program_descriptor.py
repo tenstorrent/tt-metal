@@ -50,6 +50,10 @@ COALESCE_MIN_CORES_PER_BANK = 2
 # is already an efficient read, and the local reorder copies then cost more than they save
 # (hand-tune, BH: 512x512 bf16 / 1 KiB sticks on 16 cores 8.6 -> 3.7 us without coalescing).
 COALESCE_MAX_STICK_BYTES = 256
+# Mid-width sticks still pay under grid-wide DRAM contention (BH: 320 B sticks on 42-100 cores win,
+# on 16-28 cores lose; 512 B+ lose even on 64 cores).
+COALESCE_WIDE_MAX_STICK_BYTES = 384
+COALESCE_WIDE_MIN_CORES_PER_BANK = 4
 # Rotate each core's bank walk so the grid's requests spread over all banks at once.
 BANK_STAGGER = True
 # Segment (non-coalesced) reader: rotate each core's start stick within a tile-row (k % tile_h).
@@ -576,7 +580,13 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
         and tile_h > 1
         and in_image_height_sticks % tile_h == 0
         and len(assignment) >= COALESCE_MIN_CORES_PER_BANK * num_banks
-        and in_row_bytes <= COALESCE_MAX_STICK_BYTES
+        and (
+            in_row_bytes <= COALESCE_MAX_STICK_BYTES
+            or (
+                in_row_bytes <= COALESCE_WIDE_MAX_STICK_BYTES
+                and len(assignment) >= COALESCE_WIDE_MIN_CORES_PER_BANK * num_banks
+            )
+        )
     )
     max_core_rows = max(entry[2] for entry in assignment)
     staging_tile_rows = max(1, min(max_core_rows, STAGING_SLOT_BUDGET_BYTES // (tile_h * stick_page_bytes)))
