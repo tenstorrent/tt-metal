@@ -103,7 +103,7 @@ _x280_compile(
     ${X280_CFLAGS}
 )
 # The pinned-input prepare and teardown operations as a library, for images that run them
-# themselves (LINK_PINNED_INPUT).
+# themselves (OBJECTS ${_x280_pinned_input_library}).
 set(_x280_pinned_input_library "${_x280_obj_dir}/x280_pinned_input_library.o")
 _x280_compile(
     "${_x280_pinned_input_library}"
@@ -113,7 +113,7 @@ _x280_compile(
 )
 
 #[[
-x280_add_image(NAME <stem> SOURCES <source>... [LIM_IDLE] [LINK_PINNED_INPUT] [DEFINES <macro>...]
+x280_add_image(NAME <stem> SOURCES <source>... [LIM_IDLE] [OBJECTS <object>...] [DEFINES <macro>...]
                [INCLUDES <dir>...] [COMPILE_OPTIONS <flag>...] [LINK_OPTIONS <flag>...])
 
 Builds ${X280_IMAGE_DIR}/<stem>.elf and <stem>.bin from C and C++ (.cpp) sources, and adds them
@@ -121,8 +121,8 @@ to x280_images. An image links the active lifecycle harness and ld/x280.ld (.tex
 0x08001000), or with LIM_IDLE the per-hart entry and ld/x280-lim-idle.ld (.text at 0x08000000).
 DEFINES, INCLUDES (directories relative to this tree's root) and COMPILE_OPTIONS apply to this
 image's sources only; C++ sources also get -std=c++17 -fno-exceptions -fno-rtti. LINK_OPTIONS
-apply to this image's link; LINK_PINNED_INPUT also links the pinned-input operations
-(src/x280_pinned_input.c as a library), compiled once with the plain image flags. The sources of
+apply to this image's link. OBJECTS are prebuilt objects linked after the image's own, such as
+${_x280_pinned_input_library}, the pinned-input operations compiled once with the plain image flags. The sources of
 an image linking the active harness are appended to the global property X280_ACTIVE_IMAGE_SOURCES,
 which the STOP-poll check scans.
 #]]
@@ -131,9 +131,9 @@ function(x280_add_image)
         PARSE_ARGV
         0
         ARG
-        "LIM_IDLE;LINK_PINNED_INPUT"
+        "LIM_IDLE"
         "NAME"
-        "SOURCES;DEFINES;INCLUDES;COMPILE_OPTIONS;LINK_OPTIONS"
+        "SOURCES;OBJECTS;DEFINES;INCLUDES;COMPILE_OPTIONS;LINK_OPTIONS"
     )
     if(NOT ARG_NAME OR NOT ARG_SOURCES OR ARG_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "x280_add_image: needs NAME and SOURCES; unparsed: '${ARG_UNPARSED_ARGUMENTS}'")
@@ -168,9 +168,7 @@ function(x280_add_image)
         _x280_compile("${object}" "${source}" ${X280_CFLAGS} ${ARG_COMPILE_OPTIONS} ${ARG_INCLUDES} ${ARG_DEFINES})
         list(APPEND objects "${object}")
     endforeach()
-    if(ARG_LINK_PINNED_INPUT)
-        list(APPEND objects "${_x280_pinned_input_library}")
-    endif()
+    list(APPEND objects ${ARG_OBJECTS})
 
     set(elf "${X280_IMAGE_DIR}/${ARG_NAME}.elf")
     set(bin "${X280_IMAGE_DIR}/${ARG_NAME}.bin")

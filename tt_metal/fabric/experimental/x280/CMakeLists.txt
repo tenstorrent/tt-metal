@@ -675,7 +675,10 @@ foreach(
     list(GET _variant 2 _creation)
     set(_pinned_input "")
     if(_mode EQUAL 1)
-        set(_pinned_input LINK_PINNED_INPUT)
+        set(_pinned_input
+            OBJECTS
+            ${_x280_pinned_input_library}
+        )
     endif()
     x280_add_image(
         NAME firmware-packet-injection-${_name}
