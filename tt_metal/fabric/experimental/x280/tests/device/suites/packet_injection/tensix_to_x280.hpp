@@ -366,7 +366,7 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
     const auto plan = hreg::select_release(*f.mesh, participants, hreg::kX280ReleaseSender, hreg::ReleaseMode::Auto, T);
 
     const uint32_t abi_tag = PI_ABI_TAG(cfg.mode, cfg.include_creation);
-    const uint32_t assumption_mask = PI_ASSUMED_INBOUND | PI_ASSUMED_COUNTER_ATOMICITY | PI_ASSUMED_BRIDGE_COMPLETION |
+    const uint32_t assumption_mask = PI_ASSUMED_INBOUND | PI_ASSUMED_COUNTER_ATOMICITY | PI_ASSUMED_STATIC_VC_ORDER |
                                      PI_ASSUMED_MTIME_HZ | PI_ASSUMED_LOCAL_TIMER_ORDER |
                                      (cfg.mode == PI_MODE_LATENCY ? PI_ASSUMED_PIN_EXPORT : 0u);
 

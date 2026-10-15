@@ -24,6 +24,7 @@
 
 #if defined(__riscv)
 #include "noc.h"
+#include "../shared/x280_counter_window.h"
 #include "rt/x280_hw.h"
 #include "rt/x280_idle.h"
 #include "rt/measurement.h"
@@ -117,16 +118,14 @@ struct DeviceX280Transport {
     /** Base of the packet LIM arena every derived address is measured from. */
     static inline uint64_t arena_base() { return X280_LIM_PACKET_INJECTION_ARENA_BASE; }
 
-    /* -1 for a refused or unverified window. The pointer is unused (window_base()
+    /* Opens the tile's credit window, a counter window (x280_counter_window.h).
+     * -1 for a refused or unverified window. The pointer is unused (window_base()
      * derives it), and an unverified window stays programmed: the consumer
      * retains it (cleanup_windows). */
     static inline int configure_credit_window(uint32_t index, uint32_t noc_x, uint32_t noc_y) {
 #if defined(__riscv)
         volatile void* ptr = nullptr;
-        return noc_open_window_2m(index, x280_noc_coord_t{noc_x, noc_y}, 0, NOC_ORDER_STRICT, NOC_VC_DYNAMIC, &ptr) ==
-                       NOC_WINDOW_OPEN
-                   ? 0
-                   : -1;
+        return x280_counter_window_open(index, x280_noc_coord_t{noc_x, noc_y}, &ptr) == NOC_WINDOW_OPEN ? 0 : -1;
 #else
         (void)index;
         (void)noc_x;
@@ -211,11 +210,11 @@ struct DeviceX280Transport {
 #endif
     }
 
-    static inline void mode1_credit_store(volatile uint32_t* addr, uint32_t val) {
+    /* x280_counter_store(): the slot loads before it are performed first; it
+     * returns once the store is accepted, not delivered. */
+    static inline void counter_store(volatile uint32_t* addr, uint32_t val) {
 #if defined(__riscv)
-        x280_fence_iorw();
-        *addr = val;
-        x280_fence_iorw();
+        x280_counter_store(addr, val);
 #else
         *addr = val;
 #endif
@@ -625,7 +624,7 @@ private:
             return;
         }
 
-        Transport::mode1_credit_store(credit_reg, slots_[worker_index].consumed);
+        Transport::counter_store(credit_reg, slots_[worker_index].consumed);
         slots_[worker_index].credited = slots_[worker_index].consumed;
     }
 
@@ -647,7 +646,7 @@ private:
             uint64_t win_addr = (uint64_t)(uintptr_t)Transport::window_base(tlb_idx);
             volatile uint32_t* control_reg =
                 (volatile uint32_t*)(uintptr_t)(win_addr + pi_worker_l1_base(&layout_, w) + PI_L1_CONTROL_OFFSET);
-            Transport::mode1_credit_store(control_reg, (uint32_t)control);
+            Transport::counter_store(control_reg, (uint32_t)control);
         }
     }
 
@@ -810,7 +809,7 @@ private:
                     // GCC otherwise treats the branch as cold and spills
                     // credit_reg to the stack, one LIM load per credit.
                     if (__builtin_expect(pi_counter_distance(consumed, credited) == C && credit_reg != nullptr, 1)) {
-                        Transport::mode1_credit_store(credit_reg, consumed);
+                        Transport::counter_store(credit_reg, consumed);
                         credited = consumed;
                     }
 
@@ -823,7 +822,7 @@ private:
                 }
                 // return_credit() on the register copies.
                 if (consumed != credited && credit_reg != nullptr) {
-                    Transport::mode1_credit_store(credit_reg, consumed);
+                    Transport::counter_store(credit_reg, consumed);
                     credited = consumed;
                 }
                 store_slot();

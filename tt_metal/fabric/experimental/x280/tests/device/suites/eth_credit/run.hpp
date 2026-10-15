@@ -751,7 +751,9 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
         for (uint32_t p = 0; p < c.shape.P; ++p) {
             cr.fwd[p].block =
                 hreg::read_struct<ec_result_t>(*tiles[i], hreg::Region{l.fwd_area(p) + l.x280.result, EC_RESULT_BYTES});
-            hexec::expect_window_cleared(*tiles[i], ec::fwd_tlb_base(p));
+            for (uint32_t w = 0; w < X280_TLB_ETH_CREDIT_PER_HART; ++w) {
+                hexec::expect_window_cleared(*tiles[i], ec::fwd_tlb_base(p) + w);
+            }
         }
     }
     out.attribution = attribute(c, out);

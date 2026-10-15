@@ -288,7 +288,7 @@ pointer that publishes them:
 
 - E1: W5, `noc_async_write_barrier()`, then W6.
 - Forwarder: W1 through a strict TLB window, whose store completes only when the
-  NoC write has, then W2.
+  NoC write has, then W2 through its counter window.
 
 `BATCH` amortises the wait: a producer writes up to `BATCH` slots, waits once,
 then publishes one pointer covering them. A final batch may be partial.
@@ -398,9 +398,10 @@ The X280 LIM arena is, in order: the per-hart argument records, the ready
 table, and the P forwarder areas. It is placed in the runtime's available LIM
 window (`available_lim()`), the same base on both chips, so it moves with the
 runtime's LIM reservation and no LIM address is compiled into the image. The X280 TLB reservation is
-`X280_TLB_ETH_CREDIT_BASE = 161` in `include/rt/x280_noc_map.h`, one Ethernet
-window per hart, with `static_assert`s that it sits above the packet-injection
-and core_sync blocks and below the host block.
+`X280_TLB_ETH_CREDIT_BASE = 161` in `include/rt/x280_noc_map.h`, two Ethernet
+windows per hart (strict for W1, a counter window for W2 and R1), with
+`static_assert`s that it sits above the packet-injection and core_sync blocks
+and below the host block.
 
 Fit: a bidirectional run holds `tx_fifo` and `rx` for P on each tile, so tile
 slots take `2 · P · N_LINK · SLOT_SIZE`. At P = 4 and `N_LINK = 8` that is
@@ -760,8 +761,12 @@ From the Tenstorrent ISA documentation:
 - `BlackholeA0/TensixTile/BabyRISCV/README.md`, **L0 Data Cache**: 64 bytes in
   four 16-byte lines, not coherent with other L1 writers, flushed by `fence`.
 - `BlackholeA0/L2CPUTile/TLBWindows.md`: the `ordering` field names modes 0
-  Default, 1 Strict AXI, 2 Posted Writes, 3 Counted Writes. The forwarder relies
-  on mode 1, where a store's write response waits for NoC completion.
+  Default, 1 Strict AXI, 2 Posted Writes, 3 Counted Writes. W1 relies on mode 1,
+  where a store's write response waits for NoC completion. W2 and R1 go through
+  a counter window (`kernels/shared/x280_counter_window.h`: mode 2, static VC 2),
+  whose store returns once accepted and whose same-address stores are assumed
+  to land in order ([measurement.md](../measurement.md#unconfirmed-hardware-assumptions)
+  item 21).
 - `WormholeB0/NoC/Ordering.md`: two same-VC writes to non-overlapping L1 ranges
   have no commit-order guarantee; an MMIO write may race ahead of an earlier L1
   write; stronger ordering requires waiting for the response.

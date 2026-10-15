@@ -49,7 +49,7 @@ if pending==B || r-c_seen==S || issued==limit:
                                                     [Mode 1: read remote timer, store sample]
                                                     Advance consumed[w]
                                                     if consumed - credited == C || visit_end:
-Poll local consumed mirror <------------------------- return_credit(consumed[w]) via mode 1
+Poll local consumed mirror <------------------------- return_credit(consumed[w]), posted
 Retire requests (and record RTTs in Mode 3)
 [Mode 2: take throughput_end once, after the final measured credit]
 ```
@@ -197,6 +197,9 @@ the record labels the start `release_issued`. The start sample therefore does no
 the producers began: one released by an earlier write may already have published, which
 makes the rate look higher, and one whose release is still in flight starts after it, which
 makes it look lower. The error is of the order of the release's issue and delivery time.
+The end read follows the final credit flush, whose credit stores are posted, so the interval
+ends when the last credits are accepted, not when they land; the producers' own intervals
+end only after they observe them.
 The host records the raw `mtime` and `rdcycle` endpoints with the fixed 50 MHz `x280_mtime`
 clock; the offline tool derives the interval over `P*N` headers and `P*N*96` header bytes, and
 rates from it; `rdcycle` stays raw hart-0 cycles. On a successful run a zero, inverted or half-range interval in either counter fails the
@@ -353,10 +356,12 @@ count, zero for none, and the unicast endpoint count. The run record also carrie
 `release_multicast_safe` instead, the flag the host passed: 1 released tiles that filled their
 bounding box by one multicast, 0 released one unicast per tile.
 
-The reported assumption mask covers inbound LIM visibility, scalar counter atomicity, mode-1 credit completion,
+The reported assumption mask covers inbound LIM visibility, scalar counter atomicity,
+same-address credit order on the static-VC counter window (`PI_ASSUMED_STATIC_VC_ORDER`),
 nominal mtime frequency, local timer access ordering, and (for latency) pinned export
-visibility. The mode-1 store plus immediate fence follows existing transport code;
-a CPU fence alone is not an independently established NoC completion guarantee.
+visibility. It does not carry bit 2 (`PI_ASSUMED_BRIDGE_COMPLETION`, mode-1 credit
+completion): no packet-injection store waits for completion, and a record that sets it
+returned its credits through a mode-1 window.
 `PACKET_INJECTION_BRIDGE_HISTORY` defaults to `unknown`; the accepted
 `reported_no_mode3_since_reset` value is provenance, not proof of clean hardware.
 `mode3_observed` refuses reuse without initiating a reset.
@@ -484,7 +489,8 @@ permutation would attribute one tile's counters to another, which no later check
 
 The X280 firmware reserves:
 - **Entries 16..155:** 140 fixed uncached System Port L1 windows (one per physical tile).
-  Programmed once before warmup; credit writes use Mode 1 (`NOC_ORDER_STRICT`, Strict AXI).
+  Programmed once before warmup as counter windows (`kernels/shared/x280_counter_window.h`:
+  Mode 2, `NOC_ORDER_POSTED`, static VC 2, write-only); they carry the credit and STOP words.
 - **Entry 156:** Latency debug-timer window (`NOC_ORDER_STRICT`), mapped to page
   `0xFFA00000` to access Debug Timestamper at `0xFFB121F0/4`.
 - **Entry 157:** Core-sync ordered release window. A selection the shared release selector
@@ -720,8 +726,10 @@ visit to `w`:
    destination-ID byte loads, the remote timer read in latency mode, then
    `consumed++`.
 4. Returns credit whenever `consumed − credited` reaches `C`, and once more at
-   visit end if any is outstanding. A credit is a mode-1 store of `consumed`
-   into the worker's L1 consumed mirror.
+   visit end if any is outstanding. A credit is a posted store of `consumed`
+   into the worker's L1 consumed mirror through the tile's counter window: it
+   returns once accepted, after the visit's slot loads (fence), without waiting
+   for delivery.
 
 A visit servicing `v` slots therefore issues `⌈v / C⌉` credit writes, and every
 visit ends with `credited == consumed`.

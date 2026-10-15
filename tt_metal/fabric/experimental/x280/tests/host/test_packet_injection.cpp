@@ -2881,7 +2881,7 @@ struct MockX280Transport {
         lifecycle.push_back("unpin");
         return teardown_result;
     }
-    static void mode1_credit_store(volatile uint32_t* addr, uint32_t val) {
+    static void counter_store(volatile uint32_t* addr, uint32_t val) {
         if (addr) {
             *addr = val;
         }

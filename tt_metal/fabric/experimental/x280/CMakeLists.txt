@@ -427,6 +427,7 @@ _x280_check_headers(
         core_sync_core_family.h
         core_sync_probe_args.h
         credit_counter.h
+        x280_counter_window.h
         p2p_latency_frontend.h
         p2p_latency_layout.h
         fabric_shadow.h

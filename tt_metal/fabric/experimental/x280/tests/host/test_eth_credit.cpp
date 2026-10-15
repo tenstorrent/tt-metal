@@ -1345,14 +1345,16 @@ TEST(EthCreditArgs, OneWayRunIdlesTheSendersInboundSideAndTheReceiversOutbound) 
     }
 }
 
-// X280_TLB_ETH_CREDIT_*: hart p owns one window onto its Ethernet tile, so the
-// per-hart windows must not overlap.
+// X280_TLB_ETH_CREDIT_*: hart p owns PER_HART windows onto its Ethernet tile,
+// so the per-hart windows must not overlap.
 TEST(EthCreditArgs, ForwarderTlbRangesAreDisjointPerHart) {
     for (uint32_t p = 0; p + 1u < EC_X280_HARTS; ++p) {
-        EXPECT_GE(fwd_tlb_base(p + 1u), fwd_tlb_base(p) + 1u);
+        EXPECT_GE(fwd_tlb_base(p + 1u), fwd_tlb_base(p) + X280_TLB_ETH_CREDIT_PER_HART);
     }
     EXPECT_EQ(fwd_tlb_base(0u), X280_TLB_ETH_CREDIT_BASE);
-    EXPECT_LE(fwd_tlb_base(EC_X280_HARTS - 1u) + 1u, X280_TLB_ETH_CREDIT_BASE + X280_TLB_ETH_CREDIT_COUNT);
+    EXPECT_LE(
+        fwd_tlb_base(EC_X280_HARTS - 1u) + X280_TLB_ETH_CREDIT_PER_HART,
+        X280_TLB_ETH_CREDIT_BASE + X280_TLB_ETH_CREDIT_COUNT);
 }
 
 // ---------------------------------------------------------------------------

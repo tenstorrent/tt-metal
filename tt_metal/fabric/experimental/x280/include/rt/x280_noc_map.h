@@ -28,7 +28,7 @@
  *   120..127  paired-case outbound       X280_TLB_PAIRED_BASE, below
  *   156       packet-injection timer      X280_TLB_PACKET_INJECTION_TIMER, below
  *   157..160  core-sync barrier          X280_TLB_CORE_SYNC_BASE, below
- *   161..164  eth_credit forwarders      X280_TLB_ETH_CREDIT_BASE, below
+ *   161..168  eth_credit forwarders      X280_TLB_ETH_CREDIT_BASE, below
  *   192..223  host-programmed            X280_TLB_HOST_BASE, below
  */
 
@@ -126,13 +126,13 @@ _Static_assert(
 #endif
 
 /* eth_credit forwarder windows. Forwarder hart p owns PER_HART slots from
- * base + p * PER_HART: one onto its Ethernet tile, which carries W1, W2 and R1
- * because E0 and E1 share that tile's L1. The block sits clear of the
+ * base + p * PER_HART, both onto its Ethernet tile, whose L1 E0 and E1 share:
+ * a strict window for W1 and a counter window for W2 and R1. The block sits clear of the
  * packet-injection block and of the core-sync block the director uses, so an
  * eth_credit image and a packet-injection image can share a tile. */
 #define X280_TLB_ETH_CREDIT_BASE 161u
-#define X280_TLB_ETH_CREDIT_PER_HART 1u
-#define X280_TLB_ETH_CREDIT_COUNT 4u
+#define X280_TLB_ETH_CREDIT_PER_HART 2u
+#define X280_TLB_ETH_CREDIT_COUNT 8u
 
 #if defined(__cplusplus)
 static_assert(

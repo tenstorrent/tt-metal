@@ -47,7 +47,7 @@ point and one of each Tensix cross-check.
 | Pipeline instrumentation | Original sample counter retained; batch is independently bracketed | X280 samples (`cpu_samples`) use rdcycle |
 | Packet throughput | Producer release-to-final-credit interval on its wall counter: the Tensix live timer (`tensix_to_x280`) or the ERISC wall clock (`erisc_to_x280_header`) | Same producer's cycle CSR interval |
 | Packet credit stall / stall-triggered RTT | Producer-local live timer | Same producer's cycle CSR |
-| Packet X280 aggregate | X280 mtime from the measured-phase release issue (`start_event` `release_issued`: the release is posted, so delivery can follow the start read) to the final credit flush | X280 hart-0 rdcycle over the same bracket |
+| Packet X280 aggregate | X280 mtime from the measured-phase release issue (`start_event` `release_issued`: the release is posted, so delivery can follow the start read) to the final credit flush, whose credit stores are posted, so their delivery can follow the end read | X280 hart-0 rdcycle over the same bracket |
 | Packet one-way latency | Producer-local start and remote read of the same tile timer | Unavailable: endpoints have different CPU counters |
 | Core-sync release | Raw per-worker timestamp diagnostic | Unavailable: spread has no local CPU duration |
 | Ethernet credit throughput | The receiving forwarder's X280 mtime from its stamp after its first batch to its last stamp; the window covers `packets` − `first_batch_packets` packets | Unavailable: the forwarder records no CPU interval |
@@ -295,8 +295,8 @@ the others are open.
   for the LIM write; `NoC/Counters.md` defines the ack for "L1 or register
   space".
 - Item 3, owner assumption: a store through a mode-1 window stalls at the store
-  until BRESP, which follows its NoC write's completion
-  (`PI_ASSUMED_BRIDGE_COMPLETION`, the store-to-BRESP TURN). No X280 document
+  until BRESP, which follows its NoC write's completion (the store-to-BRESP
+  TURN, eth_credit's W1 before W2). No X280 document
   says the store, rather than a later fence, waits for BRESP. Evidence: the
   X280 TURN falls from 440 to 76 ticks on a tile whose completion blocking a
   mode-3 store disabled.
@@ -349,6 +349,20 @@ the others are open.
   `x280_to_tensix` `RETIRED`). `L2CPUTile/TLBWindows.md`
   names the mode only. Evidence: hardware review 2026-09-03 ("returns a fake
   AXI BRESP quickly").
+- Item 21, owner assumption (2026-10-13): successive stores of one hart to one
+  address through one counter window (`kernels/shared/x280_counter_window.h`:
+  mode 2, static VC 2, unicast) land at the destination in program order
+  (packet_injection's credit, `PI_ASSUMED_STATIC_VC_ORDER`; eth_credit's W2 and
+  R1). It rests on two undocumented links: that the X280 port issues two
+  same-address uncached stores to AXI in program order, and that Blackhole's
+  AXI-to-NoC bridge forwards writes in acceptance order, as later bridge
+  designs document. After the bridge, writes on one static VC keep their order
+  and overlapping L1 writes apply in arrival order (`WormholeB0/NoC/Ordering.md`,
+  "Ordering properties of two packets", stated for Wormhole). Blackhole has no `NoC/Ordering.md`. A reversal is
+  refused by the reader's advance check (`credit_pair_ok`) when it sees the
+  older value, and otherwise stalls a full ring until a timeout. Stores to
+  different addresses through the window have no commit order, so STOP is not
+  ordered behind a credit, which it does not need.
 
 Item 16 (`PI_ASSUMED_LOCAL_TIMER_ORDER`, high/low/high Tensix timer reads) is
 documented (`TensixTile/DebugTimestamper.md`). Item 17, successive writes from

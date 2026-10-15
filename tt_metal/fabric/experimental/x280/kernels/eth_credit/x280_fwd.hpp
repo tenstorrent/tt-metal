@@ -5,9 +5,9 @@
 // kernels/eth_credit/x280_fwd.hpp
 //
 // The X280 forwarder: one hart per p, sending through tx_fifo[p] on the local
-// E0 and draining in[p], in one loop. W1, W2 and R1 go through a strict TLB
-// window onto the Ethernet tile, whose store completes only when the NoC write
-// has.
+// E0 and draining in[p], in one loop. W1 goes through a strict TLB window onto
+// the Ethernet tile, whose store completes only when the NoC write has; W2 and
+// R1 go through a counter window onto the same tile (x280_counter_window.h).
 
 #ifndef X280_KERNELS_ETH_CREDIT_X280_FWD_HPP
 #define X280_KERNELS_ETH_CREDIT_X280_FWD_HPP
@@ -25,6 +25,7 @@
 #if defined(__riscv) && __riscv_xlen == 64
 #define X280_ETH_CREDIT_FWD 1
 #include "noc.h"
+#include "../shared/x280_counter_window.h"
 #include "rt/x280_hw.h"
 #include "rt/x280_idle.h"
 #include "rt/x280_measurement.h"
@@ -32,7 +33,9 @@
 #define X280_ETH_CREDIT_FWD 0
 #endif
 
-static_assert(X280_TLB_ETH_CREDIT_PER_HART == 1u, "each forwarder hart needs one window, onto its Ethernet tile");
+static_assert(
+    X280_TLB_ETH_CREDIT_PER_HART == 2u,
+    "each forwarder hart needs two windows onto its Ethernet tile: strict for W1, a counter window for W2 and R1");
 static_assert(
     X280_TLB_ETH_CREDIT_COUNT == EC_X280_HARTS * X280_TLB_ETH_CREDIT_PER_HART, "the reservation covers every hart");
 
@@ -196,17 +199,27 @@ private:
         volatile void* base = nullptr;
         const noc_window_status_t opened =
             noc_open_window_2m(a_.tlb_base, a_.eth, 0u, NOC_ORDER_STRICT, NOC_VC_DYNAMIC, &base);
-        /* An unverified window is kept in window_ so finish() clears it: the
-         * slot is this forwarder hart's own reservation (fwd_tlb_base), so a
-         * mapping left in it is a standing path no other owner relies on. */
+        /* An unverified window is kept so finish() clears it: both slots are
+         * this forwarder hart's own reservation (fwd_tlb_base), so a mapping
+         * left in one is a standing path no other owner relies on. */
         window_ = static_cast<volatile uint8_t*>(base);
-        return opened == NOC_WINDOW_OPEN;
+        if (opened != NOC_WINDOW_OPEN) {
+            return false;
+        }
+        volatile void* counter = nullptr;
+        const noc_window_status_t counter_opened = x280_counter_window_open(a_.tlb_base + 1u, a_.eth, &counter);
+        counter_window_ = static_cast<volatile uint8_t*>(counter);
+        return counter_opened == NOC_WINDOW_OPEN;
     }
 
     void clear_windows() {
         if (window_ != nullptr) {
             (void)noc_clear_tlb_2m(a_.tlb_base);
             window_ = nullptr;
+        }
+        if (counter_window_ != nullptr) {
+            (void)noc_clear_tlb_2m(a_.tlb_base + 1u);
+            counter_window_ = nullptr;
         }
     }
 
@@ -299,7 +312,8 @@ private:
         volatile uint32_t* seq_expected;
         volatile fs_hybrid_mesh_packet_header_t* staging;
         uint64_t in_slots;
-        /* tx_fifo[p] and the two shadows, inside the window onto the Ethernet tile. */
+        /* tx_fifo[p] inside the strict window, and the two shadows inside the
+         * counter window, both onto the Ethernet tile. */
         volatile uint8_t* tx_fifo;
         volatile uint32_t* e0_wr_sh;
         volatile uint32_t* e1_out_rd_sh;
@@ -335,9 +349,9 @@ private:
             .in_slots = area_ + lim_.in_slots,
             .tx_fifo = eth_window(eth_tx_base_ + a_.p * eth_.fifo_stride),
             .e0_wr_sh =
-                reinterpret_cast<volatile uint32_t*>(eth_window(a_.eth_ctrl_base + eth_.e0_wr_sh + a_.p * kUnit)),
-            .e1_out_rd_sh =
-                reinterpret_cast<volatile uint32_t*>(eth_window(a_.eth_ctrl_base + eth_.e1_out_rd_sh + a_.p * kUnit)),
+                reinterpret_cast<volatile uint32_t*>(counter_window_ + a_.eth_ctrl_base + eth_.e0_wr_sh + a_.p * kUnit),
+            .e1_out_rd_sh = reinterpret_cast<volatile uint32_t*>(
+                counter_window_ + a_.eth_ctrl_base + eth_.e1_out_rd_sh + a_.p * kUnit),
         };
     }
 
@@ -413,8 +427,7 @@ private:
         stall(h, 1u, t0, t1);
         h.wr = ec_ptr_advance(h.wr, k, h.n_link);
         *h.wr_src = h.wr;
-        *h.e0_wr_sh = h.wr;
-        x280_fence_iorw();
+        x280_counter_store(h.e0_wr_sh, h.wr);
         h.sent += k;
         h.result->packets_out[h.p] = h.sent;
         stamp(h, t1);
@@ -443,8 +456,7 @@ private:
 
     __attribute__((always_inline)) static void publish_rd(Hot& h) {
         *h.rd_src = h.rd;
-        *h.e1_out_rd_sh = h.rd;
-        x280_fence_iorw();
+        x280_counter_store(h.e1_out_rd_sh, h.rd);
     }
 
     /* Consumes up to BATCH headers from in[p], then R1. */
@@ -528,8 +540,10 @@ private:
     volatile ec_result_t* result_ = nullptr;
     /* E0's tx_fifo region, at the layout's tx_offset past eth_ctrl_base. */
     uint32_t eth_tx_base_ = 0u;
-    /* The verified window onto the Ethernet tile, at its L1 address 0. */
+    /* The verified strict window onto the Ethernet tile, at its L1 address 0. */
     volatile uint8_t* window_ = nullptr;
+    /* The counter window onto the same tile and address, for W2 and R1. */
+    volatile uint8_t* counter_window_ = nullptr;
 };
 
 /**
