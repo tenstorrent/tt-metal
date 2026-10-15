@@ -638,6 +638,157 @@
   "status": "PASS",
   "waiting": null
  },
+ "C.swa.experts": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "39f7bef319c7db75c06ec1259c657c4ed30170e5",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "cc9b52d1721e12b4a3f71d7fc0eba1c2bcb58891",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "30686fc2-f0f1-4c01-9724-8fed648373cf"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/C.swa.experts.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "39f7bef319c7db75c06ec1259c657c4ed30170e5",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "cc9b52d1721e12b4a3f71d7fc0eba1c2bcb58891",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/C.swa.experts.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 2153.8,
+    "session_id": "9322e21d-10ac-416b-b80c-01d456c4ac80",
+    "t": "2026-10-15T17:28:07"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/C.swa.experts.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "39f7bef319c7db75c06ec1259c657c4ed30170e5",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "cc9b52d1721e12b4a3f71d7fc0eba1c2bcb58891",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": [
+     "knowledge report contradicted: unknown or malformed entry {'id': 'repo doc (not a known-issues entry)', 'evidence': 'models/demos/deepseek_v3_d_p/tt/moe/README.md:28,115 says dispatch metadata has 5 fields incl. the routing weight; init_helpers.py:compute_constants sets metadata_len = 3 and dispatch_program_factory.cpp:406 says the weight is not a metadata field (recorded as DS41-23)'}"
+    ],
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/C.swa.experts.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 2491.4,
+    "session_id": "30686fc2-f0f1-4c01-9724-8fed648373cf",
+    "t": "2026-10-15T18:25:45"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 705.6,
+  "history": [
+   {
+    "s": 252.7,
+    "status": "FAIL",
+    "t": "2026-10-15T17:44:12"
+   },
+   {
+    "s": 705.6,
+    "status": "PASS",
+    "t": "2026-10-15T18:37:34"
+   }
+  ],
+  "last_run": "2026-10-15T18:37:34",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.swa.experts.log",
+  "metrics": {
+   "auto_experts_L00_big_bias": -2.980232238769531e-07,
+   "auto_experts_L00_big_ratio_max": 1.002178430557251,
+   "auto_experts_L00_big_ratio_min": 0.99233478307724,
+   "auto_experts_L00_big_rel": 0.0017689078813418746,
+   "auto_experts_L00_big_rel_limit": 0.03,
+   "auto_experts_L00_big_row": 0.023404834792017937,
+   "auto_experts_L00_layer24_bias": 3.6954879760742188e-06,
+   "auto_experts_L00_layer24_ratio_max": 1.0012145042419434,
+   "auto_experts_L00_layer24_ratio_min": 0.9985143542289734,
+   "auto_experts_L00_layer24_rel": 0.0028298385441303253,
+   "auto_experts_L00_layer24_rel_limit": 0.03,
+   "auto_experts_L00_layer24_row": 0.013877976685762405,
+   "auto_experts_L00_mixed_bias": -2.7418136596679688e-06,
+   "auto_experts_L00_mixed_ratio_max": 1.0013234615325928,
+   "auto_experts_L00_mixed_ratio_min": 0.9987196326255798,
+   "auto_experts_L00_mixed_rel": 0.0027712394949048758,
+   "auto_experts_L00_mixed_rel_limit": 0.03,
+   "auto_experts_L00_mixed_row": 0.010564446449279785,
+   "auto_experts_L00_small_bias": -3.2782554626464844e-06,
+   "auto_experts_L00_small_ratio_max": 1.0017893314361572,
+   "auto_experts_L00_small_ratio_min": 0.997671902179718,
+   "auto_experts_L00_small_rel": 0.0016150668961927295,
+   "auto_experts_L00_small_rel_limit": 0.03,
+   "auto_experts_L00_small_row": 0.015234388411045074,
+   "auto_experts_L00_vs_cpu_bias": 1.1920928955078125e-06,
+   "auto_experts_L00_vs_cpu_col": 0.006927713751792908,
+   "auto_experts_L00_vs_cpu_col_index": 1518,
+   "auto_experts_L00_vs_cpu_col_limit": 0.06015051156282425,
+   "auto_experts_L00_vs_cpu_ratio_max": 1.0012887716293335,
+   "auto_experts_L00_vs_cpu_ratio_min": 0.9832403063774109,
+   "auto_experts_L00_vs_cpu_rel": 0.002230443526059389,
+   "auto_experts_L00_vs_cpu_rel_limit": 0.01503762826323509,
+   "auto_experts_L00_vs_cpu_row": 0.03901439532637596,
+   "auto_experts_L00_vs_golden_bias": -0.0004488825798034668,
+   "auto_experts_L00_vs_golden_col": 0.022068507969379425,
+   "auto_experts_L00_vs_golden_col_index": 860,
+   "auto_experts_L00_vs_golden_col_limit": 0.12782543897628784,
+   "auto_experts_L00_vs_golden_ratio_max": 1.0583010911941528,
+   "auto_experts_L00_vs_golden_ratio_min": 0.9761882424354553,
+   "auto_experts_L00_vs_golden_rel": 0.017046505585312843,
+   "auto_experts_L00_vs_golden_rel_limit": 0.03195635825395584,
+   "auto_experts_L00_vs_golden_row": 0.0797610655426979,
+   "det_experts_L00": 1.0,
+   "pcc_experts_L00": 0.9998547796273016
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-10-15T18:25:48",
+  "status": "PASS",
+  "waiting": null
+ },
  "C.swa.ffn_collapse": {
   "agent": {
    "defs": {
