@@ -681,3 +681,51 @@ def test_fork_cases_merge_captures(tmp_path):
     b.write_text(_json.dumps({"calls": [call("y"), call("z")]}))
     res, missing = fork_cases.check([a, b], "nobody")
     assert res["stats"]["fork_calls"] == 3 and res["stats"]["fork_calls_uncovered"] == 3
+
+
+def test_scale_copies_subfolders_and_rewrites_extra_configs(fx, tmp_path, monkeypatch):
+    """F75: a model that reads its counts from its own config (DeepSeek's inference/config.json) gets the scaled
+    counts there too; subfolders without weights are copied; a config-only change does not re-cut the weights."""
+    import json as _json
+
+    from models.demos.common.bringup.plan import scale
+
+    s, hf, sc = _scaled_setup(fx, tmp_path, monkeypatch)
+    (hf / "inference").mkdir()
+    (hf / "inference" / "config.json").write_text(_json.dumps({"n_heads": 8, "n_routed_experts": 8, "dim": 16}))
+    (hf / "inference" / "model.py").write_text("# code\n")
+    assert scale.scale(s)["errors"] == []
+    assert (s.scaled_hf_dir / "inference" / "model.py").exists()
+    assert _json.loads((s.scaled_hf_dir / "inference" / "config.json").read_text())["n_heads"] == 8  # not asked for
+    sc2 = {
+        **sc,
+        "config_files": {
+            "inference/config.json": {"n_heads": "num_attention_heads", "n_routed_experts": "n_routed_experts"}
+        },
+    }
+    write(s, "scaling.yaml", sc2)
+    r = scale.scale(s)
+    assert r["errors"] == [] and r.get("reused")  # the weights are not re-cut for a config-only change
+    cfg = _json.loads((s.scaled_hf_dir / "inference" / "config.json").read_text())
+    assert cfg == {"n_heads": 4, "n_routed_experts": 1, "dim": 16}
+    bad = {**sc, "config_files": {"inference/config.json": {"nope": "num_attention_heads"}, "x.json": {}}}
+    errs = scale.scale(s, sc=bad)["errors"]
+    assert any("no key 'nope'" in e for e in errs) and any("x.json is not in the checkpoint" in e for e in errs)
+
+
+def test_scale_never_rewrites_the_real_config_through_a_hard_link(fx, tmp_path, monkeypatch):
+    import json as _json
+    import os
+
+    from models.demos.common.bringup.plan import scale
+
+    s, hf, sc = _scaled_setup(fx, tmp_path, monkeypatch)
+    (hf / "inference").mkdir()
+    (hf / "inference" / "config.json").write_text(_json.dumps({"n_heads": 8, "n_routed_experts": 8}))
+    assert scale.scale(s)["errors"] == []
+    (s.scaled_hf_dir / "inference" / "config.json").unlink()
+    os.link(hf / "inference" / "config.json", s.scaled_hf_dir / "inference" / "config.json")  # as an agent once did
+    write(s, "scaling.yaml", {**sc, "config_files": {"inference/config.json": {"n_heads": "num_attention_heads"}}})
+    assert scale.scale(s)["errors"] == []
+    assert _json.loads((hf / "inference" / "config.json").read_text())["n_heads"] == 8  # the real one untouched
+    assert _json.loads((s.scaled_hf_dir / "inference" / "config.json").read_text())["n_heads"] == 4

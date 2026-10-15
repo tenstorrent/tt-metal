@@ -1066,3 +1066,8 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - Skill: "The rule for a box smaller than the deployment box (read this first)"; roles / agent definition / briefs:
   every agent on a scaled run is told the run is the scaled model and to read dimensions from its config.
 - Selftests: test_scaled_spec_view, test_ledger_of_a_scaled_run, test_golden_full_layers (reuse).
+- F75 (2): plan/scale.py copies the checkpoint's subfolders without weights (a model's own code and configs, e.g.
+  DeepSeek's inference/) and rewrites the extra configs scaling.yaml `config_files` names with the kept counts (every
+  run; a config-only change does not re-cut the weights). It never rewrites a file in place: a hard link to the real
+  checkpoint (an agent had linked DeepSeek's inference/ files) is broken first. Why: the frozen serving-contract tests
+  read inference/config.json directly and failed on the scaled checkpoint (C.swa.attention). Selftests: 2 more.
