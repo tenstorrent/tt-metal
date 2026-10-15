@@ -231,9 +231,9 @@ public:
         "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
         "28-02-2026.")]]
     IDevice* get_device(ChipId physical_device_id) const;
-    [[deprecated(
-        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
-        "28-02-2026.")]]
+    // Returns the IDevice for `coord`. In a multi-host context this throws if `coord` is remote.
+    // Not deprecated: there is no replacement yet for callers that need per-device queries or access. Once one
+    // exists (e.g. get_info(coord)), callers should migrate and this can be deprecated again.
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
