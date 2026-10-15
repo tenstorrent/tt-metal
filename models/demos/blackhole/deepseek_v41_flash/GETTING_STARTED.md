@@ -8,12 +8,13 @@ sampling.
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-e68e45f-233b250` |
+| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-3dce07e-233b250` |
 | Size | 21.4 GB on disk (5.3 GB compressed), built 2026-10-14 |
 | Access | `docker run` pulls the image automatically on a new host. Pulling needs access to the `tenstorrent` packages on ghcr.io (check the digest with `docker image inspect <image> --format '{{.RepoDigests}}'`) |
-| tt-metal | `e68e45f85da78973931b5d1d545617f91c5e16cd` (branch `ssinghal/dsv4p1`; the routed-expert SwiGLU clamp at every MoE site, see below, plus this guide, its runtime spec and the GSM8K eval scripts) |
+| tt-metal | `3dce07e379262731b410319f1cd4c90795d294e2` (branch `ssinghal/dsv4p1`; the routed-expert SwiGLU clamp, the multimodal (image input) processor port for vLLM 0.31, plus the guide-era assets and the GSM8K eval scripts) |
 | tt-inference-server | `233b250e85148bc25853786aff54c0949a994b76` (branch `ssinghal/dsv4p1`) |
-| vllm-tt-plugin | `ad9eed9ad9f7295fda00b8ec788dc30b34587647` (branch `ssinghal/dsv4p1`; the scheduler no longer splits a prompt across prefill steps when the token budget holds a whole prompt) |
+| vllm-tt-plugin | `6b9ef2ab6e23cbf86bdc9350eb2066f1adcef786` (branch `ssinghal/dsv4p1`; ported to vLLM 0.31, logprobs / structured-output requests no longer fail with HTTP 400) |
+| vLLM | 0.31.0 (torch 2.11.0+cpu, transformers 5.12.1) |
 | Model | [`deepseek-ai/DeepSeek-V4.1-Flash`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash) (476 GB of safetensors, 48 shards) |
 | Hardware | 1x Blackhole Galaxy (32 chips, 4x8 mesh) |
 
@@ -34,19 +35,21 @@ What this build is configured for (the runtime spec in step 3 sets all of it):
 
 ## Performance
 
-**The speed numbers below were measured on the previous image (`0.24.0-901fa21-5b9d4ce`), before the SwiGLU clamp was added; they were not re-measured on this image.** The accuracy line at the end of this section was re-measured on this image.
+All numbers were measured on this image (`0.24.0-3dce07e-233b250`, vLLM 0.31.0), 16-user server above, GSM8K-style
+prompts of 1024 input tokens, 256 output tokens per request, `vllm bench serve` run by tt-inference-server's
+`benchmarks` workflow from the same image. "Greedy" is temperature 0; "sampled" is temperature 0.6, top-k 20,
+top-p 0.95. TPOT and TTFT are the report means.
 
-All numbers: one Blackhole Galaxy, this image, 16-user server above, GSM8K 8-shot prompts (about 700
-tokens each), 256 output tokens per request, `vllm bench serve` run by tt-inference-server's `benchmarks`
-workflow from the same image. "Greedy" is temperature 0; "sampled" is temperature 0.6, top-k 20, top-p 0.95.
+| Concurrent requests | Greedy TTFT | Greedy TPOT | Greedy tok/s/user | Sampled TTFT | Sampled TPOT | Sampled tok/s/user |
+|---|---|---|---|---|---|---|
+| 1 | 1.24 s | 27.7 ms | 36.1 | 1.20 s | 29.4 ms | 34.0 |
+| 2 | 1.51 s | 33.7 ms | 29.7 | 1.41 s | 35.4 ms | 28.2 |
+| 4 | 1.54 s | 43.7 ms | 22.9 | 1.60 s | 42.5 ms | 23.5 |
+| 8 | 1.96 s | 52.5 ms | 19.0 | 1.99 s | 56.1 ms | 17.8 |
+| 16 | 2.75 s | 80.1 ms | 12.5 | 2.96 s | 78.4 ms | 12.8 |
 
-| Concurrent requests | Greedy TTFT | Greedy TPOT | Greedy tok/s/user | Sampled TPOT | Sampled tok/s/user |
-|---|---|---|---|---|---|
-| 1 | 1.24 s | 26.9 ms | 37.2 | 31.8 ms | 31.4 |
-| 2 | 1.52 s | 31.7 ms | 31.5 | 33.3 ms | 30.0 |
-| 4 | 1.53 s | 40.4 ms | 24.8 | 38.6 ms | 25.9 |
-| 8 | 1.86 s | 53.1 ms | 18.8 | 53.0 ms | 18.9 |
-| 16 | 2.62 s | 75.8 ms | 13.2 | 72.7 ms | 13.8 |
+Total output throughput (greedy): 30.9 / 50.0 / 72.4 / 121.4 / 168.3 tok/s at 1 / 2 / 4 / 8 / 16 requests.
+These are within noise of the previous image (vLLM 0.26): TPOT parity, no regression from vLLM 0.31.
 
 - **TPOT is a serving metric, not decode speed.** The benchmark keeps the number of requests in flight
   constant, so every finishing request is replaced by a new one, and that new request's prefill (about
@@ -62,15 +65,9 @@ workflow from the same image. "Greedy" is temperature 0; "sampled" is temperatur
 - **Speculative-decode statistics** during the benchmark (server log): 3.7-3.95 tokens per round (greedy),
   3.6-3.8 (sampled); a round takes 99 ms at one user and 108 ms at 16; the host gap between rounds is
   4.5-7 ms.
-- **Accuracy.** GSM8K 8-shot (`dsv41_gsm8k_cot`, all 1319 questions, temperature 1.0, top-p 0.95, run through
-  tt-inference-server's `evals` workflow from this image): **95.75 ± 0.56 %** flexible-extract (strict-match
-  75.59 ± 1.18 %: the answers end "The answer is $64." and the strict regex wants a digit right after
-  "is"). The model card lists 93.0 for the base model.
-- **Accuracy on this image (with the SwiGLU clamp at all four sites).** GSM8K 8-shot (`dsv41_gsm8k_cot`, all 1319
-  questions, `evals` workflow run from this image against a 16-user server with speculative decoding and a
-  40,000-token context): **96.29 %** flexible-extract. The same configuration run as a host server (not in the
-  container) also scored 96.29 %. Earlier runs of the previous image scored 95.75 / 95.83 %; the 131,072-token
-  server configuration in this guide was not re-run for accuracy on this image.
+- **Accuracy on this image.** GSM8K 8-shot (`dsv41_gsm8k_cot`, all 1319 questions, `evals` workflow run from this image
+  against the 16-user, 131,072-token server of this guide): **95.45 %** flexible-extract (PASS). Earlier images scored
+  95.75 / 95.83 / 96.29 %; the model card lists 93.0 for the base model.
 - A single-user request with a ~93,000-token prompt returned a correct two-sentence summary in 105 s on an
   earlier commit of this server (`e41a8985e97`, before the dense position bucket; host checkout, not this
   image). The long-prompt rate was not re-measured on this image.
@@ -85,6 +82,7 @@ Time from `docker run` until `GET /health` returns 200:
 | Weight cache populated, this configuration not yet run on the host (kernel cache still to fill) | ~30-33 min (29.5 and 32.6 min measured on one host: about 13 min building the 40 layers, then about 16-19 min compiling kernels and capturing the prefill and spec traces) |
 | This image, both caches populated (16-user speculative server, 40,000-token context) | 14.0 min (`docker run` to `/health`) |
 | This image with the runtime spec of this guide (131,072-token context), weight cache populated, kernel cache from earlier runs on the host | 20.1 min (`docker run` 18:47:55, `/health` 19:07:59); 13.4 min on a repeat start of the same server (19:25:35 to 19:39:00) |
+| This image (vLLM 0.31) with the runtime spec of this guide, weight and kernel caches populated | 16.6-22 min over five starts on three hosts (first start on a host that had run another image: 20.2 min) |
 | First start with nothing cached | not re-measured on this image; earlier first starts of the same weights took 60-90 min |
 
 Two caches make later starts fast; both are mounted in the `docker run` below:
@@ -112,7 +110,7 @@ Keep both on a disk local to the host (we used a local NVMe), not on a network f
 `docker run` pulls the image by itself the first time. To pull ahead of time:
 
 ```bash
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-e68e45f-233b250
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-3dce07e-233b250
 docker pull $IMAGE
 ```
 
@@ -123,7 +121,7 @@ export CKPT=/path/to/deepseek-v41-flash        # the model checkpoint (read-only
 export CACHE=/path/to/dsv41_cache              # weights/ and kernels/ below; reused across starts
 export STATE=/path/to/dsv41_state              # small scratch dirs the server writes to
 export SPEC=$PWD/assets/runtime_spec_b16_k5_131072.json   # run from models/demos/blackhole/deepseek_v41_flash/ in tt-metal (see below)
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-e68e45f-233b250   # or the image you built locally
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-3dce07e-233b250   # or the image you built locally
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
 
@@ -238,7 +236,7 @@ CTX_ROOT=~/dsv41/docker-ctx \
 The script exports the sources into `$CTX_ROOT/<tt-metal-11>-<tt-inference-server-8>-<plugin-7>`, builds the
 toolchain base image `tt-metalium-ci-build:local-<tt-metal-11>` from tt-metal's own `dockerfile/docker-bake.hcl`
 (4.7 GB), then builds the server image and prints `BUILT dsv41-flash-local:<tt-metal-11>-<tt-inference-server-8>-<plugin-7>`
-(for this guide's commits: `dsv41-flash-local:e68e45f85da-233b250e-ad9eed9`).
+(for this guide's commits: `dsv41-flash-local:3dce07e3792-233b250e-6b9ef2a`).
 
 | Variable / flag | Use |
 |---|---|
@@ -267,7 +265,7 @@ Notes on the build:
 Check the image:
 
 ```bash
-IMAGE=dsv41-flash-local:e68e45f85da-233b250e-ad9eed9     # the tag the script printed
+IMAGE=dsv41-flash-local:3dce07e3792-233b250e-6b9ef2a     # the tag the script printed
 docker run --rm --entrypoint cat $IMAGE /home/container_app_user/BUILD_INFO
 docker run --rm --entrypoint wc $IMAGE -c /home/container_app_user/app/src/run_vllm_api_server.py   # 53132 bytes, not 0
 ```
@@ -284,7 +282,7 @@ Do steps 1 and 3 of "Launch the server" (prerequisites; checkout, caches and run
 local image in step 4:
 
 ```bash
-export IMAGE=dsv41-flash-local:e68e45f85da-233b250e-ad9eed9     # the image you built
+export IMAGE=dsv41-flash-local:3dce07e3792-233b250e-6b9ef2a     # the image you built
 # step 4: the same docker run as above, which uses $IMAGE
 ```
 
@@ -305,11 +303,9 @@ curl -s http://localhost:8000/v1/chat/completions -H "Content-Type: application/
 }'
 ```
 
-Streaming (`"stream": true`) works the same way. On 2026-10-14 the steps of this guide were run again with the image tag above and
-`assets/runtime_spec_b16_k5_131072.json`: the server was ready after 20.1 min, a chat request was answered correctly,
-`/v1/models` reported `max_model_len` 131072, and `docker stop` ended the container cleanly. The commands in this guide were run end to end on one
-Galaxy (a server started with the command in step 4, then the request above, a streaming request, the model
-list, a seeded request twice, and the field checks in the table).
+Streaming (`"stream": true`) works the same way. On 2026-10-15 the steps of this guide were run again with the image tag above on two
+hosts (`assets/runtime_spec_b16_k5_131072.json`, vLLM 0.31.0): the server was ready after 16.6-22 min, chat and completion requests were
+answered correctly (arithmetic, a 20,000-token needle-in-a-haystack), GSM8K scored 95.45 %, and the 1 / 2 / 4 / 8 / 16-request benchmarks above ran.
 
 ### Request fields
 
@@ -320,10 +316,33 @@ list, a seeded request twice, and the field checks in the table).
 | `temperature`, `top_p`, `top_k` | sampled on the device; `temperature` 0 (or `top_k` 1) is greedy. The model card recommends temperature 1.0 and top-p 0.95. Top-k up to 32 takes the fastest path. |
 | `seed` | a seeded request gives the same output whatever slot or batch position it runs in |
 | `stop`, `stream` | work as usual |
-| `logprobs` | **not supported**: the request fails with an error that says to drop the control or to run the server without speculative decoding |
+| `logprobs`, structured output | **not supported** with speculative decoding: the request is rejected with HTTP 400 and a message that says to drop the control or to run the server without speculative decoding |
 | `min_p`, `logit_bias` | **rejected** with HTTP 400 (`not yet supported with speculative decoding`) |
 | `presence_penalty`, `frequency_penalty`, `repetition_penalty` | accepted; per the server's own message these requests decode without speculation (slower) |
 | `n` | `n` 2 returned two choices in a test |
+
+## Image input (optional)
+
+The server can also take images in chat messages. This needs the vision runtime spec
+`assets/runtime_spec_b16_k5_131072_vision.json` instead of the text one (set `SPEC` to it in step 3; everything else in the
+launch is unchanged). It is the text spec plus `limit-mm-per-prompt {"image": 4}` (at most 4 images per request),
+`mm-processor-cache-gb 0`, `chat-template-content-format openai`, `DSV41_VISION=1` and the modalities `text` + `image`.
+The vision tower costs extra device memory at start and a slightly longer start; text-only requests work as before.
+
+```bash
+IMG=$(base64 -w0 photo.png)
+curl -s http://localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{
+  "model": "deepseek-ai/DeepSeek-V4.1-Flash",
+  "messages": [{"role": "user", "content": [
+    {"type": "image_url", "image_url": {"url": "data:image/png;base64,'"$IMG"'"}},
+    {"type": "text", "text": "What does the image say?"}]}],
+  "max_tokens": 128, "temperature": 0
+}'
+```
+
+Checked on this image: text, one image (a red square labelled "CAT 42" was read correctly), two images, 4 image + 4 text requests at
+once, streaming, and a 16-concurrent stress run (48 of 48 number answers right, 47 of 48 colour answers; the miss was a reply cut by
+`max_tokens`).
 
 ## Run the GSM8K evaluation
 
@@ -386,3 +405,6 @@ run differ from the next by about half a percent, so compare scores within that 
   `/home/container_app_user/tt-metal/python_env/bin/python run.py ...`). `assets/run_gsm8k_eval.sh` wraps the
   `evals` workflow for GSM8K (section "Run the GSM8K evaluation"); there is no such wrapper for `benchmarks` in the
   repos yet.
+- **Hugging Face cache must be a real directory.** vLLM resolves the model name through `$HF_HOME`. If `~/.cache/huggingface/hub` on your
+  host is a symlink (for example to a shared file system) and you mount that path into the container, the link dangles inside it and the server
+  fails to find the model. Mount the real directory created in step 3 (`$STATE/hf`) as `/hf`, as the `docker run` above does.
