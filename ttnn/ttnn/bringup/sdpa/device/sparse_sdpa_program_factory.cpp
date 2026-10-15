@@ -164,7 +164,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     cb(cb_out_a, state_tile_bytes, Sqt * vDHt, state_df);
     cb(cb_out_b, state_tile_bytes, Sqt * vDHt, state_df);
     cb(cb_corr, tile_bytes, Sqt, bf);
-    cb(cb_out_im, tile_bytes, Sqt * vDHt, bf);
+    // fp32_output (fork option): the normalized output stays Float32 up to the untilize (default bf16).
+    const tt::DataFormat out_im_df = attrs.fp32_output ? fp32 : bf;
+    cb(cb_out_im, tt::tile_size(out_im_df), Sqt * vDHt, out_im_df);
     cb(cb_out_rm, out_tile_bytes, Sqt * vDHt, out_df);
     cb(cb_idx, topk * idx_elem_bytes, 1, bf);
     cb(cb_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
@@ -325,6 +327,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     if (attrs.high_precision) {
         compute_desc.defines.emplace_back("SPARSE_SDPA_HIGH_PRECISION", "1");
     }
+    if (attrs.fp32_output) {
+        compute_desc.defines.emplace_back("SPARSE_SDPA_FP32_OUTPUT", "1");
+    }
     // fp8 inputs must unpack into a 32-bit dest (fp8 -> fp32 in DEST, then packed to bfp8 cb_*_in).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
@@ -333,6 +338,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     }
     if (q_is_fp8) {
         unpack_to_dest_mode[cb_q_rm] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (attrs.fp32_output) {
+        // the untilize's datacopy reads the Float32 output straight into DEST (via srcA it would be TF32)
+        unpack_to_dest_mode[cb_out_im] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     compute_desc.config = tt::tt_metal::ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,

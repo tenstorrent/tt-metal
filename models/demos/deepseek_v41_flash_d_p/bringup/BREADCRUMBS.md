@@ -597,3 +597,26 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Gate: PASS. pcc_attention_L00 0.999704; test_cache_starts 4/4, 0 failures each (layer 0, SP 2, W 1024).
 - OV-4: DS41-20 already states the F73 fix; unchanged.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py && PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`
+
+## S.swa.06 implement (attempt 1, scaled run)
+- Previous run (orchestrator, WINDOW_SDPA=high_precision per OV-3) failed one check: attention vs the CPU step worst
+  row 0.0522 > 0.05 (the fixed swap_step_row limit; rel 0.0230 passed its F73 limit 0.0486; tail passed). Dumped the
+  step's rows (probe, deleted): worst rows have ordinary norms, quantiles 0.022 / 0.027 / 0.037 / 0.047: the tail of
+  the whole error, so the error had to come down, not one row.
+- Fix: the bf16 output of sparse_sdpa (DS41-18) -> new fork option `ttnn.bringup.sparse_sdpa(fp32_output=True)`
+  (needs high_precision; default off = previous programs). Setting WINDOW_SDPA_OUT = fp32 (default, max precision) |
+  bf16. `tt/attention.py`: passes it, `_out` skips the typecast when the output is already fp32 (all_to_all back in
+  fp32). No other step changed; no host work added.
+- Gotcha (DS41-29): the first fp32 output was garbage: high_precision leaves the packer bf16 before the normalize
+  and `sdpa_maybe_pack_reconfig_data_format<normalized_out, scratch>` skips at compile time once both are fp32;
+  explicit `pack_reconfig_data_format(scratch)` under a new define SPARSE_SDPA_FP32_OUTPUT. cb_out_im unpacks with
+  UnpackToDestFp32 for the untilize (srcA would be TF32).
+- Gate: PASS. pcc_swap_out 0.999849; attention vs CPU rel 0.0189 (limit 0.0486), worst row 0.0458 (limit 0.05:
+  ~9 % margin), ratio [0.9908, 1.0029]; tail 0.0168 (limit 0.0423). C.swa.attention 0.999777 and
+  C.swa_engram.attention 0.999699 still pass. Fork: unit 37 passed / 10 skipped (32 + 5 new), fork_source 216 tests
+  0 regressions, model cases 5 passed / 1 skipped. O.1 needs a case for the new call (fp32_output=True).
+- Levers if the worst row tightens again: bf16 probabilities / q inside the op (DS41-18 emulation: small), or
+  WINDOW_SDPA=exact (owner decision, OV-3).
+- OV-4: DS41-20 already states the F73 fix; unchanged. DS41-18 updated (fp32 output now enough since F73).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_06_attention.py`;
+  fork: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py -k fp32_output`

@@ -35,7 +35,7 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
                    softmax with the fp32 sink, fp32 output. "high_precision" / "source": the bf16 q -> all_to_all ->
                    ttnn.bringup / ttnn.transformer sparse_sdpa(attention_sink = sink / 1, scale 1) path: per query the
                    128 window rows (load-time index list: row d + 1 + j of the table, a sentinel tail for positions
-                   < 0) -> all_to_all back -> fp32
+                   < 0) -> all_to_all back -> fp32 (high_precision: the op's own fp32 output, WINDOW_SDPA_OUT)
     output         inverse RoPE + re-interleave -> fp8_qdq -> heads concatenated per group ->
                    grouped wo_a (the chip's whole groups, one batched matmul) -> fp8_qdq -> wo_b (K-split: the chip's
                    groups) -> exact sum over TP (all_gather + SFPU add, K-30) -> the chip's hidden slice
@@ -336,6 +336,7 @@ class TtWindowAttention:
         self.scale = self.d**-0.5
         self.sdpa = settings.get("WINDOW_SDPA")
         self.high_precision = self.sdpa == "high_precision"
+        self.fp32_out = self.high_precision and settings.get("WINDOW_SDPA_OUT") == "fp32"
         if self.sdpa != "exact":
             assert (
                 self.heads % 32 == 0
@@ -454,6 +455,7 @@ class TtWindowAttention:
                 compute_kernel_config=self.ckc,
                 attention_sink=self.sink,
                 high_precision=True,
+                fp32_output=self.fp32_out,
             )
         return ttnn.transformer.sparse_sdpa(
             q_rm,
@@ -468,11 +470,14 @@ class TtWindowAttention:
         )
 
     def _out(self, o_rm: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """sparse_sdpa output [1, H, S/(SP TP), 512] bf16 ROW_MAJOR -> attn_out [1, 1, S/SP, H/TP] fp32."""
+        """sparse_sdpa output [1, H, S/(SP TP), 512] ROW_MAJOR (fp32, or bf16 with WINDOW_SDPA_OUT=bf16 / the source
+        op) -> attn_out [1, 1, S/SP, H/TP] fp32."""
         ot = ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT, memory_config=DRAM)
-        oh = self._reshard(ot, in_dim=2, out_dim=1)  # [1, H/TP, S/SP, 512] bf16
+        oh = self._reshard(ot, in_dim=2, out_dim=1)  # [1, H/TP, S/SP, 512]
         if oh is not ot:
             ttnn.deallocate(ot)
+        if oh.dtype == ttnn.float32:
+            return self._out_heads(oh, cos, sin)
         of = ttnn.typecast(oh, ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(oh)
         return self._out_heads(of, cos, sin)

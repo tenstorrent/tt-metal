@@ -130,6 +130,7 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
             q.dtype() == DataType::BFLOAT16 && attrs.kv_format == transformer::bringup::SparseKVFormat::BF16,
             "sparse_sdpa high_precision supports bf16 q and a BF16 kv only");
     }
+    TT_FATAL(!attrs.fp32_output || attrs.high_precision, "sparse_sdpa fp32_output requires high_precision=true");
 
     const auto qs = q.logical_shape();
     const auto is = idx.logical_shape();
@@ -226,8 +227,10 @@ SparseSDPAOperation::spec_return_value_t SparseSDPAOperation::compute_output_spe
     // noc writes, so no caller-supplied memory_config is exposed (it could only ever be this).
     const tt::tt_metal::MemoryConfig out_mem{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    // fp32_output (fork option): Float32 instead of q's dtype.
+    const DataType out_dtype = attrs.fp32_output ? DataType::FLOAT32 : t.q.dtype();
     return tt::tt_metal::TensorSpec(
-        shape, tt::tt_metal::TensorLayout(t.q.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem));
+        shape, tt::tt_metal::TensorLayout(out_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem));
 }
 
 SparseSDPAOperation::tensor_return_value_t SparseSDPAOperation::create_output_tensors(
@@ -276,7 +279,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.indices.logical_shape(),
         t.indices.dtype(),
         t.attention_sink,
-        attrs.high_precision);
+        attrs.high_precision,
+        attrs.fp32_output);
 }
 
 Tensor sparse_sdpa(
@@ -291,7 +295,8 @@ Tensor sparse_sdpa(
     std::optional<uint32_t> cache_batch_idx,
     std::optional<BlockCyclicLayout> block_cyclic,
     const std::optional<Tensor>& attention_sink,
-    bool high_precision) {
+    bool high_precision,
+    bool fp32_output) {
     using OperationType = ttnn::prim::bringup::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -303,6 +308,7 @@ Tensor sparse_sdpa(
             .cache_batch_idx = cache_batch_idx,
             .block_cyclic = block_cyclic,
             .high_precision = high_precision,
+            .fp32_output = fp32_output,
         },
         OperationType::tensor_args_t{
             .q = q,

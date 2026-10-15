@@ -1,62 +1,32 @@
 {
  "used": [
   {
-   "id": "DS41-16",
-   "how": "the FPU's in-tile dot rounding is why fp32 operands alone cannot pass; moved ExactMatmul's one-product-per-tile-dot masks to the keys / values with lanes along K summed in DEST (tt/window_exact.py)",
-   "traced": true,
-   "cited": true
-  },
-  {
    "id": "DS41-18",
-   "how": "started from its emulation numbers; fp32 output alone measured insufficient (tail 0.013), so went to exact products",
+   "how": "named the bf16 sparse_sdpa output as the largest error piece: added fp32_output to the fork instead of another change",
    "traced": true,
    "cited": true
   },
   {
-   "id": "DS41-1",
-   "how": "the fp8 q-dq after the un-RoPE turns any rounding into e4m3 steps: emulated the whole chain to size the error budget",
+   "id": "DS41-20",
+   "how": "F73 rel limit already scales with the component error, so only the fixed worst-row limit failed; targeted the overall error",
    "traced": true,
    "cited": true
   },
   {
-   "id": "DS41-13",
-   "how": "fp32 bit ops / SFPU arithmetic exact on BH: pieces by typecast + fp32 subtract, softmax on the SFPU",
-   "traced": true,
-   "cited": false
-  },
-  {
-   "id": "K-30",
-   "how": "no fp32 operand through the FPU: q and probs split into bf16 pieces, lane sums with ttnn.add (SFPU)",
+   "id": "DS41-19",
+   "how": "kept WINDOW_SDPA=exact as comparison only (owner OV-3), did not switch to it",
    "traced": false,
-   "cited": false
-  },
-  {
-   "id": "K-27",
-   "how": "kept 512^-0.5 folded into q; the sink now enters as fp32 in exp(sink - max)",
-   "traced": true,
    "cited": false
   },
   {
    "id": "K-56",
-   "how": "deleted tests/ttnn/unit_tests/operations/ds41_window_exact after the probes",
-   "traced": true,
-   "cited": true
-  },
-  {
-   "id": "K-57",
-   "how": "probes opened the whole 2x2 mesh with FABRIC_2D, never one card",
+   "how": "deleted the tt-probe directories after probing",
    "traced": true,
    "cited": false
   },
   {
-   "id": "K-58",
-   "how": "hand-run gate metrics read from the log; results/ left to the orchestrator",
-   "traced": false,
-   "cited": false
-  },
-  {
-   "id": "DS41-17",
-   "how": "kept the cache write / carry path; the exact path reads the same [carry | chunk] table",
+   "id": "K-52",
+   "how": "read the pcc-0 FAIL lines of the precompile collect pass as noise, judged the real pass",
    "traced": true,
    "cited": false
   }
@@ -64,29 +34,23 @@
  "contradicted": [
   {
    "id": "DS41-18",
-   "evidence": "its Fix says an fp32-output fork option is the next precision step; CPU emulation of the device arithmetic (S.swa.06) gives attention rel 0.0126 and tail 0.0132 with an fp32 output, still over the 0.01 tail limit; updated the entry to point at DS41-19",
-   "cited": true
-  },
-  {
-   "id": "DS41-16",
-   "evidence": "says the FPU rounds each in-tile partial dot to ~TF32 (11 bits): a single bf16 x e4m3 product (12 significant bits) alone in a tile-dot comes out exact (probe, rel 7.5e-9 vs fp64); the rounding is of in-tile sums, not single products (recorded in DS41-19)",
+   "evidence": "said 'an fp32 output alone is not enough (tail 0.013 in S.swa.06)'; after F73 the tail limit is 0.042 and the fp32 output passes S.swa.06 (rel 0.0189, row 0.0458, tail 0.0168). Updated in the file.",
    "cited": true
   }
  ],
  "missing": [
-  "the hand-run test_cache_starts needs BRINGUP_TASK=C.swa.attention (or the step's task) to restrict it to the device layers; without it it fails on layer 1",
-  "ttnn binary ops broadcast fp32 / bf16 operands over dims 0 and 1 (both operands) exactly; useful for building masked copies in one op"
+  "swap step checks: the worst-row limit (swap_step_row 0.05) stays fixed while F73 scales the rel limit; a step near its component error fails only on the row",
+  "sdpa fork kernels: sdpa_maybe_pack_reconfig_data_format compares compile-time formats and assumes the previous pack state; a new fp32 CB can silently skip a needed reconfig"
  ],
  "overseer": [
   {
-   "id": "OV-1",
+   "id": "OV-4",
    "answer": "done",
-   "evidence": "DS41-12 is now one 352-character line pointing at known_issues_detail.md (heading renamed to match); knowledge.check reports no problem"
+   "evidence": "known_issues.md DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x (swap_step_calib) the step's own component error, no cap'; unchanged this step"
   }
  ],
  "cited_only": [
-  "DS41-12",
-  "DS41-19"
+  "DS41-29"
  ],
  "meta": {
   "model": "deepseek_v41_flash_d_p",
@@ -95,17 +59,26 @@
   "role": "implement",
   "attempt": 1,
   "agent": "bringup-engineer",
-  "t": "2026-10-15T15:35:23",
-  "head": "c6ae714cb93",
+  "t": "2026-10-15T23:41:25",
+  "head": "cacb4c66b87",
   "touched": [
    "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
    "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
-   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
    "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
    "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.swa.06.implement.1.json",
    "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
    "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
-   "models/demos/deepseek_v41_flash_d_p/tt/window_exact.py"
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
+   "ttnn/ttnn/bringup/sdpa/device/kernels/compute/compute_streaming.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_program_factory.cpp",
+   "ttnn/ttnn/bringup/sdpa/sdpa_nanobind.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.hpp",
+   "ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py"
   ]
  }
 }
