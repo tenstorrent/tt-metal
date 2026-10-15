@@ -1451,6 +1451,13 @@ tasks:
     - attn_collapse
     - attn_norm
     layer: 1
+  frozen:
+    at: '2026-10-15T20:07:14'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_06_attn_norm.py: 0998ba53467b8f9317dd4b7576539dace0cfeed0c9ecf7daf7a064a85b1e5602
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.q_a
   title: swa_engram q_a (op) on device, layer 1
   step: implement
