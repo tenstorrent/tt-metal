@@ -50,11 +50,14 @@ __attribute__((noinline)) void calculate_div_int32_floor_fresh_cpp()
     {
         for (int row = 0; row < ITERATIONS; ++row)
         {
-            const sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
-            const sfpi::vInt b = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
+            // Sign-magnitude converts straight to fp32 (exact: |a| < 2^23).
+            // The +0.0f folds sign-magnitude -0 onto +0.0, the bits the
+            // integer contract's -0 -> 0 would have produced.
+            const sfpi::vSMag a = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
+            const sfpi::vSMag b = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
 
-            const sfpi::vFloat fa = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest); // exact: |a| < 2^23
-            const sfpi::vFloat fb = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest);
+            const sfpi::vFloat fa = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest) + 0.0f;
+            const sfpi::vFloat fb = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest) + 0.0f;
 
             // Hardware-seeded reciprocal (positive finite divisors only,
             // which the domain guarantees).
