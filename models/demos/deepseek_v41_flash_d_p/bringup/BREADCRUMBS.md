@@ -106,3 +106,19 @@ for the ladder's state check is a run-only Setting (index_history), not in the d
 Gate (hand run, generated/bringup_adhoc/PL.1.json): plan_fits 1, unplaced_tensors 0, plan_errors 1 (DS41-9),
 component_errors 0, ledger_errors 0, plan_approved 0 (needs the approval); deploy_fits 1, box_path_differences 0.
 Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.check_plan`
+
+## SG.1 scale (attempt 1)
+
+What: the reference reads the scaled checkpoint's counts. `reference/ds41_ref.py:inference_config` / `inference_dir`:
+a dir without `inference/` but with `bringup_scale.json` takes the source's `inference/config.json` and applies every
+text_config key the cut changed (HF_TO_INFERENCE; an unmapped change asserts) -> n_heads 32, o_groups 4,
+n_routed_experts 96 (DS41-11). `Config.from_dir` and `hf_oracle.build_oracle` / `inference_module` use them.
+scaling.yaml unchanged: scale.py reports 0 errors, 250 cut, 43200 dropped; layer 2 shapes checked (wq_b 16384 rows,
+wo_a 4096 x 4096, wo_b 5120 x 4096, attn_sink 32, gate 96 rows, 576 expert tensors).
+Checked on the CPU: layers 0-24 of the scaled checkpoint, 2 chunks of 512: finite, state shapes as expected (171 s).
+Blocker (RESOLVED by the supervisor 2026-10-15: scaled.ladder 55296 / 2048; not in SG.1's paths): golden fails "the prompt has 56320 tokens < 65536" (DS41-12). input/prompt.json was
+built at R.1 for the real ladder (56320); the scaled ladder (owner, 65536) needs spec `text.length: 65536` and a
+prompt rebuild (prefix-identical ids, new sha; existing goldens record the old sha in their manifests), or a shorter
+scaled.ladder. The 64k golden then runs ~2 h on the CPU (56k real took 5894 s).
+Gotcha: hf_scaled/quietbox_2x2 is 237 GB (scale.py copies the engram tables whole).
+Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.scale && BRINGUP_SCALED=1 python -m models.demos.common.bringup.reference.generate_golden --rung scaled`
