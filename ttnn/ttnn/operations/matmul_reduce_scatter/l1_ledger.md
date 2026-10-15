@@ -1,0 +1,65 @@
+# L1 Ledger: matmul_reduce_scatter
+
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes are those of `op_design.md` → Blocking Model:
+`g` (device), `j` (entry/block), `m` (core_m), `n` (core_n), `k` (kb / Kt), `c` (transport chunk). `P = core_m·core_n`
+(nominal per-core sub-block, tiles). DEST is fp32 on the matmul cores, always (see op_design.md, Perf lamps).
+
+## Matmul cores (`grid_m·grid_n` cores per chip)
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_act_k_window` | resident-xblock ∧ scatter -1: `core_m·Kt`; otherwise `depth_in0·core_m·kb` (`depth_in0 = 2`) | resident: `core_m·Kt` (the whole K of this core's A rows, reused by all G entries). Stream: `2·core_m·kb` (one K-block computing, one landing). | `{g: streams → 1, j: streams (resident: spans, reused across all entries), m: spans → core_m, n: streams (independent of n), k: spans → Kt (resident) / kb·depth (stream), c: streams}` | A dtype: Float16_b (Bfp8_b when the TARGET bf8b activation lands) | reader | compute | whole call | None. Live alongside every other CB for the whole call (the matmul of entry j+1 overlaps the finish of j). Residency is the regime predicate, not an alias. |
+| `cb_weight_k_window` | resident-xblock ∧ scatter -2: `Kt·core_n`; otherwise `depth_in1·kb·core_n` (`depth_in1 = 2`) | resident: `Kt·core_n`; stream: `2·kb·core_n` | `{g: streams → 1, j: streams (resident: spans), m: streams (independent of m), n: spans → core_n, k: spans → Kt / kb·depth, c: streams}` | W dtype: Float16_b / Bfp8_b (Bfp4_b at TARGET) | reader | compute | whole call | None. Concurrent with `cb_act_k_window` (both are operands of every K-block). A different format means the two can never share. |
+| `cb_partial_hold` | `depth_hold·P` (`depth_hold = 2`) | `2·P`: entry e is held for its lagged arrival while entry e+1's matmul L1-accumulates into the second slot | `{g: streams, j: spans → 2 (lag 1 + current), m: spans → core_m, n: spans → core_n, k: streams (L1-accumulated in place across Kt/kb K-blocks; no K extent), c: streams}` | Float32 (DEST is fp32 and the slot is a packer-L1-accumulation target) | compute (matmul_block, caller-owned reserve/push) | compute (finish) | per entry, at most 2 live | None. It *is* the matmul's interm target (`Interm` + `caller_owns_pack_target`), so the separate spill CB was folded into it (Rule 3.4). It cannot alias `cb_finished`, which has a different format (Float32 vs Float16_b), a concurrent lifetime (finish reads hold while writing finished) and a different consumer core set (ports read finished remotely). |
+| `cb_finished` (staging offset 0) | `depth_handoff·P` (`depth_handoff = 2`) | `2·P`: entry e being gathered by a port while entry e+1 is finished | `{g: streams, j: spans → 2, m: spans → core_m, n: spans → core_n, k: streams (absent), c: streams (ports read it chunk by chunk, chunk_tiles ≤ P)}` | Float16_b. A traveling partial may be bf16 per the spec; the fin output is bf16. | compute | writer (the port reads its bytes remotely under the writer's ack protocol, so the writer is the only CB consumer) | per entry until acked (start/relay) or written (fin) | Shares the **staging tensor allocation** with the two arrival CBs (disjoint `address_offset` ranges, never overlapping bytes). It cannot alias them: all three are live together. Fin output goes through this same CB, so there is no separate output CB (Rule 3.1, pack into the destination). |
+| `cb_arrivals_fwd` (staging offset `depth_handoff·P·2048`) | `slots_fwd·P`, where `slots_fwd = max over halves` of the forward-travelling arrivals of a core | `slots_fwd·P`: every slot is written once by the fabric at an address fixed for the call, and may land before compute reaches it | `{g: spans → slots_fwd (one slot per upstream contribution: G-1 bounded), j: spans → slots_fwd, m: spans → core_m, n: spans → core_n, k: streams, c: streams (packets land chunk by chunk)}` | Float16_b | reader (credit; the bytes are written by the upstream port over the fabric) | compute | whole call | Staging allocation shared with `cb_finished` / `cb_arrivals_bwd` at disjoint offsets. It cannot be reused across slots inside a call: a slot reused before compute consumed it would need a credit round trip to the remote sender (regime `port-L1 landing with credits`, rejected). |
+| `cb_arrivals_bwd` (staging offset after fwd) | `slots_bwd·P` | `slots_bwd·P` | `{g: spans → slots_bwd, j: spans → slots_bwd, m: spans → core_m, n: spans → core_n, k: streams, c: streams}` | Float16_b | reader | compute | whole call | As `cb_arrivals_fwd`. It is a separate CB because the fin add reads both arrival streams at once (two CB inputs of one chain). |
+
+## Port cores (`2·L` per chip)
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_port_chunks` | `2·port_group·chunk_tiles` (`port_group = 4`, `chunk_tiles ≤ 7`) | `2·port_group·chunk_tiles`: one batch being read in while one batch is sent (2× is the double buffer; the batch = `port_group` chunks) | `{g: streams, j: streams, m: streams, n: streams, k: streams (absent), c: spans → 2·port_group}` | Float16_b | reader (port) | writer (port sender) | whole call | The only CB on the core, so there is nothing to share. |
+
+## Symbol table
+
+| Symbol | Bound | Predicate establishing it |
+|---|---|---|
+| `core_m`, `core_n` | `core_m ≤ ceil(block_m_tiles / min(ext_m, block_m_tiles))`, likewise n. For INPUTS on an 11×10 grid: `P ≤ 26` | `choose_grid()` minimizes `P` over strips and orientations |
+| `Kt` | unbounded op dim | appears only under `resident-xblock`, whose predicate is `F(kb, True) ≤ L1_budget` |
+| `kb` | `kb | Kt`, `kb ≤ Kt` | `choose_k_block()`: the largest divisor that satisfies `F ≤ L1_budget` (resident needs `kb ≥ min(Kt, 8)`) |
+| `G` | 2 ≤ G ≤ 8 for every deployment (Galaxy axes 4 / 8, mocks 4 / 8) | mesh shape |
+| `slots_fwd + slots_bwd` | ≤ G + 1. Line interior: `(G-p) + (p+1)`. Ring unbalanced: `G-1`. Ring balanced: ≤ G (per-half maxima, e.g. 2 + 2 at G=4). | `build_schedule()` (per-direction maxima over the two core halves) |
+| `chunk_tiles` | ≤ 7 at 14 KiB payload (2048 B tiles) | `floor(get_tt_fabric_max_payload_size_bytes() / 2048)`, clamped to `P` |
+| `port_group` | ≤ 8 (header pool 12/RISC) | constant 4 |
+| `L` | ≤ (strip length)/2 | `get_forwarding_link_indices` + strip check |
+| `L1_budget` | `L1_bank_size − allocator_base − 64 KiB` | device query at plan time |
+
+## Total per-core footprint
+
+Matmul core (`tA` = A tile bytes, `tW` = W tile bytes; `rA = resident ∧ scatter -1`, `rW = resident ∧ scatter -2`):
+
+```
+F(kb, resident) = tA·(rA ? core_m·Kt : 2·core_m·kb)          // scales with core_m and kb (or Kt under rA)
+                + tW·(rW ? Kt·core_n : 2·kb·core_n)          // scales with core_n and kb (or Kt under rW)
+                + 4096·2·P                                    // scales with P (depth_hold)
+                + 2048·(2 + slots_fwd + slots_bwd)·P          // staging tensor: scales with P and G (slots)
+```
+
+Port core: `2048·2·port_group·chunk_tiles` (112 KiB at the defaults; independent of shape).
+
+Worked example: the focus case on QB2. scatter -1, G=4 ring balanced, `core_m=2, core_n=6, P=12, Kt=64`, W bf8b. `slots_fwd = slots_bwd = 2`. With resident A and `kb=32`: `256 KiB (A) + 408 KiB (W window) + 96 KiB (hold) + 144 KiB (staging: 2+2+2 slots × 24 KiB) = 904 KiB`. `kb=64` adds 408 KiB (1.31 MiB), which is selected only if the device's `L1_budget` allows.
+
+## Data-movement budget (per chip, chosen split)
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| A `(M, K)` | 1 (resident-xblock or scatter -2); G (stream-xblock ∧ scatter -1) | the A slice is reused by every entry under scatter -1 and kept in L1 when `F` fits. Under scatter -2 each entry needs different rows. | mcast once per m-line (scatter -1 resident) or once per entry |
+| W `(K, N)` | 1 (scatter -1, or scatter -2 resident); G (stream-xblock ∧ scatter -2) | under scatter -1 each entry reads a different column stripe. Under scatter -2 every entry needs all of W. | mcast once per K-block per n-line |
+| output block `(M·N/G)` | 1 write | the fin finish writes straight from `cb_finished` | — |
+| partials (G blocks per chip) | **0** | They land in the next chip's matmul-core L1 zones (L1-landing). Own partials are handed off from L1. | on-chip: ports NoC-read `(G-1)` blocks per chip from the matmul cores. Fabric: per chip `(G-1)·B` sent in total. The busiest link direction carries `(G-1)/2·B/L` (ring) or `(G-1)·B/L` (line). |
+
+Focus case (640×2048×7168, scatter -1, ring G=4, L=2, bf8b W): DRAM = 2.62 MB (A) + 15.6 MB (W) + 2.29 MB (out) = **20.5 MB**, about 40 µs at 512 GB/s. The roofline's fused-DRAM model counts 34.2 MB (66.9 µs) because it assumes relay scratch in DRAM. Fabric: 1.72 MB per link direction.
+MiMo (2048×2048×4096, scatter -2, bf8b W, stream-xblock because W residency does not fit): DRAM = 8.4 (A) + 4×8.9 (W) + 4.2 (out) = 48.2 MB, about 94 µs, against a compute roof of 126.8 µs. Even the stream regime stays under compute.
+
+> Cheapest-traffic split considered: 2D (m,n) per block, entries walked in time, cross-block operand resident, arrivals landing in L1. That moves A and W once each, the output once, and 0 partial bytes through DRAM. Implemented: **the same split** (resident-xblock + L1-landing), which is the cheapest. The stream-xblock fallback is selected only when `F(kb, resident) > L1_budget`. Its delta is +(G-1)× the cross-block operand in DRAM, and it is reached by the same loop nest (the sender re-fetches, the window shrinks).
