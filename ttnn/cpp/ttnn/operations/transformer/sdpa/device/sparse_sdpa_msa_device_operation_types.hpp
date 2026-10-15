@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
+#include <tt-metalium/core_coord.hpp>
 #include <optional>
 
 namespace ttnn::prim {
@@ -39,6 +40,10 @@ struct SparseSDPAMsaParams {
     // The slot count resolved against the L1 free at this call, once, at the prim entry; the program hash and the
     // program factory both read it. 0 selects the streamed kernels. Not user-facing.
     uint32_t kv_cache_slots = 0;
+    // Worker cores. Unset: the whole compute grid from (0, 0). Set: one rectangle anywhere in the grid, so the op
+    // can run on a compute sub-device while a collective owns the rest; the per-core work split is the same
+    // contiguous S*n_kv partition over that rectangle's core count. Hashed (it fixes the kernels' core ranges).
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt;
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
     bool causal_enabled() const { return chunk_start_idx.has_value(); }
     bool has_block_cyclic() const { return block_cyclic.has_value(); }

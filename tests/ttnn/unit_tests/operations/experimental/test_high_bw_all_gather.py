@@ -1545,6 +1545,21 @@ def _sparse_mla_overlap_grids(mesh_device):
     return topk_grid, gather_grid
 
 
+_MSA_GATHER_ROWS = 2  # models/demos/minimax_m3/tt/ccl.py MSA_GATHER_ROWS
+
+
+def _msa_overlap_grids(mesh_device):
+    """The MiniMax-M3 packed-prefill carve: the bottom _MSA_GATHER_ROWS rows gather, the rows above compute."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    split = grid.y - _MSA_GATHER_ROWS
+    compute_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, split - 1))])
+    gather_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, split), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    needed = _NUM_LINKS * 2 * (4 + 1)  # the 4-worker tier: 4 workers + 1 mux per direction per link
+    if gather_grid.num_cores() < needed:
+        pytest.skip(f"a {_MSA_GATHER_ROWS}-row strip of {gather_grid.num_cores()} cores holds no 4-worker tier")
+    return compute_grid, gather_grid
+
+
 def _right_strip_subdevice_manager(mesh_device, owned_cores):
     """Build an isolated gather strip of exactly ``owned_cores`` on each chip.
 
@@ -2450,3 +2465,103 @@ def test_high_bw_all_gather_cached_link_discovery(mesh_device, num_links, expect
                 rows_per_device=32,
                 num_links=invalid_links,
             )
+
+
+@run_for_blackhole("sub-device gather/compute overlap requires Blackhole fabric")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("carve", [_sparse_mla_overlap_grids, _msa_overlap_grids], ids=["mla_columns", "m3_rows"])
+def test_high_bw_all_gather_segment_pipeline_matches_serial(mesh_device, carve):
+    """Gather slot i+1 on the gather sub-device while a top-k on the other sub-device consumes gather i, the two
+    joined by a device-side event before each top-k: the MiniMax-M3 packed-prefill MSA schedule (G(0); for i:
+    join; C(i); G(i+1)) over two output buffers that alternate by parity, on the sparse-MLA column carve and on
+    M3's two-row gather strip. Every top-k ranks the rows its segment gathered, so a join that let it start
+    before its gather landed, or a gather that overwrote the buffer a top-k was still reading, would rank stale
+    rows; the pipeline must equal the serial schedule and the host."""
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    topk_grid, gather_grid = carve(rank_line)
+    manager = rank_line.create_sub_device_manager([ttnn.SubDevice([topk_grid]), ttnn.SubDevice([gather_grid])], 0)
+    ready_semaphore, data_valid_semaphore = _make_l1_small_semaphore_pair(rank_line, gather_grid)
+    ttnn.synchronize_device(rank_line)
+
+    axis_size = rank_line.shape[cluster_axis]
+    slots, local_rows, width, k = 3, 64, 1024, 48
+    # Distinct bf16 bit patterns per row (a permutation of consecutive patterns above 1.0), so every row's top-k is
+    # a unique index set and the host reference is exact.
+    gen = torch.Generator().manual_seed(7)
+    perms = torch.stack([torch.randperm(width, generator=gen) for _ in range(slots * local_rows * axis_size)])
+    host = (0x3F80 + perms).to(torch.int32).to(torch.uint16).view(torch.bfloat16)
+    host = host.reshape(slots, 1, local_rows * axis_size, width)
+    cache = _make_tensor(
+        rank_line,
+        host,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ShardTensor2dMesh(
+            rank_line, dims=(2, None) if cluster_axis == 0 else (None, 2), mesh_shape=tuple(rank_line.shape)
+        ),
+    )
+    outputs = [
+        _make_tensor(
+            rank_line,
+            torch.zeros((1, 1, local_rows * axis_size, width), dtype=torch.bfloat16),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.ReplicateTensorToMesh(rank_line),
+        )
+        for _ in range(2)
+    ]
+    expected = [torch.topk(host[s, 0].float(), k, dim=-1, largest=True, sorted=True).indices for s in range(slots)]
+
+    def gather(slot):
+        return ttnn.experimental.high_bw_all_gather(
+            cache,
+            dim=2,
+            output_tensor=outputs[slot % 2],
+            cluster_axis=cluster_axis,
+            subdevice_id=ttnn.SubDeviceId(1),
+            sub_core_grids=gather_grid,
+            num_links=_NUM_LINKS,
+            input_batch_index=slot,
+            ready_semaphore=ready_semaphore,
+            data_valid_semaphore=data_valid_semaphore,
+        )
+
+    def topk(slot):
+        return ttnn.experimental.topk_large_indices(
+            outputs[slot % 2], k=k, subdevice_id=ttnn.SubDeviceId(0), sub_core_grids=topk_grid
+        )
+
+    def check(results, label):
+        for slot, result in enumerate(results):
+            for rank, shard in enumerate(ttnn.get_device_tensors(result)):
+                actual = ttnn.to_torch(shard).reshape(-1, k).to(torch.int64)
+                assert torch.equal(actual, expected[slot]), f"{label}: slot {slot} top-k differs on rank {rank}"
+
+    try:
+        rank_line.load_sub_device_manager(manager)
+        try:
+            # Serial: each gather fully landed (host sync) before its top-k; the reference for the pipeline.
+            serial = []
+            for slot in range(slots):
+                gather(slot)
+                ttnn.synchronize_device(rank_line)
+                serial.append(topk(slot))
+            ttnn.synchronize_device(rank_line)
+            check(serial, "serial")
+
+            # Pipelined: the event over both sub-devices stalls the queue until gather i and top-k i-1 are done, so
+            # top-k i reads a complete buffer and gather i+1 may overwrite the other one.
+            pipelined = []
+            gather(0)
+            for slot in range(slots):
+                ttnn.record_event(rank_line, sub_device_ids=[ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
+                pipelined.append(topk(slot))
+                if slot + 1 < slots:
+                    gather(slot + 1)
+            ttnn.synchronize_device(rank_line)
+            check(pipelined, "pipelined")
+        finally:
+            rank_line.clear_loaded_sub_device_manager()
+    finally:
+        ttnn.synchronize_device(rank_line)
+        rank_line.remove_sub_device_manager(manager)

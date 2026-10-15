@@ -14,6 +14,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"                           // ttnn::ccl::Topology
 #include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 
@@ -129,6 +130,11 @@ struct operation_attributes_t {
     // K), which selects the classic program factory and stays byte-identical.
     std::optional<FusedRingConfig> fused_ring{std::nullopt};
     bool has_fused_ring() const { return fused_ring.has_value(); }
+    // Worker rectangle for the banded schedule. Unset: the whole compute grid from (0, 0). Set: one rectangle the
+    // schedule is planned over (its size is the grid the group rows / band columns are fitted to, its origin
+    // offsets every core), so the op can run on a compute sub-device while a collective owns the other cores.
+    // HASHED (it fixes the kernels' core ranges). Classic factory only: the fused ring places its own workers.
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids{std::nullopt};
     // KV dedup: KEYS striped this many times finer than the queries are sharded. Deliberately NOT folded into
     // block_cyclic -- device_causal_geometry indexes by SP-ring rank, so that would shift the causal diagonal.
     uint32_t key_stripe_split{1};  // 1 = pre-dedup. HASHED: it bakes the reader's invP divisors.

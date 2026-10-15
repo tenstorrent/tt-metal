@@ -3,33 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // V2 reader for fused multi-scale deformable attention: the sampling grid is
-// never materialized. Instead of reading a location, the op forms it from a
+// never materialized. Instead of reading a location, the reader forms it from a
 // reference point and a raw sampling offset:
 //
 //     loc = reference_points[b, q, r(l, p)]
-//         + sampling_offsets[b, q, h, l, p] * scale_l
+//         + sampling_offsets[b, q, h, l, p] * pixel_offset_scale([W_l, H_l])
 //
-// scale_l is the pixel spacing of the normalized -> pixel mapping (README.md
-// §2.2), so one offset unit is one feature-map pixel.
+// The scale matches to_pixel(), so one offset unit is one feature-map pixel.
 //
 // r(l, p) depends on REF_MODE:
 //   0 (level):  R == L, r = l         — DINO-family deformable decoders
 //   1 (pillar): P % R == 0, r = p % R — BEVFormer, where the point axis is
 //                                       laid out as (P / R, R) over z-anchors
 //
-// The addition, the scale_l normalization and the normalized -> pixel
-// mapping all happen on the SFPU in one expression:
+// reference_points are bf16, or float32 with REF_FP32 defined.
 //
-//     px = ref_x * primary_scale + off_x * secondary_scale + bias
-//
-// with the three constants folded per level on the host. This reader only
-// chooses which pair is the reference and which is the offset; it does no
-// arithmetic on either. reference_points are bf16, or float32 when REF_FP32
-// is defined. A bf16 point in [0, 1] moves in steps of up to 2^-8 (~0.8 px at
-// W = 200), and that rounding would already be in the tile before the SFPU
-// multiply. Offsets stay bf16. The gather and the input-tile contract live in
-// fused_msda_reader_common.hpp, compiled with FROM_OFFSETS set. REF_FP32
-// changes only the reference operand's tile width there; V1 never defines it.
+// Everything after that step is fused_msda_reader_common.hpp, byte-identical to
+// V1 — which is what makes V2 a pure frontend and not a different operator.
 
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/fused_msda_reader_common.hpp"
 
@@ -39,7 +29,6 @@ constexpr auto off_args = TensorAccessorArgs<attn_args.next_compile_time_args_of
 constexpr auto ref_args = TensorAccessorArgs<off_args.next_compile_time_args_offset()>();
 
 static_assert(NUM_REFS > 0, "V2 reader requires R > 0");
-static_assert(FROM_OFFSETS, "V2 reader must be built with the from-offsets frontend");
 
 namespace {
 
@@ -63,28 +52,23 @@ struct ReferencePlusOffset {
         }
     }
 
+    void location(uint32_t r, uint32_t l, uint32_t p, const fused_msda::LevelGeom& g, float& x, float& y) const {
+        const uint32_t ref_idx = (REF_MODE == 0) ? l : (p % NUM_REFS);
+        const uint32_t ref_l1 = ref_arena_l1 + (r * NUM_REFS + ref_idx) * ref_stick_nbytes;
 #ifdef REF_FP32
-    // Two float32 bit patterns. The SFPU multiplies them; converting here would
-    // round the point to bf16, or pay for soft-float on a core with no FPU.
-    void primary(uint32_t r, uint32_t l, uint32_t p, uint32_t& x, uint32_t& y) const {
-        const uint32_t ref_idx = (REF_MODE == 0) ? l : (p % NUM_REFS);
-        CoreLocalMem<volatile uint32_t> ref(ref_arena_l1 + (r * NUM_REFS + ref_idx) * ref_stick_nbytes);
-        x = ref[0];
-        y = ref[1];
-    }
+        CoreLocalMem<volatile float> ref(ref_l1);
+        const float ref_x = ref[0];
+        const float ref_y = ref[1];
 #else
-    void primary(uint32_t r, uint32_t l, uint32_t p, uint16_t& x, uint16_t& y) const {
-        const uint32_t ref_idx = (REF_MODE == 0) ? l : (p % NUM_REFS);
-        CoreLocalMem<volatile uint16_t> ref(ref_arena_l1 + (r * NUM_REFS + ref_idx) * ref_stick_nbytes);
-        x = ref[0];
-        y = ref[1];
-    }
+        CoreLocalMem<volatile uint16_t> ref(ref_l1);
+        const float ref_x = fused_msda::bf16_to_float(ref[0]);
+        const float ref_y = fused_msda::bf16_to_float(ref[1]);
 #endif
-
-    void secondary(uint32_t r, uint32_t l, uint32_t p, uint16_t& x, uint16_t& y) const {
         CoreLocalMem<volatile uint16_t> off(fused_msda::staged_loc_addr(off_arena_l1, r, l, p));
-        x = off[0];
-        y = off[1];
+        // Offsets are raw feature-map pixels. inv_width / inv_height are
+        // precomputed so this stays a multiply.
+        x = ref_x + fused_msda::bf16_to_float(off[0]) * g.inv_width;
+        y = ref_y + fused_msda::bf16_to_float(off[1]) * g.inv_height;
     }
 };
 

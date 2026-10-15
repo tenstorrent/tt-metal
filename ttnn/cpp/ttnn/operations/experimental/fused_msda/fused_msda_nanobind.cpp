@@ -95,8 +95,7 @@ void bind_fused_msda(nb::module_& mod) {
 
         Out-of-bounds sampling corners contribute zero (padding_mode="zeros").
         Constraints: all tensors bfloat16 / ROW_MAJOR / INTERLEAVED, D a positive
-        multiple of 16, 1 <= L <= 8, and each level's H_l and W_l <= 256. Q need
-        not be a multiple of 32.
+        multiple of 16, 1 <= L <= 8. Q need not be a multiple of 32.
         )doc";
 
     ttnn::bind_function<"fused_msda", "ttnn.experimental.">(
@@ -114,7 +113,7 @@ void bind_fused_msda(nb::module_& mod) {
 
     const auto* v2_doc =
         R"doc(
-        fused_msda with sampling-location generation fused into the op. No
+        fused_msda with sampling-location generation fused into the reader. No
         (B, Q, H, L, P, 2) location tensor is materialized::
 
             sampling_locations[b, q, h, l, p] =
@@ -131,9 +130,8 @@ void bind_fused_msda(nb::module_& mod) {
               (x, y) in [0, 1]. float32 keeps the sampling position sub-pixel on wide maps.
               The 4-D box form is rejected, not reinterpreted.
             * :attr:`sampling_offsets`: (B, Q, H, L, P, 2) or packed (B, Q, H, L*P*2)
-              ROW_MAJOR bfloat16. Raw, in feature-map pixel units — the op applies
-              scale_l on the SFPU (1/[W_l, H_l], or 1/[W_l-1, H_l-1] when
-              align_corners is set).
+              ROW_MAJOR bfloat16. Raw, in feature-map pixel units — the reader applies
+              scale_l (1/[W_l, H_l], or 1/[W_l-1, H_l-1] when align_corners is set).
             * :attr:`attention_weights`: as in fused_msda
             * :attr:`spatial_shapes`: as in fused_msda
             * :attr:`reference_mode`:
