@@ -43,6 +43,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
           git fetch --depth=1 origin 0b315cc07f0fe4d99a5bfee256549bfbb7337112
           git diff --exit-code 0b315cc07f0fe4d99a5bfee256549bfbb7337112 HEAD -- tt_metal ttnn tt_stl
+          git fetch --depth=1 origin 1e11ea08d753c66fff839d93e3de407df5b134de
+          git diff --exit-code 1e11ea08d753c66fff839d93e3de407df5b134de HEAD -- models ':!models/demos/gpt_oss_120b_qb2/tt/attention_prefill.py' ':!models/demos/gpt_oss_120b_qb2/tests/test_short_prefill_qkv.py'
           echo "29e69618b7c138a81bd1b5210f3fb107caf15e21d95c51b5d9d2357f90e80e96  ttm_any.tar.zst" | sha256sum -c -
           tar --zstd -xf ttm_any.tar.zst
           /opt/venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3,12), sys.version; print(sys.version)'
@@ -112,7 +114,7 @@ jobs:
              origins[name]={'path':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
           (out/'import-proof.json').write_text(json.dumps(origins,indent=2))
           original=attention_prefill._project_qkv;native=ttnn.linear
-          rc=pytest.main(['--noconftest','-q','models/demos/gpt_oss_120b_qb2/tests/test_short_prefill_qkv.py','/tmp/candidate/test_candidate_contract.py','--junitxml='+str(out/'host.xml')])
+          rc=pytest.main(['--noconftest','-q','models/demos/gpt_oss_120b_qb2/tests/test_short_prefill_qkv.py','models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py','/tmp/candidate/test_candidate_contract.py','--junitxml='+str(out/'host.xml')])
           assert attention_prefill._project_qkv is original and attention_prefill.ttnn is ttnn and ttnn.linear is native
           from candidate_contract import CandidateContract
           from models.demos.gpt_oss_120b_qb2.tt.model import Model
