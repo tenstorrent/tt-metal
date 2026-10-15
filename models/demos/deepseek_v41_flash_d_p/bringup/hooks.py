@@ -55,7 +55,7 @@ def state_sources(spec, layer):
 # Device steps of the hybrid model, per block type: every step listed passed its component gate on the device.
 # Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "swa": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "kv", "attention"},
+    "swa": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "kv", "attention", "attn_residual"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -105,6 +105,32 @@ def _collapse_host_fn(mesh, module, hidden):
         od = module(xd, pd)
         out = hidden_split_to_host(mesh, od).float()
         for t in (xd, pd, od):
+            ttnn.deallocate(t)
+        return out
+
+    fn.module = module
+    return fn
+
+
+def _residual_host_fn(mesh, module, hidden):
+    """fn(ctx, x_host [S, 4H + 4], mix_host [S, 24], y_host [S, H]) -> h_mid host [S, 4H] fp32 (harness boundary: the
+    streams in (the pending pre dropped), the mixes row-split and TP-replicated, y rows over axis 0 and hidden columns
+    over axis 1; the streams back)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import (
+        hidden_split_to_device,
+        row_split_to_device,
+        streams_to_device,
+        streams_to_host,
+    )
+
+    def fn(ctx, x, mix, y):
+        xd = streams_to_device(mesh, x, hidden)
+        md = row_split_to_device(mesh, mix)
+        yd = hidden_split_to_device(mesh, y)
+        od = module(xd, md, yd)
+        out = streams_to_host(mesh, od, hidden).float()
+        for t in (xd, md, yd, od):
             ttnn.deallocate(t)
         return out
 
@@ -245,6 +271,10 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         from models.demos.deepseek_v41_flash_d_p.tt.norm import build_norm
 
         return _hidden_host_fn(mesh, build_norm(mesh, ck, cfg, layer, step))
+    if step == "attn_residual":
+        from models.demos.deepseek_v41_flash_d_p.tt.residual import build_residual
+
+        return _residual_host_fn(mesh, build_residual(cfg), cfg.dim)
     if step == "attn_collapse":
         from models.demos.deepseek_v41_flash_d_p.tt.collapse import build_collapse
 
