@@ -77,11 +77,10 @@ sfpi_inline sfpi::vFloat fresh_recip_hwseed(const sfpi::vFloat x)
 sfpi_inline sfpi::vFloat fresh_trunc_nonneg(const sfpi::vFloat v)
 {
     constexpr float MANTISSA_ONE = 8388608.0f; // 2^23
-    sfpi::vFloat r               = v;
-    const sfpi::vFloat nearest   = (v + MANTISSA_ONE) - MANTISSA_ONE;
-    v_if (v < MANTISSA_ONE)
+    sfpi::vFloat r               = (v + MANTISSA_ONE) - MANTISSA_ONE;
+    v_if (v >= MANTISSA_ONE)
     {
-        r = nearest;
+        r = v;
     }
     v_endif;
     // Nearest may round up; truncation of a non-negative value never does.
