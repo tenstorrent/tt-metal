@@ -91,8 +91,11 @@ Each cell is the range over three runs.
 | Tensix -> X280 | 256 B | DRAINED | 17.797 | 24.026 | 14.384 |
 | Tensix -> X280 | 256 B | INJECTION | 17.782 | 24.006 | 14.396 |
 
-- X280 -> Tensix is bound by the X280's posted-store issue rate, 16 ns (28 cycles) per u32
-  store, so it is size-invariant. Under mode 2 the drain read does not wait for the writes, so
+- The X280 -> Tensix rows measured LIM loads, not stores: the timed loop loaded each store's
+  word from a stack array, and the stack is in LIM, which is uncached, so one LIM read (16 ns,
+  28 cycles) per u32 store set the size-invariant 0.250 GB/s. The member now holds its 64 B
+  source pattern in registers across the timed loop; the same four points measure 1.800 GB/s,
+  3.89 cycles per `sw` (see the store-width sweep below). Under mode 2 the drain read does not wait for the writes, so
   RETIRED is an issue rate like INJECTION. The records label RETIRED with the earlier
   `DRAINED` boundary name.
 - Tensix -> X280 is bound by Tensix issue (17.8 ns per write) at 1750 MHz. Below about 1.44 GHz

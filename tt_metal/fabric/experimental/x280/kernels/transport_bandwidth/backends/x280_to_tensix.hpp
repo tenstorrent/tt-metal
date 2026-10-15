@@ -10,13 +10,12 @@
  * Tensix worker's L1 destination in posted mode, then issues bursts of
  * `transfer_size / 4` back-to-back u32 stores through the window. BUG-4
  * forbids memcpy through the window; the burst is a straight sequence of
- * `sw` instructions the compiler unrolls at `issue<TransferSize>`, the shape
- * this member measures.
+ * `sw` instructions, the shape this member measures.
  *
- * The source of every store is a stack-resident vector loaded from LIM
- * once at INIT; subsequent iterations hit the X280's cache path to the
- * stack and never touch LIM. What we want to measure is transport
- * throughput, not LIM -> window bandwidth.
+ * The source of every store is a 64 B pattern held in registers across the
+ * timed loop. The stack is in LIM, which is uncached, so a load per store
+ * would cost one LIM read each and the loop would measure that instead of
+ * the transport.
  *
  * Timing uses TWO counters around the same bracket. mtime (fixed 50 MHz,
  * PLL-independent) is the PRIMARY -- it is a wall clock that needs no
@@ -66,13 +65,10 @@ constexpr uint32_t kVerifyPollBound = 500000u;
 /* Admitted transfer sizes. Each `sw` through the uncached window is its own
  * 4 B NoC request, so a larger transfer_size does not grow a packet. */
 using sizes = size_list<64u, 256u>;
-static_assert(
-    sizes::max() == TB_X2T_STAGING_MAX_BYTES,
-    "the host sizes LIM staging and the Tensix L1 destination to the largest transfer");
+static_assert(sizes::max() == TB_X2T_DST_MAX_BYTES, "the host sizes the Tensix L1 destination to the largest transfer");
 
-/* Ceiling for the source-vector cache, in u32 words. Sized for the largest
- * supported transfer_size; smaller transfers use a prefix. */
-constexpr uint32_t kMaxWords = sizes::max() / sizeof(uint32_t);
+/* Words in the source pattern. Every 64 B of a transfer repeats it. */
+constexpr uint32_t kPatternWords = TB_X2T_PATTERN_BYTES / sizeof(uint32_t);
 
 /* --------------------------------------------------------------------------
  * Backend types
@@ -103,14 +99,10 @@ struct state_t {
      * read target for drain(). */
     volatile uint32_t* window;
 
-    /* Stack-resident source vector. Kept inside state_t so the frontend's
-     * `Backend::issue<TransferSize>(s)` can access it through a stable
-     * offset; the compiler hoists s.window and s.staging into registers
-     * for the inner unrolled loop.
-     *
-     * kMaxWords is sized for the largest supported transfer; smaller
-     * transfers touch only the prefix. */
-    uint32_t staging[kMaxWords];
+    /* Source pattern, copied from LIM staging at INIT. issue() reads it and
+     * s.window with nothing in the timed loop that could change them, so the
+     * compiler holds both in registers across the loop. */
+    uint32_t staging[kPatternWords];
 
     /* Result region (writable, plain). The volatile-vs-plain cast is done
      * once at image entry. */
@@ -227,13 +219,8 @@ inline bool initialize(state_t& state, const transport_bw_x280_to_tensix_section
         return false;
     }
 
-    /* Prepare a stack-resident source vector. Reading the store source from
-     * a register-cached local array keeps the hot loop's data path off LIM:
-     * what we want to measure is transport throughput, not LIM -> window
-     * bandwidth. Copies enough words for the largest supported transfer;
-     * smaller transfers touch only the prefix. */
     const volatile uint32_t* staging_lim = reinterpret_cast<volatile const uint32_t*>(s.backend.own_staging_addr);
-    for (uint32_t k = 0u; k < kMaxWords; ++k) {
+    for (uint32_t k = 0u; k < kPatternWords; ++k) {
         state.staging[k] = staging_lim[k];
     }
     __asm__ volatile("" : : "r"(&state.staging[0]) : "memory");
@@ -249,6 +236,50 @@ inline bool shutdown(state_t& state) {
     }
     state.window = nullptr;
     return noc_clear_tlb_2m(state.tlb_index) == 0;
+}
+
+/* Store the source pattern at `line`, 64 B, as 16 sw from registers.
+ *
+ * No "memory" clobber, so the compiler may keep `line`'s base and the pattern
+ * words in registers across calls: the image never reads the window through
+ * C, and the timing reads are volatile asm, which the compiler does not
+ * reorder this past. */
+inline __attribute__((always_inline)) void store_line(volatile uint32_t* line, const uint32_t* p) {
+    __asm__ volatile(
+        "sw %1, 0(%0)\n"
+        "sw %2, 4(%0)\n"
+        "sw %3, 8(%0)\n"
+        "sw %4, 12(%0)\n"
+        "sw %5, 16(%0)\n"
+        "sw %6, 20(%0)\n"
+        "sw %7, 24(%0)\n"
+        "sw %8, 28(%0)\n"
+        "sw %9, 32(%0)\n"
+        "sw %10, 36(%0)\n"
+        "sw %11, 40(%0)\n"
+        "sw %12, 44(%0)\n"
+        "sw %13, 48(%0)\n"
+        "sw %14, 52(%0)\n"
+        "sw %15, 56(%0)\n"
+        "sw %16, 60(%0)\n"
+        :
+        : "r"(line),
+          "r"(p[0]),
+          "r"(p[1]),
+          "r"(p[2]),
+          "r"(p[3]),
+          "r"(p[4]),
+          "r"(p[5]),
+          "r"(p[6]),
+          "r"(p[7]),
+          "r"(p[8]),
+          "r"(p[9]),
+          "r"(p[10]),
+          "r"(p[11]),
+          "r"(p[12]),
+          "r"(p[13]),
+          "r"(p[14]),
+          "r"(p[15]));
 }
 
 /* --------------------------------------------------------------------------
@@ -296,13 +327,11 @@ struct Backend {
     template <uint32_t TransferSize>
     static inline __attribute__((always_inline)) void issue(state_t& s) {
         static_assert(sizes::contains(TransferSize), "TransferSize is not in sizes");
-        static_assert(TransferSize % sizeof(uint32_t) == 0u, "transfer_size must be a multiple of 4B");
-        constexpr uint32_t K = TransferSize / sizeof(uint32_t);
-        volatile uint32_t* window = s.window;
-        const uint32_t* staging = s.staging;
-#pragma GCC unroll 64
-        for (uint32_t k = 0u; k < K; ++k) {
-            window[k] = staging[k];
+        static_assert(
+            TransferSize % TB_X2T_PATTERN_BYTES == 0u, "transfer_size must be a multiple of the source pattern");
+#pragma GCC unroll 16
+        for (uint32_t line = 0u; line < TransferSize / TB_X2T_PATTERN_BYTES; ++line) {
+            store_line(s.window + line * kPatternWords, s.staging);
         }
     }
 

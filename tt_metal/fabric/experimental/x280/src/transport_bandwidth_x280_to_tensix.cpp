@@ -68,7 +68,7 @@ extern "C" __attribute__((hot)) int main(uint64_t hartid) {
      * the result address is validated, so the host reads the
      * terminal state rather than inferring it.
      *
-     * The `state{}` initializer is omitted: state_t carries a 256-byte
+     * The `state{}` initializer is omitted: state_t carries a 64-byte
      * staging array, and a zero-init would have GCC emit a `memset` call
      * that this freestanding image cannot resolve. `initialize()` writes
      * every scalar field before use and fills the staging array from LIM

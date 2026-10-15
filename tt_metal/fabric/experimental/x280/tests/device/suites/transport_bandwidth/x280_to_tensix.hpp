@@ -70,7 +70,7 @@ struct X280LimRegions {
         hreg::Arena arena(w);
         X280LimRegions R{};
         R.args = arena.allocate(sizeof(transport_bw_x280_to_tensix_args_block_t));
-        R.staging = arena.allocate(TB_X2T_STAGING_MAX_BYTES);
+        R.staging = arena.allocate(TB_X2T_PATTERN_BYTES);
         R.result = arena.allocate(sizeof(transport_bw_result_t));
         return R;
     }
@@ -84,11 +84,16 @@ struct TensixL1Layout {
     static TensixL1Layout compute() {
         TensixL1Layout L{};
         L.dst_offset = 0;
-        L.dst_bytes = static_cast<uint32_t>(hreg::round_up(TB_X2T_STAGING_MAX_BYTES, hreg::kCacheLineBytes));
+        L.dst_bytes = static_cast<uint32_t>(hreg::round_up(TB_X2T_DST_MAX_BYTES, hreg::kCacheLineBytes));
         L.block_bytes = L.dst_bytes;
         return L;
     }
 };
+
+// Word k of the destination: the source pattern, repeated every 64 B.
+inline uint32_t pattern_word(uint32_t run_nonce, uint32_t k) {
+    return run_nonce ^ ((k % (TB_X2T_PATTERN_BYTES / sizeof(uint32_t))) * 0x9E3779B9u);
+}
 
 inline uint64_t mint_run_value(uint32_t& run_nonce) {
     static uint32_t sequence = 0;
@@ -129,8 +134,8 @@ inline void run_axis(
     uint32_t run_nonce = 0;
     const uint64_t run_value = mint_run_value(run_nonce);
     std::vector<uint8_t> staging_bytes(XR.staging.bytes, 0);
-    for (uint32_t k = 0; k < 64u; ++k) {
-        const uint32_t v = run_nonce ^ (k * 0x9E3779B9u);
+    for (uint32_t k = 0; k < TB_X2T_PATTERN_BYTES / sizeof(uint32_t); ++k) {
+        const uint32_t v = pattern_word(run_nonce, k);
         std::memcpy(staging_bytes.data() + k * sizeof(uint32_t), &v, sizeof(v));
     }
     f.tile->write_available_lim(XR.staging.addr, staging_bytes);
@@ -190,7 +195,7 @@ inline void run_axis(
     ttmd::EnqueueReadMeshBuffer(f.mesh->mesh_command_queue(), l1_readback, l1.buffer, /*blocking=*/true);
     ASSERT_GE(l1_readback.size(), transfer_size / sizeof(uint32_t));
     for (uint32_t k = 0; k < transfer_size / sizeof(uint32_t); ++k) {
-        const uint32_t expected = run_nonce ^ (k * 0x9E3779B9u);
+        const uint32_t expected = pattern_word(run_nonce, k);
         EXPECT_EQ(l1_readback[k], expected) << "destination word " << k << " did not receive the staging pattern; "
                                             << "did the transport drop writes?";
     }

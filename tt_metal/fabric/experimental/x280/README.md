@@ -145,8 +145,8 @@ moved into tt-metal; conditions, ranges and records are in [docs/results.md](doc
   ticks) with a 40 ns turnaround. Across tiles every non-posted store crosses one full 12-hop
   lap whatever the placement, 260-340 ns round trip. To a Tensix, idle-ERISC or DRISC peer the
   X280 sees 360-420 ns. ([details](docs/results.md#p2p_latency))
-- **transport_bandwidth.** X280 -> Tensix u32 posted stores run at 0.250 GB/s, bound by the
-  X280's store issue. Tensix -> X280 is Tensix-issue-bound at 17.8 ns per write through 256 B
+- **transport_bandwidth.** X280 -> Tensix u32 posted stores from registers run at 1.800 GB/s,
+  3.89 cycles per `sw`. Tensix -> X280 is Tensix-issue-bound at 17.8 ns per write through 256 B
   (14.4 GB/s), then the X280 sink holds about 17.5 GB/s from 384 B to 16 KiB at 1750 MHz; below
   about 1.44 GHz the sink binds at 256 B too. ([details](docs/results.md#transport_bandwidth))
 - **pipeline_stage.** A routing-table lookup costs about 74 X280 cycles per item and a forward

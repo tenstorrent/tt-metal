@@ -80,9 +80,13 @@ typedef struct {
 
 typedef transport_bw_x280_to_tensix_section_t transport_bw_x280_to_tensix_args_block_t;
 
-/* The largest listed transfer_size. The host sizes the LIM staging vector and
- * the Tensix L1 destination to it. */
-#define TB_X2T_STAGING_MAX_BYTES 256u
+/* The source pattern every 64 B of a transfer repeats. The host writes it to
+ * LIM staging and checks the destination against it. */
+#define TB_X2T_PATTERN_BYTES 64u
+
+/* The largest listed transfer_size. The host sizes the Tensix L1 destination
+ * to it. */
+#define TB_X2T_DST_MAX_BYTES 256u
 
 /* --------------------------------------------------------------------------
  * Static assertions
