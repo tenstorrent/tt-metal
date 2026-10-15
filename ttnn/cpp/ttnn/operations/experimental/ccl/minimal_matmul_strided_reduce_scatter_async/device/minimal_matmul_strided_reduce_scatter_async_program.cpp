@@ -35,26 +35,71 @@ namespace ttnn::experimental::prim {
 
 void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const MinimalMatmulStridedReduceScatterAsyncParams& attributes,
-    const MinimalMatmulStridedReduceScatterAsyncInputs&,
-    std::vector<Tensor>&,
+    const MinimalMatmulStridedReduceScatterAsyncParams& operation_attributes,
+    const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args,
+    std::vector<Tensor>& output_tensor,
     const std::optional<ttnn::MeshCoordinate>&) {
-    // Buffer addresses are bindings. Caller semaphores and fused_ternary_scalar are outside attribute_names.
+    // Also rewrites tensor addresses: aliased addcmul inputs empty resolve_bindings, and this workload does not
+    // rebuild.
+    constexpr uint32_t kReaderInputArg = 0;
+    constexpr uint32_t kReaderIntermediateArg = 1;
     constexpr uint32_t kReaderSemaphoreArg = 2;
     constexpr uint32_t kReaderDirectionArg = 3;
+    constexpr uint32_t kWriterIntermediateArg = 0;
+    constexpr uint32_t kWriterOutputArg = 1;
     constexpr uint32_t kWriterDirectionSemaphoreArg = 4;
     constexpr uint32_t kWriterBatchSemaphoreArg = 5;
     constexpr uint32_t kWriterBarrierSemaphoreArg = 7;
     constexpr uint32_t kWriterDirectionArg = 8;
     constexpr uint32_t kReduceScalarArg = 3;
     constexpr uint32_t kNumDirections = 2;
+    constexpr uint32_t kIn0InputArg = 0;
+    constexpr uint32_t kIn0BiasArg = 1;
+    constexpr uint32_t kIn0OptionalInputArg = 2;
+    constexpr uint32_t kIn0OutputArg = 14;
+    constexpr uint32_t kIn1WeightArg = 0;
+    constexpr uint32_t kIn1BiasArg = 1;
+    constexpr uint32_t kIn1OutputArg = 13;
+
+    TT_FATAL(output_tensor.size() == 3, "minimal_matmul_strided_reduce_scatter returns 3 tensors");
+    TT_FATAL(output_tensor[0].buffer() != nullptr, "matmul output must have a buffer");
+    TT_FATAL(output_tensor[1].buffer() != nullptr, "reduce-scatter intermediate must have a buffer");
+    TT_FATAL(output_tensor[2].buffer() != nullptr, "reduce-scatter output must have a buffer");
+    TT_FATAL(tensor_args.input_tensor.buffer() != nullptr, "matmul input must have a buffer");
+    TT_FATAL(tensor_args.weight_tensor.buffer() != nullptr, "matmul weight must have a buffer");
+    const uint32_t mm_output_addr = static_cast<uint32_t>(output_tensor[0].buffer()->address());
+    const uint32_t rs_intermediate_addr = static_cast<uint32_t>(output_tensor[1].buffer()->address());
+    const uint32_t rs_output_addr = static_cast<uint32_t>(output_tensor[2].buffer()->address());
+    const uint32_t input_addr = static_cast<uint32_t>(tensor_args.input_tensor.buffer()->address());
+    const uint32_t weight_addr = static_cast<uint32_t>(tensor_args.weight_tensor.buffer()->address());
+    uint32_t bias_addr = 0;
+    if (tensor_args.bias.has_value()) {
+        TT_FATAL(tensor_args.bias->buffer() != nullptr, "matmul bias must have a buffer");
+        bias_addr = static_cast<uint32_t>(tensor_args.bias->buffer()->address());
+    }
+    uint32_t optional_input_addr = 0;
+    if (tensor_args.mm_optional_input_tensor.has_value()) {
+        TT_FATAL(tensor_args.mm_optional_input_tensor->buffer() != nullptr, "optional matmul input must have a buffer");
+        optional_input_addr = static_cast<uint32_t>(tensor_args.mm_optional_input_tensor->buffer()->address());
+    }
+    const bool fuse_addcmul =
+        tensor_args.addcmul_input_tensor1.has_value() && tensor_args.addcmul_input_tensor2.has_value();
+    uint32_t addcmul_a_addr = 0;
+    uint32_t addcmul_b_addr = 0;
+    if (fuse_addcmul) {
+        TT_FATAL(tensor_args.addcmul_input_tensor1->buffer() != nullptr, "addcmul input A must have a buffer");
+        TT_FATAL(tensor_args.addcmul_input_tensor2->buffer() != nullptr, "addcmul input B must have a buffer");
+        addcmul_a_addr = static_cast<uint32_t>(tensor_args.addcmul_input_tensor1->buffer()->address());
+        addcmul_b_addr = static_cast<uint32_t>(tensor_args.addcmul_input_tensor2->buffer()->address());
+    }
 
     TT_FATAL(
-        attributes.semaphore.size() > kNumDirections,
+        operation_attributes.semaphore.size() > kNumDirections,
         "strided reduce scatter expects one semaphore per direction plus the batch semaphore");
-    const auto batch_semaphore = static_cast<uint32_t>(attributes.semaphore.at(kNumDirections).address());
-    const auto barrier_semaphore =
-        attributes.barrier_semaphore.has_value() ? static_cast<uint32_t>(attributes.barrier_semaphore->address()) : 0u;
+    const auto batch_semaphore = static_cast<uint32_t>(operation_attributes.semaphore.at(kNumDirections).address());
+    const auto barrier_semaphore = operation_attributes.barrier_semaphore.has_value()
+                                       ? static_cast<uint32_t>(operation_attributes.barrier_semaphore->address())
+                                       : 0u;
 
     auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     for (auto& column : reader_runtime_args) {
@@ -62,8 +107,14 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
             if (args.size() <= kReaderDirectionArg) {
                 continue;
             }
+            args[kReaderInputArg] = mm_output_addr;
+            args[kReaderIntermediateArg] = rs_intermediate_addr;
             args[kReaderSemaphoreArg] =
-                static_cast<uint32_t>(attributes.semaphore.at(args[kReaderDirectionArg]).address());
+                static_cast<uint32_t>(operation_attributes.semaphore.at(args[kReaderDirectionArg]).address());
+            if (fuse_addcmul) {
+                args[args.size() - 2] = addcmul_a_addr;
+                args[args.size() - 1] = addcmul_b_addr;
+            }
         }
     }
 
@@ -73,17 +124,47 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
             if (args.size() <= kWriterDirectionArg) {
                 continue;
             }
+            args[kWriterIntermediateArg] = rs_intermediate_addr;
+            args[kWriterOutputArg] = rs_output_addr;
             args[kWriterDirectionSemaphoreArg] =
-                static_cast<uint32_t>(attributes.semaphore.at(args[kWriterDirectionArg]).address());
+                static_cast<uint32_t>(operation_attributes.semaphore.at(args[kWriterDirectionArg]).address());
             args[kWriterBatchSemaphoreArg] = batch_semaphore;
-            if (attributes.barrier_semaphore.has_value()) {
+            if (operation_attributes.barrier_semaphore.has_value()) {
                 args[kWriterBarrierSemaphoreArg] = barrier_semaphore;
             }
         }
     }
 
-    if (attributes.fused_ternary_scalar.has_value()) {
-        float scalar_f = attributes.fused_ternary_scalar.value();
+    TT_FATAL(
+        operation_attributes.matmul_struct.config.has_value(),
+        "minimal_matmul_strided_reduce_scatter requires a matmul config");
+    const auto grid = operation_attributes.matmul_struct.config->compute_with_storage_grid_size;
+    auto& in0_sender_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kMatmulIn0SenderKernelIdx);
+    auto& in0_receiver_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kMatmulIn0ReceiverKernelIdx);
+    auto& in1_sender_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kMatmulIn1SenderKernelIdx);
+    auto& in1_receiver_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kMatmulIn1ReceiverKernelIdx);
+    for (uint32_t x = 0; x < grid.x; ++x) {
+        for (uint32_t y = 0; y < grid.y; ++y) {
+            auto& in0_grid = x == 0 ? in0_sender_runtime_args : in0_receiver_runtime_args;
+            if (x < in0_grid.size() && y < in0_grid[x].size() && in0_grid[x][y].size() > kIn0OutputArg) {
+                auto& in0_args = in0_grid[x][y];
+                in0_args[kIn0InputArg] = input_addr;
+                in0_args[kIn0BiasArg] = bias_addr;
+                in0_args[kIn0OptionalInputArg] = optional_input_addr;
+                in0_args[kIn0OutputArg] = mm_output_addr;
+            }
+            auto& in1_grid = y == 0 ? in1_sender_runtime_args : in1_receiver_runtime_args;
+            if (x < in1_grid.size() && y < in1_grid[x].size() && in1_grid[x][y].size() > kIn1OutputArg) {
+                auto& in1_args = in1_grid[x][y];
+                in1_args[kIn1WeightArg] = weight_addr;
+                in1_args[kIn1BiasArg] = bias_addr;
+                in1_args[kIn1OutputArg] = mm_output_addr;
+            }
+        }
+    }
+
+    if (operation_attributes.fused_ternary_scalar.has_value()) {
+        float scalar_f = operation_attributes.fused_ternary_scalar.value();
         uint32_t scalar_u32 = 0;
         std::memcpy(&scalar_u32, &scalar_f, sizeof(uint32_t));
         auto& reduce_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReduceKernelIdx);
@@ -248,10 +329,12 @@ FusedProgram minimal_matmul_strided_reduce_scatter_async_program(
 }
 
 tt::tt_metal::WorkloadDescriptor MinimalMatmulStridedReduceScatterAsyncProgramFactory::create_workload_descriptor(
-    const MinimalMatmulStridedReduceScatterAsyncParams& attributes,
+    const MinimalMatmulStridedReduceScatterAsyncParams& operation_attributes,
     const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args,
-    std::vector<Tensor>& output_tensor,
+    std::vector<Tensor>& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    const auto& attributes = operation_attributes;
+    auto& output_tensor = tensor_return_value;
     tt::tt_metal::WorkloadDescriptor workload;
     for (const auto& mesh_coordinate : tensor_coords.coords()) {
         uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(

@@ -17,6 +17,11 @@ struct MinimalMatmulStridedReduceScatterAsyncProgramFactory {
     static constexpr uint32_t kReaderKernelIdx = 1;
     static constexpr uint32_t kWriterKernelIdx = 2;
     static constexpr uint32_t kReduceKernelIdx = 3;
+    // minimal_matmul_factory_helper_common appends these next. Ternary is fused in the reduce-scatter, not here.
+    static constexpr uint32_t kMatmulIn0SenderKernelIdx = 4;
+    static constexpr uint32_t kMatmulIn0ReceiverKernelIdx = 5;
+    static constexpr uint32_t kMatmulIn1SenderKernelIdx = 6;
+    static constexpr uint32_t kMatmulIn1ReceiverKernelIdx = 7;
 
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const MinimalMatmulStridedReduceScatterAsyncParams& operation_attributes,
