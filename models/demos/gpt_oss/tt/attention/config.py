@@ -115,8 +115,10 @@ class ProgramConfig:
             q_chunk = self.prefill_q_chunk_size_small
             k_chunk = self.prefill_k_chunk_size_small
 
+        # Prefill SDPA spreads batch x heads x q-chunks over the whole compute grid (Blackhole P150: 11x10 = 110
+        # cores, not 64), so long sequences get ~1.7x the cores.
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
             exp_approx_mode=False,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
