@@ -129,9 +129,10 @@ def _raise_nproc_limit():
             )
 
 
-# MSA (sparse) layers 3-59 pick the top-TOPK_BLOCKS of BLOCK_SIZE-token blocks; topk_large_indices
-# aborts unless at least that many blocks exist, so the sparse path floors the sequence here. Keep in
-# sync with TOPK_BLOCKS * BLOCK_SIZE in models/demos/minimax_m3/tt/attention/msa.py.
+# MSA (sparse) layers 3-59 pick the top-TOPK_BLOCKS of BLOCK_SIZE-token blocks. A cold chunk of at least
+# this many tokens runs the exact-size MSA path; a shorter one reads the KV cache instead. One-shot pads to
+# it so it stays on the exact-size path; chunked only needs whole 128-token blocks per SP rank (a multiple
+# of 1024 at SP=8). Keep in sync with TOPK_BLOCKS * BLOCK_SIZE in models/demos/minimax_m3/tt/attention/msa.py.
 MSA_MIN_TOKENS = 16 * 128  # = 2048
 
 
@@ -143,8 +144,8 @@ class GateFailure(AssertionError):
 
 def plan(n_tokens, chunk_size, chunked):
     """Resolve (n_chunks, chunk, total). chunked: full chunk_size chunks (tail padded). one-shot:
-    a single chunk == total, padded up to a multiple of 1024 and at least MSA_MIN_TOKENS (MSA needs
-    S%1024==0 and S>=2048; 1024 is also a multiple of sp=8 so the SP shard stays tile-aligned)."""
+    a single chunk == total, padded up to a multiple of 1024 (whole MSA blocks per SP rank) and at least
+    MSA_MIN_TOKENS (the exact-size MSA path's top-k window)."""
     if chunked:
         chunk = chunk_size
         n_chunks = max(1, math.ceil(n_tokens / chunk))
@@ -438,10 +439,10 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         recompile_s = time.perf_counter() - t0
         print(f"[prefill-pcc] re-targeted at capacity {capacity} in {recompile_s:.1f} s", flush=True)
     kv_cache = state["kv_cache"]
-    if n_tokens < MSA_MIN_TOKENS:
+    if n_tokens < chunk:
         print(
-            f"[prefill-pcc] WARNING: prompt is only {n_tokens} tokens (< MSA floor {MSA_MIN_TOKENS}); padded to "
-            f"{total}. KV PCC over the {n_tokens} real tokens stays valid; tok/s is pad-dominated — ignore it.",
+            f"[prefill-pcc] WARNING: prompt is only {n_tokens} tokens; padded to the {chunk}-token chunk. "
+            f"KV PCC over the {n_tokens} real tokens stays valid; tok/s is pad-dominated — ignore it.",
             flush=True,
         )
 
@@ -615,10 +616,10 @@ def main():
             bang = "!" * 80
             print(
                 f"\n{bang}\n"
-                f"[prefill-pcc] WARNING: prompt is only {n_tokens} tokens, below the MSA sparse floor of\n"
-                f"  {MSA_MIN_TOKENS} (TOPK_BLOCKS*BLOCK_SIZE = 16*128). Layers 3-59 select the top-16 of\n"
-                f"  128-token blocks, and topk_large_indices aborts with fewer than 16 blocks. PADDING the\n"
-                f"  sequence {n_tokens} -> {capacity} tokens (token 0) so the sparse path can run.\n"
+                f"[prefill-pcc] WARNING: prompt is only {n_tokens} tokens, below the one-shot MSA floor of\n"
+                f"  {MSA_MIN_TOKENS} (TOPK_BLOCKS*BLOCK_SIZE = 16*128): the exact-size MSA path needs 16\n"
+                f"  128-token blocks (a shorter cold chunk would read the KV cache instead). PADDING the\n"
+                f"  sequence {n_tokens} -> {capacity} tokens (token 0) so one-shot stays on that path.\n"
                 f"  * ACCURACY IS STILL VALID: KV PCC compares only the first {n_tokens} real tokens, and\n"
                 f"    causal masking keeps the trailing pad (positionally future) from touching them.\n"
                 f"  * THROUGHPUT IS NOT: tok/s below is dominated by {capacity - n_tokens} pad tokens — ignore it\n"
@@ -667,12 +668,6 @@ def main():
             f"[prefill-pcc] multi-run: source={runs_source} chunk={chunk} initial capacity={capacity} "
             f"({capacity // chunk} chunks) per-run capacity={'FIXED ' + cap_env if cap_env else 'fit to trace'} "
             f"golden_root={golden_root} specs={'stream' if batch_specs is None else len(batch_specs)}",
-            flush=True,
-        )
-    if chunk < MSA_MIN_TOKENS and (runs_source is not None or chunked):
-        print(
-            f"[prefill-pcc] WARNING: chunked chunk={chunk} < MSA floor {MSA_MIN_TOKENS}; the first chunk "
-            f"(cache empty) has < 16 blocks and MSA topk will abort. Use PREFILL_CHUNK_SIZE >= {MSA_MIN_TOKENS}.",
             flush=True,
         )
 

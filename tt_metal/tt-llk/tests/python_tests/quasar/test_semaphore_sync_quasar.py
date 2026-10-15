@@ -12,7 +12,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     ReduceDimension,
@@ -29,7 +28,6 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     MATH_FIDELITY,
     MATH_OP,
     NUM_FACES,
@@ -50,18 +48,11 @@ from helpers.utils import passed_test
     + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dest_sync=[DestSync.Full, DestSync.Half],
-    # MX formats require implied_math_format=Yes on Quasar (bypass format inference pipeline).
-    implied_math_format=lambda formats: (
-        [ImpliedMathFormat.No]
-        if not formats.input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes]
-    ),
 )
 def test_semaphore_sync_quasar(
     formats,
     dest_acc,
     dest_sync,
-    implied_math_format,
 ):
 
     pool_type = ReducePool.Sum
@@ -100,7 +91,6 @@ def test_semaphore_sync_quasar(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync),
         ],
         runtimes=[
@@ -122,11 +112,6 @@ def test_semaphore_sync_quasar(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         dest_acc=dest_acc,
-        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting.
-        disable_format_inference=(
-            implied_math_format == ImpliedMathFormat.Yes
-            and formats.input_format.is_mx_format()
-        ),
     )
 
     res_from_L1 = configuration.run().result
