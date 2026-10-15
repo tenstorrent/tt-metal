@@ -29,15 +29,12 @@ from pathlib import Path
 TOOLS = Path(__file__).resolve().parents[2] / "tools"
 sys.path.insert(0, str(TOOLS))
 from tabulate_suites import (
-    MEMBERS,
     ParseError,
+    all_tables,
     campaign_report,
-    cross_member_tables,
     parse_jsonl,
     read_attempt,  # noqa: E402
-    render,
-    render_tables,
-    tabulate,
+    render_all,
 )
 
 
@@ -599,15 +596,13 @@ def check_report(directory, configs, paths):
 
 
 def tables_of(rows):
-    """The tables tabulate() and cross_member_tables() make of `rows` as {title: (constants, rows)},
-    each row a {head: cell} dict."""
-    tables = [table for member in MEMBERS for table in tabulate(member, [r for r in rows if r.member == member])]
+    """all_tables() of `rows` as {title: (constants, rows)}, each row a {head: cell} dict."""
     return {
         table.title: (
             dict(c.split("=", 1) for c in table.constant),
             [dict(zip(table.heads, cells)) for cells in table.cells],
         )
-        for table in tables + cross_member_tables(rows)
+        for table in all_tables(rows)
     }
 
 
@@ -666,13 +661,7 @@ def check_outputs(directory, paths):
     run = subprocess.run(
         [sys.executable, str(TOOLS / "tabulate_suites.py")] + [str(p) for p in paths], capture_output=True, text=True
     )
-    printed = "\n\n".join(
-        filter(
-            None,
-            [render(m, [r for r in rows if r.member == m]) for m in MEMBERS]
-            + [render_tables(cross_member_tables(rows))],
-        )
-    )
+    printed = render_all(rows)
     if run.returncode != 0 or run.stdout != printed + "\n":
         failures.append(f"table mode exited {run.returncode} and printed other tables: {run.stderr.strip()}")
 

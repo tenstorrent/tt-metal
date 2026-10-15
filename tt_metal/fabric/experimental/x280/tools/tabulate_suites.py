@@ -602,6 +602,7 @@ CS_TABLES = (
 EC_WALL = difference(field("receive_window", "start_ticks"), field("receive_window", "end_ticks"))
 EC_NS = ns(EC_WALL)
 EC_PACKETS = difference(field("first_batch_packets"), field("packets"))
+EC_MPKT = ratio(product(EC_PACKETS, constant(1000)), EC_NS)
 EC_TABLES = (
     Table(
         "",
@@ -626,7 +627,7 @@ EC_TABLES = (
             Column("ns", EC_NS),
             Column("window packets", EC_PACKETS),
             Column("ns/packet", ratio(EC_NS, EC_PACKETS)),
-            Column("Mpkt/s", ratio(product(EC_PACKETS, constant(1000)), EC_NS)),
+            Column("Mpkt/s", EC_MPKT),
             Column(
                 "useful GB/s", ratio(product(EC_PACKETS, field("receive_window", "useful_bytes_per_request")), EC_NS)
             ),
@@ -656,7 +657,7 @@ EC_HOP_TABLES = (
             Column("ns", EC_NS),
             Column("window packets", EC_PACKETS),
             Column("ns/packet", ratio(EC_NS, EC_PACKETS)),
-            Column("Mpkt/s", ratio(product(EC_PACKETS, constant(1000)), EC_NS)),
+            Column("Mpkt/s", EC_MPKT),
             Column(
                 "payload GB/s", ratio(product(EC_PACKETS, field("receive_window", "useful_bytes_per_request")), EC_NS)
             ),
@@ -1037,7 +1038,6 @@ EC_CEILING_STRETCHES = (
     ("receive side", "W5 W6 R1"),
 )
 EC_CEILING_STORES = (("W2", "W2"), ("R1", "R1"))
-EC_MPKT = ratio(product(EC_PACKETS, constant(1000)), EC_NS)
 
 
 def ec_ceilings(rows):
@@ -1103,14 +1103,12 @@ def ec_ceilings(rows):
     return Tabulated("eth_credit ceilings", [], heads, right, shown, cells)
 
 
-# Tables computed across members' rows, which no one member's tables can hold; each returns a
-# Tabulated or None.
-CROSS_MEMBER = (ec_ceilings,)
-
-
-def cross_member_tables(rows):
-    """The CROSS_MEMBER tables of `rows`, every member's, that hold any row."""
-    return [table for table in (derive(rows) for derive in CROSS_MEMBER) if table is not None]
+def all_tables(rows):
+    """Every table of `rows`: each member's (tabulate()), then eth_credit's ceilings, which no one
+    member's rows can hold."""
+    tables = [table for member in MEMBERS for table in tabulate(member, [row for row in rows if row.member == member])]
+    ceilings = ec_ceilings(rows)
+    return tables + ([ceilings] if ceilings is not None else [])
 
 
 # A table's title names it in both outputs.
@@ -1343,13 +1341,13 @@ def tabulate(member, rows):
     return out
 
 
-def render(member, rows, markdown=False):
-    """`member`'s tables (tabulate) as aligned text, or as Markdown whose rows lead with their label."""
-    return render_tables(tabulate(member, rows), markdown)
+def render_all(rows, markdown=False):
+    """all_tables(rows) as aligned text, or as Markdown whose rows lead with their label."""
+    return render_tables(all_tables(rows), markdown)
 
 
 def render_tables(tables, markdown=False):
-    """Tabulated `tables` as render() prints them."""
+    """Tabulated `tables` as aligned text, or as Markdown whose rows lead with their label."""
     out = []
     for table in tables:
         size = "%d row%s" % (len(table.rows), "" if len(table.rows) == 1 else "s")
@@ -1792,8 +1790,7 @@ def campaign_report(campaign, destination):
         master += [(key, path.parent.name, row, digests[row.path]) for row in rows]
     complete = all(entry["status"] == "passed" for entry in coverage.values())
     table_rows = [row for _, _, row, _ in master]
-    results = [render(member, [row for row in table_rows if row.member == member], markdown=True) for member in MEMBERS]
-    results.append(render_tables(cross_member_tables(table_rows), markdown=True))
+    results = [render_all(table_rows, markdown=True)]
     wall_rows = [row for row in table_rows if "wall_counter" in row.record]
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "coverage.json").write_text(json.dumps(coverage, indent=2) + "\n")
@@ -1925,15 +1922,11 @@ def main():
         )
         return 1
 
-    tables = []
     try:
-        for member in MEMBERS:
-            tables.append(render(member, [row for row in rows if row.member == member]))
-        tables.append(render_tables(cross_member_tables(rows)))
+        print(render_all(rows))
     except ParseError as error:
         print("FAIL: %s" % error, file=sys.stderr)
         return 1
-    print("\n\n".join(table for table in tables if table))
     return 0
 
 
