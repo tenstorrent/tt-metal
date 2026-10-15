@@ -82,6 +82,9 @@ class OptimizedDecoder(LightweightModule):
     def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, policy=None):
         import torch
 
+        from .accurate_attention import _load, accurate_attention
+
+        _load()  # Host extension/kernel-path loading is an explicit setup boundary.
         c = hf_config
         if (
             c.hidden_size,
@@ -102,6 +105,7 @@ class OptimizedDecoder(LightweightModule):
         self.mesh_device = mesh_device
         self.policy = policy or PrecisionPolicy()
         self.kv_dtype = getattr(ttnn, self.policy.kv)
+        self._attention = accurate_attention
         self.eps = c.rms_norm_eps
         self.context = c.max_position_embeddings
         self.compute = ttnn.init_device_compute_kernel_config(
@@ -582,20 +586,14 @@ class OptimizedDecoder(LightweightModule):
                 ),
             )
         else:
-            attention = ttnn.transformer.chunked_scaled_dot_product_attention(
+            attention = self._attention(
                 q,
                 kv_cache[0],
                 kv_cache[1],
                 page_table,
                 chunk_start_idx=start_pos,
-                compute_kernel_config=self.compute,
-                program_config=ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
-                    q_chunk_size=sdpa_chunk,
-                    k_chunk_size=sdpa_chunk,
-                    exp_approx_mode=False,
-                    fp32_accumulation=True,
-                ),
+                q_chunk_size=sdpa_chunk,
+                k_chunk_size=sdpa_chunk,
             )
         attention = ttnn.experimental.nlp_concat_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Prefill assembles chunks and decode-assisted prefix tokens in one public

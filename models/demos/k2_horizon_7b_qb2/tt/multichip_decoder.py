@@ -27,10 +27,10 @@ class MultichipDecoder(OptimizedDecoder):
     flash_decode_k_chunk = 256
     flash_decode_max_cores_per_head = 64  # tree reduction limit; B1 uses all 55 per KV head
     long_decode_fp32_accumulation = True  # False only for A/B diagnostics (tests/check_batched_long_decode.py)
-    # Accurate long prefill: chunked SDPA with fp32_accumulation. Causal SDPA assigns Q chunks in pairs, so
-    # a 4096-token chunk at Q128 (256 chunks) needs 4 per core on 64 or 110 cores. Q64 fills all 110 workers
-    # (at most 6 per core); large K blocks amortize the FP32 recurrence. HiFi4 retained (HiFi2 triples the
-    # error).
+    # Accurate long prefill (model-local FP32-recurrence kernel, tt/accurate_attention): causal SDPA assigns
+    # Q chunks in pairs, so a 4096-token chunk at Q128 (256 chunks) needs 4 per core on 64 or 110 cores. Q64
+    # fills all 110 workers (at most 6 per core); large K blocks amortize the FP32 recurrence. HiFi4 retained
+    # (HiFi2 triples the error).
     accurate_prefill_grid = (11, 10)
     accurate_prefill_q_chunk = 64
     accurate_prefill_max_k_chunk = 1024
@@ -65,6 +65,9 @@ class MultichipDecoder(OptimizedDecoder):
     ):
         import torch
 
+        from .accurate_attention import _load, accurate_attention
+
+        _load()  # Host extension/kernel-path loading is an explicit setup boundary.
         c = hf_config
         if (
             c.hidden_size,
@@ -130,6 +133,7 @@ class MultichipDecoder(OptimizedDecoder):
         self.local_q_heads, self.local_kv_heads = 8, 2
         self.weight_allocations = []
         self.kv_dtype = getattr(ttnn, self.policy.kv)
+        self._attention = accurate_attention
         self.eps = c.rms_norm_eps
         self.context = c.max_position_embeddings
         self.compute = ttnn.init_device_compute_kernel_config(
@@ -146,16 +150,13 @@ class MultichipDecoder(OptimizedDecoder):
             fp32_dest_acc_en=True,
             packer_l1_acc=packer_l1_acc,
         )
-        # Long-context attention (fp32_accumulation): HiFi4 and exact arithmetic for both phases.
-        self.long_decode_compute, self.long_prefill_compute = (
-            ttnn.init_device_compute_kernel_config(
-                mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=l1_acc,
-            )
-            for l1_acc in (False, True)
+        # Long-context decode (fp32_accumulation): HiFi4 and exact arithmetic.
+        self.long_decode_compute = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
         prefix = f"model.layers.{layer_idx}."
 
@@ -648,20 +649,15 @@ class MultichipDecoder(OptimizedDecoder):
             k_chunk = self.accurate_prefill_max_k_chunk
             while start_pos % k_chunk:
                 k_chunk //= 2
-            attention = ttnn.transformer.chunked_scaled_dot_product_attention(
+            attention = self._attention(
                 q,
                 kv_cache[0],
                 kv_cache[1],
                 page_table,
                 chunk_start_idx=start_pos,
-                compute_kernel_config=self.long_prefill_compute,
-                program_config=ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=self.accurate_prefill_grid,
-                    q_chunk_size=q_chunk,
-                    k_chunk_size=max(k_chunk, 32),
-                    exp_approx_mode=False,
-                    fp32_accumulation=True,
-                ),
+                q_chunk_size=q_chunk,
+                k_chunk_size=max(k_chunk, 32),
+                grid=self.accurate_prefill_grid,
             )
         attention = ttnn.experimental.nlp_concat_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Prefill assembles chunks and decode-assisted prefix tokens in one public

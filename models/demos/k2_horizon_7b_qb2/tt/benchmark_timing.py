@@ -35,39 +35,54 @@ def _atomic_json(path, value):
 
 
 def _long_context_attention_identity(model):
-    """Beyond the stock bounds, decode and prefill attention are the stock SDPA ops with
-    SDPAProgramConfig.fp32_accumulation (FP32 scores and online-softmax state, accurate exponentials)."""
-    layers = model.layers
+    """Beyond the stock bounds, decode runs the stock paged SDPA decode with SDPAProgramConfig.fp32_accumulation
+    (FP32 scores and online-softmax state, accurate exponentials) and prefill the already-loaded model-local
+    FP32-recurrence kernel (tt/accurate_attention), pinned by its build provenance."""
+    from .accurate_attention import _load
+
     settings = {
         (
             layer.flash_decode_k_chunk,
             layer.flash_decode_max_cores_per_head,
+            bool(layer.long_decode_fp32_accumulation),
             tuple(layer.accurate_prefill_grid),
             layer.accurate_prefill_q_chunk,
             layer.accurate_prefill_max_k_chunk,
         )
-        for layer in layers
+        for layer in model.layers
     }
     if len(settings) != 1:
         raise ValueError("All layers must share one long-context attention configuration")
-    k_chunk, max_cores, grid, q_chunk, max_k_chunk = next(iter(settings))
+    k_chunk, max_cores, fp32_accumulation, grid, q_chunk, max_k_chunk = next(iter(settings))
+    binding, kernel_path = _load()  # Already cached by every decoder's construction.
+    root = Path(__file__).resolve().parent / "accurate_attention"
+    provenance_path = root / ".build/provenance.json"
+    provenance = json.loads(provenance_path.read_text())
+    library = Path(binding.__file__).resolve()
+    if _hash(library) != provenance["library_sha256"]:
+        raise RuntimeError("Loaded accurate-attention binding provenance changed")
     return {
-        "accounting_schema_version": 5,
+        "accounting_schema_version": 6,
         "decode": {
             "op": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
-            "fp32_accumulation": True,
+            "fp32_accumulation": fp32_accumulation,
             "k_chunk_size": k_chunk,
             "max_cores_per_head_batch": max_cores,
             "grid": [11, 10],
             "math_fidelity": "HiFi4",
         },
         "prefill": {
-            "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
-            "fp32_accumulation": True,
+            "kernel": "model_local_accurate_attention",
+            "fp32_denominator": True,
+            "fp32_output_accumulator": True,
             "grid": list(grid),
             "q_chunk_size": q_chunk,
             "max_k_chunk_size": max_k_chunk,
             "math_fidelity": "HiFi4",
+            "library": {"path": str(library), "sha256": _hash(library)},
+            "provenance": {"path": str(provenance_path), "sha256": _hash(provenance_path), "data": provenance},
+            "compute_kernel": {"path": str(kernel_path), "sha256": _hash(kernel_path)},
+            "wrapper": {"path": str(root / "__init__.py"), "sha256": _hash(root / "__init__.py")},
         },
     }
 
@@ -291,15 +306,22 @@ class PhaseRecorder:
         effective = list(self.positions)
         threshold = 4096 * min(16, max(1, (64 // generated_batch) // 2))
         accurate = table_capacity > threshold
+        fp32 = accurate and self.identity.get("long_context_attention", {}).get("decode", {}).get("fp32_accumulation")
         self.annotate(
             positions=effective,
             active_mask=[p >= 0 for p in effective],
             generated_batch=generated_batch,
             table_capacity=table_capacity,
-            attention_branch="stock_paged_decode_fp32_accumulation" if accurate else "stock_paged_decode",
+            attention_branch=(
+                "stock_paged_decode_fp32_accumulation"
+                if fp32
+                else "stock_paged_decode_long"
+                if accurate
+                else "stock_paged_decode"
+            ),
             attention_effective_fidelity="HiFi4" if accurate else None,
-            attention_fp32_denominator=True if accurate else None,
-            attention_fp32_output_accumulator=True if accurate else None,
+            attention_fp32_denominator=bool(fp32) if accurate else None,
+            attention_fp32_output_accumulator=bool(fp32) if accurate else None,
             reset_inputs=bool(reload_inputs),
             layout_epoch=self.layout_epoch,
             physical_rows=32,
