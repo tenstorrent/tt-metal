@@ -10,7 +10,7 @@
 #include "hostdev/dev_msgs.h"
 #include "hostdev/rta_constants.h"
 
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #include "internal/debug/fw_debug.h"
 #include "api/debug/waypoint.h"

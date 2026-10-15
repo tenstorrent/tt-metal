@@ -14,6 +14,7 @@
 
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/mesh_coord_utils.hpp"
@@ -84,7 +85,6 @@ struct CapturedProgram {
 struct StagedCommandListNode {
     std::vector<CapturedProgram> programs;
     bool multicast_go_signals = false;
-    bool unicast_go_signals = false;
     SubDeviceId sub_device_id;
     uint32_t num_workers = 0;
 };
@@ -112,8 +112,7 @@ void append_go_signal_sequence(
     SubDeviceId sub_device,
     uint32_t expected_workers,
     CoreCoord dispatch_core,
-    bool send_multicast,
-    bool send_unicasts) {
+    bool send_multicast) {
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
     // GO-signal-only sequences carry no kernel binary; marking them cached skips the prefetcher ring-buffer offset
     // command.
@@ -125,7 +124,6 @@ void append_go_signal_sequence(
         expected_workers,
         dispatch_core,
         send_multicast,
-        send_unicasts,
         dispatch_metadata,
         std::nullopt);
     append_command_bytes(output, commands.data(), commands.size_bytes());
@@ -199,7 +197,7 @@ private:
         MeshCommandQueue& cq,
         const CommandListDescriptor& descriptor,
         const std::vector<CommandListData>& serialized_ranges) const;
-    uint32_t get_num_workers(bool multicast, bool unicast, SubDeviceId sub_device) const;
+    uint32_t get_num_workers(bool multicast, SubDeviceId sub_device) const;
 
     MeshDevice& mesh_device;
     SubDeviceManagerId sub_device_manager_id;
@@ -430,32 +428,22 @@ CommandListData CommandListBuilderImpl::serialize_range(
     // the last program may still be running when the stream ends.
     for (uint32_t sub_device_idx = 0; sub_device_idx < mesh_device.num_sub_devices(); ++sub_device_idx) {
         const SubDeviceId sub_device{static_cast<uint8_t>(sub_device_idx)};
-        // Multicast + unicast first, then multicast-only, then unicast-only.
-        for (const auto& [multicast, unicast] :
-             {std::pair{true, true}, std::pair{true, false}, std::pair{false, true}}) {
-            for (size_t i = 0; i < staged_nodes.size(); ++i) {
-                const auto& staged_node = staged_nodes[i];
-                if (programs[i] != nullptr || *staged_node.sub_device_id != sub_device_idx ||
-                    staged_node.multicast_go_signals != multicast || staged_node.unicast_go_signals != unicast) {
-                    continue;
-                }
-                append_go_signal_sequence(
-                    bytes,
-                    dispatch_state.cq_id,
-                    mesh_device,
-                    sub_device,
-                    expected_workers[sub_device_idx],
-                    dispatch_state.dispatch_core,
-                    multicast,
-                    unicast);
-                if (multicast) {
-                    launch_state[sub_device_idx].inc_mcast_wptr(1);
-                }
-                if (unicast) {
-                    launch_state[sub_device_idx].inc_unicast_wptr(1);
-                }
-                expected_workers[sub_device_idx] += staged_node.num_workers;
+        for (size_t i = 0; i < staged_nodes.size(); ++i) {
+            const auto& staged_node = staged_nodes[i];
+            if (programs[i] != nullptr || *staged_node.sub_device_id != sub_device_idx ||
+                !staged_node.multicast_go_signals) {
+                continue;
             }
+            append_go_signal_sequence(
+                bytes,
+                dispatch_state.cq_id,
+                mesh_device,
+                sub_device,
+                expected_workers[sub_device_idx],
+                dispatch_state.dispatch_core,
+                /*send_multicast=*/true);
+            launch_state[sub_device_idx].inc_mcast_wptr(1);
+            expected_workers[sub_device_idx] += staged_node.num_workers;
         }
     }
 
@@ -489,18 +477,14 @@ CommandListData CommandListBuilderImpl::serialize_range(
 
         auto& worker_launch_state = launch_state[*sub_device];
         node.dispatch_metadata.sync_count += starting_workers[*sub_device];
-        const uint32_t virtual_eth_cores =
-            staged_node.unicast_go_signals ? mesh_device.impl().num_virtual_eth_cores(sub_device) : 0;
         program_dispatch::update_traced_program_dispatch_commands(
             node,
             command_sequence,
             worker_launch_state.get_mcast_wptr(),
-            worker_launch_state.get_unicast_wptr(),
             expected_workers[*sub_device],
             dispatch_state.dispatch_core,
             sub_device,
             ProgramBinaryStatus::Committed,
-            {staged_node.unicast_go_signals, virtual_eth_cores},
             dispatch_state.cq_id);
 
         program_dispatch::for_each_program_command_sequence_chunk(
@@ -512,9 +496,6 @@ CommandListData CommandListBuilderImpl::serialize_range(
 
         if (staged_node.multicast_go_signals) {
             worker_launch_state.inc_mcast_wptr(1);
-        }
-        if (staged_node.unicast_go_signals) {
-            worker_launch_state.inc_unicast_wptr(1);
         }
         expected_workers[*sub_device] += node.num_workers;
     }
@@ -598,13 +579,10 @@ std::shared_ptr<MeshBuffer> CommandListBuilderImpl::allocate_and_commit(
     return buffer;
 }
 
-uint32_t CommandListBuilderImpl::get_num_workers(bool multicast, bool unicast, SubDeviceId sub_device) const {
+uint32_t CommandListBuilderImpl::get_num_workers(bool multicast, SubDeviceId sub_device) const {
     uint32_t workers = 0;
     if (multicast) {
         workers += mesh_device.num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device);
-    }
-    if (unicast) {
-        workers += mesh_device.impl().num_virtual_eth_cores(sub_device);
     }
     return workers;
 }
@@ -620,13 +598,11 @@ void CommandListBuilderImpl::add(MeshWorkload& workload) {
     auto binary_buffer = workload.impl().prepare_for_command_list(binary_load_cq);
 
     StagedCommandListNode staged_node;
-    staged_node.unicast_go_signals = workload.impl().runs_on_noc_unicast_only_cores();
     staged_node.multicast_go_signals = workload.impl().runs_on_noc_multicast_only_cores();
     const auto sub_devices = workload.impl().determine_sub_device_ids(&mesh_device);
     TT_FATAL(sub_devices.size() == 1, "A command-list workload must execute on one sub-device");
     staged_node.sub_device_id = *sub_devices.begin();
-    staged_node.num_workers =
-        get_num_workers(staged_node.multicast_go_signals, staged_node.unicast_go_signals, staged_node.sub_device_id);
+    staged_node.num_workers = get_num_workers(staged_node.multicast_go_signals, staged_node.sub_device_id);
     const uint32_t cache_size = mesh_device.impl().metal_context().dispatch_mem_map().ringbuffer_size();
     const uint32_t max_program_kernels_size = workload.impl().max_program_kernels_size();
     const bool use_prefetcher_cache = max_program_kernels_size != 0 && max_program_kernels_size <= cache_size;
@@ -645,9 +621,6 @@ void CommandListBuilderImpl::add(MeshWorkload& workload) {
     worker->num_completion_worker_cores += staged_node.num_workers;
     if (staged_node.multicast_go_signals) {
         ++worker->num_traced_programs_needing_go_signal_multicast;
-    }
-    if (staged_node.unicast_go_signals) {
-        ++worker->num_traced_programs_needing_go_signal_unicast;
     }
     staged_nodes.push_back(std::move(staged_node));
     if (binary_buffer) {

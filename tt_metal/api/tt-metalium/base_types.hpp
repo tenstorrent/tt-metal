@@ -6,6 +6,7 @@
 
 #include <ostream>
 #include <cstdint>
+#include <stdexcept>
 
 namespace tt::tt_metal {
 
