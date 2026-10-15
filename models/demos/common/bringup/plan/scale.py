@@ -15,6 +15,8 @@ next to the plan (written with the plan; not part of the approved files, so the 
     counts:                            # config key (dotted for nested, e.g. linear_attn_config.num_heads) -> role
       num_attention_heads: heads
       n_routed_experts: experts
+    config_files:                      # optional: other configs the model reads counts from, rewritten (F75)
+      inference/config.json: {n_heads: num_attention_heads, n_routed_experts: n_routed_experts}
     tensors:                           # first match wins; tensors no rule matches are copied unchanged
       - {pattern: "model.layers.*.self_attn.q_proj.*", count: num_attention_heads, dim: 0}
       - {pattern: "model.layers.*.mlp.experts.*", count: n_routed_experts, index: "experts\\.(\\d+)\\."}
@@ -36,6 +38,7 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -159,11 +162,13 @@ def scale(spec, plan: dict | None = None, sc: dict | None = None) -> dict:
     }
     if errs:
         return res
+    weights_rules = {k: v for k, v in sc.items() if k != "config_files"}  # config files are rewritten every time
     key = hashlib.sha256(
-        json.dumps([sc, res["factors"], sorted(wm.items()), (src / "config.json").read_text()]).encode()
+        json.dumps([weights_rules, res["factors"], sorted(wm.items()), (src / "config.json").read_text()]).encode()
     ).hexdigest()
     marker = dst / MARKER
     if marker.exists() and json.loads(marker.read_text()).get("key") == key:
+        res["errors"] = _side_files(src, dst, sc, counts)
         return {**res, "reused": True}
     from safetensors import safe_open
     from safetensors.torch import save_file
@@ -191,11 +196,43 @@ def scale(spec, plan: dict | None = None, sc: dict | None = None) -> dict:
         holder, k = _cfg_get(cfg, key_)
         holder[k] = kept
     (dst / "config.json").write_text(json.dumps(cfg, indent=2) + "\n")
+    res["errors"] = _side_files(src, dst, sc, counts)
+    marker.write_text(json.dumps({**res, "key": key, "source": str(src)}, indent=1) + "\n")
+    return res
+
+
+def _copy_unless_same(a, b):
+    if os.path.exists(b) and os.path.samefile(a, b):
+        return b
+    return shutil.copy2(a, b)
+
+
+def _side_files(src: Path, dst: Path, sc: dict, counts: dict) -> list[str]:
+    """Everything of the checkpoint but its weights: top-level files and subfolders (a model's own code and configs,
+    e.g. DeepSeek's inference/), copied; then every extra config the model reads its counts from rewritten with the
+    kept counts (scaling.yaml `config_files: {relative path: {key: count name}}`, F75)."""
     for p in src.iterdir():
         if p.is_file() and p.suffix != ".safetensors" and p.name not in SKIP_FILES and p.name != "config.json":
             shutil.copy2(p, dst / p.name)
-    marker.write_text(json.dumps({**res, "key": key, "source": str(src)}, indent=1) + "\n")
-    return res
+        elif p.is_dir() and not any(p.rglob("*.safetensors")):
+            shutil.copytree(p, dst / p.name, dirs_exist_ok=True, copy_function=_copy_unless_same)
+    errs = []
+    for rel_path, keys in (sc.get("config_files") or {}).items():
+        f = dst / rel_path
+        if not f.exists():
+            errs.append(f"config_files: {rel_path} is not in the checkpoint")
+            continue
+        cfg = json.loads(f.read_text())
+        f.unlink()  # a hard link to the real checkpoint's file must not be rewritten in place
+        for k, name in (keys or {}).items():
+            if name not in counts:
+                errs.append(f"config_files {rel_path}: {k} -> {name!r}, not one of the scaled counts {sorted(counts)}")
+            elif k not in cfg:
+                errs.append(f"config_files {rel_path}: no key {k!r}")
+            else:
+                cfg[k] = counts[name][1]
+        f.write_text(json.dumps(cfg, indent=2) + "\n")
+    return errs
 
 
 def main(argv=None):
