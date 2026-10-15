@@ -109,13 +109,25 @@ function(_x280_check_header header lang)
         PARENT_SCOPE
     )
 endfunction()
-foreach(_header IN LISTS _x280_abi_headers)
-    _x280_check_header(${_header} c)
-    _x280_check_header(${_header} c++)
-endforeach()
-foreach(_header IN LISTS _x280_asm_headers)
-    _x280_check_header(${_header} assembler-with-cpp)
-endforeach()
+# _x280_check_headers([DIRS <dir>...] [C_AND_CXX <header>...] [CXX <header>...] [ASM <header>...]):
+# _x280_check_header for each header in each listed language, with the DIRS (relative to this tree's
+# root) as extra include directories.
+function(_x280_check_headers)
+    cmake_parse_arguments(PARSE_ARGV 0 ARG "" "" "DIRS;C_AND_CXX;CXX;ASM")
+    list(TRANSFORM ARG_DIRS PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+    foreach(header IN LISTS ARG_C_AND_CXX)
+        _x280_check_header(${header} c ${ARG_DIRS})
+        _x280_check_header(${header} c++ ${ARG_DIRS})
+    endforeach()
+    foreach(header IN LISTS ARG_CXX)
+        _x280_check_header(${header} c++ ${ARG_DIRS})
+    endforeach()
+    foreach(header IN LISTS ARG_ASM)
+        _x280_check_header(${header} assembler-with-cpp ${ARG_DIRS})
+    endforeach()
+    set(_x280_header_stamps ${_x280_header_stamps} PARENT_SCOPE)
+endfunction()
+_x280_check_headers(C_AND_CXX ${_x280_abi_headers} ASM ${_x280_asm_headers})
 
 # _x280_refusal_test(<prefix> <source> COMPILE <command>... CASES <id>|<defines>|<message>...): one CTest
 # <prefix><id> per case, compiling <source> with the case's comma-separated defines (none when empty).
@@ -383,40 +395,34 @@ add_library(x280_slow_dispatch OBJECT harness/slow_dispatch.cpp)
 
 # Suite headers compile on their own, as C and C++ or, for templates, C++ only.
 set(_x280_shared_dir "${CMAKE_CURRENT_SOURCE_DIR}/kernels/shared")
-foreach(
-    _header
-    ubench_cookies.h
-    ubench_backend_ids.h
-    ubench_region.h
-    ubench_units.h
-    ubench_layout_cookie.h
-    ubench_section_load.h
-    ubench_outcome.h
-    tensix_live_timer.h
-    core_sync_layout.h
-    core_sync_core_family.h
-    core_sync_probe_args.h
-    credit_counter.h
-    p2p_latency_frontend.h
-    p2p_latency_layout.h
-    fabric_shadow.h
+_x280_check_headers(
+    DIRS kernels/shared
+    C_AND_CXX
+        ubench_cookies.h
+        ubench_backend_ids.h
+        ubench_region.h
+        ubench_units.h
+        ubench_layout_cookie.h
+        ubench_section_load.h
+        ubench_outcome.h
+        tensix_live_timer.h
+        core_sync_layout.h
+        core_sync_core_family.h
+        core_sync_probe_args.h
+        credit_counter.h
+        p2p_latency_frontend.h
+        p2p_latency_layout.h
+        fabric_shadow.h
+    CXX
+        core_sync_arrival.hpp
+        core_sync_barrier.hpp
+        core_sync_transport_x280.hpp
+        core_sync_transport_metal.hpp
+        p2p_latency_frontend_cxx.hpp
+        p2p_latency_entry_cxx.hpp
+        x280_section_load.hpp
+        fabric_shadow_header.hpp
 )
-    _x280_check_header(${_header} c ${_x280_shared_dir})
-    _x280_check_header(${_header} c++ ${_x280_shared_dir})
-endforeach()
-foreach(
-    _header
-    core_sync_arrival.hpp
-    core_sync_barrier.hpp
-    core_sync_transport_x280.hpp
-    core_sync_transport_metal.hpp
-    p2p_latency_frontend_cxx.hpp
-    p2p_latency_entry_cxx.hpp
-    x280_section_load.hpp
-    fabric_shadow_header.hpp
-)
-    _x280_check_header(${_header} c++ ${_x280_shared_dir})
-endforeach()
 
 # A DRISC core_sync director is refused at compile time, on kMayDirect alone.
 add_test(
@@ -515,16 +521,10 @@ x280_add_image(
         kernels/transport_bandwidth
         kernels/transport_bandwidth/backends
 )
-set(_x280_transport_bandwidth_dirs
-    ${_x280_shared_dir}
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/transport_bandwidth
-)
-foreach(_header transport_bandwidth_common.h tensix_to_x280.h x280_to_tensix.h)
-    _x280_check_header(${_header} c ${_x280_transport_bandwidth_dirs})
-    _x280_check_header(${_header} c++ ${_x280_transport_bandwidth_dirs})
-endforeach()
-_x280_check_header(transport_bandwidth_frontend_cxx.hpp c++ ${_x280_transport_bandwidth_dirs}
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/transport_bandwidth/backends
+_x280_check_headers(
+    DIRS kernels/shared kernels/transport_bandwidth kernels/transport_bandwidth/backends
+    C_AND_CXX transport_bandwidth_common.h tensix_to_x280.h x280_to_tensix.h
+    CXX transport_bandwidth_frontend_cxx.hpp
 )
 target_sources(x280_bench_host_tests PRIVATE tests/host/test_transport_bandwidth.cpp)
 target_include_directories(x280_bench_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/transport_bandwidth)
@@ -552,15 +552,11 @@ foreach(_image x280-same-tile x280-peer-tile metal-peer-tile)
             kernels/p2p_latency/backends
     )
 endforeach()
-set(_x280_p2p_latency_dirs
-    ${_x280_shared_dir}
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/p2p_latency
+_x280_check_headers(
+    DIRS kernels/shared kernels/p2p_latency kernels/p2p_latency/backends
+    C_AND_CXX p2p_latency_x280_noc_args.h metal_peer_args.h
+    CXX x280_noc.hpp
 )
-foreach(_header p2p_latency_x280_noc_args.h metal_peer_args.h)
-    _x280_check_header(${_header} c ${_x280_p2p_latency_dirs})
-    _x280_check_header(${_header} c++ ${_x280_p2p_latency_dirs})
-endforeach()
-_x280_check_header(x280_noc.hpp c++ ${_x280_p2p_latency_dirs} ${CMAKE_CURRENT_SOURCE_DIR}/kernels/p2p_latency/backends)
 # The Metal peer kernel selects its core type from exactly one P2P_LATENCY_TARGET_* define.
 set(_cases "none||p2p_latency Metal peer requires exactly one target define")
 foreach(_targets TENSIX,IDLE_ERISC TENSIX,DRISC IDLE_ERISC,DRISC TENSIX,IDLE_ERISC,DRISC)
@@ -605,19 +601,11 @@ foreach(_member compute forward)
             kernels/pipeline_stage/backends
     )
 endforeach()
-set(_x280_pipeline_stage_dirs
-    ${_x280_shared_dir}
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/pipeline_stage
+_x280_check_headers(
+    DIRS kernels/shared kernels/pipeline_stage kernels/pipeline_stage/backends
+    C_AND_CXX pipeline_stage_common.h route_compute_args.h route_forward_args.h
+    CXX pipeline_stage_frontend_cxx.hpp x280_member_backend.hpp x280_route_compute.hpp x280_route_forward.hpp
 )
-foreach(_header pipeline_stage_common.h route_compute_args.h route_forward_args.h)
-    _x280_check_header(${_header} c ${_x280_pipeline_stage_dirs})
-    _x280_check_header(${_header} c++ ${_x280_pipeline_stage_dirs})
-endforeach()
-foreach(_header pipeline_stage_frontend_cxx.hpp x280_member_backend.hpp x280_route_compute.hpp x280_route_forward.hpp)
-    _x280_check_header(${_header} c++ ${_x280_pipeline_stage_dirs}
-        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/pipeline_stage/backends
-    )
-endforeach()
 target_sources(x280_bench_host_tests PRIVATE tests/host/test_pipeline_stage.cpp)
 target_include_directories(x280_bench_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/pipeline_stage)
 foreach(_member compute forward)
@@ -643,14 +631,7 @@ foreach(_member director release-probe)
             kernels/core_sync
     )
 endforeach()
-set(_x280_core_sync_dirs
-    ${_x280_shared_dir}
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/core_sync
-)
-foreach(_header core_sync_director_args.h core_sync_release_probe_args.h)
-    _x280_check_header(${_header} c ${_x280_core_sync_dirs})
-    _x280_check_header(${_header} c++ ${_x280_core_sync_dirs})
-endforeach()
+_x280_check_headers(DIRS kernels/shared kernels/core_sync C_AND_CXX core_sync_director_args.h core_sync_release_probe_args.h)
 target_sources(x280_bench_host_tests PRIVATE tests/host/test_core_sync_director_args.cpp)
 target_include_directories(x280_bench_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/core_sync)
 target_sources(x280_bench_device_tests PRIVATE tests/device/test_core_sync_hw.cpp)
@@ -716,13 +697,11 @@ foreach(
         LINK_OPTIONS -Wl,--defsym=X280_PACKET_INJECTION_LAYOUT=1
     )
 endforeach()
-set(_x280_packet_injection_dirs
-    ${_x280_shared_dir}
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/packet_injection
+_x280_check_headers(
+    DIRS kernels/shared kernels/packet_injection
+    C_AND_CXX packet_injection_abi.h
+    CXX packet_injection_slot.hpp
 )
-_x280_check_header(packet_injection_abi.h c ${_x280_packet_injection_dirs})
-_x280_check_header(packet_injection_abi.h c++ ${_x280_packet_injection_dirs})
-_x280_check_header(packet_injection_slot.hpp c++ ${_x280_packet_injection_dirs})
 # The consumer refuses to compile without one valid mode and creation flag.
 _x280_refusal_test(x280_packet_injection_rejects_ ${CMAKE_CURRENT_SOURCE_DIR}/src/packet_injection_x280.cpp
     COMPILE
@@ -772,15 +751,11 @@ x280_add_image(
         kernels/shared
         kernels/eth_credit
 )
-set(_x280_eth_credit_dirs
-    ${_x280_shared_dir}
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/eth_credit
+_x280_check_headers(
+    DIRS kernels/shared kernels/eth_credit
+    C_AND_CXX eth_credit_abi.h
+    CXX eth_credit_header.hpp x280_fwd.hpp
 )
-_x280_check_header(eth_credit_abi.h c ${_x280_eth_credit_dirs})
-_x280_check_header(eth_credit_abi.h c++ ${_x280_eth_credit_dirs})
-foreach(_header eth_credit_header.hpp x280_fwd.hpp)
-    _x280_check_header(${_header} c++ ${_x280_eth_credit_dirs})
-endforeach()
 # The E0/E1 kernels are built by the Metal JIT at launch; this compiles them offline the same way,
 # for every shape and bring-up mode the suite runs. It also links them when a Metal runtime cache
 # holds firmware built from this tree, and otherwise reports "compile only".
