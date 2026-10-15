@@ -194,8 +194,10 @@ SCENARIOS = [
     _s(f"{LONG}/input_data_long_256k.json", 4, 270000, 64, "isl256k_b4"),
     _s(f"{LONG}/input_data_long_256k.json", 1, 270000, 64, "isl256k_b1"),
     # the REAL ~262k-token prompt (the LONG/ files above hold a ~102k-token prompt): the prefill of the long context, batch 4 / 1
-    _s(f"{PROMPTS}/input_data_long_256k_exact.json", 4, 270000, 64, "isl256kx_b4"),
-    _s(f"{PROMPTS}/input_data_long_256k_exact.json", 1, 270000, 64, "isl256kx_b1"),
+    # chunk 512: the real ~262k / ~126k-token prompts (the LONG/ files above hold a ~102k-token prompt)
+    _s(f"{PROMPTS}/input_data_long_256k_exact.json", 4, 270000, 64, "isl256kx_b4", chunk=512),
+    _s(f"{PROMPTS}/input_data_long_128k_exact.json", 4, 135000, 64, "isl128kx_b4", chunk=512),
+    _s(f"{PROMPTS}/input_data_long_256k_exact.json", 1, 270000, 64, "isl256kx_b1", chunk=512),
     _s(
         f"{PROMPTS}/input_data_long_1M.json",
         1,

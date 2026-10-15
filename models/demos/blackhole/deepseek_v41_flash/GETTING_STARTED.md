@@ -344,6 +344,28 @@ Checked on this image: text, one image (a red square labelled "CAT 42" was read 
 once, streaming, and a 16-concurrent stress run (48 of 48 number answers right, 47 of 48 colour answers; the miss was a reply cut by
 `max_tokens`).
 
+## 1M-token context (4 users, plain decode)
+
+`assets/runtime_spec_b4_1m_c512.json` configures a 1,048,576-token server for 4 concurrent users with plain decode (no speculation). Use it as `SPEC` in step 3; the
+launch is otherwise unchanged. It differs from the 131,072-token spec in: `max_model_len` 1,048,576, `max_num_seqs` 4, no `speculative_config`, `trace_region_size`
+800,000,000 (the tables of a 1M context leave no room for the 1.6 GB trace region), and `DSV41_VLLM_CHUNK` 512 (prefill chunk).
+
+What makes it fit (branch `ssinghal/dsv4p1`): compact RoPE position tables (768 B per position per chip, column-sharded from 262,144 positions), the prefill
+indexer's key FIFO, scores and visibility mask sharded over the 8 mesh columns (from 131,072 index entries; `DSV41_PIDX_SHARD`), dense prefill masks only for the layers that
+run the dense path, the kv-table FIFO shifted in place in row pieces (`DSV41_PF_FIFO_CHUNK`), and one extra eager chunk before the prefill trace capture
+(`DSV41_PF_PRECAPTURE_WARM`).
+
+Measured on one Galaxy (vLLM 0.31, 4 users, plain decode):
+
+| | |
+|---|---|
+| Server ready | 13 min (weight and kernel caches populated) |
+| Sanity requests | `17*23` -> 391, capital of France -> Paris |
+| 100,020-token prompt with a needle at the end | answered correctly (4817); prefill 163.8 s at chunk 512 (412 s at chunk 128) |
+
+Not measured: a prompt close to 1,000,000 tokens (estimated ~12 min of prefill from the 100k run), GSM8K accuracy and the speed table at this configuration, speculative
+decoding (it is off: its draft state does not fit at this context). The prefill kv table is still replicated over the mesh columns.
+
 ## Run the GSM8K evaluation
 
 The accuracy numbers in this guide come from tt-inference-server's `evals` workflow, run from the same image
