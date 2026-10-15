@@ -10,12 +10,13 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "impl/context/metal_env_impl.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/distributed/erisc_bridge_doorbell.hpp"
 #include "tt_metal/distributed/erisc_bridge_packet.hpp"
 #include "tt_metal/distributed/erisc_bridge_placement.hpp"
@@ -107,6 +108,19 @@ std::unique_ptr<H2ELeg> H2ELeg::create(const std::shared_ptr<MeshDevice>& mesh, 
         err = "H2ELeg::create: link_idx out of range for the active eth channels";
         return nullptr;
     }
+    // HeaderT is fixed at zero extension words. Fabric picks 0-3 at runtime, and a longer header
+    // would put our payload where the router expects header -- refuse rather than corrupt frames.
+    if (const size_t want = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(); want != sizeof(HeaderT)) {
+        err = "H2ELeg::create: fabric uses a " + std::to_string(want) + " B packet header, this leg synthesises " +
+              std::to_string(sizeof(HeaderT)) + " B";
+        return nullptr;
+    }
+    // An explicit channel still has to be a router: unchecked, a typo maps an inactive ETH core
+    // and every slot write and doorbell below lands where nothing is listening.
+    if (cfg.eth_chan != Config::kUnsetChan && std::find(chans.begin(), chans.end(), cfg.eth_chan) == chans.end()) {
+        err = "H2ELeg::create: eth_chan " + std::to_string(cfg.eth_chan) + " is not an active fabric eth channel";
+        return nullptr;
+    }
     // The caller's channel wins, as in E2HLeg: link_idx into the active list can name a
     // different router than the one the caller resolved as bridged.
     const uint32_t chan = cfg.eth_chan != Config::kUnsetChan ? cfg.eth_chan : chans.at(cfg.link_idx);
@@ -153,13 +167,15 @@ bool H2ELeg::publish(const BridgeDeliverTask& task) {
     if (im.dev == nullptr) {
         return false;
     }
-    if (!im.credit.has_room(static_cast<uint32_t>(im.outstanding))) {
-        ++im.credit_stalls;
-        return false;  // the ROUTER has not kept up; the caller re-offers
-    }
+    // Validity BEFORE credit: false means "retry" only when first_error() is empty, so rejecting
+    // a bad frame behind a full channel would have the caller re-offer it until the run times out.
     if (task.length == 0) {
         im.fail("H2ELeg::publish: empty frame");
         return false;
+    }
+    if (!im.credit.has_room(static_cast<uint32_t>(im.outstanding))) {
+        ++im.credit_stalls;
+        return false;  // the ROUTER has not kept up; the caller re-offers
     }
     const uint32_t hdr_bytes = sizeof(HeaderT);
     const uint32_t slot_addr = im.rx_base + (im.next_slot % im.rx_slots) * im.slot_bytes;
@@ -188,18 +204,24 @@ bool H2ELeg::publish(const BridgeDeliverTask& task) {
         ok = eb::write_bytes_to_l1(im.env(), im.dev, im.eth_logical, slot_addr, src, task.length);
     } else {
         // Synthesised: a caller with bare payload bytes and no fabric header of its own.
-        const uint32_t payload = std::min<uint32_t>(task.length, im.cfg.page_bytes);
-        if (hdr_bytes + payload > im.slot_bytes) {
+        // Rejected, never clamped: a min() here turns an oversized frame into a short SUCCESS and
+        // the bytes past page_bytes are lost with nothing reported.
+        if (task.length > im.cfg.page_bytes || hdr_bytes > im.slot_bytes ||
+            task.length > im.slot_bytes - hdr_bytes) {
             ++im.oversize;
-            im.fail("H2ELeg::publish: header + payload larger than the receiver slot");
+            im.fail("H2ELeg::publish: header + payload larger than the configured page or receiver slot");
             return false;
         }
+        const uint32_t payload = task.length;
         // No staging copy when aliased: the arena is ordinary host memory the MMIO path reads
         // directly. Safe to split -- the doorbell arms the slot, so only "both before it" matters.
         const bool aliased = im.cfg.alias_region_base != nullptr;
         // Header-sized when the payload is written separately; header+payload when there is
         // no source, so an unaliased caller still gets the zeroed slot it always got.
-        im.scratch.assign((aliased ? hdr_bytes : hdr_bytes + payload) / sizeof(uint32_t), 0);
+        // Rounded UP: the write below is a byte count, so a payload that is not a whole number of
+        // words would otherwise read up to three bytes past the vector.
+        const uint32_t staged = aliased ? hdr_bytes : hdr_bytes + payload;
+        im.scratch.assign((staged + sizeof(uint32_t) - 1) / sizeof(uint32_t), 0);
         if (!eb::make_local_write_header<HeaderT>(
                 im.scratch.data(), im.hal(), im.cfg.dst_noc_x, im.cfg.dst_noc_y, im.cfg.dst_l1_addr, payload)) {
             im.fail("H2ELeg::publish: header build rejected the payload size");
@@ -207,7 +229,7 @@ bool H2ELeg::publish(const BridgeDeliverTask& task) {
         }
         ok = eb::write_bytes_to_l1(
             im.env(), im.dev, im.eth_logical, slot_addr, im.scratch.data(),
-            aliased ? hdr_bytes : hdr_bytes + payload);
+            staged);
         if (ok && aliased) {
             const uint8_t* src = im.cfg.alias_region_base + task.page_offset;  // region-relative
             ok = eb::write_bytes_to_l1(im.env(), im.dev, im.eth_logical, slot_addr + hdr_bytes, src, payload);
