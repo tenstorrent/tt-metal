@@ -65,6 +65,7 @@ DEVICE_STEPS = {
         "attn_residual",
         "ffn_hc",
         "ffn_collapse",
+        "ffn_norm",
     },
 }
 
@@ -307,6 +308,11 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         from models.demos.deepseek_v41_flash_d_p.tt.norm import build_norm
 
         return _hidden_host_fn(mesh, build_norm(mesh, ck, cfg, layer, step))
+    if step == "ffn_norm":
+        from models.demos.deepseek_v41_flash_d_p.tt.norm import build_norm
+
+        # output gathered over axis 1: whole rows, replicated within a mesh row (read back from mesh column 0)
+        return _hidden_to_rows_host_fn(mesh, build_norm(mesh, ck, cfg, layer, step))
     if step == "attn_residual":
         from models.demos.deepseek_v41_flash_d_p.tt.residual import build_residual
 

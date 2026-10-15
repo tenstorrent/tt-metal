@@ -1,0 +1,50 @@
+{
+ "used": [
+  {
+   "id": "DS41-13",
+   "how": "q(x) for the experts reuses tt/quant.fp8_qdq (bit-exact) via TtDistributedRmsNorm.quant instead of a new quantizer",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "kept the attn_norm SFPU-only fp32 chain (mhc_pre_xing_pack + tp_sum) for ffn_norm instead of xing40's rms_norm_pre/post_all_gather FPU path",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-20",
+   "evidence": "models/demos/common/bringup/testing/component.py:350-356 (F73): swap step limit = swap_step_calib x component error, no fixed 2 % cap; entry marked RESOLVED",
+   "cited": true
+  }
+ ],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "DS41-20 rewritten as RESOLVED by F73, citing testing/component.py:350-356"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.ffn_norm",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T16:26:37",
+  "head": "a1b8c019ccd",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.ffn_norm.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py"
+  ]
+ }
+}
