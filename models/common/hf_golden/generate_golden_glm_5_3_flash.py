@@ -103,7 +103,12 @@ What is model-specific, and why it is handled here:
     attn_hc.fn, ...) and concatenates q/k/v_conv1d into conv1d as its converter does. The vision tower and the MTP
     layer (layers.45) are never built into a stage nor read.
   * Memory: the torch chunked KDA materializes [64 heads, N/64 chunks, 64, 64, 128] fp32 intermediates (~4.8 GB
-    each at N = 2304, ~21 GB at N = 10240, a few alive at once); MoE layers hold ~15 GB of expert weights.
+    each at N = 2304, ~21 GB at N = 10240, a few alive at once); MoE layers hold ~15 GB of expert weights. Long ISL:
+    HF_GOLDEN_KDA_CHUNK runs KDA a segment at a time (segmented_kda) and HF_GOLDEN_INDEXER_CHUNK the indexer a slice
+    of query rows at a time (chunked_indexer_forward); both bit-identical, both checked at startup.
+
+    HF_GOLDEN_KDA_CHUNK=4096 HF_GOLDEN_INDEXER_CHUNK=2048 \\
+        python generate_golden_glm_5_3_flash.py --isl 56320 --attn-chunk 2048     # 4.1 min, 89 GB GPU, 117 GB
 
     python generate_golden_glm_5_3_flash.py --isl 10240
     python generate_golden_glm_5_3_flash.py --isl 2304 --num-layers 5 --root /tmp/smoke   # KDA dense, DSA + MoE,
@@ -114,6 +119,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -236,6 +242,150 @@ def torch_kda(modeling) -> str:
     return "transformers torch reference (no fla / causal_conv1d / hub kernel in use)"
 
 
+def segmented_kda(reference, segment: int):
+    """chunk_kimi_delta_attention run on ``segment`` positions at a time, each segment starting from the previous
+    one's final recurrent state. The torch reference holds [heads, N / 64, 64, 64, 128] fp32 intermediates (~118 GB
+    each at N = 56320). Its only cross-chunk dependency is that state, carried in fp32 by its sequential chunk loop,
+    so segments that are whole numbers of its 64-position chunks run the same per-chunk ops on the same inputs.
+    check_segmented_kda compares with the installed reference at startup."""
+
+    def kda(query, key, value, g, beta, chunk_size=64, initial_state=None, output_final_state=False, **kwargs):
+        assert segment % chunk_size == 0, f"KDA segment {segment} must be a multiple of chunk_size {chunk_size}"
+        n = query.shape[1]
+        if n <= segment:
+            return reference(query, key, value, g, beta, chunk_size, initial_state, output_final_state, **kwargs)
+        out, state = [], initial_state
+        for s in range(0, n, segment):
+            sl = slice(s, s + segment)
+            o, state = reference(
+                query[:, sl], key[:, sl], value[:, sl], g[:, sl], beta[:, sl], chunk_size, state, True, **kwargs
+            )
+            out.append(o)
+        return torch.cat(out, dim=1), state if output_final_state else None
+
+    kda.segment = segment
+    return kda
+
+
+def check_segmented_kda(reference, device) -> None:
+    """segmented_kda against the reference on real KDA widths (64 heads x 128), 1000 positions (a padded last chunk),
+    segments that do and do not divide them; on ``device``, since kernel choice is what this guards."""
+    gen = torch.Generator().manual_seed(0)
+    n, h, d = 1000, 64, 128
+    q, k, v = (torch.randn(1, n, h, d, generator=gen).to(device, torch.bfloat16) for _ in range(3))
+    g = (-5 * torch.rand(1, n, h, d, generator=gen)).to(device)
+    beta = torch.rand(1, n, h, generator=gen).to(device, torch.bfloat16)
+    s0 = torch.randn(1, h, d, d, generator=gen).to(device) * 0.1
+    with torch.no_grad():
+        for state in (None, s0):
+            ref = reference(q, k, v, g, beta, 64, state, True, use_qk_l2norm_in_kernel=True)
+            for segment in (128, 384, 4096):
+                got = segmented_kda(reference, segment)(q, k, v, g, beta, 64, state, True, use_qk_l2norm_in_kernel=True)
+                if not (torch.equal(got[0], ref[0]) and torch.equal(got[1], ref[1])):
+                    raise SystemExit(
+                        f"segmented KDA (segment {segment}) differs from this transformers' "
+                        "chunk_kimi_delta_attention: upstream changed; update segmented_kda"
+                    )
+
+
+def chunked_indexer_forward(chunk: int):
+    """Glm5NextTextIndexer.forward with its [B, S, heads, pools] fp32 scores built ``chunk`` query rows at a time
+    (~100 GB whole at N = 56320, plus the [B, S, S] visibility). The body is upstream's; every projection (wq_b, wk,
+    gate, weights_proj) and the pooled keys still run on the whole sequence, since a bf16 linear rounds differently by
+    row count (see the DeepSeek-V4 script). What is sliced reads only its own query row: the fp32 score matmul, the
+    head sum, the visibility, top-k and the tail. check_chunked_indexer compares with the installed upstream."""
+    import torch.nn.functional as F
+
+    def forward(self, hidden_states, q_resid, attention_mask, past_key_values):
+        batch_size, seq_len = hidden_states.shape[:2]
+        hidden_shape = (batch_size, seq_len, -1, self.head_dim)
+
+        q = self.wq_b(q_resid).view(hidden_shape)
+        k = self.k_norm(self.wk(hidden_states)).view(hidden_shape).squeeze(2)
+        gate_scores = F.linear(hidden_states, self.index_kpool_compress_gate)
+        valid_channel = attention_mask.to(k.dtype)[..., None]
+        packed_states = torch.cat([k, gate_scores, valid_channel], dim=-1)
+
+        kv_len = current_length = seq_len
+        if past_key_values is not None:
+            cache_layer = past_key_values.layers[self.layer_idx]
+            packed_states = past_key_values.update_indexer(packed_states, self.layer_idx)
+            kv_len = cache_layer.keys.shape[-2]
+            current_length = cache_layer.get_seq_length()
+
+        valid_keys = packed_states[..., -1].bool()
+        pool_keys, pool_indices, pool_valid = self.get_pooled_states(packed_states=packed_states)
+        pool_keys_t = pool_keys.transpose(-1, -2).float().unsqueeze(1)
+        weights = self.weights_proj(hidden_states.to(self.weights_proj.weight.dtype)).float() * (self.n_heads**-0.5)
+        pool_end = pool_indices[..., -1].clamp(0, kv_len - 1)
+        select_k = min(self.index_topk // self.index_kpool, pool_keys.shape[1])
+        batch_idx = torch.arange(batch_size, device=hidden_states.device)[:, None, None]
+        output_width = self.index_topk + (self.index_kpool - 1 if self.index_kpool_always_select_tail else 0)
+
+        out = []
+        for s in range(0, seq_len, chunk):
+            e = min(s + chunk, seq_len)
+            # get_visible_tokens for query rows s:e (their absolute positions)
+            kv_positions = torch.arange(valid_keys.shape[-1], device=valid_keys.device)
+            q_positions = current_length - seq_len + torch.arange(s, e, device=valid_keys.device)
+            visible_tokens = (kv_positions[None, None, :] <= q_positions[None, :, None]) & valid_keys[:, None, :]
+
+            scores = torch.matmul(q[:, s:e].float(), pool_keys_t)
+            scores = F.relu(scores * self.softmax_scale)
+            index_scores = torch.matmul(weights[:, s:e].unsqueeze(-2), scores).squeeze(-2)
+            del scores
+            pool_visible = visible_tokens.gather(dim=-1, index=pool_end[:, None, :].expand(batch_size, e - s, -1))
+            valid_candidates = pool_visible & pool_valid[:, None]
+            index_scores = index_scores.masked_fill(~valid_candidates, torch.finfo(index_scores.dtype).min)
+
+            selected = index_scores.topk(select_k, dim=-1).indices
+            selected_valid = valid_candidates.gather(-1, selected)
+            selected_indices = pool_indices[batch_idx, selected]
+            topk_indices = selected_indices.flatten(-2)
+            topk_indices = topk_indices.masked_fill(
+                ~selected_valid[..., None].expand_as(selected_indices).flatten(-2), -1
+            )
+            if self.index_kpool_always_select_tail:
+                topk_indices = self.append_visible_tail(topk_indices, visible_tokens, valid_keys)
+            topk_indices = F.pad(topk_indices, (0, output_width - topk_indices.shape[-1]), value=-1)
+            topk_indices = topk_indices[..., :output_width]
+            topk_indices = topk_indices.masked_fill(~attention_mask[:, s:e, None], -1)
+            out.append(topk_indices.to(torch.int32))
+        return torch.cat(out, dim=1)
+
+    forward.chunk = chunk
+    return forward
+
+
+def check_chunked_indexer(upstream, device) -> None:
+    """chunked_indexer_forward copies upstream's body; exit if the installed transformers has changed it. Real index
+    widths (32 heads x 128 from q LoRA 1536 / hidden 4096, pools of 4, top 2048), 3000 rows so selection is really
+    sparse, chunk sizes that do and do not divide them; on ``device``, since kernel choice is what this guards."""
+    from transformers import Glm5NextConfig
+    from transformers.models.glm5_next.modeling_glm5_next import Glm5NextTextIndexer
+
+    cfg = Glm5NextConfig().text_config
+    cfg.hidden_size, cfg.q_lora_rank, cfg.index_n_heads, cfg.index_head_dim = 4096, 1536, 32, 128
+    cfg.index_topk, cfg.index_kpool, cfg.index_kpool_always_select_tail = 2048, 4, True
+    gen = torch.Generator().manual_seed(0)
+    indexer = Glm5NextTextIndexer(cfg, 0)
+    for p in indexer.parameters():
+        p.data = torch.randn(p.shape, generator=gen) * (0.02 if p.dim() == 2 else 0.5)
+    indexer = indexer.to(device, torch.bfloat16)
+    n = 3000
+    h = torch.randn(1, n, 4096, generator=gen).to(device, torch.bfloat16)
+    q_resid = torch.randn(1, n, 1536, generator=gen).to(device, torch.bfloat16)
+    mask = torch.ones(1, n, dtype=torch.bool, device=device)
+    with torch.no_grad():
+        ref = upstream(indexer, h, q_resid, mask, None)
+        for chunk in (256, 1000, 4096):
+            if not torch.equal(chunked_indexer_forward(chunk)(indexer, h, q_resid, mask, None), ref):
+                raise SystemExit(
+                    f"chunked indexer (chunk {chunk}) differs from this transformers' Glm5NextTextIndexer.forward: "
+                    "upstream changed; update chunked_indexer_forward"
+                )
+
+
 class HcHeadNorm(torch.nn.Module):
     """What Glm5NextTextModel does after its last layer, as one stage: norm(hc_head(streams))."""
 
@@ -249,6 +399,11 @@ class HcHeadNorm(torch.nn.Module):
 
 class Glm53FlashGolden(LayerwiseGolden):
     hf_repo = "zai-org/GLM-5.3-Flash-BF16"
+    # No prefix: raw wikitext is what this model predicts best. Wikitext ppl over the same 10100 tokens at isl 10240:
+    # 2.87 raw (top-1 72.8%), 3.06 with "[gMASK]<sop>", 17.5 (top-1 51.8%) framed as its own reply by the chat
+    # template ("[gMASK]<sop><|system|>Reasoning Effort: Max<|user|>Continue this WikiText-2 dump verbatim: ...
+    # <|assistant|><think></think>"), unlike DeepSeek-V4 and MiniMax-M3, which that framing helps.
+    prefix = ""
     recipe = Recipe(
         modules=(
             "self_attn.forget_gate",  # KDA
@@ -313,9 +468,27 @@ class Glm53FlashGolden(LayerwiseGolden):
         from transformers.models.glm5_next import modeling_glm5_next
 
         kda = torch_kda(modeling_glm5_next)  # before any forward, the selftest's reference included
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # HF_GOLDEN_KDA_CHUNK=<positions>: KDA one segment at a time (segmented_kda); a multiple of 64.
+        if segment := int(os.environ.get("HF_GOLDEN_KDA_CHUNK", "0")):
+            reference = modeling_glm5_next.chunk_kimi_delta_attention
+            check_segmented_kda(reference, device)
+            modeling_glm5_next.chunk_kimi_delta_attention = segmented_kda(reference, segment)
+            kda += f", run {segment} positions at a time"
+            print(f"[kda] {segment} positions at a time", flush=True)
+        # HF_GOLDEN_INDEXER_CHUNK=<rows>: DSA indexer scores that many query rows at a time (chunked_indexer_forward).
+        if chunk := int(os.environ.get("HF_GOLDEN_INDEXER_CHUNK", "0")):
+            from transformers.models.glm5_next.modeling_glm5_next import Glm5NextTextIndexer
+
+            upstream = getattr(Glm5NextTextIndexer.forward, "upstream", Glm5NextTextIndexer.forward)
+            check_chunked_indexer(upstream, device)
+            Glm5NextTextIndexer.forward = chunked_indexer_forward(chunk)
+            Glm5NextTextIndexer.forward.upstream = upstream
+            print(f"[indexer] scores built {chunk} query rows at a time", flush=True)
         out = super().generate(args)
         meta = json.loads((out / "metadata.json").read_text())
         meta["kda_implementation"] = kda
+        meta["indexer_chunk"] = chunk or None
         (out / "metadata.json").write_text(json.dumps(meta, indent=2, default=str))
         return out
 

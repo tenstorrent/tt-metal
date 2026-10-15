@@ -65,6 +65,15 @@ Pro (128 heads); 4096 OOMs on Flash (55 GiB fp32 logits per slice). `HF_GOLDEN_I
 only, not the scores (~3.2 GB per CSA layer at isl 56320). isl 56320: Flash 5.6 min, 83 GB. The 4 mHC streams make
 hidden states large: [N, 4, hidden] per layer, 3.2 GB per Pro layer.
 
+**GLM-5.3-Flash at long ISL:** transformers' torch KDA holds [64 heads, N / 64, 64, 64, 128] fp32 intermediates
+(~118 GB each at isl 56320) and the DSA indexer [N, 32 heads, N / 4] fp32 pool scores (~100 GB).
+`HF_GOLDEN_KDA_CHUNK=4096` runs KDA 4096 positions at a time, carrying its fp32 recurrent state (the reference's only
+cross-chunk dependency); `HF_GOLDEN_INDEXER_CHUNK=2048` scores 2048 query rows at a time, every projection still on
+the whole sequence. Both are checked against the installed transformers at startup, and the trace is bit-identical to
+the unchunked one (layers 0-8 at isl 10240, all 66 tensors). It needs no prefix: wikitext ppl at isl 10240 is 2.87
+raw, 3.06 with `[gMASK]<sop>` and 17.5 under its chat template. isl 56320 on one H200 with `--attn-chunk 2048`: 4.1
+min from cached weights, 89 GB GPU peak, 117 GB on disk (70 GB trimmed to 15 hidden layers).
+
 **`--device cuda` under torch 2.11:** `torch.cuda.set_device` rejects a device without an index; pass `cuda:0`.
 
 `generate_golden_whole_model.py` is the original script behind the Qwen, Llama and Mistral traces. It loads the whole
