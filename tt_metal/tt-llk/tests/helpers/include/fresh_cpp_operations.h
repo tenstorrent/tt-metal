@@ -279,9 +279,18 @@ __attribute__((noinline)) void calculate_add_sub_int_fresh_cpp()
 #pragma GCC unroll 8
         for (int row = 0; row < ITERATIONS; ++row)
         {
-            const sfpi::vInt a                              = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
-            const sfpi::vInt b                              = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
-            sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>() = IS_ADD ? a + b : a - b;
+            // Raw sign-magnitude bits.  For every pattern x, smag_to_int (x)
+            // == abs (x) + (x & 0x80000000) mod 2^32, where abs is the
+            // two's-complement SFPABS (0x80000000, sign-magnitude -0, stays
+            // put and the added sign bit wraps it to 0).  The two sign terms
+            // sum to (a ^ b) & 0x80000000 mod 2^32, so the conversions fold
+            // into one sign flip of the magnitude sum.
+            const sfpi::vInt a  = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+            const sfpi::vInt b  = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::I32>();
+            const sfpi::vInt ma = sfpi::as<sfpi::vInt>(sfpi::abs(a));
+            const sfpi::vInt mb = sfpi::as<sfpi::vInt>(sfpi::abs(b));
+            const sfpi::vInt d  = IS_ADD ? ma + mb : ma - mb;
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>() = d ^ ((a ^ b) & sfpi::vInt(static_cast<int>(0x80000000u)));
             sfpi::dst_reg++;
         }
         ::_llk_math_eltwise_sfpu_inc_dst_face_addr_();
