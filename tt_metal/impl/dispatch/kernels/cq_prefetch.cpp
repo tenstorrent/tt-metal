@@ -2229,6 +2229,9 @@ uint32_t process_exec_buf_cmd(
             cmd_ptr += stride;
         }
     }
+    // A mesh trace buffer is sized for its longest device range, so pages past this device's EXEC_BUF_END can still be
+    // in flight into cmddat_q. Drain them before the host commands that follow are fetched into the same space.
+    noc_async_read_barrier_with_trid(1);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
