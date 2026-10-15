@@ -31,8 +31,7 @@
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
 namespace {
-// Quasar has one NOC and no torus, so a multicast rectangle is always given low corner to high, whatever NOC
-// the WH/BH start/end swaps assumed (preferred_noc_for_dram_write returns NOC_1 on Quasar too; see #48552).
+// Quasar has one NOC and no torus: a multicast rectangle always runs low corner to high (see #48552).
 void quasar_ascending_mcast_rect(tt::tt_metal::CoreCoord& start, tt::tt_metal::CoreCoord& end) {
     const tt::tt_metal::CoreCoord lo{std::min(start.x, end.x), std::min(start.y, end.y)};
     const tt::tt_metal::CoreCoord hi{std::max(start.x, end.x), std::max(start.y, end.y)};
