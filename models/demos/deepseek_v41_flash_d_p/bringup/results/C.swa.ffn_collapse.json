@@ -1,180 +1,180 @@
 {
  "metrics": {
   "auto_ffn_collapse_L00_big_bias": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_big_ratio_max": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 1.0
   },
   "auto_ffn_collapse_L00_big_ratio_min": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 1.0
   },
   "auto_ffn_collapse_L00_big_rel": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_big_rel_limit": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.03
   },
   "auto_ffn_collapse_L00_big_row": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_layer24_bias": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_layer24_ratio_max": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 1.0
   },
   "auto_ffn_collapse_L00_layer24_ratio_min": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 1.0
   },
   "auto_ffn_collapse_L00_layer24_rel": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_layer24_rel_limit": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.03
   },
   "auto_ffn_collapse_L00_layer24_row": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_mixed_bias": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_mixed_ratio_max": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 1.0
   },
   "auto_ffn_collapse_L00_mixed_ratio_min": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 1.0
   },
   "auto_ffn_collapse_L00_mixed_rel": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_mixed_rel_limit": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.03
   },
   "auto_ffn_collapse_L00_mixed_row": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_small_bias": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_small_ratio_max": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 1.0
   },
   "auto_ffn_collapse_L00_small_ratio_min": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 1.0
   },
   "auto_ffn_collapse_L00_small_rel": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_small_rel_limit": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.03
   },
   "auto_ffn_collapse_L00_small_row": {
-   "t": "2026-10-15T16:14:19",
+   "t": "2026-10-15T23:52:36",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_vs_cpu_bias": {
-   "t": "2026-10-15T16:14:18",
+   "t": "2026-10-15T23:52:35",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_vs_cpu_col": {
-   "t": "2026-10-15T16:14:18",
+   "t": "2026-10-15T23:52:35",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_vs_cpu_col_index": {
-   "t": "2026-10-15T16:14:18",
+   "t": "2026-10-15T23:52:35",
    "value": 0
   },
   "auto_ffn_collapse_L00_vs_cpu_col_limit": {
-   "t": "2026-10-15T16:14:18",
-   "value": 0.01791144348680973
+   "t": "2026-10-15T23:52:35",
+   "value": 0.01769886165857315
   },
   "auto_ffn_collapse_L00_vs_cpu_ratio_max": {
-   "t": "2026-10-15T16:14:18",
+   "t": "2026-10-15T23:52:35",
    "value": 1.0
   },
   "auto_ffn_collapse_L00_vs_cpu_ratio_min": {
-   "t": "2026-10-15T16:14:18",
+   "t": "2026-10-15T23:52:35",
    "value": 1.0
   },
   "auto_ffn_collapse_L00_vs_cpu_rel": {
-   "t": "2026-10-15T16:14:18",
+   "t": "2026-10-15T23:52:35",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_vs_cpu_rel_limit": {
-   "t": "2026-10-15T16:14:18",
-   "value": 0.004477860871702433
+   "t": "2026-10-15T23:52:35",
+   "value": 0.004424715414643288
   },
   "auto_ffn_collapse_L00_vs_cpu_row": {
-   "t": "2026-10-15T16:14:18",
+   "t": "2026-10-15T23:52:35",
    "value": 0.0
   },
   "auto_ffn_collapse_L00_vs_golden_bias": {
-   "t": "2026-10-15T16:14:19",
-   "value": 4.267692565917969e-05
+   "t": "2026-10-15T23:52:36",
+   "value": 2.5987625122070312e-05
   },
   "auto_ffn_collapse_L00_vs_golden_col": {
-   "t": "2026-10-15T16:14:19",
-   "value": 0.002884830581024289
+   "t": "2026-10-15T23:52:36",
+   "value": 0.002843944588676095
   },
   "auto_ffn_collapse_L00_vs_golden_col_index": {
-   "t": "2026-10-15T16:14:19",
-   "value": 4549
+   "t": "2026-10-15T23:52:36",
+   "value": 3576
   },
   "auto_ffn_collapse_L00_vs_golden_col_limit": {
-   "t": "2026-10-15T16:14:19",
-   "value": 0.028071433305740356
+   "t": "2026-10-15T23:52:36",
+   "value": 0.027691330760717392
   },
   "auto_ffn_collapse_L00_vs_golden_ratio_max": {
-   "t": "2026-10-15T16:14:19",
-   "value": 1.0021343231201172
+   "t": "2026-10-15T23:52:36",
+   "value": 1.0021417140960693
   },
   "auto_ffn_collapse_L00_vs_golden_ratio_min": {
-   "t": "2026-10-15T16:14:19",
-   "value": 0.9976403117179871
+   "t": "2026-10-15T23:52:35",
+   "value": 0.9979222416877747
   },
   "auto_ffn_collapse_L00_vs_golden_rel": {
-   "t": "2026-10-15T16:14:19",
-   "value": 0.0025399976875633
+   "t": "2026-10-15T23:52:35",
+   "value": 0.0024981172755360603
   },
   "auto_ffn_collapse_L00_vs_golden_rel_limit": {
-   "t": "2026-10-15T16:14:19",
-   "value": 0.007017858559265733
+   "t": "2026-10-15T23:52:36",
+   "value": 0.006922832690179348
   },
   "auto_ffn_collapse_L00_vs_golden_row": {
-   "t": "2026-10-15T16:14:19",
-   "value": 0.003408607095479965
+   "t": "2026-10-15T23:52:35",
+   "value": 0.0032153641805052757
   },
   "det_ffn_collapse_L00": {
-   "t": "2026-10-15T16:14:21",
+   "t": "2026-10-15T23:52:38",
    "value": 1.0
   },
   "pcc_ffn_collapse_L00": {
-   "t": "2026-10-15T16:14:18",
-   "value": 0.9999967716350429
+   "t": "2026-10-15T23:52:35",
+   "value": 0.9999968779259946
   }
  },
  "task": "C.swa.ffn_collapse"
