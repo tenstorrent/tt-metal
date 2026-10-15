@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.utility_functions import is_quasar
 
 from .config import AttentionConfig, ProgramConfig
 from .operations import (
@@ -144,7 +145,10 @@ def prefill_forward(
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
 
     # Scaled dot-product attention
-    tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
+    # The mainline SDPA ops build DataMovementKernel kernels, which Quasar does not support. The
+    # ttnn.experimental.quasar.transformer versions take the same arguments.
+    sdpa_ops = ttnn.experimental.quasar.transformer if is_quasar() else ttnn.transformer
+    tt_sdpa_out = sdpa_ops.scaled_dot_product_attention(
         tt_q,
         tt_k,
         tt_v,
