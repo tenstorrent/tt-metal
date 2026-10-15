@@ -1018,6 +1018,19 @@ std::optional<std::string> add_exit_node_constraints(
                 const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
                 auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
                 if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
+                    // RELAXED (#56762): a device-level connection with no physical exit nodes is logical-only too.
+                    if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                        log_warning(
+                            tt::LogFabric,
+                            "Relaxed mode: requested inter-mesh connection from fabric node (mesh {}, chip {}) toward "
+                            "logical mesh {} has NO physical exit nodes ({} logical channel(s) requested); the "
+                            "connection is logical-only and traffic must use the host interconnect",
+                            fabric_node_id.mesh_id.get(),
+                            fabric_node_id.chip_id,
+                            dst_logical_mesh.get(),
+                            num_logical_exit_nodes_assigned);
+                        continue;
+                    }
                     return fmt::format(
                         "no physical exit ASICs toward physical mesh {} (logical destination mesh {}) for "
                         "fabric node (mesh {}, chip {})",
