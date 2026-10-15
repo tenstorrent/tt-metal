@@ -594,11 +594,14 @@ CleanupResult RuntimeImpl::cleanup(SessionId id, std::chrono::milliseconds timeo
     {
         const std::lock_guard<std::mutex> lock(sessions_mutex_);
         sessions_.erase(id.tile);
+        if (exclusive_ == id.tile) {
+            exclusive_.reset();
+        }
     }
     return result;
 }
 
-EnqueueResult RuntimeImpl::enqueue(X280Tile& tile, const ActiveRunRequest& request) {
+EnqueueResult RuntimeImpl::enqueue(X280Tile& tile, const ActiveRunRequest& request, bool exclusive) {
     EnqueueResult result;
     auto& target = *tile.impl_;
     if (target.runtime_ != this) {
@@ -621,13 +624,36 @@ EnqueueResult RuntimeImpl::enqueue(X280Tile& tile, const ActiveRunRequest& reque
     // that lands in it out of the write path entirely: reaching the registration
     // below and colliding there would mean the hart records had already been
     // cleared, latching a healthy tile unhealthy over transient bookkeeping.
+    //
+    // An exclusive submission is admitted only when no session is registered
+    // or being submitted anywhere in the runtime, and refuses every other
+    // admission until its session is reaped.
+    bool registered = false;
     {
         const std::lock_guard<std::mutex> lock(sessions_mutex_);
-        if (sessions_.contains(tile_key(target.id()))) {
+        if (sessions_.contains(tile_key(target.id())) || exclusive_ ||
+            (exclusive && (submitting_ > 0 || !sessions_.empty()))) {
             result.outcome = EnqueueOutcome::Busy;
             return result;
         }
+        ++submitting_;
+        if (exclusive) {
+            exclusive_ = tile_key(target.id());
+        }
     }
+    struct Admission {
+        RuntimeImpl& runtime;
+        bool exclusive;
+        const bool& registered;
+        ~Admission() {
+            const std::lock_guard<std::mutex> lock(runtime.sessions_mutex_);
+            --runtime.submitting_;
+            if (exclusive && !registered) {
+                runtime.exclusive_.reset();
+            }
+        }
+    } const admission{*this, exclusive, registered};
+
     if (request.cleanup_timeout.count() <= 0) {
         result.error = "cleanup_timeout is " + std::to_string(request.cleanup_timeout.count()) +
                        " ms; the runtime's destructor sweep requires a positive timeout";
@@ -636,7 +662,6 @@ EnqueueResult RuntimeImpl::enqueue(X280Tile& tile, const ActiveRunRequest& reque
 
     const SessionId id = mint_session_id(tile_key(target.id()));
     bool attached = false;
-    bool registered = false;
     bool records_cleared = false;
 
     try {

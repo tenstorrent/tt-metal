@@ -154,6 +154,7 @@ add_library(
     src/device/x280_state.cpp
     src/device/x280_tile_state.cpp
     src/device/x280_noc_window.cpp
+    src/device/x280_pinned_input_record.cpp
 )
 target_include_directories(x280_state PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
@@ -168,6 +169,7 @@ add_library(
     src/device/x280_pll.cpp
     src/device/x280_lim_ecc.cpp
     src/device/x280_boot.cpp
+    src/device/x280_pinned_input_prepare.cpp
 )
 target_link_libraries(x280_device PUBLIC x280_state PRIVATE TT::Metalium)
 target_include_directories(
@@ -219,7 +221,7 @@ add_test(NAME x280_runtime_host_tests COMMAND x280_runtime_host_tests)
 
 # _x280_device_test(<name> <source>...): a gtest executable over x280_device and Metal. Executables
 # stay separate where a test must not share a process: prime is destructive, active_failure
-# retains a fault, and shape and pll change chip state behind an opt-in.
+# retains a fault, and shape, pll and pinned_input change chip state behind an opt-in.
 function(_x280_device_test name)
     add_executable(${name} ${ARGN})
     target_include_directories(
@@ -254,6 +256,7 @@ _x280_device_test(x280_runtime_coordinate_tests tests/device/test_x280_coordinat
 _x280_device_test(x280_active_failure_test tests/device/test_x280_active_failure_hw.cpp)
 _x280_device_test(x280_prime_test tests/device/test_x280_prime_hw.cpp)
 _x280_device_test(x280_shape_test tests/device/test_x280_shape_hw.cpp)
+_x280_device_test(x280_pinned_input_test tests/device/test_x280_pinned_input_hw.cpp)
 _x280_device_test(x280_arc_test tests/device/test_x280_arc_hw.cpp)
 _x280_device_test(x280_pll_test tests/device/test_x280_pll_hw.cpp)
 

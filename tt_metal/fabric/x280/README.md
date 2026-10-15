@@ -124,7 +124,8 @@ by CMake); an `X280_*_FW_IMAGE` variable names another file (§ 6). A test that
 changes the chip for the rest of a reset lifetime, or can wedge it, lives in
 its own executable and runs only when its `X280_ALLOW_*` variable is `1`:
 `x280_prime_test` (`X280_ALLOW_LIM_ECC_PRIME`), `x280_shape_test`
-(`X280_ALLOW_LIM_SHAPE_CHANGE`), `x280_active_failure_test`
+(`X280_ALLOW_LIM_SHAPE_CHANGE`), `x280_pinned_input_test`
+(`X280_ALLOW_PINNED_INPUT_PREPARE`), `x280_active_failure_test`
 (`X280_ALLOW_ACTIVE_SESSION_FAILURE`) and `x280_pll_test`
 (`X280_ALLOW_PLL_SLEW`).
 
@@ -265,11 +266,15 @@ reserved lines; way 0 remains general-purpose. The required partition is
 `WAYENABLE=1` (14 LIM ways). Preparation does not create this partition, prime
 ECC, boot resident idle, reset the ASIC, or flush caches.
 
-An operator must first establish that partition and resident idle, fresh cache
-placement for the reserved addresses, and exclusive device ownership covering
-the entire sequence of benchmark executables. Neither matching input bytes nor
-mask readback proves fresh placement. The runtime checks neither prerequisite;
-the caller establishes both.
+An operator must first establish that partition and resident idle, and
+exclusive device ownership covering the entire sequence of benchmark
+executables. Neither matching input bytes nor mask readback proves fresh cache
+placement for the reserved addresses, so the runtime records preparation in the
+tile's 64 B general-purpose scratch (`0x2001_0100`), which survives Metal and
+runtime opens and is cleared by an ASIC reset (observed; the hardware
+documentation gives no reset value). An empty record shows that
+no preparation has run since the reset; it does not show that nothing else
+cached those addresses, which exclusive ownership covers.
 
 Prime, open and boot as in "Using the X280 runtime", opening with
 `LimEccPrimingPolicy::RequirePrepared` and `LimShape{14}` so shape provisioning
@@ -277,11 +282,20 @@ cannot silently run the ECC primer. The runtime applies an increase-only shape
 only while every L2CPU remains in reset; it refuses a request that would expand
 LIM.
 
-The `x280_images` target builds the two operation-specific images; no
-executable in this tree runs them. Each runs as
-an active image on a tile in confirmed healthy resident idle, with no other
-session live: prepare once, run the compatible pipeline configurations
-sequentially on the same tile, then tear down.
+`X280Tile::prepare_pinned_input` prepares once per ASIC-reset lifetime, taking
+the path of `firmware-pinned-input-prepare.bin` from its caller. It refuses
+without writing unless the runtime is at 14 LIM ways, the tile's `WAYENABLE` is
+1 and the runtime owns no live session on any tile; while its own session is
+live, `X280Runtime::enqueue` refuses every tile. From an empty record it
+records an aborted attempt, runs the image as an active session on the tile in
+resident idle, requires hart 0 to report prepared and harts 1-3 no-op, restores
+resident idle, then records the prepared region. A record already prepared at
+this shape returns `AlreadyPrepared`, so each later executable calls it and
+reuses the region. An aborted, corrupt or unreadable record, or one prepared at
+another shape, returns `ResetRequired`. `X280Tile::pinned_input_state` reads the
+record. Run the compatible pipeline configurations on the prepared tile.
+Concurrent calls on one tile in one process are serialised; nothing serialises
+across processes.
 
 ID 7 uses the first 96-byte header in this region at `0x0A000AC0`. Its
 `decide_plain` configuration reseeds that complete header before warmup; it
@@ -304,18 +318,18 @@ members and both transport-bandwidth executables run at the reset shape, so a
 chip left at 14 LIM ways skips them until an ASIC reset. Prepare every
 participating tile under the same external ownership.
 
-Final teardown requires confirmed resident idle and the pinned policy. It
-re-enables only way 1's replacement bit, preserving other bits, without flushing
-the region or changing `WAYENABLE`. The device remains at 14 LIM ways; restoring
-the default partition requires separately authorized reset/provisioning.
-Do not run cache-flush, repartition, ECC-priming, or conflicting Zero Device
-experiments inside this prepared sequence.
+There is no teardown: an ASIC reset (`tt-smi -r <device>`) clears the pinning,
+the 14-way partition and the record together. The `x280_images` target also
+builds `firmware-pinned-input-teardown.bin`, which re-enables only way 1's
+replacement bit without flushing the region or changing `WAYENABLE`; nothing in
+this tree runs it. Do not run cache-flush, repartition, ECC-priming, or
+conflicting Zero Device experiments inside this prepared sequence.
 
-A failed preparation, unconfirmed cleanup, or process crash aborts the prepared
-sequence. Do not continue or use normal teardown as recovery: retain exclusive
-ownership and perform explicit recovery/repreparation before reuse. Closing a
-benchmark process neither unpins the region nor preserves a device lock
-for the next executable.
+A preparation that fails after its image may have run, including a failed
+cleanup or a process crash, leaves the aborted record, and every later
+`prepare_pinned_input` returns `ResetRequired` until an ASIC reset. Closing a
+benchmark process neither unpins the region nor preserves a device lock for the
+next executable.
 
 ### Runtime ownership
 
@@ -659,7 +673,7 @@ ctest --test-dir build -R x280      # image placement, pinned-input guards, host
 |---|---|---|
 | `firmware-lim-idle.bin` | `src/lim_idle.c` | resident idle, the runtime prerequisite |
 | `firmware.bin` | `src/main.c` | active session success image (the sentinel) |
-| `firmware-pinned-input-prepare.bin`, `firmware-pinned-input-teardown.bin` | `src/x280_pinned_input.c` | pinned-input preparation and teardown (§ 1); no executable in this tree runs them |
+| `firmware-pinned-input-prepare.bin`, `firmware-pinned-input-teardown.bin` | `src/x280_pinned_input.c` | pinned-input preparation, run by `X280Tile::prepare_pinned_input`, and teardown, which nothing in this tree runs (§ 1) |
 | `firmware-atomic-bench.bin` | `src/atomic_bench.c` | cross-hart atomics micro-benchmark (§ 7); in the active-image contract set |
 | `firmware-active-session-fault.bin` | `src/active_session_fault.c` | traps and CEASEs hart 2, for `x280_active_failure_test` only |
 
@@ -698,7 +712,7 @@ broken path list fails on a laptop.
 Every runtime device test takes its image from `build/x280/` unless its
 variable names another (`X280_ACTIVE_FW_IMAGE` for `X280ActiveHw`, which runs
 the sentinel; `X280_ATOMIC_BENCH_FW_IMAGE`; `X280_ACTIVE_FAULT_FW_IMAGE`;
-`X280_IDLE_FW_IMAGE` for the resident idle the active fixtures boot), so a
+`X280_PINNED_INPUT_PREPARE_FW_IMAGE`; `X280_IDLE_FW_IMAGE` for the resident idle the active fixtures boot), so a
 run from the build needs none of them. Set `X280_ACTIVE_FW_IMAGES` to exercise
 the guard:
 

@@ -64,6 +64,13 @@ constexpr uint64_t kNocTlb2mConfigBase = 0x2FF00000ull;
 constexpr uint64_t kL2cpuRegBase = 0xFFFFF7FEFFF10000ull;
 constexpr uint64_t kResetVectorStride = 8;  // per hart: {lo, hi}
 
+// 64 B general-purpose scratch, x280 physical 0x2001_0100, at its high alias
+// (tt-isa-documentation BlackholeA0/L2CPUTile/MemoryMap.md, "External
+// peripherals"). Survives Metal and runtime opens; tt-smi -r clears it
+// (observed; the documentation gives no reset value).
+constexpr uint64_t kL2cpuScratchBase = kL2cpuRegBase + 0x100;
+constexpr uint64_t kL2cpuScratchBytes = 64;
+
 // --- Priming --------------------------------------------------------------
 
 // Prime the full pinned 128 KiB L3 piece. Instruction fetch from an unprimed

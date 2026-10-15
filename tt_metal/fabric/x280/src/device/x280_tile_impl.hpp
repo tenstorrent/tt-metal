@@ -12,6 +12,7 @@
 
 #include "x280/device/x280_tile.hpp"
 #include "x280_chip_impl.hpp"
+#include "x280_pinned_input_record.hpp"
 #include "x280_runtime_impl.hpp"
 
 #include <cstddef>
@@ -55,6 +56,9 @@ public:
     // cleared in software.
     bool healthy() const;
     std::optional<std::array<HartState, kHartsPerTile>> failure_hartstates() const;
+
+    PinnedInputState pinned_input_state() const;
+    PinnedInputPrepareResult prepare_pinned_input(const PinnedInputPrepareRequest& request);
 
     // Runtime initialization owns sequencing and recovery reporting. These
     // perform the one-tile body under the chip lock the caller holds.
@@ -146,6 +150,12 @@ private:
     // nothing that will republish them.
     void zero_hart_protocol_unlocked();
 
+    // Caller must hold ChipImpl::lock(). The pinned-input record in the tile's
+    // general-purpose scratch, one 32-bit register access per word; the write
+    // covers words [first, end).
+    PinnedInputRecord read_pinned_input_record_unlocked() const;
+    void write_pinned_input_words_unlocked(const PinnedInputRecord& words, size_t first, size_t end);
+
     RuntimeImpl* runtime_;
     ChipImpl* chip_;
     TileIdentity identity_;
@@ -154,6 +164,9 @@ private:
     SessionId active_session_id_;
     bool healthy_ = true;
     std::optional<std::array<HartState, kHartsPerTile>> failure_hartstates_;
+    // Serialises pinned_input_state and prepare_pinned_input; taken before the
+    // chip lock.
+    mutable std::mutex pinned_input_mutex_;
 };
 
 // Device tests need to create reversible hardware states that the semantic

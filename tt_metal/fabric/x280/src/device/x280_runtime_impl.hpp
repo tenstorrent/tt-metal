@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 namespace tt::tt_metal::distributed {
@@ -56,7 +57,11 @@ public:
     // releases it and only then restores, because the restoration polls the
     // tile, and re-takes it afterwards to erase. sessions, session and
     // session_live take sessions_mutex_ alone and touch no hardware.
-    EnqueueResult enqueue(X280Tile& tile, const ActiveRunRequest& request);
+    //
+    // An exclusive enqueue is refused while any session is registered or being
+    // submitted anywhere in this runtime, and while its own session is live
+    // every other enqueue is refused Busy.
+    EnqueueResult enqueue(X280Tile& tile, const ActiveRunRequest& request, bool exclusive = false);
     std::vector<SessionId> sessions() const;
     X280ActiveSession& session(SessionId id);
     bool session_live(SessionId id) const;
@@ -79,17 +84,22 @@ private:
     // and is erased only once its restoration has finished, so no
     // active-protocol traffic is ever in flight for a tile absent from this map.
     //
-    // sessions_mutex_ guards the map, ActiveSessionImpl's restoring_ flag and
-    // next_session_id_, and is never held across device I/O. Registration in
-    // enqueue() takes it under the chip lock, so chip then sessions is the one
-    // permitted nesting; taking the chip lock under this one would deadlock
-    // against it.
+    // sessions_mutex_ guards the map, ActiveSessionImpl's restoring_ flag,
+    // next_session_id_, submitting_ and exclusive_, and is never held across
+    // device I/O. Registration in enqueue() takes it under the chip lock, so
+    // chip then sessions is the one permitted nesting; taking the chip lock
+    // under this one would deadlock against it.
     std::map<TileKey, std::unique_ptr<X280ActiveSession>> sessions_;
     mutable std::mutex sessions_mutex_;
 
     // Only distinguishes successive executions on one tile, which the tile key
     // cannot.
     uint64_t next_session_id_ = 1;
+
+    // Enqueues admitted and not yet returned, and the tile holding an exclusive
+    // admission until its session is reaped.
+    size_t submitting_ = 0;
+    std::optional<TileKey> exclusive_;
 };
 
 }  // namespace x280::detail

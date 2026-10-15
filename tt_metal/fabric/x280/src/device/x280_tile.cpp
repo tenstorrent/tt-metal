@@ -651,4 +651,10 @@ std::optional<std::array<HartState, kHartsPerTile>> X280Tile::last_failure() con
     return impl_->failure_hartstates();
 }
 
+PinnedInputState X280Tile::pinned_input_state() const { return impl_->pinned_input_state(); }
+
+PinnedInputPrepareResult X280Tile::prepare_pinned_input(const PinnedInputPrepareRequest& request) {
+    return impl_->prepare_pinned_input(request);
+}
+
 }  // namespace x280

@@ -610,6 +610,20 @@ TEST_F(X280DeviceHw, ColdBootRefusedWithoutOptIn) {
     EXPECT_EQ(tile_handle_->inspect().reset_released, state.reset_released);
 }
 
+// The record sits in the L2CPU scratch, which an ASIC reset clears. This
+// fixture opens at the reset shape, which is reachable only through a reset
+// since WayEnable is increase-only, and a prepare needs WayEnable 1: so the
+// record must read None, and the refusal must leave it as found.
+TEST_F(X280DeviceHw, PinnedInputPrepareRefusesTheResetShapeWithoutWriting) {
+    const auto before = tile_handle_->pinned_input_state();
+    EXPECT_EQ(before.status, PinnedInputStatus::None) << describe(before);
+
+    const auto result = tile_handle_->prepare_pinned_input(PinnedInputPrepareRequest{});
+    EXPECT_EQ(result.outcome, PinnedInputPrepareOutcome::WrongShape) << describe(result);
+    EXPECT_FALSE(result.enqueue.has_value());
+    EXPECT_EQ(tile_handle_->pinned_input_state().words, before.words);
+}
+
 // A tile out of reset without valid resident idle cannot be recovered in
 // software: harts leave reset only once per chip-reset lifetime. The component
 // must say so and stop — above all it must not try to reassert reset.

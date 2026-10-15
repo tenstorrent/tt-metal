@@ -132,6 +132,104 @@ struct NocWindowResult {
     NocWindowWords words;
 };
 
+/** What a tile's pinned-input record says about the cached Zero Device region
+ * at [X280_PINNED_INPUT_BASE, X280_PINNED_INPUT_END). */
+enum class PinnedInputStatus {
+    /** No prepare has been attempted since the last ASIC reset. */
+    None,
+    Prepared,
+    /** A prepare started and never recorded success; the region's contents and
+     * the way masks are unknown until an ASIC reset. */
+    Aborted,
+    /** An unrecognised record, a non-zero reserved word, or some but not all
+     * words all ones. */
+    Corrupt,
+    /** Every word read all ones: the tile is unclocked or the transport is
+     * broken. Never a statement about the region. */
+    InvalidObservation,
+};
+
+const char* to_string(PinnedInputStatus status);
+
+/** 32-bit words in the pinned-input record: the tile's whole 64 B scratch. */
+inline constexpr size_t kPinnedInputRecordWords = 16;
+
+/** The pinned-input record as read from the tile's 64 B general-purpose
+ * scratch, which only an ASIC reset clears. */
+struct PinnedInputState {
+    PinnedInputStatus status = PinnedInputStatus::InvalidObservation;
+    /** The recorded shape and span, set for Prepared and Aborted. */
+    uint32_t wayenable = 0;
+    uint64_t region_base = 0;
+    uint64_t region_bytes = 0;
+    /** The sixteen scratch words as read. */
+    std::array<uint32_t, kPinnedInputRecordWords> words{};
+};
+
+std::string describe(const PinnedInputState& state);
+
+enum class PinnedInputPrepareOutcome {
+    /** This call prepared the region and recorded it. */
+    Prepared,
+    /** The record already matched the fixed region at this shape; nothing was
+     * written. */
+    AlreadyPrepared,
+    /** The runtime is not at kPreparedLimWays or the tile's WayEnable is not
+     * X280_PINNED_INPUT_WAYENABLE. Nothing was written. */
+    WrongShape,
+    /** The runtime owned a live or submitting session on some tile. The record
+     * is left as found. */
+    Busy,
+    /** The record is Aborted, Corrupt, InvalidObservation, or Prepared at
+     * another shape or span. Nothing was written; an ASIC reset
+     * (tt-smi -r <device>) clears it. */
+    ResetRequired,
+    /** WayEnable read all ones. Nothing was written. */
+    InvalidObservation,
+    /** A timeout in the request was not positive. Nothing was read or
+     * written. */
+    InvalidRequest,
+    /** This attempt failed. `state` says what the record now holds: None when
+     * the image never ran, Aborted once it may have. */
+    Failed,
+};
+
+const char* to_string(PinnedInputPrepareOutcome outcome);
+
+struct PinnedInputPrepareRequest {
+    /** The prepare image (firmware-pinned-input-prepare.bin), supplied by the
+     * caller. The runtime hard-codes no build-tree location. */
+    std::string image_path;
+    /** Bounds the wait for all four harts' results. Must be positive. */
+    std::chrono::milliseconds wait_timeout{3000};
+    /** Bounds the restoration to resident idle. Must be positive. */
+    std::chrono::milliseconds cleanup_timeout{3000};
+};
+
+struct PinnedInputPrepareResult {
+    PinnedInputPrepareOutcome outcome = PinnedInputPrepareOutcome::Failed;
+    /** The record as last read by this call. */
+    PinnedInputState state;
+    /** The request's timeouts. */
+    std::chrono::milliseconds wait_timeout{0};
+    std::chrono::milliseconds cleanup_timeout{0};
+    /** What the shape check saw. */
+    uint8_t runtime_lim_ways = 0;
+    uint32_t raw_wayenable = 0;
+    /** Set once the image was submitted. */
+    std::optional<EnqueueResult> enqueue;
+    /** Set when the submission attached a session and `enqueue` reports
+     * Enqueued. */
+    std::optional<WaitResult> wait;
+    /** Set whenever the submission attached a session. */
+    std::optional<CleanupResult> cleanup;
+    std::optional<TileState> final_state;
+    /** Transport or exception text. Empty unless the outcome is Failed. */
+    std::string error;
+};
+
+std::string describe(const PinnedInputPrepareResult& result);
+
 /**
  * Whether `window` was read and read back as a cleared entry: all four words
  * zero. Every field counts, not just the decoded ones, so a partial clear that
@@ -196,6 +294,39 @@ public:
     // The four-hart snapshot saved when health was lost. Outlives the session
     // that recorded it, which cleanup() reaps.
     std::optional<std::array<HartState, kHartsPerTile>> last_failure() const;
+
+    /**
+     * Reads the tile's pinned-input record. Read-only; blocks for sixteen
+     * register reads.
+     *
+     * Serialised with prepare_pinned_input() on this tile within this process;
+     * nothing serialises across processes.
+     *
+     * @throws std::runtime_error if the caller-owned MeshDevice has been closed
+     *         or dropped, or on a transport error.
+     */
+    PinnedInputState pinned_input_state() const;
+
+    /**
+     * Prepares the fixed pinned-input region on this tile once per ASIC-reset
+     * lifetime and records it in the tile's scratch, so a later process at the
+     * same shape gets AlreadyPrepared. There is no teardown: an ASIC reset
+     * (tt-smi -r <device>) clears the region's pinning and the record together.
+     *
+     * Leaves the record as found for every outcome but Prepared and Failed. From
+     * None it records Aborted, runs the image as an active session (hart 0 must
+     * report X280_PINNED_INPUT_RESULT_PREPARED, harts 1-3
+     * X280_PINNED_INPUT_RESULT_NOOP_HART), restores and confirms resident
+     * idle, then records Prepared. A failure after the image may have run
+     * leaves Aborted.
+     *
+     * Blocks for at most the request's two timeouts plus register I/O. While
+     * the prepare session is live, X280Runtime::enqueue on any tile of this
+     * runtime returns Busy. Serialised with pinned_input_state() on this tile
+     * within this process; nothing serialises across processes. Never throws:
+     * failures are reported as Failed with `error`.
+     */
+    PinnedInputPrepareResult prepare_pinned_input(const PinnedInputPrepareRequest& request);
 
 private:
     friend class X280Runtime;

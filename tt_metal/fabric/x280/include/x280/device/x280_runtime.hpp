@@ -238,7 +238,8 @@ public:
     // per-hart record clearing, run/entry/args publication, and JUMP
     // publication in the caller's thread -- an immediate submission, not a
     // background FIFO. One execution per tile: a second call while one is live
-    // returns Busy.
+    // returns Busy. Every tile returns Busy while an X280Tile::prepare_pinned_input
+    // session is live.
     //
     // request.args_addr is validated for placement before the slot is reserved
     // and never for content; EnqueueOutcome::ArgumentsRejected leaves the tile
