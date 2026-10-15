@@ -394,8 +394,9 @@ The X280 LIM arena is, in order: the per-hart argument records, the ready
 table, and the P forwarder areas. It is placed in the runtime's available LIM
 window (`available_lim()`), the same base on both chips, so it moves with the
 runtime's LIM reservation and no LIM address is compiled into the image. The X280 TLB reservation is
-`X280_TLB_ETH_CREDIT_BASE = 16` in `include/rt/x280_noc_map.h`, one Ethernet
-window per hart, with a `static_assert` that it stays below the core_sync block.
+`X280_TLB_ETH_CREDIT_BASE = 161` in `include/rt/x280_noc_map.h`, one Ethernet
+window per hart, with `static_assert`s that it sits above the packet-injection
+and core_sync blocks and below the host block.
 
 Fit: a bidirectional run holds `tx_fifo` and `rx` for P on each tile, so tile
 slots take `2 · P · N_LINK · SLOT_SIZE`. At P = 4 and `N_LINK = 8` that is
