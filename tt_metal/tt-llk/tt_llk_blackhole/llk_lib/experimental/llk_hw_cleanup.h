@@ -61,7 +61,9 @@ inline void start()
 {
     static_assert(IS_TRISC_THREAD<thread_id>, "Hardware cleanup requires a TRISC thread.");
 
-    mop_sync();
+    // Waits for the thread to go idle, which includes any MOP still being expanded; a separate
+    // mop_sync() adds nothing. The drain must precede the mailbox write below, a RISC store that
+    // no Tensix-side wait can order.
     tensix_sync();
 
     if constexpr (thread_id == UnpackThreadId)
@@ -105,8 +107,8 @@ inline void finish()
     LLK_ASSERT(cfg_state_id == 0, "Blackhole cleanup must exit with configuration state zero selected.");
 
     // Do not hand off while buffered MOP / Tensix config work could overlap the
-    // next owner (or the caller's return into the next MicroOp).
-    mop_sync();
+    // next owner (or the caller's return into the next MicroOp). tensix_sync() waits for
+    // the thread to go idle, MOPs still being expanded included.
     tensix_sync();
 
     if constexpr (thread_id == UnpackThreadId)
