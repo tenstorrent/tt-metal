@@ -63,6 +63,7 @@
 
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/tensor/d2d_stream_service.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/inbound_socket_service_sync/inbound_socket_service_sync.hpp"
 #include "ttnn/services/h2d_socket_service.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -2212,6 +2213,145 @@ TEST_F(D2DStreamServiceTest, StageGateLeaseModeSingleChipPair) {
 TEST_F(D2DStreamServiceTest, StageGateLeaseModeRowPair) {
     D2D_ROW_PAIR_GUARD();
     verify_stage_gate_lease_mode(sender_mesh, receiver_mesh);
+}
+
+// ---------------------------------------------------------------------------
+// Two-entry input FIFO (D2DStreamConfig::buffer_depth)
+// ---------------------------------------------------------------------------
+
+// Load iota(base) into the sender backing on every coord.
+void load_sender_iota(const D2DStreamServiceSender& sender, const std::shared_ptr<MeshDevice>& mesh, uint32_t base) {
+    const auto& backing = sender.get_backing_tensor();
+    auto mesh_buffer = mesh_buffer_view(backing);
+    auto data = make_iota_u32(backing.buffer()->size() / sizeof(uint32_t), base);
+    for (const auto& coord : backing.tensor_topology().mesh_coords()) {
+        WriteShard(mesh->mesh_command_queue(), mesh_buffer, data, coord);
+    }
+    Finish(mesh->mesh_command_queue());
+}
+
+// Transfers the sender has shipped on `coord` (its consumed_sem count on a sender worker).
+uint32_t shipped(
+    const D2DStreamServiceSender& sender, const std::shared_ptr<MeshDevice>& mesh, const MeshCoordinate& coord) {
+    std::vector<uint32_t> v;
+    tt::tt_metal::detail::ReadFromDeviceL1(
+        mesh->get_device(coord),
+        sender.get_worker_cores().start_coord,
+        static_cast<uint32_t>(sender.get_consumed_sem_addr()),
+        sizeof(uint32_t),
+        v);
+    return v.at(0);
+}
+
+bool wait_shipped(const D2DStreamServiceSender& sender, const std::shared_ptr<MeshDevice>& mesh, uint32_t n) {
+    const auto& coords = sender.get_backing_tensor().tensor_topology().mesh_coords();
+    const auto deadline = std::chrono::steady_clock::now() + kGateReleaseTimeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (std::all_of(coords.begin(), coords.end(), [&](const auto& c) { return shipped(sender, mesh, c) == n; })) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
+
+// Run the consumer op once and check it got iota(base) and the record for `slot`.
+void expect_next_transfer(
+    const D2DStreamServiceReceiver& receiver, const std::shared_ptr<MeshDevice>& mesh, uint32_t base, uint32_t slot) {
+    auto outs = ttnn::experimental::inbound_socket_service_sync(receiver, kGateMetadataBytes);
+    ASSERT_EQ(outs.size(), 2u);
+    expect_output_tensor_iota(outs[0], mesh, base);
+    auto md_buffer = mesh_buffer_view(outs[1]);
+    std::vector<uint32_t> md;
+    for (const auto& coord : outs[1].tensor_topology().mesh_coords()) {
+        md.clear();
+        ReadShard(mesh->mesh_command_queue(), md, md_buffer, coord);
+        ASSERT_FALSE(md.empty());
+        EXPECT_EQ(md[kGateSlotOffsetBytes / sizeof(uint32_t)], slot) << "wrong record at " << coord;
+    }
+}
+
+// The consumer op reads each transfer from the right entry, at either depth.
+void verify_fifo_rounds(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const std::shared_ptr<MeshDevice>& receiver_mesh, uint32_t depth) {
+    auto cfg = make_stage_gate_config(sender_mesh);
+    cfg.buffer_depth = depth;
+    auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
+    EXPECT_EQ(receiver->get_head_entry_addr_l1() != 0, depth > 1);
+    StageGateHarness h(sender.get(), receiver.get(), sender_mesh, receiver_mesh);
+    for (uint32_t i = 0; i < 5; ++i) {
+        load_sender_iota(*sender, sender_mesh, 1000 * (i + 1));
+        h.send(/*slot=*/kGateNumGates, /*flags=*/0);  // ungated
+        ASSERT_TRUE(wait_shipped(*sender, sender_mesh, i + 1));
+        expect_next_transfer(*receiver, receiver_mesh, 1000 * (i + 1), kGateNumGates);
+    }
+}
+
+// With two entries the sender lands the next transfer while the receiver holds one at a
+// closed gate. Transfers still reach the workers in order, each from its own entry.
+void verify_two_entry_fifo_behind_gate(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const std::shared_ptr<MeshDevice>& receiver_mesh) {
+    auto cfg = make_stage_gate_config(sender_mesh);
+    cfg.buffer_depth = 2;
+    auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
+    StageGateHarness h(sender.get(), receiver.get(), sender_mesh, receiver_mesh);
+    h.set_gate(1, /*open=*/true);
+
+    load_sender_iota(*sender, sender_mesh, 100);
+    h.send(/*slot=*/0, ttnn::kStageGateFlagCloseOnTransit);  // gate 0 closed: held
+    ASSERT_TRUE(wait_shipped(*sender, sender_mesh, 1));
+    load_sender_iota(*sender, sender_mesh, 200);
+    h.send(/*slot=*/1, ttnn::kStageGateFlagCloseOnTransit);
+    ASSERT_TRUE(wait_shipped(*sender, sender_mesh, 2)) << "second transfer did not land while the first was held";
+    load_sender_iota(*sender, sender_mesh, 300);
+    h.send(/*slot=*/kGateNumGates, /*flags=*/0);
+    std::this_thread::sleep_for(kGateHeldWindow);
+    for (const auto& coord : h.coords()) {
+        EXPECT_EQ(shipped(*sender, sender_mesh, coord), 2u) << "sender overran a full FIFO at " << coord;
+        EXPECT_EQ(h.released(coord), 0u) << "transfer behind a closed gate was released at " << coord;
+    }
+
+    h.set_gate(0, /*open=*/true);
+    expect_next_transfer(*receiver, receiver_mesh, 100, 0);
+    expect_next_transfer(*receiver, receiver_mesh, 200, 1);
+    expect_next_transfer(*receiver, receiver_mesh, 300, kGateNumGates);
+    EXPECT_TRUE(h.gate_closed_everywhere(0));
+    EXPECT_TRUE(h.gate_closed_everywhere(1));
+}
+
+TEST_F(D2DStreamServiceTest, FifoRejectsBadDepth) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    for (const uint32_t depth : {0u, 3u}) {
+        auto cfg = make_stage_gate_config(sender_mesh);
+        cfg.buffer_depth = depth;
+        EXPECT_ANY_THROW((void)D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg)))
+            << "buffer_depth " << depth;
+    }
+}
+
+TEST_F(D2DStreamServiceTest, FifoDepth1RoundsSingleChipPair) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    verify_fifo_rounds(sender_mesh, receiver_mesh, 1);
+}
+
+TEST_F(D2DStreamServiceTest, FifoDepth2RoundsSingleChipPair) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    verify_fifo_rounds(sender_mesh, receiver_mesh, 2);
+}
+
+TEST_F(D2DStreamServiceTest, FifoDepth2RoundsRowPair) {
+    D2D_ROW_PAIR_GUARD();
+    verify_fifo_rounds(sender_mesh, receiver_mesh, 2);
+}
+
+TEST_F(D2DStreamServiceTest, FifoDepth2BehindGateSingleChipPair) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    verify_two_entry_fifo_behind_gate(sender_mesh, receiver_mesh);
+}
+
+TEST_F(D2DStreamServiceTest, FifoDepth2BehindGateRowPair) {
+    D2D_ROW_PAIR_GUARD();
+    verify_two_entry_fifo_behind_gate(sender_mesh, receiver_mesh);
 }
 
 }  // namespace

@@ -84,6 +84,15 @@ constexpr uint32_t num_stage_gates = get_named_compile_time_arg_val("num_stage_g
 constexpr uint32_t stage_gate_addr = get_named_compile_time_arg_val("stage_gate_addr");
 constexpr uint32_t stage_gate_slot_word = get_named_compile_time_arg_val("stage_gate_slot_offset") / sizeof(uint32_t);
 constexpr uint32_t stage_gate_flags_word = get_named_compile_time_arg_val("stage_gate_flags_offset") / sizeof(uint32_t);
+// Input FIFO. Transfer i is in entry i % buffer_depth; its metadata record sits at
+// metadata_span_bytes * entry past the socket FIFO base. With buffer_depth > 1, entry e's
+// DRAM address is the word at entry_addrs_l1 + e * entry_addr_stride, multicast to
+// head_entry_addr_l1 on every worker before data_ready.
+constexpr uint32_t buffer_depth = get_named_compile_time_arg_val("buffer_depth");
+constexpr uint32_t metadata_span_bytes = get_named_compile_time_arg_val("metadata_span_bytes");
+constexpr uint32_t entry_addrs_l1 = get_named_compile_time_arg_val("entry_addrs_l1");
+constexpr uint32_t entry_addr_stride = get_named_compile_time_arg_val("entry_addr_stride");
+constexpr uint32_t head_entry_addr_l1 = get_named_compile_time_arg_val("head_entry_addr_l1");
 using ttnn::kStageGateClosed;
 using ttnn::kStageGateFlagBypass;
 using ttnn::kStageGateFlagCloseOnTransit;
@@ -182,6 +191,7 @@ void kernel_main() {
     // Last observed value of the receiver's bytes_sent counter (the sender's
     // data-landed signal); advances by kIncsPerTransfer each transfer.
     uint32_t last_seen_sent = 0;
+    uint32_t received = 0;  // transfers handed to the workers; picks the FIFO head entry
     bool terminated = false;
     while (!terminated) {
         // LEASE mode: wait for a grant before the transfer's overwrite-OK inc (which
@@ -228,9 +238,12 @@ void kernel_main() {
             break;
         }
 
+        const uint32_t entry = received % buffer_depth;
+        const uint32_t metadata_addr = receiver_socket.read_ptr + entry * metadata_span_bytes;
+
         // 1b. Optional stage gate.
         if constexpr (num_stage_gates > 0) {
-            if (!pass_stage_gate(receiver_socket.read_ptr)) {
+            if (!pass_stage_gate(metadata_addr)) {
                 terminated = true;
                 break;
             }
@@ -241,9 +254,23 @@ void kernel_main() {
         //    present). Multicast its first metadata_size_bytes to every receiver worker
         //    core's L1. The barrier must complete BEFORE the data_ready_sem mcast below
         //    so workers observing data_ready see consistent (DRAM + metadata-L1) state.
+        if constexpr (buffer_depth > 1) {
+            noc.async_write_multicast(
+                CoreLocalMem<uint32_t>(entry_addrs_l1 + entry * entry_addr_stride),
+                metadata_mcast,
+                sizeof(uint32_t),
+                /*num_dsts=*/num_workers,
+                {},
+                {.noc_x_start = worker_mcast_noc_x_start,
+                 .noc_y_start = worker_mcast_noc_y_start,
+                 .noc_x_end = worker_mcast_noc_x_end,
+                 .noc_y_end = worker_mcast_noc_y_end,
+                 .addr = head_entry_addr_l1});
+            noc.async_write_barrier();
+        }
         if constexpr (metadata_enabled) {
             noc.async_write_multicast(
-                CoreLocalMem<uint32_t>(receiver_socket.read_ptr),
+                CoreLocalMem<uint32_t>(metadata_addr),
                 metadata_mcast,
                 metadata_size_bytes,
                 /*num_dsts=*/num_workers,
@@ -291,6 +318,8 @@ void kernel_main() {
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_flush_blocking_from_address(
             (uint32_t)socket_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+
+        received += 1;
 
         // 5. LEASE mode: this transfer is done — drop the credit-return connection and
         //    hand the links back to the model graph (link_grant = 0). The host polls

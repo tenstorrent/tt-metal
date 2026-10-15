@@ -144,6 +144,9 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
     attrs.metadata_size_bytes = metadata_size_bytes;
     attrs.metadata_l1_addr = metadata_size_bytes > 0 ? static_cast<uint32_t>(service.get_metadata_addr()) : 0;
     attrs.overhang_size_bytes = overhang_size_bytes;
+    if constexpr (requires { service.get_head_entry_addr_l1(); }) {
+        attrs.head_entry_addr_l1 = service.get_head_entry_addr_l1();
+    }
     attrs.worker_cores = service.get_worker_cores();
     attrs.mesh_num_cols = num_cols;
 
