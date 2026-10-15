@@ -63,3 +63,11 @@ Every intervention by the supervising session: time, task, trigger, classificati
   work around it. Scaled ladder set to 53248 (13 x 4096) <= the prompt and the owner's ~50K. The agent's attempt-1
   edits (reference reads the scaled counts from config.json; inference/ dir from the scale marker's source) reviewed
   and kept. Intake and plan re-approved (delegated).
+- 08:00 OWNER: one serving chunk on every box, never above ~5K; no golden at a chunk this box never serves. Framework
+  F67 (chunk fixed per deployment, serving.max_chunk 5120, intake asks for it, default ladder at the serving chunk).
+  Spec: deploy chunk 5120, context 522,240 (102 chunks, ~510K) on galaxy_4x4 (1,044,480 on galaxy_8x4); ladder
+  s10240 (2 x 5120, full dumps) / last / s56320; scaled ladder 56320 / 5120. tasks.yaml regenerated (old copy
+  runs/run1/tasks_before_F67.yaml): G.s4096, G.s16384, L.s4096, L.s16384 -> G.s10240, L.s10240; G.s56320 reused.
+  plan.md note (2); plan check passes on every box at 5120. SG.1's scaled golden (53248 / 4096) stopped mid-way.
+  Intake and plan re-approved (delegated). Consequence noted for perf: ~1.6x more chunks per prefill, so the
+  per-chunk sparse-table refill is paid more often.

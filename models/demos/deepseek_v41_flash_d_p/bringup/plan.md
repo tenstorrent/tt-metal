@@ -6,6 +6,12 @@
 > galaxy_8x4 reaches 1M (18.5 GiB). The per-chip numbers below were computed for 1M with bfp8; the gate's
 > `results/plan_boxes.json` / `plan_memory.json` hold the current ones. An e4m3-decoding matmul (the checkpoint's fp8
 > bytes, decoded in the op as the experts are) would bring 1M back to galaxy_4x4 exactly.
+>
+> **Owner decision, 2026-10-15 (2):** one serving chunk of 5120 tokens on every box (F67: the chunk no longer scales
+> with the box; only the context does), never above ~5K. Per row: 1280 tokens on galaxy_4x4, 640 on galaxy_8x4, 2560
+> on this box (real and scaled). Where this page says chunk 8192 / W = 2048, read 5120 / 1280; every condition in
+> plan.yaml holds at 5120 (the gate's plan_boxes.json). More, smaller chunks per prefill: the per-chunk sparse-table
+> refill (an all_gather of the source group's compressed rows) is paid ~1.6x as often; a perf item, not correctness.
 
 The gate (PL.1, `python -m models.demos.common.bringup.plan.check_plan`) computes every per-chip number below from
 `plan.yaml` and the real checkpoint shapes (`results/plan_memory.json`, `results/plan_boxes.json`). This page gives

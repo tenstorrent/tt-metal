@@ -23,50 +23,6 @@
   "started": "2026-10-14T23:01:38",
   "status": "PASS"
  },
- "G.s16384": {
-  "attempts": 0,
-  "duration_s": 1583.5,
-  "history": [
-   {
-    "status": "PASS",
-    "t": "2026-10-14T21:23:01"
-   }
-  ],
-  "last_run": "2026-10-14T21:23:01",
-  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/G.s16384.log",
-  "metrics": {
-   "cpu_seconds": 1566.4,
-   "golden_chunks": 2,
-   "golden_hash_ok": 1,
-   "golden_layers": 8
-  },
-  "rc": 0,
-  "reason": [],
-  "started": "2026-10-14T20:56:37",
-  "status": "PASS"
- },
- "G.s4096": {
-  "attempts": 0,
-  "duration_s": 1116.6,
-  "history": [
-   {
-    "status": "PASS",
-    "t": "2026-10-14T20:56:35"
-   }
-  ],
-  "last_run": "2026-10-14T20:56:35",
-  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/G.s4096.log",
-  "metrics": {
-   "cpu_seconds": 1102.2,
-   "golden_chunks": 2,
-   "golden_hash_ok": 1,
-   "golden_layers": 8
-  },
-  "rc": 0,
-  "reason": [],
-  "started": "2026-10-14T20:37:59",
-  "status": "PASS"
- },
  "G.s56320": {
   "attempts": 0,
   "duration_s": 5913.3,
@@ -448,6 +404,94 @@
   "role": "serving",
   "started": "2026-10-14T23:36:47",
   "status": "PASS",
+  "waiting": null
+ },
+ "SG.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "012a6038aee962f797c0bef7c6c2629cb77d9007",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "e6bea15f919500e0fea61577b8b06d765bec69e1",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "cc9b52d1721e12b4a3f71d7fc0eba1c2bcb58891",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "35bf1b7f-4ead-4c42-bb2d-5ec0a18c2192"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/SG.1.scale.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "012a6038aee962f797c0bef7c6c2629cb77d9007",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "e6bea15f919500e0fea61577b8b06d765bec69e1",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "cc9b52d1721e12b4a3f71d7fc0eba1c2bcb58891",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/SG.1.scale.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "scale",
+    "seconds": 418.6,
+    "session_id": "35bf1b7f-4ead-4c42-bb2d-5ec0a18c2192",
+    "t": "2026-10-15T07:33:41"
+   }
+  ],
+  "attempt": 2,
+  "attempts": 2,
+  "duration_s": 12.6,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-10-15T07:26:40"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-10-15T07:33:57"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-10-15T07:37:12"
+   }
+  ],
+  "last_run": "2026-10-15T07:33:57",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/SG.1.log",
+  "metrics": {
+   "scale_errors": 0,
+   "scale_tensors_cut": 250,
+   "scale_tensors_dropped": 43200,
+   "scale_tensors_total": 58399
+  },
+  "rc": 1,
+  "reason": [
+   "  cmd rc=1 (13s), log: /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/SG.1.log",
+   "  ok       scale_errors = 0 (need == 0)",
+   "  ok       scale_tensors_total = 58399 (need >= 1)",
+   "  MISSING  golden_layers (need == 8)",
+   "  MISSING  golden_hash_ok (need == 1)"
+  ],
+  "role": "scale",
+  "started": "2026-10-15T07:37:16",
+  "status": "RUNNING",
   "waiting": null
  },
  "_run": {
