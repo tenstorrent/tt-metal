@@ -1,7 +1,8 @@
 # Model spec for the gated bring-up framework (models/demos/common/bringup). Written by the /bringup intake skill,
 # approved by a person (python -m models.demos.common.bringup approve intake --spec <this file>).
 # deepseek-ai/DeepSeek-V4.1-Flash, text decoder only (vision encoder, aligner and the DSpark/MTP draft layers skipped).
-# Planned for a Blackhole Galaxy 4x4 at 1M tokens; brought up here in partial mode on the 4-chip QuietBox (mesh 2x2):
+# Planned for a Blackhole Galaxy 4x4 at 512K tokens (1M on the Galaxy 8x4; owner 2026-10-15: reference-exact weights
+# over context length); brought up here in partial mode on the 4-chip QuietBox (mesh 2x2):
 # one layer of each kind (window-only, engram, encoder KV source, encoder reuse, decoder candidate source, decoder
 # reuse, decoder re-index), at real size for accuracy and scaled (heads and experts cut per the plan) for the
 # deployment's per-chip shapes. The full model (289 GB of fp4 experts) needs the Galaxy; a LoudBox holds a subset only.
@@ -13,7 +14,7 @@ hooks: models.demos.deepseek_v41_flash_d_p.bringup.hooks
 num_layers: 40
 prior: null
 layers: "0-3,14,20,21,24"          # one of each block type (a subset result is never reported as full-model)
-deploy: {box: galaxy_4x4, seq: 1048576, chunk: 8192}   # the system the plan is for (F64)
+deploy: {box: galaxy_4x4, seq: 524288, chunk: 8192}    # the system the plan is for (F64); 1M fits only galaxy_8x4 exactly
 boxes:
   galaxy_4x4:
     name: Blackhole Galaxy, 4 rows as a 4x4 torus (FABRIC_2D_TORUS_XY)
@@ -52,8 +53,8 @@ ladder:                            # rungs in order; the first rung with full_du
   - {name: s56320, seq: 56320, chunk: 5120}                     # all 11 chunks on device
 scaled:                            # the scaled run (plan: sequence 0.5 -> chunk 4096, 2048 rows per mesh row as on the
   ladder:                          # deployment), capped at 64k tokens by the owner (CPU golden time)
-    - {name: scaled, seq: 65536, chunk: 4096}
-    - {name: scaled_last, seq: 65536, chunk: 4096, golden: scaled, prefix_from_golden: true}
+    - {name: scaled, seq: 53248, chunk: 4096}             # 13 chunks: the canonical prompt has 56320 tokens
+    - {name: scaled_last, seq: 53248, chunk: 4096, golden: scaled, prefix_from_golden: true}
 block_types:                       # every layer exactly once; representative = the layer swap tests use
   swa:                             # attention over the 128-token window only (compress ratio 0)
     layers: [0]
@@ -139,8 +140,8 @@ serving:
   # answers to serving_contract.md's owner questions (decided by the supervisor on the owner's delegation, 2026-10-15)
   owner_answers:
     - "1 decode-side cache: bf16 row-major per position, lossless, the contract's five config names and order"
-    - "2 window KV at 1M: TP-dedup (2.5 GiB per chip per slot); fp8 rows later only with server tooling support"
-    - "3 slots: max_slots 1 at 1M on galaxy_4x4; 2 in the tests"
+    - "2 window KV: TP-dedup (1.25 GiB per chip per slot at 512K on galaxy_4x4); fp8 rows only with server tooling support"
+    - "3 slots: max_slots 1 at the deployment context; 2 in the tests"
     - "4 prefix reuse: on, kv_block_size 64"
     - "5 d2p: off (a pulled prefix has no token ids for the engram hash)"
     - "6 server tooling: our tests decode with explicit geometry; tt-d-gen needs a DeepSeek-V4 entry before a launch run"

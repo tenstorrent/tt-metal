@@ -1,5 +1,12 @@
 # DeepSeek-V4.1-Flash prefill: sharding plan for galaxy_4x4 at 1M tokens, brought up on quietbox_2x2
 
+> **Owner decision, 2026-10-15 (supersedes this page where they differ):** every box keeps weights in a format that
+> holds the reference's values exactly; the bfp8 override for galaxy_4x4 is dropped (owner question 1). The deployment
+> context on galaxy_4x4 is 512K tokens (26.5 of 27.2 GiB per chip; the longest exact context there is ~720K);
+> galaxy_8x4 reaches 1M (18.5 GiB). The per-chip numbers below were computed for 1M with bfp8; the gate's
+> `results/plan_boxes.json` / `plan_memory.json` hold the current ones. An e4m3-decoding matmul (the checkpoint's fp8
+> bytes, decoded in the op as the experts are) would bring 1M back to galaxy_4x4 exactly.
+
 The gate (PL.1, `python -m models.demos.common.bringup.plan.check_plan`) computes every per-chip number below from
 `plan.yaml` and the real checkpoint shapes (`results/plan_memory.json`, `results/plan_boxes.json`). This page gives
 the reasoning. `components.yaml` maps every step to its ops; `scaling.yaml` defines the scaled run.
