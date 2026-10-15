@@ -8,6 +8,7 @@ from .operations import (
     apply_allgather_and_slice,
     apply_allreduce,
     apply_output_projection,
+    apply_output_projection_allreduce_prefill,
     apply_output_projection_fused_rs,
     apply_qkv_projection,
     apply_rope,
@@ -175,6 +176,11 @@ def prefill_forward(
         rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
         tt_sdpa_out.deallocate(True)
         tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
+    elif mesh_config.tp > 1 and weights.o_proj_prefill is not None:
+        tt_out_result = apply_output_projection_allreduce_prefill(
+            tt_sdpa_out, weights, activation_dtype, mesh_config, ccl_manager
+        )
+        tt_sdpa_out.deallocate(True)
     else:
         tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
         tt_sdpa_out.deallocate(True)

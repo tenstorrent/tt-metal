@@ -98,7 +98,7 @@ def concat_heads(tensor, is_decode_mode: bool):
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype):
+def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype, unpadded=False):
     """
     Apply output projection and bias.
 
@@ -106,15 +106,43 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
         tensor: Attention output tensor
         weights: Attention weights container
         activation_dtype: Target dtype for output
+        unpadded: use the prefill o_proj without the CCL padding columns (weights.o_proj_prefill)
 
     Returns:
         Output tensor after projection
     """
+    w, b = (weights.o_proj_prefill, weights.o_proj_bias_prefill) if unpadded else (weights.o_proj, weights.o_proj_bias)
     tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
     # Bias fused into the matmul (one pass over the output instead of a separate in-place add).
-    out = ttnn.linear(tensor, weights.o_proj, bias=weights.o_proj_bias, dtype=activation_dtype)
+    out = ttnn.linear(tensor, w, bias=b, dtype=activation_dtype)
     tensor.deallocate(True)
     return out
+
+
+def apply_output_projection_allreduce_prefill(
+    tensor, weights: AttentionWeights, activation_dtype, mesh_config, ccl_manager
+):
+    """Prefill o_proj on the unpadded weight, then one TP all_reduce over the full hidden width.
+
+    Replaces o_proj (padded width) + reduce_scatter_minimal_async + all_gather_async + slice of the padding columns.
+    Measured standalone on BH 1x4 at [S, 2880] vs the padded RS + AG + slice chain: bf16 1.99 -> 1.36 ms at S = 8192,
+    7.90 -> 5.38 ms at S = 32768 (l10/probe_attn_ccl*.py).
+
+    ttnn.all_reduce scatters over the innermost dim whose tile count divides by the TP size. The width
+    (2880 = 90 tiles) does not at TP = 4, so the rows do: S % (32 * TP) == 0, i.e. S % 128 == 0 at TP = 4. Otherwise
+    it falls back to the composite all-gather + local sum: still correct, but slower and with a TP-times larger
+    intermediate.
+    """
+    out = apply_output_projection(tensor, weights, activation_dtype, unpadded=True)
+    reduced = ttnn.all_reduce(
+        out,
+        num_links=ccl_manager.num_links,
+        topology=ccl_manager.topology,
+        cluster_axis=mesh_config.tp_axis,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out.deallocate(True)
+    return reduced
 
 
 # Per-M_tiles tuned config for the fused attention o_proj matmul + reduce-scatter.
