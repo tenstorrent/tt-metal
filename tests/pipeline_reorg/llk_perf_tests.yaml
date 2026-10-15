@@ -23,9 +23,10 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "true"
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
-    PIPELINE: "nightly"
+    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
+                             # leg per change is not worth it, and nothing compares it
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
+    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 2/5
@@ -41,9 +42,10 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "true"
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
-    PIPELINE: "nightly"
+    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
+                             # leg per change is not worth it, and nothing compares it
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
+    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 3/5
@@ -59,9 +61,10 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "true"
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
-    PIPELINE: "nightly"
+    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
+                             # leg per change is not worth it, and nothing compares it
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
+    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 4/5
@@ -77,9 +80,10 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "true"
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
-    PIPELINE: "nightly"
+    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
+                             # leg per change is not worth it, and nothing compares it
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
+    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 5/5
@@ -95,9 +99,10 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "true"
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
-    PIPELINE: "nightly"
+    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
+                             # leg per change is not worth it, and nothing compares it
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
+    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 1/5
@@ -113,9 +118,10 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "true"
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
-    PIPELINE: "nightly"
+    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
+                             # leg per change is not worth it, and nothing compares it
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
+    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 2/5
@@ -131,9 +137,10 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "true"
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
-    PIPELINE: "nightly"
+    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
+                             # leg per change is not worth it, and nothing compares it
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
+    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 3/5
@@ -149,9 +156,10 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "true"
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
-    PIPELINE: "nightly"
+    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
+                             # leg per change is not worth it, and nothing compares it
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
+    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 4/5
@@ -167,9 +175,10 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "true"
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
-    PIPELINE: "nightly"
+    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
+                             # leg per change is not worth it, and nothing compares it
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
+    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
     TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 5/5
@@ -185,7 +194,8 @@
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
   env:
-    SPEED_OF_LIGHT: "true"
-    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
-    PIPELINE: "nightly"
+    SPEED_OF_LIGHT: "false"  # the nightly pipeline measures speed-of-light; a 2-4h
+                             # leg per change is not worth it, and nothing compares it
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type
+    PIPELINE: "pr"  # this runs on a pull_request, not the nightly schedule
     TT_LLK_DISABLE_ASSERTS: "1"

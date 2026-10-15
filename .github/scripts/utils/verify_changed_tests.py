@@ -100,6 +100,10 @@ LLK_SETUP_CMD = "cd tests && ./setup_testing_env.sh"
 # the leg silently measures the wrong mode. See check_llk_perf_env.
 LLK_PERF_SCRIPT = re.compile(r"run_llk_perf_\w*\.sh")
 
+# What `export` will accept. A name it rejects would take the run step down under
+# set -e, after the leg has already claimed a runner.
+ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
 DEFAULT_TTSIM_SKIP_LIST = "tests/pipeline_reorg/ttsim-skip-list.yaml"
 DEFAULT_SKU_CONFIG = ".github/sku_config.yaml"
 DEFAULT_PREPARE_SCRIPT = ".github/scripts/utils/prepare_test_matrix.py"
@@ -602,8 +606,11 @@ def entry_env(entry, path):
     env = entry.get("env")
     if env is None:
         return ""
-    if not isinstance(env, dict) or not all(isinstance(k, str) for k in env):
-        raise GateError(f"{path}: entry '{entry.get('name')}' has an invalid 'env'; expected a mapping of names")
+    if not isinstance(env, dict) or not all(isinstance(key, str) and ENV_NAME.fullmatch(key) for key in env):
+        raise GateError(
+            f"{path}: entry '{entry.get('name')}' has an invalid 'env'; "
+            "expected a mapping of environment variable names"
+        )
     for key, value in env.items():
         if "\n" in key or "\n" in str(value):
             raise GateError(f"{path}: env {key!r} spans lines; the run step reads one KEY=VALUE per line")
