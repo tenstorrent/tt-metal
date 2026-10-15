@@ -20,8 +20,8 @@ actual compiled TTNN/model imports ([CPU validation](https://github.com/tenstorr
 This tree includes the exact tested compact-prefill padding and layout guards. They cover
 async token feedback, page-only refresh, teacher forcing, trace recapture and
 sampling-state reuse, using CPU tensors and mocked device operations. They do
-not qualify device execution. The compact-prefill prerequisite remains separately reviewed in #58504;
-its source is included here for coherent validation with the recipes below.
+not qualify device execution. The compact-prefill prerequisite merged in #58504
+as `20b3ff3e`; its generator and regression-test sources match this tree exactly.
 
 ## Configuration
 
@@ -56,10 +56,11 @@ The shared-generator changes are reviewed separately:
 - [Compact prefill request/page ownership, #58504](https://github.com/tenstorrent/tt-metal/pull/58504).
 - [Decode output rows across changing buckets, #58542](https://github.com/tenstorrent/tt-metal/pull/58542).
 
-The three native prerequisites and decode output-row change are merged on main.
-Compact prefill #58504 remains independently reviewed and is included in the
-combined validation tree; it must land before this dependent model PR. This
-model-only import does not duplicate that change.
+All five prerequisites are merged on main. Compact prefill #58504 merged as
+`20b3ff3e` on 15 October 2026. The current model tree already includes its exact
+generator and regression-test source; no pending compact-prefill dependency
+remains. Validation after refreshing the model onto newer main remains separate
+from the measured current-source serving investigation.
 
 Serving uses the current official [vLLM TT plugin installation procedure](https://github.com/tenstorrent/vllm-tt-plugin#installation)
 with merged [input/slot integration #152](https://github.com/tenstorrent/vllm-tt-plugin/pull/152)
@@ -167,7 +168,8 @@ python -m vllm.entrypoints.openai.api_server \
 
 The tested serving configuration reserves 16,384 bytes of small L1. The default
 zero-reserve path has a retained failure and is not qualified. The command above
-still requires the separate prerequisites and combined-tree device validation.
+still requires successful full-model serving and quality validation; merged
+prerequisites alone do not establish that qualification.
 
 The model declares its ring fabric requirement before the plugin opens the mesh.
 For bulk throughput, set `GPT_OSS_120B_CHUNK_WARMUP=32768`, pass
