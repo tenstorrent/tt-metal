@@ -42,8 +42,8 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 from quasar.test_matmul_int4_quasar import (
-    MATMUL_INT4_FORMATS,
     TILE,
+    WEIGHT_FORMATS,
     generate_int_matrix,
 )
 
@@ -73,6 +73,16 @@ def dequant_register_format_hints():
     return [None, DataFormat.Int8_2x] if is_4row_arch() else [None]
 
 
+def dequant_format(weight_format, register_format_hint=None):
+    # Int8 activations x weight_format, dequantized to Float32.
+    return InputOutputFormat(
+        DataFormat.Int8,
+        DataFormat.Float32,
+        input_format_B=weight_format,
+        register_format_hint=register_format_hint,
+    )
+
+
 def _pad_to_tiles(values):
     # The stimuli writer works in whole tiles.
     pad = (-values.numel()) % TILE_ELEMENTS
@@ -81,13 +91,13 @@ def _pad_to_tiles(values):
 
 @pytest.mark.quasar
 @parametrize(
-    format=MATMUL_INT4_FORMATS,
+    weight_format=WEIGHT_FORMATS,
     dest_sync_mode=[DestSync.Half],
     matmul_dims=lambda dest_sync_mode: matmul_group_dims(dest_sync_mode),
     register_format_hint=dequant_register_format_hints(),
 )
 def test_matmul_int4_dequant_quasar(
-    format,
+    weight_format,
     dest_sync_mode,
     matmul_dims,
     register_format_hint,
@@ -97,12 +107,7 @@ def test_matmul_int4_dequant_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    format = InputOutputFormat(
-        format.input_format,
-        DataFormat.Float32,
-        input_format_B=format.input_format_B,
-        register_format_hint=register_format_hint,
-    )
+    format = dequant_format(weight_format, register_format_hint)
     ct_dim, rt_dim, kt_dim, group_kt_dim = matmul_dims
     dest_acc = DestAccumulation.Yes
     tile_dimensions = [TILE, TILE]
@@ -270,19 +275,19 @@ def test_matmul_int4_dequant_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    format=[MATMUL_INT4_FORMATS[1]],
+    weight_format=[DataFormat.Int4],
     dest_sync_mode=[DestSync.Half],
     matmul_dims=[(1, 1, 8, 4), (2, 2, 8, 2)],
     register_format_hint=dequant_register_format_hints(),
     loop_factor=[2, 3],
 )
 def test_matmul_int4_dequant_loops_quasar(
-    format, dest_sync_mode, matmul_dims, register_format_hint, loop_factor
+    weight_format, dest_sync_mode, matmul_dims, register_format_hint, loop_factor
 ):
     # Repeated passes exercise the TRISC2 <-> TRISC3 semaphore handshake around the s_a
     # epilogue, which a single pass never re-arms. Each pass rewrites the same result.
     test_matmul_int4_dequant_quasar(
-        format,
+        weight_format,
         dest_sync_mode,
         matmul_dims,
         register_format_hint,
