@@ -506,10 +506,13 @@ class DramShardedLinear:
             out = ttnn.reshape(out, ttnn.Shape([1, 1, m_rows, n_out]), ttnn.Shape([1, 1, TILE_SIZE, n_out]))
         return out
 
-    def __call__(self, x, compute_kernel_config=None, out_memory_config=None, keep_sharded=False, rows=None):
+    def __call__(
+        self, x, compute_kernel_config=None, out_memory_config=None, keep_sharded=False, rows=None, prefill=False
+    ):
         """``keep_sharded``: a decode (one row tile) result is returned in the kernel's L1 width-sharded output
         layout (no sharded -> interleaved copy; the consumer reads the shards). ``rows``: the logical row count of
-        the result when the input is a width-sharded one-row-tile activation (its logical rows are the tile)."""
+        the result when the input is a width-sharded one-row-tile activation (its logical rows are the tile).
+        ``prefill``: a tile-sized prefill (a 32-token prompt) takes the 2D prefill config, not the decode kernel."""
         out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
         # Prefill with batch>1 reshapes activations to [B, 1, S, K] (see
         # DecoderLayer). Row count for the matmul is the product of all leading
@@ -522,7 +525,13 @@ class DramShardedLinear:
         M = 1
         for d in orig_leading:
             M *= d
-        if x.is_sharded() and M <= TILE_SIZE and self._decode_1d is None and x.memory_config() == self._act_memcfg:
+        if (
+            not prefill
+            and x.is_sharded()
+            and M <= TILE_SIZE
+            and self._decode_1d is None
+            and x.memory_config() == self._act_memcfg
+        ):
             return self._decode_sharded_rows(
                 x, out_mc, compute_kernel_config, M if rows is None else int(rows), keep_sharded=keep_sharded
             )
@@ -535,7 +544,9 @@ class DramShardedLinear:
                 return out
             return ttnn.reshape(out, (*orig_leading, int(out.shape[-1])))
 
-        if M <= TILE_SIZE:
+        # ``prefill`` keeps a tile-sized prefill (e.g. a 32-token prompt) off the decode
+        # DRAM-sharded kernel, whose CBs do not fit L1 with fp32 dest accumulation.
+        if M <= TILE_SIZE and not prefill:
             # Decode DRAM-sharded kernel + activation memcfg are tiled for
             # M=TILE_SIZE (32). Packed-verify / small-batch paths pass M=B*P
             # (e.g. 4, 16) — pad to one tile, run, then slice back so callers

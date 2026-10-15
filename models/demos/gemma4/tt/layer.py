@@ -387,7 +387,7 @@ class Gemma4DecoderLayer:
         normed = (
             self.input_layernorm.forward(hidden_states, out_memory_config=wqkv_act)
             if wqkv_act is not None
-            else self.input_layernorm.forward(hidden_states)
+            else self.input_layernorm.forward(hidden_states, prefill=not is_decode)
         )
         if not is_decode and batch_size > 1:
             attn_in = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
@@ -438,7 +438,7 @@ class Gemma4DecoderLayer:
         if isinstance(attn_output, torch.Tensor):
             hidden_states = residual
         else:
-            attn_output = self.post_attention_layernorm.forward(attn_output)
+            attn_output = self.post_attention_layernorm.forward(attn_output, prefill=not is_decode)
             if not is_decode and batch_size > 1:
                 residual = ttnn.reshape(
                     residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1]
@@ -455,9 +455,9 @@ class Gemma4DecoderLayer:
         normed = (
             self.pre_feedforward_layernorm.forward(hidden_states, out_memory_config=gate_up_act)
             if gate_up_act is not None
-            else self.pre_feedforward_layernorm.forward(hidden_states)
+            else self.pre_feedforward_layernorm.forward(hidden_states, prefill=not is_decode)
         )
-        mlp_output = self.shared_mlp(normed)
+        mlp_output = self.shared_mlp(normed, prefill=not is_decode)
         normed.deallocate(True)
 
         if self.enable_moe_block:
@@ -486,7 +486,7 @@ class Gemma4DecoderLayer:
             hidden_states = mlp_output
 
         # post_feedforward_layernorm -> residual add
-        hidden_states = self.post_feedforward_layernorm.forward(hidden_states)
+        hidden_states = self.post_feedforward_layernorm.forward(hidden_states, prefill=not is_decode)
         combined = ttnn.add(residual, hidden_states)
         residual.deallocate(True)
         hidden_states.deallocate(True)
