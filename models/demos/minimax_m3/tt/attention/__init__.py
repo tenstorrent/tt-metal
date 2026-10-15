@@ -92,6 +92,7 @@ class Attention:
         batch_size=1,
         cached_len=0,
         indexed_rope=False,
+        segments=None,
     ):
         """
         Prefill attention forward.
@@ -102,6 +103,8 @@ class Attention:
             kv_cache: Externally-owned :class:`MiniMaxKVCache` (packed K/V/index_k). ``user_id`` is the
                 cache slot, ``self.local_layer_idx`` the (local) layer, ``cached_len`` the prior-prefix length.
             user_id: User/batch index; also the cache slot index (default: 0).
+            segments: packed forward: list of (slot, cached_len), one per equal row block of hidden_states;
+                attention runs per segment and ``user_id`` / ``cached_len`` are not read.
 
         Returns:
             Attention output [batch, seq_len, hidden_size]
@@ -125,4 +128,5 @@ class Attention:
             layer_idx=self.local_layer_idx,
             cached_len=cached_len,
             indexed_rope=indexed_rope,
+            segments=segments,
         )

@@ -46,6 +46,10 @@ class MiniMaxKVCache(KvCaches):
     sp: int
     index_k_tp_axis: Optional[int] = None  # None = index_k TP-replicated; else the mesh axis it is deduped over
 
+    def slot(self, user: int, layer_idx: int) -> int:
+        """Batch index of (user, layer) in the three caches."""
+        return user * self.num_layers + layer_idx
+
     def deallocate(self) -> None:
         """Free the three device caches (e.g. to re-allocate at a different ``max_seq_len`` while the
         model stays resident). The handle is dead afterwards; do not pass it into the runtime again."""

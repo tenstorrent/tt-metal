@@ -39,16 +39,19 @@ from loguru import logger
 
 import ttnn
 from models.common.utils import block_cyclic_reorder
-from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
+from models.demos.common.prefill.chunk_layout import pack_segment_rows, packed_segments_real_counts, rotate_chunk_tokens
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
 
 @dataclass
 class TtPrefillRuntimeConfig:
     num_layers: int  # layers built/cached by this runtime (== model total for single-rank)
-    max_seq_len: int  # per-user KV-cache length in tokens; must be a multiple of chunk_size
+    max_seq_len: int  # per-user KV-cache length in tokens; a multiple of the segment size (chunk_size unless packed)
     mesh_shape: tuple = (8, 4)  # (SP rows, TP cols) on the Blackhole galaxy
     chunk_size: int = 5120  # tokens per prefill_chunk() call; one-shot sets this == max_seq_len
+    # Packed forwards (prefill_segments): tokens per segment, the KV / RoPE block-cyclic period. A forward
+    # is chunk_size // segment_size segments. None = one segment per forward (segment_size == chunk_size).
+    segment_size: Optional[int] = None
     num_users: int = 1  # independent cache slots (user-major batch)
     sp_axis: int = 0
     tp_axis: int = 1
@@ -80,6 +83,10 @@ class TtPrefillRuntimeConfig:
     overlap_shared_expert: bool = True
 
     @property
+    def seg(self) -> int:
+        return self.segment_size or self.chunk_size
+
+    @property
     def sp_factor(self) -> int:
         return self.mesh_shape[self.sp_axis]
 
@@ -91,7 +98,10 @@ class TtPrefillRuntimeConfig:
 class TtPrefillRuntime:
     """Single-rank prefill execution lifecycle: build model -> compile(kv_cache) ->
     prefill_chunk(chunk, kv_cache). Owns the SP=8 × TP=4 ``Model``; the KV cache is engine-owned and
-    passed into every call."""
+    passed into every call. ``prefill_segments`` is the packed variant (``segment_size`` shorter than the
+    chunk): several users' segments in one forward, for single-rank studies only: ``compile()`` refuses such
+    a runtime, so no layer-completion sink can be registered through ``set_layer_completion_sink``, and its
+    caller warms its programs."""
 
     def __init__(self, mesh_device, hf_config, state_dict: dict, config: TtPrefillRuntimeConfig):
         self.mesh_device = mesh_device
@@ -99,8 +109,14 @@ class TtPrefillRuntime:
         self.config = config
 
         assert (
-            config.max_seq_len % config.chunk_size == 0
-        ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
+            config.max_seq_len % config.seg == 0
+        ), f"max_seq_len ({config.max_seq_len}) must be a multiple of the segment size ({config.seg})"
+        assert config.chunk_size % config.seg == 0, f"chunk_size {config.chunk_size} % segment {config.seg} != 0"
+        # A segment's per-chip slice is sliced out of the packed activations and written to the cache at tile
+        # granularity, so it must be whole tiles.
+        assert (
+            config.seg % (config.sp_factor * ttnn.TILE_SIZE) == 0
+        ), f"segment {config.seg} / sp {config.sp_factor} is not a multiple of {ttnn.TILE_SIZE} rows per chip"
         # The KV cache, its slot addressing and gather_layer are all sized by config.num_layers, while
         # the model builds one layer per entry of layer_indices. If those disagree, a layer addresses
         # past the per-user cache stride and silently corrupts another slot.
@@ -175,8 +191,8 @@ class TtPrefillRuntime:
     def _build_indexed_rope(self) -> None:
         mesh = self.mesh_device
         sp = self.config.sp_factor
-        cache_seq = self.config.max_seq_len  # cache capacity; % chunk_size == 0 (asserted in __init__)
-        chunk_local = self.config.chunk_size // sp
+        cache_seq = self.config.max_seq_len  # cache capacity; % seg == 0 (asserted in __init__)
+        chunk_local = self.config.seg // sp  # the KV block-cyclic period is one segment
         rdims = [None, None]
         rdims[self.config.sp_axis] = 2  # seq dim across SP rows
         mapper = ttnn.ShardTensor2dMesh(mesh, dims=tuple(rdims), mesh_shape=mesh.shape)
@@ -212,8 +228,8 @@ class TtPrefillRuntime:
         """
         assert self.model_built
         assert (
-            max_seq_len % self.config.chunk_size == 0
-        ), f"max_seq_len ({max_seq_len}) must be a multiple of chunk_size ({self.config.chunk_size})"
+            max_seq_len % self.config.seg == 0
+        ), f"max_seq_len ({max_seq_len}) must be a multiple of the segment size ({self.config.seg})"
         if max_seq_len == self.config.max_seq_len:
             return
         logger.info(f"TtPrefillRuntime.reconfigure_capacity: max_seq_len {self.config.max_seq_len} -> {max_seq_len}")
@@ -232,7 +248,7 @@ class TtPrefillRuntime:
         self.compiled = False
 
     def release_sub_device_managers(self) -> None:
-        """Remove the MoE overlap sub-device manager before the mesh is closed. Idempotent."""
+        """Remove the MoE and MSA overlap sub-device managers before the mesh is closed. Idempotent."""
         if self.model_built:
             self.model.release_sub_device_managers()
 
@@ -295,6 +311,25 @@ class TtPrefillRuntime:
             ),
         )
 
+    def make_segments_input(self, segment_tokens: list) -> ttnn.Tensor:
+        """Packed-forward input for ``prefill_segments``: one segment_size token list per segment. Each
+        segment is SP-sharded like a chunk of its own (chip r gets tokens [r*s_local, (r+1)*s_local) of it),
+        and chip r's row is the concatenation of those slices in segment order."""
+        cfg = self.config
+        sp, seg = cfg.sp_factor, cfg.seg
+        assert (
+            len(segment_tokens) * seg == cfg.chunk_size
+        ), f"{len(segment_tokens)} segments x {seg} != chunk_size {cfg.chunk_size}"
+        tok = torch.tensor(pack_segment_rows(segment_tokens, sp), dtype=torch.int32).reshape(sp, 1, -1)
+        return ttnn.from_torch(
+            tok,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=cfg.mesh_shape, dims=(cfg.sp_axis, None)),
+        )
+
     def _embed_tokens(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
         """Embed the SP-sharded tokens into the bf16 hidden state the layers consume, delegating to the
         model's TtParallelEmbedding. Returns [1, 1, s_local, emb_dim] full hidden TP-replicated, or
@@ -319,8 +354,10 @@ class TtPrefillRuntime:
         every KV-length bucket (the previous behaviour: max_seq_len / chunk_size chunks, 196 at 1M) re-ran
         the same programs and still missed variant (iii). What IS hashed is the cache capacity itself (gather
         buffer shapes, sparse_sdpa T), which is why reconfigure_capacity() invalidates this warm-up.
-        Each warm-up writes slot 0, which the real run overwrites."""
+        Each warm-up writes slot 0, which the real run overwrites. A packed runtime (segment shorter than the
+        chunk) is refused: its cache period is the segment, and ``prefill_segments``' caller warms its programs."""
         assert self.model_built
+        self._assert_unpacked("compile")  # a packed runtime is warmed by prefill_segments' caller
         chunk = self.config.chunk_size
         cache_read_start = chunk if self.config.max_seq_len >= 2 * chunk else 0
         plan = [(0, chunk), (cache_read_start, chunk), (cache_read_start, chunk // 2)]  # (actual_start, real tokens)
@@ -401,6 +438,7 @@ class TtPrefillRuntime:
                 "run with PREFILL_LAYER_ACK_D2H=0 or wire the D2H ack into this runtime."
             )
         assert self.model_built, "build the model before prefill_chunk()"
+        self._assert_unpacked("prefill_chunk")  # a packed runtime takes prefill_segments()
         assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
         assert (
             actual_start + self.config.chunk_size <= self.config.max_seq_len
@@ -425,11 +463,27 @@ class TtPrefillRuntime:
         else:
             x_embd = input_tensor
 
-        # Whole-cache indexed rope built once (self.rope_indexed); the indexed op picks this chunk's rows
-        # on-device from kv_actual_global (= actual_start, threaded via cached_len + indexed_rope=True). No
-        # per-chunk host reshard, and the tensors are persistent (do NOT deallocate them here). The KV
-        # cache is engine-owned and passed in. If a LayerAck channel is registered, the model bumps it
-        # once per layer via on_layer_complete.
+        return self._forward(
+            x_embd,
+            request_id=request_id,
+            skip_lm_head=skip_lm_head,  # default: cache-fill only (skip final norm + lm_head)
+            kv_cache=kv_cache,
+            cached_len=actual_start,  # valid prefix already in the cache before this chunk
+            user_id=slot_id,
+            get_last_token=get_last_token,
+            # Real tokens in THIS chunk. Only the final chunk of a ragged prompt is short; every other
+            # chunk is full and the MoE's padding config resolves to None. Without this the padded tail
+            # is routed and dispatched as if real: wasted dispatch work that also eats per-expert
+            # dispatch-buffer capacity.
+            actual_isl=actual_end - actual_start,
+        )
+
+    def _forward(self, x, *, request_id: int, skip_lm_head: bool, **forward_kwargs):
+        """One ``Model.prefill_forward`` over the embedded (or handed-over) activation ``x`` with the
+        per-layer completion sink bound to ``request_id``, and the rank's return contract: a non-last rank
+        hands back the hidden state for the next rank; the last rank returns the logits, or None under
+        ``skip_lm_head`` (the populated cache is the output)."""
+        cfg = self.config
         # Pipelined mode registers a completion sink keyed by (global_layer_idx, request_id); bind request_id
         # per call so the synchronous per-layer callback reads no mutable state. Single-host mode uses the ack.
         if self._layer_completion_sink is not None:
@@ -439,34 +493,68 @@ class TtPrefillRuntime:
                 # The model reports a rank-local index; the sink's seq = request_id * total_layers +
                 # layer_idx needs the GLOBAL index, else every rank's local layer k collides at one seq
                 # and all but the first rank's completion is dropped.
-                sink(self.config.first_layer_idx + layer_idx, request_id)
+                sink(cfg.first_layer_idx + layer_idx, request_id)
 
         else:
             on_layer_complete = self._on_layer_complete
+        # Whole-cache indexed rope built once (self.rope_indexed): the indexed op picks each chunk's rows
+        # on-device from its cached_len; the tensors are persistent (never deallocated here).
         out = self.model.prefill_forward(
-            x_embd,
+            x,
             rot_mats_global=self.rope_indexed,
-            kv_cache=kv_cache,
-            cached_len=actual_start,  # valid prefix already in the cache before this chunk
-            user_id=slot_id,
-            get_last_token=get_last_token,
-            skip_lm_head=skip_lm_head,  # default: cache-fill only (skip final norm + lm_head)
             indexed_rope=True,
+            skip_lm_head=skip_lm_head,
             on_layer_complete=on_layer_complete,
-            # Real tokens in THIS chunk. Only the final chunk of a ragged prompt is short; every other
-            # chunk is full and the MoE's padding config resolves to None. Without this the padded tail
-            # is routed and dispatched as if real: wasted dispatch work that also eats per-expert
-            # dispatch-buffer capacity.
-            actual_isl=actual_end - actual_start,
+            **forward_kwargs,
         )
-        if not self.config.is_last_rank:
-            # Middle rank: hand the slice's output hidden state to the next rank.
+        if not cfg.is_last_rank:
             return out
         if skip_lm_head:
             if out is not None:
                 out.deallocate(True)
             return None
         return out  # logits [1,1,chunk_local,vocab_shard], SP-sharded on seq / TP-sharded on vocab
+
+    def _assert_unpacked(self, what: str) -> None:
+        """Refuse an entry point that takes the chunk as the cache period on a packed runtime (period = the
+        segment, shorter than the chunk); the call sites say what to use instead."""
+        cfg = self.config
+        assert cfg.segment_size in (None, cfg.chunk_size), (
+            f"{what}() takes the {cfg.chunk_size}-token chunk as the cache period, but this runtime is packed "
+            f"(segment_size {cfg.segment_size} < chunk_size)"
+        )
+
+    def prefill_segments(self, input_tensor: ttnn.Tensor, kv_cache, segments: list, request_id: int = 0):
+        """Packed prefill: ONE forward over ``chunk_size // segment_size`` segments, each
+        ``(slot, cached_len, n_real)``. The layer norms, the fused QKV projection and the MoE run once on the
+        packed rows; the head split, QK-norm, RoPE, the index branch (its projections included), the KV and
+        index_k writes, the SP gathers, indexer, top-k and SDPA run per segment against that segment's slot at
+        its cached_len. Returns what prefill_chunk returns (None on a last rank, the hidden state otherwise).
+        ``request_id`` mirrors prefill_chunk's and is unread: no layer-completion sink can be bound on a packed
+        runtime (class docstring)."""
+        cfg = self.config
+        seg, sp = cfg.seg, cfg.sp_factor
+        assert self.model_built, "build the model before prefill_segments()"
+        assert len(segments) * seg == cfg.chunk_size, f"{len(segments)} segments x {seg} != chunk_size {cfg.chunk_size}"
+        for slot, cached_len, n_real in segments:
+            assert 0 <= slot < cfg.num_users, f"slot {slot} out of range [0, {cfg.num_users})"
+            assert cached_len % seg == 0, f"cached_len={cached_len} must be a multiple of the segment size {seg}"
+            assert cached_len + seg <= cfg.max_seq_len, f"segment at {cached_len} exceeds the cache {cfg.max_seq_len}"
+            assert 0 < n_real <= seg, f"n_real={n_real} not in (0, {seg}]"
+        # MoE padding: per chip, the leading real rows of the packed slices (None = every row real).
+        s_local = seg // sp
+        counts = packed_segments_real_counts([n for _, _, n in segments], sp, s_local)
+        x = self._embed_tokens(input_tensor) if cfg.is_first_rank else input_tensor
+        if cfg.is_first_rank:
+            ttnn.deallocate(input_tensor)
+        return self._forward(
+            x,
+            request_id=request_id,
+            skip_lm_head=True,
+            kv_cache=kv_cache,
+            actual_isl=None if counts is None else tuple(counts),
+            segments=[(slot, cached_len) for slot, cached_len, _ in segments],
+        )
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register a per-layer completion sink for pipelined (multi-rank) prefill. ``sink`` is called once
@@ -493,15 +581,9 @@ class TtPrefillRuntime:
         k_blk, v_blk, ik_blk = self.read_slot_kv(kv_cache, slot_id)
         cfg = self.config
         return (
-            naturalize_kv_block(k_blk[layer_idx], n_tokens, cfg.sp_factor, cfg.chunk_size, cfg.max_seq_len).unsqueeze(
-                0
-            ),
-            naturalize_kv_block(v_blk[layer_idx], n_tokens, cfg.sp_factor, cfg.chunk_size, cfg.max_seq_len).unsqueeze(
-                0
-            ),
-            naturalize_kv_block(ik_blk[layer_idx], n_tokens, cfg.sp_factor, cfg.chunk_size, cfg.max_seq_len).unsqueeze(
-                0
-            ),
+            naturalize_kv_block(k_blk[layer_idx], n_tokens, cfg.sp_factor, cfg.seg, cfg.max_seq_len).unsqueeze(0),
+            naturalize_kv_block(v_blk[layer_idx], n_tokens, cfg.sp_factor, cfg.seg, cfg.max_seq_len).unsqueeze(0),
+            naturalize_kv_block(ik_blk[layer_idx], n_tokens, cfg.sp_factor, cfg.seg, cfg.max_seq_len).unsqueeze(0),
         )
 
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
@@ -535,6 +617,7 @@ class TtPrefillRuntime:
         index_k) and passes them as ``stage_layouts`` so ONLY rank 0 builds the table spanning every
         stage; with stage_layouts None the table covers config.num_layers == the full model from this
         rank's own mesh."""
+        self._assert_unpacked("build_kv_chunk_table")  # the table's slab period is the chunk
         from models.demos.minimax_m3.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         c = self.config
@@ -570,11 +653,11 @@ class TtPrefillRuntime:
         tensor, each ``[num_layers, heads(or 1), seq_read, head_dim]`` (index_k collapsed to one TP
         replica), in the raw on-device (block-cyclic) layout — not un-rotated to natural token order.
 
-        ``n_tokens`` bounds the read to the first ``ceil(n_tokens / chunk_size)`` chunks: the block-cyclic
-        writer puts slab k of every chip at local rows ``[k*chunk_local, (k+1)*chunk_local)``, so the first
-        ``k`` chunks live in the first ``k*chunk_local`` rows of EVERY chip and the composed block is exactly
-        the layout of a ``k*chunk_size`` cache — un-rotate it with ``naturalize_kv_block(...,
-        max_seq_len=k*chunk_size)`` (see ``read_seq_len``). Without the bound a 1M-capacity slot is ~120 GB
+        ``n_tokens`` bounds the read to the first ``ceil(n_tokens / seg)`` segments (the chunk unless
+        packed): the block-cyclic writer puts slab k of every chip at local rows ``[k*s_local, (k+1)*s_local)``,
+        so the first ``k`` segments live in the first ``k*s_local`` rows of EVERY chip and the composed block
+        is exactly the layout of a ``k*seg`` cache — un-rotate it with ``naturalize_kv_block(...,
+        max_seq_len=k*seg)`` (see ``read_seq_len``). Without the bound a 1M-capacity slot is ~120 GB
         of fp32 per cache on host. ``None`` reads the whole capacity.
 
         One device slice + one mesh compose per cache. DRAM_MEMORY_CONFIG on the slice is required —
@@ -584,8 +667,8 @@ class TtPrefillRuntime:
         A TP-deduped index_k (``kv_cache.index_k_tp_axis``) is returned in the SAME layout as the replicated
         one: its per-column stripes are re-interleaved on host, so callers need no special case.
         """
-        start = slot * self.config.num_layers
-        end = start + self.config.num_layers
+        start = kv_cache.slot(slot, 0)
+        end = start + kv_cache.num_layers
         seq_read = self.read_seq_len(n_tokens)
         rows = seq_read // self.config.sp_factor  # per-chip rows holding the first seq_read positions
         composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=self.mesh_device.shape)
@@ -646,11 +729,12 @@ class TtPrefillRuntime:
 
     def read_seq_len(self, n_tokens: int | None) -> int:
         """Cache length (tokens) that ``read_slot_kv(n_tokens=...)`` returns: the first ``ceil(n_tokens /
-        chunk_size)`` chunks, i.e. the ``max_seq_len`` to pass to ``naturalize_kv_block`` for that block."""
+        seg)`` segments (a segment is the chunk unless packed), i.e. the ``max_seq_len`` to pass to
+        ``naturalize_kv_block`` for that block."""
         if n_tokens is None:
             return self.config.max_seq_len
-        chunk = self.config.chunk_size
-        return min(self.config.max_seq_len, -(-n_tokens // chunk) * chunk)
+        seg = self.config.seg
+        return min(self.config.max_seq_len, -(-n_tokens // seg) * seg)
 
     def kv_cache_pcc_check(
         self,
@@ -669,6 +753,7 @@ class TtPrefillRuntime:
         validation module so the PCC logic lives in one place. ``real_len`` caps the compared extent to the
         real (non-pad) tokens; ``pt_path_override`` (per-slot .pt golden) is unsupported for M3 (trace-dir
         goldens only) and rejected if set."""
+        self._assert_unpacked("kv_cache_pcc_check")  # the validation un-rotates with the chunk as the period
         if pt_path_override is not None:
             raise NotImplementedError(
                 "MiniMax-M3 kv_cache_pcc_check has no per-slot .pt golden path; use PREFILL_TRACE_DIR"
