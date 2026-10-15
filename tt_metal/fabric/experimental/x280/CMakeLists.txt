@@ -784,12 +784,17 @@ add_test(
     COMMAND
         ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_characterization.py
 )
-get_property(_x280_active_sources GLOBAL PROPERTY X280_ACTIVE_IMAGE_SOURCES)
-list(REMOVE_DUPLICATES _x280_active_sources)
-add_test(
-    NAME x280_stop_poll
-    COMMAND
-        ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_stop_poll.py ${_x280_active_sources}
-)
+# The STOP-poll check scans every image source that links the active harness. It is registered when
+# this directory finishes, so an image added anywhere in this file is in the list.
+function(_x280_add_stop_poll_test)
+    get_property(sources GLOBAL PROPERTY X280_ACTIVE_IMAGE_SOURCES)
+    list(REMOVE_DUPLICATES sources)
+    add_test(
+        NAME x280_stop_poll
+        COMMAND
+            ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_stop_poll.py ${sources}
+    )
+endfunction()
+cmake_language(DEFER CALL _x280_add_stop_poll_test)
 
 add_custom_target(x280_abi_headers ALL DEPENDS ${_x280_header_stamps})
