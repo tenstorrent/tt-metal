@@ -72,7 +72,7 @@ DEVICE_STEPS = {
         "moe_add",
         "ffn_residual",
     },
-    "swa_engram": {"engram_rows"},
+    "swa_engram": {"engram_rows", "engram_kv"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -406,6 +406,26 @@ def _engram_rows_host_fn(mesh, module):
     return fn
 
 
+def _engram_kv_host_fn(mesh, module, hidden):
+    """fn(ctx, rows_host [S, 6144]) -> engram_kv host [S, 5H] fp32 (harness boundary: the rows split over axis 0,
+    replicated over axis 1, in; each chip's hidden slice of the 5 H-wide blocks gathered over both axes and put back
+    in block order)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.engram_kv import BLOCKS
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import blocks_to_host, row_split_to_device
+
+    def fn(ctx, rows):
+        rd = row_split_to_device(mesh, rows)
+        od = module(rd)
+        out = blocks_to_host(mesh, od, hidden, BLOCKS).float()
+        ttnn.deallocate(rd)
+        ttnn.deallocate(od)
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _chunk(spec):
     """The serving chunk the window tables are built for (the run's target chunk; every ladder rung uses it)."""
     return int(spec.get("target.chunk"))
@@ -434,6 +454,10 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         from models.demos.deepseek_v41_flash_d_p.tt.engram import build_engram_rows
 
         return _engram_rows_host_fn(mesh, build_engram_rows(mesh, ck, cfg, layer, shared.get("engram_hasher")))
+    if step == "engram_kv":
+        from models.demos.deepseek_v41_flash_d_p.tt.engram_kv import build_engram_kv
+
+        return _engram_kv_host_fn(mesh, build_engram_kv(mesh, ck, cfg, layer), cfg.dim)
     if step == "attention":
         from models.demos.deepseek_v41_flash_d_p.tt.attention import build_attention
 
