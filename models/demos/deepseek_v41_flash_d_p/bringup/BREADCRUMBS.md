@@ -583,3 +583,17 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   0 failures each). The pcc-0 FAIL lines before the real pass are the precompile collect pass (K-52).
 - OV-4: DS41-20 already states the F73 fix; unchanged.
 - Re-run: `PYTHONPATH=$PWD BRINGUP_TASK=C.swa_engram.attention scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attention.py && PYTHONPATH=$PWD BRINGUP_TASK=C.swa_engram.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`
+
+## C.swa.attention implement (attempt 1, scaled run)
+- The swa window attention module from the real-size run (`tt/attention.py`, `tt/window_exact.py`) reads its dims
+  from the scaled config and already passes the frozen component test (pcc 0.999704). The orchestrator's pre-run
+  failed only the contract: `tests/bringup/contract/caches.py:53` reads `<hf>/inference/config.json`, which the scaled
+  checkpoint lacks (DS41-11: scale.py writes only the top-level config.json; the reference derives it).
+- Fix (outside the repo, no code change): `hf_scaled/quietbox_2x2/inference/config.json` = `ds41_ref.inference_config`
+  of the scaled dir (n_heads 32, o_groups 4, n_routed_experts 96, the rest = the source's) plus symlinks to the
+  source's `inference/` code files, so `inference_dir()` / hf_oracle still find model.py. A re-scale (scale.py rmtree)
+  wipes it; the framework should write it (owner/overseer: scale.py or caches.py should use inference_config).
+- No tt/, hooks.py or fork change. DEVICE_STEPS["swa"] already lists attention (DS41-28).
+- Gate: PASS. pcc_attention_L00 0.999704; test_cache_starts 4/4, 0 failures each (layer 0, SP 2, W 1024).
+- OV-4: DS41-20 already states the F73 fix; unchanged.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py && PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py`
