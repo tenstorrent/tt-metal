@@ -5,9 +5,6 @@
 # Wormhole LLK perf runner, shared by the 5 wh matrix groups in
 # tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
 #
-# pytest-split sharding: compile this shard's items (producer), then measure
-# them (consumer) -- one invocation each over the whole perf suite.
-#
 # Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_wormhole.sh <group> <n_groups>
 set -euo pipefail
 
@@ -37,9 +34,9 @@ PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
 PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 
 pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
+  --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
   --junitxml="pytest-report-wormhole-${GROUP}-compile.xml" .
 pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
+  --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
   --junitxml="pytest-report-wormhole-${GROUP}-run.xml" .
 junitparser merge pytest-report-wormhole-${GROUP}-compile.xml pytest-report-wormhole-${GROUP}-run.xml pytest-report-wormhole-${GROUP}.xml

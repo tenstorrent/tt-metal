@@ -48,4 +48,46 @@ struct KdaPrepWorkDist {
 
 KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t core_cap);
 
+// One core per (head, value block). A head's state columns evolve independently, so its value tiles are split
+// across as many cores as fit. A head's blocks share one grid row so value block 0 can multicast the
+// value-independent inputs to the rest.
+struct ValueBlockDistribution {
+    std::vector<tt::tt_metal::CoreCoord> cores;
+    std::vector<uint32_t> head;
+    std::vector<uint32_t> value_block;
+    uint32_t value_blocks = 1;
+    uint32_t value_tiles_per_core = 1;
+    tt::tt_metal::CoreRangeSet core_set;
+};
+
+ValueBlockDistribution distribute_value_blocks(
+    tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles);
+
+// The physical row segment a core's value-block multicast addresses, ordered for NoC 0: value block 0 (the
+// sender) gets its siblings' segment, every other block gets the sender. All zero when a head has one block.
+struct ValueBlockPeers {
+    uint32_t x0 = 0;
+    uint32_t y0 = 0;
+    uint32_t x1 = 0;
+    uint32_t y1 = 0;
+};
+
+template <typename Device>
+ValueBlockPeers value_block_peers(const Device& device, const ValueBlockDistribution& distribution, uint32_t index) {
+    if (distribution.value_blocks == 1) {
+        return {};
+    }
+    const uint32_t value_block = distribution.value_block[index];
+    const uint32_t sender_index = index - value_block;
+    const auto first =
+        device.worker_core_from_logical_core(distribution.cores[value_block == 0 ? sender_index + 1 : sender_index]);
+    const auto last =
+        device.worker_core_from_logical_core(distribution.cores[sender_index + distribution.value_blocks - 1]);
+    return {
+        static_cast<uint32_t>(first.x),
+        static_cast<uint32_t>(first.y),
+        static_cast<uint32_t>(last.x),
+        static_cast<uint32_t>(last.y)};
+}
+
 }  // namespace ttnn::experimental::prim::kda_factory_detail

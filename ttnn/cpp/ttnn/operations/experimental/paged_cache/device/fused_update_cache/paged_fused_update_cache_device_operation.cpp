@@ -217,6 +217,17 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
     bool is_row_major = input_tensor1.layout() == Layout::ROW_MAJOR && input_tensor2.layout() == Layout::ROW_MAJOR;
 
     TT_FATAL(is_tiled || is_row_major, "input_tensor1 and input_tensor2 must be either both tiled or both row-major");
+    // Both kernel triples share buffer formats and row-width calculations.
+    TT_FATAL(
+        cache_tensor1.dtype() == cache_tensor2.dtype(),
+        "Fused update requires matching cache tensor dtypes, got {} and {}",
+        cache_tensor1.dtype(),
+        cache_tensor2.dtype());
+    TT_FATAL(
+        input_tensor1.dtype() == input_tensor2.dtype(),
+        "Fused update requires matching input tensor dtypes, got {} and {}",
+        input_tensor1.dtype(),
+        input_tensor2.dtype());
     if (is_row_major) {
         TT_FATAL(
             input_tensor1.padded_shape()[-1] == 128 && input_tensor2.padded_shape()[-2] == 8,

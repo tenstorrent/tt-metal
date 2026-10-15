@@ -324,6 +324,11 @@ TEST_P(WatcherRingBufferTest, TestWatcherRingBuffer) {
         GTEST_SKIP() << "Test " << params.test_name << " requires Slow Dispatch";
     }
 
+    const bool is_active_eth = (params.processor.core_type == HalProgrammableCoreType::ACTIVE_ETH);
+    if (is_active_eth && !this->IsSlowDispatch()) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
+
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [&params](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
