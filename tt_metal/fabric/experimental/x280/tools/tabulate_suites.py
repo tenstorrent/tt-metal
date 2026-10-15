@@ -592,6 +592,24 @@ EC_WALL = difference(field("receive_window", "start_ticks"), field("receive_wind
 EC_NS = ns(EC_WALL)
 EC_PACKETS = difference(field("first_batch_packets"), field("packets"))
 EC_MPKT = ratio(product(EC_PACKETS, constant(1000)), EC_NS)
+# The window's own columns, shared by every member that stamps one.
+EC_WINDOW_COLUMNS = (
+    Column("packets", field("packets")),
+    Column("k1", field("first_batch_packets")),
+    Column("wall ticks", EC_WALL),
+    Column("ns", EC_NS),
+    Column("window packets", EC_PACKETS),
+    Column("ns/packet", ratio(EC_NS, EC_PACKETS)),
+    Column("Mpkt/s", EC_MPKT),
+)
+
+
+def ec_window_bytes(head):
+    """`head`: the window's useful bytes per request, over the window."""
+    return Column(head, ratio(product(EC_PACKETS, field("receive_window", "useful_bytes_per_request")), EC_NS))
+
+
+EC_SLOT_GBPS = Column("slot GB/s", ratio(product(EC_PACKETS, field("receive_window", "slot_bytes_per_request")), EC_NS))
 EC_TABLES = (
     Table(
         "",
@@ -610,17 +628,9 @@ EC_TABLES = (
             ident("rx_chip", "rx"),
             ident("x280_hw_index", "l2cpu"),
             ident("x280_pll_mhz", "pll MHz"),
-            Column("packets", field("packets")),
-            Column("k1", field("first_batch_packets")),
-            Column("wall ticks", EC_WALL),
-            Column("ns", EC_NS),
-            Column("window packets", EC_PACKETS),
-            Column("ns/packet", ratio(EC_NS, EC_PACKETS)),
-            Column("Mpkt/s", EC_MPKT),
-            Column(
-                "useful GB/s", ratio(product(EC_PACKETS, field("receive_window", "useful_bytes_per_request")), EC_NS)
-            ),
-            Column("slot GB/s", ratio(product(EC_PACKETS, field("receive_window", "slot_bytes_per_request")), EC_NS)),
+            *EC_WINDOW_COLUMNS,
+            ec_window_bytes("useful GB/s"),
+            EC_SLOT_GBPS,
         ),
     ),
 )
@@ -640,17 +650,9 @@ EC_HOP_TABLES = (
             ident("BATCH"),
             ident("tx_chip", "tx"),
             ident("rx_chip", "rx"),
-            Column("packets", field("packets")),
-            Column("k1", field("first_batch_packets")),
-            Column("wall ticks", EC_WALL),
-            Column("ns", EC_NS),
-            Column("window packets", EC_PACKETS),
-            Column("ns/packet", ratio(EC_NS, EC_PACKETS)),
-            Column("Mpkt/s", EC_MPKT),
-            Column(
-                "payload GB/s", ratio(product(EC_PACKETS, field("receive_window", "useful_bytes_per_request")), EC_NS)
-            ),
-            Column("slot GB/s", ratio(product(EC_PACKETS, field("receive_window", "slot_bytes_per_request")), EC_NS)),
+            *EC_WINDOW_COLUMNS,
+            ec_window_bytes("payload GB/s"),
+            EC_SLOT_GBPS,
             Column("400G Mpkt/s", ratio(constant(50000), field("payload_bytes_per_request"))),
         ),
     ),
