@@ -178,4 +178,7 @@ def test_persistent_loop_payload_teardown(mesh_device, dtype, num_tiles, termina
         ttnn.deallocate(output_tensor)
         ttnn.deallocate(status_tensor)
 
-    assert completed_total > 0, "no cycle completed an iteration; the test exercised nothing"
+    # With no delay the terminate write can legitimately land before the first iteration, so only the delayed
+    # arms are required to have completed work; the zero-iteration branch above still checks the 0 ms arm.
+    if terminate_delay_ms > 0:
+        assert completed_total > 0, "no cycle completed an iteration; the test exercised nothing"
