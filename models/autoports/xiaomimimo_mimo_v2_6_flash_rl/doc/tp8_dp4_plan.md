@@ -24,18 +24,21 @@ DP path. The cost is that experts must be BFP4 to fit.
 |---|---|---|---|
 | Embedding | 152576 x 4096 bf16 | replicated | 1.25 GB |
 | `qkv_proj` (SWA) | 4096 -> 64x192 + 8x192 + 8x128 | 4096 x (8x192 + 192 + 192) | 8 Q heads + 1 KV head; V padded 128 -> 192 |
-| `qkv_proj` (global) | 4096 -> 64x192 + 4x192 + 4x128 | same | KV head `c // 2` on chip `c` (stored twice across the row) |
-| `o_proj` | 8192 -> 4096 | (8x192) x 4096 | rows for the V padding are zero; row-parallel + all-reduce |
+| `qkv_proj` (global), prefill | 4096 -> 64x192 + 4x192 + 4x128 | same as SWA | 8 Q heads + KV head `c // 2` on chip `c` |
+| `qkv_proj` (global), decode | | 4096 x (16x192 + 192 + 192) | all 16 Q heads of KV group `c // 2`; the chip pair splits the users (`tt/kv.py`) |
+| `o_proj` | 8192 -> 4096 | (8x192) x 4096; global decode (16x128) x 4096 | padded rows are zero; row-parallel + all-reduce |
 | Attention sink (SWA) | 64 | 8 | pre-divided by the softmax scale |
 | Dense MLP (layer 0) | 4096 -> 16384 -> 4096 | 4096 x 2048, 2048 x 4096 | column / row parallel + all-reduce |
-| Router | 4096 x 256 bf16, bias fp32 | replicated | `moe_grouped_topk` single-group path |
+| Router | 4096 x 256 bf16, bias fp32 | replicated | fp32 sigmoid / topk / gather |
 | Routed experts | 256 x (3 x 4096 x 2048) | 256 x (3 x 4096 x 256) | intermediate dim TP-sharded; `sparse_matmul` on the union of selected experts per 32-token group; all-reduce |
 | LM head | 4096 x 152576 | 4096 x 19072 | vocab-parallel, host concatenates |
-| KV cache (per layer) | | `[blocks, 1, 64, 192]` K and V | paged, BFP8 |
+| KV cache, SWA layer | | K, V `[blocks, 1, 64, 192]` | 512-token ring per user (`cache_position_modulo`), BFP8 |
+| KV cache, global layer | | K `[blocks, 1, 64, 192]`, V `[blocks, 1, 64, 128]` | full context, only the users this chip owns, BFP8; decode via `paged_flash_multi_latent_attention_decode` |
 
 RoPE: HF rotates the first 64 of 192 dims with `rotate_half`. The Q/K rows of each head are
-permuted to interleaved order so `rotary_embedding_llama` applies; the cos/sin tables are 192 wide
-with cos = 1, sin = 0 on the 128 no-RoPE dims.
+permuted to interleaved order so `rotary_embedding_llama` applies; cos/sin are 192 wide with
+cos = 1, sin = 0 on the 128 no-RoPE dims, computed on the host for the positions in use (no
+max_seq_len tables on device).
 
 ## Memory per chip (48 layers)
 
@@ -46,11 +49,25 @@ with cos = 1, sin = 0 on the 128 no-RoPE dims.
 | Attention weights, BFP8 (0.68B params) | 0.72 GB |
 | Embedding (bf16, replicated) | 1.25 GB |
 | Router, dense MLP, LM head, norms | ~0.2 GB |
-| KV cache, BFP8, 4 users x 1024 tokens (test config) | ~0.08 GB |
-| Total (test config) | ~23.6 GB of 32 GB |
+| KV cache, 4 users x 1M, BFP8: global layers (2 owned users x 1M x 9 layers x 320) | 6.4 GB |
+| KV cache, SWA rings (39 layers x 4 users x 512 x 384) | 0.03 GB |
+| **Measured** (`test_capacity_1m_tp8_dp4.py`, every replica) | weights 23.69 GB; with 4 x 1M KV 30.14 GB of 34.03 GB (3.89 GB free) |
 
-At 1M context the global layers' KV is the open item: replicated KV heads on chip pairs and the
-V padding do not fit B=4 @ 1M (see #60809, decision 1 and 2).
+How B=4 @ 1M fits, with existing ops only (no new kernel):
+
+1. SWA layers only attend to 128 tokens, so their cache is a 512-token ring per user
+   (`cache_position_modulo` on fill, update and decode SDPA). A full-length SWA cache would be
+   66.8 GB per chip.
+2. Global layers have 4 KV heads on 8 chips. Rather than store each head on both chips of a pair,
+   the pair splits the users: chip `c` keeps the KV of slots with `slot % 2 == c % 2` and decodes all
+   16 Q heads of its group for them (decode reads the minimum bytes; no cross-chip softmax merge).
+   Prefill still uses 8 heads per chip on fresh K/V, so long-prompt prefill is balanced too, until
+   chunked prefill needs the cached KV, which only the owner holds.
+3. The global V cache is 128 wide, read with `paged_flash_multi_latent_attention_decode`
+   (`head_dim_v`), so V is not padded to 192 in the cache.
+
+Splitting the sequence across the pair instead would need decode SDPA to return the softmax
+statistics (LSE) for a cross-chip merge, which it does not today.
 
 ## Validation (tests/, measured 2026-10-15 on one BH Galaxy, branch `mimo-v2.6/tp8-dp4`)
 
@@ -65,6 +82,7 @@ own users. References are fp32 torch (`reference/model.py`, bit-identical to HF 
 | `test_moe_tp8_dp4.py` layers 1, 5 | real golden MoE inputs over 4 rows | top-8 set match 98%; vs reference with device routing PCC 0.9999+; end to end 0.9997-0.9999 |
 | `test_model_tp8_dp4.py` | 48 layers, BFP4 experts, 4 rows x 3 users | 40 logits rows vs fp32 reference: top-1 97.5%, PCC mean 0.9924 (min 0.9686). Shared prompt identical on all 4 rows (PCC 1.0, same greedy text) |
 | `test_model_traced_tp8_dp4.py` | traced decode, 4 rows x 2 users | traced == eager tokens (logits PCC 1.000000). Step: 1 row 164 ms, 4 rows 228 ms -> 35.1 tok/s aggregate vs 12.2 tok/s on one row (eager: 690 ms for 4 rows) |
+| `test_capacity_1m_tp8_dp4.py` | 4 rows x 4 users, max_seq_len 1M, traced decode | fits (above). 16 users: 261 ms/step at 4K, 278 ms at 128K, 449 ms at ~1M |
 
 Notes:
 
