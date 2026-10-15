@@ -97,7 +97,7 @@ void kernel_main() {
     const auto neighbor2_physical_x = get_arg_val<uint32_t>(argidx++);
     const auto neighbor2_physical_y = get_arg_val<uint32_t>(argidx++);
     const auto core_id = get_arg_val<uint32_t>(argidx++);
-    const auto raw_scores_semaphore = get_arg_val<uint32_t>(argidx++);
+    const auto collector_semaphore = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_r2c_w_id = tt::CBIndex::c_0;
@@ -184,8 +184,14 @@ void kernel_main() {
     const uint32_t local_group_scores_dst_addr1 = local_collector_addr + core_id * group_score_size;
     const uint32_t local_group_scores_dst_addr2 = local_group_scores_dst_addr1 + 8 * group_score_size;
 
+    // The collector counts group-score and top8 arrivals on its own semaphore. Sharing the partial
+    // semaphore let an early increment satisfy the collector's partial wait and get zeroed, and the
+    // neighbor's partial write (a set to 1) overwrite increments that had already landed.
+    const uint32_t collector_semaphore_addr = get_semaphore(collector_semaphore);
+    volatile tt_l1_ptr uint32_t* my_collector_semaphore_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(collector_semaphore_addr);
     const uint64_t collector_semaphore_noc_addr =
-        get_noc_addr(collector_physical_x, collector_physical_y, semaphore_addr);
+        get_noc_addr(collector_physical_x, collector_physical_y, collector_semaphore_addr);
 
     //-------------------------------------------------------------------------
     // Group masks (1 collector core -> 7 cores)
@@ -209,11 +215,6 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t raw_scores_size = tt::constants::FACE_HW * sizeof(uint16_t);
 
-    uint32_t raw_scores_semaphore_addr = get_semaphore(raw_scores_semaphore);
-    volatile tt_l1_ptr uint32_t* my_raw_scores_semaphore_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(raw_scores_semaphore_addr);
-    *my_raw_scores_semaphore_ptr = 0;
-
     // Top8 partials: after gathering, data is in the 16-31 rows
     const uint32_t local_raw_scores_src_addr = cb_w2c_in3.get_write_ptr();
     const uint32_t local_gathered_scores_src_addr = local_raw_scores_src_addr + raw_scores_size;
@@ -221,14 +222,12 @@ void kernel_main() {
     const uint32_t local_raw_scores_dst_base_addr = cb_w2c_in7.get_write_ptr();
     const uint32_t local_raw_scores_dst_addr = local_raw_scores_dst_base_addr + core_id * raw_scores_size;
 
-    const uint64_t raw_scores_semaphore_noc_addr =
-        get_noc_addr(collector_physical_x, collector_physical_y, raw_scores_semaphore_addr);
     const uint64_t raw_scores_noc_addr = get_noc_multicast_addr(
         first_physical_x, first_physical_y, collector_physical_x, collector_physical_y, local_raw_scores_dst_base_addr);
 
     //-------------------------------------------------------------------------
-    *my_semaphore_ptr = 0;
-
+    // Semaphores start at 0 on every launch (host-initialized). Do not zero them here: a neighbor's
+    // partial write can land before this core gets this far.
     if (is_send_core) {
         // Since neighbor2 is farther, we send it first.
         // Set state for the writes
@@ -367,8 +366,7 @@ void kernel_main() {
         cb_w2c_in4.reserve_back(1);
 
         // I am collecting, let us wait for everyone else to finish sending their data to me
-        noc_semaphore_wait_min(my_semaphore_ptr, 7);
-        *my_semaphore_ptr = 0;
+        noc_semaphore_wait_min(my_collector_semaphore_ptr, 7);
 
         // Let compute know that we got the group scores
         cb_w2c_in4.push_back(1);
@@ -396,8 +394,8 @@ void kernel_main() {
 
         cb_w2c_in6.reserve_back(4);
 
-        // Wait for the top8 partials to arrive
-        noc_semaphore_wait_min(my_semaphore_ptr, 1 + 7);
+        // Wait for the top8 partials to arrive (7 group-score + 7 top8 increments)
+        noc_semaphore_wait_min(my_collector_semaphore_ptr, 7 + 7);
 
         // Let compute know that we got the top8 partials
         cb_w2c_in6.push_back(4);
