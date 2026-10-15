@@ -950,7 +950,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // Blackhole per-tensor quantization takes the scale at init, so the kernel copies only the input tile into DEST.
     if (is_quant_op && !b.has_value() && !operation_attributes.scalar_is_lhs &&
-        tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE) {
+        a.device()->arch() == tt::ARCH::BLACKHOLE) {
         const auto scalar_form = [](std::string name) {
             const std::string tile = "_tile";
             const auto pos = name.rfind(tile);
