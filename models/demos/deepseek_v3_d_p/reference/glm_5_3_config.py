@@ -23,7 +23,10 @@ class GLM53Config:
     EMB_SIZE = 6144  # embedding dimension
     # Callers can override this default with use_fused_rmsnorm at model initialization.
     USE_FUSED_PREFILL_RMSNORM = True
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    # Max fabric packet payload; must stay in sync with migration code. Sized to the MoE's largest single fabric
+    # transfer on the fp8 wire: one packed 1x128 row [6144 e4m3 | 48 fp32 scales] (6336 B) plus 64 B of routing tail or
+    # dispatch metadata, so each fp8 row crosses as one packet. bf16 rows (12288 B) take two packets either way.
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE + EMB_SIZE // 128 * 4 + 64
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. The crossover is a function of the
