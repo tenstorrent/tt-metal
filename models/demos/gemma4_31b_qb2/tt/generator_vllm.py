@@ -2,6 +2,10 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Translate vLLM scheduler updates into the Gemma4 TP4 generator's inputs."""
 
+import json
+import os
+import time
+
 import torch
 
 import ttnn
@@ -100,9 +104,25 @@ class Gemma4ForCausalLM:
         # in-flight prefill tokens globally, in addition to the per-request tails.
         # The plugin separately adds one output page per request.
         tails = Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * max_num_seqs
-        return 262144 + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
+        pool_tokens = int(os.environ.get("GEMMA_EXPERIMENT_KV_POOL_TOKENS", "262144"))
+        if pool_tokens < 262144 or pool_tokens % Decoder.PAGE_SIZE:
+            raise ValueError("Experimental pool must preserve context and page alignment")
+        return pool_tokens + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
+        before = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.DRAM)
+        print(
+            "KV_POOL_MEMORY "
+            + json.dumps(
+                {
+                    "phase": "before",
+                    "banks": before.num_banks,
+                    "allocated_per_bank": before.total_bytes_allocated_per_bank,
+                    "free_per_bank": before.total_bytes_free_per_bank,
+                }
+            ),
+            flush=True,
+        )
         pools, kv, scratch = {}, [], {}
         for i, (layer, (shape, dtype, pool_id)) in enumerate(zip(self.generator.model.layers, per_layer_specs)):
             if tuple(shape[1:]) != (layer.kv_heads, 128, layer.head_dim) or dtype != torch.bfloat16:
@@ -120,7 +140,50 @@ class Gemma4ForCausalLM:
         self.cache = CacheState(
             kv, tables, self.max_batch_size, self.max_seq_len, scratch_pages=scratch, vllm_owned=True
         )
+        after = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.DRAM)
+        print(
+            "KV_POOL_MEMORY "
+            + json.dumps(
+                {
+                    "phase": "after",
+                    "banks": after.num_banks,
+                    "allocated_per_bank": after.total_bytes_allocated_per_bank,
+                    "free_per_bank": after.total_bytes_free_per_bank,
+                    "unique_pools": len(pools),
+                    "pool_full_tokens": int(os.environ.get("GEMMA_EXPERIMENT_KV_POOL_TOKENS", "262144")),
+                }
+            ),
+            flush=True,
+        )
         return self.cache
+
+    def _sample_pool_memory(self, phase):
+        # Host allocator snapshots at operation boundaries: NOT a device peak.
+        started = time.perf_counter()
+        view = ttnn.get_memory_view(self.generator.mesh, ttnn.BufferType.DRAM)
+        allocated = view.total_bytes_allocated_per_bank
+        previous_high = getattr(self, "_pool_observed_high", 0)
+        high = max(previous_high, allocated)
+        self._pool_observed_high = high
+        self._pool_memory_samples = getattr(self, "_pool_memory_samples", 0) + 1
+        self._pool_memory_host_s = getattr(self, "_pool_memory_host_s", 0.0) + time.perf_counter() - started
+        if allocated > previous_high or self._pool_memory_samples % 64 == 0:
+            print(
+                "KV_POOL_MEMORY_BOUNDARY "
+                + json.dumps(
+                    {
+                        "phase": phase,
+                        "banks": view.num_banks,
+                        "allocated_per_bank": allocated,
+                        "free_per_bank": view.total_bytes_free_per_bank,
+                        "largest_contiguous_free_per_bank": view.largest_contiguous_bytes_free_per_bank,
+                        "observed_high_per_bank": high,
+                        "samples": self._pool_memory_samples,
+                        "query_host_s_total": self._pool_memory_host_s,
+                    }
+                ),
+                flush=True,
+            )
 
     def _tables(self, cache, page_tables_per_layer, *, slots=None):
         if cache is not self.cache:
@@ -199,6 +262,7 @@ class Gemma4ForCausalLM:
                 self.prefill_slot_keys[slot] = self.next_prefill_key
                 self.next_prefill_key += 1
             keys.append(self.prefill_slot_keys[slot])
+        self._sample_pool_memory("before_prefill")
         outputs = self.generator.prefill_forward(
             tokens,
             page_table=tables,
@@ -209,6 +273,7 @@ class Gemma4ForCausalLM:
             start_positions=starts,
             history_keys=keys,
         )
+        self._sample_pool_memory("after_prefill")
         if sampling_params is None:
             return outputs
         params = self._sampling(sampling_params, len(lengths), [n - 1 for n in lengths])
@@ -251,6 +316,7 @@ class Gemma4ForCausalLM:
                     slot = row if slot_remap is None else int(slot_remap[row])
                     self.release_request(slot)
             self.entry = self.generator.prepare_decode(tokens, start_pos, page_table=tables, kv_cache=kv_cache)
+            self._sample_pool_memory("after_prepare_decode")
         elif self.entry is None or self.generator.traces.get(id(kv_cache)) is not self.entry:
             raise ValueError("A retired decode trace requires current scheduler inputs")
         elif reload_page_table:
