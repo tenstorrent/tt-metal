@@ -98,8 +98,9 @@ ttsl::hash::hash_t TopkRouteFinishDeviceOperation::compute_program_hash(
     //     split_blocks_for_tilize core partition (which cores carry kernels is create-time state);
     //   - index_is_u32 selects the output index dtype, its CB/staging sizes, and the output
     //     TensorAccessor's page size (2048 vs 4096 B tiles).
-    // Logical R stays hash-free: it only feeds reader/writer runtime args (the per-unit valid-row
-    // clamp), re-derived from the tensors in override_runtime_arguments on every cache hit.
+    //   - the unit choice (half tiles or single faces) also depends on logical R.
+    // Otherwise logical R only feeds reader/writer runtime args (the per-unit valid-row clamp),
+    // re-derived from the tensors in override_runtime_arguments on every cache hit.
     const auto& padded = input.padded_shape();
     const uint32_t width_tiles = padded[-1] / tt::constants::TILE_WIDTH;
     const uint32_t total_tile_rows = (input.physical_volume() / padded[-1]) / tt::constants::TILE_HEIGHT;
@@ -120,7 +121,8 @@ ttsl::hash::hash_t TopkRouteFinishDeviceOperation::compute_program_hash(
         width_tiles,
         total_tile_rows,
         k_rounded,
-        index_is_u32);
+        index_is_u32,
+        program::finish_units_per_tile(input, indices, grid.x * grid.y));
 }
 
 spec_return_value_t TopkRouteFinishDeviceOperation::compute_output_specs(

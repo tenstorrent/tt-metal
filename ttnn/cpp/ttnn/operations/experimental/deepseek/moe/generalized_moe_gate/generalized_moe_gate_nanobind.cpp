@@ -65,6 +65,8 @@ void bind_generalized_moe_gate(nb::module_& mod) {
             input_tensor: Router logits, BF16. Shard shape ``(num_blocks*32, 32)`` (num_blocks tiles stacked
                 along the height); each 32x32 tile carries one 256-expert block in its top-left 16x16 face
                 (face0) only — the rest of the tile is padding. One shard/token per core.
+                With 256 experts it can also be the router matmul's interleaved ``[1, 1, B, 256]`` TILE tensor,
+                one token row per core of the bias grid, with ROW_MAJOR bias and output shard specs.
             bias_tensor: Score-correction bias added for selection only (output scores stay unbiased), BF16.
                 Same shard spec / shape / orientation as ``input_tensor`` (transposed within each 16x16 block).
             input_indices_tensor: Routing indices (the global expert id per slot), UInt16. Same sharding as
