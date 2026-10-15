@@ -74,6 +74,7 @@ class TtMolmo2DecoderBlock(LightweightModule):
         configuration,
     ):
         super().__init__()
+        self.configuration = configuration
 
         layer_name = f"model.transformer.blocks.{layer_num}"
 
@@ -119,6 +120,45 @@ class TtMolmo2DecoderBlock(LightweightModule):
             configuration=configuration,
         )
 
+    _NORM_GRID = (4, 4)  # decode RMSNorm cores: one 32x4096 row spread over 16 cores instead of 1
+
+    def _norm(self, norm, x, mode):
+        """RMSNorm; in decode the single token row is width-sharded over several cores (1 core takes ~82 us)."""
+        if mode == "prefill":
+            return norm(x, mode=Mode.PREFILL)
+        gx, gy = self._NORM_GRID
+        dim = self.configuration.dim
+        if not hasattr(self, "_norm_cfgs"):
+            block_w = dim // (gx * gy) // 32
+            subblock_w = next(w for w in (4, 3, 2, 1) if block_w % w == 0)
+            self._norm_cfgs = (
+                ttnn.create_sharded_memory_config(
+                    shape=(32, dim // (gx * gy)),
+                    core_grid=ttnn.CoreGrid(y=gy, x=gx),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                ),
+                ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=[gx, gy],
+                    subblock_w=subblock_w,
+                    block_h=1,
+                    block_w=block_w,
+                    inplace=False,
+                ),
+            )
+        shard_cfg, prog_cfg = self._norm_cfgs
+        xs = ttnn.to_memory_config(x, shard_cfg)
+        out = norm(
+            xs,
+            mode=Mode.DECODE,
+            in_sharded=True,
+            out_sharded=False,
+            norm_config={"sharded_program_config": prog_cfg, "sharded_output_config": shard_cfg},
+        )
+        ttnn.deallocate(xs)
+        return out
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -132,7 +172,7 @@ class TtMolmo2DecoderBlock(LightweightModule):
         skip_cfg = ttnn.DRAM_MEMORY_CONFIG
 
         # Attention sub-block
-        attn_in = self.attention_norm(x, mode=Mode.PREFILL if mode == "prefill" else Mode.DECODE)
+        attn_in = self._norm(self.attention_norm, x, mode)
         attn_out = self.attention.forward(
             attn_in,
             current_pos=current_pos,
@@ -148,7 +188,7 @@ class TtMolmo2DecoderBlock(LightweightModule):
         ttnn.deallocate(x)
 
         # MLP sub-block
-        ff_in = self.ff_norm(h, mode=Mode.PREFILL if mode == "prefill" else Mode.DECODE)
+        ff_in = self._norm(self.ff_norm, h, mode)
         ff_out = self.feed_forward.forward(ff_in, mode=Mode.PREFILL if mode == "prefill" else Mode.DECODE)
         ttnn.deallocate(ff_in)
         out = ttnn.add(h, ff_out, memory_config=skip_cfg, dtype=ttnn.bfloat16)
@@ -254,13 +294,23 @@ class TtMolmo2Model(LightweightModule):
         )
 
         lm_head_w = state_dict["lm_head.weight"].T.unsqueeze(0).unsqueeze(0)  # [1, 1, 4096, 152064]
+        # Vocab-parallel lm_head: each chip holds vocab/num_devices columns (a replicated 4096x152064 weight
+        # costs ~7.6 ms per decode step); the logits are all-gathered on device after the matmul.
+        n_dev = mesh_device.get_num_devices()
+        self._lm_head_sharded = n_dev > 1
+        self._vocab_size = lm_head_w.shape[-1]
+        if self._lm_head_sharded:  # zero-pad the vocab so every chip's shard is tile aligned; padding is sliced off
+            pad = (-self._vocab_size) % (32 * n_dev)
+            lm_head_w = torch.nn.functional.pad(lm_head_w, (0, pad))
         self.lm_head = ttnn.as_tensor(
             lm_head_w,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=3)
+            if self._lm_head_sharded
+            else ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
         # ------------------------------------------------------------------ #
@@ -319,6 +369,26 @@ class TtMolmo2Model(LightweightModule):
     # ------------------------------------------------------------------ #
     # Rope helpers
     # ------------------------------------------------------------------ #
+
+    def _project_logits(self, x):
+        """ln_f output [1,1,S,dim] -> logits [1,1,S,vocab] (replicated on every chip)."""
+        logits = ttnn.linear(
+            x,
+            self.lm_head,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.configuration.compute_kernel_config_hifi2_fp16,
+        )
+        if self._lm_head_sharded:
+            gathered = ttnn.all_gather(logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(logits)
+            if gathered.shape[-1] != self._vocab_size:
+                n = gathered.shape[2]
+                logits = ttnn.slice(gathered, (0, 0, 0, 0), (1, 1, n, self._vocab_size))
+                ttnn.deallocate(gathered)
+            else:
+                logits = gathered
+        return logits
 
     def _get_rot_mats_prefill(self, seq_len: int):
         """Get HF-format cos/sin for prefill via ttnn.experimental.rotary_embedding.
@@ -630,13 +700,11 @@ class TtMolmo2Model(LightweightModule):
             for layer in self.layers:
                 x = layer.forward(x, current_pos=cur_pos_t, rot_mats=rot_mats, mode="decode")
             x = self.ln_f(x, mode=Mode.PREFILL)
-            return ttnn.linear(
-                x,
-                self.lm_head,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=cfg.compute_kernel_config_hifi2_fp16,
-            )
+            # Row-major output: the host reads one 300 KB row instead of a 32-row tile-padded 9.7 MB tensor.
+            logits = self._project_logits(x)
+            row_major = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(logits)
+            return row_major
 
         # ---- Warm-up (compile) pass — not traced ----
         logits_warmup = _forward_decode(tt["tok_id"], tt["cur_pos"], tt["cos"], tt["sin"])
@@ -987,13 +1055,7 @@ class TtMolmo2Model(LightweightModule):
                 (1, 1, S, self.configuration.dim),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            logits = ttnn.linear(
-                x_last_ttnn,
-                self.lm_head,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.configuration.compute_kernel_config_hifi2_fp16,
-            )
+            logits = self._project_logits(x_last_ttnn)
             ttnn.deallocate(x_last_ttnn)
             logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).float().squeeze(0)
             ttnn.deallocate(logits)
@@ -1052,13 +1114,7 @@ class TtMolmo2Model(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(x_ttnn)
-        logits = ttnn.linear(
-            x_last_ttnn,
-            self.lm_head,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.configuration.compute_kernel_config_hifi2_fp16,
-        )
+        logits = self._project_logits(x_last_ttnn)
         ttnn.deallocate(x_last_ttnn)
 
         logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).float().squeeze(0)
@@ -1129,13 +1185,7 @@ class TtMolmo2Model(LightweightModule):
 
         # ---- Final norm + LM head ----
         x_ttnn = self.ln_f(x_ttnn, mode=Mode.DECODE)
-        logits = ttnn.linear(
-            x_ttnn,
-            self.lm_head,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.configuration.compute_kernel_config_hifi2_fp16,
-        )
+        logits = self._project_logits(x_ttnn)
         ttnn.deallocate(x_ttnn)
 
         logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).float().squeeze(0).squeeze(0)
@@ -1313,7 +1363,15 @@ class TtMolmo2Model(LightweightModule):
         # LN final and LM head on CPU
         ln_f_w = ttnn.to_torch(ttnn.get_device_tensors(self.ln_f.weight)[0]).float().reshape(-1)
         lm_head_w = (
-            ttnn.to_torch(ttnn.get_device_tensors(self.lm_head)[0]).float().squeeze(0).squeeze(0)
+            (
+                torch.cat([ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(self.lm_head)], dim=-1)[
+                    ..., : self._vocab_size
+                ]
+                if self._lm_head_sharded
+                else ttnn.to_torch(ttnn.get_device_tensors(self.lm_head)[0]).float()
+            )
+            .squeeze(0)
+            .squeeze(0)
         )  # [4096, vocab] before .T
         # lm_head was stored as lm_head_weight.T → [1,1,4096,vocab]; squeeze gives [4096,vocab]
         # For F.linear out=vocab, in=4096: weight=[vocab,4096], so take .T of [4096,vocab]
