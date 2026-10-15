@@ -2,6 +2,8 @@
 
 > Audit cleared all gates. One gate was cleared by user waiver; see below. This is your actionable input; the full record is in `METAL2_PREPORT_AUDIT.md`.
 
+> **Superseded item (2026-10-15, port step).** The `c_8` / `cb_S` multi-binding item under *CB endpoints* and *Watch for* describes the op before PR #60011. That PR moved the reader's seed into a new `c_7` / `cb_S0` (reader PRODUCER → compute CONSUMER), leaving `c_8` a compute-only self-loop. The audit was not re-run; the port re-derived the census (see `METAL2_PORT_PLAN.md`). The rest of the brief is unchanged.
+
 **Gates cleared:** Device 2.0 ✓ · Features ✓ · TTNN factory concept ✓ *(user waiver: readiness-sheet row is stale, see below)* · Offset base pointers ✓ · TensorAccessor 3rd arg ✓
 
 **Recipe docs:** `4bd4bf42bfe 2026-09-03 docs(metal_2.0): state the offset-base wall as a category, not as slice's current state` *(carry this line into the port report's Provenance section; hash from the `Port_Recipe` checkout)*
