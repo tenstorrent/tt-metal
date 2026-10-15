@@ -66,6 +66,7 @@ DEVICE_STEPS = {
         "ffn_hc",
         "ffn_collapse",
         "ffn_norm",
+        "router",
     },
 }
 
@@ -265,6 +266,24 @@ def _attention_host_fn(mesh, module):
     return fn
 
 
+def _router_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> dense routing host [S, E] fp32 (harness boundary: ffn_norm's gathered rows split over
+    axis 0, replicated over axis 1, in; the dense [S/SP, E] fp32 ROW_MAJOR routing back from mesh column 0)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import row_split_to_device, row_split_to_host
+
+    def fn(ctx, x):
+        xd = row_split_to_device(mesh, x)
+        dense, idx, wts = module(xd)
+        out = row_split_to_host(mesh, dense).float()
+        for t in (xd, dense, idx, wts):
+            ttnn.deallocate(t)
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _chunk(spec):
     """The serving chunk the window tables are built for (the run's target chunk; every ladder rung uses it)."""
     return int(spec.get("target.chunk"))
@@ -300,6 +319,10 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         from models.demos.deepseek_v41_flash_d_p.tt.kv import build_kv
 
         return _kv_host_fn(mesh, build_kv(mesh, ck, cfg, layer, _max_seq(spec)))
+    if step == "router":
+        from models.demos.deepseek_v41_flash_d_p.tt.router import build_router
+
+        return _router_host_fn(mesh, build_router(mesh, ck, cfg, layer, _chunk(spec)))
     if step == "q_a":
         from models.demos.deepseek_v41_flash_d_p.tt.q_a import build_q_a
 
