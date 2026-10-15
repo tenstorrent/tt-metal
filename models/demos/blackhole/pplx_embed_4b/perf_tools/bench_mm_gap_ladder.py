@@ -19,7 +19,7 @@ from bench_mm_ablate import HDR, patch  # noqa: E402
 from device_kernel_us import kernel_us  # noqa: E402
 
 COMPUTE = os.path.join(os.path.dirname(HDR), "compute_metal2.cpp")
-SFPU_CALL = "PACK((llk_minimal_matmul_swiglu(gate, gate + 1, gate)));"
+SFPU_CALL = "PACK((minimal_matmul_swiglu_tile<block_float_output>(gate, gate + 1, gate)));"
 ADD_GUARD = "            if (add_partials) {"
 COPY = "            copy_tile(in_dfb, tile_id, fused_act_dst_id /*dst*/);"
 MM_CALL = re.compile(r"(\n\s*)matmul_block\(\n")  # the calls, not matmul_block_init

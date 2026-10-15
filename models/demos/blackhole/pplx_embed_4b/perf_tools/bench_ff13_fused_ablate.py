@@ -17,7 +17,7 @@ sys.path.insert(0, HERE)
 from bench_mm_ablate import HDR, patch  # noqa: E402
 
 COMPUTE = os.path.join(os.path.dirname(HDR), "compute_metal2.cpp")
-SFPU_CALL = "PACK((llk_minimal_matmul_swiglu(gate, gate + 1, gate)));"
+SFPU_CALL = "PACK((minimal_matmul_swiglu_tile<block_float_output>(gate, gate + 1, gate)));"
 ADD_GUARD = "            if (add_partials) {"
 VARIANTS = {  # name: (SFPU passes, add partials, read in0, read in1, write out)
     "full": (1, 1, 1, 1, 1),

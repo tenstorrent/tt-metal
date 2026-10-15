@@ -20,7 +20,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")
 KDIR = os.path.join(REPO, "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels")
 HDR = os.path.join(KDIR, "swiglu_sfpu.hpp")
 COMPUTE = os.path.join(KDIR, "compute_metal2.cpp")
-SFPU_CALL = "PACK((llk_minimal_matmul_swiglu(gate, gate + 1, gate)));"
+SFPU_CALL = "PACK((minimal_matmul_swiglu_tile<block_float_output>(gate, gate + 1, gate)));"
 SKIP = {  # SW_SKIP: which subblocks of each output block run without the pass
     "first": "!(M_start == 0 && N_start == 0)",
     "last": "!(M_start + subblock_h >= M_block_tiles && N_start + subblock_w >= N_block_tiles)",

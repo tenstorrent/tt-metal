@@ -41,7 +41,7 @@ ALWI void rsqrt_col_tile(uint32_t idst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_rsqrt,
-        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, false, false),
+        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, /*FAST_APPROX=*/false),
         idst,
         VectorMode::C));
 }

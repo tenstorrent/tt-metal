@@ -63,9 +63,10 @@ void kernel_main() {
             for (uint32_t i = 0; i < CH; ++i) {
                 copy_tile(cb_b, i, CH + i);
             }
-            MATH((llk_minimal_matmul_swiglu_init()));
+            // minimal_matmul's single-pass SwiGLU with its block-float sigmoid (the output is bfp8).
+            MATH((minimal_matmul_swiglu_tile_init()));
             for (uint32_t i = 0; i < CH; ++i) {
-                MATH((llk_minimal_matmul_swiglu(i, CH + i, i)));
+                MATH((minimal_matmul_swiglu_tile</*block_float_output=*/true>(i, CH + i, i)));
             }
         } else {
             reconfig_data_format_srca(cb_b);
