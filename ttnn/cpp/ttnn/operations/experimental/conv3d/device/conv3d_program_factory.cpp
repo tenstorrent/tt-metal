@@ -179,7 +179,8 @@ Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
     // The loop stops at out_subblock_h=1 whether or not the CBs fit. A blocking whose static CBs cannot be
     // placed below the top of L1 at all fails here, where the message can say what was asked for, rather than at
     // enqueue where only the region clash is reported. One that fits the span but not the planning budget runs
-    // with less than the headroom left for L1 buffers; the validator warns about it.
+    // with less than the headroom left for L1 buffers; nothing warns, and a clash with a live L1 buffer is
+    // reported by the enqueue-time region check.
     plan.static_cb_bytes = static_cb_bytes_for(plan.out_subblock_h);
     TT_FATAL(
         plan.static_cb_bytes <= budget.span,
