@@ -385,6 +385,13 @@ tasks:
     - attn_norm
     - q_a
     layer: 0
+  frozen:
+    at: '2026-10-15T22:38:54'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_04_q_a.py: 3f5f52146f123e8979b61991c1664f2b9613e6d5c3e03e779e3e5c7a600b251a
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.swa.kv
   title: swa kv (op) on device, layer 0
   step: implement
