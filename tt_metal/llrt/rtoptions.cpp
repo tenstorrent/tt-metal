@@ -121,7 +121,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
-    TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS,              // Serve simulated chips over sockets (on by default)
+    TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS,              // Serve simulated chips over sockets
     TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
     TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
@@ -966,14 +966,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS
         // Expose each simulated chip over a per-chip socket so a separate process (a debug tool) can
-        // attach to this run as a client. Set to '0' to keep the simulator private to this process.
-        // Default: true (enabled)
-        // Usage: export TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=0
+        // attach to this run as a client.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1
         case EnvVarID::TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS:
-            this->simulator_serve_over_sockets = true;
-            if (std::strncmp(value, "0", 1) == 0) {
-                this->simulator_serve_over_sockets = false;
-            }
+            this->simulator_serve_over_sockets = is_env_enabled(value);
             break;
 
         // TT_METAL_QUASAR_NOC_API_VERSION
