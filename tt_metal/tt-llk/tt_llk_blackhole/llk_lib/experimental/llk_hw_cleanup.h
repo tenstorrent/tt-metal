@@ -42,10 +42,12 @@ inline void select_cfg_state(const std::uint32_t state_id)
 {
     LLK_ASSERT(state_id <= 1, "Blackhole cleanup configuration state must be zero or one.");
 
+    // No drain is needed after the flip: the state ID is a thread-private register that the thread's
+    // following configuration instructions see in program order, and RISC configuration accesses
+    // select their bank by address.
     if (cfg_state_id != state_id)
     {
         flip_cfg_state_id();
-        tensix_sync();
     }
 }
 
