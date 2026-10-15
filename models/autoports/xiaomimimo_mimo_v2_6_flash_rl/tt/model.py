@@ -191,8 +191,11 @@ class TtMiMoModel:
             if return_hidden:
                 hidden.append(ttnn.clone(x))
         tile_start = ((seq_len - 1) // TILE) * TILE
-        last = ttnn.slice(x, (0, 0, tile_start, 0), (1, 1, tile_start + TILE, self.cfg.hidden_size))
-        x.deallocate(True)
+        if padded == TILE:
+            last = x  # a slice covering the whole tensor shares its buffer, so it must not be freed separately
+        else:
+            last = ttnn.slice(x, (0, 0, tile_start, 0), (1, 1, tile_start + TILE, self.cfg.hidden_size))
+            x.deallocate(True)
         logits = self._logits(last)
         last.deallocate(True)
         return {"logits": logits, "row": seq_len - 1 - tile_start, "hidden": hidden, "seq_len": seq_len}
