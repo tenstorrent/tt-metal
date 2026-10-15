@@ -78,9 +78,7 @@ function(_x280_check_header header lang)
         )
     elseif(lang STREQUAL "c++")
         set(flags
-            -std=c++17
-            -fno-exceptions
-            -fno-rtti
+            ${_x280_cxxflags}
             -fsyntax-only
         )
     else()
@@ -422,8 +420,7 @@ endforeach()
 add_test(
     NAME x280_core_sync_director_refusal
     COMMAND
-        ${CMAKE_COMMAND} "-DCOMPILER=${X280_GCC}"
-        "-DFLAGS=${X280_CFLAGS};-I${_x280_shared_dir};-std=c++17;-fno-exceptions;-fno-rtti"
+        ${CMAKE_COMMAND} "-DCOMPILER=${X280_GCC}" "-DFLAGS=${X280_CFLAGS};-I${_x280_shared_dir};${_x280_cxxflags}"
         -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/core-sync-director-check -P
         ${CMAKE_CURRENT_SOURCE_DIR}/x280_core_sync_director_check.cmake
 )

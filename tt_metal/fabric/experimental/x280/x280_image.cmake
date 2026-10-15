@@ -42,7 +42,7 @@ set(X280_CFLAGS
     -mcmodel=medany
     -I${CMAKE_CURRENT_LIST_DIR}/include
 )
-# C++ image sources add these, as the C++ suite-header checks do.
+# Every C++ compile adds these: image sources, suite-header checks and refusal checks.
 set(_x280_cxxflags
     -std=c++17
     -fno-exceptions
@@ -64,18 +64,20 @@ set(_x280_obj_dir "${X280_IMAGE_DIR}/obj")
 
 add_custom_target(x280_images ALL)
 
-# _x280_compile(<out> <source> <flag>...): one object from one C, C++ (.cpp, compiled by g++) or
-# assembly source, with header dependencies through a depfile.
+# _x280_compile(<out> <source> <flag>...): one object from one C, C++ (.cpp, compiled by g++ with
+# _x280_cxxflags) or assembly source, with header dependencies through a depfile.
 function(_x280_compile out source)
     set(compiler "${X280_GCC}")
+    set(language_flags "")
     if(source MATCHES "\\.cpp$")
         set(compiler "${X280_GXX}")
+        set(language_flags ${_x280_cxxflags})
     endif()
     add_custom_command(
         OUTPUT
             "${out}"
         COMMAND
-            "${compiler}" ${ARGN} -MD -MT "${out}" -MF "${out}.d" -c -o "${out}" "${source}"
+            "${compiler}" ${ARGN} ${language_flags} -MD -MT "${out}" -MF "${out}.d" -c -o "${out}" "${source}"
         DEPENDS
             "${source}"
         DEPFILE "${out}.d"
@@ -163,11 +165,7 @@ function(x280_add_image)
         endif()
         cmake_path(GET source STEM stem)
         set(object "${_x280_obj_dir}/${ARG_NAME}/${stem}.o")
-        set(flags ${X280_CFLAGS})
-        if(source MATCHES "\\.cpp$")
-            list(APPEND flags ${_x280_cxxflags})
-        endif()
-        _x280_compile("${object}" "${source}" ${flags} ${ARG_COMPILE_OPTIONS} ${ARG_INCLUDES} ${ARG_DEFINES})
+        _x280_compile("${object}" "${source}" ${X280_CFLAGS} ${ARG_COMPILE_OPTIONS} ${ARG_INCLUDES} ${ARG_DEFINES})
         list(APPEND objects "${object}")
     endforeach()
     if(ARG_LINK_PINNED_INPUT)
