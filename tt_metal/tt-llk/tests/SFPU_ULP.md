@@ -211,7 +211,10 @@ Re-run without `--ulp-emit`. Green means the budgets in the table hold over ever
 of a 16-bit input and over the `Float32` stride. Then run the host guards, which check things the sweep cannot:
 
 ```bash
-pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
+cd tests/python_tests
+CHIP_ARCH=wormhole pytest -c pytest.ini --rootdir=. --confcutdir=. \
+  ../hardware_free/accuracy/test_sfpu_accuracy_budget.py \
+  ../hardware_free/accuracy/test_ulp_sweep.py -q
 ```
 
 ## The rules the table enforces

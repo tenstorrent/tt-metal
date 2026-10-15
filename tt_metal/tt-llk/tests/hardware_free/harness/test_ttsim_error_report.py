@@ -17,7 +17,7 @@ import pytest
 from helpers.llk_pytest_plugin import pytest_runtest_logreport
 from ttsim_error import parse_ttsim_error
 
-_RENDERER_PATH = Path(__file__).resolve().parents[1] / "render_ttsim_report.py"
+_RENDERER_PATH = Path(__file__).resolve().parents[2] / "render_ttsim_report.py"
 
 
 def _load_renderer():

@@ -25,15 +25,17 @@ PerfConfig call, via a named variable, or as a dict entry), so both derive
 statically the same way.
 
 This module is import-free of device libraries on purpose, so the gate imports it
-normally (unlike helpers/*, whose package __init__ pulls ttexalens).
+normally (unlike helpers/*, whose package __init__ pulls ttexalens). It lives
+next to the other gate modules under ``tt-llk/perf`` and is not a pytest file:
+``pytest.ini`` collects every ``perf_*.py``.
 """
 
 import ast
 import importlib.util
 from pathlib import Path
 
-# python_tests root (this file lives directly under it).
-ROOT = Path(__file__).resolve().parent
+# python_tests root. This file lives in tt-llk/perf/, a sibling of tests/.
+ROOT = Path(__file__).resolve().parents[1] / "tests" / "python_tests"
 
 PARAM_BASES = {"TemplateParameter", "RuntimeParameter"}
 LIST_KWARGS = {"templates", "runtimes"}

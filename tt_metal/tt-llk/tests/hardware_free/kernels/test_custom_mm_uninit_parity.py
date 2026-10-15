@@ -16,11 +16,11 @@ from pathlib import Path
 
 import pytest
 
-# tests/python_tests -> tests -> tt-llk -> tt_metal
-_TT_METAL = Path(__file__).resolve().parents[3]
+# tests/hardware_free/kernels -> hardware_free -> tests -> tt-llk -> tt_metal
+_TT_METAL = Path(__file__).resolve().parents[4]
 _COMPUTE_API = _TT_METAL / "hw" / "inc" / "api" / "compute" / "experimental"
 _DRIVER = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[2]
     / "sources"
     / "custom_mm_uninit_restore_test.cpp"
 )

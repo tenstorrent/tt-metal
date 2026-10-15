@@ -935,7 +935,9 @@ def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypat
     from helpers.test_config import TestConfig
     from helpers.ulp_sweep import SWEEP_FORMATS, SWEEP_INPUT_FORMATS, sweep_cells
 
-    monkeypatch.setattr(TestConfig, "CHIP_ARCH", arch)
+    # CHIP_ARCH is assigned by the harness plugin's pytest_configure. This suite
+    # does not load that plugin (it opens a device), so the attribute may be absent.
+    monkeypatch.setattr(TestConfig, "CHIP_ARCH", arch, raising=False)
     built_as_asked = [
         (i, o, a, d)
         for i in SWEEP_INPUT_FORMATS
