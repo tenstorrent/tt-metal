@@ -24,11 +24,13 @@ than a marker of "loops", which is the distinction the check needs.
 
 Known blind spots, all deliberate:
 
-- Only the sources named in the Makefile's ACTIVE_IMAGE_SRCS are read. Shared
-  runtime headers are not, so the RETURN_ACK wait in
-  `rt/x280_idle.h` is invisible here. The idle header's
-  waits are correct by construction -- both are entered only after STOP has
-  been latched, so nothing is left to observe. Firmware outside the active set is out of scope too: the
+- Only the sources named on the command line are read: the CTest
+  x280_stop_poll passes every source of every image that links the active
+  harness, as x280_add_image records them. Shared runtime headers are not, so
+  the RETURN_ACK wait in
+  `rt/x280_idle.h` is invisible here. The idle header's waits are correct by
+  construction -- both are entered only after STOP has been latched, so
+  nothing is left to observe. Firmware outside the active set is out of scope too: the
   resident idle image is supposed to spin until the next handoff.
 - A wait with no load fence is not seen at all. It is also already broken for
   the reason above, which is why the idiom is universal in this tree.
@@ -43,7 +45,7 @@ Known blind spots, all deliberate:
   a caller then wraps in its own wait needs that header scanned.
 
 Usage:
-    check_stop_poll.py [--makefile PATH] [--verbose] SRC...
+    check_stop_poll.py [--verbose] SRC...
 """
 
 import argparse
@@ -402,103 +404,9 @@ def scan(path, verbose=False):
     return failures, exemptions
 
 
-HARNESS_OBJS = ("entry_active", "x280_active_start")
-
-
-def _make_vars(text):
-    joined = re.sub(r"\\\n", " ", text)
-    return dict(re.findall(r"^(\w+)\s*:?=\s*(.*)$", joined, re.MULTILINE))
-
-
-def _expand(value, variables, depth=8):
-    for _ in range(depth):
-        expanded = re.sub(r"\$\((\w+)\)", lambda m: variables.get(m.group(1), m.group(0)), value)
-        if expanded == value:
-            break
-        value = expanded
-    return value
-
-
-def check_scope(makefile, scanned):
-    """Every image linking the active harness must be in the scanned set.
-
-    This is the hole the defect went through: three images coordinate helper
-    harts, two were converted by hand and the third was missed. An image added
-    to the Makefile without being added to ACTIVE_IMAGE_SRCS would be exempt by
-    omission, which is the failure this whole target exists to prevent.
-    """
-    with open(makefile, "r", encoding="utf-8") as fh:
-        text = fh.read()
-    variables = _make_vars(text)
-    root = os.path.dirname(os.path.abspath(makefile))
-    scanned_stems = {os.path.splitext(os.path.basename(p))[0] for p in scanned}
-    linked_stems = set()
-    problems = []
-    for m in re.finditer(r"^(\S+\.elf):([^\n]*)$", text, re.MULTILINE):
-        target = _expand(m.group(1), variables)
-        prereqs = _expand(m.group(2), variables)
-        if not all("%s.o" % obj in prereqs for obj in HARNESS_OBJS):
-            continue
-        for obj in re.findall(r"([\w.\-]+)\.o\b", prereqs):
-            obj = os.path.basename(obj)
-            if obj in HARNESS_OBJS:
-                continue
-            linked_stems.add(obj)
-            if obj in scanned_stems:
-                continue
-            for ext in (".c", ".cpp"):
-                if os.path.exists(os.path.join(root, "src", obj + ext)):
-                    problems.append(
-                        "%s: %s links the active harness but src/%s%s is not in "
-                        "ACTIVE_IMAGE_SRCS" % (makefile, os.path.basename(target), obj, ext)
-                    )
-                    break
-    for stem in sorted(scanned_stems - linked_stems):
-        problems.append(
-            "%s: ACTIVE_IMAGE_SRCS lists %s, which no image links through the " "active harness" % (makefile, stem)
-        )
-    return problems
-
-
-def check_build_coverage(makefile):
-    with open(makefile, "r", encoding="utf-8") as fh:
-        text = fh.read()
-    joined = re.sub(r"\\\n", " ", text)
-    variables = _make_vars(text)
-
-    rules = {}
-    for m in re.finditer(r"^([^\s:#][^:\n]*):(?!=)([^\n]*)$", joined, re.MULTILINE):
-        prereqs = _expand(m.group(2), variables).split()
-        for target in _expand(m.group(1), variables).split():
-            rules.setdefault(target, []).extend(prereqs)
-
-    # legacy-tests builds the active images outside the active-image contract.
-    reachable, stack = set(), rules.get("all-tests", []) + rules.get("legacy-tests", [])
-    while stack:
-        node = stack.pop()
-        if node in reachable:
-            continue
-        reachable.add(node)
-        stack.extend(rules.get(node, []))
-
-    problems = []
-    for m in re.finditer(r"^(\S+\.elf):([^\n]*)$", joined, re.MULTILINE):
-        prereqs = _expand(m.group(2), variables)
-        if not all("%s.o" % obj in prereqs for obj in HARNESS_OBJS):
-            continue
-        binary = _expand(m.group(1), variables)[: -len(".elf")] + ".bin"
-        if binary not in reachable:
-            problems.append(
-                "%s: %s links the active harness but neither all-tests nor "
-                "legacy-tests builds it" % (makefile, os.path.basename(binary))
-            )
-    return problems
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("sources", nargs="+")
-    ap.add_argument("--makefile", help="cross-check the scanned set against it")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -512,10 +420,6 @@ def main():
         f, e = scan(path, args.verbose)
         failures += f
         exemptions += e
-
-    if args.makefile:
-        failures += check_scope(args.makefile, args.sources)
-        failures += check_build_coverage(args.makefile)
 
     # Exemptions print on every run, pass or fail: an exemption nobody sees is
     # an exemption nobody reviews.
