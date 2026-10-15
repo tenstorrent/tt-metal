@@ -33,7 +33,7 @@ import ttnn
 
 from loguru import logger as loguru_logger
 
-from models.common.utility_functions import is_wormhole_b0, skip_for_slow_dispatch
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0, skip_for_slow_dispatch
 
 
 @pytest.fixture
@@ -419,7 +419,7 @@ class TestSubDeviceExecutionImport:
             ):
                 assert cursor.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
             assert cursor.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'").fetchone() == (
-                "3.4",
+                graph_report.DATABASE_SCHEMA_VERSION,
             )
         finally:
             conn.close()

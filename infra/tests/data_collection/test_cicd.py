@@ -791,7 +791,7 @@ def test_search_for_jit_cache_stats_tolerates_missing_bracket_counters(tmp_path)
     # Only the leading hits/lookups pair is required; a truncated bracket must still
     # yield hits and lookups rather than failing the scan.
     log_file = tmp_path / "cache_partial.log"
-    log_file.write_text("JIT cache stats: 96/346 hits (27.7%)\n")
+    log_file.write_text("2026-09-17 07:26:27.230 | info | BuildKernels | JIT cache stats: 96/346 hits (27.7%)\n")
 
     metrics = {m["metric_name"]: m for m in workflows.search_for_jit_telemetry_in_log_file_(log_file)}
 
@@ -802,14 +802,54 @@ def test_search_for_jit_cache_stats_tolerates_missing_bracket_counters(tmp_path)
 def test_search_for_jit_cache_stats_sum_across_process_blocks(tmp_path):
     # Counters from independent process blocks are summed (job-level totals).
     log_file = tmp_path / "cache_multi.log"
+    prefix = "2026-09-17 07:26:27.230 | info | BuildKernels | "
     log_file.write_text(
-        "JIT cache stats: 10/100 hits (10.0%) [1 cached, 2 build-once dedup, 0 merged artifacts, 0 merged genfiles]\n"
-        "JIT cache stats: 30/300 hits (10.0%) [3 cached, 4 build-once dedup, 0 merged artifacts, 0 merged genfiles]\n"
+        prefix
+        + "JIT cache stats: 10/100 hits (10.0%) [1 cached, 2 build-once dedup, 0 merged artifacts, 0 merged genfiles]\n"
+        + prefix
+        + "JIT cache stats: 30/300 hits (10.0%) [3 cached, 4 build-once dedup, 0 merged artifacts, 0 merged genfiles]\n"
     )
 
     metrics = {m["metric_name"]: m for m in workflows.search_for_jit_telemetry_in_log_file_(log_file)}
     assert metrics["jit_cache.hits"]["total_value"] == pytest.approx(40.0)  # 10 + 30
     assert metrics["jit_cache.lookups"]["total_value"] == pytest.approx(400.0)  # 100 + 300
+
+
+def test_search_for_jit_cache_stats_ignores_echoed_summary_copies(tmp_path):
+    # A workflow step may re-print the cache-stats lines with the logger prefix stripped, e.g.
+    #   grep -a 'JIT cache stats' "$LOG" | sed 's/.*| //' | sed 's/^/  /'
+    # Those echoed copies must not be counted again: each process block counts exactly once.
+    # Lines below use the raw CI format, where every logger field carries ANSI color codes.
+    def real(ts, body):
+        return (
+            f"2026-10-08T{ts}Z \x1b[90m2026-10-08 {ts[:12]}\x1b[0m | info     | "
+            f"\x1b[35m   BuildKernels\x1b[0m | \x1b[37mJIT cache stats: {body}\x1b[0m "
+            "\x1b[90m(build_cache_telemetry.cpp:268)\x1b[0m\n"
+        )
+
+    def echoed(ts, body):
+        return f"2026-10-08T{ts}Z   \x1b[37mJIT cache stats: {body}\x1b[0m \x1b[90m(build_cache_telemetry.cpp:268)\x1b[0m\n"
+
+    body_1 = "106/18250 hits (0.6%) [106 cached, 32783 build-once dedup, 0 merged artifacts, 0 merged genfiles]"
+    body_2 = "106/294 hits (36.1%) [106 cached, 395 build-once dedup, 0 merged artifacts, 0 merged genfiles]"
+    log_file = tmp_path / "cache_echoed.log"
+    log_file.write_text(
+        real("08:31:23.2189789", body_1)
+        + real("08:31:43.2012370", body_2)
+        + "2026-10-08T08:39:04.0881710Z ##[group]Run set -uo pipefail\n"
+        + "2026-10-08T08:39:04.0888341Z grep -a 'JIT cache stats' \"$LOG\" | sed 's/.*| //' | sed 's/^/  /'\n"
+        + "2026-10-08T08:39:04.1525152Z --- JIT cache stats (tt-metal, once per process) ---\n"
+        + echoed("08:39:04.1554629", body_1)
+        + echoed("08:39:04.1556427", body_2)
+    )
+
+    metrics = {m["metric_name"]: m for m in workflows.search_for_jit_telemetry_in_log_file_(log_file)}
+
+    # Two real process blocks -> two samples, not four.
+    assert metrics["jit_cache.lookups"]["sample_count"] == 2
+    assert metrics["jit_cache.lookups"]["total_value"] == pytest.approx(18250.0 + 294.0)
+    assert metrics["jit_cache.hits"]["total_value"] == pytest.approx(212.0)
+    assert metrics["jit_cache.build_once_dedup"]["total_value"] == pytest.approx(32783.0 + 395.0)
 
 
 def test_search_for_jit_telemetry_returns_empty_when_absent(tmp_path):

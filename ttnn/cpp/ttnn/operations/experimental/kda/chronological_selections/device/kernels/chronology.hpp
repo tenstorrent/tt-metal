@@ -30,10 +30,15 @@ struct Topology {
         const uint32_t rows_per_group = local_rows / groups;
         return (valid_rows + rows_per_group - 1) / rows_per_group;
     }
+    // Chunks holding any valid row. Only the last can be partial: its rows from
+    // partial_rows() on are padding, and kernels make them identity steps.
+    uint32_t chunk_count() const { return (valid_rows + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT; }
+    uint32_t partial_chunk() const { return valid_rows / tt::constants::TILE_HEIGHT; }
+    uint32_t partial_rows() const { return valid_rows % tt::constants::TILE_HEIGHT; }
     uint32_t valid_chunks(uint32_t group, uint32_t groups) const {
         const uint32_t chunks = group_chunks(groups);
         const uint32_t begin = group * chunks;
-        const uint32_t end = valid_rows / tt::constants::TILE_HEIGHT;
+        const uint32_t end = chunk_count();
         return end <= begin ? 0 : (end - begin < chunks ? end - begin : chunks);
     }
     bool has_valid_tail() const { return local_split && valid_rows > head_rows; }

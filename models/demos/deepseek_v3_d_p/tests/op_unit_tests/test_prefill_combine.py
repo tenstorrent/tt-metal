@@ -473,8 +473,8 @@ def _unsupported_param_combos(**params):
     if use_fp8_output and not is_bh:
         return True
 
-    # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
-    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+    # Production combine consumes a TILE dispatched buffer, so ROW_MAJOR (pcc and perf) has no CI coverage value.
+    if (is_ci_env or is_ci_v2_env) and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
         return True
 
     # Otherwise don't uncollect the test case. Keep it.

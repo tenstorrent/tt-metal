@@ -19,6 +19,13 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     DataflowBuffer dfb_sum_obj(dfb::sum);
+    DataflowBuffer dfb_y_obj(dfb::y);
+    DataflowBuffer dfb_dy_obj(dfb::dy);
+    DataflowBuffer dfb_mask_obj(dfb::mask);
+    DataflowBuffer dfb_ydy_obj(dfb::ydy);
+    DataflowBuffer dfb_add_obj(dfb::add);
+    DataflowBuffer dfb_dy_m_sum_obj(dfb::dy_m_sum);
+    DataflowBuffer dfb_dx_obj(dfb::dx);
 
     compute_kernel_hw_startup(dfb::y, dfb::scaler, dfb::dx);
 
@@ -32,20 +39,32 @@ void kernel_main() {
             if (h == Ht - 1) {
                 if (h == 0) {
                     mask_tile_to_dfb<dfb::dy, dfb::mask, dfb::add>(
-                        /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
+                        dfb_dy_obj,
+                        dfb_mask_obj,
+                        dfb_add_obj,
+                        /*itile=*/0,
+                        /*mtile=*/0,
+                        /*pop=*/1,
+                        /*popm=*/0);
                 } else {
                     // The y*dy buffer under a second name; one FIFO, not an extra buffer.
                     constexpr auto dfb_inter0_id = dfb::ydy;
                     mask_tile_to_dfb<dfb::dy, dfb::mask, dfb_inter0_id>(
-                        /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
+                        dfb_dy_obj,
+                        dfb_mask_obj,
+                        dfb_ydy_obj,
+                        /*itile=*/0,
+                        /*mtile=*/0,
+                        /*pop=*/1,
+                        /*popm=*/0);
 
-                    add_tiles_to_dfb<dfb::add, dfb_inter0_id, dfb::add>();
+                    add_tiles_to_dfb<dfb::add, dfb_inter0_id, dfb::add>(dfb_add_obj, dfb_ydy_obj, dfb_add_obj);
                 }
             } else {
                 if (h == 0) {
-                    copy_tile_to_dfb<dfb::dy, dfb::add>();
+                    copy_tile_to_dfb<dfb::dy, dfb::add>(dfb_dy_obj, dfb_add_obj);
                 } else {
-                    add_tiles_to_dfb<dfb::add, dfb::dy, dfb::add>();
+                    add_tiles_to_dfb<dfb::add, dfb::dy, dfb::add>(dfb_add_obj, dfb_dy_obj, dfb_add_obj);
                 }
             }
         }
@@ -55,13 +74,14 @@ void kernel_main() {
 
         for (uint32_t h = 0; h < Ht; ++h) {
             constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
-            exp_tile_to_dfb<dfb::y, dfb_exp_id>();
+            exp_tile_to_dfb<dfb::y, dfb_exp_id>(dfb_y_obj, dfb_ydy_obj);
 
             // sum * exp(y)
-            mul_tiles_bcast_rows_to_dfb<dfb_exp_id, dfb::sum, dfb::dy_m_sum>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            mul_tiles_bcast_rows_to_dfb<dfb_exp_id, dfb::sum, dfb::dy_m_sum>(
+                dfb_ydy_obj, dfb_sum_obj, dfb_dy_m_sum_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 
             // dy - sum * exp(y)
-            sub_tiles_to_dfb<dfb::dy, dfb::dy_m_sum, dfb::dx>();
+            sub_tiles_to_dfb<dfb::dy, dfb::dy_m_sum, dfb::dx>(dfb_dy_obj, dfb_dy_m_sum_obj, dfb_dx_obj);
         }
 
         dfb_sum_obj.pop_front(onetile);
@@ -71,15 +91,15 @@ void kernel_main() {
         for (uint32_t h = 0; h < Ht; ++h) {
             if (h == Ht - 1) {
                 mul_tiles_and_mask_tile_to_dfb<dfb::y, dfb::dy, dfb::mask, dfb::ydy>(
-                    0, 0, 0, /*pop0=*/1, /*pop1=*/1, /*popm=*/0);
+                    dfb_y_obj, dfb_dy_obj, dfb_mask_obj, dfb_ydy_obj, 0, 0, 0, /*pop0=*/1, /*pop1=*/1, /*popm=*/0);
             } else {
-                mul_tiles_to_dfb<dfb::y, dfb::dy, dfb::ydy>();
+                mul_tiles_to_dfb<dfb::y, dfb::dy, dfb::ydy>(dfb_y_obj, dfb_dy_obj, dfb_ydy_obj);
             }
 
             if (h == 0) {
-                copy_tile_to_dfb<dfb::ydy, dfb::add>();
+                copy_tile_to_dfb<dfb::ydy, dfb::add>(dfb_ydy_obj, dfb_add_obj);
             } else {
-                add_tiles_to_dfb<dfb::add, dfb::ydy, dfb::add>();
+                add_tiles_to_dfb<dfb::add, dfb::ydy, dfb::add>(dfb_add_obj, dfb_ydy_obj, dfb_add_obj);
             }
         }
 
@@ -90,14 +110,15 @@ void kernel_main() {
         // step 3, compute final result
         for (uint32_t h = 0; h < Ht; ++h) {
             // dy - sum
-            sub_tiles_bcast_rows_to_dfb<dfb::dy, dfb::sum, dfb::dy_m_sum>(0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_bcast_rows_to_dfb<dfb::dy, dfb::sum, dfb::dy_m_sum>(
+                dfb_dy_obj, dfb_sum_obj, dfb_dy_m_sum_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
 
 #ifdef SOFTMAX
             // (dy - sum) * y
-            mul_tiles_to_dfb<dfb::y, dfb::dy_m_sum, dfb::dx>();
+            mul_tiles_to_dfb<dfb::y, dfb::dy_m_sum, dfb::dx>(dfb_y_obj, dfb_dy_m_sum_obj, dfb_dx_obj);
 #else
             // -(dy - sum) * y
-            mul_tiles_and_negative_to_dfb<dfb::y, dfb::dy_m_sum, dfb::dx>();
+            mul_tiles_and_negative_to_dfb<dfb::y, dfb::dy_m_sum, dfb::dx>(dfb_y_obj, dfb_dy_m_sum_obj, dfb_dx_obj);
 #endif
         }
 
