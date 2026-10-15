@@ -8,6 +8,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.hpp"
