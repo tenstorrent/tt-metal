@@ -8,7 +8,7 @@ RS=(ionice -c3 nice -n19 rsync -a --bwlimit=100M --rsync-path="ionice -c3 nice -
 use=$(ssh $H "df --output=pcent / | tail -1" | tr -dc 0-9); [ "$use" -le 70 ] || { echo "blx03 / at $use%"; exit 5; }
 ssh $H "mkdir -p $R/ltx25/text_encoders $R/ltx25/diffusion_models $R/ltx25/vae $R/ltx25/latent_upscale_models $R/te0817/text_encoders $R/cache $R/jit $R/tmp ~/fasth3/t503/tt-metal"
 echo "code $(date -u +%T)"
-"${RS[@]}" --exclude=.git --exclude=.cpmcache --exclude=tt-project --exclude=build_Release/CMakeFiles --exclude=build_Release/Testing --exclude='*.o' $P/worktrees/t313/ $H:fasth3/t503/tt-metal/
+"${RS[@]}" --exclude=.git --exclude=.cpmcache --exclude=tt-project --exclude=build_Release/CMakeFiles --exclude=build_Release/Testing --include='/runtime/**' --exclude='*.o' $P/worktrees/t313/ $H:fasth3/t503/tt-metal/
 git -C $P/worktrees/t503 ls-files -z -- . ':!tt-project' ':!NOTES.md' ':!tmp' > /tmp/t503.files
 "${RS[@]}" --from0 --files-from=/tmp/t503.files $P/worktrees/t503/ $H:fasth3/t503/tt-metal/
 git -C $P/worktrees/t503 rev-parse HEAD | ssh $H "cat > ~/fasth3/t503/tt-metal/T503_COMMIT"

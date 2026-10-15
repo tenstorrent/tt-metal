@@ -37,3 +37,16 @@
   would take hours; blx03 already has everything staged.
 - Restarted blx03 runner (pid 8491); it will rerun t503-ab-r1 (one drop so far) then r2 when the broker is healthy.
 - Probe now inline ssh (harness flagged the wrapper script as naming no ssh host).
+
+## 2026-10-15 04:15 PDT (run 1959)
+- The A/B never ran. Broker job 250 (t503-ab-r1, 2026-10-14 19:45 UTC) died in 26 s: JIT link of fabric_erisc_router
+  failed, `ld: cannot find .../runtime/hw/lib/blackhole/substitutes.o` (stage503 rsync had --exclude='*.o', which also
+  dropped runtime/hw/lib and sfpi crt objects), then segfault rc=139. The broker post-job fabric gate then went
+  UNHEALTHY and held blx03 degraded (19:47:59 UTC); our crash mid fabric init may have contributed.
+- The runner logged this as 3 "drops" of the same job 250 (failed, then vanished twice on re-adoption after the
+  reboots) and skipped the config. Not real drops: no rerun ever happened.
+- Fix: copied the 42 runtime *.o files from t313 to blx03 ~/fasth3/t503/tt-metal/runtime; stage503.sh now keeps
+  /runtime/**. Removed our configs/t503-ltx25-te-ab; queued t503-ab-r3 and t503-ab-r4 (same script).
+- Probe: runner/done/t503-ab-r4.done. Then follow "Next on wake" above.
+- Diffs for the ltx-rt #327 peer request: /home/smarton/fasth3/tt-metal/tt-project/state/runs/1959/diffs/<sha>.diff (or git -C /home/smarton/fasth3/tt-metal show <sha>) (61284950f0d/24ca98f193b are the same
+  patches as t498's 94825eb729e/df0b2742038 by patch-id).
