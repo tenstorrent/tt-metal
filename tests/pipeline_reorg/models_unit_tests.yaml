@@ -1571,6 +1571,7 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
     # Plain single-rank mpirun (no tt-run). Host topology comes from the multihost-ci
     # runner (/etc/ttop/hostfile). The rank owns one connected 4x2 (8-device) block,
     # so run the Flux pipeline's 8-device (2x4) parametrization.
@@ -1757,6 +1758,7 @@
     export TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1
     export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
     unset HF_HUB_OFFLINE
+    export HF_HOME=/mnt/models/huggingface
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
     UNIT_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_transformer_wan.py"
