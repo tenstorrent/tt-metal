@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import is_quasar
 from tests.ttnn.utils_for_testing import assert_allclose
 
 
@@ -1026,9 +1027,9 @@ def test_scatter_1d_tile_layout_negative_dim(device, shape, index_shape, dtype):
     assert_allclose(result, torch_result)
 
 
-# The empty path returns before the device operation runs, so it calls that operation's validation
-# itself. Without these, a refactor could drop the call and nothing would notice: invalid operands
-# would be accepted whenever a shape happened to contain a zero.
+# The empty path returns before the device operation runs, so it relies on ttnn::scatter calling that
+# operation's validation up front. Without these, a refactor could drop the call and nothing would
+# notice: invalid operands would be accepted whenever a shape happened to contain a zero.
 @pytest.mark.parametrize(
     "input_dtype, index_dtype, source_dtype, expected_message",
     [
@@ -1047,3 +1048,43 @@ def test_scatter_zero_volume_rejects_invalid_operands(
 
     with expect_error(RuntimeError, expected_message):
         ttnn.scatter(make(input_dtype), -1, make(index_dtype), make(source_dtype))
+
+
+# ttnn::scatter checks dtypes on the caller's tensors, before to_layout(ROW_MAJOR) turns BFLOAT8_B into
+# BFLOAT16. So a BFLOAT8_B operand mixed with a BFLOAT16 one is rejected up front, even though the two
+# would match after untilize. BFLOAT8_B on both sides is still accepted.
+@pytest.mark.parametrize(
+    "input_dtype, source_dtype, expected_message",
+    [
+        (ttnn.bfloat16, ttnn.bfloat8_b, "input_dtype differs from src_dtype"),
+        (ttnn.bfloat8_b, ttnn.bfloat16, "input_dtype differs from src_dtype"),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b, None),
+    ],
+)
+def test_scatter_block_float_operands(input_dtype, source_dtype, expected_message, device, expect_error):
+    torch.manual_seed(0)
+    shape, dim = [32, 64], -1
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_index = rand_scatter_index(shape, dim, shape[dim], torch.int64)
+    torch_src = torch.randn(shape, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # Row-major index: only the block-float operands need TILE, and untilizing an INT32 index would
+    # test untilize rather than scatter.
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=source_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if expected_message is not None:
+        with expect_error(RuntimeError, expected_message):
+            ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+        return
+
+    if is_quasar():
+        pytest.skip("untilize of a BFLOAT8_B tensor is not supported on Quasar (Bfp8_b DFB format)")
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+    assert ttnn_result.dtype == ttnn.bfloat16
+    # Compare against torch on the block-float-rounded operands, the values the device actually scattered.
+    torch_result = torch.scatter(
+        ttnn.to_torch(ttnn_input).to(torch.bfloat16), dim, torch_index, ttnn.to_torch(ttnn_src).to(torch.bfloat16)
+    )
+    assert_allclose(ttnn.to_torch(ttnn_result).to(torch.bfloat16), torch_result)
