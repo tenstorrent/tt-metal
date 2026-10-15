@@ -20,8 +20,11 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         and computes the triangular correction used by the recurrence.
 
         Optional ``actual_start`` and ``actual_end`` are replicated device UINT32
-        row-major scalars defining a 32-token-aligned, nonempty global interval.
-        ``actual_end`` requires ``actual_start``. Omitting both bounds preserves the
+        row-major scalars defining a nonempty global interval. ``actual_start`` is
+        32-token aligned; ``actual_end`` need not be. Rows of a partial last chunk
+        past ``actual_end`` become identity recurrence steps: their gate, beta,
+        key, and value inputs are replaced by zeros, so any padding, including
+        NaN, is ignored. ``actual_end`` requires ``actual_start``. Omitting both bounds preserves the
         original unbounded call without allocating a scalar.
         Omitting ``actual_end`` retains full physical
         capacity. Their contents may change during trace replay. Padded chunk/group

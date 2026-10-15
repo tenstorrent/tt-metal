@@ -15,7 +15,7 @@ from shutil import copyfile
 from loguru import logger
 from tracy.common import PROFILER_DEVICE_SIDE_LOG, generate_logs_folder
 
-# Bit positions match PROFILE_PERF_COUNTERS_* in tt_metal/tools/profiler/perf_counters.hpp.
+# Bit positions match PROFILE_PERF_COUNTERS_* in tt_metal/hw/inc/internal/profiler/perf_counters.hpp.
 # l1_2 to l1_5 are Blackhole-only (its L1 has more client ports behind the mux).
 PERF_COUNTER_GROUP_BITS = {
     "fpu": 0,
