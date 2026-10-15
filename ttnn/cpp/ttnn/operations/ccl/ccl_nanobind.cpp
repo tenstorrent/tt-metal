@@ -10,6 +10,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -71,6 +72,42 @@ void bind_common(nb::module_& mod) {
                 >>> import ttnn
                 >>> topology = ttnn.get_usable_topology(input_tensor, cluster_axis=1)
                 >>> output = ttnn.reduce_scatter(input_tensor, dim=3, cluster_axis=1, topology=topology)
+        )doc");
+
+    mod.def(
+        "get_num_links",
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device, const std::optional<size_t>& cluster_axis) {
+            TT_FATAL(
+                !cluster_axis.has_value() || *cluster_axis < 2,
+                "Invalid cluster axis {}. Must be 0 or 1",
+                *cluster_axis);
+            return ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("cluster_axis") = nb::none(),
+        R"doc(
+            Return the number of ethernet links CCL ops can use on the mesh device.
+
+            Queries the fabric control plane for the usable routing planes between neighbouring
+            devices on every row (``cluster_axis=1``) or column (``cluster_axis=0``) of the mesh,
+            and returns the lowest count. Planes reserved for dispatch are excluded, and hops owned
+            by another host are skipped. With ``cluster_axis=None`` the lowest count across both
+            axes is returned.
+
+            Falls back to 1 (with a warning) when no link could be measured, e.g. on a
+            single-device mesh.
+
+            Args:
+                mesh_device (ttnn.MeshDevice): The mesh device the CCL runs on.
+                cluster_axis (int, optional): Cluster axis the CCL operates along. Defaults to ``None``.
+
+            Returns:
+                int: The number of links usable along ``cluster_axis``.
+
+            Example:
+                >>> import ttnn
+                >>> num_links = ttnn.get_num_links(mesh_device, cluster_axis=1)
+                >>> output = ttnn.all_gather(input_tensor, dim=3, cluster_axis=1, num_links=num_links)
         )doc");
 }
 }  // namespace

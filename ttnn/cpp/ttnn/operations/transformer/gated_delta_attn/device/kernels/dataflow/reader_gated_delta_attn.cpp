@@ -54,14 +54,14 @@ void kernel_main() {
     constexpr uint32_t cb_q_decay = tt::CBIndex::c_4;
     constexpr uint32_t cb_k_dt = tt::CBIndex::c_5;
     constexpr uint32_t cb_dl_exp = tt::CBIndex::c_6;
-    constexpr uint32_t cb_S = tt::CBIndex::c_8;
+    constexpr uint32_t cb_S0 = tt::CBIndex::c_7;  // initial state for chunk 0
     // L_inv CBs: c_14..c_17 (1 tile each, loaded per chunk)
     constexpr uint32_t cb_L_inv_0 = tt::CBIndex::c_14;
     constexpr uint32_t cb_L_inv_1 = tt::CBIndex::c_15;
     constexpr uint32_t cb_L_inv_2 = tt::CBIndex::c_16;
     constexpr uint32_t cb_L_inv_3 = tt::CBIndex::c_17;
 
-    constexpr uint32_t f32_tile = get_tile_size(cb_S);
+    constexpr uint32_t f32_tile = get_tile_size(cb_S0);
 
     // TensorAccessors for the interleaved fp32 DRAM inputs. The per-tensor
     // TensorAccessorArgs compile-time blocks are appended (in this order) by the
@@ -94,25 +94,25 @@ void kernel_main() {
     CircularBuffer cb_q_decay_o(cb_q_decay);
     CircularBuffer cb_k_dt_o(cb_k_dt);
     CircularBuffer cb_dl_exp_o(cb_dl_exp);
-    CircularBuffer cb_S_o(cb_S);
+    CircularBuffer cb_S0_o(cb_S0);
     CircularBuffer cb_L_inv_0_o(cb_L_inv_0);
     CircularBuffer cb_L_inv_1_o(cb_L_inv_1);
     CircularBuffer cb_L_inv_2_o(cb_L_inv_2);
     CircularBuffer cb_L_inv_3_o(cb_L_inv_3);
 
-    // === Load initial state S into CB8 ===
-    cb_S_o.reserve_back(state_tiles);
+    // === Load initial state S0 into CB7 ===
+    cb_S0_o.reserve_back(state_tiles);
     uint32_t s0_base_tile = head_idx * state_tiles;
     if (s0_addr != 0) {
         for (uint32_t t = 0; t < state_tiles; t++) {
-            noc.async_read(s0_gen, cb_S_o, f32_tile, {.page_id = s0_base_tile + t}, {.offset_bytes = t * f32_tile});
+            noc.async_read(s0_gen, cb_S0_o, f32_tile, {.page_id = s0_base_tile + t}, {.offset_bytes = t * f32_tile});
         }
         noc.async_read_barrier();
     } else {
-        noc.async_write_zeros(cb_S_o, state_tiles * f32_tile);
+        noc.async_write_zeros(cb_S0_o, state_tiles * f32_tile);
         noc.write_zeros_l1_barrier();
     }
-    cb_S_o.push_back(state_tiles);
+    cb_S0_o.push_back(state_tiles);
 
     // Per-head tile offsets in the flat 4D tensors [BH, NC, *, *].
     const uint32_t h_off_lu = head_idx * NC * attn_tiles;

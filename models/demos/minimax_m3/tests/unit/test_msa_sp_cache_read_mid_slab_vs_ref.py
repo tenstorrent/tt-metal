@@ -36,7 +36,6 @@ from ..test_factory import parametrize_mesh_with_fabric
 
 NQ, NKV, NIDX, HEAD_DIM = 64, 4, 4, 128
 BLOCK, TOPK = 128, 16
-CHUNK_LOCAL = 640
 WINDOW = 32  # attention keys: correlation 1 - |dt| / (2*WINDOW + 1)
 LOGIT = 10.0  # scaled q.k at dt == 0
 PCC = 0.99
@@ -99,30 +98,33 @@ def golden_rank(q, iq, k, v, ik, positions, cached_len, kv_len, *, heads, mask_p
     return (torch.softmax(scores, dim=-1) @ v[0, g, :kv_len].float()).unsqueeze(0)
 
 
-def rank_positions(cached_len, sp):
-    return [torch.tensor(p) for p in rotated_chip_positions(cached_len, sp, CHUNK_LOCAL)]
+def rank_positions(cached_len, sp, chunk_local):
+    return [torch.tensor(p) for p in rotated_chip_positions(cached_len, sp, chunk_local)]
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
 @pytest.mark.parametrize(
-    "start_offset",
-    [0, 32, 128, 640, 736],
-    ids=["slab_aligned", "mid_block_straddle", "block_aligned_straddle", "rotated", "rotated_straddle"],
+    "chunk_local,n_prior,start_offset",
+    [(640, 1, 0), (640, 1, 32), (640, 1, 128), (640, 1, 640), (640, 1, 736), (128, 0, 0)],
+    ids=["slab_aligned", "mid_block_straddle", "block_aligned_straddle", "rotated", "rotated_straddle", "cold_1024"],
 )
 @pytest.mark.parametrize("index_k_tp_shard", [False, True], ids=["ik_tp_replicated", "ik_tp_dedup"])
-def test_msa_sp_cache_read_mid_slab(mesh_device, device_params, start_offset, index_k_tp_shard, reset_seeds):
+def test_msa_sp_cache_read_mid_slab(
+    mesh_device, device_params, chunk_local, n_prior, start_offset, index_k_tp_shard, reset_seeds
+):
+    """cold_1024: a first chunk shorter than the top-k window (8 < 16 blocks), which prefill.py sends here."""
     from models.demos.minimax_m3.tt.attention.kv_cache import allocate_kv_caches, write_index_k_chunk, write_kv_chunk
     from models.demos.minimax_m3.tt.attention.msa import msa_cache_read_extent, msa_sp_attention_cache_read
 
     rows, cols = tuple(mesh_device.shape)
     assert (rows, cols) == (8, 4)
     sp, tp, sp_axis = rows, cols, 0
-    chunk_global = sp * CHUNK_LOCAL
-    cached_len = chunk_global + start_offset  # one whole prior chunk, then a 32-aligned resume point
+    chunk_global = sp * chunk_local
+    cached_len = n_prior * chunk_global + start_offset  # whole prior chunks, then a 32-aligned resume point
     capacity = 3 * chunk_global
-    kv_len, _ = msa_cache_read_extent(cached_len, CHUNK_LOCAL, sp, BLOCK)
+    kv_len, _ = msa_cache_read_extent(cached_len, chunk_local, sp, BLOCK)
     q, iq, k, v, ik = make_inputs(capacity, chunk_global, cached_len, seed=start_offset)
-    positions = rank_positions(cached_len, sp)
+    positions = rank_positions(cached_len, sp, chunk_local)
     order = torch.cat(positions)  # chip-major: the rows each SP rank holds, in its local-row order
     group = NQ // tp
 
@@ -167,7 +169,7 @@ def test_msa_sp_cache_read_mid_slab(mesh_device, device_params, start_offset, in
 
     # The previous turn: whole chunks from 0 (their tail past cached_len is overwritten by the resumed chunk).
     for c in range(-(-cached_len // chunk_global)):
-        write(c * chunk_global, torch.cat(rank_positions(c * chunk_global, sp)))
+        write(c * chunk_global, torch.cat(rank_positions(c * chunk_global, sp, chunk_local)))
     write(cached_len, order)
 
     out = msa_sp_attention_cache_read(
@@ -178,7 +180,7 @@ def test_msa_sp_cache_read_mid_slab(mesh_device, device_params, start_offset, in
         mesh_config=mesh_config,
         ccl_manager=ccl,
         cached_len=cached_len,
-        chunk_local=CHUNK_LOCAL,
+        chunk_local=chunk_local,
         scale=HEAD_DIM**-0.5,
         block_size=BLOCK,
         topk_blocks=TOPK,
@@ -195,7 +197,7 @@ def test_msa_sp_cache_read_mid_slab(mesh_device, device_params, start_offset, in
             _, p = comp_pcc(gold, dev, PCC)
             worst = min(worst, p)
             if start_offset % chunk_global:
-                linear = cached_len + r * CHUNK_LOCAL + torch.arange(CHUNK_LOCAL)
+                linear = cached_len + r * chunk_local + torch.arange(chunk_local)
                 bug = golden_rank(q, iq, k, v, ik, positions[r], cached_len, kv_len, heads=heads, mask_positions=linear)
                 _, p_lin = comp_pcc(gold, bug, PCC)
                 worst_linear = min(worst_linear, p_lin)

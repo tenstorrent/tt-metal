@@ -74,7 +74,7 @@ def test_max_pool2d(ttnn_mesh_device, reset_seeds, variant, channels, hw):
     x_nhwc_flat = x_nchw.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c).contiguous()
     x = U.to_tt(x_nhwc_flat, mesh, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-    out = ttnn.max_pool2d(
+    out = U.op("max_pool2d")(
         input_tensor=x,
         batch_size=n,
         input_h=h,
@@ -138,16 +138,16 @@ def test_max_pool2d_sharded(ttnn_mesh_device, reset_seeds, variant, channels, hw
     )
 
     # Pool #1: interleaved -> HEIGHT_SHARDED L1 (this sharded output is what pools #2/#3 eat).
-    out1 = ttnn.max_pool2d(input_tensor=x, **pool_kwargs)
+    out1 = U.op("max_pool2d")(input_tensor=x, **pool_kwargs)
     assert out1.is_sharded(), "pool #1 output should be HEIGHT_SHARDED (the pool #2/#3 input state)"
 
     # Pool #2: consumes the HEIGHT_SHARDED L1 tensor directly, exactly as the model loop does.
-    out2 = ttnn.max_pool2d(input_tensor=out1, **pool_kwargs)
+    out2 = U.op("max_pool2d")(input_tensor=out1, **pool_kwargs)
     assert out2.is_sharded(), "pool #2 output should be HEIGHT_SHARDED (the pool #3 input state)"
 
     # Pool #3: the SPPF applies max_pool2d three times; verify the 2nd sharded output can
     # feed the 3rd invocation (catches a state/layout issue that only shows on the last pool).
-    out3 = ttnn.max_pool2d(input_tensor=out2, **pool_kwargs)
+    out3 = U.op("max_pool2d")(input_tensor=out2, **pool_kwargs)
 
     ref = _torch_max_pool2d_thrice(x_nchw)
     U.assert_pcc(ref, out3, pcc=0.99, mesh_device=mesh)
