@@ -287,6 +287,8 @@ chip. Both return a `TranslatedCoord` (`x280/device/translated_coord.hpp`),
 which nothing else constructs, so a logical or NOC0 value cannot reach a device
 argument; device code carries it as `x280_noc_coord_t` (`include/x280_noc_coord.h`). Hardware tile indices are not logical coordinates. These queries perform
 no device I/O, and the caller must not close or reshape the mesh concurrently.
+The p2p_latency, transport_bandwidth, core_sync, eth_credit and packet_injection
+suites resolve their L2CPU coordinates through these methods.
 The ISA's L2CPU translated range and UMD's mapping differ; the software lookup
 does not establish NIU configuration or prove traffic delivery on silicon.
 
