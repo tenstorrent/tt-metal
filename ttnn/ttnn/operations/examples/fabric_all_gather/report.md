@@ -131,3 +131,110 @@ sends packets up to that size.
   caps a link near 18.5 GB/s whatever the op or its worker count (inferred from the timings; the router was not
   profiled).
 - **Two links at 4,352 B only match one link at 14,336 B** (1.00–1.05).
+
+## Dual cycles on a 2D torus
+
+`scheme="dual_cycles"` gathers over the whole torus on two edge-disjoint Hamiltonian cycles, each carrying half of
+every shard (half the DRAM banks). Every chip then uses all four of its neighbours. Running it needs a torus with both
+sides ≥ 3, i.e. a Galaxy; the numbers in this section are computed from `plan()` (`link_load`) at this code, not
+timed on the QuietBox above.
+
+**Busiest hop.** Shards carried by the busiest directed hop, per link; the call takes at least busiest × shard bytes
+/ (links × link rate).
+
+| torus | topology | chips per group | busiest hop | busiest hop, `balance=True` | links used per chip |
+|---|---|---|---|---|---|
+| 4 × 4 | ring along each column (`cluster_axis=0`) | 4 | 2 | 1.5 | 2 |
+| 4 × 4 | ring along each row (`cluster_axis=1`) | 4 | 2 | 1.5 | 2 |
+| 4 × 4 | snake ring over all chips | 16 | 8 | 7.5 | 2 |
+| 4 × 4 | **dual cycles over all chips** | **16** | **4** | **3.75** | **4** |
+| 4 × 8 | ring along each column (`cluster_axis=0`) | 4 | 2 | 1.5 | 2 |
+| 4 × 8 | ring along each row (`cluster_axis=1`) | 8 | 4 | 3.5 | 2 |
+| 4 × 8 | snake ring over all chips | 32 | 16 | 15.5 | 2 |
+| 4 × 8 | **dual cycles over all chips** | **32** | **8** | **7.75** | **4** |
+
+For a gather over the whole mesh, dual cycles halve the busiest hop of the snake: a 2× lower bandwidth bound. The
+per-axis rings gather over smaller groups, so they are not the same collective.
+
+**Reproduce on a Galaxy** (`4x4_*` on a 4 × 4 sub-torus):
+
+```bash
+AG_FABRICS=2d_torus_xy AG_TOPOS=4x8_snake_ring,4x8_dual_cycles AG_VARIANTS=base,b AG_LINKS=1 AG_TRIALS=5 \
+AG_SHAPE="64,64;128,128;256,256;512,512;1024,1024;2048,2048;2048,4096" \
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_fabric_all_gather.py -s \
+  -k "not reuse and not subdevice"
+```
+
+### The stored cycles
+
+`_HAMILTONIAN_CYCLES` in `program_descriptor_with_inline_kernels.py`, which `plan()` uses for these two shapes
+(any other shape is searched). Each cycle lists `(row, col)` mesh coordinates in ring order; consecutive entries are
+torus neighbours and the last closes back to the first. The two cycles of a shape share no link and together use
+every link of the torus.
+
+```python
+_HAMILTONIAN_CYCLES = {
+    (4, 4): (
+        [
+            (0, 0), (0, 3), (0, 2), (0, 1), (1, 1), (1, 2), (1, 3), (1, 0),
+            (2, 0), (2, 3), (3, 3), (3, 2), (2, 2), (2, 1), (3, 1), (3, 0),
+        ],
+        [
+            (0, 0), (1, 0), (1, 1), (2, 1), (2, 0), (3, 0), (3, 3), (0, 3),
+            (1, 3), (2, 3), (2, 2), (1, 2), (0, 2), (3, 2), (3, 1), (0, 1),
+        ],
+    ),
+    (4, 8): (
+        [
+            (0, 0), (3, 0), (2, 0), (1, 0), (1, 1), (0, 1), (3, 1), (2, 1),
+            (2, 2), (1, 2), (0, 2), (3, 2), (3, 3), (2, 3), (1, 3), (0, 3),
+            (0, 4), (3, 4), (2, 4), (1, 4), (1, 5), (0, 5), (3, 5), (2, 5),
+            (2, 6), (2, 7), (3, 7), (3, 6), (0, 6), (1, 6), (1, 7), (0, 7),
+        ],
+        [
+            (0, 0), (1, 0), (1, 7), (2, 7), (2, 0), (2, 1), (1, 1), (1, 2),
+            (1, 3), (1, 4), (0, 4), (0, 5), (0, 6), (0, 7), (3, 7), (3, 0),
+            (3, 1), (3, 2), (2, 2), (2, 3), (2, 4), (2, 5), (1, 5), (1, 6),
+            (2, 6), (3, 6), (3, 5), (3, 4), (3, 3), (0, 3), (0, 2), (0, 1),
+        ],
+    ),
+}
+```
+
+Each chip's position on each cycle (position p sends to p + 1 and p − 1, wrapping):
+
+**4 × 4, cycle A**
+
+| row \ col | 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| **0** | 0 | 3 | 2 | 1 |
+| **1** | 7 | 4 | 5 | 6 |
+| **2** | 8 | 13 | 12 | 9 |
+| **3** | 15 | 14 | 11 | 10 |
+
+**4 × 4, cycle B**
+
+| row \ col | 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| **0** | 0 | 15 | 12 | 7 |
+| **1** | 1 | 2 | 11 | 8 |
+| **2** | 4 | 3 | 10 | 9 |
+| **3** | 5 | 14 | 13 | 6 |
+
+**4 × 8, cycle A**
+
+| row \ col | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|---|
+| **0** | 0 | 5 | 10 | 15 | 16 | 21 | 28 | 31 |
+| **1** | 3 | 4 | 9 | 14 | 19 | 20 | 29 | 30 |
+| **2** | 2 | 7 | 8 | 13 | 18 | 23 | 24 | 25 |
+| **3** | 1 | 6 | 11 | 12 | 17 | 22 | 27 | 26 |
+
+**4 × 8, cycle B**
+
+| row \ col | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|---|
+| **0** | 0 | 31 | 30 | 29 | 10 | 11 | 12 | 13 |
+| **1** | 1 | 6 | 7 | 8 | 9 | 22 | 23 | 2 |
+| **2** | 4 | 5 | 18 | 19 | 20 | 21 | 24 | 3 |
+| **3** | 15 | 16 | 17 | 28 | 27 | 26 | 25 | 14 |

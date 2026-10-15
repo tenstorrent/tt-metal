@@ -74,6 +74,11 @@ _TOPOS = {
     "4x1_ring": ((4, 1), 0, "Ring"),
     "1x4_line": ((1, 4), 1, "Linear"),
     "1x4_ring": ((1, 4), 1, "Ring"),
+    # 16-chip Galaxy sub-torus (4 x 4): per-axis rings, one snake ring, and two edge-disjoint Hamiltonian cycles
+    "4x4_axis0_ring": ((4, 4), 0, "Ring"),
+    "4x4_axis1_ring": ((4, 4), 1, "Ring"),
+    "4x4_snake_ring": ((4, 4), None, "Ring"),
+    "4x4_dual_cycles": ((4, 4), None, "Ring", "dual_cycles"),
     # 32-chip Galaxy (4 x 8 torus): per-axis rings, one snake ring, and two edge-disjoint Hamiltonian cycles
     "4x8_axis0_ring": ((4, 8), 0, "Ring"),
     "4x8_axis1_ring": ((4, 8), 1, "Ring"),
