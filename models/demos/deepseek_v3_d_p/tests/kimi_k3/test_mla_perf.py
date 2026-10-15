@@ -88,6 +88,7 @@ PERF_TARGETS = {
     "LoudBox": {
         "warm": 10_900_000,
         "cold": 49_500_000,
+        "long": 88_700_000,
     },
     "QuietBox": {
         "warm": 11_100_000,
