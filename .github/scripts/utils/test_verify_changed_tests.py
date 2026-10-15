@@ -1812,3 +1812,63 @@ def test_the_lint_only_applies_to_perf_scripts(repo: Repo):
     repo.write("tests/pipeline_reorg/llk_derived_tests.yaml", LLK_DERIVED_YAML)
     code, _, stderr = repo.scope()
     assert code == 0, stderr
+
+
+# --- env name validation -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["BAD-NAME", "1LEADING", "has space", "", "BAD.NAME", "WITH$SIGN", "a/b"],
+)
+def test_entry_env_rejects_names_export_would_reject(name: str):
+    """Caught at scope time with the yaml and entry named, rather than taking the
+    run step down with `not a valid identifier` after a runner is already claimed."""
+    mod = gate_module()
+    with pytest.raises(Exception) as excinfo:
+        mod.entry_env({"name": "x", "env": {name: "v"}}, "f.yaml")
+    assert "invalid 'env'" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("name", ["PYTEST_MARKERS", "_LEADING_UNDERSCORE", "A1", "x"])
+def test_entry_env_accepts_valid_names(name: str):
+    mod = gate_module()
+    assert mod.entry_env({"name": "x", "env": {name: "v"}}, "f.yaml") == f"{name}=v"
+
+
+def test_a_bad_env_name_fails_the_whole_gate(repo: Repo):
+    """End to end: it never reaches a dispatched leg."""
+    bad = BASE_TESTS_YAML.replace(
+        "  owner_id: U001\n",
+        '  owner_id: U001\n  env:\n    "BAD-NAME": "x"\n',
+    )
+    repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", bad)
+    code, _, stderr = repo.scope()
+    assert code == 1
+    assert "invalid 'env'" in stderr
+    assert "unit alpha" in stderr
+
+
+# --- hardware and simulator run steps stay in parity -------------------------
+
+GATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "verify-changed-tests.yaml"
+
+
+@pytest.mark.parametrize("field", ["gate_env", "gate_setup", "gate_workdir"])
+def test_both_run_steps_apply_the_leg_fields(field: str):
+    """A sim leg runs the same cmd as a hardware one, so a field applied to only
+    one of them is a latent repeat of the PYTEST_MARKERS unbound-variable bug."""
+    if not GATE_WORKFLOW.exists():
+        pytest.skip("run from a full checkout")
+    import yaml as _yaml
+
+    jobs = _yaml.safe_load(GATE_WORKFLOW.read_text())["jobs"]
+    steps = jobs["run-tests"]["steps"]
+    runs = [
+        s["with"]["run"]
+        for s in steps
+        if isinstance(s.get("with"), dict) and "run" in s["with"] and "matrix.leg.cmd" in s["with"]["run"]
+    ]
+    assert len(runs) == 2, f"expected a hardware and a simulator run step, found {len(runs)}"
+    missing = [i for i, body in enumerate(runs) if f"matrix.leg.{field}" not in body]
+    assert not missing, f"{field} is absent from run step(s) {missing}; both must apply it"

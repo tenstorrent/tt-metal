@@ -468,6 +468,15 @@ jobs:
             ${{ matrix.leg.cmd }}
             GATE_CMD_EOF
             )
+            # Same entry-declared env as the hardware step: a sim leg runs the same
+            # cmd, so an unset variable kills it the same way.
+            while IFS= read -r gate_env_kv; do
+              if [[ -n "$gate_env_kv" ]]; then
+                export "$gate_env_kv"
+              fi
+            done <<'GATE_ENV_EOF'
+            ${{ matrix.leg.gate_env }}
+            GATE_ENV_EOF
             if [[ -n '${{ matrix.leg.gate_workdir }}' ]]; then
               cd '${{ matrix.leg.gate_workdir }}'
               mkdir -p generated/test_reports
