@@ -20,10 +20,10 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_m
 
 # `and pad0`/`and pad50` pins the padding parametrize so each command selects
 # exactly one production TorusXY case.
-_CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad0' --wrapper-invocation"
-_CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50' --wrapper-invocation"
+_CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad0'"
+_CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50'"
 _CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and torus-y-8x1 and pad0' --wrapper-invocation"
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0' --wrapper-invocation"
+_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0'"
 
 # Mistral Small 4 has its own driver rather than a row in test_ds_moe: its reference stores all 128
 # experts as one fused stacked parameter and its router is bias-free.
@@ -31,10 +31,10 @@ _CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and p
 # fabric2d-8x4 is the only mesh test_mistral4_moe declares, so this number is NOT comparable to the
 # TorusXY deepseek rows above.
 _MISTRAL4_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe"
-_CMD_MISTRAL4_8X4 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and fabric2d-8x4' --wrapper-invocation"
+_CMD_MISTRAL4_8X4 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and fabric2d-8x4'"
 # SP=8 x TP=1 on a LoudBox: the stage shape PP=4 runs. Blaze builds without Tracy, so this is the
 # only Tracy-capable CI home for it.
-_CMD_MISTRAL4_8X1 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and torus-y-8x1' --wrapper-invocation"
+_CMD_MISTRAL4_8X1 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and torus-y-8x1'"
 
 # Record-only: one local run on a different fabric from every sibling row, so the margin admits any
 # measurement. Replace both with the first CI result on this fabric.
