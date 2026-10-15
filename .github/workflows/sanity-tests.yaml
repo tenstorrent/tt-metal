@@ -103,6 +103,11 @@ on:
         type: boolean
         default: false
         description: "Enable LLK asserts"
+      enable-llk-sanitizer:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK sanitizer"
       ref:
         required: false
         type: string
@@ -222,6 +227,11 @@ on:
         default: false
         type: boolean
         description: "Enable LLK asserts"
+      enable-llk-sanitizer:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable LLK sanitizer"
       ref:
         required: false
         type: string
@@ -529,6 +539,7 @@ jobs:
       timeout-minutes-override: ${{ inputs.enable-watcher && 240 || 0 }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-sanitizer: ${{ inputs.enable-llk-sanitizer || false }}
       ref: ${{ needs.resolve-ref.outputs.sha }}
       prebuilt-image: ${{ needs.bake-env-ci-test-wheel.outputs.image }}
 
@@ -556,6 +567,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-sanitizer: ${{ inputs.enable-llk-sanitizer || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 80 || 0 }}
       ref: ${{ needs.resolve-ref.outputs.sha }}
 
@@ -597,6 +609,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-sanitizer: ${{ inputs.enable-llk-sanitizer || false }}
       ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # UMD sanity (Blackhole only)
@@ -616,6 +629,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-sanitizer: ${{ inputs.enable-llk-sanitizer || false }}
       ref: ${{ needs.resolve-ref.outputs.sha }}
 
   ttsim-sanity-tests:
@@ -660,6 +674,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      enable-llk-sanitizer: ${{ inputs.enable-llk-sanitizer || false }}
       ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # Model sanity tests (WH Galaxy). The gate requires an explicit true, so a push to
