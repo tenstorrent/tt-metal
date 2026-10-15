@@ -43,6 +43,7 @@ namespace sfpu {
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
  * - vConstFloatPrgm1 = -127.0f;
+ * - vConstFloatPrgm2 = 2.0f; (read by _sfpu_binary_power_f32_)
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
@@ -110,7 +111,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(sfpi::vInt(0x560e) + zif), sfpi::RoundMode::Nearest);
 
     d2 = d1 * d2;
-    zif = _float_to_int32_positive_(d2 * d3);
+    // d2 * d3 lies in [2^13, 2^23) for every zif in [0, 2^23), so _float_to_int32_positive_'s
+    // underflow and saturation arms are never taken: the conversion is its right shift alone.
+    sfpi::vFloat d23 = d2 * d3;
+    zif = sfpi::exman(d23, sfpi::MantissaMode::ImplicitOne);
+    zif = sfpi::shft(zif, sfpi::exexp(d23) - 23, sfpi::ShiftMode::Logical);
 
     // Restore exponent
     zii = sfpi::as<sfpi::vInt>(sfpi::setexp(sfpi::as<sfpi::vFloat>(zif), 127U + zii));
@@ -123,16 +128,16 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     // [1/2, 2^24] keeps exexp in [-1, 24] (every |pow| >= 2^24 is an even integer), and shifting the
     // mantissa left by exexp + 7, then doubling, leaves the units bit at bit 31 and the fraction below it.
     sfpi::vFloat abs_pow = sfpi::abs(pow);
-    sfpi::vFloat pow_x = sfpi::min(sfpi::max(abs_pow, 0.5f), 16777216.0f);
+    sfpi::vFloat pow_x = sfpi::min(sfpi::max(sfpi::vFloat(0.5f), abs_pow), 16777216.0f);
     sfpi::vInt pow_bits = sfpi::exman(pow_x, sfpi::MantissaMode::ImplicitOne);
     pow_bits = sfpi::shft(pow_bits, sfpi::exexp(pow_x) + 7, sfpi::ShiftMode::Logical);
     pow_bits = pow_bits + pow_bits;
 
-    v_if(base < 0.0f) {  // negative base
-        // If pow is odd integer then result is negative
-        // If power is even, then result is positive
-        y = sfpi::copysgn(y, sfpi::as<sfpi::vFloat>(pow_bits));
+    // A negative base (sign bit set, as v_if(base < 0) reads it) takes the parity as the result's sign;
+    // y is non-negative here, so any other base keeps it.
+    y = sfpi::copysgn(y, sfpi::as<sfpi::vFloat>(pow_bits & sfpi::as<sfpi::vInt>(base)));
 
+    v_if(base < 0.0f) {  // negative base
         // Check for integer power, if it is not then overwrite result with NaN
         // The clamp reads zero as 1/2, so zero is excluded (on |pow|: SFPSETCC's == 0 does not match -0).
         v_if((pow_bits + pow_bits) != 0 && abs_pow != 0.0f) {  // non-integer power: NaN
@@ -227,12 +232,14 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // 1/t: initial guess 1.0f - 0.2426406871192851f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 -
     // t*y).
     sfpi::vFloat recip = 1.0f - 0.2426406871192851f * m_plus_1;
-    recip = recip * (2.0f - m_plus_1 * recip);  // 1st NR
-    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR
+    // sfpu_binary_pow_init sets vConstFloatPrgm2 to 2.0f.
+    const sfpi::vFloat two = sfpi::vConstFloatPrgm2;
+    recip = recip * (two - m_plus_1 * recip);  // 1st NR
+    recip = recip * (two - m_plus_1 * recip);  // 2nd NR
     // 3rd NR: two NR iterations leave a ~2 ULP reciprocal residual that, after the
     // atanh(z) log series and pow*log2 multiply, is the floor keeping 2.5 at 4 ULP.
     // One more quadratically-convergent step drives 1/(m+1) to full fp32 precision.
-    recip = recip * (2.0f - m_plus_1 * recip);  // 3rd NR for float32
+    recip = recip * (two - m_plus_1 * recip);  // 3rd NR for float32
     // z = (m-1)*recip. The subtract is kept separate rather than folded into a multiply-add:
     // the range reduction above leaves m in [sqrt(2)/2, sqrt(2)], which is inside [0.5, 2], so
     // Sterbenz's lemma makes m - 1 exact for every representable m and the only rounding left is
@@ -316,7 +323,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
         // Integer-ness and parity of pow: as in _sfpu_binary_power_21f_ above.
-        sfpi::vFloat pow_x = sfpi::min(sfpi::max(abs_pow, 0.5f), 16777216.0f);
+        sfpi::vFloat pow_x = sfpi::min(sfpi::max(sfpi::vFloat(0.5f), abs_pow), 16777216.0f);
         sfpi::vInt pow_bits = sfpi::exman(pow_x, sfpi::MantissaMode::ImplicitOne);
         pow_bits = sfpi::shft(pow_bits, sfpi::exexp(pow_x) + 7, sfpi::ShiftMode::Logical);
         pow_bits = pow_bits + pow_bits;
@@ -417,6 +424,7 @@ inline void sfpu_binary_pow_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;
     sfpi::vConstFloatPrgm1 = -127.0f;
+    sfpi::vConstFloatPrgm2 = 2.0f;
 }
 
 }  // namespace sfpu
