@@ -27,12 +27,9 @@ __attribute__((noinline)) void calculate_sign_fresh_cpp()
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat r       = 1.0f;
-        v_if (v < 0.0f)
-        {
-            r = -1.0f;
-        }
-        v_elseif (v == 0.0f)
+        // sign(v) is 1 carrying the sign of v, except at zero.
+        sfpi::vFloat r = sfpi::copysgn(sfpi::vFloat(1.0f), v);
+        v_if (v == 0.0f)
         {
             r = 0.0f;
         }
