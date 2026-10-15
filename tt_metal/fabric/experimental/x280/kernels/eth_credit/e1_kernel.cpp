@@ -18,10 +18,16 @@
 
 /* Bring-up modes, each off in the benchmark build. EC_E1_SINK_LOCAL consumes
  * rx here, checking each header's sequence number and channel, and returns
- * R2 without delivering, so the Ethernet hop runs alone; EC_TAIL_MARKER checks
- * each slot's last 16 bytes against the marker E0 stamped. */
+ * R2 without delivering, so the Ethernet hop runs alone; EC_E1_SOURCE_SELF
+ * fills rx here, with every slot always full, and delivers it without reading
+ * pkts or returning R2, so the receive side (W5, W6, R1) runs alone;
+ * EC_TAIL_MARKER checks each slot's last 16 bytes against the marker E0
+ * stamped. */
 #ifndef EC_E1_SINK_LOCAL
 #define EC_E1_SINK_LOCAL 0
+#endif
+#ifndef EC_E1_SOURCE_SELF
+#define EC_E1_SOURCE_SELF 0
 #endif
 #ifndef EC_TAIL_MARKER
 #define EC_TAIL_MARKER 0
@@ -30,6 +36,9 @@
 static_assert(
     !EC_TAIL_MARKER || EC_SLOT_SIZE >= EC_HEADER_BYTES + EC_TAIL_MARKER_BYTES,
     "the tail marker needs a payload of at least 16 bytes");
+static_assert(
+    !(EC_E1_SOURCE_SELF && (EC_E1_SINK_LOCAL || EC_TAIL_MARKER)),
+    "a local source neither sinks locally nor receives a marker over the link");
 
 namespace {
 
@@ -168,7 +177,9 @@ private:
 
     /* One delivery turn for p: up to BATCH packets, W5, barrier, W6, then R2. */
     bool deliver(uint32_t p, uint32_t* progressed, uint32_t* site) {
-        const uint32_t pkts = static_cast<uint32_t>(get_ptr_val(static_cast<uint8_t>(a_.erisc.stream_id[p])));
+        const uint32_t pkts =
+            EC_E1_SOURCE_SELF ? EC_N_LINK
+                              : static_cast<uint32_t>(get_ptr_val(static_cast<uint8_t>(a_.erisc.stream_id[p])));
         if (pkts > EC_N_LINK) {
             result_.failure(p, 0u, 0u, EC_SITE_NONE, pkts, link_rd_[p]);
             fail(EC_ERROR_COUNTER_DISTANCE, p);
@@ -220,6 +231,12 @@ private:
             if (!check_slot(p, src, received_[p] + j)) {
                 return false;
             }
+            if constexpr (EC_E1_SOURCE_SELF) {
+                /* The fields the forwarder checks, as E0's local source writes them. */
+                auto* h = reinterpret_cast<volatile fs_hybrid_mesh_packet_header_t*>(src);
+                ec_header_set_seq(h, received_[p] + j);
+                fs_set_src_ch_id(h, static_cast<uint8_t>(p));
+            }
             if constexpr (!EC_E1_SINK_LOCAL) {
                 noc_async_write(
                     src,
@@ -227,7 +244,9 @@ private:
                         a_.erisc.fwd.x, a_.erisc.fwd.y, a_.erisc.fwd_area[p] + lim_.in_slots + i * EC_HEADER_BYTES),
                     EC_HEADER_BYTES);
             }
-            increment_local_update_ptr_val(static_cast<uint8_t>(a_.erisc.stream_id[p]), -1);
+            if constexpr (!EC_E1_SOURCE_SELF) {
+                increment_local_update_ptr_val(static_cast<uint8_t>(a_.erisc.stream_id[p]), -1);
+            }
             link_rd_[p] = ec_ptr_advance(link_rd_[p], 1u, EC_N_LINK);
             deliver_wr_[p] = ec_ptr_advance(deliver_wr_[p], 1u, EC_N_DELIVER);
         }
@@ -261,15 +280,17 @@ private:
 
         /* A resend of R2 rereads crd_src, which only ever holds the same or a
          * newer read pointer, so overwriting it while TXQ 1 may resend is safe. */
-        uint64_t busy = 0u;
-        if (!wait_txq(&busy)) {
-            return timeout(p, EC_SITE_E1_TXQ1_BUSY);
-        }
-        set_local_word(unit(eth_.e1_crd_src, p), link_rd_[p]);
-        internal_::eth_send_packet_bytes_unsafe(
-            kTxq, unit(eth_.e1_crd_src, p), a_.peer_ctrl_base + eth_.e0_crd + p * kUnit, kUnit);
-        if (busy != 0u) {
-            result_.stall(3u, busy);
+        if constexpr (!EC_E1_SOURCE_SELF) {
+            uint64_t busy = 0u;
+            if (!wait_txq(&busy)) {
+                return timeout(p, EC_SITE_E1_TXQ1_BUSY);
+            }
+            set_local_word(unit(eth_.e1_crd_src, p), link_rd_[p]);
+            internal_::eth_send_packet_bytes_unsafe(
+                kTxq, unit(eth_.e1_crd_src, p), a_.peer_ctrl_base + eth_.e0_crd + p * kUnit, kUnit);
+            if (busy != 0u) {
+                result_.stall(3u, busy);
+            }
         }
         received_[p] += k;
         result_.packets_in(p, received_[p]);

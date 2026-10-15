@@ -477,7 +477,7 @@ aggregates only:
   traffic.
 - **Bring-up modes** are E0/E1 compile-time defines, off by default and JIT-built
   per case: `EC_E0_SINK_LOCAL`, `EC_E0_SOURCE_SELF`, `EC_E1_SINK_LOCAL`,
-  `EC_TAIL_MARKER` and `EC_E0_COUNTER_FIRST_DELAY`.
+  `EC_E1_SOURCE_SELF`, `EC_TAIL_MARKER` and `EC_E0_COUNTER_FIRST_DELAY`.
 - **One struct per role** (`ec_x280_fwd_args_t`, `ec_e0_args_t`,
   `ec_e1_args_t`), each starting `{magic, kernel_id}`. There is no schema word:
   any change to an args or result record changes its magic (`EC_ABI_MAGIC`
@@ -687,6 +687,11 @@ the `packet_injection` host does.
   the packets it sent and k1 its first sent batch, written as an
   `eth_credit_leg` record. Every throughput record names the writes inside its
   window in `legs`.
+- The receive side alone (`EC_E1_SOURCE_SELF`): E1 fills each `rx[p]` slot's
+  sequence number and channel itself, with every slot always full, and
+  delivers it (W5, W6) with no E0, link or R2; the receiving forwarder
+  consumes it and returns R1. Its window is the whole path's, the receiving
+  forwarder's, written as an `eth_credit_leg` record.
 - Per kernel, on its own clock: stall counts and stall time per stall site, and
   per-packet service time, written as one `eth_credit_kernel` JSONL record per
   launched kernel: case, chip, role, kernel id, state, code, detail, packets in
@@ -733,6 +738,7 @@ must fail:
 | `ThroughputBySlotBatchAndP` | the throughput sweep over slot size, `BATCH` and P |
 | `EthernetHopBySlotAndBatch` | the Ethernet hop alone (`EC_E0_SOURCE_SELF`, `EC_E1_SINK_LOCAL`) over payloads 64 B to 16 KiB and `BATCH` 1 to 8 at P = 1, `N_LINK` = 8: packet rate on E1's clock, against the 400G per-link rate the tabulator sets beside it |
 | `NocHopBySlotBatchAndP` | the NoC hop alone (`EC_E0_SINK_LOCAL`, W1, W2 and R3) at the throughput sweep's shapes: packet rate on the sending forwarder's clock |
+| `ReceiveSideBySlotBatchAndP` | the receive side alone (`EC_E1_SOURCE_SELF`, W5, W6 and R1) at the throughput sweep's shapes: packet rate on the receiving forwarder's clock |
 
 The E0/E1 kernels are built by the Metal JIT at launch. `x280_eth_credit_jit`
 (`tools/eth_credit_jit_check.sh`) compiles them without a device the way the JIT
@@ -888,9 +894,10 @@ with its result block: status, packets per `p`, every stall and cost site's
 count and ticks, and failure detail. The console prints raw packet counts and
 ticks and, for a failed run, the attribution line and every chip's kernel
 results; rates come from the tabulator. The manifest's `eth_credit.throughput`,
-`eth_credit.ethernet_hop` and `eth_credit.noc_hop` configurations run
-`ThroughputBySlotBatchAndP`, `EthernetHopBySlotAndBatch` and
-`NocHopBySlotBatchAndP` with every card visible (`TT_VISIBLE_DEVICES` unset),
+`eth_credit.ethernet_hop`, `eth_credit.noc_hop` and `eth_credit.receive_side`
+configurations run `ThroughputBySlotBatchAndP`, `EthernetHopBySlotAndBatch`,
+`NocHopBySlotBatchAndP` and `ReceiveSideBySlotBatchAndP` with every card visible
+(`TT_VISIBLE_DEVICES` unset),
 for the reason below. The design is above.
 
 ```bash

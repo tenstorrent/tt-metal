@@ -169,6 +169,8 @@ inline constexpr Path kFullPath{"eth_credit", Receiver::Forwarder, "W1 W2 W3 W4 
 inline constexpr Path kEthernetHop{"eth_credit_hop", Receiver::E1, "W3 W4 R2"};
 // The sending forwarder into E0 sinking locally.
 inline constexpr Path kNocHop{"eth_credit_leg", Receiver::Sender, "W1 W2 R3"};
+// E1 sourcing locally into the receiving forwarder.
+inline constexpr Path kReceiveSide{"eth_credit_leg", Receiver::Forwarder, "W5 W6 R1"};
 
 // One completed direction's receiver for `p` and where it ran: the sending
 // chip's E0 and receiving chip's E1 Ethernet tile, and each chip's X280 tile.

@@ -96,6 +96,7 @@ struct Stage {
     bool e0_sink_local = false;
     bool e0_source_self = false;
     bool e1_sink_local = false;
+    bool e1_source_self = false;
     bool tail_marker = false;
     uint32_t counter_first_delay = 0;
     /** Launch E1 on the receiving tile; false leaves the link's far end idle. */
@@ -363,6 +364,7 @@ inline std::map<std::string, std::string> kernel_defines(const ec_shape_t& s, co
         {"EC_E0_SINK_LOCAL", st.e0_sink_local ? "1" : "0"},
         {"EC_E0_SOURCE_SELF", st.e0_source_self ? "1" : "0"},
         {"EC_E1_SINK_LOCAL", st.e1_sink_local ? "1" : "0"},
+        {"EC_E1_SOURCE_SELF", st.e1_source_self ? "1" : "0"},
         {"EC_TAIL_MARKER", st.tail_marker ? "1" : "0"},
         {"EC_E0_COUNTER_FIRST_DELAY", std::to_string(st.counter_first_delay)},
     };
@@ -602,8 +604,11 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
     /* Bring-up modes move the source or the sink off the forwarders. */
     for (uint32_t i = 0; i < ec::kChips; ++i) {
         for (uint32_t p = 0; p < c.shape.P; ++p) {
-            if (c.stage.e0_source_self) {
+            if (c.stage.e0_source_self || c.stage.e1_source_self) {
                 args.chips[i].fwd[p].send_count = 0u;
+            }
+            if (c.stage.e1_source_self) {
+                args.chips[i].e0.erisc.count[p] = 0u;
             }
             if (c.stage.e1_sink_local || c.stage.e0_sink_local || !c.stage.launch_e1) {
                 args.chips[i].fwd[p].recv_count = 0u;
@@ -1012,6 +1017,9 @@ inline Path measured_path(const Stage& st) {
     }
     if (st.e0_sink_local) {
         return kNocHop;
+    }
+    if (st.e1_source_self) {
+        return kReceiveSide;
     }
     return kFullPath;
 }

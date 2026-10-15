@@ -619,4 +619,26 @@ TEST_P(EthCreditHw, NocHopBySlotBatchAndP) {
     }
 }
 
+// The receive side alone, E1 sourcing locally into the receiving forwarder
+// (W5, W6, R1): packet rate on the forwarder's clock at the throughput sweep's
+// shapes.
+TEST_P(EthCreditHw, ReceiveSideBySlotBatchAndP) {
+    for (const ThroughputPoint& pt : kThroughputPoints) {
+        suite::Case c{
+            .name = "receive_side_sweep",
+            .shape = {pt.P, 8u, 8u, pt.slot, pt.batch},
+            .direction = ec::Direction::AToB,
+            .packets = each(pt.P, 20000u)};
+        c.stage.e1_source_self = true;
+        const auto r = run(c);
+        ASSERT_TRUE(r.launched);
+        suite::expect_all_done(r);
+        for (uint32_t p = 0; p < pt.P; ++p) {
+            EXPECT_EQ(r.chips[1].e1.block.packets_in[p], 20000u) << "E1 p " << p;
+            EXPECT_EQ(r.chips[1].fwd[p].block.packets_in[p], 20000u) << "forwarder " << p;
+        }
+        suite::record_throughput(spec(), fixture(), c, r, 0u);
+    }
+}
+
 INSTANTIATE_TEST_SUITE_P(EthCredit, EthCreditHw, ::testing::Values(0));
