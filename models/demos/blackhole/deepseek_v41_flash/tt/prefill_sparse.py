@@ -61,6 +61,9 @@ def _rep(md, t, dtype, layout):
     )
 
 
+FIFO_CHUNK = (
+    os.environ.get("DSV41_PF_FIFO_CHUNK", "1") == "1"
+)  # latent FIFO shift in row pieces instead of a full copy of the table
 GATE_ROWS = int(
     os.environ.get("DSV41_GATE_ROWS", "16384")
 )  # rows per slice of the interleaved-prefill user gate on the latent table (bounds the transient DRAM copies)
@@ -137,6 +140,11 @@ PIDX_SHARD = os.environ.get(
 PIDX_SHARD_MIN_L = int(
     os.environ.get("DSV41_PIDX_SHARD_MIN_L", "131072")
 )  # (replicated select is faster below ~131072 entries, the sharded one needs 8x less DRAM)
+
+
+def _pdbg(md, tag):
+    if os.environ.get("DSV41_PIDX_DEBUG") == "1":
+        print(f"PIDX_DBG {tag} cache_entries={md.num_program_cache_entries()}", flush=True)
 
 
 def shard_len(L, cols):
@@ -563,6 +571,7 @@ class DSV41PrefillIndexer:
                 qu, self.slab, wu, chunk_start_idx=Lc, kv_len=Lc + 32, program_config=self.cfg, cache_batch_idx=u
             )
             scm = ttnn.where(vis, ttnn.to_layout(sc, ttnn.TILE_LAYOUT), float("-inf"))
+            _pdbg(self.md, "scm")
             ids = ttnn.experimental.topk_large_indices(
                 ttnn.to_layout(scm, ttnn.ROW_MAJOR_LAYOUT), k=TOPK, valid_length=Lc + 32
             )
@@ -570,20 +579,28 @@ class DSV41PrefillIndexer:
                 ttnn.typecast(ids, ttnn.float32), ttnn.TILE_LAYOUT
             )  # local slots, 0xFFFFFFFF -> ~4.3e9
             valid = ttnn.lt(idf, float(Lc))
+            _pdbg(self.md, "valid")
             idc = ttnn.typecast(ttnn.where(valid, idf, 0.0), ttnn.uint32)
+            _pdbg(self.md, "idc")
             vals = ttnn.where(ttnn.typecast(valid, ttnn.bfloat16), ttnn.gather(scm, 3, index=idc), float("-inf"))
+            _pdbg(self.md, "vals")
             pg = ttnn.typecast(
                 ttnn.add(ttnn.multiply(idf, float(cols)), sh["cid"]), ttnn.uint32
             )  # FIFO slot = local * cols + column - dL (cid holds column - dL)
             cv = mc.allgather(ttnn.to_layout(vals, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)  # [1,1,C,cols*512]
             cp = mc.allgather(ttnn.to_layout(pg, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)
+            _pdbg(self.md, "cp")
             pos = ttnn.experimental.topk_large_indices(ttnn.to_layout(cv, ttnn.ROW_MAJOR_LAYOUT), k=TOPK)
+            _pdbg(self.md, "pos")
             posf = ttnn.to_layout(ttnn.typecast(pos, ttnn.float32), ttnn.TILE_LAYOUT)
+            _pdbg(self.md, "posf")
             posu = ttnn.typecast(
                 ttnn.clamp(posf, max=float(cols * TOPK)), ttnn.uint32
             )  # a sentinel position selects the 0xFFFFFFFF column
             cpe = ttnn.concat([ttnn.to_layout(cp, ttnn.TILE_LAYOUT), sh["skip"]], dim=3)
+            _pdbg(self.md, "cpe")
             fin = ttnn.to_layout(ttnn.gather(cpe, 3, index=posu), ttnn.ROW_MAJOR_LAYOUT)
+            _pdbg(self.md, "fin")
             per_user.append(fin)
             for t_ in (sc, scm, ids, idf, valid, idc, vals, pg, cv, cp, pos, posf, posu, cpe, qu, wu):
                 ttnn.deallocate(t_)
@@ -931,6 +948,24 @@ class DSV41PrefillSparse:
                     ttnn.deallocate(new)
                     new = gated
                 ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
+            elif FIFO_CHUNK:
+                # in-place shift in row pieces (ascending: a piece reads rows ahead of everything it overwrites): no second copy of the table (1 GiB at a 1M context for ratio 2). Same values.
+                um = getattr(ctx, "umask", None) is not None
+                for a in range(0, L - Cc, GATE_ROWS):
+                    b = min(L - Cc, a + GATE_ROWS)
+                    piece = ttnn.slice(kt, [0, 0, a + Cc, 0], [U, 1, b + Cc, HEAD_DIM])
+                    if um:
+                        g = gate_user_state(ctx, piece, ttnn.slice(kt, [0, 0, a, 0], [U, 1, b, HEAD_DIM]))
+                        ttnn.deallocate(piece)
+                        piece = g
+                    ttnn.experimental.slice_write(piece, kt, [0, 0, a, 0], [U, 1, b, HEAD_DIM], [1, 1, 1, 1])
+                    ttnn.deallocate(piece)
+                new = self.kvt.rm(lat)
+                if um:
+                    gated = gate_user_state(ctx, new, ttnn.slice(kt, [0, 0, L - Cc, 0], [U, 1, L, HEAD_DIM]))
+                    ttnn.deallocate(new)
+                    new = gated
+                ttnn.experimental.slice_write(new, kt, [0, 0, L - Cc, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
             else:
                 body = ttnn.slice(kt, [0, 0, Cc, 0], [U, 1, L, HEAD_DIM])
                 new = ttnn.concat([body, self.kvt.rm(lat)], dim=2)

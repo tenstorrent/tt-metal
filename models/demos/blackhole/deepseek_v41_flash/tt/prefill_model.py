@@ -804,6 +804,19 @@ class DSV41PrefillModel:
         assert C_ == C
         from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import corruptible
 
+        if os.environ.get("DSV41_PF_PRECAPTURE_WARM", "1") == "1":
+            # a server compiles the decode programs between ``compile_dyn`` and this capture: a program of the chunk whose hash changed meanwhile (seen with the column-sharded indexer at a 1M
+            # context: "Cannot load new binaries during trace capture" in select_dyn_sharded) would be compiled INSIDE the capture. One more eager chunk right before it (same masked dummy
+            # chunk as the compile pass, same allocation pattern) leaves nothing to compile.
+            self.begin_chunk(0, C)
+            self.forward_device(bufs, C, 0, C, dyn=True)
+            ttnn.synchronize_device(self.md)
+            xs0, pres0 = self.dyn_out
+            for x in list(xs0) + list(pres0):
+                ttnn.deallocate(x)
+            for _, pl in self.layers:
+                pl.pa.reset_dyn()
+            ttnn.synchronize_device(self.md)
         self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
         with corruptible(self.md):
             self.forward_device(bufs, C, 0, C, dyn=True)
