@@ -101,6 +101,45 @@ def test_restored_by_matching_uninit_passes(tmp_path):
     assert run(f).returncode == 0
 
 
+def test_uninit_writing_the_same_value_is_not_a_restore(tmp_path):
+    f = hdr(
+        tmp_path,
+        f"""
+        inline void _llk_math_thing_init_() {{ {rmw(FP32, 0)} }}
+        inline void _llk_math_thing_uninit_() {{ {rmw(FP32, 0)} }}
+        """,
+    )
+    r = run(f)
+    assert r.returncode == 1
+    assert "[restore]" in r.stdout and "writes the same value" in r.stdout
+
+
+def test_uninit_writing_the_configured_value_restores(tmp_path):
+    f = hdr(
+        tmp_path,
+        f"""
+        inline void _llk_math_thing_init_() {{ {rmw(FP32, 0)} }}
+        template <bool is_fp32_dest_acc_en>
+        inline void _llk_math_thing_uninit_() {{ {rmw(FP32, "is_fp32_dest_acc_en")} }}
+        """,
+    )
+    r = run(f)
+    assert r.returncode == 0 and "note" not in r.stdout
+
+
+def test_uninit_writing_an_unjudgeable_value_is_a_note(tmp_path):
+    f = hdr(
+        tmp_path,
+        f"""
+        inline void _llk_math_thing_init_() {{ {rmw(FP32, 0)} }}
+        inline void _llk_math_thing_uninit_(bool v) {{ {rmw(FP32, "v")} }}
+        """,
+    )
+    r = run(f)
+    assert r.returncode == 0
+    assert "cannot be judged" in r.stdout and "_llk_math_thing_uninit_" in r.stdout
+
+
 def test_uninit_of_another_op_does_not_cover(tmp_path):
     f = hdr(
         tmp_path,
@@ -144,6 +183,38 @@ def test_configuring_function_is_exempt(tmp_path):
     r = run(f)
     assert r.returncode == 0
     assert "note" not in r.stdout
+
+
+def test_computed_value_after_a_fixed_write_is_a_note(tmp_path):
+    f = hdr(
+        tmp_path,
+        f"""
+        inline void _llk_math_thing_(std::uint32_t x)
+        {{
+            {rmw(FP32, 0)}
+            {rmw(FP32, "x")}
+        }}
+        """,
+    )
+    r = run(f)
+    assert r.returncode == 0
+    assert "cannot be judged" in r.stdout and "assumed to put back" in r.stdout
+
+
+def test_configured_value_after_a_fixed_write_is_silent(tmp_path):
+    f = hdr(
+        tmp_path,
+        f"""
+        template <bool is_fp32_dest_acc_en>
+        inline void _llk_math_thing_()
+        {{
+            {rmw(FP32, 0)}
+            {rmw(FP32, "is_fp32_dest_acc_en")}
+        }}
+        """,
+    )
+    r = run(f)
+    assert r.returncode == 0 and "note" not in r.stdout
 
 
 def test_unresolved_value_is_a_note_not_a_failure(tmp_path):

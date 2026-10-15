@@ -5,13 +5,16 @@ The fields and their policy live in sticky_cfg_fields.yaml:
 
   restore -- hardware-configure sets the field once and later ops assume that value. A write of a
              fixed value must be undone: by a later write of a different value (or of the
-             configured value) in the same function, by the matching `_uninit_`, or by a site the
-             table names under `sites:`.
+             configured value) in the same function, by the matching `_uninit_` leaving the field
+             at a different value (or the configured one), or by a site the table names under
+             `sites:`. An `_uninit_` that writes the same value as its `_init_` restores nothing.
   tracked -- the math thread caches the field in a software tracker. A raw write outside the
              tracker's writer must be followed by the invalidate call, in the same function or in
              a function of the same file that calls it.
 
-A write whose value is not a literal cannot be judged and is reported as a note, never a failure.
+A write whose value is not a literal and is not the configured expression cannot be judged and is
+reported as a note, never a failure: on its own, after a fixed write (it is then assumed to put the
+configuration back), or as what the matching `_uninit_` leaves the field at.
 Pre-existing findings can go in a `--baseline` file keyed by path, function and field; overloads and
 same-named functions in one file share a key. The shipped trees have none. A `sites:` entry exempts
 its function and field under either policy, so it is also the place to record a tracked write whose
@@ -190,7 +193,7 @@ def bodies(path):
 
 
 def uninit_index(fields, extra=()):
-    """(arch, function name) -> set of fields each _uninit_ writes, over every tree."""
+    """(arch, function name) -> {field: value its last write leaves} per _uninit_, over every tree."""
     idx = {}
     paths = {p for a in DEFINES for p in tree_files(a)} | {
         os.path.abspath(e) for e in extra
@@ -204,8 +207,9 @@ def uninit_index(fields, extra=()):
             for name, _sig, _bl, body in bodies(path):
                 if name and "uninit" in name:
                     for f in fields:
-                        if writes(body, f):
-                            idx.setdefault((arch, name), set()).add(f)
+                        ws = writes(body, f)
+                        if ws:
+                            idx.setdefault((arch, name), {})[f] = ws[-1][1]
     return idx
 
 
@@ -315,28 +319,52 @@ def scan(path, fields, sites, uninits):
                         pending = (off, val)
                     elif val != pending[1]:
                         pending = None
-                elif pending is not None:
-                    pending = None  # a computed value: assume it re-establishes the configuration
-                elif val not in spec["configured_by"]:
+                elif val in spec["configured_by"]:
+                    pending = None  # the configured value: put back
+                else:
                     yield (
                         line_of(off),
                         name,
                         field,
                         "unresolved",
-                        f"value `{val}` cannot be judged in {name}()",
+                        f"value `{val}` cannot be judged in {name}()"
+                        + (
+                            f"; assumed to put back the fixed write of {pending[1]} above"
+                            if pending is not None
+                            else ""
+                        ),
                         False,
                     )
+                    pending = None
             if pending is None or covered:
                 continue
             un = _uninit_name(name)
-            if un and un != name and field in uninits.get((arch, un), ()):
-                continue
+            left = uninits.get((arch, un), {}).get(field) if un and un != name else None
+            same = ""
+            if left is not None:
+                if isinstance(left, int):
+                    if left != pending[1]:
+                        continue  # the _uninit_ puts a different value back
+                    same = f" and {un}() writes the same value"
+                elif left in spec["configured_by"]:
+                    continue
+                else:
+                    yield (
+                        line_of(pending[0]),
+                        name,
+                        field,
+                        "unresolved",
+                        f"{un}() leaves it at `{left}`, which cannot be judged; assumed to put "
+                        f"back the fixed write of {pending[1]} in {name}()",
+                        False,
+                    )
+                    continue
             yield (
                 line_of(pending[0]),
                 name,
                 field,
                 "restore",
-                f"{name}() leaves it at {pending[1]}; restore it in this function, in "
+                f"{name}() leaves it at {pending[1]}{same}; restore it in this function, in "
                 f"{un or 'its _uninit_'}(), or name the restoring site in sticky_cfg_fields.yaml",
                 True,
             )
