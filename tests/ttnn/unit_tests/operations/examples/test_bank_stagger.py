@@ -124,13 +124,15 @@ def _measure_ns(device, run_fn):
     return total / N_LAUNCHES if total is not None else None
 
 
+# A "ws" case's W is per DRAM bank; the test scales it by the device's bank count, so every
+# bank holds one equal shard (8 banks: W = 4096 / 1024 / 256; 12 banks: 6144 / 1536 / 384).
 _CORRECTNESS_CASES = [
     (v, c)
     for v in VARIANTS
     for c in (
-        (256, 4096, 16, "ws"),
-        (96, 1024, 2, "ws"),  # 2 chunks per shard; unit counts not a multiple of the shard count
-        (64, 256, 1, "ws"),
+        (256, 512, 16, "ws"),
+        (96, 128, 2, "ws"),  # 2 chunks per shard; unit counts not a multiple of the shard count
+        (64, 32, 1, "ws"),
         (32, 8192, 4, "il"),
         (2048, 512, 16, "il"),
         (96, 1024, 1, "il"),
@@ -144,6 +146,8 @@ _CORRECTNESS_CASES = [
 def test_bank_stagger_correctness(device, variant, case):
     """Every variant tilizes exactly: out == input (bf16, bit-exact)."""
     h, w, chunk, src = case
+    if src == "ws":
+        w *= num_dram_banks(device)
     torch_input, tt_input = _make_input(device, h, w, src)
     out = ttnn.to_torch(bank_stagger(tt_input, **VARIANTS[variant], chunk_wt=chunk, kernel_iters=KERNEL_ITERS))
     assert list(out.shape) == [h, w]
