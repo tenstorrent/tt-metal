@@ -37,10 +37,6 @@ ALWI void erf_bw_tile(uint32_t idst) {
         (idst + 2 <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "erf_bw_tile needs DEST tiles idst to idst + 1"));
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erf_bw_bf16, (32), idst, VectorMode::None));
-    MATH(if constexpr (ckernel::sfpu::ErfBwBf16Config::needs_gradient) {
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erf_bw_gradient_bf16, (32), idst, VectorMode::None));
-    });
 }
 
 /**

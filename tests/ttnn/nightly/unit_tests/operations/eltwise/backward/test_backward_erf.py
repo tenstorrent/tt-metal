@@ -96,7 +96,8 @@ def _erf_bw_reference(grad, x, flush, board):
     unit = _erf_bw_torch_reference(torch.ones_like(grad), x, flush)
     g = _erf_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
     result = torch.where(unit.abs() < ERF_BW_SMALLEST_NORMAL, torch.zeros_like(result), result)
-    g = _erf_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
+    # On purpose, not torch's NaN: at a NaN x the kernel keeps the stock behaviour described above,
+    # since returning torch's NaN costs instructions on every tile.
     nan = {"blackhole": torch.where(g < 0, -torch.inf, torch.inf), "wormhole_b0": torch.zeros_like(g)}[board]
     result = torch.where(torch.isnan(x.to(torch.float64)), nan, result)
     return result
