@@ -45,6 +45,7 @@ void kernel_main() {
 #ifdef OUTPUT_SHARDED
     // The output is sharded: this reader writes the weight sticks it gathers straight into its own
     // output shard, one chunk_size-strided row after another (the host checks they fit).
+    static_assert(num_chunks == 1, "the host never chunks the rows of a sharded output");
     LocalTensorAccessor<uint8_t> out_shard(tensor::out_shard);
     uint32_t out_offset = 0;  // byte offset of the next row in the shard
 #else

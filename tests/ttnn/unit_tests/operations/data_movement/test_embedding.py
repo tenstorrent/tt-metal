@@ -826,6 +826,7 @@ def test_embedding_rm_index_dtypes_and_types(
 @pytest.mark.parametrize(
     "embeddings_type", [ttnn.EmbeddingsType.GENERIC, ttnn.EmbeddingsType.PADDED, ttnn.EmbeddingsType.BINARY]
 )
+@pytest.mark.requires_grid_size((4, 1))
 def test_embedding_rm_height_sharded_output(device, index_dtype, embeddings_type):
     torch.manual_seed(0)
     batch_size, sentence_size, hidden_embedding_dim, num_cores = 2, 128, 64, 4
@@ -854,7 +855,8 @@ def test_embedding_rm_height_sharded_output(device, index_dtype, embeddings_type
 
 
 # Tile-layout indices (tilized-indices program factory) for every embeddings type and index dtype.
-# Several tiles per core make the reader re-read its index scratchpad.
+# The larger case makes each core re-read its index scratchpad: work is split in 16-row units, so
+# the sentence is scaled with the grid to give every core more than one index tile.
 @pytest.mark.parametrize("index_dtype", [ttnn.uint32, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "embeddings_type", [ttnn.EmbeddingsType.GENERIC, ttnn.EmbeddingsType.PADDED, ttnn.EmbeddingsType.BINARY]
@@ -864,6 +866,9 @@ def test_embedding_tiled_input_index_dtypes_and_types(
     device, index_dtype, embeddings_type, batch_size, sentence_size, hidden_embedding_dim
 ):
     torch.manual_seed(0)
+    if sentence_size > 32:
+        grid = device.compute_with_storage_grid_size()
+        sentence_size = max(sentence_size, 32 * grid.x * grid.y)
     indices, vocabulary_size, pad_token = _embedding_indices((batch_size, sentence_size), 250, embeddings_type)
     torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
 

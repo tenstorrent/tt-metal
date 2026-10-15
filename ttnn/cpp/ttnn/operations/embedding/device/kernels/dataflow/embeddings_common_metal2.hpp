@@ -47,7 +47,7 @@ uint32_t one_local_addr;
 // buffer base.
 // `local_cache` is a Scratchpad binding token. The cache is only ever NoC-accessed — filled here and
 // replayed via a NoC loopback read in read_token_async — so the scratchpad's plain (cached) base
-// address is correct; no uncached alias is needed (unlike the RISC-read index scratch).
+// address is correct and the RISC never reads it, so no scoped_lock is needed.
 template <typename CacheToken, typename T>
 FORCE_INLINE void prepare_local_cache(
     const Noc& noc,
