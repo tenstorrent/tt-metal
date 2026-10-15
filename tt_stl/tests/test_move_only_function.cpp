@@ -229,6 +229,33 @@ TEST(MoveOnlyFunctionTest, CPU_SelfMoveAssignIsSafe) {
     EXPECT_EQ(f(), 1u);
 }
 
+// The source is owned by the target it replaces, so it must be read before that target is destroyed.
+TEST(MoveOnlyFunctionTest, CPU_TargetReplacesItselfWithOwnedSuccessor) {
+    move_only_function<int()> heap_outer;
+    move_only_function<int()> heap_next{[] { return 2; }};
+    heap_outer = [&heap_outer, next = std::move(heap_next)]() mutable {
+        heap_outer = std::move(next);
+        return 1;
+    };
+    EXPECT_EQ(heap_outer(), 1);
+    EXPECT_EQ(heap_outer(), 2);
+
+    struct OwnsSuccessor {
+        move_only_function<int()>* outer;
+        std::unique_ptr<move_only_function<int()>> next;
+        int operator()() const {
+            *outer = std::move(*next);
+            return 1;
+        }
+    };
+    static_assert(sizeof(OwnsSuccessor) <= detail::kMoveOnlyFunctionInlineSize);
+    static_assert(!std::is_trivially_destructible_v<OwnsSuccessor>);
+    move_only_function<int()> inline_outer;
+    inline_outer = OwnsSuccessor{&inline_outer, std::make_unique<move_only_function<int()>>([] { return 3; })};
+    EXPECT_EQ(inline_outer(), 1);
+    EXPECT_EQ(inline_outer(), 3);
+}
+
 // As with std::move_only_function, an empty std::function is an ordinary target, not an empty source.
 TEST(MoveOnlyFunctionTest, CPU_EmptyStdFunctionIsEngaged) {
     std::function<void()> empty;
