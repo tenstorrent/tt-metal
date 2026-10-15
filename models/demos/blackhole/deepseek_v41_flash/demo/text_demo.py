@@ -140,6 +140,8 @@ SCENARIOS = [
     _s(f"{LONG}/input_data_long_64k.json", 128, 70000, 64, "isl64k_b128"),
     _s(f"{LONG}/input_data_long_32k.json", 16, 40000, 64, "isl32k_b16"),
     _s(GSM, 4, 512, 384, "gsm8k_b4", instruct=True, stop_at_eos=True),
+    # a 1M-context build (tables / pool sized for 1,048,576 tokens, prefill chunk 512) with short GSM8K prompts: decode speed of plain vs speculative decoding at the long-context capacity
+    _s(GSM, 4, 1048576, 384, "gsm8k_b4_m1M", instruct=True, stop_at_eos=True, chunk=512),
     _s(GSM, 8, 512, 384, "gsm8k_b8", instruct=True, stop_at_eos=True),
     # same GSM8K prompts with a model context of 2048 (> 512: the decode indexer is ON): the demo-side reference of the vLLM adapter's indexer-on speculative rounds
     _s(GSM, 8, 2048, 384, "idxon_b8", instruct=True, stop_at_eos=True),

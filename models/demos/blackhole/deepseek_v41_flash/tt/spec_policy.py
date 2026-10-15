@@ -31,7 +31,7 @@ B_PLAIN_FORCE = 128  # B >= 128: plain unless DSV41_SPEC_B128=1
 # U <= 4 is bounded by that measurement (a smaller U has a smaller pool, index keys and runner state; a bf16 pool adds 83 MiB at U=4: 345 -> 262 free before the runner, still above SPEC_NEED_FREE_MIB).
 # B=32 (U=8) was measured only to max_seq_len 40000 (527 free before the runner, 247 after runner + traces, log pf_spec_int_specdef_isl32k_b32; 70000 ran out of DRAM before the sharing; its pool doubles): kept.
 SPEC_MAX_CTX = {
-    1: 131584,
+    1: 1048832,  # B=4 (U=1): measured at the 1M build (2026-10-15, demo gsm8k_b4_m1M, trace region 800000000, DSV41_PREFILL chunk 512): the spec runner builds and speculation is lossless, 1.81x plain decode
     2: 131584,
     4: 131584,
     8: 40000,
@@ -146,7 +146,7 @@ def resolve(batch, mesh_rows=4, max_seq_len=None, env=None):
             c = SpecChoice("fixed", k, [], rows, f"explicit DSV41_SPEC={k}", True)
     c.ring_rows = RING_ROWS_SPEC
     if not c.explicit and max_seq_len is not None:
-        lim = min(SPEC_MAX_CTX.get(U, SPEC_MAX_CTX[8]), SPEC_MAX_CTX_BACKEND)
+        lim = SPEC_MAX_CTX.get(U, SPEC_MAX_CTX[8])
         if _get(
             env, "DSV41_SPEC_MAX_CTX"
         ):  # experiment: lift the measured context cap (DRAM / matmul-indexer bound) for this build
@@ -178,8 +178,23 @@ def apply(choice, env=None):
     return choice
 
 
+def force_matmul_backend(max_seq_len, env=None):
+    """Speculative verify needs the matmul indexer backend; ``default_backend`` (tt/indexer.py) picks the fused one above 65536 entries (max_seq_len > SPEC_MAX_CTX_BACKEND). A build that
+    speculates at a longer context therefore sets DSV41_IDX_BACKEND=matmul BEFORE the model is built (a user-set value wins). The matmul backend also follows the position buckets, so short
+    prompts on a long-context build do not pay for scoring every slot (1M build, B=4: plain decode 75.3 ms/token with the fused backend, 43.8 ms with the matmul one).
+    """
+    env = os.environ if env is None else env
+    if max_seq_len is not None and int(max_seq_len) > SPEC_MAX_CTX_BACKEND and not env.get("DSV41_IDX_BACKEND"):
+        env["DSV41_IDX_BACKEND"] = "matmul"
+        return True
+    return False
+
+
 def resolve_apply(batch, mesh_rows=4, max_seq_len=None, env=None):
-    return apply(resolve(batch, mesh_rows, max_seq_len, env), env)
+    choice = apply(resolve(batch, mesh_rows, max_seq_len, env), env)
+    if choice.on:
+        force_matmul_backend(max_seq_len, env)
+    return choice
 
 
 def dram_check(free_mib, largest_mib, U=4, env=None):
