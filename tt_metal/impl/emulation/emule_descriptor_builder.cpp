@@ -33,7 +33,6 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/face_geometry.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
@@ -124,9 +123,9 @@ SocView build_soc_view(IDevice* device, Program& program) {
         v.l1_banks.push_back(bank);
     }
 
-    v.dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    v.l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    v.arch_num_circular_buffers = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    v.dram_alignment = hw.get_alignment(tt::tt_metal::HalMemType::DRAM);
+    v.l1_alignment = hw.get_alignment(tt::tt_metal::HalMemType::L1);
+    v.arch_num_circular_buffers = hw.get_num_dataflow_buffers();
     v.num_semaphores = tt::tt_metal::NUM_SEMAPHORES;
     v.has_tile_counter_registers = hw.has_tile_counter_registers();
 
@@ -387,6 +386,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                                                  const LLKMetadata& llk) {
                 // num_rt needs no handling: crta_vararg_offset (below) already counts those words.
                 kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off, serialize_llk_metadata(llk)});
+            });
+            k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
+                kd.bindings.prefetcher_pipe.push_back(PrefetcherPipeBinding{name, prefetcher_pipe_id});
             });
             k.process_scratchpad_binding_handles([&kd](
                                                      const std::string& name,

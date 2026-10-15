@@ -4,6 +4,7 @@
 
 #include "k_split_gram_matmul_program_factory.hpp"
 
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"

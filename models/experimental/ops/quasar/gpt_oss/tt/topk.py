@@ -179,11 +179,8 @@ class TopKRouter:
         if needs_typecast:
             ttnn.deallocate(hidden_states_bf16)
 
-        # Kernel produces uint16 RM [B, k_padded] and bf16 RM [B, k_padded].
-        # Slice to [B, top_k] in RM and return directly.
-        # fused_decode.py handles RM input natively (zero-cost reshape to 4D).
-        expert_indices = ttnn.slice(indices_rm, [0, 0], [B, self.top_k])
-        expert_weights = ttnn.slice(weights_rm, [0, 0], [B, self.top_k])
-        ttnn.deallocate(indices_rm)
-        ttnn.deallocate(weights_rm)
-        return expert_indices, expert_weights
+        # The op already reports uint16 / bf16 RM [B, top_k] (32 physical rows), so return its outputs as they are;
+        # fused_decode.py handles RM input natively (zero-cost reshape to 4D). Do not slice + deallocate here: a slice
+        # that covers the whole logical shape is a no-op that aliases its input, and ttnn.deallocate (force=True)
+        # would then free the tensors returned to the caller.
+        return indices_rm, weights_rm
