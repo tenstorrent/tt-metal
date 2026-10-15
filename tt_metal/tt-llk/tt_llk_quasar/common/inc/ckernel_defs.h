@@ -106,6 +106,7 @@ enum class BinaryOp : std::uint8_t
     LOGADDEXP,
     LOGADDEXP2,
     GCD,
+    LCM,
 };
 
 enum class DataLayout
