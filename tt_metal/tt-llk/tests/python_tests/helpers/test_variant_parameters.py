@@ -34,7 +34,6 @@ from .llk_params import (
     ReducePool,
     SdpaFwOp,
     SdpaOp,
-    SfpuMulImpl,
     SfpuSrcsImpl,
     StableSort,
     StochasticRounding,
@@ -1587,17 +1586,6 @@ class SFPU_DST_ROUNDING_MODE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr ckernel::DstRoundingMode SFPU_DST_ROUNDING_MODE = {self.dst_rounding.cpp_enum_value};"
-
-
-@dataclass
-class SFPU_MUL_IMPL(TemplateParameter):
-    """calculate_sfpu_binary_mul when Production. Legal only for MUL."""
-
-    mul_kernel: SfpuMulImpl = SfpuMulImpl.Generic
-
-    def convert_to_cpp(self) -> str:
-        production = self.mul_kernel == SfpuMulImpl.Production
-        return f"constexpr bool SFPU_PRODUCTION_MUL = {str(production).lower()};"
 
 
 @dataclass

@@ -28,7 +28,6 @@ from helpers.llk_params import (
     DstRoundingMode,
     MathOperation,
     PerfRunType,
-    SfpuMulImpl,
     format_dict,
 )
 from helpers.param_config import (
@@ -66,7 +65,6 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     SFPU_BCAST_DIM,
     SFPU_DST_ROUNDING_MODE,
-    SFPU_MUL_IMPL,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -459,7 +457,6 @@ def sfpu_binary(
     iterations=32,
     approx_mode=ApproximationMode.No,
     dst_rounding_mode=DstRoundingMode.Default,
-    mul_kernel=SfpuMulImpl.Production,
     check_contract=True,
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
@@ -473,10 +470,6 @@ def sfpu_binary(
     # Seed the draw so the stimuli are identical run to run; an unseeded redraw makes a
     # variant near its tolerance fail unreproducibly.
     torch.manual_seed(0)
-
-    # C++ rejects PRODUCTION_MUL for every op except MUL.
-    if mathop != MathOperation.SfpuElwmul:
-        mul_kernel = SfpuMulImpl.Generic
 
     # FP32 destination tiles occupy twice the register space. Keep four full destination
     # blocks for those formats and four blocks of eight tiles for the remaining formats.
@@ -605,7 +598,6 @@ def sfpu_binary(
             BROADCAST_TYPE(bcast),
             SFPU_BCAST_DIM(LlkBroadcastType.None_),
             SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
-            SFPU_MUL_IMPL(mul_kernel),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -916,7 +908,6 @@ def test_eltwise_binary_sfpu_mul_production_exact():
         MathOperation.SfpuElwmul,
         src_A_override=src,
         input_dimensions=_EXACT_DIMS,
-        mul_kernel=SfpuMulImpl.Production,
         check_contract=False,
     )
     zero = (a == 0) | (b == 0)
@@ -1793,7 +1784,6 @@ def _run_sfpu_add_top_row(
             BROADCAST_TYPE(LlkBroadcastType.None_),
             SFPU_BCAST_DIM(LlkBroadcastType.None_),
             SFPU_DST_ROUNDING_MODE(),
-            SFPU_MUL_IMPL(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -1972,7 +1962,6 @@ def _run_sfpu_binary_bcast(
             SFPU_BCAST_DIM(bcast_dim),
             # Unread by this kernel. Present so the report columns match sfpu_binary.
             SFPU_DST_ROUNDING_MODE(),
-            SFPU_MUL_IMPL(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A + tile_cnt_B),

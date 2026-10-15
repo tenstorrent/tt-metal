@@ -155,7 +155,6 @@ PERF_TEST_SCHEMAS = {
             "loop_factor",
             "marker",
             "mathop",
-            "mul_kernel",
             "num_blocks",
             "num_faces",
             "num_faces_A",

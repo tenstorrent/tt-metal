@@ -205,8 +205,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             SFPU_BINARY_OPERATION,
                             ITERATIONS,
                             formats.math,
-                            SFPU_DST_ROUNDING_MODE,
-                            SFPU_PRODUCTION_MUL>(tile, tile + 1, tile);
+                            SFPU_DST_ROUNDING_MODE>(tile, tile + 1, tile);
                     }
                 }
             }
@@ -233,8 +232,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             SFPU_BINARY_OPERATION,
                             ITERATIONS,
                             formats.math,
-                            SFPU_DST_ROUNDING_MODE,
-                            SFPU_PRODUCTION_MUL>(tile, tile + 1, tile);
+                            SFPU_DST_ROUNDING_MODE>(tile, tile + 1, tile);
                     }
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }

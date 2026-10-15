@@ -535,13 +535,6 @@ class DstRoundingMode(Enum):
         return f"ckernel::DstRoundingMode::{self.value}"
 
 
-class SfpuMulImpl(Enum):
-    """Generic is calculate_sfpu_binary. Production is calculate_sfpu_binary_mul."""
-
-    Generic = "Generic"
-    Production = "Production"
-
-
 class Transpose(Enum):
     Yes = True
     No = False
