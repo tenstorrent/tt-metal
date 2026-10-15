@@ -123,9 +123,17 @@ _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_si
 if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
-# Primary KV cache format. Unset leaves the adapter's own default (bf16 for GLM); dense-MLA models reject
-# any explicit format, so only the sparse models' manifests set this.
-SCALED_FP8_KV_CACHE = os.environ.get("PREFILL_SCALED_FP8_KV_CACHE", "0") == "1"
+# Primary KV cache format, for the models that have a choice (GLM): packed scaled FP8 unless
+# PREFILL_SCALED_FP8_KV_CACHE=0 asks for bf16. Dense-MLA models reject any explicit format, so they get None.
+SCALED_FP8_KV_CACHE = os.environ.get("PREFILL_SCALED_FP8_KV_CACHE", "1") == "1"
+
+
+def _sparse_kv_cache_format():
+    if ADAPTER.default_sparse_kv_cache_format is None:
+        return None
+    return MlaKvCacheFormat.SCALED_FP8 if SCALED_FP8_KV_CACHE else MlaKvCacheFormat.BF16_RM
+
+
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
 
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
@@ -631,7 +639,7 @@ def main() -> None:
         dflash_checkpoint_path=DFLASH_MODEL,
         mtp_levels=MTP_LEVELS,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
-        sparse_kv_cache_format=MlaKvCacheFormat.SCALED_FP8 if SCALED_FP8_KV_CACHE else None,
+        sparse_kv_cache_format=_sparse_kv_cache_format(),
         use_trace=USE_TRACE,
         overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",
     )
