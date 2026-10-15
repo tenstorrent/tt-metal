@@ -40,22 +40,6 @@ constexpr uint64_t kParticipants = 1u;
 
 namespace backend = transport_bandwidth::backend_x280_to_tensix;
 
-/* Backend initialisation, then the shared frontend, for one store width.
- * On an initialisation failure, publish ARG_LAYOUT_MISMATCH, or
- * WINDOW_CLEANUP_FAILED when a window it programmed does not clear -- the
- * result address is validated, so the host reads the terminal state rather
- * than inferring it. */
-template <uint32_t StoreWidth>
-inline __attribute__((always_inline)) void run(
-    backend::state_t& state, const transport_bw_x280_to_tensix_section_t& section, transport_bw_result_t& r) {
-    using Backend = backend::Backend<StoreWidth>;
-    if (!backend::initialize(state, section, r)) {
-        ubench_finish<Backend>(state, TRANSPORT_BW_STATE_ARG_LAYOUT_MISMATCH, TRANSPORT_BW_STATE_WINDOW_CLEANUP_FAILED);
-        return;
-    }
-    transport_bandwidth::run_member<Backend>(state);
-}
-
 }  // namespace
 
 /* `hot` because run_member inlines the timed loops here, and GCC lays out
@@ -86,12 +70,19 @@ extern "C" __attribute__((hot)) int main(uint64_t hartid) {
      * every scalar field before use and fills the staging array from LIM
      * on the success path.
      *
-     * sanity_check admitted only the listed widths. */
+     * On an initialisation failure, publish ARG_LAYOUT_MISMATCH, or
+     * WINDOW_CLEANUP_FAILED when a window it programmed does not clear -- the
+     * result address is validated, so the host reads the terminal state rather
+     * than inferring it. sanity_check admitted only the listed widths. */
     backend::state_t state;
-    switch (store.section.backend.store_width) {
-        case 4u: run<4u>(state, store.section, r); break;
-        case 8u: run<8u>(state, store.section, r); break;
-        case X280_VEC_M1_BYTES: run<X280_VEC_M1_BYTES>(state, store.section, r); break;
+    if (!backend::initialize(state, store.section, r)) {
+        ubench_finish<backend::Common>(
+            state, TRANSPORT_BW_STATE_ARG_LAYOUT_MISMATCH, TRANSPORT_BW_STATE_WINDOW_CLEANUP_FAILED);
+        return 0;
     }
+    transport_bandwidth::dispatch_size(
+        backend::store_widths{}, store.section.backend.store_width, [&](auto width) __attribute__((always_inline)) {
+            transport_bandwidth::run_member<backend::Backend<decltype(width)::value>>(state);
+        });
     return 0;
 }

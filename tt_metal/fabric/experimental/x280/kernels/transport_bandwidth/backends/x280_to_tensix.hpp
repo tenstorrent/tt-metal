@@ -71,7 +71,7 @@ static_assert(sizes::max() == TB_X2T_DST_MAX_BYTES, "the host sizes the Tensix L
 constexpr uint32_t kPatternWords = TB_X2T_PATTERN_BYTES / sizeof(uint32_t);
 
 /* Admitted store widths, in bytes: sw, sd, vse32.v at e32/m1. */
-constexpr bool store_width_valid(uint32_t w) { return w == 4u || w == 8u || w == X280_VEC_M1_BYTES; }
+using store_widths = size_list<4u, 8u, X280_VEC_M1_BYTES>;
 static_assert(TB_X2T_PATTERN_BYTES == X280_VEC_M1_BYTES, "one vse32.v stores the whole source pattern");
 
 /* --------------------------------------------------------------------------
@@ -164,7 +164,7 @@ inline bool sanity_check(const transport_bw_x280_to_tensix_section_t& s) {
     if (s.backend.own_result_addr == 0u) {
         return false;
     }
-    if (!store_width_valid(s.backend.store_width)) {
+    if (!store_widths::contains(s.backend.store_width)) {
         return false;
     }
     return x280_tlb_paired_slot(s.backend.peer_tlb_index);
@@ -319,13 +319,12 @@ inline __attribute__((always_inline)) void store_line(volatile uint32_t* line, c
 /* --------------------------------------------------------------------------
  * Frontend adapter
  *
- * StoreWidth is the bytes per store; the image picks the instantiation from
- * the section's store_width before anything is timed.
+ * Common holds everything but the store burst, so the image can end a run
+ * before it has picked a width. Backend<StoreWidth> adds issue(); the image
+ * picks the instantiation from the section's store_width before anything is
+ * timed.
  * -------------------------------------------------------------------------- */
-template <uint32_t StoreWidth>
-struct Backend {
-    static_assert(store_width_valid(StoreWidth), "StoreWidth is not an admitted store width");
-
+struct Common {
     using state_t = ::transport_bandwidth::backend_x280_to_tensix::state_t;
     using timestamp_t = ::transport_bandwidth::backend_x280_to_tensix::timestamp_t;
     using counter_delta_t = ::transport_bandwidth::backend_x280_to_tensix::counter_delta_t;
@@ -358,21 +357,6 @@ struct Backend {
         x280_fence_iorw();
         s.r->path_sentinel = observed;
         return observed == sentinel;
-    }
-
-    /* One issue: TransferSize/StoreWidth back-to-back stores through the TLB
-     * window. Templated so the compiler unrolls each supported burst
-     * length; `always_inline` because a call boundary here is exactly what
-     * the measured loop is otherwise counting. */
-    template <uint32_t TransferSize>
-    static inline __attribute__((always_inline)) void issue(state_t& s) {
-        static_assert(sizes::contains(TransferSize), "TransferSize is not in sizes");
-        static_assert(
-            TransferSize % TB_X2T_PATTERN_BYTES == 0u, "transfer_size must be a multiple of the source pattern");
-#pragma GCC unroll 16
-        for (uint32_t line = 0u; line < TransferSize / TB_X2T_PATTERN_BYTES; ++line) {
-            store_line<StoreWidth>(s.window + line * kPatternWords, s);
-        }
     }
 
     /* Fenced read through the window. It is not proof that preceding posted
@@ -412,6 +396,27 @@ struct Backend {
     static bool publish_footer(state_t& s) { return shutdown(s); }
 
     static constexpr uint32_t BACKEND_ID = TRANSPORT_BW_BACKEND_ID_X280_TO_TENSIX;
+};
+
+/* Common plus the burst of StoreWidth-byte stores. */
+template <uint32_t StoreWidth>
+struct Backend : Common {
+    static_assert(store_widths::contains(StoreWidth), "StoreWidth is not an admitted store width");
+
+    /* One issue: TransferSize/StoreWidth back-to-back stores through the TLB
+     * window. Templated so the compiler unrolls each supported burst
+     * length; `always_inline` because a call boundary here is exactly what
+     * the measured loop is otherwise counting. */
+    template <uint32_t TransferSize>
+    static inline __attribute__((always_inline)) void issue(state_t& s) {
+        static_assert(sizes::contains(TransferSize), "TransferSize is not in sizes");
+        static_assert(
+            TransferSize % TB_X2T_PATTERN_BYTES == 0u, "transfer_size must be a multiple of the source pattern");
+#pragma GCC unroll 16
+        for (uint32_t line = 0u; line < TransferSize / TB_X2T_PATTERN_BYTES; ++line) {
+            store_line<StoreWidth>(s.window + line * kPatternWords, s);
+        }
+    }
 };
 
 }  // namespace transport_bandwidth::backend_x280_to_tensix
