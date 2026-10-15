@@ -640,6 +640,34 @@
   budget_type: demo
   sp_config: sc1
 
+# Chunked replacement for the single-shot glm_prefill_block section above (#56993): teacher-forced
+# 55k@5k (11 chunks) through one pretrained GLM-5.3 block at full-indexer layers 2/6/30/62/74, checking
+# block output, KVPE and indexer-K cache PCC against the vLLM golden trace. Kept as its own stage so it
+# can run without the rest of the components suite; once green it can take over the glm_prefill_block slot.
+- name: "(GLM-5.3-744B) chunked prefill block, teacher-forced indexer-K 55k@5k"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
+    export TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_chunked.py::test_glm_prefill_block_indexer_teacher_forced -k "glm53 and torus-xy-8x4 and chunks11" -vvv --tb=short --timeout=900
+    '
+  test_type: glm_prefill_block_chunked
+  test_tags: [glm_5_3, block, glm_prefill_block_chunked]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 60
+      tier: 2
+      release_ready: false
+  owner_id: U09LK84G4TF  # Nikola Milicevic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 # TRACED twin of the accuracy job above. It asserts FEWER checks than its untraced twin, by construction:
 # both modes assert the KVPE and DSA indexer-K CACHE PCCs (read back after the run), but the per-layer
 # decoder-output PCC needs return_intermediates=True -- a host readback in the middle of forward() -- and
