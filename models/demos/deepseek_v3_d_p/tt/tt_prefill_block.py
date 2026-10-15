@@ -691,6 +691,7 @@ class TtPrefillBlock(LightweightModule):
             metadata_msg=metadata_msg,
             on_layer_complete=on_layer_complete,
             trace_controller=getattr(self, "_trace_controller", None),
+            tp_axis=self.mla.tp_shard_kv_axis,
         )
 
         if kv_only:
