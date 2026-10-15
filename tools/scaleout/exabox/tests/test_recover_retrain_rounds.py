@@ -290,6 +290,25 @@ class RecoverRetrainRoundsTest(unittest.TestCase):
             self.assertNotIn("btl_tcp_if_include", launch["argv"])
             self.assertNotIn("oob_tcp_if_include", launch["argv"])
 
+    def test_inherited_include_does_not_skip_detection(self):
+        # Only an exclude conflicts with btl_tcp_if_include; an inherited include is overridden.
+        code, _ = self.run_recover(
+            "--max-retrains",
+            "4",
+            "--reset-every",
+            "4",
+            pass_after_resets=1,
+            mpi_if=False,
+            env_extra={"OMPI_MCA_btl_tcp_if_include": "inherited0"},
+        )
+
+        self.assertEqual(code, 0)
+        self.assertTrue(self.launches)
+        for launch in self.launches:
+            argv = launch["argv"]
+            self.assertIn("btl_tcp_if_include", argv)
+            self.assertNotEqual(argv[argv.index("btl_tcp_if_include") + 1], "inherited0")
+
     def test_explicit_mpi_if_drops_the_inherited_interface_selection(self):
         # --mpi-if pins an interface, so an exclude from the environment must not reach mpirun with it.
         code, trace = self.run_recover(

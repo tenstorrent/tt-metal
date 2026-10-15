@@ -113,10 +113,10 @@ Optional:
 Environment:
     GLX_RESET_CMD                           Command each host runs to reset its Galaxy
                                             (default: tt-smi -glx_reset)
-    OMPI_MCA_btl_tcp_if_include/_exclude    When either is set and --use-docker is not, the MPI
-                                            interface is left to them: no auto-detection, and
-                                            no btl_tcp_if_include. --mpi-if or --use-docker
-                                            pins an interface instead, and both are dropped
+    OMPI_MCA_btl_tcp_if_exclude             When set and --use-docker is not, the MPI interface
+                                            is left to it: no auto-detection, and no
+                                            btl_tcp_if_include. --mpi-if or --use-docker pins
+                                            an interface instead, and it is dropped
 
 ================================================================================
 To see the full list of run_cluster_validation flags forwardable via

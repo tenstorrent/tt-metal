@@ -3,11 +3,11 @@
 # MPI network interface validation and auto-detection utility
 # Used by exabox cluster scripts to ensure valid MPI interface selection
 
-# True when the MPI environment already chooses the TCP interfaces, e.g. a container that
-# exports OMPI_MCA_btl_tcp_if_exclude. Open MPI refuses an include and an exclude together, so
-# callers then skip detection and pass no btl_tcp_if_include of their own.
+# True when the environment excludes TCP interfaces, e.g. a container that exports
+# OMPI_MCA_btl_tcp_if_exclude. Open MPI refuses an include alongside it, so callers then skip
+# detection and pass no btl_tcp_if_include. An inherited include is overridden by --mca as usual.
 mpi_if_set_by_env() {
-    [[ -n "${OMPI_MCA_btl_tcp_if_include:-}${OMPI_MCA_btl_tcp_if_exclude:-}" ]]
+    [[ -n "${OMPI_MCA_btl_tcp_if_exclude:-}" ]]
 }
 
 # Function to test if a given network interface works for MPI communication
