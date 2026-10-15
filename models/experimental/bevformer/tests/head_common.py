@@ -4,6 +4,7 @@
 
 """Configuration and helpers for the detection head tests."""
 
+from loguru import logger
 import torch
 import torch.nn as nn
 
@@ -35,10 +36,26 @@ def build_reference_head(bev_shape, seed=0):
     return model.eval().requires_grad_(False)
 
 
+# Box center error bounds in metres, about twice what the head's dummy-weight tests measure: PCC
+# alone allows metres of error on x and y, which span 102.4 m, where nuScenes matches boxes from
+# 0.5 m.
+CENTER_MEAN_ATOL = 0.01
+CENTER_MAX_ATOL = 0.15
+
+
 def center_channels():
     """The box code's cx, cy and cz channels."""
     channels = list(range(CODE_SIZE))
     return channels[CODE_XY] + channels[CODE_Z]
+
+
+def assert_centers_close(expected, actual):
+    """The box predictions' center channels within ``CENTER_MEAN_ATOL`` and ``CENTER_MAX_ATOL``."""
+    centers = center_channels()
+    error = (expected[..., centers] - actual[..., centers]).abs()
+    logger.info(f"box center error: mean {error.mean():.4f} m, max {error.max():.4f} m")
+    assert error.mean() <= CENTER_MEAN_ATOL, f"mean box center error {error.mean():.4f} m"
+    assert error.max() <= CENTER_MAX_ATOL, f"max box center error {error.max():.4f} m"
 
 
 def assert_boxes_close(expected, actual, pcc=0.99):

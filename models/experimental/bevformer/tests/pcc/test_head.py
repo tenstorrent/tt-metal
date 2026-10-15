@@ -11,7 +11,11 @@ from models.experimental.bevformer.config.head_config import NUM_CLASSES
 from models.experimental.bevformer.reference.nms_free_coder import NMSFreeCoder, denormalize_bbox
 from models.experimental.bevformer.tests.backbone_common import assert_pcc
 from models.experimental.bevformer.tests.decoder_common import BEV_SHAPES, assert_channels_close, random_bev_features
-from models.experimental.bevformer.tests.head_common import assert_boxes_close, build_reference_head, center_channels
+from models.experimental.bevformer.tests.head_common import (
+    assert_boxes_close,
+    assert_centers_close,
+    build_reference_head,
+)
 from models.experimental.bevformer.tt.model_preprocessing_head import create_head_parameters
 from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
 from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
@@ -49,9 +53,7 @@ def _check(torch_outputs, tt_outputs):
     # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
     for name, tensor in zip(("class logits", "box predictions"), tt_outputs):
         assert torch.isfinite(tensor).all(), f"non-finite values in the head {name}"
-    centers = center_channels()
-    center_error = (torch_outputs[1][..., centers] - tt_outputs[1][..., centers]).abs()
-    logger.info(f"box center error: mean {center_error.mean():.4f} m, max {center_error.max():.4f} m")
+    assert_centers_close(torch_outputs[1], tt_outputs[1])
     # Over all layers, then the last alone, which the coder reads and where the error is largest.
     for layers in (slice(None), -1):
         assert_pcc(torch_outputs[0][layers], tt_outputs[0][layers], 0.99)
@@ -119,7 +121,7 @@ def test_head_detections(device, reset_seeds):
     tt_all_scores = ttnn.to_torch(tt_cls_scores[-1]).float().sigmoid()
     score_error = (cls_scores[-1].sigmoid() - tt_all_scores).abs().amax((1, 2))
     for i in range(batch_size):
-        labels, query_index = tt_labels[i].long(), tt_query_index[i, :, 0].long()
+        labels, query_index = tt_labels[i].long(), tt_query_index[i].long()
         ref_scores, ref_labels, ref_query_index, _ = reference.topk(cls_scores[-1, i], bbox_preds[-1, i])
         assert (tt_scores[i][1:] <= tt_scores[i][:-1]).all(), f"sample {i}: top-k scores are not sorted"
         # With e the score error and s_k the reference's k-th score: every reference top-k pair

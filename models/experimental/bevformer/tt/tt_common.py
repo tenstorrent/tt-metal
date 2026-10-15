@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Blocks shared across the port: the LayerNorm helper that passes the module's eps, used by the
-encoder and the decoder, and the conv the ResNet101-DCN backbone and the FPN share.
+encoder and the decoder, the conv the ResNet101-DCN backbone and the FPN share, and the dtype of
+the head's class logits, which the coder takes.
 
 The conv's weights are prepared once, in the constructor, for one interleaved DRAM input dtype
 and layout. A later call with a different input fails. A 1x1 stride-1 conv whose

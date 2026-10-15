@@ -20,7 +20,7 @@ from tracy import signpost
 import ttnn
 from models.experimental.bevformer.tests.backbone_common import assert_pcc
 from models.experimental.bevformer.tests.decoder_common import BEV_SHAPES, assert_channels_close, random_bev_features
-from models.experimental.bevformer.tests.head_common import build_reference_head
+from models.experimental.bevformer.tests.head_common import assert_centers_close, build_reference_head
 from models.experimental.bevformer.tt.model_preprocessing_head import create_head_parameters
 from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
 from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
@@ -32,6 +32,7 @@ def _check(torch_outputs, tt_outputs):
         assert torch.isfinite(tensor).all(), f"non-finite values in the head {name}"
     assert_pcc(torch_outputs[0], tt_cls_scores, 0.99)
     assert_channels_close(torch_outputs[1], tt_bbox_preds)
+    assert_centers_close(torch_outputs[1], tt_bbox_preds)
 
 
 @torch.no_grad()
@@ -58,7 +59,6 @@ def test_head_perf(device, reset_seeds):
         coder.topk(cls_scores[-1], bbox_preds[-1])
         return cls_scores, bbox_preds
 
-    # Doubles as the warmup: this call compiles the kernels and fills the program cache.
     _check(torch_outputs, run())
 
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)

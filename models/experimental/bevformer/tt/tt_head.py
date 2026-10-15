@@ -32,8 +32,7 @@ from models.experimental.bevformer.config.decoder_config import (
 from models.experimental.bevformer.tt.tt_common import SCORE_DTYPE, layer_norm
 from models.experimental.bevformer.tt.tt_decoder import GRID_DTYPE, TtDetectionTransformerDecoder
 
-# TtBEVFormerHead rebuilds the box code by concatenating its parts in channel order:
-# CODE_XY | CODE_WL | CODE_Z | CODE_H onward to CODE_SIZE, the rest in order.
+# __call__ rebuilds the box code by concatenation, which needs these parts contiguous and in this order.
 _LAYOUT = (CODE_XY, CODE_WL, CODE_Z, CODE_H, CODE_SIN, CODE_COS, CODE_VELOCITY)
 assert [part.start for part in _LAYOUT] == [0] + [part.stop for part in _LAYOUT[:-1]] and (
     CODE_VELOCITY.stop == CODE_SIZE
