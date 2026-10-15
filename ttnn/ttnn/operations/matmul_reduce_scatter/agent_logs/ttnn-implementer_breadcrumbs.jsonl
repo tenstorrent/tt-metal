@@ -1,3 +1,4 @@
 {"event":"test_run","result":"pass","detail":"62/62 acceptance (38 line placement + 24 ring placement, separate invocations: module fixtures cannot coexist)","ts":"2026-10-15T16:23:24+00:00"}
 {"event":"test_run","result":"pass","detail":"golden: fabric_configs 24/24, ring_mock 72/72, regression 6/6, test_golden all supported cells pass, unsupported xfail","ts":"2026-10-15T16:52:52+00:00"}
 {"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-10-15T16:54:27+00:00"}
+{"event":"hypothesis","detail":"INC_GROUP=4 hang: leader re-arms (decrements) its arrival counter at kernel end before group members polled it; members spin forever. Fix: members ack observations to the leader (program semaphore 3); leader re-arms after all acks.","ts":"2026-10-15T17:26:05+00:00"}

@@ -51,6 +51,7 @@ void kernel_main() {
     constexpr uint32_t chunks_per_core = (P + chunk_tiles - 1) / chunk_tiles;
     constexpr uint32_t num_headers = group;
     constexpr uint32_t slot_bytes = P * tile_bytes;
+    constexpr uint32_t inc_group = get_compile_time_arg_val(6);  // cores per fused arrival increment (group leader)
 
     size_t arg = 0;
     const uint32_t zone_base = get_arg_val<uint32_t>(arg++);     // downstream zone of this direction (staging + offset)
@@ -108,6 +109,11 @@ void kernel_main() {
         const uint32_t slot0 = (unit >> 16) & 0xFF;
         const uint32_t slot1 = (unit >> 24) & 0xFF;
         const uint32_t first_half = (unit >> 10) & 0x1;
+        uint32_t unit_cores = 0;  // cores of this unit (the last group may be short)
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            unit_cores += (half_mask >> ((get_arg_val<uint32_t>(cores_idx + i) >> 16) & 0xF)) & 1;
+        }
+        uint32_t pos = 0;                                        // position of the current core in the unit's walk
         for (uint32_t walk = 0; walk < 2 * num_cores; ++walk) {  // the reader's walk: first_half's cores first
             const uint32_t hh = first_half ^ (walk >= num_cores ? 1u : 0u);
             const uint32_t i = walk >= num_cores ? walk - num_cores : walk;
@@ -130,7 +136,9 @@ void kernel_main() {
                 const uint64_t dst = get_noc_addr(x, y, dst_base + ci * chunk_bytes);
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
                 h = (h + 1 == num_headers) ? 0 : h + 1;
-                if (ci + 1 == chunks_per_core) {
+                // a group's last core carries the fused increment of its own counter (the group leader's)
+                const bool group_end = (pos + 1) % inc_group == 0 || pos + 1 == unit_cores;
+                if (ci + 1 == chunks_per_core && group_end) {
                     hdr->to_noc_fused_unicast_write_atomic_inc(
                         NocUnicastAtomicIncFusedCommandHeader{dst, ctr, 1, true}, bytes);
                 } else {
@@ -142,6 +150,7 @@ void kernel_main() {
                     pop_batch();
                 }
             }
+            ++pos;
         }
         if (u > 0) {
             pop_batch();  // end of unit (the reader flushed there too)

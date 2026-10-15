@@ -108,11 +108,12 @@ void kernel_main() {
         matmul_block_entry();
         if (pending != NONE) {
             finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(
-                get_arg_val<uint32_t>(pending));
+                get_arg_val<uint32_t>(pending) & 0xFF);
             pending = NONE;
         }
-        const uint32_t role = get_arg_val<uint32_t>(e);
-        if (role != ROLE_COPY && e + 1 < num_entries) {
+        const uint32_t role = get_arg_val<uint32_t>(e) & 0xFF;
+        const bool lag = (get_arg_val<uint32_t>(e) >> 8) & 1;  // host: arrival expected late -> finish later
+        if (lag) {
             pending = e;  // the add waits for its arrival behind the next entry's matmul
         } else {
             finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(role);

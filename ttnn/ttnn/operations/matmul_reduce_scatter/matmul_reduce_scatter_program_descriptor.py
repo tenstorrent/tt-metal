@@ -42,16 +42,26 @@ CB_ARRIVALS_BWD = 5  # backward arrival zone slots
 CB_PORT_CHUNKS = 6  # port cores: gathered chunks waiting for the fabric sender
 
 # ---- knobs (single source of truth) ------------------------------------------------------------------------------
-DEPTH_IN0 = 2  # stream regime: A K-block windows in flight
-DEPTH_IN1 = 2  # stream regime: W K-block windows in flight
+DEPTH_IN0 = 3  # stream regime: A K-block windows (one computing, one landing, PREFETCH_STEPS read ahead by a sender)
+DEPTH_IN1 = 3  # stream regime: W K-block windows
 DEPTH_HOLD = 2  # fp32 partial slots (lag 1 + current)
 DEPTH_HANDOFF = 2  # finished slots (a port gathers entry e while compute finishes e+1)
+PREFER_PORT_ROW_STRIP = True  # ports in logical row 0, right under the Ethernet row (focus case: 150-160 us with
+# the column strip -> 137-145 us with the row strip, despite 14 vs 12 tiles per core: the transport tail shrinks)
+PORT_PLACEMENT = "eth"  # "eth": each port nearest its link's Ethernet core | "spread": evenly along the strip
+INC_GROUP = 1  # cores per fused arrival increment: a unit's walk is cut into groups of this many cores; the group's
+# last core carries the fused increment of its own counter (the group leader), members poll the leader's counter
 PORT_GROUP = 4  # chunks per port batch (cb_port_chunks holds 2 batches); <= 8 (header pool)
 ENTRIES_PER_BLOCK = 1  # entries per scatter block (overlap lamp; only 1 is built)
 KB_MIN_RESIDENT = 8  # smallest K-block the resident regime accepts (min(Kt, this))
 KB_MAX = 16  # largest K-block: the streamed operand needs several K-blocks per entry to overlap read / mcast / math
 # (focus case, diagonal senders: kb 64 -> 212 us, 32 -> 160 us, 16 -> 159 us, 8 -> 164 us on the fastest chip)
 L1_HEADROOM = 64 * 1024  # bytes kept free per core beyond the op's own footprint
+LAG_POLICY = os.environ.get("MRS_LAG", "auto")  # "auto": lag a relay finish only when its arrival is produced late
+# upstream; "always": the design's original rule (every add waits behind the next matmul). env: perf experiments only
+PREFETCH_STEPS = 1  # K-block windows a sender keeps reserved with DRAM reads in flight ahead of its multicast
+SENDERS_PER_LINE = 1  # each K-block window is split into this many contiguous parts (A by m rows, W by k rows), each
+# read + multicast by a different core of the line, so no single RISC serializes a whole window's reads and mcast
 MCAST_SENDER_PLACEMENT = (
     "diagonal"  # operand senders per line: "uniform" (first core: a column of DRAM readers) | "diagonal"
 )
@@ -133,7 +143,7 @@ def plan_transport(G, kind):
     chips = {}
     for p in range(G):
         roles, entries = sch[p]
-        arrivals, thresholds = {}, {}
+        arrivals, thresholds, produced_at = {}, {}, {}
         for h in (0, 1):
             for d in _DIRS:
                 u = up(p, d)
@@ -149,7 +159,9 @@ def plan_transport(G, kind):
                 assert sorted(seq) == sorted(lst), (p, h, d, seq, lst)
                 arrivals[(h, d)] = lst
                 thresholds[(h, d)] = {b: i + 1 for i, b in enumerate(seq)}
-        chips[p] = dict(roles=roles, entries=entries, arrivals=arrivals, thresholds=thresholds)
+                # the upstream's entry index that produces each arrival (drives the per-entry lag decision)
+                produced_at[(h, d)] = {b: sch[u][1].index(b) for b in seq}
+        chips[p] = dict(roles=roles, entries=entries, arrivals=arrivals, thresholds=thresholds, produced_at=produced_at)
     slots = {d: max(1, max(len(chips[p]["arrivals"][(h, d)]) for p in range(G) for h in (0, 1))) for d in _DIRS}
     return chips, slots
 
@@ -176,12 +188,12 @@ def _subblock(core_m, core_n, cap=DEST_TILES_FP32_FULL_SYNC, prefer_tall=False):
 def choose_grid(gx, gy, block_m, block_n, L):
     """(strip, orientation, grid_m, grid_n, core_m, core_n, (sb_h, sb_w)) minimizing the per-core block."""
     best = None
-    for strip in ("row", "col"):
+    for strip in [t for t in ("row", "col") if os.environ.get("MRS_STRIP", t) == t]:  # env: perf experiments only
         strip_len = gx if strip == "row" else gy
         if 2 * L > strip_len:
             continue
         rect = (gx, gy - 1) if strip == "row" else (gx - 1, gy)
-        for orient in ("m_on_x", "m_on_y"):
+        for orient in [o for o in ("m_on_x", "m_on_y") if os.environ.get("MRS_ORIENT", o) == o]:
             ext_m, ext_n = (rect[0], rect[1]) if orient == "m_on_x" else (rect[1], rect[0])
             core_m = -(-block_m // min(ext_m, block_m))
             grid_m = -(-block_m // core_m)
@@ -189,7 +201,14 @@ def choose_grid(gx, gy, block_m, block_n, L):
             grid_n = -(-block_n // core_n)
             sb = _subblock(core_m, core_n)
             ragged = grid_m * core_m * grid_n * core_n - block_m * block_n
-            key = (core_m * core_n, -sb[0] * sb[1], ragged, grid_m * grid_n, strip != "row")
+            key = (
+                PREFER_PORT_ROW_STRIP and strip != "row",
+                core_m * core_n,
+                -sb[0] * sb[1],
+                ragged,
+                grid_m * grid_n,
+                strip != "row",
+            )
             cand = dict(strip=strip, orient=orient, grid_m=grid_m, grid_n=grid_n, core_m=core_m, core_n=core_n, sb=sb)
             if best is None or key < best[0]:
                 best = (key, cand)
@@ -243,6 +262,44 @@ def _place_ports(strip, gx, gy, L):
             cores[(d, l)] = ttnn.CoreCoord(gx - 1, i)
         else:
             cores[(d, l)] = ttnn.CoreCoord(min(gx - 1, (2 * i + 1) * gx // (2 * n)), 0)
+    return cores
+
+
+def _place_ports_near_eth(mesh, coord, strip, gx, gy, L, peers, node, links):
+    """{(d, l): logical core} in the strip, each linked port at the strip cell with the fewest NoC1 hops to its link's
+    Ethernet core (fabric rule: a sender right below its router). No probe dispatch: the router's Ethernet channel is
+    the first runtime arg setup_fabric_connection emits (asked on a scratch descriptor); it indexes the chip's
+    non-harvested Ethernet list. Falls back to _place_ports when the Ethernet map is unavailable."""
+    from ttnn.operations.examples.fabric_all_gather.program_descriptor_with_inline_kernels import (
+        _chip_maps,
+        _worker_nearest_noc1,
+    )
+
+    allowed = {(x, 0) for x in range(gx)} if strip == "row" else {(gx - 1, y) for y in range(gy)}
+    eth_list = _chip_maps(mesh, coord)[0]
+    if eth_list is None:
+        return _place_ports(strip, gx, gy, L)
+    cores, taken = {}, set()
+    for l in range(L):
+        for d in _DIRS:
+            peer = peers[d]
+            if peer is None:
+                continue
+            scratch = ttnn.ProgramDescriptor()
+            link = links[(coord, peer)][l]
+            chan = list(ttnn.setup_fabric_connection(node(coord), node(peer), link, scratch, ttnn.CoreCoord(0, 0)))[0]
+            if chan >= len(eth_list):
+                return _place_ports(strip, gx, gy, L)
+            core = _worker_nearest_noc1(mesh, coord, eth_list[chan], taken, allowed)
+            if core is None:
+                return _place_ports(strip, gx, gy, L)
+            cores[(d, l)] = core
+            taken.add((core.x, core.y))
+    for key in _place_ports(strip, gx, gy, L):  # receive-only ends: any free strip cell
+        if key not in cores:
+            free = sorted(allowed - taken)
+            cores[key] = ttnn.CoreCoord(*free[0])
+            taken.add(free[0])
     return cores
 
 
@@ -511,18 +568,27 @@ def create_mesh_program_descriptor(ctx):
     half = lambda k: 0 if k < -(-n_cores // 2) else 1
     link_of = lambda k: k % L
     mm_crs = ttnn.CoreRangeSet([ttnn.CoreRange(mm_core(0, 0), mm_core(grid_m - 1, grid_n - 1))])
-    ports = _place_ports(gd["strip"], gx, gy, L)
-    port_crs = _crs(list(ports.values()))
-    all_crs = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(mm_core(0, 0), mm_core(grid_m - 1, grid_n - 1))]
-        + [ttnn.CoreRange(c, c) for c in ports.values()]
-    )
+    ports_of = {}  # per chip: {(d, l): logical port core}
+    for grp in ctx["groups"]:
+        for p, coord in enumerate(grp):
+            peers = {
+                "fwd": grp[(p + 1) % G] if (ring or p < G - 1) else None,
+                "bwd": grp[(p - 1) % G] if (ring or p > 0) else None,
+            }
+            placement_mode = os.environ.get("MRS_PORT_PLACEMENT", PORT_PLACEMENT)  # env: perf experiments only
+            if placement_mode == "eth" and not os.environ.get("TT_METAL_EMULE_MODE"):
+                ports_of[coord] = _place_ports_near_eth(mesh, coord, gd["strip"], gx, gy, L, peers, node, ctx["links"])
+            else:
+                ports_of[coord] = _place_ports(gd["strip"], gx, gy, L)
     link_halves = {l: {half(k) for k in range(n_cores) if link_of(k) == l} for l in range(L)}
     # A is shared along an n-line (same gm), W along an m-line (same gn)
     a_shape_1d = ttnn.Mcast1DShape.PerColumn if gd["orient"] == "m_on_x" else ttnn.Mcast1DShape.PerRow
     w_shape_1d = ttnn.Mcast1DShape.PerRow if gd["orient"] == "m_on_x" else ttnn.Mcast1DShape.PerColumn
 
     nkb = Kt // kb
+    senders = int(os.environ.get("MRS_SENDERS", SENDERS_PER_LINE))  # env: perf experiments only
+    a_split = -(-core_m // 2) if senders >= 2 and core_m >= 2 else core_m  # m rows of A part 0
+    w_split = -(-kb // 2) if senders >= 2 and kb >= 2 else kb  # k rows of W part 0
     sb_h, sb_w = gd["sb"]
     rA = int(resident and scatter_dim == -1)
     rW = int(resident and scatter_dim == -2)
@@ -575,6 +641,11 @@ def create_mesh_program_descriptor(ctx):
             G,
             tA,
             tW,
+            a_pages // (core_m * kb),  # CB capacity in K-block windows
+            w_pages // (kb * core_n),
+            a_split,
+            w_split,
+            int(os.environ.get("MRS_PREFETCH", PREFETCH_STEPS)),  # env: perf experiments only
         ]
         + a_ct
         + w_ct
@@ -596,7 +667,8 @@ def create_mesh_program_descriptor(ctx):
         G,
     ]
     writer_ct = [CB_FINISHED, P, core_n, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, G] + o_ct
-    port_ct = [CB_PORT_CHUNKS, P, chunk_tiles, PORT_GROUP, STAGE_TILE_BYTES, DEPTH_HANDOFF]
+    inc_group = int(os.environ.get("MRS_INC_GROUP", INC_GROUP))  # env: perf experiments only
+    port_ct = [CB_PORT_CHUNKS, P, chunk_tiles, PORT_GROUP, STAGE_TILE_BYTES, DEPTH_HANDOFF, inc_group]
 
     src = ttnn.KernelDescriptor.SourceType.FILE_PATH
     # Perf-only ablation switches (debug scaffolding; output is wrong by design when set): MRS_ABLATE=compute,dram
@@ -609,7 +681,40 @@ def create_mesh_program_descriptor(ctx):
     dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
         processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
     )
-    port_vcore = {key: virt(c) for key, c in ports.items()}
+    port_vcore_of = {coord: {key: virt(c) for key, c in ports.items()} for coord, ports in ports_of.items()}
+
+    def unit_walks(sc, d, l):
+        """Port (d, l)'s units on a chip with schedule sc: [(entry, block, mask, h1_first, [k in walk order])]."""
+        out = []
+        for e, b in enumerate(sc["entries"]):
+            mask = sum(1 << h for h in link_halves[l] if sc["roles"][(b, h)][0] == d)
+            if not mask:
+                continue
+            # walk a chain-start half (ready right after its matmul) before a relay half (waits for its arrival)
+            h1_first = int(mask == 3 and sc["roles"][(b, 1)][1] and not sc["roles"][(b, 0)][1])
+            order = (1, 0) if h1_first else (0, 1)
+            ks = [k for hh in order if mask >> hh & 1 for k in range(n_cores) if link_of(k) == l and half(k) == hh]
+            out.append((e, b, mask, h1_first, ks))
+        return out
+
+    # arrival groups: for every arrival (receiving position q, core k, direction d, block b) the leader core whose
+    # counter covers it and the leader-counter threshold, counted in the upstream port's send order
+    leader_of, led_total, observed = {}, {}, {}
+    for p in range(G):
+        for d in _DIRS:
+            if not ring and not (0 <= (p + 1 if d == "fwd" else p - 1) < G):
+                continue
+            q = (p + 1) % G if d == "fwd" else (p - 1) % G
+            for l in range(L):
+                for _, b, _, _, ks in unit_walks(ctx["sched"][p], d, l):
+                    for g0 in range(0, len(ks), inc_group):
+                        members = ks[g0 : g0 + inc_group]
+                        lead = members[-1]
+                        led_total[(q, lead, d)] = led_total.get((q, lead, d), 0) + 1
+                        for k in members:
+                            leader_of[(q, k, d, b)] = (lead, led_total[(q, lead, d)])
+                        # members ack each observation to the leader, which re-arms only after all of them
+                        observed[(q, lead)] = observed.get((q, lead), 0) + len(members) - 1
 
     mesh_desc = ttnn.MeshProgramDescriptor()
     for grp in ctx["groups"]:
@@ -619,10 +724,18 @@ def create_mesh_program_descriptor(ctx):
             nxt = grp[(p + 1) % G] if (ring or p < G - 1) else None
             prv = grp[(p - 1) % G] if (ring or p > 0) else None
             peers = {"fwd": nxt, "bwd": prv}
+            ports = ports_of[coord]
+            port_vcore = port_vcore_of[coord]
+            all_crs = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(mm_core(0, 0), mm_core(grid_m - 1, grid_n - 1))]
+                + [ttnn.CoreRange(c, c) for c in ports.values()]
+            )
             program = ttnn.ProgramDescriptor()
             program.semaphores = [
                 ttnn.SemaphoreDescriptor(id=0, core_ranges=all_crs, initial_value=0),  # consumed_fwd
                 ttnn.SemaphoreDescriptor(id=1, core_ranges=all_crs, initial_value=0),  # consumed_bwd
+                ttnn.SemaphoreDescriptor(id=2, core_ranges=all_crs, initial_value=0),  # poll scratch (leader counter)
+                ttnn.SemaphoreDescriptor(id=3, core_ranges=all_crs, initial_value=0),  # member observations (leader)
             ]
 
             # ---- matmul cores: runtime args ----
@@ -640,10 +753,24 @@ def create_mesh_program_descriptor(ctx):
                         mask = 1 if r[0] == "fwd" else 2
                     elif r[0] == "fin":
                         mask = (1 if b in arrivals[(h, "fwd")] else 0) | (2 if b in arrivals[(h, "bwd")] else 0)
-                    thr_f = thresholds[(h, "fwd")].get(b, 0) if mask & 1 else 0
-                    thr_b = thresholds[(h, "bwd")].get(b, 0) if mask & 2 else 0
-                    ent_words += [b | (mask << 16), thr_f | (thr_b << 16)]
-                    roles_k.append([ROLE_COPY, ROLE_ADD_FWD, ROLE_ADD_BWD, ROLE_ADD_BOTH][mask])
+                    lead_words = []
+                    for d, bit in (("fwd", 1), ("bwd", 2)):
+                        if mask & bit:
+                            lk, thr = leader_of[(p, k, d, b)]
+                            lv = virt(mm_cores[lk][2])
+                            lead_words.append(lv.x | (lv.y << 8) | (thr << 16))
+                        else:
+                            lead_words.append(0)
+                    # lag (finish behind the next entry's matmul) only when an arrival is produced at the same or a
+                    # later position of the upstream's walk; an arrival produced earlier has (most likely) landed
+                    e_idx = len(roles_k)
+                    lag = LAG_POLICY == "always" and mask != 0
+                    lag = lag or any(
+                        sc["produced_at"][(h, d)][b] >= e_idx for d, bit in (("fwd", 1), ("bwd", 2)) if mask & bit
+                    )
+                    lag = int(lag and e_idx + 1 < len(entries))
+                    ent_words += [b | (mask << 16) | (lag << 20)] + lead_words
+                    roles_k.append([ROLE_COPY, ROLE_ADD_FWD, ROLE_ADD_BWD, ROLE_ADD_BOTH][mask] | (lag << 8))
                     kinds_k.append(KIND_FIN if r[0] == "fin" else (KIND_FWD if r[0] == "fwd" else KIND_BWD))
                 r_rt[core.x][core.y] = [
                     a_addr,
@@ -654,8 +781,9 @@ def create_mesh_program_descriptor(ctx):
                     n_valid,
                     arr_fwd_addr,
                     arr_bwd_addr,
-                    len(arrivals[(h, "fwd")]),
-                    len(arrivals[(h, "bwd")]),
+                    led_total.get((p, k, "fwd"), 0),  # increments my own counters receive (I lead those groups)
+                    led_total.get((p, k, "bwd"), 0),
+                    observed.get((p, k), 0),  # member observations of my counters to wait for before re-arming
                 ] + ent_words
                 c_rt[core.x][core.y] = roles_k
                 pf = port_vcore.get(("fwd", l)) if peers["fwd"] is not None else None
@@ -706,11 +834,23 @@ def create_mesh_program_descriptor(ctx):
                 if placement == "diagonal"
                 else ttnn.Mcast1DSenderPlacement.Uniform,
             )
-            mc_a = ttnn.Mcast1D(mesh, mm_crs, a_shape_1d, snd, mc_cfg)
-            mc_b = ttnn.Mcast1D(mesh, mm_crs, w_shape_1d, snd, mc_cfg)
             kernels = [reader]
-            mc_a.attach(program, "a", kernels)
-            mc_b.attach(program, "b", kernels)
+            # part 0 senders on the diagonal; part 1 senders half a line further along (a different core per line)
+            for prefix, shape_1d, split, extent, line_len in (
+                ("a", a_shape_1d, a_split, core_m, grid_n),
+                ("b", w_shape_1d, w_split, kb, grid_m),
+            ):
+                ttnn.Mcast1D(mesh, mm_crs, shape_1d, snd, mc_cfg).attach(program, prefix, kernels)
+                if split < extent:
+                    snd2 = ttnn.Mcast1DFixedSenderConfig(
+                        starting_sender_index=line_len // 2,
+                        sender_placement=ttnn.Mcast1DSenderPlacement.Diagonal
+                        if placement == "diagonal"
+                        else ttnn.Mcast1DSenderPlacement.Uniform,
+                    )
+                    ttnn.Mcast1D(mesh, mm_crs, shape_1d, snd2, mc_cfg).attach(program, prefix + "2", kernels)
+                else:
+                    ttnn.attach_absent(kernels[0], prefix + "2")
             reader = kernels[0]
 
             # ---- port cores ----
@@ -729,15 +869,9 @@ def create_mesh_program_descriptor(ctx):
                     vc = virt(c)
                     core_words.append(vc.x | (vc.y << 8) | (half(k) << 16) | (k << 20))
                 units = []
-                for e, b in enumerate(entries):
-                    mask = sum(1 << h for h in link_halves[l] if roles[(b, h)][0] == d)
-                    if not mask:
-                        continue
+                for e, b, mask, h1_first, _ in unit_walks(sc, d, l):
                     s0 = down["arrivals"][(0, d)].index(b) if mask & 1 else 0
                     s1 = down["arrivals"][(1, d)].index(b) if mask & 2 else 0
-                    # walk a chain-start half (ready right after its matmul) before a relay half (waits for its
-                    # arrival behind the next matmul), so a ready half never queues behind a late one
-                    h1_first = int(mask == 3 and roles[(b, 1)][1] and not roles[(b, 0)][1])
                     units.append(e | (mask << 8) | (h1_first << 10) | (s0 << 16) | (s1 << 24))
                 consumed_id = 0 if d == "fwd" else 1
                 pr_rt[pcore.x][pcore.y] = [staging_addr, mailbox_addr, consumed_id, len(core_words), len(units)] + (
@@ -747,7 +881,7 @@ def create_mesh_program_descriptor(ctx):
                 peer_sched = ctx["sched"][q]
                 opp = "bwd" if d == "fwd" else "fwd"
                 send_ready = int(any(peer_sched["roles"][(b, h)][0] == opp for b in range(G) for h in link_halves[l]))
-                rv = port_vcore[(opp, l)]
+                rv = port_vcore_of[peer][(opp, l)]  # the peer chip's port that writes into this chip
                 pn = node(peer)
                 zone = zone_fwd_off if d == "fwd" else zone_bwd_off
                 arr_addr = arr_fwd_addr if d == "fwd" else arr_bwd_addr
