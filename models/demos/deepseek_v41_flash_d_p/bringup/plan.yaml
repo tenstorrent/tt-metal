@@ -122,14 +122,8 @@ extra_gb_per_chip:
 activations_gb_per_chip: 3.0
 
 boxes:
-  # Deployment: 1M tokens on 16 chips does not fit with bf16 dense weights (28.4 GiB of a 27.2 GiB budget). bfp8 for
-  # the fp8 dense weights (attention, shared expert, engram projection) saves 1.5 GiB and changes 10 % of their values
-  # by one bfp8 step (rel. Frobenius error 3.5e-3, measured; plan.md "Weights"): owner decision (owner question 1).
-  galaxy_4x4:
-    dtypes:
-      "layers.*.attn.w*.weight": bfp8
-      "layers.*.ffn.shared_experts.*.weight": bfp8
-      "layers.*.engram.wkv.weight": bfp8
+  # Deployment (owner, 2026-10-15): reference-exact weights on every box (no bfp8 override); galaxy_4x4 at 512K tokens
+  # (1M needs 28.4 GiB per chip with bf16 dense weights; the longest exact context is ~720K), galaxy_8x4 reaches 1M.
   # This run's box at real size (2560 rows per chip at chunk 5120, 4096 at the s16384 rung's 8192): residual
   # [4096, 4 x 2560] fp32 168 MB per copy, q [4096, 32 x 512] fp32 268 MB, combine [4096, 6, 5120] bf16 252 MB, column
   # groups of 192 experts (3 copies per token per group), the top-k / candidate history (0.2 GiB). ~3 GB at chunk 8192,
