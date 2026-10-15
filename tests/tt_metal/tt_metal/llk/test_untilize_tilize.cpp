@@ -929,8 +929,9 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilize) {
 }
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_B) {
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        GTEST_SKIP() << "tilizeA_B + eltwise binary is not supported on Quasar";
+    const auto arch = MetalContext::instance().get_cluster().arch();
+    if (arch == ARCH::QUASAR || arch == ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "tilizeA_B + eltwise binary is not supported on Quasar/Blackhole";
     }
     for (bool dst_full_sync_en : {true, false}) {
         unit_tests::compute::tilize::TestConfig test_config = {

@@ -40,12 +40,7 @@ class ReduceUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        return (
-            f"_perf_unpack_loop_set_valid<false, true>(1);\n"
-            f"_perf_unpack_loop_set_valid<true, false>({face_r_dim * num_faces});\n"
-        )
+        return "_perf_unpack_loop_set_valid<true, true>(1);\n"
 
     def perf_clear_valid(
         self,
@@ -54,12 +49,7 @@ class ReduceUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        return (
-            f"_perf_math_loop_clear_valid<false, true>(1);\n"
-            f"_perf_math_loop_clear_valid<true, false>({face_r_dim * num_faces});\n"
-        )
+        return "_perf_math_loop_clear_valid<true, true>(1);\n"
 
     def init(
         self,

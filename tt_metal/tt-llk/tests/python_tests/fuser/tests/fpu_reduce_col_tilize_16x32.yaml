@@ -1,0 +1,35 @@
+# Blackhole column SUM reduce through tilizeA_B on 16x32 tiles: 2 faces of face_r_dim=16,
+# the geometry tt-metal's pooling kernels use (each face lands at its own 16-row SrcA slot).
+
+supported_archs: ["blackhole"]
+
+operands:
+  - name: "input_A"
+    dims: [128, 256]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+  - name: "input_B"
+    dims: [128, 256]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+    stimuli: 1.0
+  - name: "reduce_col_tilize_16x32_out"
+    dims: [128, 256]
+    format: "Float16_b"
+    tile_dims: [16, 32]
+
+operations:
+  - math:
+      - type: "Fpu"
+        block_size: [32, 128]
+        in0: "input_A"
+        in1: "input_B"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_COL"
+        reduce_pool: "SUM"
+        unpacker: "UnpackReduceTilize"
+        math_fidelity: "LoFi"
+    pack:
+      - output: "reduce_col_tilize_16x32_out"
+        block_size: [32, 128]
+        packer: "Packer"
