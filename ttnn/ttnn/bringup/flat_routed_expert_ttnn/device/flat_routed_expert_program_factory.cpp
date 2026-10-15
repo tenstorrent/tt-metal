@@ -62,7 +62,7 @@ struct Args {
 tt::DataFormat w_format(bool bf8) { return bf8 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Bfp4_b; }
 }  // namespace factory_detail
 using namespace factory_detail;
-constexpr uint32_t KBLK = kKBlk, BF8_TILE = kBf8Tile, RM_CHUNKS = kRmChunks;
+constexpr uint32_t KBLK = kKBlk, BF8_TILE = kBf8Tile;
 
 uint32_t flat_combine_overlap_walk_steps(uint32_t experts_per_chip) {
     const uint32_t se_max_e = experts_per_chip <= 16 ? 16 : (experts_per_chip <= 32 ? 32 : 64);
@@ -643,7 +643,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         // perf probes (read at program build; not in the program hash, so a process uses one setting):
         // MIMO_FL_XRD_SKIP=n: the relays read no x rows from DRAM (garbage tiles), MIMO_FL_XRD_BATCH: chunks per read
-        // barrier (must divide RM_CHUNKS), MIMO_FL_XRD_BIG: the same bytes in half the requests (indexed; garbage)
+        // barrier (must divide the row-major chunks), MIMO_FL_XRD_BIG=k: the same bytes in k-segment requests (indexed; garbage)
         if (xsolo) {
             xrd_def["XRD_SOLO"] = "1";
             if (const char* k = std::getenv("MIMO_FL_XSOLO_K")) {
@@ -660,8 +660,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         const NOC xrd_noc = std::getenv("MIMO_FL_XRD_NOC")
                                 ? (std::atoi(std::getenv("MIMO_FL_XRD_NOC")) ? NOC::NOC_1 : NOC::NOC_0)
                                 : x_rd_noc;
-        if (std::getenv("MIMO_FL_XRD_BIG")) {
-            xrd_def["XRD_BIG"] = "1";
+        if (const char* xb = std::getenv("MIMO_FL_XRD_BIG")) {
+            xrd_def["XRD_BIG"] = xb;
         }
         if (const char* skip = std::getenv("MIMO_FL_XRD_SKIP")) {
             xrd_def["XRD_SKIP_READS"] = skip;
@@ -669,7 +669,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         uint32_t xrd_batch = XRD_BATCH;
         if (const char* b = std::getenv("MIMO_FL_XRD_BATCH")) {
             xrd_batch = static_cast<uint32_t>(std::stoul(b));
-            TT_FATAL(xrd_batch > 0 && RM_CHUNKS % xrd_batch == 0, "MIMO_FL_XRD_BATCH must divide {}", RM_CHUNKS);
+            TT_FATAL(xrd_batch > 0 && p.rm_chunks % xrd_batch == 0, "MIMO_FL_XRD_BATCH must divide {}", p.rm_chunks);
         }
         std::vector<CoreCoord> xrel;  // the relays that read x (x1: rectangle 0's only)
         for (uint32_t idx = 0; idx < p.relays.size(); ++idx) {
@@ -1043,7 +1043,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (!trd.empty()) {
         arena_cb(0, 0, p.rd_slots * p.rg * p.slot * w_tile, trd, wf, w_tile);
     }
-    arena_cb(0, 0, RM_CHUNKS * 32 * p.seg, p.relays, tt::DataFormat::Float16_b, p.seg);
+    arena_cb(0, 0, p.rm_chunks * 32 * p.seg, p.relays, tt::DataFormat::Float16_b, p.seg);
     arena_cb(1, p.sb_off, p.sb_slots * MT * p.sbt * p.x_tile, p.relays, x_fmt, p.x_tile);
     arena_cb(1, 0, p.ring_g * p.slot * w_tile, p.gu, wf, w_tile);
     arena_cb(0, p.x_off, p.x_slots * x_bytes, p.gu, x_fmt, p.x_tile);

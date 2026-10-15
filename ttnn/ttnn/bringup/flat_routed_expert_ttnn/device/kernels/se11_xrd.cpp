@@ -175,11 +175,14 @@ void kernel_main() {
                     for (uint32_t r = 0; r < 32 && r0 + r < count; ++r) {
 #endif
 #ifdef XRD_INDEXED
-#ifdef XRD_BIG  // perf probe (MIMO_FL_XRD_BIG): same bytes in half the requests (2 segments of every other row)
-                        if (r % 2 == 0) {
-                            noc_async_read<2 * seg>(
-                                get_noc_addr(idx[m * 32 + r] * ppr, xg, (j * seg) % (row_bytes - seg)), dst + r * seg,
-                                2 * seg);
+#ifdef XRD_BIG  // perf probe (MIMO_FL_XRD_BIG=k): the same bytes as k-segment requests (super-blocks j % k == 0 read
+                // segments j .. j + k - 1 of each row at once, the others none; garbage layout, inside the reserved chunks)
+                        if (j % XRD_BIG == 0) {
+                            const uint32_t nseg = nsb - j < XRD_BIG ? nsb - j : XRD_BIG;
+                            const uint32_t bytes = nseg * seg;
+                            const uint32_t o = (in_batch * 32 + r) * seg, cap = batch * 32 * seg - bytes;
+                            noc_async_read(
+                                get_noc_addr(idx[m * 32 + r] * ppr, xg, j * seg), l1 + (o < cap ? o : cap), bytes);
                         }
 #else
 #if defined(XRD_SOLO) && defined(XRD_SOLO_K)
