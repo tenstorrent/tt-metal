@@ -76,3 +76,13 @@ Notes:
 - Performance is untuned: every op is DRAM-interleaved with default program configs.
 - Weight cache: the first replica converts the checkpoint in ~24 min (half host MXFP4 dequant,
   half TTNN BFP4 encoding); every later replica load is ~14 s from the cache.
+
+## Scope
+
+This document covers the TP=8 x DP=4 mesh plan and its validation. The remaining Phase 0 items are
+tracked separately and do not change the plan above:
+
+- Chunked prefill (`start_pos > 0`) and prefix caching: #60808.
+- Global-layer KV layout for B=4 @ 1M (replicated KV heads, V padding), device sampling,
+  speculative decoding, performance tuning: #60809.
+- vLLM data-parallel serving over the four rows: vllm-tt-plugin#216.
