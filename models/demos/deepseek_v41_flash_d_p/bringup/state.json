@@ -23,6 +23,126 @@
   "started": "2026-10-14T23:01:38",
   "status": "PASS"
  },
+ "C.swa.attn_hc": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "012a6038aee962f797c0bef7c6c2629cb77d9007",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "e6bea15f919500e0fea61577b8b06d765bec69e1",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "cc9b52d1721e12b4a3f71d7fc0eba1c2bcb58891",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "b0985e2c-4ee0-42c5-b4b9-e54711f7cf1e"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/C.swa.attn_hc.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "012a6038aee962f797c0bef7c6c2629cb77d9007",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "e6bea15f919500e0fea61577b8b06d765bec69e1",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "cc9b52d1721e12b4a3f71d7fc0eba1c2bcb58891",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/C.swa.attn_hc.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [
+     "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md: entry '- **[DS41-12] (RESOLVED 2026-10-15 by the supervisor: scaled' is 614 chars (max 600; put the rest in known_issues_detail.md)"
+    ],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 341.5,
+    "session_id": "b0985e2c-4ee0-42c5-b4b9-e54711f7cf1e",
+    "t": "2026-10-15T12:40:05"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 21.4,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-10-15T12:34:22"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-10-15T12:40:29"
+   }
+  ],
+  "last_run": "2026-10-15T12:40:29",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.swa.attn_hc.log",
+  "metrics": {
+   "auto_attn_hc_L00_big_bias": -0.0003514289855957031,
+   "auto_attn_hc_L00_big_ratio_max": 1.0001720190048218,
+   "auto_attn_hc_L00_big_ratio_min": 0.9992153644561768,
+   "auto_attn_hc_L00_big_rel": 0.0006466086488217115,
+   "auto_attn_hc_L00_big_rel_limit": 0.03,
+   "auto_attn_hc_L00_big_row": 0.0011066601146012545,
+   "auto_attn_hc_L00_layer24_bias": -0.0004858970642089844,
+   "auto_attn_hc_L00_layer24_ratio_max": 1.0002473592758179,
+   "auto_attn_hc_L00_layer24_ratio_min": 0.9987267255783081,
+   "auto_attn_hc_L00_layer24_rel": 0.0008566158940084279,
+   "auto_attn_hc_L00_layer24_rel_limit": 0.03,
+   "auto_attn_hc_L00_layer24_row": 0.0019533084705471992,
+   "auto_attn_hc_L00_mixed_bias": -0.0005359053611755371,
+   "auto_attn_hc_L00_mixed_ratio_max": 1.0000911951065063,
+   "auto_attn_hc_L00_mixed_ratio_min": 0.998775839805603,
+   "auto_attn_hc_L00_mixed_rel": 0.0008928047609515488,
+   "auto_attn_hc_L00_mixed_rel_limit": 0.03,
+   "auto_attn_hc_L00_mixed_row": 0.0018280457006767392,
+   "auto_attn_hc_L00_small_bias": -0.0003514289855957031,
+   "auto_attn_hc_L00_small_ratio_max": 1.0001720190048218,
+   "auto_attn_hc_L00_small_ratio_min": 0.9992153644561768,
+   "auto_attn_hc_L00_small_rel": 0.0006466086488217115,
+   "auto_attn_hc_L00_small_rel_limit": 0.03,
+   "auto_attn_hc_L00_small_row": 0.0011066601146012545,
+   "auto_attn_hc_L00_vs_cpu_bias": -0.0003514289855957031,
+   "auto_attn_hc_L00_vs_cpu_col": 0.014404336921870708,
+   "auto_attn_hc_L00_vs_cpu_col_index": 21,
+   "auto_attn_hc_L00_vs_cpu_col_limit": 0.04409756138920784,
+   "auto_attn_hc_L00_vs_cpu_ratio_max": 1.0001720190048218,
+   "auto_attn_hc_L00_vs_cpu_ratio_min": 0.9992153644561768,
+   "auto_attn_hc_L00_vs_cpu_rel": 0.0006466086488217115,
+   "auto_attn_hc_L00_vs_cpu_rel_limit": 0.0038205727469176054,
+   "auto_attn_hc_L00_vs_cpu_row": 0.0011066601146012545,
+   "auto_attn_hc_L00_vs_golden_bias": -0.0006491541862487793,
+   "auto_attn_hc_L00_vs_golden_col": 0.014742170460522175,
+   "auto_attn_hc_L00_vs_golden_col_index": 21,
+   "auto_attn_hc_L00_vs_golden_col_limit": 0.04573464021086693,
+   "auto_attn_hc_L00_vs_golden_ratio_max": 1.0009092092514038,
+   "auto_attn_hc_L00_vs_golden_ratio_min": 0.9979569911956787,
+   "auto_attn_hc_L00_vs_golden_rel": 0.0014709684764966369,
+   "auto_attn_hc_L00_vs_golden_rel_limit": 0.005054184584878385,
+   "auto_attn_hc_L00_vs_golden_row": 0.0021717112977057695,
+   "det_attn_hc_L00": 1.0,
+   "pcc_attn_hc_L00": 0.9999988109093435
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-10-15T12:40:08",
+  "status": "PASS",
+  "waiting": null
+ },
  "G.s4096": {
   "attempts": 0,
   "duration_s": 1116.6,

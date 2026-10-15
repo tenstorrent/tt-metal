@@ -1,0 +1,111 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""DeepSeek-V4.1 mHC mixes (attn_hc / ffn_hc; reference/ds41_ref.py:hc_mixes, inference Block.hc_pre's coefficient
+part) on the SP x TP mesh, all fp32:
+
+    flat   = the 4 streams of a token [4H]
+    mixes  = (flat @ hc_fn^T) * rsqrt(mean(flat^2) + norm_eps)                    [S, 24]
+    pre    = sigmoid(mixes[:4] a0 + b[:4]) + hc_eps
+    post   = 2 sigmoid(mixes[4:8] a1 + b[4:8])
+    comb   = row softmax(mixes[8:] a2 + b[8:]) + hc_eps, column norm, 19 x (row, column) norms   (eps in each sum)
+    out    = [pre 4 | post 4 | comb 16 (row j = input stream, column k = output)]  [S, 24]
+
+Per chip (r, c) the streams are [1, 1, S/SP, 4 x H/TP] (tt/layout.py). The RMS has no weight, so its rsqrt commutes
+past the linear: each chip computes its partial mixes (one HiFi4 fp32-acc matmul with its 4 x H/TP rows of hc_fn^T,
+permuted on the host to the chip's stream-column order, padded to 32 output columns) and the exact partial sum of
+squares (ttnn.bringup.mhc_pre_xing_pack, SFPU fp32) in column 24 of the same [S/SP, 32] row; one exchange over axis 1
+(all_gather + ttnn.add, exact, K-30; tt/common.py:tp_sum) completes both. Then mixes x rsqrt(sum / 4H + norm_eps)
+and ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn (DeepSeek-V4's own kernel: K-20, the same sequence as
+reference/kernels.py:sinkhorn_split; it caps logits at 80 instead of subtracting the row max, equal in range) on
+every chip of the row: the output is replicated over TP.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import torch
+
+import ttnn
+from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import build_consts
+
+from .common import DRAM, compute_config, tp_sum
+from .layout import HC, streams_cols_to_chip_major
+
+W = 32  # one tile row: 24 coefficient columns, the sum of squares in column SS_COL, the rest zero
+NC = HC * HC
+NG = 2 * HC + NC  # 24
+SS_COL = NG
+
+
+class TtHcMixes:
+    """One mHC coefficient block (attn_hc or ffn_hc of one layer). Call with the per-chip streams
+    [1, 1, S/SP, 4 x H/TP] fp32 TILE; returns [1, 1, S/SP, 24] fp32 TILE (pre | post | comb), replicated over
+    axis 1. Does not consume its input."""
+
+    def __init__(self, mesh, fn, scale, base, hidden: int, norm_eps: float, hc_eps: float, iters: int):
+        fn = fn.float()
+        assert fn.shape == (NG, HC * hidden), fn.shape
+        tp = mesh.shape[1]
+        assert hidden % (tp * 32) == 0, f"hidden {hidden} does not split into tiles over TP {tp}"
+        self.mesh, self.hidden = mesh, hidden
+        self.inv_n = 1.0 / float(HC * hidden)
+        self.norm_eps, self.hc_eps, self.iters = float(norm_eps), float(hc_eps), int(iters)
+        self.ckc = compute_config(mesh)
+        # fn^T in the chip-major (c, j, k) row order, padded to 32 output columns; rows split over mesh columns
+        # (axis 1), replicated over mesh rows (axis 0): chip (r, c) holds its [4 x H/TP, 32] block.
+        fn_t = torch.zeros(HC * hidden, W, dtype=torch.float32)
+        fn_t[:, :NG] = streams_cols_to_chip_major(fn, hidden, tp).T
+        self.fn_t = ttnn.from_torch(
+            fn_t.reshape(1, 1, HC * hidden, W),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=DRAM,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(None, 2)),
+        )
+        # The Sinkhorn kernel's constants (SEL_pre / post / comb with the scales folded in, the bases, RB / CB).
+        consts = build_consts(SimpleNamespace(n=HC), scale.float().reshape(-1), base.float().reshape(-1))
+        self.consts = ttnn.from_torch(
+            consts.reshape(8, W, W).contiguous(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=DRAM,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        rows = x.shape[-2]
+        mix = ttnn.matmul(x, self.fn_t, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        packed = ttnn.bringup.mhc_pre_xing_pack(mix, x, n=HC)  # column 24 = this chip's sum of x^2 (exact)
+        ttnn.deallocate(mix)
+        red = tp_sum(self.mesh, packed)
+        ttnn.deallocate(packed)
+        ss = ttnn.slice(red, [0, 0, 0, SS_COL], [1, 1, rows, SS_COL + 1])
+        ms = ttnn.multiply(ss, self.inv_n, dtype=ttnn.float32)
+        ttnn.deallocate(ss)
+        t = ttnn.add(ms, self.norm_eps, dtype=ttnn.float32)
+        ttnn.deallocate(ms)
+        rs = ttnn.rsqrt(t)
+        ttnn.deallocate(t)
+        mixes = ttnn.multiply(red, rs, dtype=ttnn.float32, memory_config=DRAM)  # column 24 is ignored below
+        ttnn.deallocate(red)
+        ttnn.deallocate(rs)
+        pre, post, comb = ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
+            mixes, self.consts, HC, self.iters, self.hc_eps
+        )
+        ttnn.deallocate(mixes)
+        out = ttnn.concat([pre, post, comb], dim=-1, memory_config=DRAM)
+        for t_ in (pre, post, comb):
+            ttnn.deallocate(t_)
+        return ttnn.reshape(out, [1, 1, rows, NG])
+
+
+def build_hc(mesh, ck, cfg, layer: int, step: str) -> TtHcMixes:
+    """step: 'attn_hc' or 'ffn_hc' (checkpoint layers.<layer>.hc_attn_* / hc_ffn_*, fp32)."""
+    kind = {"attn_hc": "attn", "ffn_hc": "ffn"}[step]
+    p = f"layers.{layer}.hc_{kind}_"
+    fn, scale, base = (ck.weight(p + k, torch.float32) for k in ("fn", "scale", "base"))
+    return TtHcMixes(mesh, fn, scale, base, cfg.dim, cfg.eps, cfg.hc_eps, cfg.sinkhorn_iters)
