@@ -30,18 +30,15 @@ __attribute__((noinline)) void calculate_relu_max_fresh_cpp(const float threshol
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat input = sfpi::dst_reg[0];
-        sfpi::vFloat v           = input;
         // Clear the sign explicitly: SFPABS float mode deliberately preserves
         // the sign of negative NaNs. After SFPSETSGN, every NaN encoding is
-        // bitwise above +inf while finite values and infinity are not. Keep
-        // NaNs on the input-initialized path; SFPSWAP min/max total-order them.
-        const sfpi::vFloat magnitude = sfpi::setsgn(input, 0);
-        v_if (magnitude <= std::numeric_limits<float>::infinity())
+        // bitwise above +inf while finite values and infinity are not. NaN
+        // lanes are left untouched in Dest; SFPSWAP min/max total-order them.
+        v_if (sfpi::setsgn(input, 0) <= std::numeric_limits<float>::infinity())
         {
-            v = sfpi::max(sfpi::min(input, threshold), 0.0f);
+            sfpi::dst_reg[0] = sfpi::max(sfpi::min(input, threshold), 0.0f);
         }
         v_endif;
-        sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }
 }
