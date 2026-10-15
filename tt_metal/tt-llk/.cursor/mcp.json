@@ -11,6 +11,13 @@
         "glean_default": {
             "type": "http",
             "url": "https://tenstorrent-be.glean.com/mcp/default"
+        },
+        "llk-tools": {
+            "type": "stdio",
+            "command": "python3",
+            "args": [
+                "${workspaceFolder}/tools/mcp/llk_tools.py"
+            ]
         }
     }
 }
