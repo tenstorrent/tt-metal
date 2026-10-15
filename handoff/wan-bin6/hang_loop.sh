@@ -32,6 +32,7 @@ export NO_PROMPT=1
 export TT_DIT_CACHE_DIR="${TT_DIT_CACHE_DIR:-/tmp/TT_DIT_CACHE_wan_bin6}"
 export VBENCH_CACHE_DIR="${VBENCH_CACHE_DIR:-$HOME/.cache/vbench}"  # /mnt/models/vbench here is empty and read-only
 export TORCH_HOME="${TORCH_HOME:-$VBENCH_CACHE_DIR/torch_hub}"
+export SKIP_VBENCH="${SKIP_VBENCH:-0}"  # 1 = skip VBench (vae_chunk_patch plugin)
 export TT_MESH_GRAPH_DESC_PATH="$repo/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
 
 plugin=()
@@ -87,6 +88,8 @@ for (( i = first; i < first + runs; i++ )); do
         break
     done
     wait "$tpid" 2>/dev/null
+    # Keep this run's video; the next run overwrites it in the repo root.
+    find "$repo" -maxdepth 1 -name 'wan_t2v_*.mp4' -newer "$d/links.txt" -exec cp {} "$d/" \;
 
     if [[ -z "$result" ]]; then
         summary="$(grep -E '[0-9]+ (passed|failed|error)' "$d/test.log" | tail -1 | tr -d '=')"

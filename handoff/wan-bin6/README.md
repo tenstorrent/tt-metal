@@ -2,7 +2,7 @@
 
 Branch: `jameslee/test-pr60190-dram-endpoints` (`main` @ `7086ed4c7a0` + the two commits of PR #60190, cherry-picked).
 Machine: `bh-glx-120-b10u08` (single BH Galaxy, 32 Blackhole chips).
-Written 2026-10-14 by a Claude Code session for jameslee@tenstorrent.com.
+Written 2026-10-14, updated 2026-10-15 (TDP cap results), by a Claude Code session for jameslee@tenstorrent.com.
 
 This directory is test scaffolding for an experiment branch. It is not meant to merge.
 
@@ -10,17 +10,19 @@ This directory is test scaffolding for an experiment branch. It is not meant to 
 
 1. **Issue #59504 (OOM at Wan pipeline creation on Bin6) reproduces here, byte for byte.** Chunked VAE decode (`vae_t_chunk_size=7` for the BH 4x8 preset) makes pipeline creation succeed.
 2. **On `main`, Wan output on this machine is garbage** (flat gray / static frames, CLIP ≈ 19.4). **PR #60190 fixes it** (CLIP 37.07 at 480p). Likely cause: CCL kernels compute remote DRAM addresses with the *local* chip's bank-to-core map, and this Galaxy mixes all 8 DRAM harvest masks.
-3. **Open problem: 720p + chunked VAE on the PR branch hangs every time: 15 of 15 runs** (plus 1 of 3 at 480p). Every device-side hang (13 of 16) has the straggler on **device 9 (T2L2)**, with the **same physical core, `4-10` (logical `(3,8)`)**, as the single outlier, across ring SDPA and matmul, `tt-smi -r` and `-glx_reset`, and with `TT_MM_THROTTLE_PERF=5`. The other 3 were host-side (all devices idle). This points strongly to a defective or marginal Tensix core on device 9. `main` has completed 2 runs and hung 0, too few to rule the PR build out.
+3. **720p + chunked VAE on the PR branch hung every time without a power cap: 17 of 17 runs** (plus 1 of 3 at 480p). Every device-side hang that triage could read (14) has the straggler on **device 9 (T2L2)**, with the **same physical core, `4-10` (logical `(3,8)`)**, as the single outlier, across ring SDPA and matmul, `tt-smi -r` and `-glx_reset`, and with `TT_MM_THROTTLE_PERF=5`. In the last of those hangs, all 32 chips stayed on PCIe (no `rev ff`), so no chip or tray dropped out.
+4. **New (2026-10-15): `TT_METAL_TDP_LIMIT_WATTS=130` stops the hang.** With the firmware TDP limit at 130 W on all 32 chips, **4 of 4 runs finished without hanging**. This is strong evidence that the hang is power-related (power delivery, or a marginal core under full power), not a pure logic bug.
+5. **New: with the hang gone, the output is wrong in a different way (open).** Same prompt and seed (42), yet every run gives a **different video**: different art style, lighting and set, and in run 3 cats that vanish and teleport (CLIP 25.3). On top of that, **flat mid-grey rectangles** (decoded zeros) appear in almost every run, **always in the VAE shard at mesh coordinate (3, 6)** (pixels x 960–1120, y 540–720), sometimes also (0, 6) / (0, 5). CLIP passes in 2 of 4 runs. See finding 6.
 
 ## Your task
 
-Find out whether the 720p hangs are hardware (device 9) or software (PR #60190 / chunked VAE):
+The hang now has a workaround (`TT_METAL_TDP_LIMIT_WATTS=130`). The open question is the **wrong, non-reproducible output** that shows up once the run gets through:
 
-0. **First, run `hang_loop.sh 3 720p chunk` (it now uses `tt-smi -glx_reset`).** Every hang so far followed a `tt-smi -r`, which may not fully reset this Galaxy. If the hangs disappear with `-glx_reset`, they were stale chip state, not a bad core or a software bug.
-1. Rebuild `main` (see "Switching builds"), reset, and run `run_wan.sh 720p chunk` 2–3 times. No such run on `main` has hung yet, but there has only been one.
-2. Run `run_wan.sh 720p chunk` on this branch 2–3 more times. Each time it hangs, run triage (below) and record **which device and which core** is the straggler. If it is always device 9 / core `4-10`, that is strong evidence of a bad chip.
-3. If possible, stress device 9 on its own (for example, a single-device matmul or SDPA unit test in a loop on that chip) to confirm a hardware fault without Wan.
-4. Report the ethernet links that fail to train intermittently (below) to whoever owns this machine.
+1. **Run with the cap:** `SKIP_VBENCH=1 TT_METAL_TDP_LIMIT_WATTS=130 hang_loop.sh 3 720p chunk`, then `find_grey_patches.py` on each `run_NN/*.mp4`. Is it still always shard (3, 6)?
+2. **Is it power or software?** Try a middle cap (e.g. 200 W) and a lower one (e.g. 100 W). If the garbage gets worse as the cap rises and disappears at a lower cap, it is the same marginal-power problem in a milder form (silent corruption instead of a hang). If it does not change, it is a software bug that the hang was hiding.
+3. **Find the physical chip behind VAE shard (3, 6)** (and (0, 6)). Map the mesh coordinate to a chip ID / tray / PCI address (e.g. `mesh_device.get_device_id(ttnn.MeshCoordinate(3, 6))` on an open mesh). If it is device 9 (T2L2), the hang and the patches are the same bad chip.
+4. **Check reproducibility on `main`'s math:** run the 480p preset (no chunking) 2–3 times with the cap and compare videos. 480p does not use the patched chunk size, so it separates the chunked-VAE path from the rest.
+5. Still worth doing: rebuild `main` and compare; stress device 9 alone; report the flaky ethernet links and device 9 / core `4-10` to whoever owns this machine.
 
 ## Machine facts (verified)
 
@@ -99,7 +101,21 @@ All runs use `4x8sp1tp0nl2_linear_is_fsdp0` with `TT_MESH_GRAPH_DESC_PATH=single
 | PR #60190 | 720p | 7 | `hang_loop.sh` ×3 with **`tt-smi -glx_reset`**: **3/3 hang**: device 9 matmul in warmup (odd core `4-10`); 2× host-side (all devices idle, host waits on a completion event; in one, triage could not open chip 0: "No such device") |
 | PR #60190 | 720p | 7 | `hang_loop.sh` ×3 with `-glx_reset` + **`TT_MM_THROTTLE_PERF=5`** (verified: 19 kernel builds with `MM_THROTTLE 5`; warmup steps 10.6 s vs 4.5 s): **3/3 hang**, all on device 9 in RingJointSDPA, odd core `4-10 (3,8)` every time |
 
-Totals: 15 runs at 720p chunked on the PR build, 15 hangs: 12 device-side, all on device 9 / core `4-10 (3,8)`; 3 host-side. Plus 1 hang at 480p (device 9 / core `4-10`). Overall 16 hangs, 13 device-side, every one on that core. The 15th 720p run (a final `-glx_reset` retry, no throttle) hung at denoise step 2 in MinimalMatmul, outlier `4-10`; reports in `~jameslee/wan_720p_retry/`.
+| PR #60190 | 720p | 7 | `-glx_reset`, then `lspci -d 1e52: \| grep "rev ff"` sampled 4× during the hang: **hang** after warmup step 1, **all 32 chips still on PCIe**, no `rev ff` (no tray or chip dropped). About 3.5 min into the hang the test died with `Fatal Python error: Bus error` (host MMIO access failed), before triage could read the cores. Reports in `~jameslee/wan_pcie_check/` |
+| PR #60190 | 720p | 7 | **`TT_METAL_TDP_LIMIT_WATTS=130`** (log confirms "firmware TDP limit on chip N is now 130 W" for all 32), `hang_loop.sh`: **no hang in any run**, 40 steps at about 3.6 s each, about 4 min per run with a warm cache. **Output wrong instead:** see the table below and finding 6. Reports in `~jameslee/wan_720p_tdp130/run_NN/` (`test.log`, the `.mp4`, `index.txt`) |
+
+**Runs with `TT_METAL_TDP_LIMIT_WATTS=130`** (same prompt, seed 42, `-glx_reset` before each; frames 0 / 22 / 45 / 80 in `img/`):
+
+| Run | Hang | CLIP mean (≥ 36 passes) | What the video shows | Grey patches (`find_grey_patches.py`) |
+|---|---|---|---|---|
+| 1 | no | 34.92 FAIL | realistic cats on a dark spotlit stage, coherent motion | frames 17–32, shard (3, 6) only |
+| 2 | no | 37.54 pass | realistic cats on a grey starry stage, coherent motion | frames 19–24, shard (3, 6) |
+| 3 | no | 25.30 FAIL | flat cartoon cats on a white stage; cats vanish and jump between frames, stray dots | frames 47–52 and 62–64, shards (3, 6), (0, 6), (0, 5) |
+| 4 | no | 36.47 pass (test PASSED, VBench skipped) | realistic cats on a blue-lit stage, coherent motion | frame 54 in shard (3, 6) (+1 tile in (0, 1)); smaller blocks also visible by eye in the same spot in frames 0 and 22 (below the scanner's 3-tile cutoff) |
+
+Run 2 was stopped during VBench (CPU, more than 25 minutes at 720p); runs 3+ use `SKIP_VBENCH=1`.
+
+Totals before the power cap: 17 runs at 720p chunked on the PR build, 17 hangs. The breakdown of the first 15: 12 device-side, all on device 9 / core `4-10 (3,8)`; 3 host-side. Plus 1 hang at 480p (device 9 / core `4-10`). Overall 16 hangs, 13 device-side, every one on that core. The 15th 720p run (a final `-glx_reset` retry, no throttle) hung at denoise step 2 in MinimalMatmul, outlier `4-10`; reports in `~jameslee/wan_720p_retry/`.
 
 **Power / di/dt mitigations.** `TT_MM_THROTTLE_PERF=N` (1–5; level 5 caps matmul math at 33%) inserts NOPs between MVMULs. Via `throttle_mm_perf()` it reaches Wan's `MinimalMatmul` but **not** `RingJointSDPA`, whose Q·Kᵀ/PV math (`sdpa_matmul_block_no_mop`) is unthrottled, and that is where most hangs are. `TT_MM_STAGGER_TYPE`/`TT_MM_STAGGER_VALUE` have no effect on Blackhole: `apply_mm_stagger()` exists only in the Wormhole `llk_io_unpack.h`. Neither Wan op calls `add_stagger_defines_if_needed()` either. Testing the "weak Galaxy power delivery" theory properly would need throttling or staggering added to the SDPA compute kernel (a code change).
 
@@ -138,12 +154,33 @@ See "Results so far". Device 9 = T2L2 = tray 2, ASIC location 2, logical mesh ro
 - Run 3 (matmul `compute_metal2`): 109 cores sit at `compute_metal2.cpp:441`. Core `(3,8)` alone is at `:431`, with its unpacker in `ckernel.h:265`.
 - Run 2 was a host-side hang instead: the completion reader thread spun in `SystemMemoryManager::completion_queue_wait_front` while every device was idle.
 
+### 5. A firmware TDP cap of 130 W stops the hang
+
+`TT_METAL_TDP_LIMIT_WATTS` (`tt_metal/llrt/rtoptions.cpp`, applied in `Cluster::apply_tdp_limit_override`, `tt_metal/llrt/tt_cluster.cpp:363`) sends ARC message `SET_TDP_LIMIT` to every PCIe chip when the cluster opens, then reads the limit back and logs it. The accepted range is 50–500 W, and it needs Blackhole firmware 19.11.0+ (this board has 19.13.2). **The limit outlives the process and stays until the chip is reset** (`tt-smi -glx_reset`). Anyone who uses the board afterwards runs capped too.
+
+With 130 W the run is no slower in practice: 3.6 s per denoise step versus 4.5–4.9 s seen earlier without a cap (those runs also had other variables). The firmware throttler lowers clocks only when the chip reaches the limit. Unlike `TT_MM_THROTTLE_PERF`, it covers every op, including RingJointSDPA, where most of the hangs were.
+
+Taken together (17/17 hangs without the cap, 0/4 with it; the same core every time; chips stay on PCIe during a hang), the most likely story is **a marginal core or power path on device 9 that fails under full load**. That matches the "weak Galaxy power delivery" theory and the advice to try `TT_MM_THROTTLE_PERF`. The cap only works around it; the machine owners should still hear about device 9.
+
+### 6. With the cap: non-reproducible output and grey patches in VAE shard (3, 6) (open)
+
+Two separate symptoms. Both appear only now that runs finish on the PR build at 720p:
+
+1. **Different output every run, with the same prompt and seed.** `torch.manual_seed(seed)` + `torch.randn` on the host (`pipeline_wan.py:678`, `:586`) make the initial latents identical across runs, and the device math has no atomics, so the video should be the same each time. Instead, the four videos differ completely in style and content, and run 3 is barely coherent. So the latents (or the text embeddings) are being corrupted somewhere in the denoise loop, by a different amount each run. Not yet proven: whether the pipeline is bit-exact on a healthy machine; compare two runs on an 8-bank Galaxy to be sure.
+2. **Flat mid-grey rectangles.** Grey ≈ 124 is what an all-zero latent region decodes to (the garbage output on `main` was the same value over the whole frame). On the BH 4x8 preset the VAE splits height over mesh axis 0 (4 × 180 px at 720p) and width over axis 1 (8 × 160 px). The patch in all 4 runs sits inside the shard at **mesh coordinate (3, 6)**, pixels x 960–1120, y 540–720, in very different scenes. It fades in over 2–3 frames (the VAE's temporal convolutions spread it), lasts 6–16 frames, and moves in time from run to run. Run 3 also had patches in (0, 6) and (0, 5).
+
+![run 1 frame 26](img/tdp130_run01_frame26_grey_patch.jpg)
+
+A fixed shard points to one device (or its links) delivering zeros for part of its region, not random noise. Open questions: which physical chip is (3, 6) (is it device 9?); whether the patches and the run-to-run divergence go away at a lower cap (power) or not (software, e.g. the CCL/DRAM-address issue PR #60190 only partly fixes); and whether they appear at 480p.
+
 ## Files
 
 - `run_wan.sh`: runs the test with the right environment.
-- `vae_chunk_patch.py`: pytest plugin that sets BH 4x8 `vae_t_chunk_size=7` in memory only (`-p vae_chunk_patch`).
+- `vae_chunk_patch.py`: pytest plugin that sets BH 4x8 `vae_t_chunk_size=7` in memory only (`-p vae_chunk_patch`). With `SKIP_VBENCH=1` it also skips the VBench check, which takes more than 25 minutes on CPU at 720p.
+- `find_grey_patches.py video.mp4 [--save-dir DIR]`: frames with flat mid-grey (decoded zero) tiles, their pixel box and which VAE shard (mesh row, col) they fall in.
+- `img/`: frame strips (frames 0 / 22 / 45 / 80) from the 130 W runs, and a full frame showing the grey patch.
 - `check_links.py`: ethernet link state (`--map`: full neighbour map; `--dram`: harvest masks), via UMD without opening a device.
-- `hang_loop.sh [runs] [res] [chunk|nochunk] [out_dir]`: N × (check no other users → `tt-smi -glx_reset` → links → run). On a stall over 3 minutes it captures triage twice, gdb host stacks and an `analyze_triage.py` summary, then kills the run. It writes one line per run to `<out_dir>/index.txt`.
+- `hang_loop.sh [runs] [res] [chunk|nochunk] [out_dir]`: N × (check no other users → `tt-smi -glx_reset` → links → run). On a stall over 3 minutes it captures triage twice, gdb host stacks and an `analyze_triage.py` summary, then kills the run. It writes one line per run to `<out_dir>/index.txt` and copies the run's `.mp4` into `run_NN/`. Environment variables pass through, e.g. `SKIP_VBENCH=1 TT_METAL_TDP_LIMIT_WATTS=130 hang_loop.sh 3 720p chunk ~/out`.
 - `analyze_triage.py triage.txt [triage_callstacks_2.txt]`: running ops per device, straggler device(s), cores grouped by kernel callstack with the outliers listed, and frozen-PC cores.
 
 Full triage dumps and logs from the session above were in a session scratch directory and were **not** committed (about 110k lines each).
