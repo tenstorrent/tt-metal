@@ -1,7 +1,6 @@
 # Int32 gcd over operands in [-(2**31 - 1), 2**31 - 1]: small values, around +-2**30, near the ceiling,
 # fp32-NaN bit patterns and the operands of the 30-step worst-case pairs. The fuser stages Int32 as SMAG32,
-# so the op runs with sign_magnitude. The lane-paired edge cases and shared-factor lanes stay in
-# test_eltwise_binary_sfpu_quasar.py: the fuser samples each operand independently.
+# so the op runs with sign_magnitude. sfpu_int32_gcd_pairs_*.yaml cover specific (a, b) pairs.
 
 dest_acc: true
 

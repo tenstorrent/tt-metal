@@ -253,8 +253,7 @@ def _prepare_int_stimuli(
     formats, input_dimensions, src0_idx, src1_idx, mathop, clamp_inputs
 ):
     """Integer stimuli: uniform over the dtype range, optionally clamped (int MUL
-    clamps to keep the product representable). Both operands live in src_A.
-    For GCD, the head of each operand tile is overwritten by _plant_gcd_lanes."""
+    clamps to keep the product representable). Both operands live in src_A."""
     data_format = formats.input_format
     iinfo = torch.iinfo(format_dict[data_format])
     spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
@@ -269,89 +268,10 @@ def _prepare_int_stimuli(
     if clamp_inputs is not None:
         src_A = torch.clamp(src_A, -clamp_inputs, clamp_inputs)
         src_B = torch.clamp(src_B, -clamp_inputs, clamp_inputs)
-    if mathop == MathOperation.SfpuGcd:
-        _plant_gcd_lanes(src_A, src0_idx, src1_idx)
     return src_A, tile_cnt_A, src_B
 
 
 _INT31_MAX = 2**31 - 1
-
-# Uniform int32 pairs almost always have a tiny gcd, so plant edge pairs.
-_GCD_EDGE_PAIRS = [
-    (0, 0),
-    (0, 12),
-    (12, 0),
-    (0, -_INT31_MAX),
-    (-_INT31_MAX, 0),
-    (12345, 12345),
-    (-7, -7),
-    (_INT31_MAX, _INT31_MAX),
-    (-_INT31_MAX, _INT31_MAX),
-    (-48, 18),
-    (48, -18),
-    (-48, -18),
-    (1, 1),
-    (1, 2),
-    (2, 1),
-    (15, 40),
-    (40, 15),
-    (1 << 30, 1 << 20),
-    (1 << 20, 1 << 30),
-    (1 << 30, 1 << 30),
-    (1, 1 << 30),
-    (1 << 30, 3 << 28),
-    (3 << 28, 1 << 30),
-    (-(1 << 30), 6 << 20),
-    (_INT31_MAX, 1),
-    (1836311903, 1134903170),
-    (1134903170, 1836311903),
-    (-1836311903, 1134903170),
-    # Operands above 0x7F800000 (fp32 NaN patterns) check SFPSWAP compares as int32.
-    (2147483647, 2139095041),
-    (2139095041, 2147483647),
-    (2147483646, 2139095042),
-    (2143289344, 2139095041),
-    (2147483646, 2143289344),
-    (2147483646, 2147483644),
-    (2139095044, 2147483644),
-    (2147483647, 2147483646),
-    (2139095041, 7),
-    (2147483646, 1000),
-    # Need all 30 Stein steps: catches a short replay budget.
-    (2147483645, 3),
-    (3, 2147483645),
-    (-2147483645, 3),
-    (3, -2147483645),
-    (1073741821, 1073741827),
-    (715827883, -1431655765),
-]
-
-# g * x must fit 31 bits, or the int32 cast wraps and corrupts the golden's operands.
-_GCD_MAX_COMMON_FACTOR = 1 << 15
-_GCD_MAX_COFACTOR = 1 << 16
-assert (_GCD_MAX_COMMON_FACTOR - 1) * (_GCD_MAX_COFACTOR - 1) <= _INT31_MAX
-_GCD_COMMON_FACTOR_LANES = MAX_TILE_ELEMENTS // 2
-
-
-def _plant_gcd_lanes(src_A, src0_idx, src1_idx):
-    """Overwrite each operand tile's head with edge pairs, then shared-factor pairs."""
-    elems = MAX_TILE_ELEMENTS
-    edge_a = torch.tensor([a for a, _ in _GCD_EDGE_PAIRS], dtype=src_A.dtype)
-    edge_b = torch.tensor([b for _, b in _GCD_EDGE_PAIRS], dtype=src_A.dtype)
-    n_common = _GCD_COMMON_FACTOR_LANES
-    g = torch.randint(1, _GCD_MAX_COMMON_FACTOR, (n_common,), dtype=torch.int64)
-    x = torch.randint(0, _GCD_MAX_COFACTOR, (n_common,), dtype=torch.int64)
-    y = torch.randint(0, _GCD_MAX_COFACTOR, (n_common,), dtype=torch.int64)
-    sx = torch.where(torch.rand(n_common) < 0.5, -1, 1)
-    sy = torch.where(torch.rand(n_common) < 0.5, -1, 1)
-    common_a = (sx * g * x).to(src_A.dtype)
-    common_b = (sy * g * y).to(src_A.dtype)
-    lane_a = torch.cat([edge_a, common_a])
-    lane_b = torch.cat([edge_b, common_b])
-    n = len(lane_a)
-    src_A[src0_idx * elems : src0_idx * elems + n] = lane_a
-    src_A[src1_idx * elems : src1_idx * elems + n] = lane_b
-
 
 _INT_CLAMP = {
     MathOperation.SfpuElwmulInt: 1000,
@@ -947,7 +867,7 @@ def _run_max_min(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
-            # 2's-complement datapath (default); max/min ignore it.
+            # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
             SFPU_DST_ROUNDING_MODE(),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
