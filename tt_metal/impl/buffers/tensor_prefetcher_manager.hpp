@@ -168,12 +168,12 @@ private:
     struct RequestTarget {
         // Sender core -> receivers, in the order that fixes bank-local slab numbering.
         std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
-        // DRISC L1 address of each sender's pipe config page (header field target_state_addr), in
+        // DRISC L1 address of each sender's pipe config page (header field target_config_page_addr), in
         // mapping order.
-        std::vector<uint32_t> state_addr_per_sender;
+        std::vector<uint32_t> config_page_addr_per_sender;
         // The DRISC L1 range each of those addresses lies in, in mapping order. Weak, like the rest of
         // this struct: it only tells stop whether that range still belongs to the target.
-        std::vector<std::weak_ptr<DriscL1Allocation>> state_alloc_per_sender;
+        std::vector<std::weak_ptr<DriscL1Allocation>> config_page_alloc_per_sender;
         // Bank-local slab index of each sender's first receiver, in mapping order: local receiver
         // r of sender s reads slab recv_index_base_per_sender[s] + r. Stamped into every layout
         // slot of that sender's page.
@@ -185,7 +185,8 @@ private:
     void worker_loop();
     // Add the pipe config page at `config_page_addr` to sender slot `sender`'s drain targets, dropping
     // the ones whose memory is gone.
-    void record_drain_target(uint32_t sender, uint32_t config_page_addr, const std::weak_ptr<DriscL1Allocation>& state);
+    void record_drain_target(
+        uint32_t sender, uint32_t config_page_addr, const std::weak_ptr<DriscL1Allocation>& allocation);
     // One DRAIN request per page's worth of every sender's live drain targets, for stop to send ahead
     // of STOP.
     std::vector<Request> build_drain_requests();
@@ -203,17 +204,11 @@ private:
     // Serialize a Queue call's tensors into one or more socket pages, deduplicating
     // tensor layouts within each page and splitting when a page fills. Returns one entry per
     // logical page, each a vector in target sender-mapping order. The entry and geometry bytes
-    // are identical across senders, while the header carries that sender's state address and slab
+    // are identical across senders, while the header carries that sender's config page address and slab
     // base, and a streaming page carries only that sender's slice of the per-receiver rotation
     // table.
     std::vector<std::vector<std::vector<uint8_t>>> serialize_request_pages(
         const RequestTarget& target, const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const;
-    // Body of queue() once its pipes are resolved to a RequestTarget.
-    void queue_to_target(
-        const RequestTarget& target,
-        ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
-        const std::vector<experimental::TensorPrefetcherInput>& tensors,
-        MeshCommandQueue* trace_capture_cq);
     MeshCoordinateRangeSet full_mesh_subset() const;
 
     MeshDevice* mesh_device_;
@@ -248,7 +243,7 @@ private:
     // that memory as counters.
     struct DrainTarget {
         uint32_t config_page_addr = 0;
-        std::weak_ptr<DriscL1Allocation> state;
+        std::weak_ptr<DriscL1Allocation> allocation;
     };
     // drain_targets_per_sender_[s]: every target sender slot s has been queued for since start.
     std::vector<std::vector<DrainTarget>> drain_targets_per_sender_;

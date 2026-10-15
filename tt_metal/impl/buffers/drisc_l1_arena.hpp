@@ -71,11 +71,12 @@ private:
 class DriscL1Arena : public std::enable_shared_from_this<DriscL1Arena> {
 public:
     // A PrefetcherPipe set's per-core config pages all share one offset, so a
-    // whole set costs one page (~356 B for 8 receivers: 36 B header + 8 NOC XY
-    // pairs + 8 L1-aligned counter pairs), and the zone holds a few sets live at
-    // once. The remaining ~92 KB above the zone is reported by
-    // kernel_working_region_size() so callers placing a co-resident DRISC kernel
-    // know how much L1 they have.
+    // whole set costs one page per sender core: 384 B at 8 receivers (a 40 B
+    // header and 8 NOC XY pairs padded to 128 B, then the SENT and ACKED blocks
+    // of 8 L1-aligned slots, 128 B each on their own 64 B lines), so the zone
+    // holds two such sets live on a core at once. The remaining ~92 KB above the
+    // zone is reported by kernel_working_region_size() so callers placing a
+    // co-resident DRISC kernel know how much L1 they have.
     static constexpr uint32_t kSenderStateZoneSize = 1 * 1024;
 
     explicit DriscL1Arena(ContextId context_id);

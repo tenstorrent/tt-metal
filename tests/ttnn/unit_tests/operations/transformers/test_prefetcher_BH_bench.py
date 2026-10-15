@@ -56,6 +56,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
     ring_grid_cols as _ring_grid_cols,
     make_recv_contig_weight as _make_recv_contig_weight,
+    make_tensor_prefetcher_pipes as _make_tensor_prefetcher_pipes,
     bank_receivers_contiguous as _bank_receivers_contiguous,
     bytes_per_tile as _bytes_per_tile,
     tensor_prefetcher_session as _tensor_prefetcher_session,
@@ -255,28 +256,6 @@ def _build_program_config(
     )
 
 
-def _make_bench_pipes(device, bank_to_receivers, ring_size: int, single_sender: bool):
-    """The Tensor-prefetcher pipes over ``bank_to_receivers``, every ring ``ring_size`` bytes.
-    Returns (space, pipes); the space must outlive the pipes. Call it before any matmul runs on the
-    receivers: pipe rings come from the persistent L1 arena, which refuses a core a live Program holds.
-    """
-    receiver_domain = ttnn.CoreRangeSet(
-        {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
-    )
-    space = ttnn.experimental.create_prefetcher_pipe_space(
-        device,
-        sender_cores=ttnn.CoreRangeSet(set()),
-        receiver_domain=receiver_domain,
-        ring_size=ring_size,
-        max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
-        num_dram_senders=2 * len(bank_to_receivers),
-    )
-    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
-        space, bank_to_receivers, support_multi_receiver_shards=single_sender
-    )
-    return space, pipes
-
-
 def _flops_per_matmul(k: int) -> int:
     # Use the unpadded K and N: padded zeros aren't useful flops. (Callers pass _K or
     # _K_padded depending on what they have at hand; either way swap in _K_ORIG.)
@@ -413,7 +392,7 @@ def test_bench_dram_core_repeats(device, op_name, shape):
         num_global_cb_receivers=num_receivers_per_bank,
     )
     # A K-row-major weight needs one pipe per bank: one read of a bank's shard feeds all its receivers.
-    _pipe_space, pipes = _make_bench_pipes(device, bank_to_receivers, pipe_ring_size, single_sender=True)
+    _pipe_space, pipes = _make_tensor_prefetcher_pipes(device, bank_to_receivers, pipe_ring_size, single_sender=True)
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(_M, _N // ring_size),
         core_grid=receiver_core_range_set,
@@ -642,7 +621,9 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
             for b in range(num_dram_banks)
         ]
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
-    _pipe_space, pipes = _make_bench_pipes(device, bank_to_receivers, pipe_ring_size, single_sender=not dual_senders)
+    _pipe_space, pipes = _make_tensor_prefetcher_pipes(
+        device, bank_to_receivers, pipe_ring_size, single_sender=not dual_senders
+    )
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(_M, _N // ring_size),
         core_grid=receiver_core_range_set,

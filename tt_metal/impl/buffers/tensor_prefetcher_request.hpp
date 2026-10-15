@@ -199,12 +199,12 @@ struct TensorPrefetcherPrefetchCmd {
     // Number of valid TensorPrefetcherTensorLayout table entries. uint16 is ample: the table is
     // bounded by kRequestPageBytes / layout_stride, well under 300 even at the smallest stride.
     uint16_t num_layouts;
-    // Reserved, and the reason target_state_addr below lands on offset 8: that keeps the header 12
+    // Reserved, and the reason target_config_page_addr below lands on offset 8: that keeps the header 12
     // bytes (see the static_assert below) and so the entry table 4-byte aligned. Zeroed by the host.
     uint16_t pad1;
     // DRISC L1 address of this sender's config page for the target PrefetcherPipe. One address per
     // request, so all tensors in a request target the same pipe.
-    uint32_t target_state_addr;
+    uint32_t target_config_page_addr;
 } __attribute__((packed));
 
 // WAIT_CQ payload.

@@ -41,6 +41,8 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     make_recv_contig_grouped_weight as _make_recv_contig_grouped_weight,
     recv_contig_weight_memory_config as _recv_contig_weight_memory_config,
     make_krow_major_weight as _make_krow_major_weight,
+    krow_major_weight_memory_config as _krow_major_weight_memory_config,
+    make_tensor_prefetcher_pipes as _make_tensor_prefetcher_pipes,
     tensor_prefetcher_session,
     require_tensor_prefetcher,
 )
@@ -59,17 +61,6 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 @pytest.fixture(autouse=True)
 def _require_tensor_prefetcher(device):
     require_tensor_prefetcher(device)
-
-
-def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int):
-    """Row-major-adjacent receivers: bank b -> ring positions [b*recv_per_bank, (b+1)*recv_per_bank)."""
-    cores = []
-    for k in range(recv_per_bank):
-        ring_pos = bank_idx * recv_per_bank + k
-        col = ring_pos % ring_cols
-        row = ring_pos // ring_cols
-        cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
-    return ttnn.CoreRangeSet(cores)
 
 
 def _bank_to_receivers(contiguous: bool, num_dram_banks: int, recv_per_bank: int, ring_cols: int):
@@ -211,7 +202,7 @@ def test_tensor_prefetcher_pipes_sized_per_consumer(device, expect_error):
     _exact_space, exact_pipes = _make_tensor_prefetcher_pipes(
         device, gather["bank_to_receivers"], exact_ring, single_sender=True
     )
-    l1_alignment = 16  # Blackhole L1_ALIGNMENT: a pipe ring is a whole number of these
+    l1_alignment = ttnn.get_l1_alignment()  # a pipe ring is a whole number of these
     _short_space, short_pipes = _make_tensor_prefetcher_pipes(
         device, gather["bank_to_receivers"], exact_ring - l1_alignment, single_sender=True
     )
@@ -254,25 +245,13 @@ _MT_TILE_BYTES = 1088  # bf8_b
 
 def _make_mt_weight(device, seed: int, num_dram_banks: int) -> ttnn.Tensor:
     torch.manual_seed(seed)
-    pt_weight = torch.randn(1, 1, _MT_K, _MT_N)
-    dram_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
-    )
-    weight_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(dram_core_range_set, [_MT_K, _MT_N // num_dram_banks], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    return ttnn.as_tensor(
-        pt_weight, device=device, dtype=ttnn.bfloat8_b, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
-    )
+    return _make_krow_major_weight(device, torch.randn(1, 1, _MT_K, _MT_N), num_dram_banks, ttnn.bfloat8_b)
 
 
 @pytest.mark.parametrize("num_tensors,num_layers", [(1, 1), (2, 1), (3, 1), (2, 5), (3, 10)])
-def test_tensor_prefetcher_multi_tensor_pipes(device, num_tensors, num_layers):
-    """The PrefetcherPipe twin of test_tensor_prefetcher_multi_tensor: several K-row-major weights, each
-    queued num_layers times in one flattened list (which splits across request pages), delivered through
-    one pipe per bank and drained by a discard receiver."""
+def test_tensor_prefetcher_multi_tensor(device, num_tensors, num_layers):
+    """Several K-row-major weights, each queued num_layers times in one flattened list (which splits
+    across request pages), delivered through one pipe per bank and drained by a discard receiver."""
     num_dram_banks = device.dram_grid_size().x
     ring_size = num_dram_banks * _MT_NUM_RECV_PER_BANK
     weights = [_make_mt_weight(device, seed=0xB100 + i, num_dram_banks=num_dram_banks) for i in range(num_tensors)]
@@ -283,7 +262,7 @@ def test_tensor_prefetcher_multi_tensor_pipes(device, num_tensors, num_layers):
     push_page_size = k_block_w_tiles * n_tiles_per_recv * _MT_TILE_BYTES
 
     bank_to_receivers = [
-        (b, _bank_receivers_row_major(b, _MT_NUM_RECV_PER_BANK, ring_cols=num_dram_banks))
+        (b, _bank_receivers_contiguous(b, _MT_NUM_RECV_PER_BANK, ring_cols=num_dram_banks))
         for b in range(num_dram_banks)
     ]
     _space, pipes = _make_tensor_prefetcher_pipes(
@@ -302,10 +281,10 @@ def test_tensor_prefetcher_multi_tensor_pipes(device, num_tensors, num_layers):
         )
 
 
-def test_tensor_prefetcher_block_count_rejects_uneven_krow_major_fanout_over_pipes(device, expect_error):
-    """The PrefetcherPipe twin of test_tensor_prefetcher_block_count_rejects_uneven_krow_major_fanout: a
-    K-row-major weight is sliced by one receivers-per-bank count, so pipes whose banks drive different
-    receiver counts that still average out are rejected rather than delivering the wrong pages."""
+def test_tensor_prefetcher_block_count_rejects_uneven_krow_major_fanout(device, expect_error):
+    """A K-row-major weight is sliced by one receivers-per-bank count, so pipes whose banks drive
+    different receiver counts that still average out are rejected rather than delivering the wrong
+    pages: by the matmul block-count check, and by the queue itself when no matmul checks first."""
     num_dram_banks = device.dram_grid_size().x
     if num_dram_banks < 3:
         pytest.skip(f"uneven fan-out needs at least 3 DRAM banks; device has {num_dram_banks}")
@@ -341,6 +320,11 @@ def test_tensor_prefetcher_block_count_rejects_uneven_krow_major_fanout_over_pip
     )
     with expect_error(RuntimeError, "sliced by one receivers-per-bank count"):
         ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(program_config, weight, prefetcher_pipes=pipes)
+    with tensor_prefetcher_session(device):
+        with expect_error(RuntimeError, "requires exactly one primary sender per DRAM bank"):
+            ttnn.experimental.queue_tensor_prefetcher_request(
+                device, [(weight, receiver_count)], prefetcher_pipes=pipes
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -510,7 +494,7 @@ class _TraceCase:
         tile_bytes = _bytes_per_tile(dtype)
         in1_block_size_bytes = k_tiles_per_shard * n_tiles_per_receiver * tile_bytes
         bank_to_receivers = [
-            (b, _bank_receivers_row_major(b, num_receivers_per_bank, ring_cols)) for b in range(num_dram_banks)
+            (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols)) for b in range(num_dram_banks)
         ]
         self.pipe_space, self.pipes = _make_tensor_prefetcher_pipes(
             device, bank_to_receivers, ring_size * in1_block_size_bytes
@@ -792,15 +776,7 @@ def _streaming_gather_in0_setup(
     krow_major = distribution_strategy is None
     assert not krow_major or K == K_padded, "a K-row-major bank shard holds exactly the weight's K"
     if krow_major:
-        weight_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}),
-                [K, N // num_dram_banks],
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        )
+        weight_mem_config = _krow_major_weight_memory_config(K, N, num_dram_banks)
     else:
         weight_mem_config = _recv_contig_weight_memory_config(
             K, N, num_dram_banks, ring_size, distribution_strategy, shard_k=K_padded
@@ -1081,30 +1057,6 @@ def _mcast_in0_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat
         # A K-row-major weight needs one pipe per bank.
         "single_sender": krow_major,
     }
-
-
-def _make_tensor_prefetcher_pipes(device, bank_to_receivers, ring_size, single_sender=False):
-    """A PrefetcherPipeSpace over the matmul's workers and the Tensor-prefetcher pipes carved from it.
-
-    Every ring is ``ring_size`` bytes. ``single_sender`` gives each bank one pipe, as a K-row-major
-    weight needs, rather than splitting a bank's receivers across its two senders. Returns (space,
-    pipes): the space must outlive the pipes, so callers keep both.
-    """
-    receiver_domain = ttnn.CoreRangeSet(
-        {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
-    )
-    space = ttnn.experimental.create_prefetcher_pipe_space(
-        device,
-        sender_cores=ttnn.CoreRangeSet(set()),
-        receiver_domain=receiver_domain,
-        ring_size=ring_size,
-        max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
-        num_dram_senders=2 * len(bank_to_receivers),
-    )
-    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
-        space, bank_to_receivers, support_multi_receiver_shards=single_sender
-    )
-    return space, pipes
 
 
 def _linear_over_pipes(setup, pipes, weight=None):

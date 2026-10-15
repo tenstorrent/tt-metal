@@ -8,6 +8,7 @@
 #include "distributed/mesh_device_view_impl.hpp"
 #include "distributed/mesh_command_queue_base.hpp"
 #include "impl/allocator/allocator.hpp"
+#include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/prefetcher_pipe_dram_sender_internal.hpp"
 #include "impl/buffers/h2d_socket_internal.hpp"
@@ -675,8 +676,8 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     // the caller may pass one factory call's pipes in any order. It must pass all of them: a tensor
     // laid out for a subset has fewer slabs per bank than the pipes' slab bases assume.
     target.mapping = experimental::GetPrefetcherPipeSenderReceiverMapping(prefetcher_pipes);
-    target.state_addr_per_sender.reserve(target.mapping.size());
-    target.state_alloc_per_sender.reserve(target.mapping.size());
+    target.config_page_addr_per_sender.reserve(target.mapping.size());
+    target.config_page_alloc_per_sender.reserve(target.mapping.size());
     target.recv_index_base_per_sender.reserve(target.mapping.size());
 
     std::unordered_set<CoreCoord> distinct_receivers;
@@ -688,7 +689,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
         const experimental::PrefetcherPipe& pipe = prefetcher_pipes[p];
         const auto bank_id = static_cast<uint32_t>(target.mapping[p].first.x);
 
-        // state_addr_per_sender below is a DRISC L1 offset reserved on this mesh, so a pipe from
+        // config_page_addr_per_sender below is a DRISC L1 offset reserved on this mesh, so a pipe from
         // another one would aim the sender at unrelated state instead of failing here.
         TT_FATAL(
             pipe.get_device() == mesh_device_,
@@ -736,8 +737,9 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
         // The factory handed each pipe the base its sender owns in its bank, so the queue path
         // reads it off the pipe instead of re-deriving it from where the pipe sits in this list.
         target.recv_index_base_per_sender.push_back(pipe.impl().recv_index_base());
-        target.state_addr_per_sender.push_back(static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe)));
-        target.state_alloc_per_sender.emplace_back(experimental::sender_state_drisc_l1_allocation(pipe));
+        target.config_page_addr_per_sender.push_back(
+            static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe)));
+        target.config_page_alloc_per_sender.emplace_back(experimental::sender_state_drisc_l1_allocation(pipe));
     }
     TT_FATAL(
         distinct_receivers.size() == total_receivers,
@@ -1060,26 +1062,28 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         total_receivers += receivers.num_cores();
     }
     TT_FATAL(num_banks_ > 0, "Tensor prefetcher: num_banks must be > 0");
+    // receivers_per_bank is only consumed by the K-row-major layout (single sender per
+    // bank). Recv-contig derives its geometry from the shard shape and ignores it, and
+    // its receivers need not be uniform per bank — so the even-divisibility requirement
+    // is enforced per-tensor in compute_tensor_layout(), only for K-row-major tensors.
+    const uint32_t receivers_per_bank = total_receivers / num_banks_;
     // K-row-major stores one complete per-bank shard, so all receivers for a bank must
-    // remain on its primary sender. Receiver-contiguous tensors may use either this
-    // topology or a dual-sender split.
+    // remain on its primary sender, and the kernel slices every bank's shard by the one
+    // receivers_per_bank count, so every bank must drive exactly that many. Receiver-contiguous
+    // tensors may use either this topology or a dual-sender split.
     bool krow_compatible_mapping = mapping.size() == num_banks_;
     std::vector<bool> primary_bank_seen(num_banks_, false);
     if (krow_compatible_mapping) {
-        for (const auto& [sender, _receivers] : mapping) {
+        for (const auto& [sender, receivers] : mapping) {
             const uint32_t bank = static_cast<uint32_t>(sender.x);
-            if (bank >= num_banks_ || primary_bank_seen[bank] || sender != sender_logical_cores_[2 * bank]) {
+            if (bank >= num_banks_ || primary_bank_seen[bank] || sender != sender_logical_cores_[2 * bank] ||
+                receivers.num_cores() != receivers_per_bank) {
                 krow_compatible_mapping = false;
                 break;
             }
             primary_bank_seen[bank] = true;
         }
     }
-    // receivers_per_bank is only consumed by the K-row-major layout (single sender per
-    // bank). Recv-contig derives its geometry from the shard shape and ignores it, and
-    // its receivers need not be uniform per bank — so the even-divisibility requirement
-    // is enforced per-tensor in compute_tensor_layout(), only for K-row-major tensors.
-    const uint32_t receivers_per_bank = total_receivers / num_banks_;
 
     const uint32_t pcie_alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST);
     const uint32_t aligned_page_bytes = align_up(kRequestPageBytes, pcie_alignment);
@@ -1223,13 +1227,15 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         // distinct slots.
         layout.streaming = streaming ? 1u : 0u;
         // One read of a K-row-major bank shard feeds every receiver of that bank, so its sender has to
-        // own them all.
+        // own them all, and every bank's shard is sliced by the same receiver count.
         TT_FATAL(
             layout.layout_mode != static_cast<uint32_t>(LayoutMode::KRowMajor) || krow_compatible_mapping,
-            "Tensor prefetcher: K-row-major input tensor {} requires exactly one primary sender per DRAM bank; "
-            "the supplied target uses a split or incompatible sender topology. Create the target with "
-            "support_multi_receiver_shards=true.",
-            tensor_idx);
+            "Tensor prefetcher: K-row-major input tensor {} requires exactly one primary sender per DRAM bank, each "
+            "driving {} receivers (total receivers / banks); the supplied target uses a split, uneven or incompatible "
+            "sender topology. Create the target with support_multi_receiver_shards=true over the same number of "
+            "receivers on every bank.",
+            tensor_idx,
+            receivers_per_bank);
 
         // The sender's free-space poll counts whole per-receiver pages; if the target's per-receiver
         // ring can't hold even one full page the poll never reaches a usable block and the DRISC
@@ -1343,7 +1349,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         for (uint32_t s = 0; s < mapping.size(); ++s) {
             std::vector<uint8_t> page = templ;
             auto* sender_header = reinterpret_cast<TensorPrefetcherRequestHeader*>(page.data());
-            sender_header->prefetch.target_state_addr = target.state_addr_per_sender[s];
+            sender_header->prefetch.target_config_page_addr = target.config_page_addr_per_sender[s];
             // This sender's bank-local slab base is per-sender but not per-tensor, so it goes into
             // every slot of this sender's page: the kernel reads it beside the geometry the entry
             // points at and needs no second lookup.
@@ -1390,14 +1396,7 @@ void TensorPrefetcherManager::queue(
     MeshCommandQueue* trace_capture_cq) {
     // target_for validates the list: banks in contiguous runs appearing once each, one to two DRAM
     // senders per bank and in sender order, one shared geometry, and disjoint receivers.
-    queue_to_target(target_for(prefetcher_pipes), device_subset, tensors, trace_capture_cq);
-}
-
-void TensorPrefetcherManager::queue_to_target(
-    const RequestTarget& target,
-    ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
-    const std::vector<experimental::TensorPrefetcherInput>& tensors,
-    MeshCommandQueue* trace_capture_cq) {
+    const RequestTarget target = target_for(prefetcher_pipes);
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
     // Only reached with a non-null queue: the null case short-circuits, so the message may
@@ -1440,7 +1439,7 @@ void TensorPrefetcherManager::queue_to_target(
     // every other check by now, and a request only captured into a trace counts too: a replay sends it.
     for (size_t m = 0; m < target_sender_indices.size(); ++m) {
         record_drain_target(
-            target_sender_indices[m], target.state_addr_per_sender[m], target.state_alloc_per_sender[m]);
+            target_sender_indices[m], target.config_page_addr_per_sender[m], target.config_page_alloc_per_sender[m]);
     }
 
     // Engaged only when the caller named a queue that is mid trace-capture; that is what
@@ -1472,13 +1471,13 @@ void TensorPrefetcherManager::queue_to_target(
 }
 
 void TensorPrefetcherManager::record_drain_target(
-    uint32_t sender, uint32_t config_page_addr, const std::weak_ptr<DriscL1Allocation>& state) {
+    uint32_t sender, uint32_t config_page_addr, const std::weak_ptr<DriscL1Allocation>& allocation) {
     auto& targets = drain_targets_per_sender_[sender];
-    std::erase_if(targets, [](const DrainTarget& t) { return t.state.expired(); });
+    std::erase_if(targets, [](const DrainTarget& t) { return t.allocation.expired(); });
     const auto it = std::find_if(
         targets.begin(), targets.end(), [&](const DrainTarget& t) { return t.config_page_addr == config_page_addr; });
     if (it == targets.end()) {
-        targets.push_back(DrainTarget{config_page_addr, state});
+        targets.push_back(DrainTarget{config_page_addr, allocation});
     }
 }
 
@@ -1489,7 +1488,7 @@ std::vector<TensorPrefetcherManager::Request> TensorPrefetcherManager::build_dra
         for (const DrainTarget& t : drain_targets_per_sender_[s]) {
             // Held for the rest of stop, so the range cannot be released and reused between this check
             // and the kernel reading it.
-            if (auto alive = t.state.lock()) {
+            if (auto alive = t.allocation.lock()) {
                 pages_per_sender[s].push_back(t.config_page_addr);
                 drain_holds_.push_back(std::move(alive));
             }

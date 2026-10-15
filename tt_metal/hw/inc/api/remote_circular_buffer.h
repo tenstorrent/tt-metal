@@ -19,11 +19,6 @@
 
 namespace experimental {
 
-// Per-receiver layout of the sender's local pages_sent / pages_acked slots. The sender is a worker
-// and the slots live in the config buffer pages at L1 alignment, the same layout its receivers use.
-static constexpr uint32_t REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET = L1_ALIGNMENT;
-static constexpr uint32_t REMOTE_CB_LOCAL_PAGES_STRIDE = 2 * L1_ALIGNMENT;
-
 namespace detail {
 
 #ifndef COMPILE_FOR_TRISC
@@ -64,7 +59,7 @@ FORCE_INLINE void update_pages_sent(
             false /*linked*/,
             posted /*posted*/,
             MEM_NOC_ATOMIC_RET_VAL_ADDR);
-        pages_sent_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
+        pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
         remote_pages_sent_addr += 2 * L1_ALIGNMENT;
         remote_noc_xy_ptr += 2;
     }
@@ -285,8 +280,8 @@ FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
 
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr);
-    volatile tt_l1_ptr uint32_t* pages_acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        remote_cb.aligned_pages_sent_ptr + REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET);
+    volatile tt_l1_ptr uint32_t* pages_acked_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr + L1_ALIGNMENT);
 
     uint32_t num_receivers = remote_cb_num_receivers(remote_cb.num_receivers_and_remote_pages_sent_ptr);
     uint32_t fifo_aligned_num_pages = fifo_size / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
@@ -299,8 +294,8 @@ FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
             uint32_t sent_minus_ack = pages_sent - pages_acked;
             free_pages = fifo_aligned_num_pages - sent_minus_ack;
         } while (free_pages < num_pages_wait);
-        pages_acked_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
-        pages_sent_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
+        pages_acked_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+        pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
     }
 
     WAYPOINT("RCRD");
@@ -312,16 +307,16 @@ FORCE_INLINE void remote_cb_sender_barrier(uint32_t cb_id) {
 
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr);
-    volatile tt_l1_ptr uint32_t* pages_acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        remote_cb.aligned_pages_sent_ptr + REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET);
+    volatile tt_l1_ptr uint32_t* pages_acked_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr + L1_ALIGNMENT);
 
     uint32_t num_receivers = remote_cb_num_receivers(remote_cb.num_receivers_and_remote_pages_sent_ptr);
 
     for (uint32_t i = 0; i < num_receivers; ++i) {
         while (*pages_acked_ptr != *pages_sent_ptr) {
         }
-        pages_acked_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
-        pages_sent_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
+        pages_acked_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+        pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
     }
     WAYPOINT("RCBD");
 }
@@ -429,7 +424,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
 
         uint64_t remote_sent_ptr_addr = receiver_base + remote_sent_base;
         noc_semaphore_inc<posted>(remote_sent_ptr_addr, pages_sent, noc);
-        pages_sent_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
+        pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
         remote_sent_base += 2 * L1_ALIGNMENT;
         remote_noc_xy_ptr += 2;
     }
