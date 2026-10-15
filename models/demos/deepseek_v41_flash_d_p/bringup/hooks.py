@@ -52,9 +52,129 @@ def state_sources(spec, layer):
     return _config(spec).sources(layer)
 
 
+# Device steps of the hybrid model, per block type: every step listed passed its component gate on the device.
+# Steps not listed run on the CPU reference.
+DEVICE_STEPS = {
+    "swa": {"attn_hc"},
+}
+
+# mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
+_HC_STEPS = {"attn_hc", "ffn_hc"}
+
+
+def _checkpoint(spec):
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.deepseek_v41_flash_d_p.reference.weights import Checkpoint
+
+    return Checkpoint(hf_path(spec))
+
+
+def _hc_host_fn(mesh, module, hidden):
+    """fn(ctx, x_host [S, 4H + 4] or [S, 4H]) -> mixes host [S, 24] fp32 (harness boundary: the streams in, the
+    row-split, TP-replicated coefficients back from mesh column 0)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import row_split_to_host, streams_to_device
+
+    def fn(ctx, x):
+        xd = streams_to_device(mesh, x, hidden)
+        od = module(xd)
+        out = row_split_to_host(mesh, od).float()
+        ttnn.deallocate(xd)
+        ttnn.deallocate(od)
+        return out
+
+    fn.module = module
+    return fn
+
+
+def _device_step_fn(mesh, spec, layer, step, ck, cfg):
+    if step in _HC_STEPS:
+        from models.demos.deepseek_v41_flash_d_p.tt.mhc import build_hc
+
+        return _hc_host_fn(mesh, build_hc(mesh, ck, cfg, layer, step), cfg.dim)
+    return None
+
+
 def device_component(mesh, spec, layer, step):
-    raise NotImplementedError(f"implement step: no device module for {step} yet")
+    fn = _device_step_fn(mesh, spec, layer, step, _checkpoint(spec), _config(spec))
+    if fn is None:
+        raise NotImplementedError(f"implement step: no device module for {step} yet")
+    return fn
+
+
+class _HybridState:
+    """The CPU reference state (every cache on the host until the stateful steps move to the device)."""
+
+    def __init__(self, ref, max_seq):
+        self.ref, self.s = ref, ref.new_state(max_seq)
+
+    def load_prefix(self, layer, tensors, length):
+        self.ref.load_state(self.s, layer, tensors, length)
+
+    def to_torch(self, layer, length):
+        return self.ref.state_tensors(self.s, layer, length)
+
+
+class HybridDeviceModel:
+    """CPU reference model with the steps in DEVICE_STEPS swapped for device modules (host in / host out per step).
+    The block boundary (the packed [S, 4H + 4] streams + pending pre) stays on the host. The device model until the
+    assemble step builds the all-device one."""
+
+    def __init__(self, mesh, spec, layers, lm_head=True):
+        import time
+
+        t0 = time.time()
+        self.spec, self.mesh = spec, mesh
+        self.ref = reference(spec, layers=layers, dtype=torch.float32)
+        self.cfg = self.ref.cfg
+        ck = _checkpoint(spec)
+        self.overrides = {}
+        for i in self.ref.layer_ids:
+            steps = sorted(DEVICE_STEPS.get(spec.block_type_of(i), ()))
+            self.overrides[i] = {st: _device_step_fn(mesh, spec, i, st, ck, self.cfg) for st in steps}
+            missing = [st for st, f in self.overrides[i].items() if f is None]
+            assert not missing, f"layer {i}: no device module for {missing}"
+        self._tokens = None
+        self.load_seconds = time.time() - t0
+
+    def new_state(self, max_seq):
+        return _HybridState(self.ref, max_seq)
+
+    def begin_chunk(self, tokens, start):
+        self._tokens = tokens.reshape(-1).long()
+
+    def embed(self, tokens):
+        return self.ref.first_block_input(self.ref.embed(tokens.reshape(-1).long()))
+
+    def from_host(self, h):
+        return h.float()
+
+    def to_host(self, h):
+        return h
+
+    def layer(self, i, h, start, state):
+        from models.demos.common.bringup.reference.interface import run_block
+
+        ctx = self.ref.chunk_context(i, start, h.shape[0], state.s)
+        if self._tokens is not None:
+            ctx.extra["tokens"] = self._tokens
+        return run_block(
+            self.ref.block_graph(i), lambda n: self.ref.component(i, n), ctx, h, overrides=self.overrides[i]
+        )
+
+    def final_norm(self, h):
+        return self.ref.final_norm(h)
+
+    def logits(self, hidden, rows):
+        return self.ref.logits(hidden[rows])
+
+    def free(self, h):
+        pass
+
+    def sync(self):
+        pass
 
 
 def device_model(mesh, spec, layers, lm_head=True):
-    raise NotImplementedError("implement step: no device model yet")
+    """The hybrid model (CPU reference + the validated device steps); the all-device model comes with assemble."""
+    return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)

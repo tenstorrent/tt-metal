@@ -1,0 +1,49 @@
+{
+ "used": [
+  {
+   "id": "K-30",
+   "how": "the [S/SP, 32] partial mixes + sum x^2 exchange is all_gather + SFPU ttnn.add (tt/common.py:tp_sum), not all_reduce",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-20",
+   "how": "checked mhc_split_sinkhorn's op sequence and comb orientation against reference kernels.sinkhorn_split before using it unmodified",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-3",
+   "how": "attn_hc takes only the 4 streams of the packed [S, 4H + 4] boundary; the pending pre columns are dropped at the harness boundary",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "mhc_split_sinkhorn (deepseek_prefill) applies the scales and the Sinkhorn row / column sums as FPU matmuls, which read fp32 at about TF32: rel 6.5e-4 and a -3.5e-4 median row-norm bias vs the fp32 CPU step on DS41 layer 0 (well within the component limits; its doc says bit-for-bit vs its torch reference)"
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.attn_hc",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T12:40:04",
+  "head": "fd48b6f5be2",
+  "touched": [
+   "models/demos/common/bringup/knowledge/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.attn_hc.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/__init__.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/layout.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
