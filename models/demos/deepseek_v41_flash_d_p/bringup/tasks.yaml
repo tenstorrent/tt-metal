@@ -6795,7 +6795,6 @@ tasks:
       contract_checks_failed: == 0
       acks_early: == 0
       pcc_producer_kv_*: '>= 0.97'
-      smoke_runner_ok: == 1
   device: true
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt

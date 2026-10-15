@@ -50,7 +50,10 @@ ladder:                            # rungs in order; the first rung with full_du
   - {name: s16384, seq: 16384, chunk: 8192}                     # 8k->8k
   - {name: last, seq: 56320, chunk: 5120, golden: s56320, prefix_from_golden: true}   # golden 51k prefix, device 51k->56k
   - {name: s56320, seq: 56320, chunk: 5120}                     # all 11 chunks on device
-# scaled.ladder (the scaled run, capped at 64k by the owner) is set once the plan's roles fix the sequence factor
+scaled:                            # the scaled run (plan: sequence 0.5 -> chunk 4096, 2048 rows per mesh row as on the
+  ladder:                          # deployment), capped at 64k tokens by the owner (CPU golden time)
+    - {name: scaled, seq: 65536, chunk: 4096}
+    - {name: scaled_last, seq: 65536, chunk: 4096, golden: scaled, prefix_from_golden: true}
 block_types:                       # every layer exactly once; representative = the layer swap tests use
   swa:                             # attention over the 128-token window only (compress ratio 0)
     layers: [0]
@@ -133,6 +136,15 @@ contract: {adapter: deepseek_v41_flash_d_p}
 serving:
   server_repo: /localdev/$USER/tt-d-gen
   require_engine: false            # QuietBox: tt-d-gen does not run here; tt-metal's prefill_producer stands in
+  # answers to serving_contract.md's owner questions (decided by the supervisor on the owner's delegation, 2026-10-15)
+  owner_answers:
+    - "1 decode-side cache: bf16 row-major per position, lossless, the contract's five config names and order"
+    - "2 window KV at 1M: TP-dedup (2.5 GiB per chip per slot); fp8 rows later only with server tooling support"
+    - "3 slots: max_slots 1 at 1M on galaxy_4x4; 2 in the tests"
+    - "4 prefix reuse: on, kv_block_size 64"
+    - "5 d2p: off (a pulled prefix has no token ids for the engram hash)"
+    - "6 server tooling: our tests decode with explicit geometry; tt-d-gen needs a DeepSeek-V4 entry before a launch run"
+    - "7 runner smoke: needs all 40 layers; not required in this partial run (F66), run on the deployment Galaxy"
 agents:
   rules:                           # the owner's rules, shown in every brief
     - "Always use 2D fabric: the mesh opens with the spec's device_params; never FABRIC_1D or FABRIC_1D_RING."
