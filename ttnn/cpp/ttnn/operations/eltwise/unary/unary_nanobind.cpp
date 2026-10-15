@@ -923,10 +923,7 @@ void bind_gelu(nb::module_& mod) {
             variant (ttnn.GeluVariant, optional): Select GELU implementation. Defaults to `GeluVariant.Accurate`.
                 - `Accurate`: piecewise CDF (BF16) or FP32 erf — matches torch.nn.functional.gelu (exact).
                 - `FastLut`: 6-segment piecewise-linear LUT — fastest, ~1% absolute error.
-                - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))), as torch.nn.functional.gelu(approximate="tanh").
-                  Evaluated in FP32 on Wormhole and with FP32 DEST accumulation. On Blackhole with BF16 DEST a fitted
-                  BF16 kernel computes it, below 1 BF16 ULP of the exact value, so Wormhole and Blackhole give
-                  different bits there.
+                - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))), as torch.nn.functional.gelu(approximate="tanh"); FP32 on Wormhole and with FP32 DEST accumulation, a fitted BF16 kernel (below 1 BF16 ULP) on Blackhole with BF16 DEST, so Wormhole and Blackhole give different bits there.
             fast_and_approximate_mode (bool, optional): Legacy alias. `True` maps to `variant=FastLut`, `False` to `variant=Accurate`. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
