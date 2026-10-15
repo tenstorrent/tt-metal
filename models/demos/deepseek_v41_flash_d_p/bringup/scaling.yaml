@@ -12,6 +12,10 @@ counts:
   o_groups: heads                   # 8 -> 4 (groups of 8 heads stay whole: wo_a [groups x 1024, 8 x 512])
   n_routed_experts: experts         # 384 -> 96 (top-6 routing unchanged)
 
+# the model's own inference code reads its counts from inference/config.json (F75): rewrite them there too
+config_files:
+  inference/config.json: {n_heads: num_attention_heads, o_groups: o_groups, n_routed_experts: n_routed_experts}
+
 tensors:
   # query heads: wq_b rows are head-major (64 x 512); its fp8 scale has 16 block rows per head
   - {pattern: "layers.*.attn.wq_b.weight", count: num_attention_heads, dim: 0}
