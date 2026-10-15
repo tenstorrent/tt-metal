@@ -211,6 +211,12 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         logger.info(
             f"DSV4.1 vLLM: building {len(layer_ids)} layers, max_num_seqs {max_batch_size} -> batch {B} (U={U}), max_seq_len {max_seq_len}"
         )
+        if (
+            spec_k
+        ):  # speculative verify needs the matmul indexer backend: set it before the indexers are built (tt/spec_policy.force_matmul_backend)
+            from models.demos.blackhole.deepseek_v41_flash.tt import spec_policy as _sp
+
+            _sp.force_matmul_backend(max_seq_len)
         args, model, _pool, _ = create_tt_model(
             mesh_device, B, max_seq_len, paged, layer_ids=layer_ids, log=lambda m: logger.info(m)
         )

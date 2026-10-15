@@ -74,6 +74,18 @@ def pos_buckets(max_pos):
     return sorted({int(x) for x in raw.split(",") if x.strip() and 0 < int(x) < int(max_pos)})
 
 
+def mask_scores(scores, nvalid, ar):
+    """Rank-masking of a ragged batch: scores [U,1,1,n] row-major, nvalid float32 [U,1,1,1] tile, ar [1,1,1,n] float32 (entries >= the user's valid count -> -1e30), -> bf16 row-major
+    [1,1,U,n]. The users are laid out as ROWS of one tile tensor: a [U,1,1,n] tile tensor pads every user's single row to 32 (32 x the bytes: 768 MiB at 24 verify rows x 262144 entries,
+    the 1M-context spec verify ran out of DRAM on it); [1,1,U,n] pads U to a tile once. Same values."""
+    U, n = int(scores.shape[0]), int(scores.shape[-1])
+    sc = ttnn.reshape(scores, [1, 1, U, n])
+    nv = ttnn.reshape(ttnn.to_layout(nvalid, ttnn.ROW_MAJOR_LAYOUT), [1, 1, U, 1])
+    keep = ttnn.lt(ar, ttnn.to_layout(nv, ttnn.TILE_LAYOUT))  # [1,1,U,n]
+    masked = ttnn.where(keep, ttnn.typecast(ttnn.to_layout(sc, ttnn.TILE_LAYOUT), ttnn.float32), -1e30)
+    return ttnn.to_layout(ttnn.typecast(masked, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
+
+
 SELECT_CONCAT_BYTES = (
     1 << 20
 )  # score rows of the users concatenated into one tensor must stay below this (the circular buffer of the concat holds a few of them in L1)
@@ -400,11 +412,9 @@ class DSV41DecodeIndexer:
         if (
             "nvalid" in st
         ):  # ragged batch: entries >= the user's own valid count must never be ranked (the shared valid length is the batch maximum)
-            ar = self._arange_for(self.n_score)
-            keep = ttnn.lt(ar, st["nvalid"])  # [U,1,1,n_alloc]
-            masked = ttnn.where(keep, ttnn.typecast(ttnn.to_layout(scores, ttnn.TILE_LAYOUT), ttnn.float32), -1e30)
-            scores = ttnn.to_layout(ttnn.typecast(masked, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
-        return ttnn.experimental.topk_large_indices(scores, k=self.topk, valid_length_tensor=st["valid"])
+            scores = mask_scores(scores, st["nvalid"], self._arange_for(self.n_score))
+        ids = ttnn.experimental.topk_large_indices(scores, k=self.topk, valid_length_tensor=st["valid"])
+        return ids if ids.shape[0] == scores.shape[0] else ttnn.reshape(ids, [scores.shape[0], 1, 1, self.topk])
 
     def forward(self, x, qr, st, return_scores=False):
         q, w = self.project(x, qr, st)

@@ -81,15 +81,19 @@ def test_context_fallback():
     assert R(32, ctx=40000).on
     # measured at B=16 (U=4): spec runner + trace fit at max_seq_len 131072 with the fp8 pool (mem2_fp8_k5_131072), U <= 4 bounded by it; the matmul indexer backend ends at 131072
     assert R(16, ctx=131072).on and R(8, ctx=131072).on and R(4, ctx=131072).on and R(1, ctx=131072).on
-    assert R(16, ctx=131073).mode == "plain" and R(16, ctx=135000).mode == "plain"
-    assert max(sp.SPEC_MAX_CTX.values()) <= sp.SPEC_MAX_CTX_BACKEND
+    assert (
+        R(16, ctx=131584).on and R(16, ctx=131585).mode == "plain" and R(16, ctx=135000).mode == "plain"
+    )  # the cap is 131072 + 256 rounded to the 512-token chunk
+    # only U = 1 (B = 4) is validated beyond the matmul backend's 131584: the 1M build (demo gsm8k_b4_m1M); every other U stays at or below it
+    assert max(v for u, v in sp.SPEC_MAX_CTX.items() if u != 1) <= sp.SPEC_MAX_CTX_BACKEND
+    assert R(4, ctx=1048832).on and R(4, ctx=1048833).mode == "plain"
     c = R(32, ctx=70000)
     assert (
         c.mode == "plain"
         and c.ring_rows == 0
         and c.describe().startswith("spec decode: plain (context too long for spec")
     )
-    c = R(4, ctx=135000)
+    c = R(8, ctx=135000)  # B=8 (U=2): not measured beyond 131584
     assert c.mode == "plain" and "context too long" in c.reason
     # explicit settings are trusted
     assert R(32, {"DSV41_SPEC": "3"}, ctx=70000).on
@@ -157,3 +161,19 @@ def test_dram_check():
         not sp.dram_check(172, 84, 8, {})[0] and not sp.dram_check(300, 290, 8, {})[0]
     )  # B=32 ISL 60k (OOM) / below the 320 need
     assert not sp.dram_check(527, 478, 8, {"DSV41_SPEC_NEED_FREE_MIB": "9999"})[0]
+
+
+def test_force_matmul_backend():
+    env = {}
+    assert (
+        not sp.force_matmul_backend(131584, env) and "DSV41_IDX_BACKEND" not in env
+    )  # short enough: the default backend already is the matmul one
+    assert sp.force_matmul_backend(1048576, env) and env["DSV41_IDX_BACKEND"] == "matmul"
+    env = {"DSV41_IDX_BACKEND": "fused"}
+    assert not sp.force_matmul_backend(1048576, env) and env["DSV41_IDX_BACKEND"] == "fused"  # a user-set value wins
+    env = {}
+    c = sp.resolve_apply(4, 4, 1048576, env)
+    assert c.on and env.get("DSV41_IDX_BACKEND") == "matmul"
+    env = {}
+    c = sp.resolve_apply(4, 4, 70000, env)
+    assert c.on and "DSV41_IDX_BACKEND" not in env
