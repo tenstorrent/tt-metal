@@ -20,12 +20,13 @@ from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference import model as re
 from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tests.common import (
     DP,
     GALAXY_DEVICE_PARAMS,
-    block_page_table,
+    TP,
     cache_dir,
     dp_submeshes,
     load_config_and_ckpt,
     pcc,
 )
+from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tt import kv as kv_lib
 from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tt.common import MeshPlan
 from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tt.decoder import TtMiMoDecoderLayer
 from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tt.rope import MiMoRotarySetup
@@ -75,17 +76,18 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
         layer = TtMiMoDecoderLayer(
             plan, cfg, layer_idx, weights if r == 0 else None, ropes, cache_dir=cache_dir("layer_bfp8")
         )
-        # SWA layers address a 512-token ring per user, global layers the whole context.
+        # SWA layers address a 512-token ring per user, global layers the whole context. Global layers split
+        # each chip pair's users, so their page table differs per chip (kv.py).
         layer_blocks = layer.attn.kv_tokens_per_user(MAX_SEQ) // BLOCK
-        kv = layer.attn.allocate_kv_cache(MAX_BATCH * layer_blocks, BLOCK, KV_DTYPE)
-        page_table = block_page_table(MAX_BATCH, layer_blocks, seed=r)
+        tables, num_blocks = kv_lib.page_tables(USERS_PER_REPLICA, MAX_BATCH, layer_blocks, TP, layer.attn.rep, seed=r)
+        kv = layer.attn.allocate_kv_cache(num_blocks, BLOCK, KV_DTYPE)
         replicas.append(
             dict(
                 plan=plan,
                 ropes=ropes,
                 layer=layer,
                 kv=kv,
-                page_table=replicated(plan, page_table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+                page_table=kv_lib.per_chip(plan, tables, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
             )
         )
 
@@ -137,7 +139,16 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
                 True: rep["ropes"]["swa"].get_rot_mats(pos.clamp(min=0)),
                 False: rep["ropes"]["full"].get_rot_mats(pos.clamp(min=0)),
             }
-            cur_pos = replicated(plan, pos, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            kv_rep = replicas[r]["layer"].attn.rep
+            cur_pos = {
+                "pos": replicated(plan, pos, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+                "pos_owned": kv_lib.per_chip(
+                    plan, kv_lib.owned_positions(pos, TP, kv_rep), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+                ),
+                "owner_mask": kv_lib.per_chip(
+                    plan, kv_lib.owner_mask(pos, TP, kv_rep), ttnn.bfloat16, ttnn.TILE_LAYOUT
+                ),
+            }
             mask = replicated(plan, (pos >= 0).bfloat16().reshape(1, 1, -1, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT)
             out = rep["layer"].forward_decode(to_tt(x, plan), rot, cur_pos, rep["page_table"], rep["kv"], mask)
             pending.append(out)
