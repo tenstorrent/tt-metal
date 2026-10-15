@@ -26,7 +26,12 @@ from tt_llk_harness import (
 @pytest.mark.parametrize(
     "pattern", ["random", "winners", "fractional", "negative_zero"]
 )
-def test_block_max8(dst_index, valid, pattern):
+@pytest.mark.parametrize(
+    "source",
+    ["sources/block_max8_test.cpp", "sources/block_max8_fpu_test.cpp"],
+    ids=["sfpu", "fpu"],
+)
+def test_block_max8(dst_index, valid, pattern, source, request):
     """Check all pooled blocks and preserve every other tile in both DST halves.
 
     Three batches reuse the first half after exercising the second. Directed
@@ -36,7 +41,15 @@ def test_block_max8(dst_index, valid, pattern):
     unpack/datacopy path can canonicalize its sign before the SFPU sees it.
     Exact negative-zero output bits are encoded as -1 in DST before packing,
     which otherwise canonicalizes zeros; positive zero cannot pass this probe.
+    The FPU (GMPOOL) variant flushes negative zero to positive zero.
     """
+    if source.endswith("fpu_test.cpp") and pattern == "negative_zero" and valid > 0:
+        request.applymarker(
+            pytest.mark.xfail(
+                strict=True,
+                reason="GMPOOL flushes exponent-zero inputs, so a -0.0 block max returns +0.0",
+            )
+        )
     generator = torch.Generator().manual_seed(4869)
     logical = torch.randint(-256, 0, (24, 32, 32), generator=generator).bfloat16()
     targets = logical[dst_index::8].reshape(3, 128, 8).clone()
@@ -65,7 +78,7 @@ def test_block_max8(dst_index, valid, pattern):
     ).flatten()
     formats = input_output_formats([DataFormat.Float16_b])[0]
     config = LLKTestConfig(
-        "sources/block_max8_test.cpp",
+        source,
         formats,
         runtimes=[
             params.TILE_COUNT(24),
