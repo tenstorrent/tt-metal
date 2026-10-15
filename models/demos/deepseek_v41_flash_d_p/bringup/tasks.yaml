@@ -599,6 +599,14 @@ tasks:
     kind: op
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-10-15T16:02:08'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_hc.py: bc028d6630109578adfdc500abdf159e10adb5a443b4ce4140d81347f3406df9
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.08
   title: 'swa block with steps 1-8 on device (last: ffn_hc)'
   step: implement
