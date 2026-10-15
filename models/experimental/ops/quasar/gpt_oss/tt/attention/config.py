@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 
 import ttnn
+from models.experimental.ops.quasar.gpt_oss.utils.general_utils import get_compute_grid_size
 
 
 @dataclass
@@ -100,7 +101,7 @@ class ProgramConfig:
     def get_decode_sdpa_config(self, mesh_device) -> ttnn.SDPAProgramConfig:
         """Get SDPA config for decode mode"""
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            compute_with_storage_grid_size=get_compute_grid_size(mesh_device),
             q_chunk_size=self.decode_q_chunk_size,
             k_chunk_size=self.decode_k_chunk_size,
             exp_approx_mode=False,
@@ -116,7 +117,7 @@ class ProgramConfig:
             k_chunk = self.prefill_k_chunk_size_small
 
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            compute_with_storage_grid_size=get_compute_grid_size(mesh_device),
             exp_approx_mode=False,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,

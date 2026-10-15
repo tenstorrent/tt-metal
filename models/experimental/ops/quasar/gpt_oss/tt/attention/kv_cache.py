@@ -6,7 +6,7 @@ import torch
 import ttnn
 from models.common.utility_functions import nearest_y
 from models.experimental.ops.quasar.gpt_oss.config import MeshConfig
-from models.experimental.ops.quasar.gpt_oss.utils.general_utils import get_cache_file_name
+from models.experimental.ops.quasar.gpt_oss.utils.general_utils import get_cache_file_name, get_compute_grid_size
 
 from .config import AttentionConfig
 
@@ -95,7 +95,7 @@ def get_kv_memory_config(mesh_device, max_local_batch_size: int, num_local_kv_he
     Returns:
         Sharded memory config for KV tensors
     """
-    grid_size = ttnn.CoreCoord(8, 8)
+    grid_size = get_compute_grid_size(mesh_device)
 
     # KV tensors should be [local_batch_size, num_local_kv_heads, 1, head_dim] for decode
     kv_shape = (1, max_local_batch_size, num_local_kv_heads, head_dim)
