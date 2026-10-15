@@ -55,6 +55,9 @@ struct TopologySatSolver {
     int active_vars() const;
     int64_t irredundant_clauses() const;
     int64_t redundant_clauses() const;
+    // Total clauses handed to add() so far (counts the 0 terminators). Engine-agnostic (works for kissat, which
+    // exposes no clause getter); used by the conflict-cap scaling policy as the CNF-size signal.
+    int64_t clauses_added() const;
     // Dump CaDiCaL's full statistics (incl. conflicts/decisions/propagations). Only prints when the solver
     // was constructed un-quiet (TT_METAL_SAT_VERBOSE=1).
     void print_statistics();

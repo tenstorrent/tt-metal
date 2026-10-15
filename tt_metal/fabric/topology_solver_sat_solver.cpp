@@ -221,6 +221,9 @@ long long g_sat_instances = 0;  // total TopologySatSolver instances created thi
 struct TopologySatSolver::Impl {
     std::unique_ptr<SatEngine> engine = make_engine();
     SatProfile prof;
+    // Clauses added so far (a clause ends on add(0)). Engine-agnostic -- kissat exposes no clause getter, so this
+    // is the portable CNF-size signal the conflict-cap scaling policy keys off of (see topology_solver_sat.cpp).
+    int64_t clauses_added = 0;
     Impl() { ++g_sat_instances; }
     ~Impl() {
         if (prof.on) {
@@ -263,7 +266,12 @@ void TopologySatSolver::protect_variable(int var) { impl_->engine->protect_varia
 void TopologySatSolver::add(int lit) {
     impl_->engine->add(lit);
     ++impl_->prof.adds;
+    if (lit == 0) {
+        ++impl_->clauses_added;  // a 0 terminator ends one clause
+    }
 }
+
+int64_t TopologySatSolver::clauses_added() const { return impl_->clauses_added; }
 
 void TopologySatSolver::assume(int lit) {
     impl_->engine->assume(lit);
