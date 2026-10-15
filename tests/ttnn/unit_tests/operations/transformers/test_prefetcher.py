@@ -105,3 +105,41 @@ def test_run_prefetcher_post_commit_multi_device(
         dtypes,
         is_functional_test=True,
     )
+
+
+def test_dram_prefetcher_rejects_global_cb_with_fewer_senders(device, expect_error):
+    # Regression: validation read past the global CB's sender list when it had fewer senders than readers.
+    num_banks = device.dram_grid_size().x
+    banks = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_banks - 1, 0))})
+    weight = ttnn.from_torch(
+        torch.randn(1, 1, 32, 32 * num_banks),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(banks, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+    senders = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)]
+    mapping = [
+        (s, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(s.x, 1), ttnn.CoreCoord(s.x, 1))})) for s in senders
+    ]
+    global_cb = ttnn.create_global_circular_buffer(device, mapping, 32 * 1088)
+    addrs = ttnn.from_torch(
+        torch.full((len(senders), 1), weight.buffer_address(), dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(senders[0], senders[1])}), [1, 1], ttnn.ShardOrientation.ROW_MAJOR
+            ),
+        ),
+    )
+
+    with expect_error(RuntimeError, "sender cores"):
+        ttnn.dram_prefetcher([weight, addrs], num_layers=1, global_cb=global_cb)
