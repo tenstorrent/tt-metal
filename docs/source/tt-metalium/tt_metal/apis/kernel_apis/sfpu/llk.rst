@@ -499,6 +499,26 @@ information to deduce this itself.
     v_if (nearby (a < 255)) {
     } v_endif;
 
+Mask Generation
+^^^^^^^^^^^^^^^
+
+Masks can be generated from comparison operations on Blackhole and
+Quasar targets:
+
+-- code-block:: c++
+
+    vUInt mask (a OP b)
+
+Where ``OP`` is one of ``<``, ``<=``, ``==``, ``!=``, ``>`` or
+``>=``. The types supported are:
+
+  * vFloat
+  * vSMag
+  * vInt: Quasar only
+
+The result elements are all-zeroes or all-ones, depending on the
+comparison result.
+    
 Scalar Values
 ^^^^^^^^^^^^^
 
