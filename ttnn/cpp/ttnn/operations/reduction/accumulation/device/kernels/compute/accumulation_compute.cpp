@@ -156,7 +156,8 @@ void kernel_main() {
             dfb_in_obj.wait_front(ONE_TILE);
 
 #ifdef COMPENSATED_SUM
-            // in, acc and comp are all Float32 here: one unpack configuration serves the three copies.
+            // in, acc and comp are all Float32 here (the factory sets COMPENSATED_SUM only then): one unpack
+            // configuration serves the three copies.
             reconfig_data_format(dfb::in, dfb::in);
             copy_init(dfb::in);
             copy_tile(dfb::in, 0, DST_IN);
