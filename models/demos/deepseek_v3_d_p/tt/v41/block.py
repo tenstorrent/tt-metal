@@ -402,7 +402,7 @@ class V41PrefillBlock(LightweightModule):
     # get extra A2 islands per capacity bucket (the scorer over the first kv_b key columns, DS4F-0300). Every full path-A chunk
     # (kv_actual >= window + top-k worth of entries) replays them; chunk 0 (path B) and a ragged final chunk stay eager.
     def _capture_attn_islands(self, h, chunk_tokens: int) -> None:
-        self._attn_islands, self._a2_buckets = {}, {}
+        self._attn_islands, self._a2_buckets, self._a2c0 = {}, {}, {}
         attn = self.attn
         # the CSA sources and their consumers only: V41SWA inherits TtHCA's traceable() (True by default) and its A2 builds
         # V4-Flash's contract export ring -- layers 0 / 1 (~65 ms of a chunk, DS41F-0037 10-11 profile) stay eager for now
@@ -446,6 +446,16 @@ class V41PrefillBlock(LightweightModule):
                 for dst, t in zip(a2_warm, attn.forward_attn(h, warm, state, chunk_tokens, kv_bucket=kv_b)):
                     copy_into(dst, t)
                     ttnn.deallocate(t)
+            # DS41F-0073 (PREFILL_V41_A3_CHUNK0): chunk 0's A2 variant -- compiled and its repack constants built here, before
+            # any capture; a source's chunk 0 scores the smallest capacity bucket (its live columns fit it)
+            chunk0 = bool(getattr(attn, "supports_chunk0_island", False))
+            c0_kw = dict(kw, chunk0=True)
+            if is_source and buckets:
+                c0_kw["kv_bucket"] = buckets[0]
+            if chunk0:
+                for dst, t in zip(a2_warm, attn.forward_attn(h, warm, state, chunk_tokens, **c0_kw)):
+                    copy_into(dst, t)
+                    ttnn.deallocate(t)
             for t in a2_warm + list(warm):
                 if t is not None:  # the SWA phases carry None for entries / mask
                     ttnn.deallocate(t)
@@ -480,6 +490,19 @@ class V41PrefillBlock(LightweightModule):
                 isl.capture()
                 bucket_islands.append((kv_b, isl))
             self._a2_buckets[slot] = bucket_islands
+            if chunk0:
+                # writes the FULL island's persistent outputs, as a bucket island does (the consumers' A2c0 read the
+                # source's chunk-0 top-k there)
+
+                def _c0_fn(_o=outs, _st=state, _kw=c0_kw, _dst=a2_out):
+                    for dst, t in zip(_dst, attn.forward_attn(h, _o, _st, chunk_tokens, **_kw)):
+                        copy_into(dst, t)
+                        ttnn.deallocate(t)
+                    return _dst
+
+                A2c0 = TraceIsland(self.mesh_device, _c0_fn, [], name=f"v41.L{self.layer}.A2c0.slot{slot}")
+                A2c0.capture()
+                self._a2c0[slot] = A2c0
             self._attn_islands[slot] = (A1, A2, kw)
             if is_source:
                 attn._a3_states[slot], attn._a3_out[slot] = state, a2_out
@@ -500,7 +523,18 @@ class V41PrefillBlock(LightweightModule):
     def _attn_islands_for(self, real_len: int):
         """(A1, A2, kwargs) when this chunk's attention replays its islands, else None (eager)."""
         isl = getattr(self, "_attn_islands", None)
-        if not isl or not self.attn.trace_ready(self.state):
+        if not isl:
+            return None
+        slot = int(getattr(self.state, "slot", 0))
+        c0 = (getattr(self, "_a2c0", None) or {}).get(slot)
+        if c0 is not None and int(self.state.kv_actual) == 0:
+            # DS41F-0073: chunk 0 (a full one, or the whole of a prompt shorter than a chunk) on its A2c0 island
+            if int(real_len) != self._island_chunk and not (
+                A3_RAGGED and int(real_len) % 128 == 0 and int(real_len) >= self.attn.sliding_window
+            ):
+                return None
+            return isl[slot][0], c0, isl[slot][2]
+        if not self.attn.trace_ready(self.state):
             return None
         if int(real_len) != self._island_chunk:
             # DS41F-0068: a ragged FINAL chunk replays the full-chunk islands too (the attention is causal: no real row reads a
@@ -541,9 +575,12 @@ class V41PrefillBlock(LightweightModule):
         for slot, (A1, A2, _kw) in (getattr(self, "_attn_islands", None) or {}).items():
             A1.release()
             A2.release()
+            c0 = (getattr(self, "_a2c0", None) or {}).get(slot)
+            if c0 is not None:
+                c0.release()
             for _, b in (getattr(self, "_a2_buckets", None) or {}).get(slot, ()):
                 b.release()
-        self._attn_islands, self._a2_buckets = {}, {}
+        self._attn_islands, self._a2_buckets, self._a2c0 = {}, {}, {}
         if self._islands is not None:
             self._islands[0].release()
             self._islands[1].release()

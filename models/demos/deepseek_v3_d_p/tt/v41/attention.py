@@ -345,6 +345,10 @@ PATH_A = os.environ.get("PREFILL_V41_PATH_A", "0") == "1"
 # 0300, TtCSA's prepare_chunk / forward_pre / glue_chunk / forward_attn / epilogue_chunk protocol), replayed by the block between
 # its mHC / MoE islands; chunk 0 (path B) and a ragged final chunk stay eager. Needs PATH_A and V41_PREFILL_ISLANDS.
 A3 = os.environ.get("PREFILL_V41_A3", "0") == "1"
+# DS41F-0073: chunk 0's CSA attention on its own captured A2 island (V4-Flash DS4F-0300's A2c0: the same A1, then the sparse
+# core with each index row repacked to [valid window | valid top-k | sentinels], rate-aware) instead of the eager path B; every
+# prompt shorter than one chunk is chunk 0 alone. Default off until the export / e2e A/B lands. Needs A3.
+A3_CHUNK0 = os.environ.get("PREFILL_V41_A3_CHUNK0", "0") == "1"
 # e2m1 magnitudes 0, .5, 1, 1.5, 2, 3, 4, 6 as a sum of steps at the midpoints; ties go to the even code (0.25 -> 0,
 # 0.75 -> 1, 1.25 -> 1, 1.75 -> 2, 2.5 -> 2, 3.5 -> 4, 5 -> 4): "gt" at a tie that rounds down, "ge" at one that rounds up
 _FP4_STEPS = (
@@ -621,13 +625,14 @@ def _source_forward_attn(
     self, hidden_states, outs, state, real_len: int, chunk0: bool = False, _t=None, kv_bucket=None
 ):
     """Island A2 (chunk-invariant): the static fused scorer + top-k over the key cache (or its first ``kv_bucket`` columns),
-    the sparse gather over the persistent slab, V's un-RoPE and the output projection -> (y, top-k)."""
-    assert not chunk0, "V4.1 runs chunk 0 eagerly (path B)"
+    the sparse gather over the persistent slab, V's un-RoPE and the output projection -> (y, top-k). ``chunk0``
+    (A3_CHUNK0, DS41F-0073): the A2c0 variant -- the index rows repacked for chunk 0 (TtCSA._chunk0_pack)."""
+    assert A3_CHUNK0 or not chunk0, "V4.1 runs chunk 0 eagerly (path B) unless PREFILL_V41_A3_CHUNK0"
     q, q_latent, sliding_kv_g, _nc, entries, keys, cos, sin = outs[:8]
     idx = self.indexer.select_indices_static(
         q_latent, hidden_states, cos, sin, state.index_k, state.score_mask, kv_bucket=kv_bucket
     )
-    attn = self._sparse_core(q, idx, cos, sin, state.slab_rm, seq_len=sliding_kv_g.shape[2])
+    attn = self._sparse_core(q, idx, cos, sin, state.slab_rm, seq_len=sliding_kv_g.shape[2], chunk0=chunk0)
     return self._o_proj(attn), idx
 
 
@@ -693,7 +698,7 @@ V41CSA.traceable = _source_traceable
 V41CSA.prepare_chunk = _source_prepare_chunk
 V41CSA.forward_attn = _source_forward_attn
 V41CSA.epilogue_chunk = _source_epilogue_chunk
-V41CSA.supports_chunk0_island = False
+V41CSA.supports_chunk0_island = A3_CHUNK0
 
 
 class V41CSAConsumer(_V41QStem, TtCSA):
@@ -827,7 +832,7 @@ class V41CSAConsumer(_V41QStem, TtCSA):
     # rows and of the previous carry; glue (eager): those two into the SOURCE's slab rows [0, S) and [S + cap, S + cap + 128)
     # (exactly the eager path A's _slab_write pieces); A2c: the sparse gather with the source's A2 top-k (its persistent
     # output, read in place) over the source's slab, V's un-RoPE, o-proj; epilogue (eager): counters + the carry.
-    supports_chunk0_island = False
+    supports_chunk0_island = A3_CHUNK0
 
     def traceable(self) -> bool:
         return A3 and PATH_A and self.source.traceable()
@@ -876,9 +881,13 @@ class V41CSAConsumer(_V41QStem, TtCSA):
         self._slab_write_rm(src_state, kv_rm, 0)
         self._slab_write_rm(src_state, carry_rm, int(sliding_kv_g.shape[2]) + self._slab_cap)
 
-    def forward_attn(self, hidden_states, outs, state, real_len: int, src_idx=None, src_state=None, **_kw):
+    def forward_attn(
+        self, hidden_states, outs, state, real_len: int, src_idx=None, src_state=None, chunk0: bool = False, **_kw
+    ):
         q, sliding_kv_g, _nc, cos, sin = outs[:5]
-        attn = self._sparse_core(q, src_idx, cos, sin, src_state.slab_rm, seq_len=sliding_kv_g.shape[2])
+        attn = self._sparse_core(
+            q, src_idx, cos, sin, src_state.slab_rm, seq_len=sliding_kv_g.shape[2], chunk0=chunk0
+        )  # chunk0: the source's chunk-0 top-k, repacked the same way (DS41F-0073)
         return (self._o_proj(attn),)
 
     def epilogue_chunk(self, state, outs, a2, export, real_len: int) -> None:
