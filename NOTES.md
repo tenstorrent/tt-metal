@@ -16,3 +16,8 @@
 - Cleanup at end: ~/fasth3/t511 and /var/tmp/fasth3/t511 on blx03.
 - 2026-10-15 04:13 PDT: queued; runner restarted pid 49491 (blx03 rebooted ~03:51 PDT), t503-ab-r1/-r2 ahead
   (they stop early on t503's last_fail guard). ttp checks started in run 1958 (checks.out/.rc there).
+- 2026-10-15 05:58 PDT: r1 jobs all failed in ~12 s, not drops: ValueError "missing Torch state keys: conv_in.weight, ..."
+  (broker jobs 432, 434 e2e; 436, 450 ab). The 2.5 conv VAE split file has bare decoder./encoder. keys; ltx-rt's loaders read
+  only vae.* (fix 63e54d98036 is on t48 only). The runner logged them as drops (chips=unknown) and blocked config
+  t511-ltx25-e2e: cleared it. Wrote /var/tmp/fasth3/t511/vae/ltx-2.5-video-vae-conv-bf16-vaeprefix.safetensors on blx03
+  (same 170 tensors + metadata, keys prefixed vae.), run511.sh points there. Queued t511-e2e-r2, t511-ab-r2.

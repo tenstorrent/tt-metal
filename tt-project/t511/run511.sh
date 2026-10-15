@@ -15,7 +15,9 @@ export LD_LIBRARY_PATH=$W/build_Release/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 export TT_METAL_HOME=$W PYTHONPATH=$W:$W/ttnn:$W/tools PYTHONDONTWRITEBYTECODE=1 TMPDIR=$R/tmp HF_HUB_OFFLINE=1
 export TT_METAL_CACHE=$R/jit
 export LTX_VERSION=2.5 LTX25_DIFFVAE=0 RUN_VBENCH=0 RUN_CLIP=0 LTX25_ROOT=$L
-export LTX25_VIDEO_VAE=$L/vae/ltx-2.5-video-vae-conv-bf16.safetensors
+# ltx-rt's VAE loaders read only vae.-prefixed keys; the 2.5 split file has bare decoder./encoder. keys (fixed on
+# t48 by 63e54d98036, not on ltx-rt). Same 170 tensors and metadata, keys prefixed with vae.
+export LTX25_VIDEO_VAE=$R/vae/ltx-2.5-video-vae-conv-bf16-vaeprefix.safetensors
 # the test's skip gate checks the 2.3 checkpoint even for LTX_VERSION=2.5 (the 2.5 branch does not read it)
 export LTX_CHECKPOINT=$LTX25_VIDEO_VAE
 unset TT_DIT_CACHE_DIR LTX25_TEXT_ENCODER_PATH LTX_FUSE_GATE_ON_DEVICE LTX_QUANT LTX_QUANT_ACTIVATIONS LTX_QUALITY LTX_FAST \

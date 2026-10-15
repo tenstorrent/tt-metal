@@ -1,0 +1,8 @@
+ID=t511-e2e-r2
+TASK=t511
+CONFIG=t511-ltx25-e2e
+TIMEOUT=600
+WORKDIR=/var/tmp/fasth3/t511
+ENV=/home/smarton/fasth3/runner/env.yaml
+CMD=bash /var/tmp/fasth3/t511/run511.sh e2e
+NEEDS=/var/tmp/fasth3/t503/ltx25/diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors,/var/tmp/fasth3/t503/ltx25/text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors,/var/tmp/fasth3/t503/ltx25/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors,/var/tmp/fasth3/t511/vae/ltx-2.5-video-vae-conv-bf16-vaeprefix.safetensors,/var/tmp/fasth3/t511/jit
