@@ -1,0 +1,147 @@
+# DeepSeek-V4.1-Flash text prefill, planned for galaxy_4x4 (16 x Blackhole p150b, 32 GB each) at 1,048,576 tokens in
+# 8192-token chunks; brought up on quietbox_2x2 (layers 0-3, 14, 20, 21, 24; real size and scaled). Reasoning in plan.md,
+# step-to-op map in components.yaml.
+# Mesh axis 0 = rows = SP (the chunk's tokens: row r computes the natural block [start + r W, start + (r + 1) W),
+# W = chunk / rows), axis 1 = columns = TP (query heads, wo_a groups, the hidden split of the residual and of every
+# K-split matmul). Routed experts over every chip (DeepSeek 2D dispatch: one group per column, along axis 0). Served KV
+# records over every chip (row by position as the serving contract places them, TP-dedup by W / TP sub-block).
+# Every matmul HiFi4 + fp32 accumulation.
+#
+# Formats (plan.md "Weights"): routed experts stay in the checkpoint's own bytes on the device (packed e2m1 [out, in/2]
+# + e8m0 scale [out, in/32], uint8, 0.53 B per value) and are decoded exactly inside the expert op: bfp8 is exact too
+# (measured) but needs 1.06 B per value, which neither this run's box (26.9 GiB of experts per chip for 8 layers) nor
+# the deployment box (33.6 GiB) holds. Other fp8 weights are dequantized at load to bf16 (exact); their ue8m0 scales
+# are folded in and are counted as uint8 only because the check rejects `skip` on decoder-layer tensors (< 1 MB).
+headroom_frac: 0.15
+users: 1                          # max_slots 1 at 1M on the deployment box (serving_contract.md owner question 3)
+
+roles:
+  sequence: [0]                   # SP: row r holds W = chunk / rows contiguous tokens of the chunk
+  heads: [1]                      # TP: query heads (wq_b), wo_a groups (whole groups of 8 heads per chip)
+  hidden: [1]                     # TP: hidden split of the residual, norms, mHC projection, K-split matmuls, shared expert
+  experts: [0, 1]                 # EP over every chip
+  kv_records: [0, 1]              # served window / compressed KV records: row by position, TP-dedup by W / TP sub-block
+  vocab: [0, 1]                   # LM head rows over every chip
+
+placements:
+  # --- not part of the text decoder (owner rule)
+  - {pattern: "vision.*", placement: skip, why: "vision encoder (owner rule: text decoder only)"}
+  - {pattern: "aligner.*", placement: skip, why: "vision aligner (owner rule)"}
+  - {pattern: "image_*", placement: skip, why: "image tokens (owner rule)"}
+  - {pattern: "mtp.*", placement: skip, why: "DSpark / MTP draft layers (owner rule)"}
+
+  # --- engram tables (layers 1, 14; 98 GB fp8 + 3 GB scales each): host only, memory-mapped from the checkpoint files,
+  #     their rows sent per chunk as an input (owner rule; placement host, F66).
+  - {pattern: "layers.*.engram.embed.*", placement: host, dtype: uint8, why: "host-resident engram tables (owner rule), never on the device"}
+
+  # --- model level
+  - {pattern: "embed.weight", placement: split, over: hidden, dtype: bf16, group: embedding (hidden split over TP)}
+  - {pattern: "head.weight", placement: split, over: vocab, dtype: bf16, group: LM head (vocab over every chip)}
+  - {pattern: "norm.weight", placement: replicate, dtype: bf16, group: "norms, sinks, small vectors"}
+
+  # --- routed experts: EP over every chip, the checkpoint's packed fp4 + e8m0 bytes (exact; decoded in the expert op)
+  - {pattern: "layers.*.ffn.experts.*", placement: split, over: experts, dtype: uint8, group: "routed experts (packed fp4 + e8m0, exact)"}
+
+  # --- router: weight bf16 as stored (the fp32 matmul reads it exactly), bias fp32; replicated, on the gathered
+  #     ffn_norm rows. bias_vl is the vision-token bias (counted, never loaded).
+  - {pattern: "layers.*.ffn.gate.weight", placement: replicate, dtype: bf16, group: router}
+  - {pattern: "layers.*.ffn.gate.*", placement: replicate, dtype: fp32, group: router}
+
+  # --- shared expert: TP by intermediate (w1 / w3 column-parallel, w2 row-parallel), fp8 -> bf16
+  - {pattern: "layers.*.ffn.shared_experts.*.weight", placement: split, over: hidden, dtype: bf16, group: shared expert (TP)}
+  - {pattern: "layers.*.ffn.shared_experts.*.scale", placement: split, over: hidden, dtype: uint8, group: folded fp8 scales}
+
+  # --- engram projection (layers 1, 14): wkv [6144 -> 5 x 5120] split by output, a quarter of each 5120 block per
+  #     column (the residual's hidden split); q / k weights [4, 5120] split with the hidden
+  - {pattern: "layers.*.engram.wkv.weight", placement: split, over: hidden, dtype: bf16, group: engram projection (TP)}
+  - {pattern: "layers.*.engram.wkv.scale", placement: split, over: hidden, dtype: uint8, group: folded fp8 scales}
+  - {pattern: "layers.*.engram.*_weight", placement: split, over: hidden, dtype: bf16, group: engram projection (TP)}
+
+  # --- mHC: projection columns split with the hidden (each chip its slice of every stream); base / scale replicated
+  - {pattern: "layers.*.hc_*_fn", placement: split, over: hidden, dtype: fp32, group: "mHC projection (fp32, TP)"}
+  - {pattern: "layers.*.hc_*", placement: replicate, dtype: fp32, group: "norms, sinks, small vectors"}
+
+  # --- indexer (8 index-source layers): wq_b replicated (all 32 heads on every chip; the query rows are split instead,
+  #     so the head sum is complete per chip); weights_proj K-split with the hidden; wk / k_norm replicated
+  - {pattern: "layers.*.attn.indexer.wq_b.weight", placement: replicate, dtype: bf16, group: indexer}
+  - {pattern: "layers.*.attn.indexer.wq_b.scale", placement: replicate, dtype: uint8, group: folded fp8 scales}
+  - {pattern: "layers.*.attn.indexer.weights_proj.weight", placement: split, over: hidden, dtype: bf16, group: indexer}
+  - {pattern: "layers.*.attn.indexer.*", placement: replicate, dtype: bf16, group: indexer}
+
+  # --- compressor (KV sources 2, 8, 14, 20): wkv / wgate K-split with the hidden (bf16 in the checkpoint)
+  - {pattern: "layers.*.attn.compressor.norm.weight", placement: replicate, dtype: bf16, group: "norms, sinks, small vectors"}
+  - {pattern: "layers.*.attn.compressor.*", placement: split, over: hidden, dtype: bf16, group: compressor (TP K-split)}
+
+  # --- attention: q_a / kv K-split with the hidden; wq_b by head; wo_a by group; wo_b K-split; fp8 -> bf16
+  - {pattern: "layers.*.attn.wq_b.weight", placement: split, over: heads, dtype: bf16, group: attention (TP)}
+  - {pattern: "layers.*.attn.wo_a.weight", placement: split, over: heads, dtype: bf16, group: attention (TP)}
+  - {pattern: "layers.*.attn.w*.weight", placement: split, over: hidden, dtype: bf16, group: attention (TP)}
+  - {pattern: "layers.*.attn.w*.scale", placement: split, over: hidden, dtype: uint8, group: folded fp8 scales}
+  - {pattern: "layers.*.attn.attn_sink", placement: replicate, dtype: fp32, group: "norms, sinks, small vectors"}
+
+  # --- per-layer norm weights (q_norm 1280, kv_norm 512 replicated; attn / ffn norms split with the hidden)
+  - {pattern: "layers.*.attn.*_norm.weight", placement: replicate, dtype: bf16, group: "norms, sinks, small vectors"}
+  - {pattern: "layers.*_norm.weight", placement: split, over: hidden, dtype: bf16, group: "norms, sinks, small vectors"}
+
+state:
+  # Served caches (serving_contract.md "KV cache"): bf16 ROW_MAJOR, one ND shard per 32-token record. Window KV of
+  # every position, every layer, records over every chip (row by position, TP-dedup by sub-block).
+  - {layers: "0-39", what: "window KV, served 0_window_kv (every position, TP-dedup)", heads: 1, head_dim: 512, tensors: 1, dtype: bf16, split_seq: kv_records}
+  # KV sources: compressed latent served TP-dedup; index keys TP-replicated: they are also the ring indexer's
+  # block-cyclic key cache, which each column's SP ring reads whole.
+  - {layers: "2,8,14", what: "compressed KV r2, served 1_compress_kv_r2 (TP-dedup)", heads: 1, head_dim: 512, tensors: 1, dtype: bf16, seq_stride: 2, split_seq: kv_records}
+  - {layers: "2,8,14", what: "index keys r2, served 2_index_k_r2 (ring indexer cache, TP-replicated)", heads: 1, head_dim: 128, tensors: 1, dtype: bf16, seq_stride: 2, split_seq: sequence}
+  - {layers: "20", what: "compressed KV r1, served 3_compress_kv_r1 (TP-dedup)", heads: 1, head_dim: 512, tensors: 1, dtype: bf16, split_seq: kv_records}
+  - {layers: "20", what: "index keys r1, served 4_index_k_r1 (ring indexer cache, TP-replicated)", heads: 1, head_dim: 128, tensors: 1, dtype: bf16, split_seq: sequence}
+  # The sparse-attention table: sparse_sdpa reads arbitrary rows of ONE tensor, and the top-k may name any earlier
+  # group, so every chip needs all of a KV source's compressed rows. One persistent buffer, sized for the largest
+  # source (layer 20, ratio 1), refilled once per chunk per source group (layers 2-7, 8-13, 14-19, 20-39) by an
+  # all_gather of the served rows over the mesh, plus the current layer's window region (in extra below).
+  - {layers: "20", what: "sparse-attention table, one source group at a time (replicated)", heads: 1, head_dim: 512, tensors: 1, dtype: bf16, replicated: true}
+  # Ratio-2 sources: the unfinished group (only after an odd actual_end; zero at every chunk start), fp32 [kv; score].
+  - {layers: "2,8,14", what: "compressor partial group [2, 2, 512] fp32", heads: 1, head_dim: 2048, tensors: 1, dtype: fp32, per_token: false, kv_heads: 1}
+  # topk_idx / candidates by position (spec state; DS41-2) are kept only for the ladder's state check (Setting
+  # index_history, off when serving): 0.2 GiB per chip at this run's 56k, inside quietbox_2x2's activations below.
+
+extra_gb_per_chip:
+  # Built once at load, sliced on device per chunk: RoPE cos / sin of the fp32 angles the reference uses, by absolute
+  # position up to max_seq, for both rope types (2 types x 2 x 1M x 32 fp32 = 0.5 GiB at 1M, replicated).
+  rope tables: 0.5
+  # The sparse-attention table's window region (128-row carry + one chunk of window KV gathered over SP, 8 MB at
+  # chunk 8192), index-list constants, position / owner tables (cache writes, input un-reshuffle), the candidate pin
+  # table, mHC constants, dispatch tables, CCL scratch and program-cache slack.
+  window region, index and position tables, dispatch tables, CCL scratch: 0.45
+
+# Peak transient for one chunk on the deployment box (8192 tokens, 2048 rows per chip). Residual 4 fp32 streams
+# [2048, 4 x 1280] = 42 MB per copy, ~5 live (0.2 GB). Attention: q [2048, 16 x 512] fp32 67 MB, its head->seq reshard
+# copy, RoPE temporaries, sparse_sdpa out, wo_b partial [2048, 5120] fp32 42 MB (0.4 GB). Indexer at 1M (ratio 1):
+# scores [query block of 128, 1M keys] bf16 256 MB plus mask / candidate temporaries (0.6 GB). MoE: gathered ffn_norm
+# fp32 + q(x) bf16 (63 MB), dispatch buffer (~4 x the mean 3072 rows x 5120 bf16, 126 MB), one expert's decoded
+# weights and intermediates (0.1 GB), combine [2048, 6, 5120] bf16 (126 MB) (0.5 GB). Engram rows + projection (80 MB).
+# ~2.0 GB, x1.5.
+activations_gb_per_chip: 3.0
+
+boxes:
+  # Deployment: 1M tokens on 16 chips does not fit with bf16 dense weights (28.4 GiB of a 27.2 GiB budget). bfp8 for
+  # the fp8 dense weights (attention, shared expert, engram projection) saves 1.5 GiB and changes 10 % of their values
+  # by one bfp8 step (rel. Frobenius error 3.5e-3, measured; plan.md "Weights"): owner decision (owner question 1).
+  galaxy_4x4:
+    dtypes:
+      "layers.*.attn.w*.weight": bfp8
+      "layers.*.ffn.shared_experts.*.weight": bfp8
+      "layers.*.engram.wkv.weight": bfp8
+  # This run's box at real size (2560 rows per chip at chunk 5120, 4096 at the s16384 rung's 8192): residual
+  # [4096, 4 x 2560] fp32 168 MB per copy, q [4096, 32 x 512] fp32 268 MB, combine [4096, 6, 5120] bf16 252 MB, column
+  # groups of 192 experts (3 copies per token per group), the top-k / candidate history (0.2 GiB). ~3 GB at chunk 8192,
+  # x2.
+  quietbox_2x2:
+    activations_gb_per_chip: 6.0
+  loudbox_2x4:
+    activations_gb_per_chip: 4.0
+
+conditions:
+  - {what: "query rows per chip after the head->seq reshard (sparse_sdpa; indexer TP sub-shard): tile rows", total: "chunk", over: kv_records, multiple_of: 32, else: "pad the chunk to a multiple of 32 x chips"}
+  - {what: "ratio-2 compressed rows per SP row per chunk (ring indexer block-cyclic chunk): tile rows", total: "chunk / 2", over: sequence, multiple_of: 32, else: "pad the chunk"}
+  - {what: "served-record sub-block per chip (W / TP tokens): whole 32-token records", total: "chunk", over: kv_records, multiple_of: 32, else: "TP-replicate the served caches"}
+  - {what: "routed experts per chip (dispatch regions, expert op): whole experts", total: 384, over: experts, min: 1, else: "pad the expert table"}
+  - {what: "wo_a output groups per chip (whole groups of 8 heads)", total: 8, over: heads, min: 1, else: "split wo_a by head inside a group"}

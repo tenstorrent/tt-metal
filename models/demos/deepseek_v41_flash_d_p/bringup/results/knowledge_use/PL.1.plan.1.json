@@ -1,0 +1,175 @@
+{
+ "used": [
+  {
+   "id": "K-60",
+   "how": "routed experts placed as uint8 on the packed checkpoint shape (the device keeps those exact bytes), so the gate counts the real bytes without a flat extra",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-63",
+   "how": "quoted every plan.yaml group value containing a comma (two groups had been split silently)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "all small fp32 exchanges feeding norms, quantizers or selections planned as all_gather + ttnn.add instead of all_reduce",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-31",
+   "how": "attention planned on ttnn.bringup.sparse_sdpa(high_precision) with a fork extension for the sink, which the fork refuses today",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-13",
+   "how": "indexer planned on ttnn.bringup.ring_indexer_score_dsa with fp32 DEST",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-14",
+   "how": "indexer k_chunk 32 in the plan",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-23",
+   "how": "router: bias only selects, SFPU fp32 add before ttnn.topk, unbiased weights",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-20",
+   "how": "mHC Sinkhorn mapped to deepseek_prefill.mhc_split_sinkhorn with the logit-cap and comb-orientation checks",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-12",
+   "how": "attn / ffn / final norms planned as composed distributed RMSNorm (xing40), not ttnn.rms_norm on fp32",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-72",
+   "how": "embedding clamps the uint32 ids with ttnn.minimum (vocab 129280 is not a power of two)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-4",
+   "how": "router boundary and candidate mask scatter planned in ROW_MAJOR",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-42",
+   "how": "indexer and candidate outputs planned as index sets (overlap + structure checks)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-43",
+   "how": "reader attention notes the swap_context hook for the source layer's state in single-block tests",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-25",
+   "how": "fp32 intermediates for the shared and routed experts' up projections",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-2",
+   "how": "experts entry notes counts / region offsets indexed by global expert id",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-79",
+   "how": "serving contract section keeps FABRIC_PAYLOAD_SIZE in [4352, 15232]",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-1",
+   "how": "plan puts the model's fp8 / fp4 quantizers on the device and warns component limits about rounding-boundary flips",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-2",
+   "how": "topk_idx / candidates by position kept only for the ladder state check (Setting index_history), not in the deployment memory",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-3",
+   "how": "collapse steps use the pending pre; the device keeps it as its own [S/SP, 4] tensor",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-5",
+   "how": "window KV served for every position (40 layers), TP-dedup to fit 1M",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-6",
+   "how": "serving section keeps the config names in table order",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-8",
+   "how": "runner smoke listed as a deployment-only check",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the F64 plan check has no placement for host-resident checkpoint tensors (engram tables): skip on a decoder-layer tensor is a plan error (DS41-9)",
+  "K-60's fix (a flat extra_gb_per_chip) cannot be right on every box once per-box dtypes or expert counts differ; placing packed weights with the dtype that reproduces the device bytes does",
+  "which block-float formats hold fp8 / fp4 checkpoint values exactly (bfp8 exact for e2m1 + e8m0 per 32, bfp4 not; bfp8 not exact for e4m3 dense weights, 3.5e-3 rel. error) (DS41-10)",
+  "tt-metal's MxFp4 format (544 B per tile, the checkpoint's exact layout) exists only for Quasar"
+ ],
+ "cited_only": [
+  "DS41-10",
+  "DS41-9",
+  "K-1",
+  "K-15",
+  "K-22",
+  "K-27",
+  "K-35",
+  "K-39"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PL.1",
+  "role": "plan",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T00:14:57",
+  "head": "596470c2370",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/components.yaml",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/plan.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/plan.yaml",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/PL.1.plan.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/plan_boxes.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/plan_memory.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/scaling.yaml"
+  ]
+ }
+}

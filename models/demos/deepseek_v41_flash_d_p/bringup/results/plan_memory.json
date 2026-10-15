@@ -1,0 +1,106 @@
+{
+ "errors": [],
+ "rows": [
+  {
+   "group": "routed experts (packed fp4 + e8m0, exact)",
+   "gb": 13.447265625
+  },
+  {
+   "group": "activations (planner estimate)",
+   "gb": 6.0
+  },
+  {
+   "group": "attention (TP)",
+   "gb": 0.943359375
+  },
+  {
+   "group": "embedding (hidden split over TP)",
+   "gb": 0.616455078125
+  },
+  {
+   "group": "extra: rope tables",
+   "gb": 0.5
+  },
+  {
+   "group": "extra: window region, index and position tables, dispatch tables, CCL scratch",
+   "gb": 0.45
+  },
+  {
+   "group": "LM head (vocab over every chip)",
+   "gb": 0.3082275390625
+  },
+  {
+   "group": "engram projection (TP)",
+   "gb": 0.2930450439453125
+  },
+  {
+   "group": "shared expert (TP)",
+   "gb": 0.263671875
+  },
+  {
+   "group": "state: window KV, served 0_window_kv (every position, TP-dedup) layers 0-39",
+   "gb": 0.107421875
+  },
+  {
+   "group": "state: sparse-attention table, one source group at a time (replicated) layers 20",
+   "gb": 0.0537109375
+  },
+  {
+   "group": "indexer",
+   "gb": 0.040039777755737305
+  },
+  {
+   "group": "router",
+   "gb": 0.02931976318359375
+  },
+  {
+   "group": "mHC projection (fp32, TP)",
+   "gb": 0.0146484375
+  },
+  {
+   "group": "state: compressed KV r2, served 1_compress_kv_r2 (TP-dedup) layers 2,8,14",
+   "gb": 0.013427734375
+  },
+  {
+   "group": "state: compressed KV r1, served 3_compress_kv_r1 (TP-dedup) layers 20",
+   "gb": 0.013427734375
+  },
+  {
+   "group": "compressor (TP K-split)",
+   "gb": 0.01220703125
+  },
+  {
+   "group": "state: index keys r2, served 2_index_k_r2 (ring indexer cache, TP-replicated) layers 2,8,14",
+   "gb": 0.0067138671875
+  },
+  {
+   "group": "state: index keys r1, served 4_index_k_r1 (ring indexer cache, TP-replicated) layers 20",
+   "gb": 0.0067138671875
+  },
+  {
+   "group": "folded fp8 scales",
+   "gb": 0.000751495361328125
+  },
+  {
+   "group": "norms, sinks, small vectors",
+   "gb": 0.0001189112663269043
+  },
+  {
+   "group": "state: compressor partial group [2, 2, 512] fp32 layers 2,8,14",
+   "gb": 1.52587890625e-05
+  }
+ ],
+ "total_gb": 23.12054122686386,
+ "host_gb": 188.8331327587366,
+ "capacity_gb": 32.0,
+ "budget_gb": 27.2,
+ "headroom_frac": 0.15,
+ "fits": true,
+ "tensors": 96085,
+ "mesh": [
+  2,
+  2
+ ],
+ "seq": 56320,
+ "users": 1
+}
