@@ -43,7 +43,9 @@ def _spatial_shapes_list(spatial_shapes):
     return [(int(h), int(w)) for h, w in spatial_shapes.tolist()]
 
 
-def multi_scale_deformable_attn_fused(value, reference_points, sampling_offsets, attention_weights, spatial_shapes):
+def multi_scale_deformable_attn_fused(
+    value, reference_points, sampling_offsets, attention_weights, spatial_shapes, num_valid_queries=None
+):
     """Core multi-scale deformable attention, as one device op.
 
     Computes, for each (b, q, h), with ``r(l, p) = p % R`` (BEVFormer's z-anchor
@@ -61,6 +63,9 @@ def multi_scale_deformable_attn_fused(value, reference_points, sampling_offsets,
             ``/ [W_l, H_l]`` normalization itself.
         attention_weights: (bs, num_queries, num_heads, num_levels*num_points) ROW_MAJOR
         spatial_shapes: torch (num_levels, 2) of (H, W)
+        num_valid_queries: optional per-batch count of rows to compute. Rows past it are left
+            unwritten and may hold NaN or Inf, so the caller must drop them with a select
+            (``ttnn.where``), not by multiplying with a mask.
 
     Returns:
         (bs, num_queries, num_heads*head_dim) ROW_MAJOR -- the heads are already
@@ -80,6 +85,7 @@ def multi_scale_deformable_attn_fused(value, reference_points, sampling_offsets,
         attention_weights,
         _spatial_shapes_list(spatial_shapes),
         reference_mode="pillar",
+        num_valid_queries=list(num_valid_queries) if num_valid_queries else None,
     )
 
     if use_signpost:
@@ -156,6 +162,7 @@ class TTMSDeformableAttention:
         query_pos=None,
         key_padding_mask=None,
         reference_points=None,
+        num_valid_queries=None,
         **kwargs,
     ):
         """
@@ -168,6 +175,8 @@ class TTMSDeformableAttention:
             query_pos: [bs, num_queries, embed_dims] Query positional encoding
             key_padding_mask: [bs, num_keys] Padding mask for keys
             reference_points: [bs, num_queries, num_points_in_pillar, 2] Reference points
+            num_valid_queries: Optional per-batch count of rows to compute. Rows past it are left
+                unwritten and may hold NaN or Inf; drop them with ``ttnn.where``.
 
         Returns:
             output: [bs, num_queries, embed_dims]
@@ -256,6 +265,7 @@ class TTMSDeformableAttention:
             sampling_offsets=sampling_offsets,
             attention_weights=attention_weights,
             spatial_shapes=self.spatial_shapes,
+            num_valid_queries=num_valid_queries,
         )
 
         if ENABLE_LOGGING:
