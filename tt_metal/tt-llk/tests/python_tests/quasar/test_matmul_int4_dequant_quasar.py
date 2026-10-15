@@ -266,3 +266,25 @@ def test_matmul_int4_dequant_quasar(
     assert passed_test(
         golden_tensor, res_tensor, format.output_format
     ), "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(
+    format=[MATMUL_INT4_FORMATS[1]],
+    dest_sync_mode=[DestSync.Half],
+    matmul_dims=[(1, 1, 8, 4), (2, 2, 8, 2)],
+    register_format_hint=dequant_register_format_hints(),
+    loop_factor=[2, 3],
+)
+def test_matmul_int4_dequant_loops_quasar(
+    format, dest_sync_mode, matmul_dims, register_format_hint, loop_factor
+):
+    # Repeated passes exercise the TRISC2 <-> TRISC3 semaphore handshake around the s_a
+    # epilogue, which a single pass never re-arms. Each pass rewrites the same result.
+    test_matmul_int4_dequant_quasar(
+        format,
+        dest_sync_mode,
+        matmul_dims,
+        register_format_hint,
+        loop_factor=loop_factor,
+    )
