@@ -194,16 +194,24 @@ inline void launch(
     hexec::enqueue_tensix(*f.mesh, workload);
     // Start gate: every writer has published its nonce (warmed up), then the
     // host writes each one's start word.
-    bool all_ready = false;
+    // A writer that has published stays published, so each pass reads only the rest.
+    std::vector<bool> published(P, false);
+    uint32_t n_published = 0;
     const auto gate_deadline = std::chrono::steady_clock::now() + kGateTimeout;
-    while (!all_ready && std::chrono::steady_clock::now() < gate_deadline) {
-        all_ready = true;
-        for (uint32_t w = 0; w < P && all_ready; ++w) {
+    while (n_published < P && std::chrono::steady_clock::now() < gate_deadline) {
+        for (uint32_t w = 0; w < P; ++w) {
+            if (published[w]) {
+                continue;
+            }
             uint32_t ready = 0;
             cluster.read_core(&ready, sizeof(ready), cores[w], l1_base + TL.gate_offset);
-            all_ready = ready == writer_nonce(run_nonce, w);
+            if (ready == writer_nonce(run_nonce, w)) {
+                published[w] = true;
+                ++n_published;
+            }
         }
     }
+    const bool all_ready = n_published == P;
     if (all_ready) {
         const auto t0 = std::chrono::steady_clock::now();
         for (uint32_t w = 0; w < P; ++w) {
