@@ -21,6 +21,7 @@
 // compile time exactly as production's constant-propagated dispatch does.
 // bf16 corr contract (Float16_b sweep row).
 #include <cstdint>
+#include <limits>
 
 #include "fresh_cpp/fresh_common.h"
 
@@ -35,18 +36,14 @@ __attribute__((noinline)) void calculate_elu_fresh_cpp()
         const sfpi::vFloat x = sfpi::dst_reg[0];
         // Negative arm on all lanes (vector select below): the positive
         // lanes' expm1 value is never observed.
-        sfpi::vFloat r = fresh_expm1_cw(x);
-        v_if (x >= 0.0f)
+        const sfpi::vFloat em = fresh_expm1_cw(x);
+        // SFPU comparisons use a sign-magnitude total order: a positive NaN
+        // already fails x < 0, and only a negative NaN sorts below -inf, so
+        // NaNs of both signs keep their source value.
+        sfpi::vFloat r = x;
+        v_if (x < 0.0f && -std::numeric_limits<float>::infinity() <= x)
         {
-            r = x;
-        }
-        v_endif;
-        // SFPU comparisons use a sign-magnitude total order, so neither arm
-        // is an IEEE NaN propagation mechanism.  Preserve the source NaN
-        // explicitly (including its sign) for the whole-population contract.
-        v_if (sfpi::is_nan(x))
-        {
-            r = x;
+            r = em;
         }
         v_endif;
         // bf16 destination: round to nearest-even before the store truncates.
