@@ -27,4 +27,27 @@ TEST(X280PllMhzFromEnv, DefaultsTo1750AndRefusesAnUnsupportedValue) {
     }
 }
 
+TEST(X280RuntimeOpenConfig, NeverPrimesAndPinsThePreparedProfileExactly) {
+    using x280::harness::session::OpenConfig;
+    using x280::harness::session::runtime_open_config;
+    const x280::LimShape prepared{.lim_ways = x280::kPreparedLimWays};
+
+    const auto plain = runtime_open_config(OpenConfig{});
+    EXPECT_EQ(plain.priming_policy, x280::LimEccPrimingPolicy::RequirePrepared);
+    EXPECT_EQ(plain.lim_shape, x280::LimShape{});
+    EXPECT_EQ(plain.shape_change_policy, x280::LimShapeChangePolicy::ApplyWhileReset);
+    EXPECT_EQ(plain.lim_layout, x280::LimLayout::Legacy);
+
+    const auto suite = runtime_open_config(OpenConfig{.prepared_suite_requested = true});
+    EXPECT_EQ(suite.priming_policy, x280::LimEccPrimingPolicy::RequirePrepared);
+    EXPECT_EQ(suite.lim_shape, prepared);
+    EXPECT_EQ(suite.shape_change_policy, x280::LimShapeChangePolicy::RequireExact);
+
+    const auto injection = runtime_open_config(OpenConfig{.lim_layout = x280::LimLayout::PacketInjection});
+    EXPECT_EQ(injection.priming_policy, x280::LimEccPrimingPolicy::RequirePrepared);
+    EXPECT_EQ(injection.lim_shape, prepared);
+    EXPECT_EQ(injection.shape_change_policy, x280::LimShapeChangePolicy::RequireExact);
+    EXPECT_EQ(injection.lim_layout, x280::LimLayout::PacketInjection);
+}
+
 }  // namespace

@@ -502,7 +502,7 @@ _x280_device_test(x280_bench_device_tests
 )
 # Its two offline suites need no device: the PLL knob and the DRISC endpoint choice against the
 # Blackhole SoC descriptor under Metal's runtime root.
-_x280_gtest_ctest(x280_bench_device_offline x280_bench_device_tests "X280PllMhzFromEnv.*:MetalTargetOffline.*"
+_x280_gtest_ctest(x280_bench_device_offline x280_bench_device_tests "X280PllMhzFromEnv.*:X280RuntimeOpenConfig.*:MetalTargetOffline.*"
     ENV "TT_METAL_RUNTIME_ROOT=${PROJECT_SOURCE_DIR}"
 )
 
