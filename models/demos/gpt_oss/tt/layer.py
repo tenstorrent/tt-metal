@@ -203,8 +203,8 @@ class DecoderLayer:
         rows + all_gather) and then runs the residual add and the next RMSNorm on all S rows on every device. Here
         each all-reduce stops after its reduce-scatter, the add and the norm run on the local S / TP rows, and the
         all-gather moves the normed rows instead (the next projection needs all S rows). The input norm output is
-        bf8 as before (same bytes as the all-reduce's gather); the post-attention norm output is bf16, so that gather
-        moves twice the bytes. Every row goes through the same ops in the same dtypes as the replicated path."""
+        bf8 as before (same bytes as the all-reduce's gather). After the post-attention norm the router runs on the
+        local rows and the experts' input is gathered as bf8 (MLP.prefill_sequence_parallel)."""
         cluster_axis = self.self_attn.mesh_config.tp_axis
         if residual.shape[-2] * self.self_attn.mesh_config.tp > 32 * 1024:
             # As in __call__: reallocate the residual to limit DRAM fragmentation on long prefills.
@@ -232,10 +232,8 @@ class DecoderLayer:
         residual.deallocate(True)
         residual = hidden
         x = self.post_attention_layernorm(residual)
-        x_full = ttnn.all_gather(x, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        moe_rows = self.mlp.prefill_sequence_parallel(x, cluster_axis)
         x.deallocate(True)
-        moe_rows = self.mlp(x_full, is_decode=False, sequence_parallel=True)
-        x_full.deallocate(True)
         hidden = ttnn.add(residual, moe_rows, output_tensor=moe_rows)
         residual.deallocate(True)
         return hidden

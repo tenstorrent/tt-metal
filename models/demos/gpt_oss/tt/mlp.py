@@ -198,22 +198,43 @@ class MLP:
         """Whether a prefill input of this shape takes the routed experts (else the dense prefill path)."""
         return self.routed_prefill is not None and self.routed_prefill.supports(shape)
 
-    def __call__(self, hidden_states, is_decode, sequence_parallel=False):
+    def prefill_sequence_parallel(self, x_rows, cluster_axis):
+        """Routed MoE of a sequence-parallel prefill. x_rows: this device's S / N rows of the normed input
+        ([1, 1, S / N, H] bf16, device d holding rows d * S / N onward). Returns the reduce-scattered MoE output rows
+        [1, 1, S / N, H] (bf8).
+
+        The router is row-wise, so it runs on the local rows and only its top-k ids / weights ([S / N, k]) are
+        all-gathered. The experts need all S rows: those are gathered as bf8 (half the bytes of bf16); the expert op
+        packs its input to bf8 itself, so the experts see bf8 activations either way."""
+        idx_rows, w_rows = self.routed_router(x_rows, True)
+        n = x_rows.shape[-2]
+        k = idx_rows.shape[-1]
+
+        def gather_rows(t):
+            t4 = ttnn.reshape(t, (1, 1, n, k))
+            full = ttnn.all_gather(t4, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            t.deallocate(True)
+            return ttnn.reshape(full, (full.shape[-2], k))
+
+        expert_indices = gather_rows(idx_rows)
+        expert_weights = gather_rows(w_rows)
+        x8 = ttnn.typecast(x_rows, ttnn.bfloat8_b)
+        x_full = ttnn.all_gather(x8, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x8.deallocate(True)
+        assert self.routed_prefill_supports(x_full.shape), "SP prefill needs routed MoE"
+        out = self.routed_prefill(x_full, expert_indices, expert_weights, scatter=True)
+        x_full.deallocate(True)
+        ttnn.deallocate(expert_indices)
+        ttnn.deallocate(expert_weights)
+        return out
+
+    def __call__(self, hidden_states, is_decode):
         """Forward pass: route -> experts
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
-            sequence_parallel: prefill on the routed path only: return the output reduce-scattered over the
-                sequence ([1, 1, S / N, H] per device) instead of all-reduced
         Returns:
             Expert output tensor [batch, seq_len, hidden_size]
         """
-        if sequence_parallel:
-            assert not is_decode and self.routed_prefill_supports(hidden_states.shape), "SP prefill needs routed MoE"
-            expert_indices, expert_weights = self.routed_router(hidden_states, True)
-            expert_output = self.routed_prefill(hidden_states, expert_indices, expert_weights, scatter=True)
-            ttnn.deallocate(expert_indices)
-            ttnn.deallocate(expert_weights)
-            return expert_output
         if is_decode and self.indexed_decode:
             # Fused decode (fused_decode/stream.py): the router (top-k + softmax fused) and the experts read the flat
             # norm output of the layer boundary; the routed ids / weights live in shared buffers. Returns this
