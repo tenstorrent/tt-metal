@@ -1007,3 +1007,14 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   TT_DEVICE_TIMING_LOG). Writes runs/<run>/timing.json. Dashboard: "Where the time went" (teletext page 112).
 - Owner asked for a breakdown of device time vs LLM API time vs other (DeepSeek-V4.1 run1). Selftests:
   test_timing.py.
+
+## F71 (2026-10-15): the published dashboard stays current
+
+- Only an interactive Claude session can publish to claude.ai: a `claude -p` run (what the orchestrator starts) has no
+  Artifact tool (tested). So the orchestrator refreshes the local files (F69) and the overseer publishes.
+  `dashboard/links.py`: `<bringup_dir>/dashboard/links.yaml` keeps the links (every session publishes to the same
+  pages) and the last publish time (`set`, `published`, `show`); the watch wakes the overseer with DASHBOARD STALE when
+  the local files are more than 15 minutes newer than the last publish, also under --quiet-passes. The path check
+  ignores dashboard yaml too. Owner: "I want this built into the framework", not a per-session timer.
+- overseer.py CLI: `--tasks` / `--roles` repeat (action=append) instead of a greedy list that swallowed the note text.
+- Selftests: test_links.py.

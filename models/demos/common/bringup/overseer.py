@@ -183,9 +183,13 @@ def main(argv=None) -> int:
         p = sub.add_parser(name)
         p.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"))
         if name in ("note", "abort"):
-            p.add_argument("--tasks", nargs="+", help="task id globs (default: every task / the aborted task)")
+            p.add_argument(
+                "--tasks",
+                action="append",
+                help="a task id glob; repeat for more (default: every task / the aborted task)",
+            )
         if name == "note":
-            p.add_argument("--roles", nargs="+")
+            p.add_argument("--roles", action="append", help="a role; repeat for more")
             p.add_argument("text")
         if name == "close":
             p.add_argument("id")
