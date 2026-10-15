@@ -11,15 +11,16 @@ Options:
     --include-cb-content   Also read each CB's whole FIFO, as hex.
 
 Description:
-    Data provider for the circular buffers of running Tensix cores. get_circular_buffers(location)
-    reads a core's CBs once and caches them, one per CB of the program running on the core.
+    Data provider for the circular buffers of running Tensix cores, one per CB of the program running
+    on the core. get_circular_buffers(location) reads them, and get_cached_circular_buffers(location)
+    reads them once and returns the same list after.
 
 Owner:
     onenezicTT
 """
 
-import threading
 from dataclasses import dataclass
+from functools import cache
 
 from dispatcher_data import DispatcherData, run as get_dispatcher_data
 from triage import ScriptConfig, hex_serializer, run_script, triage_field, triage_singleton
@@ -56,87 +57,81 @@ class CircularBufferData:
     content: str | None = triage_field("Content", verbose=2)  # whole FIFO as hex, only with --include-cb-content
 
 
-def read_local_cbs(
-    location: OnChipCoordinate, kernel_config, config_base: int, arch: Arch, dump_content: bool
-) -> list[CircularBufferData]:
-    num_cbs, received_reg, acked_reg = arch
-    mask = int(kernel_config.local_cb_mask)
-    base = config_base + int(kernel_config.local_cb_offset)
-    cbs = []
-    for cb in range(num_cbs):
-        if not mask >> cb & 1:
-            continue
-        address, size, pages, page_size = read_words_from_device(location, base + 16 * cb, word_count=4)
-        stream = STREAM_REG_BASE + STREAM_REG_STRIDE * cb
-        pushed = read_word_from_device(location, stream + 4 * received_reg)
-        popped = read_word_from_device(location, stream + 4 * acked_reg)
-        occupancy = (pushed - popped) & 0xFFFF
-        content = read_from_device(location, address, num_bytes=size).hex() if dump_content else None
-        cbs.append(CircularBufferData(cb, "local", address, size, page_size, pages, pushed, popped, occupancy, content))
-    return cbs
-
-
-def read_remote_cbs(
-    location: OnChipCoordinate, kernel_config, config_base: int, arch: Arch, dump_content: bool
-) -> list[CircularBufferData]:
-    num_cbs = arch[0]
-    base = config_base + int(kernel_config.remote_cb_offset)
-    cbs = []
-    for cb in range(int(kernel_config.min_remote_cb_start_index), num_cbs):
-        # Remote configs are laid out from the last CB index down.
-        config_addr, page_size = read_words_from_device(location, base + 8 * (num_cbs - 1 - cb), word_count=2)
-        if config_addr == 0:
-            continue
-        is_sender, num_receivers, address, size, _, _, counters, _ = read_words_from_device(
-            location, config_addr, word_count=8
-        )
-        # A sender has a counter pair per receiver, a receiver only its own; keep the one furthest behind.
-        slots = num_receivers if is_sender else 1
-        sent_addrs = [counters + 2 * L1_ALIGNMENT * i for i in range(slots)]  # pages_acked is one L1_ALIGNMENT later
-        pairs = [
-            (read_word_from_device(location, a), read_word_from_device(location, a + L1_ALIGNMENT)) for a in sent_addrs
-        ]
-        sent, acked = max(pairs, key=lambda pair: (pair[0] - pair[1]) & 0xFFFFFFFF)
-        units = page_size // L1_ALIGNMENT  # counter units per page
-        pushed, popped = sent // units, acked // units
-        occupancy = ((sent - acked) & 0xFFFFFFFF) // units
-        kind = "global sender" if is_sender else "global receiver"
-        pages = size // page_size
-        content = read_from_device(location, address, num_bytes=size).hex() if dump_content and not is_sender else None
-        cbs.append(CircularBufferData(cb, kind, address, size, page_size, pages, pushed, popped, occupancy, content))
-    return cbs
-
-
-def read_core(
-    location: OnChipCoordinate, dispatcher_data: DispatcherData, dump_content: bool
-) -> list[CircularBufferData]:
-    arch = WORMHOLE if location.device.is_wormhole() else BLACKHOLE if location.device.is_blackhole() else None
-    if arch is None:
-        return []
-    core = dispatcher_data.get_cached_core_data(RiscLocation(location, None, "brisc"))
-    if core.go_message == "DONE" or core.mailboxes is None:
-        return []
-    kernel_config = core.mailboxes.launch[core.launch_msg_rd_ptr].kernel_config
-    if int(kernel_config.enables) == 0:
-        return []
-    cbs = read_local_cbs(location, kernel_config, core.kernel_config_base, arch, dump_content)
-    return cbs + read_remote_cbs(location, kernel_config, core.kernel_config_base, arch, dump_content)
-
-
 class CircularBufferProvider:
-    def __init__(self, dispatcher_data: DispatcherData, dump_content: bool):
+    def __init__(self, dispatcher_data: DispatcherData, include_content: bool):
         self.dispatcher_data = dispatcher_data
-        self.dump_content = dump_content
-        self._cache: dict[OnChipCoordinate, list[CircularBufferData]] = {}
-        self._lock = threading.Lock()
+        self.include_content = include_content
+
+    @cache
+    def get_cached_circular_buffers(self, location: OnChipCoordinate) -> list[CircularBufferData]:
+        return self.get_circular_buffers(location)
 
     def get_circular_buffers(self, location: OnChipCoordinate) -> list[CircularBufferData]:
-        with self._lock:
-            if location in self._cache:
-                return self._cache[location]
-        cbs = read_core(location, self.dispatcher_data, self.dump_content)
-        with self._lock:
-            self._cache[location] = cbs
+        arch = WORMHOLE if location.device.is_wormhole() else BLACKHOLE if location.device.is_blackhole() else None
+        if arch is None:
+            return []
+        core = self.dispatcher_data.get_cached_core_data(RiscLocation(location, None, "brisc"))
+        if core.go_message == "DONE" or core.mailboxes is None:
+            return []
+        kernel_config = core.mailboxes.launch[core.launch_msg_rd_ptr].kernel_config
+        if int(kernel_config.enables) == 0:
+            return []
+        cbs = self._read_local_cbs(location, kernel_config, core.kernel_config_base, arch)
+        return cbs + self._read_remote_cbs(location, kernel_config, core.kernel_config_base, arch)
+
+    def _read_local_cbs(
+        self, location: OnChipCoordinate, kernel_config, config_base: int, arch: Arch
+    ) -> list[CircularBufferData]:
+        num_cbs, received_reg, acked_reg = arch
+        mask = int(kernel_config.local_cb_mask)
+        base = config_base + int(kernel_config.local_cb_offset)
+        cbs = []
+        for cb in range(num_cbs):
+            if not mask >> cb & 1:
+                continue
+            address, size, pages, page_size = read_words_from_device(location, base + 16 * cb, word_count=4)
+            stream = STREAM_REG_BASE + STREAM_REG_STRIDE * cb
+            pushed = read_word_from_device(location, stream + 4 * received_reg)
+            popped = read_word_from_device(location, stream + 4 * acked_reg)
+            occupancy = (pushed - popped) & 0xFFFF
+            content = read_from_device(location, address, num_bytes=size).hex() if self.include_content else None
+            cbs.append(
+                CircularBufferData(cb, "local", address, size, page_size, pages, pushed, popped, occupancy, content)
+            )
+        return cbs
+
+    def _read_remote_cbs(
+        self, location: OnChipCoordinate, kernel_config, config_base: int, arch: Arch
+    ) -> list[CircularBufferData]:
+        num_cbs = arch[0]
+        base = config_base + int(kernel_config.remote_cb_offset)
+        cbs = []
+        for cb in range(int(kernel_config.min_remote_cb_start_index), num_cbs):
+            # Remote configs are laid out from the last CB index down.
+            config_addr, page_size = read_words_from_device(location, base + 8 * (num_cbs - 1 - cb), word_count=2)
+            if config_addr == 0:
+                continue
+            is_sender, num_receivers, address, size, _, _, counters, _ = read_words_from_device(
+                location, config_addr, word_count=8
+            )
+            # A sender has a counter pair per receiver, a receiver only its own; keep the one furthest behind.
+            slots = num_receivers if is_sender else 1
+            sent_addrs = [counters + 2 * L1_ALIGNMENT * i for i in range(slots)]
+            pairs = [
+                (read_word_from_device(location, a), read_word_from_device(location, a + L1_ALIGNMENT))  # sent, acked
+                for a in sent_addrs
+            ]
+            sent, acked = max(pairs, key=lambda pair: (pair[0] - pair[1]) & 0xFFFFFFFF)
+            units = page_size // L1_ALIGNMENT  # counter units per page
+            pushed, popped = sent // units, acked // units
+            occupancy = ((sent - acked) & 0xFFFFFFFF) // units
+            kind = "global sender" if is_sender else "global receiver"
+            pages = size // page_size
+            read_content = self.include_content and not is_sender
+            content = read_from_device(location, address, num_bytes=size).hex() if read_content else None
+            cbs.append(
+                CircularBufferData(cb, kind, address, size, page_size, pages, pushed, popped, occupancy, content)
+            )
         return cbs
 
 

@@ -41,7 +41,7 @@ script_config = ScriptConfig(
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     provider = get_circular_buffer_provider(args, context)
-    return run_checks.run_per_block_check(provider.get_circular_buffers, block_filter="tensix")
+    return run_checks.run_per_block_check(provider.get_cached_circular_buffers, block_filter="tensix")
 
 
 if __name__ == "__main__":

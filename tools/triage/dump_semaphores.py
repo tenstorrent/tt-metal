@@ -47,7 +47,9 @@ def shown_semaphores(
     location: OnChipCoordinate, provider: SemaphoreProvider, include_unchanged: bool
 ) -> list[SemaphoreData]:
     return [
-        s for s in provider.get_semaphores(location) if include_unchanged or s.kind == "program" or s.value != s.initial
+        s
+        for s in provider.get_cached_semaphores(location)
+        if include_unchanged or s.kind == "program" or s.value != s.initial
     ]
 
 
