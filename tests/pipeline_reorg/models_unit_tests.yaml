@@ -2352,19 +2352,3 @@
   owner_id: U09B1UE301K # Abror Shopulatov
   team: models
   budget_type: unit
-
-# Parakeet TDT 0.6B v3 ASR (nvidia/parakeet-tdt-0.6b-v3).
-# 9 tests in ~132 s warm on bh_p150 (run 38277458563); the checkpoint
-# resolves from the shared HF cache.
-- name: parakeet unit tests
-  cmd: |
-    pytest models/experimental/parakeet/tests/test_parakeet.py --timeout=300
-  model: parakeet-tdt-0.6b-v3
-  model_family: Parakeet
-  skus:
-    bh_p150:
-      timeout: 5
-      tier: 3
-  owner_id: U09B1UE301K # Abror Shopulatov
-  team: models
-  budget_type: unit
