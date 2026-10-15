@@ -586,6 +586,22 @@ V41CSA.forward = _source_forward
 # ``_entry_index`` (V4.1 pools each chip's rows, then gathers), A2 returns (y, top-k) -- the consumers' A2 islands read the
 # top-k from this island's persistent output -- and V4.1 exports from the states after the chunk (kv_export.py), so none of
 # V4-Flash's contract export prep runs in A2.
+def _a3_carry(attn, state, sliding_kv_g, next_carry, real_len: int) -> None:
+    """The epilogue's carry: A1's persistent next-carry (the last 128 rows of the full chunk), or -- a ragged FINAL chunk on the
+    islands (DS41F-0068, PREFILL_V41_A3_RAGGED) -- the slice of A1's gathered K rows ending at the real length, through the
+    carry index tabulated at alloc (one TILE step per real length, persistent) into a transient, so no host tensor and no new
+    persistent buffer is built after the captures. The export reads this carry as the window ring (kv_export.py)."""
+    seq_len = int(sliding_kv_g.shape[2])
+    if int(real_len) == seq_len:
+        ttnn.copy(next_carry, state.sliding_carry)  # NOT _update_in_place: next_carry is A1's persistent output
+        return
+    assert int(real_len) % ttnn.TILE_SIZE == 0 and int(real_len) >= attn.sliding_window, real_len
+    start, end = attn._carry_index[attn._carry_key(real_len)]
+    c = ttnn.slice(sliding_kv_g, start, end, slice_dim=2, num_devices=seq_len // attn.sliding_window)
+    ttnn.copy(c, state.sliding_carry)
+    ttnn.deallocate(c)
+
+
 def _source_traceable(self) -> bool:
     return A3 and self.sparse_path and self.fused_indexer
 
@@ -617,7 +633,7 @@ def _source_epilogue_chunk(self, state, outs, a2, export, real_len: int) -> None
     assert export is None, "V4.1 exports from the states after the chunk (kv_export.py)"
     state.entry_count += int(real_len) // self.compressor.compress_rate
     state.kv_actual += int(real_len)
-    ttnn.copy(outs[3], state.sliding_carry)  # NOT _update_in_place: outs[3] is A1's persistent output
+    _a3_carry(self, state, outs[2], outs[3], real_len)
     self.last_path = "A3"
     self.shared = dict(path="A3", idx=a2[1], state=state, entry_count=state.entry_count)
 
@@ -830,7 +846,7 @@ class V41CSAConsumer(_V41QStem, TtCSA):
         assert sh.get("path") == "A3", "a traced consumer chunk needs its source's traced chunk first"
         state.kv_actual += int(real_len)
         state.entry_count = sh["entry_count"]
-        ttnn.copy(outs[2], state.sliding_carry)
+        _a3_carry(self, state, outs[1], outs[2], real_len)
 
 
 def _kv_only(self, hidden_states, seq_len_actual=None, *, state):

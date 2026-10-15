@@ -31,6 +31,9 @@ from models.demos.deepseek_v3_d_p.tt.v4.hyper_connection import TtHyperConnectio
 from models.demos.deepseek_v3_d_p.tt.v4.trace_island import TraceIsland, copy_into
 
 from .attention import V41CSA, V41SWA, V41CSAConsumer
+
+# DS41F-0068: a ragged final chunk on the attention islands (default on with A3); 0 = eager attention for it
+A3_RAGGED = os.environ.get("PREFILL_V41_A3_RAGGED", "1") == "1"
 from .moe import build_v41_moe
 
 HC = M.HC
@@ -477,8 +480,14 @@ class V41PrefillBlock(LightweightModule):
     def _attn_islands_for(self, real_len: int):
         """(A1, A2, kwargs) when this chunk's attention replays its islands, else None (eager)."""
         isl = getattr(self, "_attn_islands", None)
-        if not isl or int(real_len) != self._island_chunk or not self.attn.trace_ready(self.state):
+        if not isl or not self.attn.trace_ready(self.state):
             return None
+        if int(real_len) != self._island_chunk:
+            # DS41F-0068: a ragged FINAL chunk replays the full-chunk islands too (the attention is causal: no real row reads a
+            # pad row; the cut mask hides pad-derived entries from real rows; the epilogue takes the carry at the real length).
+            # The export's hand-over boundary is 128-aligned (kv_export._carry_ring_block), so real_len is too.
+            if not (A3_RAGGED and int(real_len) % 128 == 0 and int(real_len) >= self.attn.sliding_window):
+                return None
         slot = int(getattr(self.state, "slot", 0))
         A1, A2, kw = isl[slot]
         for kv_b, b in self._a2_buckets.get(slot, ()):
