@@ -148,3 +148,18 @@
   owner_id: U088DBNUKGR # Evan Smal
   team: ttnn
   budget_type: e2e
+
+# CI probe: D2HStreamService runs only on Blackhole Galaxy.
+- id: bh-galaxy-d2h-stream-service
+  name: BH Galaxy D2H stream service tests
+  cmd: |
+    rc=0
+    pytest -v tests/ttnn/unit_tests/base_functionality/test_d2h_stream_service.py || rc=1
+    ./build/test/ttnn/unit_tests_ttnn_tensor --gtest_filter='D2HStreamServiceTest.*' || rc=1
+    exit $rc
+  skus:
+    bh_galaxy:
+      timeout: 30
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
+  budget_type: e2e
