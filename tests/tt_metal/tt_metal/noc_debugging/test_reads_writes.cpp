@@ -1073,7 +1073,7 @@ private:
         // start_debug_dump_thread() clears the stop flag, so the thread is live again after this.
         // Must cover EVERY device the thread originally covered (profiler_initializer.cpp launches it with all of
         // them): a device left out stops being drained, and later tests running on it see no events at all.
-        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(devices_);
+        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(tt::tt_metal::MetalContext::instance(), devices_);
     }
 
     std::vector<tt::tt_metal::IDevice*> devices_;

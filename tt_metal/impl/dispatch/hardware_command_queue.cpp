@@ -55,13 +55,8 @@ uint32_t HWCommandQueue::id() const { return this->id_; }
 
 SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager_; }
 
-void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
-    uint32_t num_dispatch_sems,
-    const vector_aligned<uint32_t>& noc_mcast_unicast_data,
-    ttsl::Span<const uint32_t> workers_per_sub_device) {
-    program_dispatch::set_num_worker_sems_on_dispatch(
-        this->manager_, id_, num_dispatch_sems, workers_per_sub_device);
-    program_dispatch::set_go_signal_noc_data_on_dispatch(noc_mcast_unicast_data, this->manager_, id_);
+void HWCommandQueue::set_dispatch_sems(uint32_t num_dispatch_sems, ttsl::Span<const uint32_t> workers_per_sub_device) {
+    program_dispatch::set_num_worker_sems_on_dispatch(this->manager_, id_, num_dispatch_sems, workers_per_sub_device);
 }
 
 Device* HWCommandQueue::device() { return this->device_; }
