@@ -8,10 +8,9 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -41,15 +40,14 @@ struct UnaryDeviceOperation {
     };
 
     struct ProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
 
-        // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses),
-        // since the hash excludes volume. See the .cpp.
-        static void override_runtime_arguments(
-            tt::tt_metal::Program& program,
+        // Cache-hit re-apply of all per-dispatch state (per-core args + tensor bindings, which also back the
+        // sharded-path DFB addresses), since the hash excludes volume. See the .cpp.
+        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output,
