@@ -17,6 +17,10 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
+  # SDPAProgramConfig.fp32_accumulation with an attention sink: ttsim rejects an unpack in that path
+  # (UnsupportedFunctionality: "tensix_unpacr: cfg_context_id=1"). Passes on wh_n300 and Blackhole hardware.
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_fp32_accumulation.py::test_prefill_fp32_accumulation_sink
+
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
@@ -30,6 +34,15 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
+
+  # SDPAProgramConfig.fp32_accumulation broadcasts FP32 per-row factors with the 32-bit unpack-to-dest column
+  # broadcast (llk_math_eltwise_unary_datacopy.h), whose SETDVALID ttsim rejects (UnsupportedFunctionality:
+  # "interaction between SETDVALID and implied src format is ill-specified"). The validation test still runs;
+  # the numeric tests pass on bh_p150b and wh_n300 hardware.
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_fp32_accumulation.py::test_paged_decode_fp32_accumulation
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_fp32_accumulation.py::test_unpaged_decode_fp32_accumulation
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_fp32_accumulation.py::test_chunked_prefill_fp32_accumulation
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_fp32_accumulation.py::test_prefill_fp32_accumulation
 
   # fp8 operands in tensix_elw_op (e.g. src_a_fmt=4 src_b_fmt=10) are not modeled by ttsim
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py

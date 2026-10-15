@@ -56,9 +56,13 @@ def test_chunked_prefill_fp32_accumulation(device, start_as_tensor):
 
 
 @pytest.mark.timeout(300)
-@pytest.mark.parametrize("use_sink", [False, True], ids=["no_sink", "sink"])
-def test_prefill_fp32_accumulation(device, use_sink):
-    run_prefill(device, 1024, 128, 128, use_sink, BOUND, 1.0)
+def test_prefill_fp32_accumulation(device):
+    run_prefill(device, 1024, 128, 128, False, BOUND, 1.0)
+
+
+@pytest.mark.timeout(300)
+def test_prefill_fp32_accumulation_sink(device):
+    run_prefill(device, 1024, 128, 128, True, BOUND, 1.0)
 
 
 @pytest.mark.timeout(120)
