@@ -21,3 +21,9 @@
   only vae.* (fix 63e54d98036 is on t48 only). The runner logged them as drops (chips=unknown) and blocked config
   t511-ltx25-e2e: cleared it. Wrote /var/tmp/fasth3/t511/vae/ltx-2.5-video-vae-conv-bf16-vaeprefix.safetensors on blx03
   (same 170 tensors + metadata, keys prefixed vae.), run511.sh points there. Queued t511-e2e-r2, t511-ab-r2.
+- 2026-10-15 08:45 PDT: r2 drops on blx03 tray 2, all our jobs, all during load/compile:
+  454 (06:05 PDT, chip 8), 473 (07:23 PDT, chips 8+12), 482 (08:28 PDT, chips 8-15; blx03 then rebooted ~08:35 PDT).
+  t511-e2e-r2 skipped on blx03 (config t511-ltx25-e2e dropped twice: 454, 473) -> pre-push e2e must run on another box
+  (g15blx02 or blx01 standard LTX e2e) once the A/B passes. t511-ab-r2 dropped once (482), but the runner logged 482 twice
+  (drop + broker-kill after the reboot) in configs/t511-ltx25-ab, which would skip it after one real drop: deduped to one line.
+  Runner (pid 12726) retries t511-ab-r2. If it drops again: skip blx03 for the A/B (weights exist only on blx03).
