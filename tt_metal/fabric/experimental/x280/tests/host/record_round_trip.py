@@ -493,6 +493,17 @@ EXPECTED = {
     },
     # 20000 packets, 4 in the first batch, over mtime 1000..3000000 at 50 MHz:
     # 19996 packets in 59.98 ms, 96 useful and 4192 slot bytes each.
+    ("eth_credit eth_credit", 0): {
+        "k1": "4",
+        "wall ticks": "2999000",
+        "ns": "59980000.000",
+        "window packets": "19996",
+        "ns/packet": "2999.600",
+        "Mpkt/s": "0.333",
+        "useful GB/s": "0.032",
+        "slot GB/s": "1.398",
+        "payload B": "4096",
+    },
     # The same window at E1 on a 1 GHz ERISC wall clock: 4096 payload bytes each.
     ("eth_credit eth_credit_hop", 0): {
         "wall ticks": "2999000",
@@ -502,9 +513,14 @@ EXPECTED = {
         "slot GB/s": "27.950",
         "400G Mpkt/s": "12.207",
     },
-    # The windows above at one shape, beside each other; the receive side's is
-    # the whole path's window again, and W2 and R1 count BATCH (4) packets per
-    # store of the same window.
+    # The same window at the sending forwarder, the NoC hop alone: k1 and the
+    # rates as above, the count from packets_out.
+    ("eth_credit eth_credit_leg", 1): {
+        "legs": "W1 W2 R3",
+        "k1": "4",
+        "window packets": "19996",
+        "ns/packet": "2999.600",
+    },
     # 1000 round trips over 250000 mtime ticks. Hop loop: W2 (8,3)->(6,1) on
     # NoC 0 is 15 + 10 links, W5 (14,1)->(8,3) on NoC 1 6 + 10, its ack 11 + 2,
     # R3 (6,1)->(8,3) on NoC 0 2 + 2: 58 links, 4 x 10 + 9 x 58 = 562 cycles at
@@ -527,6 +543,9 @@ EXPECTED = {
         "estimate 30 ns": "1054.286",
         "estimate 80 ns": "1361.429",
     },
+    # The windows above at one shape, beside each other; the receive side's is
+    # the whole path's window again, and W2 and R1 count BATCH (4) packets per
+    # store of the same window.
     # The hop loop above allows N_LINK (8) packets per 5000 ns round trip.
     ("eth_credit ceilings", 0): {
         "path Mpkt/s": "0.333",
@@ -540,25 +559,6 @@ EXPECTED = {
         "credit loop Mpkt/s": "1.600",
         "bound": "NoC hop",
         "path/bound": "1.000",
-    },
-    # The same window at the sending forwarder, the NoC hop alone: k1 and the
-    # rates as above, the count from packets_out.
-    ("eth_credit eth_credit_leg", 1): {
-        "legs": "W1 W2 R3",
-        "k1": "4",
-        "window packets": "19996",
-        "ns/packet": "2999.600",
-    },
-    ("eth_credit eth_credit", 0): {
-        "k1": "4",
-        "wall ticks": "2999000",
-        "ns": "59980000.000",
-        "window packets": "19996",
-        "ns/packet": "2999.600",
-        "Mpkt/s": "0.333",
-        "useful GB/s": "0.032",
-        "slot GB/s": "1.398",
-        "payload B": "4096",
     },
 }
 
