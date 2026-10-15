@@ -8,8 +8,21 @@
 #include <cstdint>
 #include <vector>
 
+/**
+ * @brief Pack four unsigned bytes into a word, with a in the least significant byte.
+ * @deprecated No replacement; remove calls to this API. Removal is scheduled 28 days after
+ *             this deprecation merges to main.
+ */
+[[deprecated(
+    "No replacement; remove calls to this API. Removal is scheduled 28 days after this deprecation merges to main.")]]
 uint32_t pack_four_uint8_into_uint32(uint8_t a, uint8_t b, uint8_t c, uint8_t d);
 
-// Generates num_bytes uint8 values from a uniform distribution, packed 4 per uint32.
-// Note: num_bytes must be divisible by 4.
+/**
+ * @brief Generate num_bytes random uint8 values, packed four per uint32.
+ * @pre num_bytes must be divisible by four.
+ * @deprecated No replacement; remove calls to this API. Removal is scheduled 28 days after
+ *             this deprecation merges to main.
+ */
+[[deprecated(
+    "No replacement; remove calls to this API. Removal is scheduled 28 days after this deprecation merges to main.")]]
 std::vector<uint32_t> create_random_vector_of_uint8(size_t num_bytes, int seed);
