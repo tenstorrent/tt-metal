@@ -117,7 +117,7 @@ def expected_mesh_partition_label(input_placements, dist_shape, dim, cluster_axi
     """Label ttnn.mesh_partition must produce for the N-D (ShardTensor2dMesh) inputs this file builds: Shard(dim) on
     the partitioned axis, the input's placement elsewhere, never a dim sharded on two mesh axes. Returns
     (distribution_shape, placements), or None when the op keeps the input label because the partitioned result has
-    no exact TensorTopology. Mirrors MeshPartitionDeviceOperation::compute_output_topologies rules 1 and 2."""
+    no exact TensorTopology. Mirrors the CCL topology helper's partition rules (mesh_partition_output_topology)."""
     num_devices = 1
     for size in dist_shape:
         num_devices *= size
@@ -132,6 +132,10 @@ def expected_mesh_partition_label(input_placements, dist_shape, dim, cluster_axi
     partitioned_axis_composes = isinstance(input_placements[cluster_axis], ttnn.PlacementReplicate) or (
         _placement_is_shard_of(input_placements[cluster_axis], dim)
     )
+    if not partitioned_axis_composes:
+        # The partitioned axis already shards another dim: each device keeps its chunk of that dim next to its new
+        # piece of `dim`, two dims on one axis, which no label states.
+        return None
     for axis, placement in enumerate(input_placements):
         if axis == cluster_axis or not _placement_is_shard_of(placement, dim):
             continue
@@ -302,7 +306,7 @@ def run_mesh_partition_test(
     output_placements = list(output_topology.placements())
     if expected is None:
         # Not expressible (a dim sharded on two axes that is not row-major hierarchical, or a whole-mesh partition of
-        # a tensor sharded on other dims): the op returns {} and launch() keeps the union default, i.e. the input
+        # a tensor sharded on other dims): the hook keeps the input
         # label, and logs a warning (documented fallback).
         assert output_topology == input_topology, f"{output_topology} != input {input_topology}"
     else:

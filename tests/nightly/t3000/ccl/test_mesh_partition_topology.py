@@ -16,7 +16,7 @@ unit-tested without devices in ``tests/ttnn/unit_tests/gtests/ccl/test_mesh_part
    shards ``dim``: a size-1 axis becomes ``Replicate`` (exact); an OUTER axis whose partitioned axis held
    ``Replicate`` or ``Shard(dim)`` collapses to ``{N}, [Shard(dim)]`` over the input's row-major coordinates
    (row-major hierarchical sharding, exact); anything else (inner axis, partitioned axis holding another Shard) is
-   not expressible and the output keeps the input label (union default) with a warning.
+   not expressible and the output keeps the input label with a warning.
 2. ``cluster_axis=None`` (whole mesh, devices linearised row-major): ``{N}, [Shard(dim)]`` over the input's
    coordinates when every non-trivial axis of the input is ``Replicate`` or ``Shard(dim)``; otherwise the input label.
    Exact for a replicated input; a ``Shard(dim)`` already on a non-trivial axis is overwritten and the label describes
@@ -78,8 +78,7 @@ def _assert_no_duplicate_shard_dims(output):
 
 
 def _assert_falls_back_to_input_label(output, input_tensor):
-    """Documented fallback: the partitioned result has no exact TensorTopology, so the op returns {} and launch()
-    keeps the union default, which for a single full-mesh input is the input's own label (same row-major coords)."""
+    """Documented fallback: the partitioned result has no exact TensorTopology, so the hook keeps the input's own label (same row-major coords)."""
     assert output.tensor_topology() == input_tensor.tensor_topology()
     _assert_no_duplicate_shard_dims(output)
 

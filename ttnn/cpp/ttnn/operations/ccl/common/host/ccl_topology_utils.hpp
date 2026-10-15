@@ -29,6 +29,12 @@
 // placement per mesh axis first, apply the op's edit on `cluster_axis`, then decide whether the result is still
 // expressible per axis or has to collapse back to a 1-D label.
 //
+// Coverage: the devices an op reaches are the mesh's, not the label's. A cluster-axis op spans the mesh's full extent
+// along that axis and a whole-mesh op every device, so a label that covers fewer devices along the axis addressed (a
+// (1, 4) row block on a 2x4 along axis 0, or over the whole mesh) is refused: the devices the label does not describe
+// take part and no label over the block can say what they hold. A block is gathered or scattered within itself only
+// along an axis it spans fully (the row along axis 1). This is mesh_partition's rule 0 (#58915) for the whole family.
+//
 // Failure handling: a label the helper cannot honour (a collapsed label that does not cover the mesh in row-major
 // order, an N-D label whose axes do not align with the mesh axes, a gather that would interleave shards, a result no
 // label can express) is a TT_FATAL when `ttnn::CONFIG.strict_ccl_topology` is set, and otherwise a log line (once per
@@ -188,10 +194,13 @@ std::optional<tt::tt_metal::TensorTopology> over_storage_ring_order(
 // non-trivial axis, and a scatter along an axis that itself holds a Shard of another dim (each device would hold a
 // piece of two dims on one axis), are refusals (reduce_scatter consumes both). A stale Shard dim left by a
 // rank-changing op (#52331) matches nothing, which the gather and reduce rules treat as harmless, but counts as a
-// Shard of another dim here, so a partition refuses it. No op in this change calls these two. mesh_partition keeps
-// its own inline hook (#58915), so mesh_partition_output_topology has no caller yet: it is the helper-side spelling
-// of the partition rules, should that hook ever move here. all_to_all_output_topology is what the stacked
-// experimental-CCL change calls for all_to_all_async and its fused variants, which is why both live here.
+// Shard of another dim here, so a partition refuses it. mesh_partition's hook calls mesh_partition_output_topology:
+// the inline rule table #58915 landed with (rules 0-5) lives here now, with the per-axis coverage rule above as its
+// rule 0. all_to_all_output_topology is what the stacked experimental-CCL change calls for all_to_all_async and its
+// fused variants, which is why both live here. The mesh_partition Tensor overload spells a whole-mesh label over the
+// storage's coordinates like reduce_scatter's (the program factory numbers devices row-major over the mesh, the
+// storage order of a tensor stored on every device); the all_to_all one returns the pure result, since those ops'
+// hooks handle their own ring order.
 std::optional<tt::tt_metal::TensorTopology> mesh_partition_output_topology(
     const tt::tt_metal::TensorTopology& in,
     std::optional<uint32_t> cluster_axis,
