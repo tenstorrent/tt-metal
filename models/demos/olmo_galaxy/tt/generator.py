@@ -405,6 +405,9 @@ class Generator(WarmupForwardMixin):
             # Sample using the sampling module
             # Logits are in sharded format (before all-gather), same as decode
             # sampling_params are already padded to 32 by format_sampling_params
+            # The prefill tail (final norm, lm_head, the logits concat above) is still in flight: switching modes reloads
+            # the sub-device manager and resets the CCL semaphores, which must not overlap it.
+            ttnn.synchronize_device(self.mesh_device)
             self.model.switch_mode("decode")
 
             # Setting sampling module up after switch to decode mode
@@ -445,8 +448,12 @@ class Generator(WarmupForwardMixin):
             # if prompt_tokens is not None:  # Guard for warmup
             sampling_module.reset_prompt_tokens(prefill_ids)
             sampling_module.reset_output_state()
-            sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
-            sampling_module.seed_manager.get_new_values(empty_slots)
+            if any(seed is not None for seed in (sampling_params.seed or [])):
+                # Explicit per-request seeds. Unseeded requests keep the device PRNG free-running: re-initialising it for
+                # every lane at each request join (reset_seed -> init -> skip) makes the decode samplers occasionally
+                # return a token outside the nucleus (a repeated word), measured as ~0.5-1 per 1000 words.
+                sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
+                sampling_module.seed_manager.get_new_values(empty_slots)
             tt_sampled, tt_log_probs = sampling_module.sample(
                 tt_logits_batch,
                 tt_out_tok=None,
@@ -458,6 +465,10 @@ class Generator(WarmupForwardMixin):
                 tt_sampled = tt_sampled[0]
 
             sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0]).to(torch.int32)
+            # Leave the model in prefill mode, as after any other prefill: the next decode call then re-enters decode mode
+            # itself (and reloads its inputs). Ending prefill in decode mode corrupts later decode steps.
+            ttnn.synchronize_device(self.mesh_device)
+            self.model.switch_mode("prefill")
 
             # sampled_tokens has 32 entries ordered by slot. Its rank depends on the sampling graph that ran
             # (argmax-only returns [1, 1, 32]), so flatten rather than index.

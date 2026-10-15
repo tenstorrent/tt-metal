@@ -103,3 +103,30 @@
   (scratchpad seq.py: sampled x6, greedy, sampled, top_k=0 host reference).
 - Server hit "device timeout in fetch queue wait" in prefill of a 24.6K prompt after ~1h40m uptime; a fresh server handled it.
 - Host state at end: chip 16 reads 0xffffffff over PCIe; `tt-smi -glx_reset` and `-r` fail. Needs host reboot / power cycle.
+
+## 2026-10-15 accuracy: device-sampled text had occasional repeated words (FIXED), long prompts corrupt (OPEN)
+Symptom: tt-inference-server `r1_aime24` smoke test 1/3; device-sampled completions contained doubled words ("a a brief",
+"with with history"), 0.5-2.6 per 1000 words, against 0 for host-sampled (`top_k=0`) and 0 in the demo. For every one of
+these the host reference gave the repeated token ~0 probability, so they were not legitimate tail samples.
+Ruled out (each measured): sampler probabilities (flat-context test vs the host's logprobs, TV 0.003, 0 tokens outside the
+nucleus); stale input tokens/positions (per-step device-buffer checks, 0 mismatches); k/top-p/temperature tensors on device
+(0 mismatches in 500+ steps); host/device reload mismatches; semaphore reset after prefill sampling; number of decode traces
+(1 vs 6: same rate); warmup order; forced input reload after prefill. Demo with the same sampling params and on-device first
+token sampling: 0 doubled words in 24.7K words, so it is not the model or the sampler kernel.
+Bisect of the on-device-first-token block in `Generator.prefill_forward_text` (OLMO_PS_SKIP, doubled words per 1000 words):
+  skip everything 0.00 | switch_mode only 2.68 | seed handling only 0.50 | params only 0.00 | mode+seed 4.5-7.6.
+Causes: (1) the block called `switch_mode("decode")` while the prefill tail was still in flight and left the model in decode
+mode; ending prefill in decode mode corrupts later decode steps (the host-sampled path then glitched too: 10.7/1000 words
+after device-sampled requests had run). (2) `seed_manager.reset_seed` + `get_new_values(empty_slots)` at every request join
+re-initialises the unseeded device PRNG for all lanes.
+Fix: synchronize before the switch; switch back to prefill mode after sampling (so the next decode re-enters decode mode itself);
+re-seed at prefill only when a request carries an explicit seed. Result on the fixed server: 0 doubled words in 42.5K words
+(device) and 42.9K words (host); explicit seeds repeat / differ correctly, greedy repeatable, penalties still work (hello
+fraction 1.00 -> 0.09), 96/96 mixed-config stress ok, 64 seeded concurrent requests 0 glitches. Scripts: `debug/serving/`.
+OPEN: prompts over 4096 tokens use the eager (untraced) prefill. Under vLLM the first request at a padded length is correct
+and later ones return garbage from the first token (also with the older generator, so not caused by the sampling work);
+`PREFILL PT` logging shows the first call had an ascending page table `[1,2,3,...]` and the second a descending one
+`[128,127,126,...]` (vLLM's free-block order). The demo repeats an 8K prefill 3x with a fixed table and is correct each time.
+Unresolved: page-table order vs stale cached program (a test with `mesh_device.clear_program_cache()` before each eager
+prefill was queued but the host lost chip 16 first). Each device hang/engine crash leaves chip 16 unrecoverable by
+`tt-smi -glx_reset`; it needed a power cycle.

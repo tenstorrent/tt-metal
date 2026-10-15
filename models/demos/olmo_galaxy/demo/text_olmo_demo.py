@@ -124,6 +124,9 @@ def run_olmo_demo(
     enable_trace = os.environ.get("OLMO_DECODE_TRACE", "1") == "1"
     if os.environ.get("OLMO_MAX_NEW"):  # debug: cap generated tokens for quick determinism bisects
         max_generated_tokens = int(os.environ["OLMO_MAX_NEW"])
+    num_batches = int(
+        os.environ.get("OLMO_REPEAT_BATCHES", num_batches)
+    )  # debug: repeat the batch to hit cached prefill
     prefill_enable_trace = True
     print_outputs = not is_ci_env
 
@@ -233,6 +236,12 @@ def run_olmo_demo(
         top_p = sampling_params["top_p"]
         seed = sampling_params.get("seed", 42)
         repetition_penalty = sampling_params.get("repetition_penalty", 1.0)
+        # Debug: OLMO_SAMPLE_T=<temp> samples with the model-card settings (top_p 0.95, top_k 32) instead of the config's;
+        # OLMO_SAMPLE_SEED=none leaves the lanes unseeded, like requests that carry no seed in the server.
+        if os.environ.get("OLMO_SAMPLE_T"):
+            temperature, top_p, top_k = float(os.environ["OLMO_SAMPLE_T"]), 0.95, 32
+            if os.environ.get("OLMO_SAMPLE_SEED") == "none":
+                seed = None
         device_sampling_params = SamplingParams(
             temperature=temperature,
             top_k=top_k,
@@ -463,6 +472,8 @@ def run_olmo_demo(
             )
         dump_path = os.environ.get("OLMO_DUMP_TOKENS")
         if dump_path:
+            if num_batches > 1:
+                dump_path = f"{dump_path}.b{batch_idx}"
             with open(dump_path, "w") as f:
                 json.dump(
                     {

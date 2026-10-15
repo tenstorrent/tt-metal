@@ -82,6 +82,14 @@ Long context through the server: needle retrieval passes at ~28K and ~57K prompt
 
 ## Known issues
 
+* **Prompts over 4096 tokens (eager prefill) are only correct on the first request at a padded length.** Later requests at
+  that length return garbage from the first token (observed at 8K and 16K, with the older generator too). The first call's
+  page table was ascending, the second's descending (vLLM's free-block order); the demo, with a fixed table, repeats an 8K
+  prefill correctly. Root cause not found yet; see `bringup/olmo3/LOG.md` (2026-10-15). Needle retrieval at 28K/57K above
+  was a first call per length. Until fixed, serve long prompts only after a server restart per length, or use shorter ones.
+* On-device first-token sampling must leave the model in prefill mode and must not re-seed unseeded lanes (see the same log
+  entry): doing either made device-sampled text contain repeated words (0.5-2.6 per 1000 words).
+
 * Batch-32 decode is not bit-reproducible run to run on the test host; localized to one chip's ring matmul
   (`bringup/olmo3/LOG.md`). The effect is ~1 bf16 ulp on one output column.
 * Async scheduling / speculative decoding / prefix caching are not supported.
