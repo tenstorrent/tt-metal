@@ -4537,16 +4537,18 @@ def test_ring_mla_kv_valid_end_matches_unclamped(
         tt_kv_valid_end = _make_ring_mla_scalar_tensor(mesh_device, logical_n)
 
         def run(kv_valid_end_tensor, kv=tt_kv):
+            persistent_kv = ttnn.from_torch(
+                torch.zeros(b, nhk, sp_size * cache_seq_per_dev, d_k),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            fence_persistent_buffers(mesh_device)
             tt_out, _ = ttnn.transformer.ring_mla(
                 tt_q,
                 kv,
-                persistent_output_buffer_kv=ttnn.from_torch(
-                    torch.zeros(b, nhk, sp_size * cache_seq_per_dev, d_k),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh_device,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                ),
+                persistent_output_buffer_kv=persistent_kv,
                 head_dim_v=d_v,
                 logical_n=logical_n,
                 is_balanced=False,
@@ -4582,6 +4584,108 @@ def test_ring_mla_kv_valid_end_matches_unclamped(
         assert (
             not passed_early
         ), f"kv_valid_end_tensor was ignored: an early valid end left the output unchanged, PCC={pcc_early}"
+
+        # A valid end outside (chunk start, padded end) keeps the padded end, so the output is bit-identical.
+        for fallback_end in sorted({0, kv_actual_isl, kv_actual_isl + 2 * chunk_size_global}):
+            fallback = run(_make_ring_mla_scalar_tensor(mesh_device, fallback_end))
+            assert torch.equal(unclamped, fallback), f"valid end {fallback_end} should fall back to the padded end"
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+@pytest.mark.parametrize(
+    "case, error",
+    [
+        ("no_metadata", "requires the slot_id / kv_actual_isl metadata path"),
+        ("wrong_dtype", "kv_valid_end_tensor must have UINT32 dtype"),
+        ("two_elements", "kv_valid_end_tensor must contain exactly one element"),
+        ("l1_buffer", "kv_valid_end_tensor must be stored in DRAM"),
+    ],
+)
+def test_ring_mla_kv_valid_end_rejects_invalid_use(case, error, expect_error):
+    """kv_valid_end_tensor is rejected on the host, before any value is read, unless it rides on the metadata
+    path and is a one-element UINT32 DRAM tensor. (Sliding window, the remaining rule, has no ring_mla
+    argument to reach it with.)"""
+    mesh_config = MESH_CONFIG
+    sp_size, tp_size = mesh_config.sp_size, mesh_config.tp_size
+    if sp_size < 2:
+        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={sp_size}")
+    chunk_local, nhk, d_k, d_v = 64, 1, 64, 32
+    chunk_global = chunk_local * sp_size
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    mesh_device = runtime.mesh_device
+    try:
+        mesh_shape = tuple(mesh_device.shape)
+
+        def zeros_on_mesh(shape, dims):
+            mapper = (
+                ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims)
+                if dims
+                else ttnn.ReplicateTensorToMesh(mesh_device)
+            )
+            return ttnn.from_torch(
+                torch.zeros(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
+            )
+
+        q_dims = [None, None]
+        q_dims[runtime.sp_axis] = 2
+        if tp_size > 1:
+            q_dims[runtime.tp_axis] = 1
+        kv_dims = [None, None]
+        kv_dims[runtime.sp_axis] = 2
+        tt_q = zeros_on_mesh((1, 4 * tp_size, chunk_global, d_k), q_dims)
+        tt_kv = zeros_on_mesh((1, nhk, 2 * chunk_global, d_k), kv_dims)
+        persistent_kv = zeros_on_mesh((1, nhk, 2 * chunk_global, d_k), None)
+        fence_persistent_buffers(mesh_device)
+
+        def scalar_tensor(values, dtype=ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+            return ttnn.from_torch(
+                torch.tensor(values, dtype=torch.int64).reshape(1, 1, 1, len(values)),
+                device=mesh_device,
+                dtype=dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=memory_config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+        valid_end = {
+            "no_metadata": lambda: scalar_tensor([chunk_global]),
+            "wrong_dtype": lambda: scalar_tensor([chunk_global], dtype=ttnn.int32),
+            "two_elements": lambda: scalar_tensor([chunk_global, chunk_global]),
+            "l1_buffer": lambda: scalar_tensor([chunk_global], memory_config=ttnn.L1_MEMORY_CONFIG),
+        }[case]()
+        if case == "no_metadata":
+            slot_kwargs = {"kv_cache_batch_idx": 0, "kv_actual_isl": 0}
+        else:
+            tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, slot_id=0, actual_start=0)
+            slot_kwargs = {"slot_id": tt_slot_id, "kv_actual_isl_tensor": tt_kv_actual_isl}
+        with expect_error(RuntimeError, error):
+            ttnn.transformer.ring_mla(
+                tt_q,
+                tt_kv,
+                persistent_output_buffer_kv=persistent_kv,
+                head_dim_v=d_v,
+                logical_n=chunk_global,
+                is_balanced=False,
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+                    q_chunk_size=32,
+                    k_chunk_size=32,
+                    exp_approx_mode=False,
+                ),
+                compute_kernel_config=runtime.compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                cluster_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                subdevice_id=runtime.worker_sub_device_id,
+                ccl_core_grid_offset=(runtime.ccl_column, 0),
+                use_column_major_ccl=True,
+                kv_valid_end_tensor=valid_end,
+                **slot_kwargs,
+            )
     finally:
         close_ring_joint_sdpa_runtime(runtime)
 
@@ -6600,6 +6704,32 @@ def test_ring_joint_attention_gpt_oss_chunked_sliding_circular_cache_accuracy():
         close_ring_joint_sdpa_runtime(runtime)
 
 
+def _zero_chunked_sdpa_inputs(runtime, tp_size, chunk_global, head_dim, nhq, nhk):
+    """Zero (Q, K, V, persistent K buffer, persistent V buffer) for a chunked-shaped ring_joint call: Q one
+    chunk, K/V two chunk slabs, sequence-sharded over SP and head-sharded over TP. For host-side validation
+    tests, where only shapes matter."""
+    mesh_device = runtime.mesh_device
+
+    def zeros_on_mesh(shape, dtype, seq_sharded):
+        dims = [None, None]
+        if seq_sharded:
+            dims[runtime.sp_axis] = 2
+        if tp_size > 1:
+            dims[runtime.tp_axis] = 1
+        mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
+        return ttnn.from_torch(
+            torch.zeros(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
+        )
+
+    return (
+        zeros_on_mesh((1, nhq, chunk_global, head_dim), ttnn.bfloat16, True),
+        zeros_on_mesh((1, nhk, 2 * chunk_global, head_dim), ttnn.bfloat8_b, True),
+        zeros_on_mesh((1, nhk, 2 * chunk_global, head_dim), ttnn.bfloat8_b, True),
+        zeros_on_mesh((1, nhk, 128, head_dim), ttnn.bfloat8_b, False),
+        zeros_on_mesh((1, nhk, 128, head_dim), ttnn.bfloat8_b, False),
+    )
+
+
 def test_ring_joint_circular_kv_cache_rejects_metadata_path(expect_error):
     """circular_kv_cache is rejected on the trace-safe metadata path (its halo derivation has no slab
     wrap and kv_actual_isl is clamped to the physical capacity). The check fires on the host before any
@@ -6611,23 +6741,9 @@ def test_ring_joint_circular_kv_cache_rejects_metadata_path(expect_error):
     runtime = open_ring_joint_sdpa_runtime(mesh_config, num_global_semaphores=3)
     mesh_device = runtime.mesh_device
     try:
-
-        def zeros_on_mesh(shape, dtype, seq_sharded):
-            dims = [None, None]
-            if seq_sharded:
-                dims[runtime.sp_axis] = 2
-            if tp_size > 1:
-                dims[runtime.tp_axis] = 1
-            mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
-            return ttnn.from_torch(
-                torch.zeros(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
-            )
-
-        tt_q = zeros_on_mesh((1, nhq, chunk_global, head_dim), ttnn.bfloat16, True)
-        tt_k = zeros_on_mesh((1, nhk, 2 * chunk_global, head_dim), ttnn.bfloat8_b, True)
-        tt_v = zeros_on_mesh((1, nhk, 2 * chunk_global, head_dim), ttnn.bfloat8_b, True)
-        p_buf_k = zeros_on_mesh((1, nhk, 128, head_dim), ttnn.bfloat8_b, False)
-        p_buf_v = zeros_on_mesh((1, nhk, 128, head_dim), ttnn.bfloat8_b, False)
+        tt_q, tt_k, tt_v, p_buf_k, p_buf_v = _zero_chunked_sdpa_inputs(
+            runtime, tp_size, chunk_global, head_dim, nhq, nhk
+        )
         tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, 0, chunk_global)
         with expect_error(RuntimeError, "does not support the trace-safe metadata path"):
             call_sdpa(
@@ -6659,6 +6775,52 @@ def test_ring_joint_circular_kv_cache_rejects_metadata_path(expect_error):
                 ccl_column=runtime.ccl_column,
                 sliding_window_size=128,
                 circular_kv_cache=True,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+def test_ring_joint_logical_n_tensor_rejects_metadata_path(expect_error):
+    """logical_n as a tensor is rejected on the trace-safe metadata path, which derives logical_n itself (the
+    same holds for logical_l). The check fires on the host before any value is read."""
+    mesh_config = gpt_oss_chunked_mesh_config()
+    sp_size, tp_size = mesh_config.sp_size, mesh_config.tp_size
+    chunk_global, head_dim = 256 * sp_size, 64
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, num_global_semaphores=3)
+    mesh_device = runtime.mesh_device
+    try:
+        tt_q, tt_k, tt_v, p_buf_k, p_buf_v = _zero_chunked_sdpa_inputs(
+            runtime, tp_size, chunk_global, head_dim, nhq=8 * tp_size, nhk=tp_size
+        )
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, 0, chunk_global)
+        with expect_error(RuntimeError, "logical_n as a tensor is incompatible"):
+            call_sdpa(
+                tt_q,
+                tt_k,
+                tt_v,
+                slot_id=tt_slot_id,
+                kv_actual_isl_tensor=tt_kv_actual_isl,
+                kv_cache_num_layers=1,
+                kv_cache_layer_idx=0,
+                logical_n=_make_ring_mla_scalar_tensor(mesh_device, 2 * chunk_global),
+                is_causal=True,
+                is_balanced=False,
+                p_buf_k=p_buf_k,
+                p_buf_v=p_buf_v,
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+                    q_chunk_size=64,
+                    k_chunk_size=128,
+                    exp_approx_mode=False,
+                ),
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=runtime.ccl_column,
             )
     finally:
         close_ring_joint_sdpa_runtime(runtime)
