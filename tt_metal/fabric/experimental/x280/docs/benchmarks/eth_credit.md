@@ -737,10 +737,11 @@ the `packet_injection` host does.
   batch. Each is the mean over every `p` and run at its own clock. The Ethernet
   hop is measured at P = 1 only (E1's window covers every `p`), so it is blank
   at P > 1. Beside them it sets the credit loop's bound, `N_LINK` packets per
-  hop-loop round trip at one packet in flight and the same slot size, names the
-  slowest leg and whichever of it and the credit loop binds, and gives the
-  path's rate as a share of that bound. The NoC hop, the Ethernet hop and the
-  receive side are disjoint and cover the path.
+  hop-loop round trip at one packet in flight and the same slot size. Where the
+  NoC hop and the receive side were measured at the shape, it names the slowest
+  leg and whichever of it and the credit loop binds, and gives the path's rate
+  as a share of that bound. The NoC hop, the Ethernet hop and the receive side
+  are disjoint and cover the path.
 - Per kernel, on its own clock: stall counts and stall time per stall site, and
   per-packet service time, written as one `eth_credit_kernel` JSONL record per
   launched kernel: case, chip, role, kernel id, state, code, detail, packets in

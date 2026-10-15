@@ -1029,7 +1029,8 @@ def ec_ceilings(rows):
     million stores per second at the path's P, as the forwarder stores once per batch. Each is the
     mean over every row of that leg and key (every p and run), at the row's own clock; a row left
     raw is no measurement. Ethernet hop records written before records named their legs are
-    recognised by their member.
+    recognised by their member. The slowest leg and the bound are named only where the NoC hop and the receive
+    side were measured at the path's shape; the Ethernet hop is measured at P = 1 only.
     """
     names = {legs: name for name, legs in EC_CEILING_STRETCHES + EC_CEILING_STORES}
     stores = [name for name, _ in EC_CEILING_STORES]
@@ -1061,12 +1062,13 @@ def ec_ceilings(rows):
         legs = [mean.get((name, shape)) for name, _ in EC_CEILING_STRETCHES]
         legs += [shape[4] * mean[(name, shape[:1])] if (name, shape[:1]) in mean else None for name in stores]
         measured = [(rate, name) for rate, name in zip(legs, leg_names) if rate is not None]
-        slowest = min(measured) if measured else (None, None)
+        covered = ("NoC hop", shape) in mean and ("receive side", shape) in mean
+        slowest = min(measured) if covered else (None, None)
         trips = loops.get(shape[3])
         # shape[1] is N_LINK and shape[3] SLOT_SIZE (EC_SHAPE).
         credit = shape[1] * 1000 * len(trips) / sum(trips) if trips else None
         bounds = [b for b in (slowest, (credit, "credit loop")) if b[0] is not None]
-        bound = min(bounds) if bounds else (None, None)
+        bound = min(bounds) if covered else (None, None)
         path = mean[("path", shape)]
         line = list(shape) + [path] + legs + [slowest[1], credit, bound[1], path / bound[0] if bound[0] else None]
         shown.append(groups[("path", shape)][0][0])
