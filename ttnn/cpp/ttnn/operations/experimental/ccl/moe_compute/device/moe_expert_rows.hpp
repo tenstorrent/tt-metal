@@ -114,7 +114,7 @@ struct MoEExpertRowsParams {
     uint32_t row_tiles = 1;     // M: row tiles per job
     ttnn::experimental::prim::detail::MoEActivationFunction activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction::SILU;
-    float activation_limit = 0.0f;
+    std::optional<float> activation_limit;
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi;
     bool fp32_dest_acc_en = false;
 

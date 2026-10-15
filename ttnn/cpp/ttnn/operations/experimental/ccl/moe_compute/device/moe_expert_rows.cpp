@@ -1044,6 +1044,7 @@ void MoEExpertRowsDeviceOperation::validate_on_program_cache_hit(
 
 void MoEExpertRowsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_activation_limit(args.activation_type, args.activation_limit);
     const auto& s = args.shape;
     TT_FATAL(
         s.tokens % s.num_sources == 0, "moe_compute expert rows: {} tokens over {} sources", s.tokens, s.num_sources);
@@ -1341,7 +1342,7 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
         {"cb_ones", CB_ONES},
         {"a_tiles", plan.a_tiles},
         {"activation_function", static_cast<uint32_t>(args.activation_type)},
-        {"activation_limit_bits", to_u32(args.activation_limit)},
+        {"activation_limit_bits", to_u32(args.activation_limit.value_or(0.0f))},
         {"row_tiles", M},
         {"chunk_tiles", plan.chunk_tiles},
         {"chunk_blocks", plan.chunk_blocks},

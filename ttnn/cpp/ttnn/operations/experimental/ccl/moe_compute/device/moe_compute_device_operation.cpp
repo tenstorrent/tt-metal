@@ -52,6 +52,16 @@ ttsl::hash::hash_t MoEComputeDeviceOperation::compute_program_hash(
     return ttsl::hash::hash_objects_with_default_seed(args, tensor_args);
 }
 
+void validate_activation_limit(detail::MoEActivationFunction activation_type, std::optional<float> activation_limit) {
+    TT_FATAL(
+        (activation_type == detail::MoEActivationFunction::CLAMPED_SILU) == activation_limit.has_value(),
+        "activation_limit is required for CLAMPED_SILU and must be omitted for other activations");
+    TT_FATAL(
+        !activation_limit.has_value() || (std::isfinite(*activation_limit) && *activation_limit > 0.0f),
+        "activation_limit must be finite and positive, got {}",
+        activation_limit.value_or(0.0f));
+}
+
 void MoEComputeDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
@@ -59,6 +69,8 @@ void MoEComputeDeviceOperation::validate_on_program_cache_hit(
 
 void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_activation_limit(args.activation_type, args.activation_limit);
+
     // Tilize
     TT_FATAL(
         tensor_args.tilize_input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
@@ -631,16 +643,6 @@ std::vector<ttnn::Tensor> moe_compute(
     const tt::tt_metal::MathFidelity math_fidelity,
     const bool fp32_dest_acc_en) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
-    using Activation = ttnn::experimental::prim::detail::MoEActivationFunction;
-
-    const Activation resolved_activation = activation_type.value_or(Activation::SILU);
-    TT_FATAL(
-        (resolved_activation == Activation::CLAMPED_SILU) == activation_limit.has_value(),
-        "activation_limit is required for CLAMPED_SILU and must be omitted for other activations");
-    TT_FATAL(
-        !activation_limit.has_value() || (std::isfinite(*activation_limit) && *activation_limit > 0.0f),
-        "activation_limit must be finite and positive, got {}",
-        activation_limit.value_or(0.0f));
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
     const auto& indices_shape = tilize_expert_indices_tensor.tensor_spec().logical_shape();
@@ -848,8 +850,8 @@ std::vector<ttnn::Tensor> moe_compute(
                                  : experimental::prim::MoEComputePath::FullCcl,
         .bh_ring_size = ring_n,
         .combine_params = combine_params,
-        .activation_type = resolved_activation,
-        .activation_limit = activation_limit.value_or(0.0f),
+        .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU),
+        .activation_limit = activation_limit,
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en};
     std::optional<ttnn::Tensor> expert_rows;
