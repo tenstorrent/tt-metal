@@ -794,14 +794,18 @@ bool is_native_L1_sharding(
     const bool c_is_l1 = c.buffer_type() == BufferType::L1;
 
     // Distinct from a mismatch: an ND_SHARDED config carries nd_shard_spec instead of shard_spec, so
-    // there is nothing to compare and we decline rather than compare across representations. Checking
-    // this also keeps is_uneven() -- which dereferences shard_spec() after testing only is_sharded() --
-    // off an ND-sharded operand.
+    // there is nothing to compare and we decline rather than compare across representations. For the scalar
+    // and subtile-broadcast branches below, this also keeps is_uneven() -- which dereferences shard_spec()
+    // after testing only is_sharded() -- off an ND-sharded `a`. The identical-shape branch does not use it
+    // and still reaches is_uneven() with an ND-sharded pair; that is tracked separately.
     const bool shard_specs_comparable = a.memory_config().shard_spec().has_value() && c.shard_spec().has_value();
     // Per-core work comes from a's shard while the output buffer is aliased as a CB, so a and c must
     // agree or the output is addressed on cores where it is not allocated -- which hangs the device. An
-    // unsupplied output config is derived from a's, so the common case still matches.
-    const bool c_shard_matches_a = shard_specs_comparable && *c.shard_spec() == *a.memory_config().shard_spec();
+    // unsupplied output config is derived from a's, so the common case still matches. ShardSpec equality
+    // covers grid, shape and orientation but not the memory layout, and HEIGHT and BLOCK sharding place
+    // shard i on different cores for the same spec, so the layouts must match as well.
+    const bool c_shard_matches_a = shard_specs_comparable && c.memory_layout() == a.memory_config().memory_layout() &&
+                                   *c.shard_spec() == *a.memory_config().shard_spec();
 
     // Scalar value path (b is not a tensor)
     if (!b.has_value() && a.memory_config().is_sharded()) {

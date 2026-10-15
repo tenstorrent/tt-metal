@@ -17,6 +17,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_ulp
 
 
 def _on_quasar():
@@ -109,6 +110,16 @@ def _act(act_type):
     return [ttnn.UnaryWithParam(act_type)] if act_type is not None else []
 
 
+def _assert_ulp(out_torch, golden, dtype_tt, ulp_threshold):
+    # ULP is measured in the golden's resolution, so both sides go to the output's float width: bfloat8_b is
+    # compared at bfloat16 resolution, as assert_with_ulp documents. Unlike PCC, a few misplaced or stale
+    # shards cannot hide in a high correlation over the rest of the tensor.
+    cmp_dtype = torch.float32 if dtype_tt == ttnn.float32 else torch.bfloat16
+    assert_with_ulp(
+        expected_result=golden.to(cmp_dtype), actual_result=out_torch.to(cmp_dtype), ulp_threshold=ulp_threshold
+    )
+
+
 def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, rhs_act=None, post_act=None, pcc=None):
     torch.manual_seed(0)
     ttnn_fn = _OPS[op_name][0]()
@@ -176,6 +187,7 @@ def _run_mixed(
     post_act=None,
     pcc=None,
     output_tensor_mem=None,
+    ulp_threshold=None,
 ):
     # Like _run, but with an INDEPENDENT memory config per operand (a, b, output) so the borrow-vs-NoC
     # routing in the DFB factory is exercised across mixed sharded/interleaved layouts (borrow only when
@@ -212,6 +224,14 @@ def _run_mixed(
 
     a_tt = ttnn.from_torch(a, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=a_mem)
     b_tt = ttnn.from_torch(b, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=b_mem)
+    if ulp_threshold is not None:
+        # The golden uses the operands as stored on the device, so input quantization does not count as error.
+        a_dev, b_dev = ttnn.to_torch(a_tt).float(), ttnn.to_torch(b_tt).float()
+        a_g = _ACT_GOLDEN[lhs_act](a_dev) if lhs_act is not None else a_dev
+        b_g = _ACT_GOLDEN[rhs_act](b_dev) if rhs_act is not None else b_dev
+        golden = torch_fn(a_g, b_g)
+        if post_act is not None:
+            golden = _ACT_GOLDEN[post_act](golden)
 
     kwargs = {"memory_config": out_mem, "dtype": dtype_tt}
     if post_act is not None:
@@ -239,12 +259,26 @@ def _run_mixed(
         assert (
             out_torch.float().std() > 0.1 * golden_std
         ), "output is ~constant while the golden varies (wrong tile pairing?)"
-    assert_with_pcc(out_torch, golden, pcc or _PCC[dtype_tt])
+    if ulp_threshold is not None:
+        _assert_ulp(out_torch, golden, dtype_tt, ulp_threshold)
+    else:
+        assert_with_pcc(out_torch, golden, pcc or _PCC[dtype_tt])
     return out_tt
 
 
 def _run_scalar(
-    device, op_name, mem_config, dtype_tt, shape, scalar, lhs_act=None, post_act=None, pcc=None, out_mem=None
+    device,
+    op_name,
+    mem_config,
+    dtype_tt,
+    shape,
+    scalar,
+    lhs_act=None,
+    post_act=None,
+    pcc=None,
+    out_mem=None,
+    infer_output_config=False,
+    ulp_threshold=None,
 ):
     # Tensor-SCALAR sibling of _run: operand A is a tensor, the RHS is a Python number (not a tensor),
     # and the golden uses that same scalar. Same op->torch map, PCC thresholds, and degenerate-constant
@@ -267,8 +301,18 @@ def _run_scalar(
         golden = _ACT_GOLDEN[post_act](golden)
 
     a_tt = ttnn.from_torch(a, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
+    if ulp_threshold is not None:
+        # The golden uses the operand as stored on the device, so input quantization does not count as error.
+        a_dev = ttnn.to_torch(a_tt).float()
+        golden = torch_fn(_ACT_GOLDEN[lhs_act](a_dev) if lhs_act is not None else a_dev, scalar)
+        if post_act is not None:
+            golden = _ACT_GOLDEN[post_act](golden)
 
-    kwargs = {"memory_config": out_mem if out_mem is not None else mem_config, "dtype": dtype_tt}
+    # infer_output_config omits memory_config so the op derives the output config from a's, which routes through
+    # the default-config path instead of an explicit one. out_mem overrides the output config explicitly.
+    kwargs = {"dtype": dtype_tt}
+    if not infer_output_config:
+        kwargs["memory_config"] = out_mem if out_mem is not None else mem_config
     if post_act is not None:
         kwargs["activations"] = _act(post_act)
     if lhs_act is not None:
@@ -282,5 +326,8 @@ def _run_scalar(
     golden_std = golden.float().std()
     if golden_std > 0.1:
         assert out_torch.float().std() > 0.1 * golden_std, "output is ~constant while the golden varies (scalar fill?)"
-    assert_with_pcc(out_torch, golden, pcc or _PCC[dtype_tt])
+    if ulp_threshold is not None:
+        _assert_ulp(out_torch, golden, dtype_tt, ulp_threshold)
+    else:
+        assert_with_pcc(out_torch, golden, pcc or _PCC[dtype_tt])
     return out_tt

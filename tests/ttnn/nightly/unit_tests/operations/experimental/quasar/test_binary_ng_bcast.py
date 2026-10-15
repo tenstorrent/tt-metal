@@ -36,6 +36,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quas
     _on_quasar,
     _run,
     _run_mixed,
+    _block_sharded_config,
     _height_sharded_config,
     _dram_height_sharded_config,
     _width_sharded_config,
@@ -288,6 +289,10 @@ def test_bcast_mixed_layout(device, op_name, a_shape, b_shape, bcast, a_mem, b_m
 # cannot run on Quasar.
 _COL_B_ROUTER_SHAPES = ([1, 1, 128, 128], [1, 1, 128, 1])
 _COL_B_ROUTER_L1 = _height_sharded_config([32, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}))
+# One shard spec, two layouts: HEIGHT puts the second [64, 128] shard on (1, 0), BLOCK on (0, 1).
+_COL_B_ROUTER_GRID_2X2 = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 1))})
+_COL_B_ROUTER_HEIGHT_2X2 = _height_sharded_config([64, 128], _COL_B_ROUTER_GRID_2X2)
+_COL_B_ROUTER_BLOCK_2X2 = _block_sharded_config([64, 128], _COL_B_ROUTER_GRID_2X2)
 _COL_B_ROUTER_DRAM = _dram_height_sharded_config([32, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}))
 
 
@@ -303,10 +308,18 @@ _COL_B_ROUTER_DRAM = _dram_height_sharded_config([32, 128], ttnn.CoreRangeSet({t
             _height_sharded_config([64, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 0))})),
             id="l1_output_on_other_grid",
         ),
+        pytest.param(
+            ttnn.float32,
+            _COL_B_ROUTER_HEIGHT_2X2,
+            _COL_B_ROUTER_BLOCK_2X2,
+            id="same_shard_spec_different_layout",
+        ),
     ],
 )
 def test_bcast_col_b_sharded_native_routing(device, dtype, a_mem, out_mem):
-    _run_mixed(device, "add", a_mem, ttnn.DRAM_MEMORY_CONFIG, out_mem, dtype, shape=_COL_B_ROUTER_SHAPES)
+    _run_mixed(
+        device, "add", a_mem, ttnn.DRAM_MEMORY_CONFIG, out_mem, dtype, shape=_COL_B_ROUTER_SHAPES, ulp_threshold=1
+    )
 
 
 # --- Activation fusion over subtile broadcast -------------------------------------------------------------
