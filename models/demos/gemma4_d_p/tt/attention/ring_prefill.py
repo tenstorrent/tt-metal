@@ -227,7 +227,9 @@ def global_ring_prefill_attention(
         num_links=ccl_manager.num_links,
         cluster_axis=mesh_config.cp_axis,
         mesh_device=mesh_device,
-        topology=ttnn.Topology.Linear,
+        topology=ttnn.Topology.Ring
+        if __import__("os").environ.get("TT_RING_SDPA_PARTIAL_READINESS")
+        else ttnn.Topology.Linear,  # TEMP: partial readiness needs Ring
         ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),
         use_column_major_ccl=True,
         is_balanced=False,

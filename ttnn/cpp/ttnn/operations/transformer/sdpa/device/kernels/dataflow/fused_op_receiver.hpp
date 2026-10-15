@@ -54,11 +54,46 @@ struct RingSDPAOpReceiver {
         initialized = true;
     }
 
+#ifdef RING_PARTIAL_READINESS
+    // With partial readiness the all-gather signals each remote shard twice, at its midpoint and at its completion.
+    // Direction 0's semaphore also carries the local-slice pre-signal. val is the sequencer's one-signal threshold.
+    static uint32_t partial_half_threshold(uint32_t dir, uint32_t val) {
+        return val == 0 ? 0 : (dir == 0 ? 2 * (val - 1) : 2 * val - 1);
+    }
+    static uint32_t partial_full_threshold(uint32_t dir, uint32_t val) {
+        return val == 0 ? 0 : (dir == 0 ? 2 * val - 1 : 2 * val);
+    }
+    uint32_t pending_dir = 0;
+    uint32_t pending_half = 0;
+    uint32_t pending_full = 0;
+
+    // Advance to the next ring id without waiting; wait_for_shard_rows gates each K chunk on the half it lies in.
+    uint32_t get_next_ring_id_deferred() {
+        ASSERT(initialized);
+        return seq.get_next_ring_id([&](uint32_t dir, uint32_t val) {
+            pending_dir = dir;
+            pending_half = partial_half_threshold(dir, val);
+            pending_full = partial_full_threshold(dir, val);
+        });
+    }
+
+    void wait_for_shard_rows(bool first_half_only) {
+        if (this->wait_for_op_signal) {
+            Semaphore<>(this->signal_op_semaphore_ids[pending_dir])
+                .wait_min(first_half_only ? pending_half : pending_full);
+        }
+    }
+#endif
+
     uint32_t get_next_ring_id_and_sync() {
         ASSERT(initialized);
         uint32_t ring_id = seq.get_next_ring_id([&](uint32_t dir, uint32_t val) {
             if (this->wait_for_op_signal) {
+#ifdef RING_PARTIAL_READINESS
+                Semaphore<>(this->signal_op_semaphore_ids[dir]).wait_min(partial_full_threshold(dir, val));
+#else
                 Semaphore<>(this->signal_op_semaphore_ids[dir]).wait_min(val);
+#endif
             }
         });
         // The split shard's second half is the forward chain's final arrival, on semaphore_ids[0] —

@@ -281,6 +281,13 @@ void kernel_main() {
         }
     };
 
+    if constexpr (fuse_op && direction == 1 && partial_readiness_enabled) {
+        // The local-slice signal is only an offset the consumer counts (it never waits on it), so with partial
+        // readiness it goes first: sent after the local slice, it would hold back the consumer's first remote
+        // prefix until the whole local slice had been sent.
+        op_signaler_sender.synchronize_workers_and_signal_op(my_transport_rank);
+    }
+
     uint32_t slice_writes = 0;
     constexpr uint32_t my_tensor_rank =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
@@ -414,8 +421,8 @@ void kernel_main() {
     }
 
     noc_obj.async_write_barrier();
-    // increment locally
-    if constexpr (fuse_op && direction == 1) {
+    // increment locally (partial readiness sends this before the local slice; see the top of the send)
+    if constexpr (fuse_op && direction == 1 && !partial_readiness_enabled) {
         /**
          * Synchronize and signal that the local tensor slice is available
          *

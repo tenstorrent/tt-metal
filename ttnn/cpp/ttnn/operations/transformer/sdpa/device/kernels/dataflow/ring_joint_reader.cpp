@@ -20,6 +20,9 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 #include "../ring_joint_ksplit.hpp"  // relative, so its chunked_prefill_utils.hpp is the same file this kernel includes
+#ifdef RING_PARTIAL_READINESS
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_all_gather_metadata.hpp"
+#endif
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -517,6 +520,9 @@ void kernel_main() {
         slot_from_metadata ? ring_joint::kReaderMetadataCommonArgCount : 0;
 
     [[maybe_unused]] uint32_t global_n_partial_col_live = 0;
+    // Partial readiness: tile rows of each remote shard the all-gather delivers before its midpoint signal. The
+    // default (0) gates every remote chunk on the full shard.
+    [[maybe_unused]] uint32_t partial_midpoint_tile_rows = 0;
     [[maybe_unused]] uint32_t joint_l_partial_col_live = 0;
 
     if constexpr (slot_from_metadata || kv_pad_from_metadata || has_logical_length_tensor) {
@@ -548,6 +554,14 @@ void kernel_main() {
         if constexpr (kv_pad_from_metadata) {
             uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
                 meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
+#ifdef RING_PARTIAL_READINESS
+            // Same derivation as the all-gather reader (ring_attention_all_gather_metadata.hpp), so the two agree on
+            // which rows arrive before the midpoint signal (midpoint_prefix_pages rounds the half up to whole rows).
+            partial_midpoint_tile_rows = (ring_attention_all_gather::compute_gather_valid_Ht(
+                                              kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt) +
+                                          1) /
+                                         2;
+#endif
             if constexpr (has_sliding_window) {
                 kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
                     kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
@@ -874,7 +888,14 @@ void kernel_main() {
             : has_sliding_window
                 ? ring_index
                 : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                      fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+#ifdef RING_PARTIAL_READINESS
+                      fused_op_receiver.get_next_ring_id_deferred(),
+#else
+                      fused_op_receiver.get_next_ring_id_and_sync(),
+#endif
+                      mesh_rows,
+                      mesh_cols,
+                      snake_orientation);
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
         if (!ring_iter_is_active) {
@@ -1143,6 +1164,12 @@ void kernel_main() {
                     ASSERT(!has_sliding_window);
                     continue;
                 }
+#ifdef RING_PARTIAL_READINESS
+                if (!has_sliding_window && !kv_chunk_is_joint && source_ring_id != ring_index) {
+                    fused_op_receiver.wait_for_shard_rows(
+                        (source_k_chunk + 1) * Sk_chunk_t <= partial_midpoint_tile_rows);
+                }
+#endif
 
                 // Default to local/gathered KV; override below for joint KV when applicable.
                 Slice k_slice;

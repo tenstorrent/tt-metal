@@ -2724,6 +2724,16 @@ void sdpa_ring_v2(
         if (k_chunk < k_split_begin || k_chunk >= k_split_end) {
             return true;
         }
+#ifdef RING_PARTIAL_READINESS
+        // Strided K split (ring_joint_ksplit.hpp ksplit_range): split i owns the chunks whose distance from the last
+        // one is congruent to n - 1 - i.
+        if constexpr (!has_sliding_window) {
+            if (sliding_split_count > 1 &&
+                (k_split_end - 1 - k_chunk) % sliding_split_count != sliding_split_count - 1 - sliding_split_idx) {
+                return true;
+            }
+        }
+#endif
         if constexpr (chunked_enabled && !has_sliding_window && causal_k_skip) {
             return !chunked_kv_chunk_is_live<
                 kv_pad_rotation_enabled,

@@ -22,6 +22,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <cmath>
@@ -1425,6 +1426,20 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                  ring_joint::kKSplitMaxCount,
                  sliding_ksplit_cap}));
     }
+    // Partial readiness: the fused all-gather signals each remote shard's first half before its completion, so the K
+    // bands start on first-half chunks while the rest streams in. Bands are strided (ring_joint_ksplit.hpp) so every
+    // band has first-half work. Needs the trace-safe kv_actual metadata (the reader derives the midpoint from it).
+    // TEMP: opt in with TT_RING_SDPA_PARTIAL_READINESS while it is evaluated.
+    {
+        const auto& ag = args.all_gather_operation_attributes;
+        sdpa_fused_op_signaler->partial_readiness_enabled =
+            std::getenv("TT_RING_SDPA_PARTIAL_READINESS") != nullptr && ag.topology == ttnn::ccl::Topology::Ring &&
+            ag.ring_size > 2 && !sdpa_fused_op_signaler->split_forwarding_enabled && !has_sliding_window &&
+            tensor_args.has_packed_kv() && tensor_args.kv_actual_isl.has_value() && ksplit_count > 1 && B == 1 &&
+            NHK == 1 && L == 0 &&
+            ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(
+                {tensor_args.input_k}, {tensor_args.gathered_k}, ag.dim);
+    }
     // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
     // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
     // the legacy fp32 path (sdpa_ring/sdpa_inner_loop) would leave compute waiting on K/V chunks the
@@ -1913,6 +1928,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (sdpa_fused_op_signaler->partial_readiness_enabled) {
+        defines["RING_PARTIAL_READINESS"] = "1";
+    }
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
         TT_FATAL(use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
         defines["SDPA_MATMUL_FIDELITY"] =
@@ -3658,7 +3676,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // Share the split-forwarding decision derived above so the all-gather only splits when this
             // consumer implements the second-half wait.
             sdpa_fused_op_signaler->split_forwarding_enabled,
-            /*partial_readiness_enabled=*/false,
+            sdpa_fused_op_signaler->partial_readiness_enabled,
             rank_mapping);
     }
 

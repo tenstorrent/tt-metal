@@ -18,11 +18,16 @@ namespace ttnn::operations::transformer::sdpa::ring_joint {
 // Bounds the reducer's serial merge, one pass per sender.
 constexpr uint32_t kKSplitMaxCount = 4;
 
+// [begin, end), or with stride > 1 the chunks k in [begin, end) where (end - 1 - k) % stride == residue.
 struct KSplitRange {
     uint32_t begin;
     uint32_t end;
+    uint32_t stride = 1;
+    uint32_t residue = 0;
     bool empty() const { return begin >= end; }
-    bool contains(uint32_t k_chunk) const { return k_chunk >= begin && k_chunk < end; }
+    bool contains(uint32_t k_chunk) const {
+        return k_chunk >= begin && k_chunk < end && (stride == 1 || (end - 1 - k_chunk) % stride == residue);
+    }
 };
 
 constexpr KSplitRange kKSplitAll{0, 0xFFFFFFFFu};
@@ -59,7 +64,16 @@ inline uint32_t ksplit_valid_local_k_chunks(
 // Split i of n owns [i * valid / n, (i + 1) * valid / n). The last split always owns the final chunk, which holds the
 // diagonal, so the reducer's rows are never fully masked.
 inline KSplitRange ksplit_range(uint32_t num_valid, uint32_t split_idx, uint32_t split_count) {
+#ifdef RING_PARTIAL_READINESS
+    // Strided: split i owns every split_count-th chunk counting back from the last, so the reducer (i = n - 1) still
+    // owns the final chunk, and every split has chunks in both halves of a shard, which partial all-gather readiness
+    // delivers first-half first.
+    const uint32_t residue = split_count - 1 - split_idx;
+    const uint32_t begin = num_valid > residue ? (num_valid - 1 - residue) % split_count : num_valid;
+    return {begin, num_valid, split_count, residue};
+#else
     return {split_idx * num_valid / split_count, (split_idx + 1) * num_valid / split_count};
+#endif
 }
 
 // Sliding split of a (head, Q chunk) unit's work plan. A plan shorter than two chunks per band (the first window of the

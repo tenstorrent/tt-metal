@@ -26,6 +26,8 @@ struct RingSDPAFusedOpSignaler {
 
     // Set by the program factory when the all-gather relays the diametric slice split across both links
     bool split_forwarding_enabled = false;
+    // Set by the program factory when the all-gather signals each remote shard's first half before its completion
+    bool partial_readiness_enabled = false;
 
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;

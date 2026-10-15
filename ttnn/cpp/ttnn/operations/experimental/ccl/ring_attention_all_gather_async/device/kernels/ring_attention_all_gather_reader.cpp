@@ -251,6 +251,11 @@ void kernel_main() {
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             my_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
+    // Partial readiness: the first incoming slice's prefix is announced between the local slice's two halves, as soon
+    // as it lands, instead of after the whole local slice is sent (the consumer's first remote ring iteration would
+    // otherwise wait for the local send to finish). The receive loop then skips that slice's first signal.
+    [[maybe_unused]] bool first_incoming_prefix_signaled = false;
+
     // Read the local slice into the packet CB before sending it over Fabric.
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
@@ -274,6 +279,18 @@ void kernel_main() {
                         first_pages,
                         worker_link[input_idx],
                         num_links);
+                    if constexpr (fuse_op) {
+                        if (bh_idx == 0) {
+                            // Every device sends its local prefix before blocking here, so the neighbour's prefix is
+                            // already in flight: no circular wait.
+                            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 1);
+                            const uint32_t first_sender_transport_rank =
+                                direction == 1 ? (my_transport_rank + 1) % ring_size
+                                               : (my_transport_rank + ring_size - 1) % ring_size;
+                            op_signaler.synchronize_workers_and_signal_op(first_sender_transport_rank);
+                            first_incoming_prefix_signaled = true;
+                        }
+                    }
                     prefetch_bank_owned_slices<false>(
                         noc_obj,
                         cb_output,
@@ -367,6 +384,7 @@ void kernel_main() {
         // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a
         // GlobalSemaphore.
         const uint32_t next_slice = slices_received + 1;
+        const bool prefix_already_signaled = first_incoming_prefix_signaled && next_slice == 1;
         if constexpr (partial_readiness_enabled) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2 - 1);
         } else {
@@ -391,7 +409,9 @@ void kernel_main() {
 
         if constexpr (fuse_op) {
             // In partial mode this first signal exposes the completed prefix of the shard.
-            op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
+            if (!prefix_already_signaled) {
+                op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
+            }
         }
         if constexpr (partial_readiness_enabled) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2);
