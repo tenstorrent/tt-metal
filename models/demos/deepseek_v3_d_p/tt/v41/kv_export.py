@@ -23,6 +23,10 @@ What the prefill OWNS (it runs the encoder 0..19 and layer 20 KV-only):
 Consumers hold no rows of their own: the table points their entry chunks (and the Reindex layers' key chunks) at their
 source's rows, and every decoder layer's entry chunks at layer 20's. No per-consumer copies on the prefill galaxy.
 
+DS41F-0073 (``decoder=True``: the prefill builds all 40 layers, V41_PREFILL_DECODER=1): ``win`` holds the window rings of
+EVERY compressed layer 2..39 (38), so the decoder layers' windows are migrated instead of starting empty, and the ring
+replays only the prompt's last < 128 tokens (the hand-over boundary stays 128-aligned) instead of R >= 2541.
+
 Every tensor is ``init_kvpe_cache``-allocated (DRAM ND-sharded in 32-row shards round-robin over the banks, replicated
 over the mesh), so the chunk at (batch b, row r) of a tensor with ``rows`` rows per batch sits at
 ``flat = (b * rows + r) // 32``: bank ``flat % n_banks``, offset ``base + (flat // n_banks) * chunk_bytes`` -- the
@@ -67,6 +71,7 @@ class V41KvExport:
     num_users: int
     max_seq_len: int
     sources2: tuple  # (2, 8, 14)
+    n_win: int = 19  # window rings held: layers 2..20, or 2..39 with the decoder (DS41F-0073)
 
     def tensors(self) -> dict:
         return dict(
@@ -78,7 +83,12 @@ class V41KvExport:
         return slot * 2 + L
 
     def win_batch(self, slot, L):
-        return slot * 19 + (L - 2)
+        assert 2 <= L < 2 + self.n_win, (L, self.n_win)
+        return slot * self.n_win + (L - 2)
+
+    @property
+    def decoder(self) -> bool:
+        return self.n_win > 19
 
     def ent_batch(self, slot, src):
         return (slot * 3 + self.sources2.index(src)) if src in self.sources2 else slot
@@ -129,7 +139,7 @@ class V41KvExport:
 
 
 def allocate_v41_kv_export(
-    mesh_device, cfg, *, max_seq_len: int, num_users: int = 1, mesh_shape=None, sp_axis: int = 0
+    mesh_device, cfg, *, max_seq_len: int, num_users: int = 1, mesh_shape=None, sp_axis: int = 0, decoder: bool = False
 ):
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
@@ -153,9 +163,10 @@ def allocate_v41_kv_export(
             layout=layout,
         )
 
+    n_win = (cfg.n_layers if decoder else cfg.first_decoder_layer + 1) - 2  # compressed layers 2.. that hold a window
     exp = V41KvExport(
         swa=alloc(RING, HEAD_DIM, 2, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-        win=alloc(RING, HEAD_DIM, 19, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        win=alloc(RING, HEAD_DIM, n_win, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
         zero=alloc(RING, HEAD_DIM, 1, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, users=1),
         ent2=alloc(max_seq_len // 2, HEAD_DIM, 3, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
         ent1=alloc(max_seq_len, HEAD_DIM, 1, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
@@ -164,6 +175,7 @@ def allocate_v41_kv_export(
         num_users=int(num_users),
         max_seq_len=int(max_seq_len),
         sources2=sources2,
+        n_win=int(n_win),
     )
     logger.info(f"[v41 kv export] {', '.join(f'{k} {tuple(t.shape)}' for k, t in exp.tensors().items())}")
     return exp
@@ -191,9 +203,10 @@ def export_chunk(exp: V41KvExport, pf, slot: int, start: int, end: int) -> None:
                 ttnn.deallocate(blockt)
             continue
         attn._write_rm(exp.win, carry, exp.win_batch(slot, L), row0)
-        if r.mode == "full":
+        if r.mode == "full":  # 2 / 8 / 14 at ratio 2; layer 20 (ratio 1) when it is a block (DS41F-0073)
+            ent, idx = (exp.ent2, exp.idx2) if r.compress_ratio == 2 else (exp.ent1, exp.idx1)
             _export_entries(
-                exp, attn, st, slot, L, start, end, ratio=r.compress_ratio, ent=exp.ent2, idx=exp.idx2, chunk=pf.chunk
+                exp, attn, st, slot, L, start, end, ratio=r.compress_ratio, ent=ent, idx=idx, chunk=pf.chunk
             )
     if pf.kv_attn is not None:
         L, attn, st = pf.kv_only_layer, pf.kv_attn, pf.kv_state
@@ -243,9 +256,9 @@ def table_rows(exp: V41KvExport, cfg, *, slot: int, prompt_tokens: int | None = 
                 yield "swa_window", L, p, exp.swa, exp.swa_batch(slot, L), p
             continue
         for p in range(0, RING, TILE):
-            if L <= cfg.first_decoder_layer:
+            if L <= cfg.first_decoder_layer or exp.decoder:
                 yield "csa_unified", L, p, exp.win, exp.win_batch(slot, L), p
-            else:
+            else:  # the ring replays R >= 2541 tokens and rebuilds these windows itself
                 yield "csa_unified", L, p, exp.zero, 0, p
         src = r.kv_source
         ent, idx = (exp.ent2, exp.idx2) if src in exp.sources2 else (exp.ent1, exp.idx1)

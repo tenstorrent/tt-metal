@@ -5,7 +5,9 @@ runtime over a real prompt (``V41PrefillRuntime``, chunked, exports after every 
 chunk table, then read EVERY chunk the decode ring would ask for back DEVICE-LESSLY through the table
 (``read_dram_umd`` + the producer's chunk decoder) and compare it with model.py's state at the same position, laid out
 the ring's way (tt-blaze ``seed_from_snapshot.py``): window rings at p % 256, entries at 256 + w, index keys; the
-decoder layers 21..39 get layer 20's entries / keys and an empty window.
+decoder layers 21..39 get layer 20's entries / keys and an empty window -- or, with V41_PREFILL_DECODER=1 (DS41F-0073), their
+own window rings (a golden over 40 layers checks them; a 21-layer golden leaves them unchecked, logged as rows "where model.py
+has none").
 
     V41_PREFILL_TRACE=<prefill_trace dir: model.py's prefill of ids[:S] over layers 0..20>
 """
@@ -153,7 +155,7 @@ def _run_and_check(rt, exp, cfg, ids, S, mesh_device, tmp_path):
     for (g, L), ref in sorted(want.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         got = via[(g, L)][: ref.shape[0]]
         nz = ref.abs().sum(-1) > 0
-        if (g, L)[0] != "index_k" and L > cfg.first_decoder_layer:
+        if (g, L)[0] != "index_k" and L > cfg.first_decoder_layer and not exp.decoder:
             win_zero = bool((got[:RING] == 0).all())
             assert win_zero, f"layer {L}: the decoder window chunks must read zeros"
         _, p = comp_pcc(ref[nz], got[nz])

@@ -25,6 +25,11 @@ import ttnn
 from .kv_export import allocate_v41_kv_export, build_v41_kv_chunk_table, export_chunk
 from .prefill import V41Prefill
 
+# DS41F-0073: V41_PREFILL_DECODER=1 builds all 40 layers (layer 20 a full ratio-1 source, the Reindex 24 / 28 / 32 / 36, the
+# decoder Reuse layers) and exports every decoder layer's window ring, so the ring replays only the prompt's last < 128
+# tokens instead of R >= 2541 (V4-Flash's prefill also ran every layer). Default 0: the encoder + layer 20 KV-only.
+DECODER = os.environ.get("V41_PREFILL_DECODER", "0") == "1"
+
 
 class V41PrefillRuntime:
     def __init__(
@@ -64,7 +69,8 @@ class V41PrefillRuntime:
             sp_axis=sp_axis,
             tp_axis=tp_axis,
             weight_cache_path=weight_cache_path,
-            kv_only=True,
+            n_layers=cfg.n_layers if DECODER else None,
+            kv_only=not DECODER,
             num_users=num_users,
         )
         from blaze.models.deepseek_v4_1_flash.engram_host import EngramHost  # tt-blaze's ttnn-free host half
@@ -113,6 +119,7 @@ class V41PrefillRuntime:
             num_users=self.num_users,
             mesh_shape=self.mesh_shape,
             sp_axis=self.sp_axis,
+            decoder=DECODER,
         )
 
     def kv_migration_base_address(self, kv_caches) -> int:

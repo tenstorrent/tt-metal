@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.v4 import mhc_math as M
 from models.demos.deepseek_v3_d_p.tt.v4.hyper_connection import TtHyperConnection
 from models.demos.deepseek_v3_d_p.tt.v4.trace_island import TraceIsland, copy_into
 
-from .attention import V41CSA, V41SWA, V41CSAConsumer
+from .attention import V41CSA, V41SWA, V41CSAConsumer, V41CSAReindex
 
 # DS41F-0068: a ragged final chunk on the attention islands (default on with A3); 0 = eager attention for it
 A3_RAGGED = os.environ.get("PREFILL_V41_A3_RAGGED", "1") == "1"
@@ -157,10 +157,15 @@ def build_v41_attention(mesh_device, cfg, layer: int, w: dict, rotary_emb, *, so
     r = cfg.role(layer)
     if r.mode == "swa":
         return V41SWA.from_weights(mesh_device, cfg, layer, w, rotary_emb, **kw)
-    if r.mode == "full":
+    if (
+        r.mode == "full"
+    ):  # 2 / 8 / 14 (ratio 2), and layer 20 (ratio 1) when the prefill builds the decoder (DS41F-0073)
         return V41CSA.from_weights(mesh_device, cfg, layer, w, rotary_emb, **kw)
-    assert r.mode == "reuse", f"layer {layer}: {r.mode} attention is a decoder layer (not built by the prefill)"
-    return V41CSAConsumer.from_weights(mesh_device, cfg, layer, w, rotary_emb, source=sources[r.kv_source], **kw)
+    if r.mode == "reindex":  # decoder 24 / 28 / 32 / 36: its own indexer over layer 20's keys (DS41F-0073)
+        return V41CSAReindex.from_weights(mesh_device, cfg, layer, w, rotary_emb, source=sources[r.kv_source], **kw)
+    assert r.mode == "reuse", f"layer {layer}: unknown attention mode {r.mode}"
+    # the INDEX source's shared (= the KV source itself in the encoder; layer 20 or the latest Reindex layer in the decoder)
+    return V41CSAConsumer.from_weights(mesh_device, cfg, layer, w, rotary_emb, source=sources[r.index_source], **kw)
 
 
 class V41PrefillBlock(LightweightModule):
@@ -181,6 +186,7 @@ class V41PrefillBlock(LightweightModule):
         num_links: int = 2,
         weight_cache_path=None,
         load_routed_from_cache: bool = False,
+        expert_dtype=None,
     ):
         super().__init__()
         self.mesh_device, self.cfg, self.layer = mesh_device, cfg, int(layer)
@@ -227,7 +233,7 @@ class V41PrefillBlock(LightweightModule):
             topology=topology,
             weight_cache_path=weight_cache_path,
         )
-        if cfg.role(layer).mode == "full":
+        if cfg.role(layer).mode in ("full", "reindex"):
             sources[self.layer] = self.attn
         self.moe = build_v41_moe(
             mesh_device,
@@ -240,6 +246,7 @@ class V41PrefillBlock(LightweightModule):
             topology=topology,
             weight_cache_path=weight_cache_path,
             load_routed_from_cache=load_routed_from_cache,
+            routed_expert_weights_dtype=expert_dtype,
         )
         self.state = None  # the CURRENT slot's attention state (use_slot)
         self.states: dict = {}
@@ -248,7 +255,7 @@ class V41PrefillBlock(LightweightModule):
     def alloc_state(self, max_seq_len: int, chunk_tokens: int, slot: int = 0):
         # DS41F-0068: a CSA state carries its slot -- TtCSA keys the shared score mask (path A3) by it, and slots hold
         # different entry counts (the default slot 0 made every slot share one mask)
-        kw = dict(slot=slot) if isinstance(self.attn, (V41CSA, V41CSAConsumer)) else {}
+        kw = dict(slot=slot) if isinstance(self.attn, (V41CSA, V41CSAConsumer, V41CSAReindex)) else {}
         self.states[slot] = self.attn.alloc_state(max_seq_len, chunk_tokens=chunk_tokens, **kw)
         self.states[slot].slot = int(slot)  # every kind: the block picks this slot's attention islands by it
         if self.state is None:

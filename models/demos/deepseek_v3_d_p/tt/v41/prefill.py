@@ -79,6 +79,19 @@ class PhaseProfile:
         return dict(self.acc)
 
 
+def _decoder_cache():
+    """DS41F-0073: V41_PREFILL_DECODER_CACHE = a weight-cache dir for the decoder layers (unset: converted at every start)."""
+    p = os.environ.get("V41_PREFILL_DECODER_CACHE", "")
+    return Path(p) if p else None
+
+
+def _decoder_expert_dtype():
+    """DS41F-0073: V41_PREFILL_DECODER_EXPERT_DTYPE=bfp4|bfp8 for the decoder layers' routed experts (unset: the encoder's).
+    BFP4 is what the decode ring runs those layers with (tt-blaze DS41F-0019) and halves their ~9 GB per chip."""
+    v = os.environ.get("V41_PREFILL_DECODER_EXPERT_DTYPE", "")
+    return {"bfp4": ttnn.bfloat4_b, "bfp8": ttnn.bfloat8_b}[v] if v else None
+
+
 class V41Prefill:
     CHUNK_ALIGN = (
         64  # tokens per chip: a multiple of the MoE routing's 64-core masked_bincount grid (and of TILE / ratio)
@@ -127,6 +140,9 @@ class V41Prefill:
             w = ck.layer(L)
             if cfg.role(L).engram:
                 self.engrams[L] = V41PrefillEngram(mesh_device, cfg, L, w, sp_axis=sp_axis, tp_axis=tp_axis)
+            # DS41F-0073: the decoder layers (20..39, V41_PREFILL_DECODER) take their own weight cache (default none: the shared
+            # disk cannot hold another ~13.7 GB per BFP8 layer) and expert dtype (default the encoder's)
+            dec = L >= cfg.first_decoder_layer
             blk = V41PrefillBlock(
                 mesh_device,
                 cfg,
@@ -137,8 +153,9 @@ class V41Prefill:
                 sources=self.sources,
                 ck=ck,
                 num_links=num_links,
-                weight_cache_path=weight_cache_path,
-                load_routed_from_cache=load_routed_from_cache,
+                weight_cache_path=_decoder_cache() if dec else weight_cache_path,
+                load_routed_from_cache=load_routed_from_cache and not dec,
+                expert_dtype=_decoder_expert_dtype() if dec else None,
                 **mk,
             )
             for slot in range(self.num_users):  # one attention state per user (the weights are shared)
