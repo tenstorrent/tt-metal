@@ -82,6 +82,7 @@ def fx(tmp_path, monkeypatch):
     """A valid model spec whose hooks are the synthetic fixture; metrics go to tmp."""
     monkeypatch.setenv(M.RESULTS_ENV, str(tmp_path / "results"))
     monkeypatch.setenv(M.TASK_ENV, "T")
+    monkeypatch.setenv("BRINGUP_DASHBOARD", "0")
 
     def make(**over):
         d = {

@@ -64,6 +64,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -72,6 +73,8 @@ from string import Template
 
 import yaml
 
+from models.demos.common.bringup import overseer as OV
+from models.demos.common.bringup import timing as TL
 from models.demos.common.bringup import watch as W
 from models.demos.common.bringup.core import checkout_env, defaults
 from models.demos.common.bringup.core import freeze as F
@@ -127,6 +130,7 @@ ROLE_OF_STEP = {
 }
 IGNORED = (
     r"/dashboard/[^/]+\.html$",
+    r"(^|/)bringup/(overseer\.yaml|supervision\.md)$",  # the overseer's own files (F69), never an agent's
     r"(^|/)__pycache__/",
     r"\.pyc$",
     r"^generated/",
@@ -232,6 +236,13 @@ def agents_json(run_dir: Path, agent: str = "bringup-engineer") -> Path:
         )
     )
     return out
+
+
+def _killpg(pgid: int, sig) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        pass
 
 
 def agent_command(spec: Spec, run_dir: Path, agent: str, prompt: str, model: str | None) -> list[str]:
@@ -400,6 +411,8 @@ class Orchestrator:
         self.attempts_override = None
         self.timeout_s = timeout_s or int(spec.get("agents.timeout_s"))
         self.run_dir = spec.run_dir(run_name(self.led))
+        self.shown: dict[str, list] = {}  # brief name -> the overseer notes it showed (F69)
+        self.aborted: dict | None = None  # the overseer's abort of the last agent run (F69)
         (self.run_dir / "briefs").mkdir(parents=True, exist_ok=True)
         (self.run_dir / "agents").mkdir(parents=True, exist_ok=True)
         self.echo = echo
@@ -520,10 +533,13 @@ class Orchestrator:
             "\n".join(f"- `{k}` {v}" for k, v in (task["gate"].get("metrics") or {}).items()) or "- (exit code only)"
         )
         vals["previous"] = f"## Previous attempt failed\n```\n{previous[-6000:]}\n```\n" if previous else ""
+        notes = OV.for_task(s.bringup_dir, task["id"], role)
+        vals["overseer"] = OV.brief_text(notes)
 
         text = Template((HERE / "briefs" / "brief.md").read_text()).safe_substitute(vals)
         p = self.run_dir / "briefs" / f"{task['id']}.{role}.{attempt}.md"
         p.write_text(text)
+        self.shown[p.name] = notes
         return p
 
     def defer_text(self, task: dict, comp: dict | None, vals: dict) -> str:
@@ -693,21 +709,36 @@ class Orchestrator:
         self.echo(f"  [{tid}] {role} attempt {attempt}: {agent} (brief {brief.name})")
         t0 = time.time()
         with open(log, "w") as f:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=self.spec.repo,
+                env=env,
+                stdout=f,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            OV.agent_started(self.run_dir, proc.pid, tid, role, attempt)
             try:
-                rc = subprocess.run(
-                    cmd,
-                    cwd=self.spec.repo,
-                    env=env,
-                    stdout=f,
-                    stderr=subprocess.STDOUT,
-                    stdin=subprocess.DEVNULL,
-                    timeout=self.timeout_s,
-                ).returncode
+                rc = proc.wait(timeout=self.timeout_s)
             except subprocess.TimeoutExpired:
+                _killpg(proc.pid, signal.SIGKILL)
+                rc = proc.wait()
                 rc = -9
+            except BaseException:  # the orchestrator is stopped: its agent goes with it
+                _killpg(proc.pid, signal.SIGTERM)
+                raise
+            finally:
+                OV.agent_finished(self.run_dir)
         info = parse_stream(log)
         problems = []
-        if rc != 0 or info["is_error"]:
+        self.aborted = OV.take_abort(self.run_dir)
+        if self.aborted:
+            why = self.aborted.get("reason", "")
+            problems.append(f"aborted by the overseer: {why}")
+            self.led.update(tid, history_add={"t": now(), "status": "ABORTED", "why": why})
+            self.echo(f"  [{tid}] ABORTED by the overseer ({role} attempt {attempt}): {why}")
+        if (rc != 0 or info["is_error"]) and not self.aborted:
             problems.append(f"agent exited rc={rc} is_error={info['is_error']}")
         problems += command_violations(info["commands"], self.spec.repo)
         pats = self.allowed_paths(task, role)
@@ -756,6 +787,9 @@ class Orchestrator:
         contradicted = json.loads(report.read_text()).get("contradicted") or []
         for c in contradicted:
             self.echo(f"  [{tid}] KNOWLEDGE CONTRADICTED {c['id']}: {c.get('evidence', '')}")
+        if not self.aborted:
+            for line in OV.answers(json.loads(report.read_text()), self.shown.get(brief.name, [])):
+                self.echo(f"  [{tid}] {line}")
         # Agent definitions and brief templates live in the framework checkout (which may not be the model's repo).
         defs = (
             [AGENT_DEF, HERE / "briefs" / "brief.md", HERE / "briefs" / "roles.yaml"]
@@ -797,7 +831,18 @@ class Orchestrator:
             if sig:
                 raise InfraStop(tid, sig)
         self.echo(f"  [{tid}] gate {res.verdict}" + (f" -> {res.commit}" if res.commit else ""))
+        self.refresh_dashboards()
         return res
+
+    def refresh_dashboards(self) -> None:
+        """Re-export the dashboards after every gate, in the background (BRINGUP_DASHBOARD=0 turns it off)."""
+        if os.environ.get("BRINGUP_DASHBOARD", "1") != "1" or not self.spec.path:
+            return
+        cmd = [sys.executable, "-m", "models.demos.common.bringup.dashboard.export", "--spec", str(self.spec.path)]
+        env = dict(os.environ, PYTHONPATH=str(CODE_ROOT))
+        subprocess.Popen(
+            cmd, cwd=CODE_ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
+        )
 
     def failure_text(self, res) -> str:
         tail = res.log.read_text(errors="replace")[-4000:] if res.log and res.log.exists() else ""
@@ -861,8 +906,17 @@ class Orchestrator:
                     f"  [{task['id']}] freeze without review failed, starting the test role: {previous.splitlines()[0]}"
                 )
         budget = self.policy(task, "test")["attempts"]
-        for attempt in range(1, budget + 1):
+        attempt = used = aborts = 0
+        while used < budget:
+            attempt += 1
             problems = self.run_agent(task, "test", attempt, self.brief(task, "test", attempt, previous))
+            if self.aborted:  # F69
+                aborts += 1
+                previous = "\n".join(problems)
+                if aborts > OV.MAX_ABORTS:
+                    return f"aborted by the overseer {aborts} times"
+                continue
+            used += 1
             if problems:
                 previous = "\n".join(problems)
                 continue
@@ -896,11 +950,20 @@ class Orchestrator:
     def attempt_loop(self, task: dict, role: str, first_failure: str = "") -> bool:
         previous = first_failure
         pol = self.policy(task, role)
-        for attempt in range(1, pol["attempts"] + 1):
+        attempt = used = aborts = 0
+        while used < pol["attempts"]:
+            attempt += 1
             # the dashboard shows the agent at work, not the check that ran before it started
             self.led.update(task["id"], status="RUNNING", attempt=attempt, role=role, waiting=None)
             agent = AGENT_OF_ROLE.get(role, "bringup-engineer")
             problems = self.run_agent(task, role, attempt, self.brief(task, role, attempt, previous), agent=agent)
+            if self.aborted:  # F69: the overseer stopped it; the next attempt reads its note
+                aborts += 1
+                previous = "\n".join(problems)
+                if aborts > OV.MAX_ABORTS:
+                    return self.stop_task(task, f"aborted by the overseer {aborts} times; waiting for a person")
+                continue
+            used += 1
             if task.get("approval") and not problems and self.needs_human(task):
                 return True  # the plan exists; the gate needs the approval next
             res = self.gate(task["id"])
@@ -920,6 +983,11 @@ class Orchestrator:
         if pol["escalate"] == "debugger":
             return self.debug(task, previous, pol["attempts"], pol.get("debugger_attempts", 3))
         why = f"{role} failed {pol['attempts']} attempts; waiting for a person (logs in {self.run_dir / 'agents'})"
+        self.led.update(task["id"], status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
+        self.echo(f"  [{task['id']}] STOPPED: {why}")
+        return False
+
+    def stop_task(self, task: dict, why: str) -> bool:
         self.led.update(task["id"], status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
         self.echo(f"  [{task['id']}] STOPPED: {why}")
         return False
@@ -1474,6 +1542,7 @@ def main(argv=None) -> int:
         how.add_argument(f"--{d}", dest="decision", action="store_const", const=d, help=f"decide: {d}")
     ap.add_argument("--note", default="", help="decide: stored with the decision")
     a = ap.parse_args(argv)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     if a.command in ("run", "resume"):
         checkout_env.pin()  # F68: gates, agents and tests use this checkout's cache, venv and paths
     spec = Spec.load(a.spec)
@@ -1495,9 +1564,15 @@ def main(argv=None) -> int:
                 led.update(tid, status="TODO", history_add={"t": now(), "status": "RESUMED"})
     pid_file = orch.run_dir / W.PID_FILE  # the supervisor's watch (watch.py) tells a stopped run from a quiet one
     pid_file.write_text(f"{os.getpid()} {now()}\n")
+    # F70: the run's timeline (start / exit with its code) and every device run's lock wait and run time
+    os.environ.setdefault("TT_DEVICE_TIMING_LOG", str(orch.run_dir / TL.DEVICE_LOG))
+    TL.record(orch.run_dir, "start", command=a.command)
+    rc = None
     try:
-        return orch.run(until=a.until, only=a.only)
+        rc = orch.run(until=a.until, only=a.only)
+        return rc
     finally:
+        TL.record(orch.run_dir, "exit", code=rc)
         pid_file.unlink(missing_ok=True)
 
 
