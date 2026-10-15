@@ -192,10 +192,14 @@ static inline void token_math(RUNTIME_PARAMETERS params)
 
     if constexpr (GMG_SFPU_SORT)
     {
-        // The op's sfpu_sort route: every init ahead of the bias add, whose words it issues directly.
-        _llk_math_generalized_moe_gate_eltwise_binary_direct_init_<BINARY_MODE>();
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_common_init_<false /* is_32bit */>();
-        SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX_MODE, is_fp32_dest_acc_en));
+        // The op's sfpu_sort route: every init ahead of the bias add, whose words it issues directly. With no id copy
+        // to reprogram the address modes they hold for every token, so the identity rows set them once per launch.
+        if constexpr (!GMG_IDENTITY_INDICES)
+        {
+            _llk_math_generalized_moe_gate_eltwise_binary_direct_init_<BINARY_MODE>();
+            _llk_math_generalized_moe_gate_transpose_dest_single_face_common_init_<false /* is_32bit */>();
+            SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX_MODE, is_fp32_dest_acc_en));
+        }
         _llk_math_generalized_moe_gate_eltwise_binary_direct_<BINARY_MODE>(SCORES_TILE);
     }
     else
@@ -236,6 +240,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (GMG_IDENTITY_INDICES && PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
             _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* skip_int8 */>(formats.math);
+            _llk_math_generalized_moe_gate_eltwise_binary_direct_init_<BINARY_MODE>();
+            _llk_math_generalized_moe_gate_transpose_dest_single_face_common_init_<false /* is_32bit */>();
+            SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX_MODE, is_fp32_dest_acc_en));
         }
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
