@@ -14,7 +14,13 @@ namespace ckl = compute_kernel_lib;
 
 // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
 template <uint32_t dfb_batch_id, uint32_t dfb_old_id, uint32_t dfb_updated_id, bool AlsoOut0>
-ALWI void update_running_stat() {
+ALWI void update_running_stat(
+    DataflowBuffer& dfb_batch_obj,
+    DataflowBuffer& dfb_old_obj,
+    DataflowBuffer& dfb_updated_obj,
+    DataflowBuffer& dfb_one_obj,
+    DataflowBuffer& dfb_momentum_obj,
+    DataflowBuffer& dfb_out_obj) {
     using D = ckl::Dst;
     using ckl::BinaryFpuOp;
 
@@ -23,19 +29,20 @@ ALWI void update_running_stat() {
         ckl::BinaryFpu<
             BinaryFpuOp::Sub,
             ckl::input(dfb::one, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},  // D0 = 1 - momentum
+            ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{
+            dfb_one_obj, dfb_momentum_obj},  // D0 = 1 - momentum
         // D0 = (1 - momentum) * old_stat
-        ckl::DestReuseBinary<BinaryFpuOp::Mul, ckl::input(dfb_old_id), ckl::DestReuseType::DEST_TO_SRCA>{},
+        ckl::DestReuseBinary<BinaryFpuOp::Mul, ckl::input(dfb_old_id), ckl::DestReuseType::DEST_TO_SRCA>{dfb_old_obj},
         ckl::BinaryFpu<
             BinaryFpuOp::Mul,
             ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::input(dfb_batch_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            D::D1>{},                           // D1 = momentum * batch_stat
-        ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = D0 + D1
-        ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{},
-        ckl::Optional<
-            AlsoOut0,
-            ckl::PackTile<ckl::output(dfb::out, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{});
+            D::D1>{dfb_momentum_obj, dfb_batch_obj},  // D1 = momentum * batch_stat
+        ckl::AddBinary<D::D0, D::D1, D::D0>{},        // D0 = D0 + D1
+        ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{
+            dfb_updated_obj},
+        ckl::Optional<AlsoOut0, ckl::PackTile<ckl::output(dfb::out, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{
+            dfb_out_obj});
 }
 
 void kernel_main() {
@@ -51,6 +58,10 @@ void kernel_main() {
     DataflowBuffer dfb_momentum_obj(dfb::momentum);
     DataflowBuffer dfb_one_obj(dfb::one);  // holds 1, for the (1 - momentum) term
     DataflowBuffer dfb_out_obj(dfb::out);
+    DataflowBuffer dfb_old_running_mean_obj(dfb::old_running_mean);
+    DataflowBuffer dfb_updated_mean_obj(dfb::updated_mean);
+    DataflowBuffer dfb_old_running_var_obj(dfb::old_running_var);
+    DataflowBuffer dfb_updated_var_obj(dfb::updated_var);
 
     compute_kernel_hw_startup(dfb::batch_mean, dfb::batch_var, dfb::out);
     constexpr uint32_t onetile = 1;
@@ -74,7 +85,13 @@ void kernel_main() {
                 dfb::batch_mean,
                 dfb::old_running_mean,
                 dfb::updated_mean,
-                /*AlsoOut0=*/!old_running_var_has_value>();
+                /*AlsoOut0=*/!old_running_var_has_value>(
+                dfb_batch_mean_obj,
+                dfb_old_running_mean_obj,
+                dfb_updated_mean_obj,
+                dfb_one_obj,
+                dfb_momentum_obj,
+                dfb_out_obj);
         }
 
         if constexpr (old_running_var_has_value) {
@@ -83,7 +100,13 @@ void kernel_main() {
                 dfb::batch_var,
                 dfb::old_running_var,
                 dfb::updated_var,
-                /*AlsoOut0=*/true>();
+                /*AlsoOut0=*/true>(
+                dfb_batch_var_obj,
+                dfb_old_running_var_obj,
+                dfb_updated_var_obj,
+                dfb_one_obj,
+                dfb_momentum_obj,
+                dfb_out_obj);
         }
 
         dfb_out_obj.push_back(onetile);
