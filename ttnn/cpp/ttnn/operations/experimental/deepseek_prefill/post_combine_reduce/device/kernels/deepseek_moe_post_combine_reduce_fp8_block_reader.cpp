@@ -10,10 +10,14 @@
 // rows are compacted: stage s holds every token's s-th local slot, and a token with fewer local slots gets
 // a zero scale for that row (its c_0 row keeps finite stale fp8, so it contributes 0).
 //
-// Per stage the reader also builds the multiply operands, column 0 only (face-aware):
-//   c_4: part_wt bf16 tiles, column 0 row t = the slot's pow2 scale of tile j's 1x32 block (exact in bf16)
-//   c_1: one bf16 tile, column 0 row t = the slot's routing weight
-// and per block it hands compute the stage count through the c_7 mailbox.
+// c_0 holds a whole block, one stage per top-k slot, so every read of the block is in flight behind one barrier:
+// one stage at a time left the op bound by DRAM latency. The reader always fills and the compute always frees
+// all of c_0, unused stages included, so each block starts at its base.
+//
+// Per stage the reader also builds the multiply operand, column 0 only (face-aware): c_4 holds one bf16 tile per
+// scale block of the part, column 0 row t = the slot's routing weight times that block's scale. The scale is a power
+// of two, so the product is the weight with the scale's exponent added to its own: exact, and no multiply. Per block
+// it hands compute the stage count through the c_7 mailbox.
 
 #include <cstdint>
 
@@ -26,7 +30,6 @@
 #include <tt-metalium/constants.hpp>
 
 constexpr uint32_t cb_rm_id = tt::CBIndex::c_0;
-constexpr uint32_t cb_weight_col_id = tt::CBIndex::c_1;
 constexpr uint32_t cb_dispatch_table_id = tt::CBIndex::c_2;
 constexpr uint32_t cb_indices_id = tt::CBIndex::c_3;
 constexpr uint32_t cb_scale_id = tt::CBIndex::c_4;
@@ -51,6 +54,17 @@ constexpr auto indices_accessor_args =
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 constexpr uint32_t part_row_bytes = part_wt * tt::constants::TILE_WIDTH;  // e4m3: one byte per element
+constexpr uint32_t part_scales = part_wt / TILES_PER_SCALE;
+constexpr uint32_t stage_bytes = TOKENS_PER_CHUNK * part_row_bytes;
+
+// bf16 weight * fp32 power-of-two scale, as bf16: the scale's unbiased exponent added to the weight's. A zero weight
+// stays zero; routing weights and scales are far from the ends of the exponent range.
+FORCE_INLINE uint16_t weight_times_pow2(uint16_t weight, uint32_t scale_bits) {
+    if ((weight & 0x7F80u) == 0) {
+        return 0;
+    }
+    return static_cast<uint16_t>(weight + ((static_cast<int32_t>((scale_bits >> 23) & 0xFFu) - 127) << 7));
+}
 
 // Offset, in tile elements, of column zero for a logical row in the four-face tile layout.
 FORCE_INLINE uint32_t tile_col0_offset(uint32_t row) {
@@ -74,7 +88,6 @@ void kernel_main() {
 
     Noc noc;
     CircularBuffer cb_rm(cb_rm_id);
-    CircularBuffer cb_weight_col(cb_weight_col_id);
     CircularBuffer cb_dispatch_table(cb_dispatch_table_id);
     CircularBuffer cb_indices(cb_indices_id);
     CircularBuffer cb_scale(cb_scale_id);
@@ -112,7 +125,8 @@ void kernel_main() {
     noc.async_read_barrier();
     const volatile tt_l1_ptr int32_t* dispatch_table = reinterpret_cast<volatile tt_l1_ptr int32_t*>(dispatch_table_l1);
 
-    // Reader-private scratch: [32 tokens][num_experts] weight pages, then [32 tokens] scale windows.
+    // Reader-private scratch: [32 tokens][num_experts] weight pages, then [num_experts stages][32 tokens] scale
+    // windows.
     cb_scratch.reserve_back(1);
     const uint32_t weight_scratch = cb_scratch.get_write_ptr();
     const uint32_t scale_scratch = weight_scratch + TOKENS_PER_CHUNK * num_experts * weight_read_bytes;
@@ -165,9 +179,9 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_stage_count.get_write_ptr())[0] = num_stages;
         cb_stage_count.push_back(1);
 
+        // --- every stage's part columns and scales: stage s is each token's s-th local slot ---
+        cb_rm.reserve_back(num_experts * part_wt);
         for (uint32_t s = 0; s < num_stages; s++) {
-            // --- stage s: every token's s-th local slot, part columns + the part's 1x32 scales ---
-            cb_rm.reserve_back(part_wt);
             for (uint32_t t = 0; t < TOKENS_PER_CHUNK; t++) {
                 if (s < num_local[t]) {
                     const uint32_t page = (token_start_idx + t) * num_experts + local_slots[t][s];
@@ -176,57 +190,56 @@ void kernel_main() {
                         cb_rm,
                         part_row_bytes,
                         {.page_id = page, .offset_bytes = part_offset},
-                        {.offset_bytes = t * part_row_bytes});
+                        {.offset_bytes = s * stage_bytes + t * part_row_bytes});
                     noc.async_read(
                         combine_addrg,
                         use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scratch),
                         scale_read_bytes,
                         {.page_id = page, .offset_bytes = scale_read_offset},
-                        {.offset_bytes = TOKENS_PER_CHUNK * num_experts * weight_read_bytes + t * scale_slot_bytes});
+                        {.offset_bytes = TOKENS_PER_CHUNK * num_experts * weight_read_bytes +
+                                         (s * TOKENS_PER_CHUNK + t) * scale_slot_bytes});
                 }
             }
-            noc.async_read_barrier();
+        }
+        noc.async_read_barrier();
+
+        for (uint32_t s = 0; s < num_stages; s++) {
             cb_rm.push_back(part_wt);
 
-            cb_scale.reserve_back(part_wt);
-            cb_weight_col.reserve_back(1);
+            cb_scale.reserve_back(part_scales);
             volatile tt_l1_ptr uint16_t* scale_tiles =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_scale.get_write_ptr());
-            volatile tt_l1_ptr uint16_t* weight_tile =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_weight_col.get_write_ptr());
-            // Plain (cached) loads after one invalidate, a token's part_wt scales gathered before their strided
-            // stores (the volatile load-shift-store per element serialized the staging).
+            // Plain (cached) loads after one invalidate, a token's scales gathered before their strided stores (the
+            // volatile load-shift-store per element serialized the staging).
             invalidate_l1_cache();
             for (uint32_t t = 0; t < TOKENS_PER_CHUNK; t++) {
-                const uint32_t col0 = tile_col0_offset(t);
+                volatile tt_l1_ptr uint16_t* dst = scale_tiles + tile_col0_offset(t);
                 if (s < num_local[t]) {
                     const uint32_t k = local_slots[t][s];
-                    // bf16 weight = the page's first element; pow2 fp32 scale -> bf16 is its high half (exact).
-                    weight_tile[col0] = reinterpret_cast<const uint16_t*>(
+                    // bf16 weight = the page's first element.
+                    const uint16_t weight = reinterpret_cast<const uint16_t*>(
                         weight_scratch + (t * num_experts + k) * weight_read_bytes)[0];
-                    const uint32_t* row_scales =
-                        reinterpret_cast<const uint32_t*>(scale_scratch + t * scale_slot_bytes) + scale_skip_words;
-                    // One scale per TILES_PER_SCALE tiles (scale_block_w / 32).
-                    uint32_t v[part_wt / TILES_PER_SCALE];
+                    const uint32_t* row_scales = reinterpret_cast<const uint32_t*>(
+                                                     scale_scratch + (s * TOKENS_PER_CHUNK + t) * scale_slot_bytes) +
+                                                 scale_skip_words;
+                    uint32_t v[part_scales];
 #pragma GCC unroll 32
-                    for (uint32_t j = 0; j < part_wt / TILES_PER_SCALE; j++) {
+                    for (uint32_t j = 0; j < part_scales; j++) {
                         v[j] = row_scales[j];
                     }
-                    volatile tt_l1_ptr uint16_t* dst = scale_tiles + col0;
 #pragma GCC unroll 32
-                    for (uint32_t j = 0; j < part_wt; j++) {
-                        dst[j * tt::constants::TILE_HW] = v[j / TILES_PER_SCALE] >> 16;
+                    for (uint32_t j = 0; j < part_scales; j++) {
+                        dst[j * tt::constants::TILE_HW] = weight_times_pow2(weight, v[j]);
                     }
                 } else {
-                    weight_tile[col0] = 0;
-                    for (uint32_t j = 0; j < part_wt; j++) {
-                        scale_tiles[j * tt::constants::TILE_HW + col0] = 0;
+                    for (uint32_t j = 0; j < part_scales; j++) {
+                        dst[j * tt::constants::TILE_HW] = 0;
                     }
                 }
             }
-            cb_scale.push_back(part_wt);
-            cb_weight_col.push_back(1);
+            cb_scale.push_back(part_scales);
         }
+        cb_rm.push_back((num_experts - num_stages) * part_wt);
         token_start_idx += TOKENS_PER_CHUNK;
     }
 }
