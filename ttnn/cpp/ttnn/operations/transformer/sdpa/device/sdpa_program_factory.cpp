@@ -16,10 +16,12 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <hostdevcommon/common_values.hpp>
+#include <array>
 #include <bit>
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <cmath>
 
 using namespace tt::constants;
@@ -104,6 +106,11 @@ bool get_exp_approx_mode(const std::optional<ttnn::operations::transformer::SDPA
         return program_config->exp_approx_mode.value();
     }
     return true;
+}
+
+// SDPAProgramConfig::fp32_accumulation (kernels/compute/fp32_accumulation.hpp), default off.
+bool get_fp32_accumulation(const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config) {
+    return program_config.has_value() && program_config->fp32_accumulation;
 }
 
 // Effective (num_kv_heads_k, num_kv_heads_v, block_size) for an HMA-shared paged buffer.
@@ -242,6 +249,50 @@ WindowedSetup setup_windowed_cbs(
         w.q_offset_buffer = off.buffer();
     }
     return w;
+}
+
+// SDPAProgramConfig::fp32_accumulation: the FP32 sum and output CBs also feed FPU ops (matmul_reduce, the
+// attention-sink rescale), so each gets an UnpackToDestFp32 alias over the same SRAM for the SFPU helpers' lossless
+// reads, as the matmul partials reload does. The compute kernel learns the pairs through defines
+// (kernels/compute/fp32_accumulation.hpp).
+struct Fp32AccumulationViews {
+    KernelDescriptor::Defines defines;
+    ComputeConfigDescriptor::UnpackToDestModes unpack_to_dest_mode;
+};
+
+Fp32AccumulationViews add_fp32_accumulation_views(
+    bool fp32_accumulation, ProgramDescriptor& desc, uint32_t& next_cb_index, const sdpa_cb::CBIds& cb_ids) {
+    Fp32AccumulationViews views;
+    if (!fp32_accumulation) {
+        return views;
+    }
+    views.defines.emplace_back("SDPA_FP32_ACCUMULATION", "1");
+    views.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    const std::array<std::pair<uint32_t, const char*>, 4> states = {
+        {{cb_ids.sum_A, "SUM_A"}, {cb_ids.sum_B, "SUM_B"}, {cb_ids.out_im_A, "OUT_A"}, {cb_ids.out_im_B, "OUT_B"}}};
+    for (const auto& [cb_index, name] : states) {
+        const uint32_t view = next_cb_index++;
+        TT_FATAL(
+            view < tt::tt_metal::hal::get_num_dataflow_buffers(),
+            "fp32_accumulation needs {} circular buffers, more than the device's {}",
+            view + 1,
+            tt::tt_metal::hal::get_num_dataflow_buffers());
+        CBDescriptor* cb = nullptr;
+        for (auto& candidate : desc.cbs) {
+            if (candidate.format_descriptors.size() == 1 && candidate.format_descriptors[0].buffer_index == cb_index) {
+                cb = &candidate;
+                break;
+            }
+        }
+        TT_FATAL(cb != nullptr, "fp32_accumulation: circular buffer {} not found", cb_index);
+        auto alias = cb->format_descriptors[0];
+        alias.buffer_index = static_cast<uint8_t>(view);
+        cb->format_descriptors.push_back(alias);
+        views.defines.emplace_back(std::string("SDPA_FP32_") + name, std::to_string(cb_index));
+        views.defines.emplace_back(std::string("SDPA_FP32_") + name + "_VIEW", std::to_string(view));
+        views.unpack_to_dest_mode[view] = UnpackToDestMode::UnpackToDestFp32;
+    }
+    return views;
 }
 
 }  // namespace
@@ -443,7 +494,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const bool exp_approx_mode = get_exp_approx_mode(program_config);
     // FP32 online-softmax state (SDPAProgramConfig::fp32_accumulation, kernels/compute/fp32_accumulation.hpp).
     // Validation requires fp32_dest_acc_en, which also selects the standard (non-streaming) compute path.
-    const bool fp32_accumulation = program_config.has_value() && program_config->fp32_accumulation;
+    const bool fp32_accumulation = get_fp32_accumulation(program_config);
 
     auto core_grid = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
     uint32_t num_cores = grid_size.x * grid_size.y;
@@ -771,8 +822,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat stats_df = im_df;
     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
-    // fp32_accumulation also keeps the output accumulator in FP32 (sums already are with fp32_dest_acc_en).
-    tt::DataFormat out_im_df = fp32_accumulation ? tt::DataFormat::Float32 : im_df;
+    // fp32_accumulation also keeps the output accumulator in FP32 (sums already are with fp32_dest_acc_en);
+    // otherwise it shares im_df (Float16_b).
+    tt::DataFormat out_im_df = fp32_dest_intermediate_dataformat(fp32_accumulation);
     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
     // both must share the same data format for the unpack config to be correct.
     TT_ASSERT(
@@ -880,39 +932,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
-    // fp32_accumulation: the FP32 sum and output CBs also feed FPU ops (matmul_reduce, the attention-sink
-    // rescale), so each gets an UnpackToDestFp32 alias over the same SRAM for the SFPU helpers' lossless reads,
-    // as the matmul partials reload does. The compute kernel learns the pairs through defines.
-    KernelDescriptor::Defines fp32_accumulation_defines;
-    std::vector<uint32_t> fp32_lossless_views;
-    if (fp32_accumulation) {
-        fp32_accumulation_defines.emplace_back("SDPA_FP32_ACCUMULATION", "1");
-        const auto add_lossless_view = [&](uint32_t cb_index, const std::string& name) {
-            const uint32_t view = next_cb_index++;
-            TT_FATAL(
-                view < tt::tt_metal::hal::get_num_dataflow_buffers(),
-                "fp32_accumulation needs {} circular buffers, more than the device's {}",
-                view + 1,
-                tt::tt_metal::hal::get_num_dataflow_buffers());
-            uint32_t matches = 0;
-            for (auto& cb : desc.cbs) {
-                if (cb.format_descriptors.size() == 1 && cb.format_descriptors[0].buffer_index == cb_index) {
-                    auto alias = cb.format_descriptors[0];
-                    alias.buffer_index = static_cast<uint8_t>(view);
-                    cb.format_descriptors.push_back(alias);
-                    ++matches;
-                }
-            }
-            TT_FATAL(matches == 1, "fp32_accumulation: expected one circular buffer {}, found {}", cb_index, matches);
-            fp32_accumulation_defines.emplace_back("SDPA_FP32_" + name, std::to_string(cb_index));
-            fp32_accumulation_defines.emplace_back("SDPA_FP32_" + name + "_VIEW", std::to_string(view));
-            fp32_lossless_views.push_back(view);
-        };
-        add_lossless_view(cb_ids.sum_A, "SUM_A");
-        add_lossless_view(cb_ids.sum_B, "SUM_B");
-        add_lossless_view(cb_ids.out_im_A, "OUT_A");
-        add_lossless_view(cb_ids.out_im_B, "OUT_B");
-    }
+    const Fp32AccumulationViews fp32_views =
+        add_fp32_accumulation_views(fp32_accumulation, desc, next_cb_index, cb_ids);
 
     const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();
     const auto writer_cb_compile_time_args = cb_ids.writer_compile_time_args();
@@ -1461,20 +1482,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = compute_compile_time_args;
     compute_desc.defines = defines;
-    compute_desc.defines.insert(
-        compute_desc.defines.end(), fp32_accumulation_defines.begin(), fp32_accumulation_defines.end());
-    ComputeConfigDescriptor::UnpackToDestModes unpack_to_dest_mode;
-    if (fp32_accumulation) {
-        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-        for (const uint32_t view : fp32_lossless_views) {
-            unpack_to_dest_mode[view] = UnpackToDestMode::UnpackToDestFp32;
-        }
-    }
+    compute_desc.defines.insert(compute_desc.defines.end(), fp32_views.defines.begin(), fp32_views.defines.end());
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+        .unpack_to_dest_mode = fp32_views.unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode,
     };
 
