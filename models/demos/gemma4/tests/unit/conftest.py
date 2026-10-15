@@ -39,6 +39,7 @@ from models.demos.gemma4.tests.unit.dflash_contract_harness import (  # noqa: E4
     _padded_length,
     _unused,
 )
+from models.demos.gemma4.tests.unit.dflash_sampling_harness import attach_sampling_state  # noqa: E402
 
 _ENV_CLEARED = (
     "GEMMA4_CONTRACT_ASYNC",
@@ -79,6 +80,26 @@ def _stub_runtime(patch):
     )
     patch.setitem(sys.modules, "ttnn", runtime)
     lower_modules = {
+        "ttnn.tools": {"trace_allocation_tracker": SimpleNamespace()},
+        "models.common.sampling.tt_log_probs": {
+            "LogProbsResult": type("LogProbsResult", (), {}),
+            "reformat_logprobs": _unused,
+        },
+        "models.common.sampling.tt_penalties": {"TTPenalties": _unused},
+        "models.common.sampling.tt_sampling": {"TTSampling": _unused},
+        "models.common.llama_models": {
+            name: _unused
+            for name in (
+                "CompletionMessage",
+                "StopReason",
+                "TokenResult",
+                "create_vision_mask",
+                "encode_content",
+                "extract_images_from_messages",
+                "sample_top_p",
+            )
+        },
+        "models.common.warmup": {"WarmupForwardMixin": type("WarmupForwardMixin", (), {})},
         "models.demos.gemma4.tt.common": {
             "GEMMA4_CP_PREFILL_CHUNK": 24576,
             "create_tt_model": _unused,
@@ -105,10 +126,19 @@ def _stub_runtime(patch):
                 "warmup_gemma4_model_prefill",
             )
         },
-        "models.tt_transformers.tt.common": {"get_padded_prefill_len": _padded_length},
-        "models.tt_transformers.tt.generator": {
-            "SUPPORTED_PREFILL_BATCH_SIZES": (1, 2, 4, 8, 16, 32),
-            "create_submeshes": _unused,
+        "models.tt_transformers.tt.common": {
+            "get_padded_prefill_len": _padded_length,
+            **{
+                name: _unused
+                for name in (
+                    "Mode",
+                    "copy_host_to_device",
+                    "get_all_padded_prefill_lengths",
+                    "get_block_size",
+                    "get_max_prefill_chunk_size",
+                    "num_blocks_in_seq",
+                )
+            },
         },
         "models.tt_transformers.tt.generator_vllm": {
             "HybridAttentionForCausalLM": type(
@@ -134,6 +164,13 @@ def _stub_runtime(patch):
     except ImportError:
         logger = SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None, error=lambda *a, **k: None)
         patch.setitem(sys.modules, "loguru", _module("loguru", logger=logger))
+    sampling = _fresh_import(patch, "models.common.sampling.generator")
+    sampling_package = importlib.import_module("models.common.sampling")
+    # Lazy exports must point at the same module as the imported sampler class.
+    for name, (owner, attribute) in sampling_package._EXPORTS.items():
+        if owner == ".generator":
+            patch.setitem(sampling_package.__dict__, name, getattr(sampling, attribute))
+    _fresh_import(patch, "models.tt_transformers.tt.generator")
     try:
         importlib.import_module("vllm_tt_plugin.spec_decode")
     except ImportError:
@@ -190,7 +227,8 @@ def _fresh_import(patch, name):
     parent_name, _, attr = name.rpartition(".")
     parent = importlib.import_module(parent_name)
     patch.setattr(parent, attr, None, raising=False)
-    patch.delitem(sys.modules, name, raising=False)
+    patch.setitem(sys.modules, name, None)
+    del sys.modules[name]
     return importlib.import_module(name)
 
 
@@ -225,6 +263,7 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     model = cls.__new__(cls)
     model.events = []
     model.model = [Target(model.events, ring=ring)]
+    attach_sampling_state(model)
     model.model_args = [SimpleNamespace(max_seq_len=1024, max_batch_size=32)]
     model.kv_cache = [[("k", "v"), ("k", "v")]]
     model._spec_decoder = Decoder(model.events, widths=widths)
@@ -240,9 +279,9 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     model._spec_decoder_bucket = None
     model._bounded_sliding_kv_cache = ring is not None
     model._SPEC_CONTRACT_K = 5
-    model._slots_prefilled_since_decode = set()
     model.results = []
     model.reloads = []
+    model.decode_commands = []
     model._dflash_init_state()
     model._spec_get_drafter = lambda: SimpleNamespace(target_layer_ids=[1, 2])
     model._effective_paged_block_size = lambda kv_cache: 64
@@ -283,9 +322,44 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
             target.taps.extend(model.harness_taps(rows, group))
         return torch.zeros(int(tokens.shape[0]), 1, dtype=torch.int32)
 
-    def decode(self, *args, page_tables_per_layer=None, **kwargs):
+    def decode(
+        self,
+        *args,
+        page_tables_per_layer=None,
+        reload_inputs,
+        reload_page_table,
+        reload_sampling_params,
+        reset_sampling_state,
+        **kwargs,
+    ):
+        if "reset_batch" in kwargs:
+            raise TypeError("reset_batch is not supported by decode input update contract v1")
         model.events.append(("decode", kwargs["tokens"].reshape(-1).tolist(), kwargs["start_pos"].reshape(-1).tolist()))
-        model.reloads.append(bool(kwargs.get("reset_batch", False)))
+        model.reloads.append(reload_inputs)
+        model.decode_commands.append(
+            dict(
+                reload_inputs=reload_inputs,
+                reload_page_table=reload_page_table,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+            )
+        )
+        sampling_params = kwargs.get("sampling_params")
+        if sampling_params is not None:
+            active = model._prepare_decode_sampling_state(
+                sampling_params,
+                start_pos=torch.chunk(kwargs["start_pos"], model.data_parallel, 0),
+                prompt_tokens=kwargs.get("prompt_tokens"),
+                output_tokens=kwargs.get("output_tokens"),
+                slot_remap=kwargs.get("slot_remap"),
+                reload_inputs=reload_inputs,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+            )
+            for target, slots in zip(model.model, active):
+                target.sampling.seed_manager.get_new_values(slots)
+        else:
+            model._apply_sampling_slot_remap(kwargs.get("slot_remap"))
         assert model.results, "Supply a plain decode result before submitting the step"
         return model.results.pop(0)
 

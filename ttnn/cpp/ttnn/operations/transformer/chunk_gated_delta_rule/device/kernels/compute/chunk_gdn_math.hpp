@@ -195,7 +195,8 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, EwOp op, bool ski
 // packed as is), DST3 (decay again, for the exp) and DST1 (g_sum); then SFPU: DST1 -= DST0, exp on DST1 and
 // DST3, and DST2 = DST1 * DST3 -- dl as the exact fp32 product of the two exps, not the broadcast product whose
 // rounded factors cost ~1e-3 on the value that decays the state every chunk. Packs: decay -> o_decay[i],
-// decay_exp -> o_exp[i], decayfac -> o_fac[i], dl -> o_fac[Ct] (from tile 0's window; every row holds g_sum).
+// decay_exp -> o_exp[i], decayfac -> o_fac[i], dl -> o_fac[Ct] (from the last tile's window; every row of every
+// window holds g_sum).
 inline void decay_all(
     uint32_t tril, uint32_t ones, uint32_t g, uint32_t o_decay, uint32_t o_exp, uint32_t o_fac, uint32_t Ct) {
     CircularBuffer(o_decay).reserve_back(Ct);
@@ -216,7 +217,7 @@ inline void decay_all(
         exp_tile_init();
         sfpu_exp_dst(1);  // decayfac_i
         sfpu_exp_dst(3);  // decay_exp_i
-        if (i == 0) {
+        if (i + 1 == Ct) {
             mul_binary_tile_init();
             sfpu_mul_dst(1, 3, 2);  // dl = decayfac_i * decay_exp_i = exp(g_sum)
         }
@@ -225,7 +226,9 @@ inline void decay_all(
         pack_tile(0, o_decay, i);
         pack_tile(3, o_exp, i);
         pack_tile(1, o_fac, i);
-        if (i == 0) {
+        if (i + 1 == Ct) {
+            // pack_tile fills o_fac in call order, whatever index it is given: dl is its last tile, so it is taken
+            // from the last window.
             pack_tile(2, o_fac, Ct);
         }
         tile_regs_release();

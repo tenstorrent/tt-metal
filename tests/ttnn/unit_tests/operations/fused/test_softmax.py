@@ -1035,3 +1035,43 @@ def test_softmax_dim_out_of_range_reports_caller_dim(device, expect_error, op):
     tt_input = ttnn.from_torch(torch.randn((1, 1, 32, 32)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, r"expected to be in range of \[-4, 3\], but got -7"):
         op(tt_input, dim=-7)
+
+
+def test_softmax_explicit_fp32_acc_keeps_fp32_intermediates(device):
+    """An explicit fp32_dest_acc_en keeps the attention-optimized factory's bulk buffers in Float32,
+    so exp(x - max) is not rounded to bfloat16 before the sum and the final multiply. The defaulted
+    config (fp32 accumulation with 16-bit bulk buffers since #53643) is a different program and
+    must not share its cache entry with an explicit config, even one that matches the default."""
+    torch.manual_seed(0)
+    # Attention-score shape from Qwen3-TTS's talker (16 heads, T = 26), a short causal row.
+    torch_input = torch.randn((1, 16, 26, 26), dtype=torch.bfloat16) * 4
+    golden = F.softmax(torch_input.float(), dim=-1).to(torch.bfloat16)
+
+    explicit_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    explicit_out = ttnn.to_torch(ttnn.softmax(tt_input, dim=-1, compute_kernel_config=explicit_config))
+
+    # An explicit config with the same values as the softmax default still gets its own program.
+    is_wormhole = device.arch() == ttnn.device.Arch.WORMHOLE_B0
+    default_equal_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole else ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    ttnn.softmax(tt_input, dim=-1, compute_kernel_config=default_equal_config)
+    entries_explicit = device.num_program_cache_entries()
+    ttnn.softmax(tt_input, dim=-1)
+    assert device.num_program_cache_entries() == entries_explicit + 1, "defaulted call reused the explicit program"
+
+    # Measured: 0.810 of outputs match the correctly rounded result with Float32 bulk buffers (WH N150 and
+    # BH P150), 0.728 when exp(x - max) is rounded to bfloat16 first (main after #53643, WH N150).
+    correctly_rounded = (explicit_out == golden).float().mean().item()
+    assert correctly_rounded >= 0.77, f"only {correctly_rounded:.3f} of outputs are correctly rounded"

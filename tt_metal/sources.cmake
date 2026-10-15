@@ -48,10 +48,12 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/fabric_telemetry.hpp
     api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
     api/tt-metalium/experimental/fabric/fabric_types.hpp
+    api/tt-metalium/experimental/fabric/link_health.hpp
     api/tt-metalium/experimental/fabric/mesh_graph.hpp
     api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp
     api/tt-metalium/experimental/fabric/physical_descriptor_builder.hpp
     api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp
+    api/tt-metalium/experimental/fabric/physical_node_id.hpp
     api/tt-metalium/experimental/fabric/physical_system_descriptor.hpp
     api/tt-metalium/experimental/fabric/pipeline_builder.hpp
     api/tt-metalium/experimental/fabric/routing_table_generator.hpp
@@ -102,6 +104,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/prefetcher_pipe.hpp
     api/tt-metalium/experimental/sender_core_type.hpp
+    api/tt-metalium/experimental/op_profiler_support.hpp
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/program_preparation.hpp
     api/tt-metalium/experimental/streaming_profiler.hpp

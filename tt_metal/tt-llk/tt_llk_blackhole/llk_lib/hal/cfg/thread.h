@@ -30,6 +30,7 @@ class CfgStateId
 { // Cfg state id for this thread
 public:
     // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
+    // Keep ckernel::cfg_state_id in sync when changing StateID.
     static constexpr Field StateID {RegisterScope::Thread, 16, 0, 0, 0, 1, 1, 0}; // Configuration state context to use for this thread (1b)
 };
 
@@ -301,12 +302,12 @@ private:
 public:
     constexpr AddrModSrcEntry operator[](SrcASelector) const
     {
-        return make_src<false>();
+        return make_src<false /*IsSrcB*/>();
     }
 
     constexpr AddrModSrcEntry operator[](SrcBSelector) const
     {
-        return make_src<true>();
+        return make_src<true /*IsSrcB*/>();
     }
 
     constexpr AddrModPackEntry operator[](SrcSelector) const
@@ -453,10 +454,10 @@ public:
 
     constexpr PerfCntCmdEntry operator[](std::uint32_t index) const
     {
-        return index == 0   ? PerfCntCmdEntry::make<0>()
-               : index == 1 ? PerfCntCmdEntry::make<1>()
-               : index == 2 ? PerfCntCmdEntry::make<2>()
-               : index == 3 ? PerfCntCmdEntry::make<3>()
+        return index == 0   ? PerfCntCmdEntry::make<0 /*Index*/>()
+               : index == 1 ? PerfCntCmdEntry::make<1 /*Index*/>()
+               : index == 2 ? PerfCntCmdEntry::make<2 /*Index*/>()
+               : index == 3 ? PerfCntCmdEntry::make<3 /*Index*/>()
                             : detail::invalid_index<PerfCntCmdEntry>();
     }
 

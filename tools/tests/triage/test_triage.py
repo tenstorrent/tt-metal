@@ -201,6 +201,10 @@ def wait_for_simulated_hang(proc: subprocess.Popen, output: AppOutput, app: str,
 
 @pytest.fixture(scope="class")
 def cause_hang_with_app(request):
+    # Reset the device state after the hang if set in environment
+    if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
+        subprocess.run(["tt-smi", "-r"], check=True)
+
     global metal_home
 
     app, args, app_configuration, timeout = request.param
@@ -272,10 +276,6 @@ def cause_hang_with_app(request):
             proc.kill()
             proc.wait()
         output.print()
-
-        # Reset the device state after the hang if set in environment
-        if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
-            subprocess.run(["tt-smi", "-r"], check=True)
 
 
 @pytest.mark.parametrize(
