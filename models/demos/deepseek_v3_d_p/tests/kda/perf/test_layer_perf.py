@@ -53,7 +53,11 @@ _PERF_REFERENCE_MS = {
     "SP2xTP4": 7.436,
     "SP4xTP2": 6.755,
 }
-_GALAXY_PERF_REFERENCE_MS = 1.708
+# Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
+# prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
+# broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
+_GALAXY_PERF_REFERENCE_MS = 2.077
+_GALAXY_ACTUAL_START = 4 * 640 + 320
 # Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
 # they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
 # the warm-up compiled for.
@@ -123,6 +127,7 @@ def _trace_wall_samples_ms(
     repetitions: int,
     validate_first_replay: Callable[[KdaState, ttnn.Tensor], dict[str, float]] | None = None,
     actual_start: int = 0,
+    actual_end: int | None = None,
 ) -> tuple[list[float], dict[str, float] | None]:
     state = None
     warm_output = None
@@ -131,9 +136,10 @@ def _trace_wall_samples_ms(
     output = None
     next_state = None
     actual_start_tt = make_actual_start(mesh_device, actual_start)
+    actual_end_tt = None if actual_end is None else make_actual_start(mesh_device, actual_end)
     try:
         state = _allocate_state(layer)
-        warm_output, warm_state = layer.forward(hidden, state, actual_start_tt)
+        warm_output, warm_state = layer.forward(hidden, state, actual_start_tt, actual_end_tt)
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(warm_output)
         warm_output = None
@@ -141,7 +147,7 @@ def _trace_wall_samples_ms(
         warm_state = None
 
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        output, next_state = layer.forward(hidden, state, actual_start_tt)
+        output, next_state = layer.forward(hidden, state, actual_start_tt, actual_end_tt)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
@@ -319,12 +325,19 @@ def test_synthetic_kimi_k3_perf(
         tensor_parallel_axis=tensor_parallel_axis,
         cache_weights=False,
     )
-    samples_ms, _ = _trace_wall_samples_ms(mesh_device, layer, hidden_tt, _REPETITIONS)
+    actual_start, actual_end = (
+        (_GALAXY_ACTUAL_START, _GALAXY_ACTUAL_START + _SEQUENCE) if layout == "SP8xTP4" else (0, None)
+    )
+    samples_ms, _ = _trace_wall_samples_ms(
+        mesh_device, layer, hidden_tt, _REPETITIONS, actual_start=actual_start, actual_end=actual_end
+    )
     median_wall_ms = statistics.median(samples_ms)
     result = {
         "fabric_config": ttnn.get_fabric_config().name,
         "layout": layout,
         "sequence": _SEQUENCE,
+        "actual_start": actual_start,
+        "actual_end": actual_end,
         "weights": "deterministic synthetic",
         "repetitions": _REPETITIONS,
         "trace_wall_samples_ms": samples_ms,
