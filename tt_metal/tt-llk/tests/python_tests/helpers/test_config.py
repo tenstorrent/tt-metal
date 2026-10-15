@@ -2515,8 +2515,10 @@ class TestConfig:
         variant_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
         if not self._wormhole_perf_barrier():
             return variant_dir / "elf"
-        threads = TestConfig.LAYOUT_THREADS.get(
-            getattr(self, "current_run_type", None), ()
+        threads = (
+            ()
+            if os.environ.get("LLK_ABL_NO_LAYOUT") == "1"  # ablation: no layout pads (perf/layout.py not run)
+            else TestConfig.LAYOUT_THREADS.get(getattr(self, "current_run_type", None), ())
         )
         if not threads:
             return variant_dir / "elf"
