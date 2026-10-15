@@ -229,8 +229,9 @@ def footprint(kb, resident, *, Kt, core_m, core_n, tA, tW, scatter_dim, slots, s
 
 
 def choose_k_block(Kt, budget, force_resident, **geo):
-    """(resident, kb): resident with the largest kb | Kt, kb >= min(Kt, KB_MIN_RESIDENT), else stream with the largest
-    kb | Kt that fits. force_resident (test hook) replaces the residency decision."""
+    """(resident, kb): resident with the preferred kb | Kt (largest <= KB_MAX, then smaller, then larger), kb >=
+    min(Kt, KB_MIN_RESIDENT), else stream with the preferred kb | Kt that fits. force_resident (test hook) replaces the
+    residency decision."""
     # preference order: the largest divisor <= KB_MAX first, then smaller ones, then (no fit below the cap) larger ones
     divisors = [d for d in range(min(Kt, KB_MAX), 0, -1) if Kt % d == 0]
     divisors += [d for d in range(KB_MAX + 1, Kt + 1) if Kt % d == 0]

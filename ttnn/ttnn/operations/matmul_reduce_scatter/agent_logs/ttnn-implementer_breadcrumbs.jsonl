@@ -3,3 +3,4 @@
 {"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-10-15T16:54:27+00:00"}
 {"event":"hypothesis","detail":"INC_GROUP=4 hang: leader re-arms (decrements) its arrival counter at kernel end before group members polled it; members spin forever. Fix: members ack observations to the leader (program semaphore 3); leader re-arms after all acks.","ts":"2026-10-15T17:26:05+00:00"}
 {"event":"test_run","result":"fail","detail":"INC_GROUP=4: ring G=4 PCC 0.84-0.93. Fused inc flush orders only its own write; other group members data can be in flight. Lever removed (incorrect).","ts":"2026-10-15T17:45:58+00:00"}
+{"event":"test_run","result":"pass","detail":"final: acceptance 62/62 (plain + --dev), golden supported cells all pass, fabric_configs 24/24, ring_mock 72/72. Focus 132-134us chips1-3 (161 chip0 skew); GLM 206; MiMo 242-248","ts":"2026-10-15T17:54:57+00:00"}
