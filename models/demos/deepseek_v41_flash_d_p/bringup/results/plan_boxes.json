@@ -18,28 +18,28 @@
     "vocab": 1.0
    },
    "context": {
-    "seq": 522240,
-    "chunk": 5120,
+    "seq": 524288,
+    "chunk": 4096,
     "exact": true
    },
    "dtypes": {},
    "full": {
     "weights_gb": 24.581418,
-    "gb_at_deploy_seq": 26.480221,
+    "gb_at_deploy_seq": 26.487668,
     "fits_deploy_seq": true,
-    "longest_seq": 522240
+    "longest_seq": 524288
    },
-   "partial_scaled_gb": 9.401684,
+   "partial_scaled_gb": 9.405102,
    "partial_real": {
-    "seq": 522240,
-    "gb": 9.401684
+    "seq": 524288,
+    "gb": 9.405102
    },
    "budget_gb": 27.2,
    "conditions": [
     {
      "what": "query rows per chip after the head->seq reshard (sparse_sdpa; indexer TP sub-shard): tile rows",
      "over": "kv_records",
-     "per_chip": 320.0,
+     "per_chip": 256.0,
      "ok": true,
      "path": "plan",
      "hard": false,
@@ -48,7 +48,7 @@
     {
      "what": "ratio-2 compressed rows per SP row per chunk (ring indexer block-cyclic chunk): tile rows",
      "over": "sequence",
-     "per_chip": 640.0,
+     "per_chip": 512.0,
      "ok": true,
      "path": "plan",
      "hard": false,
@@ -57,7 +57,7 @@
     {
      "what": "served-record sub-block per chip (W / TP tokens): whole 32-token records",
      "over": "kv_records",
-     "per_chip": 320.0,
+     "per_chip": 256.0,
      "ok": true,
      "path": "plan",
      "hard": false,
@@ -101,28 +101,28 @@
     "vocab": 2.0
    },
    "context": {
-    "seq": 1044480,
-    "chunk": 5120,
+    "seq": 1048576,
+    "chunk": 4096,
     "exact": true
    },
    "dtypes": {},
    "full": {
     "weights_gb": 16.138348,
-    "gb_at_deploy_seq": 17.336774,
+    "gb_at_deploy_seq": 17.341473,
     "fits_deploy_seq": true,
-    "longest_seq": 522240
+    "longest_seq": 524288
    },
-   "partial_scaled_gb": 9.401684,
+   "partial_scaled_gb": 9.405102,
    "partial_real": {
-    "seq": 1044480,
-    "gb": 8.180295
+    "seq": 1048576,
+    "gb": 8.185666
    },
    "budget_gb": 27.2,
    "conditions": [
     {
      "what": "query rows per chip after the head->seq reshard (sparse_sdpa; indexer TP sub-shard): tile rows",
      "over": "kv_records",
-     "per_chip": 160.0,
+     "per_chip": 128.0,
      "ok": true,
      "path": "plan",
      "hard": false,
@@ -131,7 +131,7 @@
     {
      "what": "ratio-2 compressed rows per SP row per chunk (ring indexer block-cyclic chunk): tile rows",
      "over": "sequence",
-     "per_chip": 320.0,
+     "per_chip": 256.0,
      "ok": true,
      "path": "plan",
      "hard": false,
@@ -140,7 +140,7 @@
     {
      "what": "served-record sub-block per chip (W / TP tokens): whole 32-token records",
      "over": "kv_records",
-     "per_chip": 160.0,
+     "per_chip": 128.0,
      "ok": true,
      "path": "plan",
      "hard": false,
@@ -184,28 +184,28 @@
     "vocab": 0.5
    },
    "context": {
-    "seq": 261120,
-    "chunk": 5120,
+    "seq": 262144,
+    "chunk": 2048,
     "exact": true
    },
    "dtypes": {},
    "full": {
     "weights_gb": 42.467557,
-    "gb_at_deploy_seq": 45.767117,
+    "gb_at_deploy_seq": 45.780057,
     "fits_deploy_seq": false,
     "longest_seq": 0
    },
-   "partial_scaled_gb": 10.401684,
+   "partial_scaled_gb": 10.405102,
    "partial_real": {
-    "seq": 261120,
-    "gb": 13.591534
+    "seq": 262144,
+    "gb": 13.593976
    },
    "budget_gb": 27.2,
    "conditions": [
     {
      "what": "query rows per chip after the head->seq reshard (sparse_sdpa; indexer TP sub-shard): tile rows",
      "over": "kv_records",
-     "per_chip": 640.0,
+     "per_chip": 256.0,
      "ok": true,
      "path": "plan",
      "hard": false,
@@ -214,7 +214,7 @@
     {
      "what": "ratio-2 compressed rows per SP row per chunk (ring indexer block-cyclic chunk): tile rows",
      "over": "sequence",
-     "per_chip": 1280.0,
+     "per_chip": 512.0,
      "ok": true,
      "path": "plan",
      "hard": false,
@@ -223,7 +223,7 @@
     {
      "what": "served-record sub-block per chip (W / TP tokens): whole 32-token records",
      "over": "kv_records",
-     "per_chip": 640.0,
+     "per_chip": 256.0,
      "ok": true,
      "path": "plan",
      "hard": false,
@@ -267,28 +267,28 @@
     "vocab": 0.25
    },
    "context": {
-    "seq": 261120,
-    "chunk": 5120,
+    "seq": 262144,
+    "chunk": 2048,
     "exact": true
    },
    "dtypes": {},
    "full": {
     "weights_gb": 81.759675,
-    "gb_at_deploy_seq": 87.705109,
+    "gb_at_deploy_seq": 87.728425,
     "fits_deploy_seq": false,
     "longest_seq": 0
    },
-   "partial_scaled_gb": 12.401684,
+   "partial_scaled_gb": 12.405102,
    "partial_real": {
-    "seq": 56320,
-    "gb": 23.120541
+    "seq": 55296,
+    "gb": 23.116879
    },
    "budget_gb": 27.2,
    "conditions": [
     {
      "what": "query rows per chip after the head->seq reshard (sparse_sdpa; indexer TP sub-shard): tile rows",
      "over": "kv_records",
-     "per_chip": 1280.0,
+     "per_chip": 512.0,
      "ok": true,
      "path": "plan",
      "hard": false,
@@ -297,7 +297,7 @@
     {
      "what": "ratio-2 compressed rows per SP row per chunk (ring indexer block-cyclic chunk): tile rows",
      "over": "sequence",
-     "per_chip": 1280.0,
+     "per_chip": 512.0,
      "ok": true,
      "path": "plan",
      "hard": false,
@@ -306,7 +306,7 @@
     {
      "what": "served-record sub-block per chip (W / TP tokens): whole 32-token records",
      "over": "kv_records",
-     "per_chip": 1280.0,
+     "per_chip": 512.0,
      "ok": true,
      "path": "plan",
      "hard": false,

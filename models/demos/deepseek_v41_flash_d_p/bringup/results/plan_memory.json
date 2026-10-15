@@ -39,11 +39,11 @@
   },
   {
    "group": "state: window KV, served 0_window_kv (every position, TP-dedup) layers 0-39",
-   "gb": 0.107421875
+   "gb": 0.10546875
   },
   {
    "group": "state: sparse-attention table, one source group at a time (replicated) layers 20",
-   "gb": 0.0537109375
+   "gb": 0.052734375
   },
   {
    "group": "indexer",
@@ -59,11 +59,11 @@
   },
   {
    "group": "state: compressed KV r2, served 1_compress_kv_r2 (TP-dedup) layers 2,8,14",
-   "gb": 0.013427734375
+   "gb": 0.01318359375
   },
   {
    "group": "state: compressed KV r1, served 3_compress_kv_r1 (TP-dedup) layers 20",
-   "gb": 0.013427734375
+   "gb": 0.01318359375
   },
   {
    "group": "compressor (TP K-split)",
@@ -71,11 +71,11 @@
   },
   {
    "group": "state: index keys r2, served 2_index_k_r2 (ring indexer cache, TP-replicated) layers 2,8,14",
-   "gb": 0.0067138671875
+   "gb": 0.006591796875
   },
   {
    "group": "state: index keys r1, served 4_index_k_r1 (ring indexer cache, TP-replicated) layers 20",
-   "gb": 0.0067138671875
+   "gb": 0.006591796875
   },
   {
    "group": "folded fp8 scales",
@@ -90,7 +90,7 @@
    "gb": 1.52587890625e-05
   }
  ],
- "total_gb": 23.12054122686386,
+ "total_gb": 23.11687911748886,
  "host_gb": 188.8331327587366,
  "capacity_gb": 32.0,
  "budget_gb": 27.2,
@@ -101,6 +101,6 @@
   2,
   2
  ],
- "seq": 56320,
+ "seq": 55296,
  "users": 1
 }
