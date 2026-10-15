@@ -6,14 +6,12 @@
 #include <buffer.hpp>
 #include <buffer_types.hpp>
 #include <circular_buffer_constants.h>
-#include "llrt/hal/generated/dev_msgs.hpp"
 #include <core_coord.hpp>
 #include <device.hpp>
 #include <global_circular_buffer.hpp>
 #include <host_api.hpp>
 #include "impl/buffers/global_circular_buffer_impl.hpp"
 #include "impl/context/context_types.hpp"
-#include "distributed/mesh_device_impl.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
@@ -39,16 +37,13 @@
 
 namespace tt::tt_metal::experimental {
 
-namespace {
-
-// Populates the core sets and reports the per-sender max receiver count.
-void initialize_global_circular_buffer(
+GlobalCircularBufferImpl::GlobalCircularBufferImpl(
+    distributed::MeshDevice& device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    CoreRangeSet& sender_cores_out,
-    CoreRangeSet& receiver_cores_out,
-    CoreRangeSet& all_cores_out,
-    uint32_t& max_num_receivers_per_sender_out) {
-    uint32_t num_sender_cores = sender_receiver_core_mapping.size();
+    uint32_t size,
+    BufferType buffer_type) :
+    device_(&device), sender_receiver_core_mapping_(sender_receiver_core_mapping), size_(size) {
+    const uint32_t num_sender_cores = sender_receiver_core_mapping.size();
     TT_FATAL(num_sender_cores > 0, "At least one sender required");
     uint32_t num_receiver_cores = 0;
     uint32_t max_num_receivers_per_sender = 0;
@@ -57,29 +52,14 @@ void initialize_global_circular_buffer(
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping) {
         num_receiver_cores += receiver_cores.num_cores();
         sender_cores.emplace_back(sender_core);
-        receiver_cores_out = receiver_cores_out.merge(receiver_cores);
+        receiver_cores_ = receiver_cores_.merge(receiver_cores);
         max_num_receivers_per_sender = std::max(max_num_receivers_per_sender, receiver_cores.num_cores());
     }
-    sender_cores_out = CoreRangeSet(sender_cores);
-    TT_FATAL(num_sender_cores == sender_cores_out.num_cores(), "Duplicate sender cores found");
-    TT_FATAL(num_receiver_cores == receiver_cores_out.num_cores(), "Duplicate receiver cores found");
-
-    all_cores_out = sender_cores_out.merge(receiver_cores_out);
-    TT_FATAL(all_cores_out.num_cores() == num_sender_cores + num_receiver_cores, "Duplicate cores found");
-    max_num_receivers_per_sender_out = max_num_receivers_per_sender;
-}
-
-}  // namespace
-
-GlobalCircularBufferImpl::GlobalCircularBufferImpl(
-    distributed::MeshDevice& device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) :
-    device_(&device), sender_receiver_core_mapping_(sender_receiver_core_mapping), size_(size) {
-    uint32_t max_num_receivers_per_sender = 0;
-    initialize_global_circular_buffer(
-        sender_receiver_core_mapping, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender);
+    sender_cores_ = CoreRangeSet(sender_cores);
+    TT_FATAL(num_sender_cores == sender_cores_.num_cores(), "Duplicate sender cores found");
+    TT_FATAL(num_receiver_cores == receiver_cores_.num_cores(), "Duplicate receiver cores found");
+    all_cores_ = sender_cores_.merge(receiver_cores_);
+    TT_FATAL(all_cores_.num_cores() == num_sender_cores + num_receiver_cores, "Duplicate cores found");
     this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender);
 }
 

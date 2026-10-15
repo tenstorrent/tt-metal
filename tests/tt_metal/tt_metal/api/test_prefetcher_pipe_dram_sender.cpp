@@ -911,9 +911,7 @@ protected:
         if (mesh_device_ == nullptr) {
             return;
         }
-        if (!MetalContext::instance(mesh_device_->impl().get_context_id())
-                 .hal()
-                 .has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        if (!dram_cores_programmable(*mesh_device_)) {
             GTEST_SKIP() << "DRAM programmable cores not enabled";
         }
     }

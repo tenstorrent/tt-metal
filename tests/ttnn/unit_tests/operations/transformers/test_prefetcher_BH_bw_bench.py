@@ -52,6 +52,7 @@ from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
     make_recv_contig_weight as _make_recv_contig_weight,
+    make_tensor_prefetcher_pipes as _make_tensor_prefetcher_pipes,
     require_tensor_prefetcher,
 )
 
@@ -153,26 +154,6 @@ def _bank_columns(num_dram_banks: int):
     ]
 
 
-def _make_bench_pipes(device, bank_to_receivers, ring_size: int, single_sender: bool):
-    """The Tensor-prefetcher pipes over ``bank_to_receivers``, every ring ``ring_size`` bytes.
-    Returns (space, pipes); the space must outlive the pipes."""
-    receiver_domain = ttnn.CoreRangeSet(
-        {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
-    )
-    space = ttnn.experimental.create_prefetcher_pipe_space(
-        device,
-        sender_cores=ttnn.CoreRangeSet(set()),
-        receiver_domain=receiver_domain,
-        ring_size=ring_size,
-        max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
-        num_dram_senders=2 * len(bank_to_receivers),
-    )
-    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
-        space, bank_to_receivers, support_multi_receiver_shards=single_sender
-    )
-    return space, pipes
-
-
 def _time_pipe_push(device, pipes, request, num_prefetch_layers: int, pages_per_layer: int, page_size: int) -> float:
     """Queue ``request`` num_prefetch_layers times, drain one warmup layer, then time the replay of
     a trace of ``num_prefetch_layers - 1`` discard consumers, each draining one layer. Returns the
@@ -239,6 +220,12 @@ def _gbps(bytes_total: float, elapsed_s: float) -> float:
     return bytes_total / elapsed_s / 1e9
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
+    indirect=True,
+)
+@pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
 def test_bw_tensor_prefetcher(device, op_name, shape):
     """Tensor prefetcher, legacy K-row-major weight → discard receiver. Prefetcher launched
     out-of-band with num_layers = trace_repeats + 1 (1 warmup + N traced). A trace captures N
@@ -257,7 +244,7 @@ def test_bw_tensor_prefetcher(device, op_name, shape):
     pages_per_layer = num_receivers  # = ring_size
 
     tt_weight = _build_weight(device, num_dram_banks)
-    _space, pipes = _make_bench_pipes(
+    _space, pipes = _make_tensor_prefetcher_pipes(
         device, _bank_columns(num_dram_banks), page_size * pages_per_layer, single_sender=True
     )
     elapsed = _time_pipe_push(device, pipes, (tt_weight, num_receivers), trace_repeats + 1, pages_per_layer, page_size)
@@ -273,6 +260,12 @@ def test_bw_tensor_prefetcher(device, op_name, shape):
     )
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
+    indirect=True,
+)
+@pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
 def test_bw_tensor_prefetcher_pipe_recv_contig(device, op_name, shape):
     """Tensor prefetcher in receiver-contiguous layout → discard receiver.
 
@@ -295,7 +288,7 @@ def test_bw_tensor_prefetcher_pipe_recv_contig(device, op_name, shape):
 
     tt_weight = _build_weight_recv_contig(device, num_dram_banks)
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
-    _space, pipes = _make_bench_pipes(
+    _space, pipes = _make_tensor_prefetcher_pipes(
         device, _bank_columns(num_dram_banks), page_size * pages_per_layer, single_sender=not dual_senders
     )
     elapsed = _time_pipe_push(device, pipes, (tt_weight, num_receivers), trace_repeats + 1, pages_per_layer, page_size)
@@ -311,6 +304,12 @@ def test_bw_tensor_prefetcher_pipe_recv_contig(device, op_name, shape):
     )
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
+    indirect=True,
+)
+@pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
 def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
     """DRAM-core prefetcher in **streaming** receiver-contiguous mode → discard receiver.
 
@@ -338,7 +337,9 @@ def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
     window_blocks = min(window_blocks, pages_per_layer)
     ring_size = window_blocks * page_size
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
-    _space, pipes = _make_bench_pipes(device, _bank_columns(num_dram_banks), ring_size, single_sender=not dual_senders)
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, _bank_columns(num_dram_banks), ring_size, single_sender=not dual_senders
+    )
 
     logger.info(
         f"[dram_core_bw_stream][{op_name}] dual_senders={dual_senders} window_blocks={window_blocks} "

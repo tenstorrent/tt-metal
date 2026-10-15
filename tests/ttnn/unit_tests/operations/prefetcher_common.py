@@ -24,9 +24,9 @@ from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 i
 from tracy import signpost
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import get_core_ranges
 
-# Re-exported so the existing callers keep importing it from here; it lives in a leaf
-# module so tests that only need the skip gate can avoid this file's import chain.
-from tests.ttnn.unit_tests.operations.prefetcher_support import require_tensor_prefetcher
+# Re-exported so the existing callers keep importing them from here; they live in a leaf
+# module so tests that only need them can avoid this file's import chain.
+from tests.ttnn.unit_tests.operations.prefetcher_support import make_tensor_prefetcher_pipes, require_tensor_prefetcher
 
 
 def round_up(n, m):
@@ -190,18 +190,21 @@ def make_krow_major_weight(device, pt_weight, num_dram_banks: int, dtype):
     ``[b * recv_per_bank, (b + 1) * recv_per_bank)``) to make shard index equal
     ring position.
     """
-    K = pt_weight.shape[-2]
-    N = pt_weight.shape[-1]
+    mem_config = krow_major_weight_memory_config(pt_weight.shape[-2], pt_weight.shape[-1], num_dram_banks)
+    return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
+
+
+def krow_major_weight_memory_config(K, N, num_dram_banks: int):
+    """The memory config ``make_krow_major_weight`` allocates a (K, N) weight with."""
     assert N % num_dram_banks == 0, f"N={N} must be divisible by num_dram_banks={num_dram_banks}"
     dram_core_range_set = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
     )
-    mem_config = ttnn.MemoryConfig(
+    return ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
         ttnn.ShardSpec(dram_core_range_set, [K, N // num_dram_banks], ttnn.ShardOrientation.ROW_MAJOR),
     )
-    return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
 
 
 @contextlib.contextmanager

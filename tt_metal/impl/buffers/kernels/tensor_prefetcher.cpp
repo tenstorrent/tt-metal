@@ -166,11 +166,13 @@ FORCE_INLINE void prefetcher_finalize_block(PipeSender& snd, uint32_t bytes_per_
 // page, where every receiver has a durable copy beside its credit counters; delivery credits them
 // all alike, so receiver 0's is representative. That holds under the streaming rotation too -- it
 // varies which DRAM block feeds a receiver, not how much each one is credited.
-FORCE_INLINE void load_pipe_sender(PipeSender& snd, uint32_t config_page_addr) {
+FORCE_INLINE PipeSender load_pipe_sender(uint32_t config_page_addr) {
+    PipeSender snd;
     experimental::pipe_load_sender_ctx(snd.ctx, config_page_addr);
     // pipe_usable_bytes owns the trailing-gap rule; do not re-derive it here.
     snd.fifo_limit = snd.ctx.fifo_start_addr + experimental::pipe_usable_bytes(snd.ctx);
     snd.fifo_wr_ptr = snd.ctx.fifo_start_addr + experimental::pipe_sender_wr_offset(snd.ctx, 0);
+    return snd;
 }
 
 // Put a tensor's finishing write cursor back into every receiver's slot in the pipe's config page,
@@ -237,8 +239,6 @@ void kernel_main() {
         }
     }
 
-    PipeSender snd;
-
     // Zero the per-CQ signal slots before parking on the socket. Safe to do here
     // (rather than from the host) because no WaitForCqOnTensorPrefetcher signal
     // can be enqueued until StartTensorPrefetcher returns to the single-threaded
@@ -299,7 +299,7 @@ void kernel_main() {
 
         const uint32_t req_num_entries = req->prefetch.num_entries;
         // This sender's config page for the pipe the request delivers into.
-        const uint32_t target_state_addr = req->prefetch.target_state_addr;
+        const uint32_t config_page_addr = req->prefetch.target_config_page_addr;
 
         PROF_DECL_ACC(prof_rounds);
         PROF_DECL_ACC(prof_chunks);
@@ -312,10 +312,6 @@ void kernel_main() {
         PROF_DECL_ACC(prof_defer_flush);
         PROF_DECL_ACC(prof_finalize);
 
-        // The pipe's receiver count, from its config page. Reading it per request lets a single
-        // prefetcher serve pipes with different receiver counts.
-        const uint32_t num_receivers =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(target_state_addr)[REMOTE_DFB_CFG_NUM_RECEIVERS];
         // Entries follow the header (grow forward); the deduplicated layout slots grow backward
         // from the end of the payload, and each entry names its own slot by byte offset from the
         // page start -- so how the host packed the slots stays host business. See
@@ -392,12 +388,12 @@ void kernel_main() {
                 // entry boundary. A tensor with the size already applied changes nothing.
                 {
                     experimental::PrefetcherPipe pipe(
-                        experimental::DramSenderConfigPage{target_state_addr}, t_page_bytes_per_recv);
+                        experimental::DramSenderConfigPage{config_page_addr}, t_page_bytes_per_recv);
                 }
                 // Load the pipe from its config page each tensor. The write cursors come out of that page,
                 // which is what makes them resume correctly across requests and across programs, and the
                 // snap above left this tensor's entry size there too.
-                load_pipe_sender(snd, target_state_addr);
+                PipeSender snd = load_pipe_sender(config_page_addr);
 
                 // stage_slot ping-pongs between stage_slot_a and stage_slot_b; toggle via
                 // `(a + b) - slot`.
@@ -412,7 +408,7 @@ void kernel_main() {
                 // hot path.
                 if (t_layout_mode == 0) {
                     // ---- K-row-major main loop ----
-                    const uint32_t t_recv_per_chunk = num_receivers / t_M;
+                    const uint32_t t_recv_per_chunk = snd.ctx.num_receivers / t_M;
                     const uint32_t t_sub_band_per_block = t_num_sub * t_M;
                     const uint32_t total_chunks = t_block_count * t_sub_band_per_block;
 
@@ -629,7 +625,7 @@ void kernel_main() {
                         // and ragged-tail/head modes have been removed.)
                         const uint32_t uniform_chunks_per_visit =
                             (bytes_per_recv + max_chunk_bytes - 1) / max_chunk_bytes;
-                        const uint32_t total_chunks_round = num_receivers * uniform_chunks_per_visit;
+                        const uint32_t total_chunks_round = snd.ctx.num_receivers * uniform_chunks_per_visit;
 
                         // ---- Depth-2 software pipeline over 3 stage slots ----
                         // Per chunk gc we: wait gc's DMA, enqueue gc's NoC writes (posted), THEN
@@ -699,7 +695,7 @@ void kernel_main() {
                             if (gen_boff >= bytes_per_recv) {
                                 gen_r += 1;
                                 gen_boff = 0;
-                                if (gen_r < num_receivers) {
+                                if (gen_r < snd.ctx.num_receivers) {
                                     recv_wrap(gen_r, gen_blk, gen_wrap_boff);
                                 }
                             }
