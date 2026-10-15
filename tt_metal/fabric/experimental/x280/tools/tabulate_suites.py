@@ -865,6 +865,121 @@ PLACEMENT = {
 }
 
 
+# eth_credit's credit round trip as built, set against an on-paper estimate: the NoC
+# traversals on its loop and a processing allowance per stage that handles the packet or its
+# credit. The hop loop runs W2 into E0, W5 out of E1 and its acknowledgement, which E1 waits
+# for before W6 and R2, and R3 out of E0; the consume loop adds W6 into the receiving
+# forwarder and its R1 back. A traversal of h router links costs ~5 + 9h + ~5 NoC cycles
+# (BlackholeA0/NoC/README.md, Performance) at its chip's AICLK, the NoC's clock domain
+# (BlackholeA0/PCIExpressTile/README.md). The hop loop's stages are E0 and E1 twice each at
+# their chips' AICLK and the sending forwarder at the X280 PLL; the consume loop adds E1 once
+# more and the receiving forwarder. The two Ethernet crossings are in neither term.
+EC_RT_HOP_TRAVERSALS = (
+    ("tx_x280_noc0", "tx_erisc_noc0", "tx_x280_noc", "tx_erisc_clock"),
+    ("rx_erisc_noc0", "rx_x280_noc0", "rx_erisc_noc", "rx_erisc_clock"),
+    ("rx_x280_noc0", "rx_erisc_noc0", "rx_erisc_noc", "rx_erisc_clock"),
+    ("tx_erisc_noc0", "tx_x280_noc0", "tx_erisc_noc", "tx_erisc_clock"),
+)
+EC_RT_TRAVERSALS = {
+    "hop": EC_RT_HOP_TRAVERSALS,
+    "consume": EC_RT_HOP_TRAVERSALS
+    + (
+        ("rx_erisc_noc0", "rx_x280_noc0", "rx_erisc_noc", "rx_erisc_clock"),
+        ("rx_x280_noc0", "rx_erisc_noc0", "rx_x280_noc", "rx_erisc_clock"),
+    ),
+}
+# Per loop: (ERISC stages per chip's clock evidence, X280 stages).
+EC_RT_STAGES = {
+    "hop": ((("tx_erisc_clock", 2), ("rx_erisc_clock", 2)), 1),
+    "consume": ((("tx_erisc_clock", 2), ("rx_erisc_clock", 3)), 2),
+}
+
+
+def ec_rt_loop(row):
+    """The record's loop, as a key of EC_RT_TRAVERSALS."""
+    loop = lookup(row.record, ("loop",))
+    if loop not in EC_RT_TRAVERSALS:
+        raise ParseError("unknown round-trip loop %r" % (loop,))
+    return loop
+
+
+def ec_core(row, prefix):
+    """The NoC0 coordinate a record's `prefix`_x and `prefix`_y fields hold."""
+    return (lookup(row.record, (prefix + "_x",)), lookup(row.record, (prefix + "_y",)))
+
+
+def ec_aiclk(row, key):
+    """The rate the ERISC clock evidence at `key` validates, or None when it fails a check."""
+    try:
+        hz, warnings = validate_clock(lookup(row.record, (key,)))
+    except ValueError as error:
+        raise ParseError("%s: %s" % (key, error))
+    return None if warnings else hz
+
+
+def ec_rt_hops(row):
+    """Router links over the round trip's NoC traversals."""
+    return sum(
+        hops(ec_core(row, src), ec_core(row, dst), lookup(row.record, (noc,)))
+        for src, dst, noc, _ in EC_RT_TRAVERSALS[ec_rt_loop(row)]
+    )
+
+
+def ec_rt_noc_ns(row):
+    """The round trip's NoC traversals in ns; None when a chip's AICLK did not validate."""
+    total = 0.0
+    for src, dst, noc, clock in EC_RT_TRAVERSALS[ec_rt_loop(row)]:
+        hz = ec_aiclk(row, clock)
+        if hz is None:
+            return None
+        total += (10 + 9 * hops(ec_core(row, src), ec_core(row, dst), lookup(row.record, (noc,)))) * 1e9 / hz
+    return total
+
+
+def ec_rt_estimate(cycles):
+    """The on-paper round trip in ns with `cycles` of processing per stage."""
+
+    def value(row):
+        noc = ec_rt_noc_ns(row)
+        if noc is None:
+            return None
+        erisc, x280 = EC_RT_STAGES[ec_rt_loop(row)]
+        stages = sum(count * 1e9 / ec_aiclk(row, clock) for clock, count in erisc)
+        stages += x280 * 1e9 / (lookup(row.record, ("x280_pll_mhz",)) * 1e6)
+        return noc + cycles * stages
+
+    return value
+
+
+EC_RT_TICKS = field("round_trip_ticks")
+EC_RT_MEAN_NS = ratio(ns(EC_RT_TICKS), field("round_trips"))
+EC_ROUND_TRIP_TABLES = (
+    Table(
+        "",
+        {},
+        (
+            ident("case"),
+            ident("loop"),
+            ident("P"),
+            ident("N_LINK"),
+            ident("N_DELIVER"),
+            ident("SLOT_SIZE", "slot B"),
+            ident("BATCH"),
+            ident("p"),
+            ident("tx_chip", "tx"),
+            ident("rx_chip", "rx"),
+            ident("x280_pll_mhz", "pll MHz"),
+            Column("round trips", field("round_trips")),
+            Column("ticks", EC_RT_TICKS),
+            Column("mean ns", EC_RT_MEAN_NS),
+            Column("NoC hops", ec_rt_hops),
+            Column("NoC ns", ec_rt_noc_ns),
+            Column("estimate 30 ns", ec_rt_estimate(30)),
+            Column("estimate 80 ns", ec_rt_estimate(80)),
+        ),
+    ),
+)
+
 # Each member's table spec, keyed by its records' suite and member.
 MEMBERS = {
     "p2p_latency x280_same_tile": P2P_TABLES,
@@ -899,6 +1014,7 @@ MEMBERS = {
     "eth_credit eth_credit": EC_TABLES,
     "eth_credit eth_credit_hop": EC_HOP_TABLES,
     "eth_credit eth_credit_leg": EC_LEG_TABLES,
+    "eth_credit eth_credit_round_trip": EC_ROUND_TRIP_TABLES,
     "eth_credit eth_credit_kernel": EC_DIAGNOSTIC,
     "eth_credit eth_credit_attribution": EC_DIAGNOSTIC,
     "eth_credit eth_credit_link": EC_DIAGNOSTIC,
@@ -925,9 +1041,12 @@ EC_MPKT = ratio(product(EC_PACKETS, constant(1000)), EC_NS)
 
 
 def ec_ceilings(rows):
-    """eth_credit's one-direction whole-path packet rate beside each leg's alone, the slowest leg
-    and the path's share of it, as a Tabulated titled "eth_credit ceilings"; None without a
-    one-direction whole-path row.
+    """eth_credit's one-direction whole-path packet rate beside each leg's alone, the slowest leg,
+    the credit loop's bound, which of the two binds and the path's share of it, as a Tabulated
+    titled "eth_credit ceilings"; None without a one-direction whole-path row.
+
+    The credit loop allows N_LINK packets per hop-loop round trip, the mean of the hop-loop
+    eth_credit_round_trip rows at one packet in flight (N_LINK = 1) and the path's slot size.
 
     A stretch's rate is its Mpkt/s at the path's shape; a pointer store's is BATCH times its
     million stores per second at the path's P, as the forwarder stores once per batch. Each is the
@@ -952,6 +1071,12 @@ def ec_ceilings(rows):
         if rate is not None:
             key = (lookup(row.record, ("P",)),) if name in stores else tuple(lookup(row.record, (k,)) for k in EC_SHAPE)
             groups.setdefault((name, key), []).append((row, rate))
+    loops = {}
+    for row in rows:
+        if row.member == "eth_credit eth_credit_round_trip" and row.record.get("loop") == "hop":
+            trip = EC_RT_MEAN_NS(row) if lookup(row.record, ("N_LINK",)) == 1 else None
+            if trip is not None:
+                loops.setdefault(lookup(row.record, ("SLOT_SIZE",)), []).append(trip)
     mean = {group: sum(r for _, r in measured) / len(measured) for group, measured in groups.items()}
     shown, cells = [], []
     for shape in sorted(key for name, key in groups if name == "path"):
@@ -960,16 +1085,21 @@ def ec_ceilings(rows):
         legs += [shape[4] * mean[(name, shape[:1])] if (name, shape[:1]) in mean else None for name in stores]
         measured = [(rate, name) for rate, name in zip(legs, leg_names) if rate is not None]
         slowest = min(measured) if measured else (None, None)
+        trips = loops.get(shape[3])
+        # shape[1] is N_LINK and shape[3] SLOT_SIZE (EC_SHAPE).
+        credit = shape[1] * 1000 * len(trips) / sum(trips) if trips else None
+        bounds = [b for b in (slowest, (credit, "credit loop")) if b[0] is not None]
+        bound = min(bounds) if bounds else (None, None)
         path = mean[("path", shape)]
-        line = list(shape) + [path] + legs + [slowest[1], path / slowest[0] if slowest[0] else None]
+        line = list(shape) + [path] + legs + [slowest[1], credit, bound[1], path / bound[0] if bound[0] else None]
         shown.append(groups[("path", shape)][0][0])
         cells.append([cell(value) for value in line])
     if not cells:
         return None
     heads = ["P", "N_LINK", "N_DELIVER", "slot B", "BATCH", "path Mpkt/s"]
     heads += ["%s Mpkt/s" % name for name in leg_names]
-    heads += ["slowest leg", "path/slowest"]
-    right = [True] * (len(heads) - 2) + [False, True]
+    heads += ["slowest leg", "credit loop Mpkt/s", "bound", "path/bound"]
+    right = [True] * (len(heads) - 4) + [False, True, False, True]
     return Tabulated("eth_credit ceilings", [], heads, right, shown, cells)
 
 
@@ -1502,8 +1632,12 @@ def validate_campaign_records(config, rows):
             validate_packet_aggregate(aggregates[0])
     elif family == "eth_credit":
         windows = [r for r in rows if r["member"] in ("eth_credit", "eth_credit_hop", "eth_credit_leg")]
-        if not windows:
-            raise ValueError(f"{config['id']}: no eth_credit throughput record")
+        trips = [r for r in rows if r["member"] == "eth_credit_round_trip"]
+        if not windows and not trips:
+            raise ValueError(f"{config['id']}: no eth_credit throughput or round-trip record")
+        for row in trips:
+            if row["round_trips"] < 1:
+                raise ValueError(f"{config['id']}: case {row['case']} p {row['p']}: no round trip timed")
         # The window's first stamp follows a batch of 1..BATCH packets; zero
         # means the field was never written, which would overstate the rate.
         for row in windows:

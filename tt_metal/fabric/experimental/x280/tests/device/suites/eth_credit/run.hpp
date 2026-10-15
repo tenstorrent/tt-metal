@@ -97,6 +97,9 @@ struct Stage {
     bool e0_source_self = false;
     bool e1_sink_local = false;
     bool e1_source_self = false;
+    /** E1 returns R2 only for packets the receiving forwarder's R1 shows
+     * consumed (EC_E1_R2_AFTER_CONSUME). */
+    bool r2_after_consume = false;
     bool tail_marker = false;
     uint32_t counter_first_delay = 0;
     /** Launch E1 on the receiving tile; false leaves the link's far end idle. */
@@ -105,6 +108,10 @@ struct Stage {
      * write send-count times and nothing else, on the measurement image; E0
      * sends nothing. */
     uint32_t leg_alone = 0;
+    /** The sending forwarders time one packet at a time from its W2 to the
+     * first R3 that covers it (EC_FWD_FLAG_ROUND_TRIP), on the measurement
+     * image. */
+    bool round_trip = false;
     /** Launch E0 on chip B; false withholds one side of the handshake. */
     bool launch_e0_b = true;
     /** Misalign chip A's E0 peer_rx_base, an argument E0 must refuse. */
@@ -369,6 +376,7 @@ inline std::map<std::string, std::string> kernel_defines(const ec_shape_t& s, co
         {"EC_E0_SOURCE_SELF", st.e0_source_self ? "1" : "0"},
         {"EC_E1_SINK_LOCAL", st.e1_sink_local ? "1" : "0"},
         {"EC_E1_SOURCE_SELF", st.e1_source_self ? "1" : "0"},
+        {"EC_E1_R2_AFTER_CONSUME", st.r2_after_consume ? "1" : "0"},
         {"EC_TAIL_MARKER", st.tail_marker ? "1" : "0"},
         {"EC_E0_COUNTER_FIRST_DELAY", std::to_string(st.counter_first_delay)},
     };
@@ -620,7 +628,7 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
                 args.chips[i].e0.erisc.count[p] = 0u;
             }
             if (args.chips[i].fwd[p].send_count != 0u) {
-                args.chips[i].fwd[p].flags |= c.stage.leg_alone;
+                args.chips[i].fwd[p].flags |= c.stage.leg_alone | (c.stage.round_trip ? EC_FWD_FLAG_ROUND_TRIP : 0u);
             }
             if (c.stage.e1_sink_local || c.stage.e0_sink_local || !c.stage.launch_e1) {
                 args.chips[i].fwd[p].recv_count = 0u;
@@ -713,7 +721,7 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
 
     /* The forwarder's measurement modes are built into their own image. */
     const auto image =
-        c.stage.leg_alone != 0u
+        c.stage.leg_alone != 0u || c.stage.round_trip
             ? hart_::image_path("X280_ETH_CREDIT_MEASURE_FW_IMAGE", "firmware-eth-credit-x280-fwd-measure.bin")
             : hart_::image_path(spec.open.image_env_var, spec.open.image_file);
     std::array<hexec::X280Launch, ec::kChips> launches{};
@@ -855,12 +863,12 @@ inline const ec_stall_t* find_stall(const ec_result_t& r, uint32_t site) {
     return nullptr;
 }
 
-/** Ticks `r` spent at its stall sites, cost sites excluded: the figure the
- * "stalls least" comparison ranks kernels by. */
+/** Ticks `r` spent at its stall sites, cost sites and timed round trips
+ * excluded: the figure the "stalls least" comparison ranks kernels by. */
 inline uint64_t stall_ticks(const ec_result_t& r) {
     uint64_t total = 0;
     for (const auto& st : r.stalls) {
-        if (st.site != EC_SITE_NONE && !ec_site_is_cost(st.site)) {
+        if (st.site != EC_SITE_NONE && st.site != EC_SITE_FWD_ROUND_TRIP && !ec_site_is_cost(st.site)) {
             total += st.ticks;
         }
     }
@@ -1038,6 +1046,9 @@ inline Path measured_path(const Stage& st) {
     if (st.e1_source_self) {
         return kReceiveSide;
     }
+    if (st.e0_source_self) {
+        return kE0Source;
+    }
     switch (st.leg_alone) {
         case EC_FWD_FLAG_W1_ALONE: return kW1Alone;
         case EC_FWD_FLAG_W2_ALONE: return kW2Alone;
@@ -1099,6 +1110,51 @@ inline void record_throughput(
             at_sender ? b.packets_out[p] : b.packets_in[p],
             static_cast<unsigned long long>(b.last_ts - b.first_ts),
             at_e1 ? "E1 wall" : "mtime");
+    }
+}
+
+/**
+ * Writes one eth_credit_round_trip record per p for a completed
+ * `c.stage.round_trip` direction from sender chip `s`: the sending
+ * forwarder's timed round trips (its EC_SITE_FWD_ROUND_TRIP entry), which loop
+ * they close (`hop`, or `consume` with `c.stage.r2_after_consume`) and where
+ * the run placed every core, as record_throughput places them. Adds a fatal
+ * failure for a sender that timed none.
+ */
+inline void record_round_trip(
+    const x280::harness::RunSpec& spec,
+    const x280::harness::session::Fixture& f,
+    const Case& c,
+    const RunResult& r,
+    uint32_t s) {
+    const ChipResult& tx = r.chips[s];
+    const ChipResult& rx = r.chips[1u - s];
+    for (uint32_t p = 0; p < c.shape.P; ++p) {
+        const ec_stall_t* timed = find_stall(tx.fwd[p].block, EC_SITE_FWD_ROUND_TRIP);
+        ASSERT_TRUE(timed != nullptr && timed->count != 0u) << "sender p " << p << " timed no round trip";
+        const ReceiveWindow window{
+            .case_name = c.name,
+            .p = p,
+            .tx_chip = tx.chip,
+            .rx_chip = rx.chip,
+            .x280_hw_index = static_cast<uint32_t>(tx.tile.hw_index),
+            .tx_erisc = erisc_placement(tx, static_cast<uint32_t>(kE0Noc)),
+            .rx_erisc = erisc_placement(rx, static_cast<uint32_t>(kE1Noc)),
+            .tx_x280 = x280_placement(tx),
+            .rx_x280 = x280_placement(rx),
+            .x280_pll_mhz = f.pll_mhz,
+            .shape = c.shape,
+            .bidirectional = c.direction == ec::Direction::Both,
+        };
+        hout::write_jsonl(
+            spec.suite_label,
+            hout::record(round_trip_record(
+                window, c.stage.r2_after_consume ? "consume" : "hop", *timed, tx.erisc_clock, rx.erisc_clock)));
+        std::printf(
+            "  p %u: %llu round trips over %llu mtime ticks\n",
+            p,
+            static_cast<unsigned long long>(timed->count),
+            static_cast<unsigned long long>(timed->ticks));
     }
 }
 

@@ -238,6 +238,26 @@ HEADS = {
         "useful GB/s",
         "slot GB/s",
     },
+    "eth_credit eth_credit_round_trip": {
+        "case",
+        "loop",
+        "P",
+        "N_LINK",
+        "N_DELIVER",
+        "slot B",
+        "BATCH",
+        "p",
+        "tx",
+        "rx",
+        "pll MHz",
+        "round trips",
+        "ticks",
+        "mean ns",
+        "NoC hops",
+        "NoC ns",
+        "estimate 30 ns",
+        "estimate 80 ns",
+    },
     "eth_credit ceilings": {
         "P",
         "N_LINK",
@@ -252,7 +272,9 @@ HEADS = {
         "W2 Mpkt/s",
         "R1 Mpkt/s",
         "slowest leg",
-        "path/slowest",
+        "credit loop Mpkt/s",
+        "bound",
+        "path/bound",
     },
     "eth_credit eth_credit_leg": {
         "legs",
@@ -479,6 +501,29 @@ EXPECTED = {
     # The windows above at one shape, beside each other; the receive side's is
     # the whole path's window again, and W2 and R1 count BATCH (4) packets per
     # store of the same window.
+    # 1000 round trips over 250000 mtime ticks. Hop loop: W2 (8,3)->(6,1) on
+    # NoC 0 is 15 + 10 links, W5 (14,1)->(8,3) on NoC 1 6 + 10, its ack 11 + 2,
+    # R3 (6,1)->(8,3) on NoC 0 2 + 2: 58 links, 4 x 10 + 9 x 58 = 562 cycles at
+    # the 1 GHz AICLK; stages four ERISC at 1 GHz and one X280 at 1750 MHz,
+    # 4.571 ns per cycle each. The consume loop adds W6 (16 links) and R1
+    # (8,3)->(14,1) on NoC 0 (6 + 10): 90 links, 870 cycles; stages five ERISC
+    # and two X280, 6.143 ns per cycle.
+    ("eth_credit eth_credit_round_trip", 0): {
+        "loop": "hop",
+        "mean ns": "5000.000",
+        "NoC hops": "58",
+        "NoC ns": "562.000",
+        "estimate 30 ns": "699.143",
+        "estimate 80 ns": "927.714",
+    },
+    ("eth_credit eth_credit_round_trip", 1): {
+        "loop": "consume",
+        "NoC hops": "90",
+        "NoC ns": "870.000",
+        "estimate 30 ns": "1054.286",
+        "estimate 80 ns": "1361.429",
+    },
+    # The hop loop above allows N_LINK (8) packets per 5000 ns round trip.
     ("eth_credit ceilings", 0): {
         "path Mpkt/s": "0.333",
         "NoC hop Mpkt/s": "0.333",
@@ -488,11 +533,13 @@ EXPECTED = {
         "W2 Mpkt/s": "1.334",
         "R1 Mpkt/s": "1.334",
         "slowest leg": "NoC hop",
-        "path/slowest": "1.000",
+        "credit loop Mpkt/s": "1.600",
+        "bound": "NoC hop",
+        "path/bound": "1.000",
     },
     # The same window at the sending forwarder, the NoC hop alone: k1 and the
     # rates as above, the count from packets_out.
-    ("eth_credit eth_credit_leg", 0): {
+    ("eth_credit eth_credit_leg", 1): {
         "legs": "W1 W2 R3",
         "k1": "4",
         "window packets": "19996",

@@ -447,7 +447,9 @@ aggregates only:
   after its own issue, so nearly every batch finds work outstanding (a strict
   store always completes). They count batches and the ticks spent.
   `ec_site_is_cost()` in `eth_credit_abi.h` names them, and the host's
-  `stall_ticks()` sums stall sites only;
+  `stall_ticks()` sums stall sites only. On the measurement image a sending
+  forwarder's fourth entry, `FWD_ROUND_TRIP`, holds its timed round trips
+  instead (Instrumentation), which `stall_ticks()` leaves out too;
 - first and last timestamps on the kernel's own clock, stamped per batch (after
   a batch completes), not per packet;
 - failure detail: for `BAD_SEQUENCE`, `p`, expected and seen; for timeouts, the
@@ -477,7 +479,8 @@ aggregates only:
   traffic.
 - **Bring-up modes** are E0/E1 compile-time defines, off by default and JIT-built
   per case: `EC_E0_SINK_LOCAL`, `EC_E0_SOURCE_SELF`, `EC_E1_SINK_LOCAL`,
-  `EC_E1_SOURCE_SELF`, `EC_TAIL_MARKER` and `EC_E0_COUNTER_FIRST_DELAY`.
+  `EC_E1_SOURCE_SELF`, `EC_E1_R2_AFTER_CONSUME`, `EC_TAIL_MARKER` and
+  `EC_E0_COUNTER_FIRST_DELAY`.
   The forwarder's measurement modes are built into a second image
   (`EC_FWD_MEASURE`, below) and selected by its args flags.
 - **One struct per role** (`ec_x280_fwd_args_t`, `ec_e0_args_t`,
@@ -706,14 +709,37 @@ the `packet_injection` host does.
   is an `eth_credit_leg` record with legs `W1`, `W2` or `R1`, one request per
   write. The benchmark image is built without the measurement modes, so they
   leave its code unchanged.
+- The credit round trip as built (`EC_FWD_FLAG_ROUND_TRIP`, on the measurement
+  image): the sending forwarder sends as usual and times one packet at a time,
+  from the mtime after the W2 that publishes it to its first poll of an R3 that
+  covers it, then the next packet it publishes. As built R3 is E1's read
+  pointer of `rx[p]`, freed once W5 is acknowledged, so this is the hop loop
+  (W2, W3 and W4, W5 and its acknowledgement, R2, R3); it does not include the
+  remote consume. `EC_E1_R2_AFTER_CONSUME` makes E1 return R2 only for packets
+  the receiving forwarder's R1 shows consumed, so the sender's R3 carries the
+  consume and the round trip runs through it: a measurement harness on the
+  as-built path, not an end-to-end credit design. Each round trip is added to
+  the forwarder's `FWD_ROUND_TRIP` entry, written as an `eth_credit_round_trip`
+  record per `p` with `loop` (`hop` or `consume`), `round_trips` and
+  `round_trip_ticks`, raw mtime. The tabulator sets their mean beside an
+  on-paper estimate: the NoC traversals on the loop (W2; W5 and its
+  acknowledgement; R3; and for the consume loop W6 and R1), each ~5 + 9 per hop
+  + ~5 NoC cycles (`BlackholeA0/NoC/README.md`, Performance) at its chip's
+  AICLK, with hops from the record's placement fields, plus 30 or 80 cycles at
+  each processing stage: E0 and E1 twice each and the sending forwarder once,
+  and for the consume loop E1 once more and the receiving forwarder. The two
+  Ethernet crossings are in neither term.
 - Ceilings: the tabulator's `eth_credit ceilings` table sets each one-direction
   whole-path shape's packet rate beside each leg's alone: the NoC hop, W1, the
   Ethernet hop and the receive side at the same shape, and W2 and R1 at the
   same P as `BATCH` packets per store, since the forwarder stores each once per
-  batch. Each is the mean over every `p` and run at its own clock. The table
-  names the slowest leg and gives the path's rate as a share of it. The NoC hop,
-  the Ethernet hop and the receive side are disjoint and cover the path, so a
-  share near 1 names the bound.
+  batch. Each is the mean over every `p` and run at its own clock. The Ethernet
+  hop is measured at P = 1 only (E1's window covers every `p`), so it is blank
+  at P > 1. Beside them it sets the credit loop's bound, `N_LINK` packets per
+  hop-loop round trip at one packet in flight and the same slot size, names the
+  slowest leg and whichever of it and the credit loop binds, and gives the
+  path's rate as a share of that bound. The NoC hop, the Ethernet hop and the
+  receive side are disjoint and cover the path.
 - Per kernel, on its own clock: stall counts and stall time per stall site, and
   per-packet service time, written as one `eth_credit_kernel` JSONL record per
   launched kernel: case, chip, role, kernel id, state, code, detail, packets in
@@ -761,6 +787,8 @@ must fail:
 | `EthernetHopBySlotAndBatch` | the Ethernet hop alone (`EC_E0_SOURCE_SELF`, `EC_E1_SINK_LOCAL`) over payloads 64 B to 16 KiB and `BATCH` 1 to 8 at P = 1, `N_LINK` = 8: packet rate on E1's clock, against the 400G per-link rate the tabulator sets beside it |
 | `NocHopBySlotAndP` | the NoC hop alone (`EC_E0_SINK_LOCAL`, W1, W2 and R3) on the leg grid, the throughput sweep's slot sizes at P = 1, 2 and 4 and `BATCH` 4: packet rate on the sending forwarder's clock |
 | `ReceiveSideBySlotAndP` | the receive side alone (`EC_E1_SOURCE_SELF`, W5, W6 and R1) on the leg grid: packet rate on the receiving forwarder's clock |
+| `RoundTripBySlot` | the credit round trip at one packet in flight (P = 1, `N_LINK` 1, `BATCH` 1) over the leg grid's slot sizes, on the measurement image: the hop loop, and the loop through the remote consume (`EC_E1_R2_AFTER_CONSUME`) |
+| `ReceiveDepthByE0Source` | the receive depths with E0 sourcing over the link (`EC_E0_SOURCE_SELF`), where W1 does not bind, at 4 KiB payloads: `N_LINK` 1 to 16 at `N_DELIVER` 8 (`BATCH` 1 and 4, and `BATCH` 1 with R2 after the consume), then `N_DELIVER` 1 to 16 at `N_LINK` 8; packet rate on the receiving forwarder's clock |
 | `W1AloneBySlotAndP`, `W2AloneByP`, `R1AloneByP` | W1 alone on the leg grid, and W2 and R1 alone at P = 1, 2 and 4, 20000 each per forwarder on the measurement image: write rate on the sending forwarder's clock |
 
 The E0/E1 kernels are built by the Metal JIT at launch. `x280_eth_credit_jit`
@@ -919,10 +947,11 @@ ticks and, for a failed run, the attribution line and every chip's kernel
 results; rates come from the tabulator. The manifest's `eth_credit.throughput`,
 `eth_credit.ethernet_hop`, `eth_credit.noc_hop` and `eth_credit.receive_side`
 configurations run `ThroughputBySlotBatchAndP`, `EthernetHopBySlotAndBatch`,
-`NocHopBySlotAndP` and `ReceiveSideBySlotAndP`, and `eth_credit.w1_alone`,
-`eth_credit.w2_alone` and `eth_credit.r1_alone` run `W1AloneBySlotAndP`,
-`W2AloneByP` and `R1AloneByP` (`X280_ETH_CREDIT_MEASURE_FW_IMAGE` names their
-image), each with every card visible
+`NocHopBySlotAndP` and `ReceiveSideBySlotAndP`, `eth_credit.e0_source_depth` runs
+`ReceiveDepthByE0Source`, and `eth_credit.w1_alone`, `eth_credit.w2_alone`,
+`eth_credit.r1_alone` and `eth_credit.round_trip` run `W1AloneBySlotAndP`,
+`W2AloneByP`, `R1AloneByP` and `RoundTripBySlot` (`X280_ETH_CREDIT_MEASURE_FW_IMAGE`
+names their image), each with every card visible
 (`TT_VISIBLE_DEVICES` unset),
 for the reason below. The design is above.
 

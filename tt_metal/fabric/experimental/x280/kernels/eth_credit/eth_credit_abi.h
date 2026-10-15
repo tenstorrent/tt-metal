@@ -140,7 +140,8 @@ typedef enum {
     EC_SITE_BARRIER = 11u,
     EC_SITE_HANDSHAKE = 12u,
     EC_SITE_DRAIN = 13u,
-    EC_SITE_E0_R3_SOURCE = 14u /* E0's R3 source unit, until the NoC has read it */
+    EC_SITE_E0_R3_SOURCE = 14u,  /* E0's R3 source unit, until the NoC has read it */
+    EC_SITE_FWD_ROUND_TRIP = 15u /* a sending forwarder's timed round trips (EC_FWD_FLAG_ROUND_TRIP) */
 } ec_site_t;
 
 /* Whether `site` is a cost site: one that runs right after its own issue, so
@@ -172,6 +173,9 @@ static inline uint32_t ec_e0_idle_site(uint32_t credit) {
 #define EC_FWD_FLAG_W2_ALONE (1u << 4)
 #define EC_FWD_FLAG_R1_ALONE (1u << 5)
 #define EC_FWD_FLAG_LEGS_ALONE (EC_FWD_FLAG_W1_ALONE | EC_FWD_FLAG_W2_ALONE | EC_FWD_FLAG_R1_ALONE)
+/* With EC_FWD_MEASURE: send as usual, timing one packet at a time from its W2
+ * to the first R3 that covers it, in stalls[3] at EC_SITE_FWD_ROUND_TRIP. */
+#define EC_FWD_FLAG_ROUND_TRIP (1u << 6)
 /* ec_e0_args_t::flags */
 #define EC_E0_FLAG_HANDSHAKE_SENDER (1u << 0)
 #define EC_E0_FLAG_OUTBOUND_ACTIVE (1u << 1)

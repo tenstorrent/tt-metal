@@ -565,6 +565,24 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
             alone.path = path;
             write(id, x280::suites::eth_credit::throughput_record(alone, forwarder, erisc_clock, erisc_clock));
         }
+        // E0 sourcing into the receiving forwarder.
+        auto e0_source = window;
+        e0_source.case_name = "e0_source_depth";
+        e0_source.path = x280::suites::eth_credit::kE0Source;
+        write(
+            "eth_credit.e0_source_depth",
+            x280::suites::eth_credit::throughput_record(e0_source, forwarder, erisc_clock, erisc_clock));
+        // The sending forwarder's timed round trips at one packet in flight, the
+        // hop loop and the loop through the remote consume, at the same placement.
+        const ec_stall_t timed{.site = EC_SITE_FWD_ROUND_TRIP, .pad = 0, .count = 1000, .ticks = 250000};
+        auto trip = window;
+        trip.shape = {1u, 1u, 8u, 4192u, 1u};
+        for (const char* loop : {"hop", "consume"}) {
+            trip.case_name = loop;
+            write(
+                "eth_credit.round_trip",
+                x280::suites::eth_credit::round_trip_record(trip, loop, timed, erisc_clock, erisc_clock));
+        }
         ec_result_t kernel{};
         kernel.magic = EC_RESULT_MAGIC;
         kernel.status.state = EC_STATE_DONE;
@@ -580,5 +598,5 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                  .erisc_clock = &erisc_clock}));
     }
 
-    validate(27);
+    validate(29);
 }

@@ -8,8 +8,8 @@
 // forwarders, and both directions. Each step carries a run that must fail.
 //
 // Runs X280_ETH_CREDIT_FW_IMAGE when set, else the build's forwarder image
-// (the writes alone: X280_ETH_CREDIT_MEASURE_FW_IMAGE, else the build's
-// measurement image), and requires live resident idle on L2CPU 0 of both chips. Slow dispatch comes
+// (the writes alone and the round trip: X280_ETH_CREDIT_MEASURE_FW_IMAGE, else
+// the build's measurement image), and requires live resident idle on L2CPU 0 of both chips. Slow dispatch comes
 // from the x280_slow_dispatch link.
 
 #include "harness/artifacts/artifacts.hpp"
@@ -698,6 +698,75 @@ TEST_P(EthCreditHw, W2AloneByP) {
 TEST_P(EthCreditHw, R1AloneByP) {
     for (const uint32_t P : {1u, 2u, 4u}) {
         run_write_alone("r1_alone", EC_FWD_FLAG_R1_ALONE, P, Slot(64u));
+    }
+}
+
+// The end-to-end credit's round trip as built, one packet in flight (P = 1,
+// N_LINK = 1, BATCH 1), on the measurement image over the leg grid's slot
+// sizes: the sending forwarder times each packet from its W2 to the first R3
+// that covers it. The hop loop returns R2 after W5's acknowledgement; the
+// consume loop (EC_E1_R2_AFTER_CONSUME) only after the receiving forwarder's
+// R1, so its round trip runs through the remote consume.
+TEST_P(EthCreditHw, RoundTripBySlot) {
+    for (const uint32_t payload : {64u, 1024u, 4096u, 16384u}) {
+        for (const bool consume : {false, true}) {
+            suite::Case c{
+                .name = consume ? "round_trip_consume" : "round_trip_hop",
+                .shape = {1u, 1u, 8u, Slot(payload), 1u},
+                .direction = ec::Direction::AToB,
+                .packets = each(1u, 20000u)};
+            c.stage.round_trip = true;
+            c.stage.r2_after_consume = consume;
+            const auto r = run(c);
+            ASSERT_TRUE(r.launched);
+            suite::expect_all_done(r);
+            suite::expect_conserved(c, r, 0u);
+            suite::record_round_trip(spec(), fixture(), c, r, 0u);
+        }
+    }
+}
+
+// The receive depths with E0 sourcing over the link into the receiving
+// forwarder, where W1 does not bind, at 4 KiB payloads and P = 1: N_LINK at
+// N_DELIVER 8 (BATCH 1 and 4), then N_DELIVER at N_LINK 8. The depth where the
+// rate stops rising covers the credit loop. N_LINK also runs with R2 after the
+// consume, the loop an end-to-end credit would close.
+TEST_P(EthCreditHw, ReceiveDepthByE0Source) {
+    struct Depth {
+        uint32_t n_link, n_deliver, batch;
+        bool consume;
+    };
+    const Depth depths[] = {
+        {1u, 8u, 1u, false},
+        {2u, 8u, 1u, false},
+        {4u, 8u, 1u, false},
+        {8u, 8u, 1u, false},
+        {16u, 8u, 1u, false},
+        {4u, 8u, 4u, false},
+        {8u, 8u, 4u, false},
+        {16u, 8u, 4u, false},
+        {8u, 1u, 1u, false},
+        {8u, 2u, 1u, false},
+        {8u, 4u, 1u, false},
+        {8u, 16u, 1u, false},
+        {1u, 8u, 1u, true},
+        {2u, 8u, 1u, true},
+        {4u, 8u, 1u, true},
+        {8u, 8u, 1u, true},
+        {16u, 8u, 1u, true}};
+    for (const Depth& d : depths) {
+        suite::Case c{
+            .name = d.consume ? "e0_source_depth_consume" : "e0_source_depth",
+            .shape = {1u, d.n_link, d.n_deliver, Slot(4096u), d.batch},
+            .direction = ec::Direction::AToB,
+            .packets = each(1u, 20000u)};
+        c.stage.e0_source_self = true;
+        c.stage.r2_after_consume = d.consume;
+        const auto r = run(c);
+        ASSERT_TRUE(r.launched);
+        suite::expect_all_done(r);
+        suite::expect_conserved(c, r, 0u);
+        suite::record_throughput(spec(), fixture(), c, r, 0u);
     }
 }
 

@@ -21,13 +21,19 @@
  * R2 without delivering, so the Ethernet hop runs alone; EC_E1_SOURCE_SELF
  * fills rx here, with every slot always full, and delivers it without reading
  * pkts or returning R2, so the receive side (W5, W6, R1) runs alone;
- * EC_TAIL_MARKER checks each slot's last 16 bytes against the marker E0
- * stamped. */
+ * EC_E1_R2_AFTER_CONSUME returns R2 for a packet only once the receiving
+ * forwarder's R1 shows it consumed, not once W5 is acknowledged, so the
+ * sender's R3 covers the remote consume: a harness that times the end-to-end
+ * credit's round trip on the as-built path; EC_TAIL_MARKER checks each slot's
+ * last 16 bytes against the marker E0 stamped. */
 #ifndef EC_E1_SINK_LOCAL
 #define EC_E1_SINK_LOCAL 0
 #endif
 #ifndef EC_E1_SOURCE_SELF
 #define EC_E1_SOURCE_SELF 0
+#endif
+#ifndef EC_E1_R2_AFTER_CONSUME
+#define EC_E1_R2_AFTER_CONSUME 0
 #endif
 #ifndef EC_TAIL_MARKER
 #define EC_TAIL_MARKER 0
@@ -39,6 +45,9 @@ static_assert(
 static_assert(
     !(EC_E1_SOURCE_SELF && (EC_E1_SINK_LOCAL || EC_TAIL_MARKER)),
     "a local source neither sinks locally nor receives a marker over the link");
+static_assert(
+    !(EC_E1_R2_AFTER_CONSUME && (EC_E1_SINK_LOCAL || EC_E1_SOURCE_SELF)),
+    "R2 after the consume needs packets from the link delivered to the forwarder");
 
 namespace {
 
@@ -132,7 +141,7 @@ private:
         }
         const uint64_t t = now();
         for (uint32_t p = 0; p < EC_P; ++p) {
-            if (received_[p] < a_.erisc.count[p] && t - last_progress_[p] >= budget()) {
+            if (!channel_done(p) && t - last_progress_[p] >= budget()) {
                 result_.failure(p, 0u, 0u, site_[p], link_rd_[p], deliver_wr_[p]);
                 fail(EC_ERROR_STALL_TIMEOUT, site_[p]);
                 return false;
@@ -278,18 +287,9 @@ private:
                 kUnit);
         }
 
-        /* A resend of R2 rereads crd_src, which only ever holds the same or a
-         * newer read pointer, so overwriting it while TXQ 1 may resend is safe. */
-        if constexpr (!EC_E1_SOURCE_SELF) {
-            uint64_t busy = 0u;
-            if (!wait_txq(&busy)) {
-                return timeout(p, EC_SITE_E1_TXQ1_BUSY);
-            }
-            set_local_word(unit(eth_.e1_crd_src, p), link_rd_[p]);
-            internal_::eth_send_packet_bytes_unsafe(
-                kTxq, unit(eth_.e1_crd_src, p), a_.peer_ctrl_base + eth_.e0_crd + p * kUnit, kUnit);
-            if (busy != 0u) {
-                result_.stall(3u, busy);
+        if constexpr (!EC_E1_SOURCE_SELF && !EC_E1_R2_AFTER_CONSUME) {
+            if (!send_r2(p, link_rd_[p])) {
+                return false;
             }
         }
         received_[p] += k;
@@ -300,9 +300,52 @@ private:
         return true;
     }
 
+    /* R2: link read pointer `rd` to the peer E0 over TXQ 1. A resend of R2
+     * rereads crd_src, which only ever holds the same or a newer read pointer,
+     * so overwriting it while TXQ 1 may resend is safe. */
+    bool send_r2(uint32_t p, uint32_t rd) {
+        uint64_t busy = 0u;
+        if (!wait_txq(&busy)) {
+            return timeout(p, EC_SITE_E1_TXQ1_BUSY);
+        }
+        set_local_word(unit(eth_.e1_crd_src, p), rd);
+        internal_::eth_send_packet_bytes_unsafe(
+            kTxq, unit(eth_.e1_crd_src, p), a_.peer_ctrl_base + eth_.e0_crd + p * kUnit, kUnit);
+        if (busy != 0u) {
+            result_.stall(3u, busy);
+        }
+        return true;
+    }
+
+    /* EC_E1_R2_AFTER_CONSUME: R2 for the packets R1 shows consumed since the
+     * last, as the link read pointer of that count. */
+    bool return_consumed(uint32_t p, uint32_t* progressed) {
+        const uint32_t frd = local_word(unit(eth_.e1_out_rd_sh, p));
+        if (!ec_ptr_distance_ok(deliver_wr_[p], frd, EC_N_DELIVER)) {
+            result_.failure(p, 0u, 0u, EC_SITE_NONE, deliver_wr_[p], frd);
+            fail(EC_ERROR_COUNTER_DISTANCE, p);
+            return false;
+        }
+        const uint32_t consumed = received_[p] - ec_ptr_used(deliver_wr_[p], frd, EC_N_DELIVER);
+        if (consumed == credited_[p]) {
+            return true;
+        }
+        if (!send_r2(p, consumed & ec_ptr_mask(EC_N_LINK))) {
+            return false;
+        }
+        credited_[p] = consumed;
+        *progressed = 1u;
+        return true;
+    }
+
+    /* Every packet received and, with EC_E1_R2_AFTER_CONSUME, credited. */
+    bool channel_done(uint32_t p) const {
+        return received_[p] == a_.erisc.count[p] && (!EC_E1_R2_AFTER_CONSUME || credited_[p] == received_[p]);
+    }
+
     bool finished() const {
         for (uint32_t p = 0; p < EC_P; ++p) {
-            if (received_[p] != a_.erisc.count[p]) {
+            if (!channel_done(p)) {
                 return false;
             }
         }
@@ -320,12 +363,17 @@ private:
             bool any = false;
             uint32_t oldest = EC_P;
             for (uint32_t p = 0; p < EC_P; ++p) {
-                if (received_[p] >= a_.erisc.count[p]) {
+                if (channel_done(p)) {
                     continue;
                 }
                 uint32_t progressed = 0u;
                 uint32_t site = EC_SITE_E1_LINK_EMPTY;
-                if (!deliver(p, &progressed, &site)) {
+                if constexpr (EC_E1_R2_AFTER_CONSUME) {
+                    if (!return_consumed(p, &progressed)) {
+                        return false;
+                    }
+                }
+                if (received_[p] < a_.erisc.count[p] && !deliver(p, &progressed, &site)) {
                     return false;
                 }
                 if (progressed != 0u) {
@@ -360,6 +408,8 @@ private:
     uint32_t link_rd_[EC_P] = {};
     uint32_t deliver_wr_[EC_P] = {};
     uint32_t received_[EC_P] = {};
+    /* EC_E1_R2_AFTER_CONSUME: the packets R2 has returned. */
+    uint32_t credited_[EC_P] = {};
     /* The last R1 value deliver() accepted. */
     uint32_t frd_seen_[EC_P] = {};
     uint64_t last_progress_[EC_P] = {};

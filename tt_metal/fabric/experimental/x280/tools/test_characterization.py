@@ -521,7 +521,10 @@ class CampaignValidation(unittest.TestCase):
         }
         validate_campaign_records(config, [window, attribution, link])
         wrong = {
-            "no eth_credit throughput record": [attribution, link],
+            "no eth_credit throughput or round-trip record": [attribution, link],
+            "no round trip timed": [
+                {"member": "eth_credit_round_trip", "case": "round_trip_hop", "p": 0, "round_trips": 0}
+            ],
             "first batch 20 of 20": [dict(window, first_batch_packets=20), attribution],
             "first batch 0 of 20": [dict(window, first_batch_packets=0), attribution],
             "first batch 5 of 20": [dict(window, first_batch_packets=5), attribution],

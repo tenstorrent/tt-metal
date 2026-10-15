@@ -3610,6 +3610,30 @@
         "TT_VISIBLE_DEVICES": null,
         "X280_ETH_CREDIT_MEASURE_FW_IMAGE": "${FW_BUILD}/firmware-eth-credit-x280-fwd-measure.bin"
       }
+    },
+    {
+      "id": "eth_credit.round_trip",
+      "member": "eth_credit/eth_credit",
+      "argv": [
+        "${HOST_BUILD}/x280_eth_credit",
+        "--gtest_filter=EthCredit/EthCreditHw.RoundTripBySlot/0"
+      ],
+      "environment": {
+        "TT_VISIBLE_DEVICES": null,
+        "X280_ETH_CREDIT_MEASURE_FW_IMAGE": "${FW_BUILD}/firmware-eth-credit-x280-fwd-measure.bin"
+      }
+    },
+    {
+      "id": "eth_credit.e0_source_depth",
+      "member": "eth_credit/eth_credit",
+      "argv": [
+        "${HOST_BUILD}/x280_eth_credit",
+        "--gtest_filter=EthCredit/EthCreditHw.ReceiveDepthByE0Source/0"
+      ],
+      "environment": {
+        "TT_VISIBLE_DEVICES": null,
+        "X280_ETH_CREDIT_FW_IMAGE": "${FW_BUILD}/firmware-eth-credit-x280-fwd.bin"
+      }
     }
   ]
 }

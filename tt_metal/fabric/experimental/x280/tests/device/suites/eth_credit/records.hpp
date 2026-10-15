@@ -195,6 +195,9 @@ inline constexpr Path kReceiveSide{"eth_credit_leg", Receiver::Forwarder, "W5 W6
 inline constexpr Path kW1Alone{"eth_credit_leg", Receiver::Sender, "W1", Useful::Header};
 inline constexpr Path kW2Alone{"eth_credit_leg", Receiver::Sender, "W2", Useful::Pointer};
 inline constexpr Path kR1Alone{"eth_credit_leg", Receiver::Sender, "R1", Useful::Pointer};
+// E0 sourcing over the link into the receiving forwarder: the path without the
+// sending forwarder.
+inline constexpr Path kE0Source{"eth_credit_leg", Receiver::Forwarder, "W3 W4 W5 W6 R1 R2", Useful::Header};
 
 // One completed direction's receiver for `p` and where it ran: the sending
 // chip's E0 and receiving chip's E1 Ethernet tile, and each chip's X280 tile.
@@ -286,6 +289,54 @@ inline x280::harness::output::RecordSpec throughput_record(
         .fields = std::move(fields),
         .warmup = hout::NoWarmup{},
         .clock = at_e1 ? Clock{rx_erisc_clock} : Clock{hout::kX280MtimeClock},
+    };
+}
+
+/**
+ * The eth_credit_round_trip record of sending forwarder `window.p`, which
+ * `window` places: identity, the shape, the loop its round trips close
+ * (`loop`: `hop`, R3 after W5's acknowledgement, or `consume`, R3 after the
+ * receiving forwarder's consume), the round trips it timed (`round_trips`,
+ * from the W2 that publishes a packet to the first R3 that covers it) and
+ * their summed raw mtime ticks (`round_trip_ticks`, `timed`'s count and
+ * ticks), with both chips' ERISC clock evidence, whose AICLK the NoC runs at,
+ * on the fixed mtime clock. The run has no warm-up.
+ */
+inline x280::harness::output::RecordSpec round_trip_record(
+    const ReceiveWindow& window,
+    const char* loop,
+    const ec_stall_t& timed,
+    const x280::harness::measurement::AiclkRunEvidence& tx_erisc_clock,
+    const x280::harness::measurement::AiclkRunEvidence& rx_erisc_clock) {
+    namespace hout = x280::harness::output;
+    std::vector<hout::Field> fields{
+        {"case", window.case_name},
+        {"loop", loop},
+        {"p", window.p},
+        {"tx_chip", window.tx_chip},
+        {"rx_chip", window.rx_chip},
+        {"x280_hw_index", window.x280_hw_index},
+        {"x280_pll_mhz", window.x280_pll_mhz},
+        {"P", window.shape.P},
+        {"N_LINK", window.shape.n_link},
+        {"N_DELIVER", window.shape.n_deliver},
+        {"SLOT_SIZE", window.shape.slot_size},
+        {"BATCH", window.shape.batch},
+        {"round_trips", timed.count},
+        {"round_trip_ticks", timed.ticks},
+        {"tx_erisc_clock", hout::Value::clock(tx_erisc_clock)},
+        {"rx_erisc_clock", hout::Value::clock(rx_erisc_clock)},
+    };
+    hout::append_placement(fields, "tx_erisc", window.tx_erisc);
+    hout::append_placement(fields, "rx_erisc", window.rx_erisc);
+    hout::append_placement(fields, "tx_x280", window.tx_x280);
+    hout::append_placement(fields, "rx_x280", window.rx_x280);
+    return {
+        .suite = "eth_credit",
+        .member = "eth_credit_round_trip",
+        .fields = std::move(fields),
+        .warmup = hout::NoWarmup{},
+        .clock = hout::kX280MtimeClock,
     };
 }
 

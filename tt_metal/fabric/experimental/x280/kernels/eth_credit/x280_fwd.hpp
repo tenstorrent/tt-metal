@@ -34,8 +34,8 @@
 #endif
 
 /* Nonzero builds the measurement modes the args flags select
- * (EC_FWD_FLAG_LEGS_ALONE). The benchmark image leaves them out, so its code
- * is unchanged by them. */
+ * (EC_FWD_FLAG_LEGS_ALONE, EC_FWD_FLAG_ROUND_TRIP). The benchmark image leaves
+ * them out, so its code is unchanged by them. */
 #ifndef EC_FWD_MEASURE
 #define EC_FWD_MEASURE 0
 #endif
@@ -104,7 +104,14 @@ public:
         }
         ec_error_t err;
         if constexpr (EC_FWD_MEASURE) {
-            err = (a_.flags & EC_FWD_FLAG_LEGS_ALONE) != 0u ? leg_alone() : loop();
+            if ((a_.flags & EC_FWD_FLAG_LEGS_ALONE) != 0u) {
+                err = leg_alone();
+            } else if ((a_.flags & EC_FWD_FLAG_ROUND_TRIP) != 0u) {
+                result_->stalls[3].site = EC_SITE_FWD_ROUND_TRIP;
+                err = loop<true>();
+            } else {
+                err = loop();
+            }
         } else {
             err = loop();
         }
@@ -411,13 +418,32 @@ private:
         return fail(EC_ERROR_COUNTER_DISTANCE, site);
     }
 
+    /* EC_FWD_FLAG_ROUND_TRIP's state: the one packet being timed, from the W2
+     * that publishes it to the first R3 that covers it. */
+    struct RoundTrip {
+        bool timing;
+        uint32_t sent;      /* h.sent once that W2 has published it */
+        uint64_t published; /* mtime after that W2 */
+    };
+
     /* W1 for `k` slots from h.wr, then W2. Sets *progressed when it sends; with
-     * no credit it returns EC_ERROR_NONE and leaves *progressed unset. */
-    __attribute__((always_inline)) ec_error_t send_step(Hot& h, bool* progressed) {
+     * no credit it returns EC_ERROR_NONE and leaves *progressed unset. With
+     * TimeRoundTrip, adds the round trip of the packet `rt` times to stalls[3]
+     * when R3 first covers it, and starts timing the last packet of a W2 when
+     * none is being timed. */
+    template <bool TimeRoundTrip = false>
+    __attribute__((always_inline)) ec_error_t send_step(Hot& h, RoundTrip& rt, bool* progressed) {
         x280_fence_ir();
         const uint32_t rd = *h.rd_sh;
         if (!ec_ptr_distance_ok(h.wr, rd, h.n_link)) {
             return distance_fail(h.wr, rd, EC_SITE_FWD_OUT_FULL);
+        }
+        if constexpr (TimeRoundTrip) {
+            /* R3 covers the packets sent less those still in tx_fifo[p]. */
+            if (rt.timing && h.sent - ec_ptr_used(h.wr, rd, h.n_link) >= rt.sent) {
+                stall(h, 3u, rt.published, x280_mtime_fenced());
+                rt.timing = false;
+            }
         }
         uint32_t k = ec_ptr_credit(h.wr, rd, h.n_link);
         k = k < h.batch ? k : h.batch;
@@ -443,6 +469,11 @@ private:
         *h.wr_src = h.wr;
         x280_counter_store(h.e0_wr_sh, h.wr);
         h.sent += k;
+        if constexpr (TimeRoundTrip) {
+            if (!rt.timing) {
+                rt = RoundTrip{true, h.sent, x280_mtime_fenced()};
+            }
+        }
         h.result->packets_out[h.p] = h.sent;
         stamp(h, t1, k);
         *progressed = true;
@@ -504,8 +535,10 @@ private:
         return EC_ERROR_NONE;
     }
 
+    template <bool TimeRoundTrip = false>
     ec_error_t loop() {
         Hot h = hot();
+        RoundTrip rt{false, 0u, 0u};
         h.last_send = x280_mtime_fenced();
         h.last_recv = h.last_send;
         while (h.sent < h.send_count || h.consumed < h.recv_count) {
@@ -513,7 +546,7 @@ private:
             bool sent_progress = false;
             bool recv_progress = false;
             if (h.sent < h.send_count) {
-                const ec_error_t err = send_step(h, &sent_progress);
+                const ec_error_t err = send_step<TimeRoundTrip>(h, rt, &sent_progress);
                 if (err != EC_ERROR_NONE) {
                     return err;
                 }
