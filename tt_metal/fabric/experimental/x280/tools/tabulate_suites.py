@@ -316,23 +316,12 @@ def tb_erisc_writer_ticks(row):
     return ticks
 
 
-def tb_erisc_writer_rate(pick):
-    """GB/s of the writer `pick` (min or max) selects by rate, at the row's rate."""
-
-    def value(row):
-        ticks = tb_erisc_writer_ticks(row)
-        if row.hz is None:
-            return None
-        return counter_value(row.record, ("logical_bytes",)) / ticks_to_ns(pick(ticks), row.hz)
-
-    return value
-
-
 # The writers' wall clocks share no stated origin, so no span is measured: the
 # start gate releases their timed loops together (to within gate ns), and the
 # run ends with the slowest writer, whose interval stands for the run's.
 TB_ERISC_RUN_BYTES = product(field("writers"), field("logical_bytes"))
 TB_ERISC_SLOWEST_NS = ns(lambda row: max(tb_erisc_writer_ticks(row)))
+TB_ERISC_FASTEST_NS = ns(lambda row: min(tb_erisc_writer_ticks(row)))
 # With writers > 1 the batch columns are writer 0's.
 TB_ERISC_TABLES = (
     Table(
@@ -345,8 +334,8 @@ TB_ERISC_TABLES = (
             + [
                 Column("slowest ticks", lambda row: max(tb_erisc_writer_ticks(row))),
                 Column("run GB/s", ratio(TB_ERISC_RUN_BYTES, TB_ERISC_SLOWEST_NS)),
-                Column("writer GB/s min", tb_erisc_writer_rate(max)),
-                Column("writer GB/s max", tb_erisc_writer_rate(min)),
+                Column("writer GB/s min", ratio(field("logical_bytes"), TB_ERISC_SLOWEST_NS)),
+                Column("writer GB/s max", ratio(field("logical_bytes"), TB_ERISC_FASTEST_NS)),
                 Column("gate ns", field("gate_release_host_ns")),
             ]
         ),
