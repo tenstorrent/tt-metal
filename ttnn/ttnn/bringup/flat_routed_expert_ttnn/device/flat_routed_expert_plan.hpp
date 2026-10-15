@@ -103,6 +103,8 @@ struct FlatRoutedExpertPlan {
     // x / h tile bytes and formats (bfp8 1088; config x_bf16 / h_bf16: bf16 2048), and the
     // relay's tilized super-block slots (fewer with bf16 x, so the relay arena fits)
     uint32_t x_tile = kBf8Tile, h_tile = kBf8Tile, sb_slots = kSbSlots;
+    // x relay row-major chunks (32 rows x SBT tiles) buffered (perf probe MIMO_FL_RM_CHUNKS)
+    uint32_t rm_chunks = kRmChunks;
     // gate/up fp32 in a full-sync DST (the whole sub-block in one K loop, x freed block by block: with bf16 x the x
     // ring holds one sub-block's blocks, row passes would keep them until the last pass and stall the relays)
     bool gu_full_sync = false;

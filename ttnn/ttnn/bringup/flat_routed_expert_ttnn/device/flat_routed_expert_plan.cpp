@@ -30,7 +30,7 @@ constexpr uint32_t KBLK = kKBlk, MT_MAX = 4, BF8_TILE = kBf8Tile;
 // scratch words (same address on every core), all below / beside the arena
 constexpr uint32_t L1_BANK_BYTES = 1427 * 1024;
 constexpr uint32_t GU_L1_BUDGET = 1400 * 1024;  // gate/up core: weight ring + x ring
-constexpr uint32_t D_CHAINS = 7, RM_CHUNKS = kRmChunks;
+constexpr uint32_t D_CHAINS = 7;
 constexpr int NOC_X = 17, NOC_Y = 12;  // Blackhole NoC torus
 
 uint32_t al(uint32_t b) { return (b + 2047) / 2048 * 2048; }
@@ -893,6 +893,14 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
         }
     }
+    if (const char* xm = std::getenv("MIMO_FL_X_SLOTS_MAX")) {
+        const uint32_t xs = static_cast<uint32_t>(std::atoi(xm));
+        TT_FATAL(
+            p.x_off + al(xs * x_bytes) + al(4 * p.mtg * p.np * p.h_tile) <= GU_L1_BUDGET,
+            "MIMO_FL_X_SLOTS_MAX={}: the gate/up x ring does not fit",
+            xs);
+        p.x_slots = xs;
+    }
     p.p_off = p.x_off + al(p.x_slots * x_bytes);
     p.hl_off = p.p_off + (p.gu_l1acc ? al(p.mtg * 2 * p.np * 2048) : 0);  // gate/up h_local (CB 3) after the partials
     p.rd_off = al(p.rd_slots * p.rg * p.slot * p.w_tile);
@@ -946,7 +954,15 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     p.seg = p.sbt * 64;
     p.nsb = p.Ht / p.sbt;
-    p.sb_off = al(RM_CHUNKS * 32 * p.seg);
+    // x staging depth probes: MIMO_FL_RM_CHUNKS (relay row-major chunks), MIMO_FL_SB_SLOTS (relay tilized super-blocks),
+    // MIMO_FL_X_SLOTS_MAX (the gate/up x ring, if it fits the gate/up budget)
+    if (const char* rc = std::getenv("MIMO_FL_RM_CHUNKS")) {
+        p.rm_chunks = static_cast<uint32_t>(std::atoi(rc));
+    }
+    if (const char* ss = std::getenv("MIMO_FL_SB_SLOTS")) {
+        p.sb_slots = static_cast<uint32_t>(std::atoi(ss));
+    }
+    p.sb_off = al(p.rm_chunks * 32 * p.seg);
     p.land_off = p.sb_off + al(p.sb_slots * p.mt * p.sbt * p.x_tile);
     p.xfwd = std::getenv("MIMO_FL_XFWD") && std::atoi(std::getenv("MIMO_FL_XFWD")) != 0 && p.nsg == 1 &&
              p.rects.size() == 2 && !p.group_rect;
