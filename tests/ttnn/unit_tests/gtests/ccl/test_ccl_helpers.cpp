@@ -1346,6 +1346,41 @@ TEST(CclTopologyUtils, MeshPartitionAndAllToAllShareTheReduceScatterLabelExceptW
     EXPECT_FALSE(topo::all_to_all_output_topology(held_other_only, 1, mesh, kRank, 3).has_value());
 }
 
+TEST(CclTopologyUtils, WholeMeshPartitionOfACollapsedShardOfAnotherDimIsRefused) {
+    // The collapsed form of the other-dim refusal above: {N}, [Shard{2}] partitioned on dim 3 leaves device k with
+    // chunk k of dim 2 next to piece k of dim 3, which no label states, so the partition kinds refuse before the
+    // collapsed early return; the reduction consumes the chunks and is labelled. Same-dim and Replicate collapsed
+    // inputs compose for every kind. mesh_partition's own hook (rule 2) refuses the same input.
+    for (const auto& mesh : {MeshShape(1, 8), MeshShape(2, 4)}) {
+        const auto other_dim = collapsed_label(mesh, TopoShard{2});
+        EXPECT_EQ(
+            topo::reduce_scatter_output_topology(other_dim, std::nullopt, mesh, kRank, 3),
+            collapsed_label(mesh, TopoShard{3}))
+            << mesh;
+        {
+            StrictCclTopologyScope warn_only(false);
+            EXPECT_FALSE(topo::mesh_partition_output_topology(other_dim, std::nullopt, mesh, kRank, 3).has_value())
+                << mesh;
+            EXPECT_FALSE(topo::all_to_all_output_topology(other_dim, std::nullopt, mesh, kRank, 3).has_value()) << mesh;
+        }
+        StrictCclTopologyScope strict(true);
+        EXPECT_NE(
+            message_of([&] {
+                topo::mesh_partition_output_topology(other_dim, std::nullopt, mesh, kRank, 3);
+            }).find("not expressible"),
+            std::string::npos)
+            << mesh;
+        EXPECT_EQ(
+            topo::mesh_partition_output_topology(collapsed_label(mesh, TopoShard{3}), std::nullopt, mesh, kRank, 3),
+            collapsed_label(mesh, TopoShard{3}))
+            << mesh;
+        EXPECT_EQ(
+            topo::all_to_all_output_topology(collapsed_label(mesh, TopoReplicate{}), std::nullopt, mesh, kRank, 3),
+            collapsed_label(mesh, TopoShard{3}))
+            << mesh;
+    }
+}
+
 TEST(CclTopologyUtils, CallerRelabelsScopeSilencesRefusalsForIntermediates) {
     // all_reduce_async labels its result from its own input and runs reduce_scatter / all_gather on intermediates
     // nobody reads; inside the scope their refusals are nullopt without a log or a TT_FATAL, honest labels are
