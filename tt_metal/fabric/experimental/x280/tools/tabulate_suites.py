@@ -669,7 +669,9 @@ EC_HOP_TABLES = (
 EC_DIAGNOSTIC = (Table("", {}),)
 
 
-class SplitRow(NamedTuple):
+class DerivedRow(NamedTuple):
+    """A derived table's row: only its Markdown label."""
+
     label: str
 
 
@@ -722,9 +724,141 @@ def turn_split(member, rows):
         ["wall counter=%s" % cell(turns[0].record.get("wall_counter"))],
         heads,
         [False] + [True] * (len(heads) - 1),
-        [SplitRow(line[0]) for line in cells],
+        [DerivedRow(line[0]) for line in cells],
         cells,
     )
+
+
+# Blackhole's NoC grid; rows and columns are rings (harness/inventory/inventory.hpp).
+NOC_GRID = (17, 12)
+
+
+def hops(src, dst, noc):
+    """Router links from NoC0 coordinate `src` to `dst` on NoC `noc`, by the rule of
+    harness/inventory/inventory.hpp hops(): NoC 0 runs right then down, NoC 1 the reverse.
+
+    Raises ParseError for an off-grid endpoint or a NoC other than 0 or 1.
+    """
+    for end in (src, dst):
+        if not all(0 <= c < n for c, n in zip(end, NOC_GRID)):
+            raise ParseError("NoC0 coordinate %r is outside the %dx%d grid" % (end, *NOC_GRID))
+    if noc not in (0, 1):
+        raise ParseError("NoC %r is neither 0 nor 1" % (noc,))
+    if noc == 1:
+        src, dst = dst, src
+    return sum((d - s) % n for s, d, n in zip(src, dst, NOC_GRID))
+
+
+class Leg(NamedTuple):
+    """A NoC write from the core at field prefix `src` to `dst` (each named by
+    <prefix>_x and <prefix>_y), issued on the NoC in field `noc`. `recorded`, when
+    set, names the fields holding the leg's hops and its acknowledgement's hops as
+    the host recorded them, which the table shows instead of deriving them."""
+
+    name: str
+    src: str
+    dst: str
+    noc: str
+    recorded: tuple = None
+
+
+class Placement(NamedTuple):
+    """A member's placement table: the records matching `select`, keyed by the
+    `keys` fields, showing the `cores` coordinates and each of `legs`."""
+
+    select: dict
+    keys: tuple
+    cores: tuple
+    legs: tuple
+
+
+def placement_table(member, rows, spec):
+    """`member`'s placement as a Tabulated titled "<member> placement"; None when no record
+    matching `spec.select` carries any of its cores' coordinates.
+
+    Each leg shows its NoC, its hops and its acknowledgement's hops, taken to return on
+    the same NoC: recorded where the leg names recorded fields, derived otherwise. Records with the same cells collapse into one row counting them. A
+    coordinate or NoC a record does not carry leaves its cells blank.
+    """
+
+    def xy(record, prefix):
+        x, y = record.get(prefix + "_x"), record.get(prefix + "_y")
+        return None if x is None or y is None else (x, y)
+
+    lines = {}
+    for row in rows:
+        record = row.record
+        if unmet(record, spec.select) or all(xy(record, core) is None for core in spec.cores):
+            continue
+        line = [record.get(key) for key in spec.keys]
+        line += ["(%d, %d)" % xy(record, core) if xy(record, core) else None for core in spec.cores]
+        for leg in spec.legs:
+            noc = record.get(leg.noc)
+            if leg.recorded:
+                line += [noc] + [record.get(field) for field in leg.recorded]
+                continue
+            src, dst = xy(record, leg.src), xy(record, leg.dst)
+            known = src is not None and dst is not None and noc is not None
+            line += [noc, hops(src, dst, noc) if known else None, hops(dst, src, noc) if known else None]
+        key = tuple(cell(v) for v in line)
+        if key not in lines:
+            lines[key] = [row.label, 0]
+        lines[key][1] += 1
+    if not lines:
+        return None
+    heads = list(spec.keys) + list(spec.cores)
+    heads += ["%s %s" % (leg.name, h) for leg in spec.legs for h in ("noc", "hops", "ack hops")] + ["records"]
+    cells = [list(key) + [str(count)] for key, (_, count) in lines.items()]
+    right = [all(c == "" or c.isdigit() for c in column) for column in zip(*cells)]
+    return Tabulated(member + " placement", [], heads, right, [DerivedRow(label) for label, _ in lines.values()], cells)
+
+
+P2P_METAL_PLACEMENT = {
+    peer: Placement(
+        {},
+        ("participant", "chip_id"),
+        ("x280_noc", f"{peer}_noc0"),
+        (
+            Leg("x280->peer", "x280_noc", f"{peer}_noc0", "x280_noc"),
+            Leg("peer->x280", f"{peer}_noc0", "x280_noc", f"{peer}_noc"),
+        ),
+    )
+    for peer in ("tensix", "erisc", "drisc")
+}
+PI_PLACEMENT = Placement(
+    {"record": {"worker"}},
+    ("worker_index", "chip_id"),
+    ("x280_noc", "noc0"),
+    (Leg("worker->x280", "noc0", "x280_noc", "noc"), Leg("x280->worker", "x280_noc", "noc0", "x280_noc")),
+)
+PLACEMENT = {
+    "p2p_latency x280_same_tile": Placement({}, ("participant", "chip_id"), ("x280_noc",), ()),
+    "p2p_latency x280_peer_tile": Placement(
+        {},
+        ("participant", "chip_id"),
+        ("x280_noc", "peer_x280_noc"),
+        (
+            Leg("a->b", None, None, "x280_noc", ("hops_a_to_b", "hops_b_to_a")),
+            Leg("b->a", None, None, "x280_noc", ("hops_b_to_a", "hops_a_to_b")),
+        ),
+    ),
+    "p2p_latency tensix_peer_tile": P2P_METAL_PLACEMENT["tensix"],
+    "p2p_latency erisc_peer_tile": P2P_METAL_PLACEMENT["erisc"],
+    "p2p_latency drisc_peer_tile": P2P_METAL_PLACEMENT["drisc"],
+    "packet_injection tensix_to_x280": PI_PLACEMENT,
+    "packet_injection erisc_to_x280_header": PI_PLACEMENT,
+    "eth_credit eth_credit": Placement(
+        {},
+        ("tx_chip", "rx_chip", "p"),
+        ("tx_x280_noc0", "tx_erisc_noc0", "rx_erisc_noc0", "rx_x280_noc0"),
+        (
+            Leg("x280->e0", "tx_x280_noc0", "tx_erisc_noc0", "tx_x280_noc"),
+            Leg("e0->x280", "tx_erisc_noc0", "tx_x280_noc0", "tx_erisc_noc"),
+            Leg("e1->x280", "rx_erisc_noc0", "rx_x280_noc0", "rx_erisc_noc"),
+            Leg("x280->e1", "rx_x280_noc0", "rx_erisc_noc0", "rx_x280_noc"),
+        ),
+    ),
+}
 
 
 # Each member's table spec, keyed by its records' suite and member.
@@ -764,6 +898,11 @@ MEMBERS = {
     "eth_credit eth_credit_attribution": EC_DIAGNOSTIC,
     "eth_credit eth_credit_link": EC_DIAGNOSTIC,
 }
+# Tables derived across a member's records, which the per-record specs above cannot express;
+# each returns a Tabulated or None.
+DERIVED = {member: [lambda m, rows, spec=spec: placement_table(m, rows, spec)] for member, spec in PLACEMENT.items()}
+for member in METAL_PEER_MEMBERS:
+    DERIVED[member].append(turn_split)
 # A table's title names it in both outputs.
 assert all(
     len({table.title for table in tables}) == len(tables) for tables in MEMBERS.values()
@@ -987,10 +1126,10 @@ def tabulate(member, rows):
         out.append(
             Tabulated(member + (" " + table.title if table.title else ""), constant, heads, right, table_rows, cells)
         )
-    if member in METAL_PEER_MEMBERS:
-        split = turn_split(member, rows)
-        if split is not None:
-            out.append(split)
+    for derive in DERIVED.get(member, ()):
+        derived = derive(member, rows)
+        if derived is not None:
+            out.append(derived)
     return out
 
 

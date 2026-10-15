@@ -100,7 +100,37 @@ TURN_SPLIT_HEADS = (
     | {f"{term} {stat}" for term in ("completion", "departure", "ack") for stat in ("mean ticks", "p50 ticks")}
     | {f"{term} {stat}" for term in ("completion", "departure", "ack") for stat in ("mean ns", "p50 ns")}
 )
+
+
+def placement_heads(keys, cores, legs):
+    return set(keys) | set(cores) | {f"{leg} {h}" for leg in legs for h in ("noc", "hops", "ack hops")} | {"records"}
+
+
+METAL_PLACEMENT = ("x280->peer", "peer->x280")
+PI_PLACEMENT_HEADS = placement_heads(
+    ("worker_index", "chip_id"), ("x280_noc", "noc0"), ("worker->x280", "x280->worker")
+)
 HEADS = {
+    "p2p_latency x280_same_tile placement": placement_heads(("participant", "chip_id"), ("x280_noc",), ()),
+    "p2p_latency x280_peer_tile placement": placement_heads(
+        ("participant", "chip_id"), ("x280_noc", "peer_x280_noc"), ("a->b", "b->a")
+    ),
+    "p2p_latency tensix_peer_tile placement": placement_heads(
+        ("participant", "chip_id"), ("x280_noc", "tensix_noc0"), METAL_PLACEMENT
+    ),
+    "p2p_latency erisc_peer_tile placement": placement_heads(
+        ("participant", "chip_id"), ("x280_noc", "erisc_noc0"), METAL_PLACEMENT
+    ),
+    "p2p_latency drisc_peer_tile placement": placement_heads(
+        ("participant", "chip_id"), ("x280_noc", "drisc_noc0"), METAL_PLACEMENT
+    ),
+    "packet_injection tensix_to_x280 placement": PI_PLACEMENT_HEADS,
+    "packet_injection erisc_to_x280_header placement": PI_PLACEMENT_HEADS,
+    "eth_credit eth_credit placement": placement_heads(
+        ("tx_chip", "rx_chip", "p"),
+        ("tx_x280_noc0", "tx_erisc_noc0", "rx_erisc_noc0", "rx_x280_noc0"),
+        ("x280->e0", "e0->x280", "e1->x280", "x280->e1"),
+    ),
     "p2p_latency x280_same_tile": P2P_HEADS,
     "p2p_latency x280_peer_tile": P2P_HEADS | {"hw", "peer", "hops a->b", "hops b->a", "lap hops"},
     "p2p_latency tensix_peer_tile": P2P_HEADS,
@@ -251,7 +281,41 @@ PS_X280_DECIDE = {
     "boundary": "decision",
 }
 PI_WORKER = {"wall ticks": "90000", "cpu cycles": "120000", "ns": "90000.000"}
+
+
+def metal_placement(to_peer, to_x280):
+    return {
+        "x280->peer hops": str(to_peer),
+        "x280->peer ack hops": str(to_x280),
+        "peer->x280 hops": str(to_x280),
+        "peer->x280 ack hops": str(to_peer),
+    }
+
+
 EXPECTED = {
+    # D1's card 0 placement (placement-inspection REPORT.md): every Metal loop is 29 hops.
+    ("p2p_latency tensix_peer_tile placement", 0): dict(
+        metal_placement(21, 8), **{"x280_noc": "(8, 3)", "tensix_noc0": "(1, 2)", "records": "4"}
+    ),
+    ("p2p_latency erisc_peer_tile placement", 1): dict(metal_placement(12, 17), participant="ERISC"),
+    ("p2p_latency drisc_peer_tile placement", 0): metal_placement(18, 11),
+    # The recorded hops, 6 and 4 in this test.
+    ("p2p_latency x280_peer_tile placement", 0): {"a->b hops": "6", "a->b ack hops": "4", "b->a hops": "4"},
+    ("packet_injection tensix_to_x280 placement", 0): {
+        "noc0": "(1, 2)",
+        "worker->x280 noc": "0",
+        "worker->x280 hops": "8",
+        "x280->worker hops": "21",
+    },
+    ("packet_injection erisc_to_x280_header placement", 0): {"worker->x280 hops": "17", "x280->worker hops": "12"},
+    ("eth_credit eth_credit placement", 0): {
+        "x280->e0 hops": "25",
+        "e0->x280 hops": "4",
+        "e1->x280 noc": "1",
+        "e1->x280 hops": "16",
+        "e1->x280 ack hops": "13",
+        "x280->e1 hops": "16",
+    },
     ("p2p_latency x280_same_tile", 0): X280_PHASE,
     ("p2p_latency x280_peer_tile", 0): dict(X280_PHASE, **{"lap hops": "10"}),
     ("p2p_latency tensix_peer_tile", 0): X280_PHASE,

@@ -174,7 +174,12 @@ as `tx_x280` and `rx_x280`; the eth_credit link record's Ethernet tile as
 `erisc`. The X280 tile of a p2p or packet_injection record is `chip_id`,
 `x280_hw_index`, `x280_noc_x/y` (NoC0) and `x280_noc`
 (`output::append_x280_placement()`); x280_peer_tile adds
-`peer_x280_noc_x/y`.
+`peer_x280_noc_x/y`. The tabulator's `<member> placement` table derives each
+leg's hops by the rule of `hops()` in `harness/inventory/inventory.hpp`, except
+x280_peer_tile's, which shows the recorded `hops_a_to_b` and `hops_b_to_a`. It
+counts a leg's acknowledgement on the same NoC in the opposite direction; the
+NoC documentation implies that return route but does not state it
+(tt-isa-documentation `BlackholeA0/NoC/MemoryMap.md`).
 
 ## Quantities that share a label
 
@@ -516,8 +521,9 @@ new campaign evidence.
 
 Tabulate current-format JSONL records of the p2p_latency, transport_bandwidth,
 pipeline_stage, packet_injection, core_sync and eth_credit members, one result
-table per member and record shape, and for each Metal p2p peer a `TURN split`
-table across its records:
+table per member and record shape, and two tables derived across a member's
+records: its `placement` (§ Placement) and, for each Metal p2p peer, a
+`TURN split`:
 
 ```bash
 # Tabulate suite results to stdout:

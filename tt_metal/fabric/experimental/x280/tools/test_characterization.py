@@ -19,6 +19,7 @@ from tabulate_suites import (
     conversion,
     endpoint_difference,
     floor_index_percentile,
+    hops,
     parse_jsonl,
     tabulate,
     ticks_to_ns,
@@ -569,6 +570,26 @@ class Reducers(unittest.TestCase):
 
     def test_an_interval_wraps_modulo_two_to_the_64(self):
         self.assertEqual(endpoint_difference(2**64 - 5, 4), 9)
+
+
+class Hops(unittest.TestCase):
+    def test_matches_the_harness_inventory_cases(self):
+        # tests/host/test_harness_inventory.cpp CountsDirectionalRingDistance, on the 17x12 grid.
+        l2cpu0, l2cpu1, l2cpu2, dram, tensix_a, tensix_b = (8, 3), (8, 9), (8, 5), (9, 3), (1, 11), (16, 2)
+        cases = [
+            (l2cpu0, l2cpu0, 0, 0),
+            (l2cpu0, dram, 1, 16),
+            (l2cpu0, l2cpu2, 2, 10),
+            (l2cpu2, l2cpu0, 10, 2),
+            (l2cpu0, l2cpu1, 6, 6),
+            (tensix_b, (1, 2), 2, 15),
+            (tensix_a, (1, 0), 1, 11),
+            ((0, 0), (16, 11), 27, 2),
+        ]
+        for src, dst, noc0, noc1 in cases:
+            self.assertEqual((hops(src, dst, 0), hops(src, dst, 1)), (noc0, noc1), (src, dst))
+        with self.assertRaises(ParseError):
+            hops((17, 3), l2cpu0, 0)
 
 
 class ClockValidation(unittest.TestCase):
