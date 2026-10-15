@@ -4,8 +4,10 @@
 
 #pragma once
 
-#include <tt-metalium/shape2d.hpp>
+#include <cstddef>
 #include <tt-metalium/shape.hpp>
+#include <tt-metalium/tensor/spec/layout/layout.hpp>
+#include <tt-metalium/tile.hpp>
 
 #include <tt-metalium/tensor/spec/layout/alignment.hpp>
 #include <tt-metalium/tensor/spec/layout/page_config.hpp>
@@ -13,8 +15,8 @@
 #include <tt-metalium/tensor/tensor_types.hpp>
 
 #include <memory>
-#include <optional>
-#include <string>
+#include <tuple>
+#include <vector>
 
 namespace tt::tt_metal {
 
