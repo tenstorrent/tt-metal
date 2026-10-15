@@ -1,0 +1,30 @@
+# H2: P = #60154 head harness kernel, P2 its copy, H = identity rows configure once per launch (H1's), HI = H with the
+# sfpu_sort routes' inits ahead of the bias add as the op orders them, HI2 its copy; blocks P H HI HI2 P2 P2 HI2 HI H P
+# twice on all 12 rows. Then the timing-only probe Q (HI with the 32 SFPSHFT2 rotations of the sort's instance merge as
+# SFPMOV, wrong results) on the sfpu_sort rows, HI Q Q HI, and counter builds HI_wc Q_wc on the identity rows.
+r P ids/gate.txt -
+r H ids/gate.txt -
+r HI ids/gate.txt -
+r HI2 ids/gate.txt -
+r P2 ids/gate.txt -
+r P2 ids/gate.txt -
+r HI2 ids/gate.txt -
+r HI ids/gate.txt -
+r H ids/gate.txt -
+r P ids/gate.txt -
+r P ids/gate.txt -
+r H ids/gate.txt -
+r HI ids/gate.txt -
+r HI2 ids/gate.txt -
+r P2 ids/gate.txt -
+r P2 ids/gate.txt -
+r HI2 ids/gate.txt -
+r HI ids/gate.txt -
+r H ids/gate.txt -
+r P ids/gate.txt -
+q HI ids/gate_s.txt -
+q Q ids/gate_s.txt -
+q Q ids/gate_s.txt -
+q HI ids/gate_s.txt -
+c HI_wc ids/gate_id.txt - wc
+c Q_wc ids/gate_id.txt - wc

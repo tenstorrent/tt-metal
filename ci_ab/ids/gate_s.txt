@@ -1,0 +1,5 @@
+perf_generalized_moe_gate.py::test_perf_generalized_moe_gate[variant:('sfpu_sort', 2, <ApproximationMode.No: False>)]
+perf_generalized_moe_gate.py::test_perf_generalized_moe_gate[variant:('sfpu_sort', 1, <ApproximationMode.No: False>)]
+perf_generalized_moe_gate.py::test_perf_generalized_moe_gate[variant:('sfpu_sort_identity', 2, <ApproximationMode.No: False>)]
+perf_generalized_moe_gate.py::test_perf_generalized_moe_gate[variant:('sfpu_sort_identity', 1, <ApproximationMode.No: False>)]
+perf_generalized_moe_gate.py::test_perf_generalized_moe_gate[variant:('sfpu_sort_identity', 0, <ApproximationMode.No: False>)]
