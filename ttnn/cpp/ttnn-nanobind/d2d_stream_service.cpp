@@ -85,8 +85,8 @@ void py_module_types(nb::module_& mod) {
         .def(
             nb::init<uint32_t, uint32_t, uint32_t>(),
             nb::arg("num_gates"),
-            nb::arg("slot_id_offset_bytes") = 0u,
-            nb::arg("gate_mode_offset_bytes") = 0u)
+            nb::arg("slot_id_offset_bytes"),
+            nb::arg("gate_mode_offset_bytes"))
         .def_rw("num_gates", &D2DStageGateConfig::num_gates)
         .def_rw("slot_id_offset_bytes", &D2DStageGateConfig::slot_id_offset_bytes)
         .def_rw("gate_mode_offset_bytes", &D2DStageGateConfig::gate_mode_offset_bytes);

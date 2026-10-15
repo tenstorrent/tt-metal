@@ -2481,6 +2481,7 @@ TEST_F(D2DStreamServiceTest, StageGateRejectsBadConfig) {
     expect_rejected(kGateSlotOffsetBytes, /*mode=*/kGateMetadataBytes);      // past the record
     expect_rejected(/*slot=*/kGateMetadataBytes - 2, kGateModeOffsetBytes);  // straddles the end
     expect_rejected(/*slot=*/4, /*mode=*/4);                                 // same word
+    expect_rejected(/*slot=*/0, /*mode=*/0);                                 // offsets left at their defaults
     // The service still comes up with a valid layout afterwards.
     auto [sender, receiver] =
         D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
