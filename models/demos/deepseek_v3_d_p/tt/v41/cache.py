@@ -50,17 +50,19 @@ WINDOW_SLOT = 128  # >= sliding_window - 1 carried rows, tile aligned
 ZERO_BLOCK_BYTES = 4 << 20
 
 
-def replicated_zeros(mesh_device, rows: int, width: int, dtype):
-    """Replicated row-major DRAM zeros [1, 1, rows, width] of ``dtype``: one host upload of at most ZERO_BLOCK_BYTES
-    per chip (whole 32-row groups), copied on device over the rest of the rows."""
+def replicated_zeros(mesh_device, rows: int, width: int, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
+    """Replicated DRAM zeros [1, 1, rows, width] of ``dtype`` in ``layout`` (row-major, or tiled with ``rows`` a
+    multiple of 32): one host upload of at most ZERO_BLOCK_BYTES per chip (whole 32-row groups), copied on device
+    over the rest of the rows."""
     step = max(ZERO_BLOCK_BYTES // (width * 2), 32) // 32 * 32  # rows of the block (<= 2 bytes per element)
+    assert layout == ttnn.ROW_MAJOR_LAYOUT or rows % 32 == 0, (layout, rows)
 
     def upload(n):
         return ttnn.from_torch(
             torch.zeros(1, 1, n, width),
             device=mesh_device,
             dtype=dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=layout,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
@@ -69,7 +71,7 @@ def replicated_zeros(mesh_device, rows: int, width: int, dtype):
         return upload(rows)
     block = upload(step)
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, rows, width]), dtype, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([1, 1, rows, width]), dtype, layout, mesh_device, ttnn.DRAM_MEMORY_CONFIG
     )
     for first in range(0, rows, step):
         n = min(step, rows - first)

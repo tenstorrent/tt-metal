@@ -153,8 +153,12 @@ class V41DecodePool:
         if swa:
             self.slots[-1] = SlotLayout(swa, 0)
         self.kv = {}
-        self.index_k_flat = {}  # [1, 1, users * cap, idim] bf16 row-major: the rows scatter_rows writes
-        self.index_k = {}  # the same buffer as [users, 1, cap, idim]: the indexer's cache slots
+        # the index keys, [users, 1, cap + 32, idim] bf16 tiled (slot u = cache_batch_idx u of the dense scorer), kept
+        # tiled by every write; and, for the candidate source, the same rows as block pages [1, 1, users * (cap + 32)
+        # / BLOCK_ROWS, BLOCK_ROWS * idim] bf16 row-major (the pages the candidate scorer gathers). The logical row of
+        # user u's compressed row t is u * (cap + 32) + t in both.
+        self.index_k = {}
+        self.index_k_blocks = {}
         for src, slot in self.slots.items():
             fmt = kv_format if src >= 0 else MlaKvCacheFormat.BF16_RM
             w = fmt.storage_width(self.kv_geometry) if src >= 0 else config.HEAD_DIM
@@ -162,9 +166,14 @@ class V41DecodePool:
             if src >= 0:
                 # cap + 32 rows per slot: the indexer's causal window starts past the slot's rows, the last tile
                 # (never written, zero keys) is what it scores there
-                flat = replicated_zeros(mesh_device, users_per_rank * (slot.cap + 32), idim, ttnn.bfloat16)
-                self.index_k_flat[src] = flat
-                self.index_k[src] = ttnn.reshape(flat, (users_per_rank, 1, slot.cap + 32, idim))
+                assert (slot.cap + 32) % 32 == 0, slot.cap  # a user's rows start on a tile and a block page
+                rows = users_per_rank * (slot.cap + 32)
+                tiled = replicated_zeros(mesh_device, rows, idim, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+                self.index_k[src] = ttnn.reshape(tiled, (users_per_rank, 1, slot.cap + 32, idim))
+                if src == config.CANDIDATE_SOURCE_LAYER:
+                    self.index_k_blocks[src] = replicated_zeros(
+                        mesh_device, rows // BLOCK_ROWS, BLOCK_ROWS * idim, ttnn.bfloat16
+                    )
         # fp32 (kv, score) projections of every ratio-2 source's last token per slot row (the compressor carry)
         self.carry = {
             src: tuple(self._replicated(torch.zeros(1, 1, ROWS, config.HEAD_DIM), ttnn.float32) for _ in range(2))
@@ -257,6 +266,13 @@ class V41DecodePool:
         return self._offsets[source]
 
     # --- joining ----------------------------------------------------------------------------------------------
+    def write_index_keys(self, source: int, keys, idx, dst_base: int = 0, stride: int = 0, rows: int | None = None):
+        """``scatter_rows`` of row-major index keys into every representation of ``source``'s pool (the tiled slots,
+        and the block pages of the candidate source): logical row ``dst_base + i * stride + idx[i]``."""
+        scatter_rows(keys, self.index_k[source], idx, dst_base=dst_base, stride=stride, rows=rows)
+        if source in self.index_k_blocks:
+            scatter_rows(keys, self.index_k_blocks[source], idx, dst_base=dst_base, stride=stride, rows=rows)
+
     def join_inputs(self, slot: int, state: V41PrefillState) -> dict:
         """The host index tensors of ``join``: per rank (the slot's rank gets the rows, the others the sentinel)
         the ring slots of the carry's 128 rows (position ``state.start - 128 + k`` at ring slot ``(step + k) %
@@ -294,7 +310,7 @@ class V41DecodePool:
             scatter_rows(
                 state.kv[src], self.kv[src], comp, src_base=g.kv_row_of_compressed(0), dst_base=base, stride=1, rows=n
             )
-            scatter_rows(state.index_k[src], self.index_k_flat[src], comp, dst_base=u * (cap + 32), stride=1, rows=n)
+            self.write_index_keys(src, state.index_k[src], comp, dst_base=u * (cap + 32), stride=1, rows=n)
         assert state.window_carry[self.layers[0]].shape[2] == RING
         for layer in self.layers:
             base = u * self.slot_rows(layer) + self.ring_row(layer)

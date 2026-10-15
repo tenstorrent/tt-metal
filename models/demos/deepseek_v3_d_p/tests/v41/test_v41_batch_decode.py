@@ -71,8 +71,11 @@ def _debug_join(decoder, state, layers) -> dict:
         comp = state.to_host(pool.kv[src])[pool.comp_row(src) : pool.comp_row(src) + written]
         rows = state.to_host(state.kv[src])[g.kv_row_of_compressed(0) : g.kv_row_of_compressed(0) + written]
         out[f"comp{src}"] = round(float((comp - rows).abs().max()), 5)
-        keys = state.to_host(pool.index_k_flat[src])[:written]
+        keys = state.to_host(pool.index_k[src])[:written]  # [0, 0]: slot 0's tiled rows, untilized on the host
         out[f"keys{src}"] = round(float((keys - state.to_host(state.index_k[src])[:written]).abs().max()), 5)
+        if src in pool.index_k_blocks:
+            blocks = state.to_host(pool.index_k_blocks[src]).reshape(-1, keys.shape[1])[:written]
+            out[f"blocks{src}"] = round(float((blocks - state.to_host(state.index_k[src])[:written]).abs().max()), 5)
         out[f"comp{src}_norm"] = round(float(rows.abs().max()), 3)
     for src, (k0, s0) in pool.carry.items():
         carry = state.compressor_carry.get(src)

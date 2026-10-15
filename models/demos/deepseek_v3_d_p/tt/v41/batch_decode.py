@@ -531,7 +531,7 @@ class TtV41BatchDecoder(TtV41Decoder):
                 scatter_rows(rows, pool.kv[src], idx, dst_base=pool.comp_row(src), stride=pool.slot_rows(layer), rows=n)
                 ttnn.deallocate(rows)
                 keys = ttnn.to_layout(keys, ttnn.ROW_MAJOR_LAYOUT)
-                scatter_rows(keys, pool.index_k_flat[src], idx, stride=pool.slots[src].cap + 32, rows=n)
+                pool.write_index_keys(src, keys, idx, stride=pool.slots[src].cap + 32, rows=n)
                 ttnn.deallocate(keys)
             if attn.is_index_source:
                 compressed, candidates = self._index(
@@ -605,7 +605,7 @@ class TtV41BatchDecoder(TtV41Decoder):
         )
         q = indexer.qdq(indexer.rope(q, cos, sin))
         w = indexer.ccl.tp_all_reduce(ttnn.linear(x, indexer.weights_proj))
-        k = ttnn.to_layout(pool.index_k[source], ttnn.TILE_LAYOUT)  # [users, 1, cap + 32, idim]
+        k = pool.index_k[source]  # [users, 1, cap + 32, idim], tiled by every write: no conversion of the history
         config = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=min(256, cap + 32), head_group_size=0)
         parts, published = [], None
         for u in range(self.users):
@@ -617,7 +617,6 @@ class TtV41BatchDecoder(TtV41Decoder):
             score = ttnn.to_layout(ttnn.add(ttnn.to_layout(score, ttnn.TILE_LAYOUT), mask), ttnn.ROW_MAJOR_LAYOUT)
             topk, published = indexer.select(score, None, 0, cfg.INDEX_TOPK, candidates)
             parts.append(ttnn.slice(topk, [0, 0, u, 0], [1, 1, u + 1, topk.shape[3]]))
-        ttnn.deallocate(k)
         if self.users < ROWS:
             parts.append(self.pad_topk)
         return ttnn.concat(parts, dim=2), published
