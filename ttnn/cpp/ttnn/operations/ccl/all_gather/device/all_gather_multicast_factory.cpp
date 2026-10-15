@@ -4,11 +4,13 @@
 
 #include "all_gather_multicast_factory.hpp"
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/descriptor_runtime_args.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::ccl {
@@ -16,22 +18,6 @@ namespace ttnn::operations::ccl {
 using namespace ::ttnn::ccl;
 
 namespace {
-
-void emplace_with_leading_buffers(
-    tt::tt_metal::KernelDescriptor& kernel,
-    const CoreCoord& core,
-    const std::vector<tt::tt_metal::Buffer*>& leading_buffers,
-    const std::vector<uint32_t>& raw_args) {
-    tt::tt_metal::KernelDescriptor::RTArgList args;
-    args.reserve(raw_args.size());
-    for (auto* buffer : leading_buffers) {
-        args.push_back(buffer);
-    }
-    for (size_t arg_idx = leading_buffers.size(); arg_idx < raw_args.size(); ++arg_idx) {
-        args.push_back(raw_args[arg_idx]);
-    }
-    kernel.emplace_runtime_args(core, args);
-}
 
 tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     const AllGatherParams& operation_attributes,
@@ -476,7 +462,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
                 reader_rt_args,
                 fabric_is_2d ? tt::tt_fabric::FabricApiType::Mesh : tt::tt_fabric::FabricApiType::Linear);
         }
-        emplace_with_leading_buffers(
+        emplace_runtime_args_with_leading_buffers(
             desc.kernels[reader_kernel_id], core, {input_tensor.buffer(), output_tensor.buffer()}, reader_rt_args);
 
         std::vector<uint32_t> writer_rt_args = {
@@ -523,7 +509,8 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
                 writer_rt_args,
                 fabric_is_2d ? tt::tt_fabric::FabricApiType::Mesh : tt::tt_fabric::FabricApiType::Linear);
         }
-        emplace_with_leading_buffers(desc.kernels[writer_kernel_id], core, {output_tensor.buffer()}, writer_rt_args);
+        emplace_runtime_args_with_leading_buffers(
+            desc.kernels[writer_kernel_id], core, {output_tensor.buffer()}, writer_rt_args);
     }
 
     return desc;

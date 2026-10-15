@@ -6,6 +6,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "ttnn/operations/ccl/common/host/descriptor_runtime_args.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
@@ -297,13 +298,8 @@ tt::tt_metal::ProgramDescriptor build_broadcast_descriptor_at(
         tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
             sender_fabric_node_id, dst_nodes, {link}, desc, worker_sender_writer_kernel_id, core, writer_rt_args);
 
-        tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args_builder;
-        writer_rt_args_builder.reserve(writer_rt_args.size());
-        writer_rt_args_builder.push_back(tensor_return_value.buffer());
-        for (size_t arg_idx = 1; arg_idx < writer_rt_args.size(); ++arg_idx) {
-            writer_rt_args_builder.push_back(writer_rt_args[arg_idx]);
-        }
-        desc.kernels[worker_sender_writer_kernel_id].emplace_runtime_args(core, writer_rt_args_builder);
+        ttnn::ccl::emplace_runtime_args_with_leading_buffers(
+            desc.kernels[worker_sender_writer_kernel_id], core, {tensor_return_value.buffer()}, writer_rt_args);
     }
 
     return desc;
