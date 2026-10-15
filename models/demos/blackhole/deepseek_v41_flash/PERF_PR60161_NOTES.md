@@ -29,3 +29,13 @@ attention outputs must be merged: q all_gather [32,4096]->[32,32768] 47.0 us + p
 Verdict: a capacity feature, not a latency one - gate it to long contexts (it frees KV DRAM 8x and divides the indexer work by 8), keep the replicated layout at <= 131072.
 Design must shrink the traffic first (send only the T real rows instead of 32 padded rows, bf16 -> keep q for 8 heads and exchange partial (o, m, l) instead of gathering q,
 or shard the heads of the 64 across columns differently).
+
+## Per-round top-2 logits in the spec round (SpecDecoder.forward) - measured 2026-10-15, not kept
+`ttnn.topk(k=2)` on the fp32 [T,16160] column-shard logits + all_gather costs 2.45 ms + 46 us per round in a trace (tests/test_top2_microbench.py); only the demo's
+near-tie report reads it (the vLLM server never does). Making it optional (DSV41_SPEC_TOP2=0) gave:
+- 4-layer model (DSV41_LAYERS=0-3, B=32, k=3): round 41.1 / 41.0 ms with top-2 vs 38.2 / 38.2 ms without (-2.9 ms, repeatable);
+- full 40-layer model: round 113.6 / 114.3 ms (two runs) with vs 114.1 ms without - no measurable difference (A/A spread ~0.7 ms), accepted drafts/round 2.353 / 2.353 vs 2.382.
+So the saving is hidden at full size (something else bounds the round there) and it is not claimed. Code reverted.
+Side finding: the k=3 spec round of the 4-layer model takes ~38 ms, i.e. roughly a third of the 114 ms round is fixed cost independent of the layer count (head + sampling +
+accept/commit + drafter + host feed/readback, Engram prep); 4 -> 40 layers adds ~75 ms. That fixed part, not the layers, is the next thing to profile.
+Demo spec runs: dsv4-logs/base/perf_top2_{on,on2,off}.log, perf_t2L4_*.log; launcher dsv4-logs/base/perf_demo.sh <name> <spec k> "<extra env>".
