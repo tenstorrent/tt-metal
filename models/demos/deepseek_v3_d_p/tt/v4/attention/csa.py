@@ -612,16 +612,42 @@ class TtCSAIndexer(_TtHCABase):
         q = ttnn.concat([nope, rope], dim=-1)  # [1, H_l, S_l, Dh]
         if getattr(self, "q_act_quant", None) is not None:  # V4.1 (DS41F-0048): model.py fp4-quantises the index q
             q = self.q_act_quant(q)
-        scores = ttnn.relu(
-            ttnn.matmul(q, keys, transpose_b=True, memory_config=self.memory_config)
-        )  # [1, H_l, S_l, cap]
+        cap = int(keys.shape[2])
+        blk = int(os.environ.get("PREFILL_INDEXER_SCORE_COLS", "65536"))
+        if blk <= 0 or cap <= blk:
+            scores = ttnn.relu(
+                ttnn.matmul(q, keys, transpose_b=True, memory_config=self.memory_config)
+            )  # [1, H_l, S_l, cap]
         w = ttnn.linear(hidden_states, self.w_proj, memory_config=self.memory_config)  # partial [1, 1, S_l, H]
         w = self.compressor._tp_all_reduce(w)
         w = ttnn.permute(
             ttnn.matmul(w, self.head_sel, memory_config=self.memory_config), (0, 3, 2, 1)
         )  # [1, H_l, S_l, 1]
-        scores = ttnn.multiply(ttnn.sum(ttnn.multiply(scores, w), dim=1, keepdim=True), self.scale)  # [1, 1, S_l, cap]
-        return ttnn.add(self._tp_all_reduce_via_gather(scores), mask_block)
+        if blk <= 0 or cap <= blk:
+            scores = ttnn.multiply(
+                ttnn.sum(ttnn.multiply(scores, w), dim=1, keepdim=True), self.scale
+            )  # [1, 1, S_l, cap]
+            return ttnn.add(self._tp_all_reduce_via_gather(scores), mask_block)
+        # DS41F-0066: the per-head scores [1, H_l, S_l, cap] (and their weighted copy) are ~4 GB each per chip at ~491k entries
+        # (V4.1, ~1M positions) -> DRAM OOM. Score the key cache in column blocks instead: every output column depends only on its
+        # own key row and every reduction (head_dim in the matmul, heads, TP) is per element, so the values are the same.
+        assert blk % ttnn.TILE_SIZE == 0, blk
+        dh = int(keys.shape[3])
+        parts = []
+        for c0 in range(0, cap, blk):
+            c1 = min(cap, c0 + blk)
+            k_blk = ttnn.slice(keys, [0, 0, c0, 0], [1, 1, c1, dh])
+            s = ttnn.relu(ttnn.matmul(q, k_blk, transpose_b=True, memory_config=self.memory_config))
+            ttnn.deallocate(k_blk)
+            s = ttnn.multiply(ttnn.sum(ttnn.multiply(s, w), dim=1, keepdim=True), self.scale)  # [1, 1, S_l, c1 - c0]
+            m_blk = ttnn.slice(mask_block, [0, 0, 0, c0], [1, 1, int(mask_block.shape[2]), c1])
+            parts.append(ttnn.add(self._tp_all_reduce_via_gather(s), m_blk))
+            ttnn.deallocate(s)
+            ttnn.deallocate(m_blk)
+        out = ttnn.concat(parts, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for t in parts:
+            ttnn.deallocate(t)
+        return out
 
 
 class TtCSA(TtHCA):
