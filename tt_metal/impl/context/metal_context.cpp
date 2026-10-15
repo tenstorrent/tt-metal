@@ -279,7 +279,7 @@ void MetalContext::initialize(
     }
 
     if (rtoptions().get_profiler_enabled()) {
-        profiler_state_manager_ = std::make_unique<ProfilerStateManager>(MetalEnvAccessor(*this->env_).impl());
+        profiler_state_manager_ = std::make_unique<ProfilerStateManager>(*this);
     }
 
     data_collector_ = std::make_unique<DataCollector>(MetalEnvAccessor(*this->env_).impl());
