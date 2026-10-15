@@ -16,7 +16,6 @@ from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_m
 from models.tt_transformers.tt.rope import RotarySetup
 
 from .batched_prefill import gather_users, last_token_rows, partition_users
-from .dp_prefill import DP_PREFILL_ENV, DPPrefillStack, dp_prefill_enabled, dp_prefill_mesh_supported
 from .fused_decode.config import fused_decode_supported
 from .fused_decode.inputs import DecodeInputs
 from .fused_decode.terminal import DecodeTerminal, FusedSamplingGenerator
@@ -325,22 +324,6 @@ class Model:
             per_device_padded,
             mesh_device.get_num_devices() // decode_tp if users_row_sharded else 1,
         )
-
-        # Data-parallel prefill stack (dp_prefill.py): only with GPT_OSS_DP_PREFILL=1 on Blackhole 1x4. Off by
-        # default; when off nothing below runs and the model is unchanged.
-        self.dp_prefill_stack = None
-        if dp_prefill_enabled():
-            if not dp_prefill_mesh_supported(mesh_device):
-                raise ValueError(f"{DP_PREFILL_ENV}=1 needs a Blackhole 1x4 mesh, got {tuple(mesh_device.shape)}")
-            self.dp_prefill_stack = DPPrefillStack(self, state_dict)
-
-    def dp_prefill(self, tokens, page_table, kv_cache, prompt_lens=None):
-        """Data-parallel prefill of B users (dp_prefill.DPPrefillStack.prefill): tokens [B, L] host (same padded L),
-        page_table [B, blocks] host, kv_cache the per-layer [k, v] of this model's TP paged cache. Fills each user's
-        pages exactly where a TP batch-1 prefill of that user would and returns last-token logits [B, vocab]."""
-        if self.dp_prefill_stack is None:
-            raise RuntimeError(f"DP prefill stack not built: set {DP_PREFILL_ENV}=1 (Blackhole 1x4)")
-        return self.dp_prefill_stack.prefill(tokens, page_table, kv_cache, prompt_lens=prompt_lens)
 
     def _make_sampling_args(self, hf_config, mesh_device):
         """Create a minimal args object for SamplingGenerator/TTSampling."""
