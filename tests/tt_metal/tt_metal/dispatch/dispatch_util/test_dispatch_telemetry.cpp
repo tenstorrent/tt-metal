@@ -25,6 +25,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/pcie/pci_device.hpp>
+#include <umd/device/soc_descriptor.hpp>
 #include <umd/device/tt_device/tt_device.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -497,6 +498,34 @@ TEST_F(DispatchTelemetryReadApiTest, SMCControlIsInitialized) {
         EXPECT_EQ(dispatch_xy, dispatch_telemetry_types::INVALID_SMC_DISPATCH_CORE_COORDS);
         EXPECT_EQ(dispatch_s_xy, dispatch_telemetry_types::INVALID_SMC_DISPATCH_CORE_COORDS);
     }
+}
+
+// Temporary: on Wormhole the ARC tile routes NOC addresses below 0x8_0000_0000 to DRAM channel 0. If the SMC buffer
+// address aliases DRAM, zeroing DRAM at its low 32 bits wipes the control block; if it reaches ARC CSM, it survives.
+TEST_F(DispatchTelemetryReadApiTest, TEMP_SMCControlSurvivesDramZeroing) {
+    auto* firmware_info_provider = tt_device().get_firmware_info_provider();
+    const uint64_t smc_addr = firmware_info_provider->get_runtime_telemetry_buffer_address().value();
+    const uint32_t smc_size = firmware_info_provider->get_runtime_telemetry_buffer_size().value();
+    const uint32_t dram_alias_addr = static_cast<uint32_t>(smc_addr);
+
+    auto before = read_smc_dispatch_telemetry_control(tt_device());
+    ASSERT_TRUE(before.has_value()) << "SMC control invalid before zeroing DRAM, smc_addr=0x" << std::hex << smc_addr;
+
+    const std::vector<uint8_t> zeros(smc_size, 0);
+    std::vector<uint8_t> readback(smc_size);
+    for (const auto& dram_core :
+         tt_device().get_soc_descriptor().get_cores(tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED)) {
+        tt_device().write_to_device(zeros.data(), dram_core, dram_alias_addr, zeros.size());
+        tt_device().read_from_device(readback.data(), dram_core, dram_alias_addr, readback.size());
+        ASSERT_TRUE(readback == zeros) << "DRAM core (" << dram_core.x << "," << dram_core.y << ") was not zeroed at 0x"
+                                       << std::hex << dram_alias_addr;
+    }
+
+    auto after = read_smc_dispatch_telemetry_control(tt_device());
+    ASSERT_TRUE(after.has_value()) << "SMC control was wiped by zeroing DRAM at 0x" << std::hex << dram_alias_addr
+                                   << "; smc_addr=0x" << smc_addr << " aliases DRAM, not ARC CSM";
+    EXPECT_EQ(std::memcmp(&before.value(), &after.value(), sizeof(before.value())), 0)
+        << "SMC control changed after zeroing DRAM";
 }
 
 TEST_F(DispatchTelemetrySlowDispatchTest, SMCControlIsInitialized) {
