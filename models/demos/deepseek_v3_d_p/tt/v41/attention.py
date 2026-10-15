@@ -338,9 +338,8 @@ class V41Compressor(TtHCACompressor):
 # the tensor's dtype). Per 32-wide block: s = 2 ** ceil(log2(amax / 6)); x <- e2m1_rne(clamp(x / s, -6, 6)) * s.
 INDEX_FP4 = os.environ.get("V41_PREFILL_INDEX_FP4", "0") == "1"
 # DS41F-0067: the CSA sources run TtCSA's sparse path A once the context holds a window + top-k worth of entries (chunk 0
-# stays on the dense path B) and their Reuse consumers gather with the source's top-k; 0 = path B everywhere (the
-# validated default until path A is measured). Islands must be off with path A (the source's eager top-k must survive
-# the consumers' island replays, DS4F-0262 class -- not yet in a persistent buffer).
+# stays on the dense path B) and their Reuse consumers gather with the source's top-k; 0 = path B everywhere (the default
+# until the e2e A/B lands). With islands the top-k goes into one persistent buffer (precreate_shared_masks).
 PATH_A = os.environ.get("PREFILL_V41_PATH_A", "0") == "1"
 # e2m1 magnitudes 0, .5, 1, 1.5, 2, 3, 4, 6 as a sum of steps at the midpoints; ties go to the even code (0.25 -> 0,
 # 0.75 -> 1, 1.25 -> 1, 1.75 -> 2, 2.5 -> 2, 3.5 -> 4, 5 -> 4): "gt" at a tie that rounds down, "ge" at one that rounds up
@@ -503,9 +502,21 @@ def _source_forward(self, hidden_states, seq_len_actual=None, *, state, export=N
     if pub is not None and pub["path"] == "A":
         # DS41F-0067 path A: the consumers gather with this chunk's top-k from THIS state's slab (rows [S, S + cap) hold
         # the entries; each consumer overwrites the chunk / carry rows with its own window KV -- the source is done with them)
-        assert getattr(self, "_shared_mask_bufs", None) is None, "path A needs V41_PREFILL_ISLANDS=0 (DS41F-0067)"
-        self.shared = dict(path="A", idx=pub["idx"], state=state, entry_count=state.entry_count)
+        idx = pub["idx"]
+        if getattr(self, "_shared_mask_bufs", None) is not None:
+            # trace islands: the consumers' island replays run while the top-k lives -> a persistent buffer, allocated
+            # before the capture (precreate_shared_masks), like path B's masks (DS4F-0262 class)
+            buf = getattr(self, "_shared_idx_buf", None)
+            assert (
+                buf is not None
+            ), "path A with islands needs the warm-up to have run a path-A chunk (precreate_shared_masks)"
+            copy_into(buf, idx)
+            ttnn.deallocate(idx)
+            idx = pub["idx"] = buf
+        self.shared = dict(path="A", idx=idx, state=state, entry_count=state.entry_count)
         return out
+    if self.sparse_path:
+        self._pb_template = self.debug_last_selection  # path A mode: the path-B chunks' mask template for the islands
     # what this chunk's consumers read (DS41F-0037): the selection mask over the live entries and those entries
     w = _live_width(self, state, state.entry_count)
     bufs = getattr(self, "_shared_mask_bufs", None)
@@ -530,12 +541,23 @@ def _source_forward(self, hidden_states, seq_len_actual=None, *, state, export=N
 
 def _precreate_shared_masks(self, state) -> None:
     """Islands: one persistent selection-mask buffer per live width this source can take (multiples of the live quantum
-    up to the dense capacity), shaped like the last eager mask (the warm-up's), padded / sliced on the width axis."""
-    template = self.debug_last_selection
+    up to the dense capacity), shaped like the last eager mask (the warm-up's), padded / sliced on the width axis.
+    DS41F-0067 path A: masks only for the widths a PATH-B chunk can take (the context before it < window + top-k worth of
+    entries, plus its own entries) -- one or two instead of capacity / quantum (DS41F-0065: O(cap^2) DRAM) -- and ONE
+    persistent top-k buffer shaped like the warm-up's last path-A top-k."""
+    template = getattr(self, "_pb_template", None) if self.sparse_path else self.debug_last_selection
     assert template is not None, "run an eager chunk before enabling islands"
     cap = int(state.compressed_kv.shape[2])
     q = self.live_quantum if (self.live_extent and self.live_quantum > 0) else cap
     widths = sorted({min(cap, k * q) for k in range(1, -(-cap // q) + 1)} | {cap})
+    if self.sparse_path:
+        rate = self.compressor.compress_rate
+        chunk = int(self._slab_chunk_tokens)
+        w_max = _live_width(self, state, -(-max(self.sliding_window, self.indexer.topk * rate) // rate) + chunk // rate)
+        widths = [w for w in widths if w <= w_max] or [w_max]
+        pub = getattr(self, "published", None)
+        if pub is not None and pub.get("idx") is not None:
+            self._shared_idx_buf = ttnn.clone(pub["idx"])
     w0 = int(template.shape[3])
     bufs = {}
     for w in widths:
@@ -607,8 +629,13 @@ class V41CSAConsumer(_V41QStem, TtCSA):
         self._build_masks(chunk, capacity)
         self._slab_rope = self._build_rope_table(_rope_table_tokens(max_seq_len, chunk), 1)
         self._slab_index = self._rope_index_base(chunk // self.sp_factor)
-        # DS41F-0067 path A reads the SOURCE's slab [chunk | entries (capacity) | carry]: the same geometry
+        # DS41F-0067 path A reads the SOURCE's slab [chunk | entries (capacity) | carry]: the same geometry; its constants are
+        # built here, before any island capture (a lazily created one could sit on a replay's addresses, DS4F-0262)
         self._slab_chunk_tokens, self._slab_cap = int(chunk), int(capacity)
+        if PATH_A:
+            heads_local = self.num_heads // self.tp_factor
+            self._window_indices(chunk // self.sp_factor)
+            self._sink_column(self.tp_factor > 1 and heads_local % ttnn.TILE_SIZE != 0)
         state = TtHCAState(
             compressed_kv=None,
             sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
