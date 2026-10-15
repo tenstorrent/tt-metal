@@ -1,0 +1,110 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// matmul_reduce_scatter — port reader (NCRISC, NoC0): gather_unit.
+//
+// Port (direction d, link l) forwards, in entry order, the units (entry, core halves) whose role on this chip is
+// start(d) or relay(d), restricted to its cores (link(k) == l). Per core of a unit: wait the core's mailbox slot (one
+// increment per (core, unit)), NoC-read its finished sub-block (P tiles, slot entry mod depth_handoff of the core's
+// cb_finished) in chunks of chunk_tiles into cb_port_chunks, then ack the core (consumed_d) once the read barrier
+// covering its last chunk returned. A batch ends at a multiple of `group` chunks in the CB (2 group chunks, so a
+// reservation never wraps), at the end of a unit, and before any blocking mailbox wait (no ack is held while waiting).
+// At the end every mailbox slot is restored to 0 (all increments of this call have landed).
+//
+// Raw-API note (design "Helpers considered and rejected"): a pull with per-producer acks; no helper expresses it.
+
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+
+void kernel_main() {
+    constexpr uint32_t cb_port_chunks = get_compile_time_arg_val(0);
+    constexpr uint32_t P = get_compile_time_arg_val(1);
+    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t group = get_compile_time_arg_val(3);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t depth_handoff = get_compile_time_arg_val(5);
+    constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
+    constexpr uint32_t chunks_per_core = (P + chunk_tiles - 1) / chunk_tiles;
+    constexpr uint32_t MAX_CORES = 256;
+    constexpr uint32_t MAILBOX_STRIDE = 16;
+
+    uint32_t arg = 0;
+    const uint32_t finished_base = get_arg_val<uint32_t>(arg++);  // staging address (cb_finished slot 0) on every core
+    const uint32_t mailbox_base = get_arg_val<uint32_t>(arg++);
+    const uint32_t consumed_id = get_arg_val<uint32_t>(arg++);
+    const uint32_t num_cores = get_arg_val<uint32_t>(arg++);
+    const uint32_t num_units = get_arg_val<uint32_t>(arg++);
+    const uint32_t cores_idx = arg;                    // per core: x | y << 8 | half << 16 | k << 20
+    const uint32_t units_idx = cores_idx + num_cores;  // per unit: entry | half_mask << 8 | slots (sender side)
+    const uint32_t consumed_addr = get_semaphore(consumed_id);
+
+    uint32_t handoffs[MAX_CORES];
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        handoffs[i] = 0;
+    }
+
+    uint32_t pos = 0;   // chunks pushed so far (batch alignment)
+    uint32_t c = 0;     // chunks in the current batch
+    uint32_t need = 0;  // chunks the current reservation covers
+    uint32_t wptr = 0;
+    uint32_t acks[group];
+    uint32_t num_acks = 0;
+    auto flush = [&]() {
+        noc_async_read_barrier();
+        cb_push_back(cb_port_chunks, c * chunk_tiles);
+        pos += c;
+        c = 0;
+        for (uint32_t i = 0; i < num_acks; ++i) {
+            const uint32_t cw = acks[i];
+            noc_semaphore_inc(get_noc_addr(cw & 0xFF, (cw >> 8) & 0xFF, consumed_addr), 1);
+        }
+        num_acks = 0;
+    };
+
+    for (uint32_t u = 0; u < num_units; ++u) {
+        const uint32_t unit = get_arg_val<uint32_t>(units_idx + u);
+        const uint32_t entry = unit & 0xFF;
+        const uint32_t half_mask = (unit >> 8) & 0x3;
+        const uint32_t slot_off = (entry % depth_handoff) * P * tile_bytes;
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            const uint32_t cw = get_arg_val<uint32_t>(cores_idx + i);
+            if (!((half_mask >> ((cw >> 16) & 0xF)) & 1)) {
+                continue;
+            }
+            const uint32_t k = cw >> 20;
+            volatile tt_l1_ptr uint32_t* mbox =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_base + k * MAILBOX_STRIDE);
+            const uint32_t target = ++handoffs[i];
+            invalidate_l1_cache();
+            if (*mbox < target && c > 0) {
+                flush();  // never hold reads / acks while blocking on a producer
+            }
+            noc_semaphore_wait_min(mbox, target);
+            const uint64_t src = get_noc_addr(cw & 0xFF, (cw >> 8) & 0xFF, finished_base + slot_off);
+            for (uint32_t ci = 0; ci < chunks_per_core; ++ci) {
+                if (c == 0) {
+                    need = group - pos % group;
+                    cb_reserve_back(cb_port_chunks, need * chunk_tiles);
+                    wptr = get_write_ptr(cb_port_chunks);
+                }
+                const uint32_t n = (P - ci * chunk_tiles) < chunk_tiles ? (P - ci * chunk_tiles) : chunk_tiles;
+                noc_async_read(src + ci * chunk_bytes, wptr + c * chunk_bytes, n * tile_bytes);
+                if (ci + 1 == chunks_per_core) {
+                    acks[num_acks++] = cw;
+                }
+                if (++c == need) {
+                    flush();
+                }
+            }
+        }
+        if (c > 0) {
+            flush();  // end of unit
+        }
+    }
+    noc_async_atomic_barrier();
+    // Re-arm: every increment of this call has landed (each slot was waited to its final count).
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const uint32_t k = get_arg_val<uint32_t>(cores_idx + i) >> 20;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_base + k * MAILBOX_STRIDE) = 0;
+    }
+}
