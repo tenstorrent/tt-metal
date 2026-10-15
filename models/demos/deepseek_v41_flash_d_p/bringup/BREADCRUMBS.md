@@ -122,3 +122,23 @@ prompt rebuild (prefix-identical ids, new sha; existing goldens record the old s
 scaled.ladder. The 64k golden then runs ~2 h on the CPU (56k real took 5894 s).
 Gotcha: hf_scaled/quietbox_2x2 is 237 GB (scale.py copies the engram tables whole).
 Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.scale && BRINGUP_SCALED=1 python -m models.demos.common.bringup.reference.generate_golden --rung scaled`
+
+## C.swa.attn_hc implement (attempt 1)
+
+What: first device step of the model. New `tt/` package: `settings.py` (DS41_ table: MATMUL_FIDELITY HiFi4,
+FP32_DEST_ACC, HC_TP_SUM gather_add | all_reduce), `common.py` (HiFi4 + fp32-acc compute config; `tp_sum`: exact
+partial sum over axis 1), `layout.py` (xing40's chip-major stream layout, sizes from mesh.shape; host helpers are the
+harness boundary only), `mhc.py:TtHcMixes` / `build_hc` (attn_hc and ffn_hc). hooks.py: `device_component` (attn_hc /
+ffn_hc host fn), `HybridDeviceModel` = `device_model` (CPU reference + DEVICE_STEPS {"swa": {"attn_hc"}}).
+Chain per chip: matmul(streams [S/SP, 4H/TP] fp32, chip rows of hc_attn_fn^T padded to 32, HiFi4 fp32 acc) ->
+`ttnn.bringup.mhc_pre_xing_pack` (exact SFPU sum x^2 into column 24) -> all_gather dim 1 over axis 1 + ttnn.add in
+mesh-column order (K-30: exact, bit-identical on every TP chip) -> x rsqrt(sum / 4H + norm_eps 1e-20) ->
+`ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn` (consts from deepseek_v3 `build_consts`, n 4, 20 iters,
+eps 1e-6) -> concat [pre | post | comb] [S/SP, 24], replicated over TP.
+Decisions: K-20 checked: the kernel's sequence (softmax, +eps, column norm, 19 (row, col) pairs, pre sigmoid + eps,
+post 2 sigmoid; comb entry (j, k) at column 4j + k, row sums over k) is reference/kernels.py:sinkhorn_split's. The
+streams-only input: attn_hc reads x's streams; the pending pre columns are dropped at the boundary (DS41-3).
+Result: pcc 0.999999; vs CPU rel 6.5e-4 (limit 3.8e-3), worst column (21, a comb entry) 0.0144 (limit 0.044), median
+row ratio -3.5e-4 (the Sinkhorn kernel's SEL / RB / CB matmuls read fp32 at about TF32, K-30); all second inputs pass;
+determinism A,B,A bit-identical. Gate ~30 s.
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_hc.py`
