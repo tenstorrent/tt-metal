@@ -1358,9 +1358,42 @@ Tensor situ_glu(
     const auto arch = gate.device()->arch();
     if ((arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) && beta1 == SITU_GLU_NATIVE_BETA_GATE &&
         beta2 == SITU_GLU_NATIVE_BETA_UP && gate.dtype() == up.dtype()) {
-        return ttnn::detail::invoke_binary_ng(
-            gate,
-            up,
+        const bool gate_rm = gate.layout() == Layout::ROW_MAJOR;
+        const bool up_rm = up.layout() == Layout::ROW_MAJOR;
+        // The shared entry point tilizes (and re-untilizes) a pair it cannot run row-major, but on the
+        // full grid: it does not carry a core restriction into those conversions. Under a restriction,
+        // do them here on the restricted cores so the shared path finds nothing left to convert. Same
+        // rule as the shared path: both row-major and interleaved runs row-major, anything else tiles.
+        const bool convert_here =
+            cores.has_value() && (gate_rm || up_rm) && !(gate_rm && up_rm && !gate.is_sharded() && !up.is_sharded());
+        if (!convert_here) {
+            return ttnn::detail::invoke_binary_ng(
+                gate,
+                up,
+                binary::BinaryOpType::SITU_GLU,
+                std::nullopt,
+                output_mem_config,
+                std::nullopt,
+                {},
+                {},
+                {},
+                std::nullopt,
+                cores);
+        }
+        // A tilized copy is a new buffer: keep it off interleaved L1, which would take L1 on the cores
+        // restricted away (see the output check above).
+        const auto tilize = [&](const Tensor& t) {
+            if (t.layout() == Layout::TILE) {
+                return t;
+            }
+            const auto& mc = t.memory_config();
+            const std::optional<MemoryConfig> tile_mc =
+                mc.is_l1() && !mc.is_sharded() ? std::optional<MemoryConfig>(ttnn::DRAM_MEMORY_CONFIG) : std::nullopt;
+            return ttnn::to_layout(t, Layout::TILE, std::nullopt, tile_mc, cores);
+        };
+        Tensor result = ttnn::detail::invoke_binary_ng(
+            tilize(gate),
+            tilize(up),
             binary::BinaryOpType::SITU_GLU,
             std::nullopt,
             output_mem_config,
@@ -1370,6 +1403,8 @@ Tensor situ_glu(
             {},
             std::nullopt,
             cores);
+        return gate_rm && up_rm ? ttnn::to_layout(result, Layout::ROW_MAJOR, std::nullopt, std::nullopt, cores)
+                                : result;
     }
 
     // Sharded inputs keep the ops' own placement: interleaved-L1 intermediates against a sharded

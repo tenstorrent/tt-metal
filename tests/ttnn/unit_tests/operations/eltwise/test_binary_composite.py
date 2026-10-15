@@ -477,6 +477,44 @@ def test_situ_glu_sub_core_grids(device, sub_core_grid, beta1, beta2):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize(
+    "gate_layout, up_layout",
+    [(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)],
+    ids=["rm_gate", "rm_up"],
+)
+def test_situ_glu_sub_core_grids_layout_conversion(device, gate_layout, up_layout):
+    torch.manual_seed(0)
+    # A mixed pair is tilized before the op runs. That conversion is a program of its own and must
+    # stay on the restricted cores too: the shared binary entry point tilizes on the full grid, which
+    # would land on the cores a concurrent op owns.
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
+    shape = torch.Size([1, 1, 64, 96])
+    gate = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=gate_layout, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=up_layout, device=device)
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2, sub_core_grids=cores)
+    finally:
+        graph = ttnn.graph.end_graph_capture()
+    # TilizeParams ends in its optional sub_core_grids, which serializes as std::nullopt when the
+    # conversion was left on the full grid.
+    tilize_params = [
+        node["arguments"][0]
+        for node in graph
+        if node.get("node_type") == "function_start" and node.get("params", {}).get("name") == "TilizeDeviceOperation"
+    ]
+    assert len(tilize_params) == 1, f"expected one tilize of the row-major operand, got {len(tilize_params)}"
+    assert tilize_params[0].endswith("<CoreRangeSet>)"), f"tilize ran unrestricted: {tilize_params[0]}"
+
+    tt_res = ttnn.to_torch(out)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+    _check_situ_glu(golden, tt_res, ttnn.bfloat16, SITU_GLU_BETA1, SITU_GLU_BETA2, ulp=SITU_GLU_NATIVE_ULP)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
 def test_situ_glu_sub_core_grids_conflict(device, expect_error):
     shape = torch.Size([1, 1, 32, 32])
     gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
