@@ -2516,3 +2516,49 @@ def test_group_norm_sharded_dirty_padding_tile_aligned_groups(
         f"(whole-tile groups={whole_tile_groups}); the composed row mask must still apply"
     )
     assert pcc > 0.999, f"pcc {pcc} at C={C} G={G} with tile padding = {padding_value}"
+
+
+# The interleaved factories used to pick channel subblocks of up to 8 tiles. The statistics loops fill a whole
+# subblock in one DEST acquire, and an fp32 DEST in half-sync mode only holds 4 tiles, so groups of 5 or more
+# channel tiles got wrong statistics. The sharded factory already caps the subblock at 4 in that case.
+@pytest.mark.parametrize("C", [512, 640, 768, 1024], ids=["4_tiles", "5_tiles", "6_tiles", "8_tiles"])
+@pytest.mark.parametrize(
+    "dtype, fp32_dest_acc_en",
+    [(ttnn.float32, True), (ttnn.bfloat16, True), (ttnn.bfloat16, False)],
+    ids=["fp32", "bf16_fp32_dest", "bf16"],
+)
+@pytest.mark.parametrize("dst_full_sync_en", [False, True], ids=["half_sync", "full_sync"])
+# One sample on an 8x8 grid takes the mcast factory. Eight samples on an 8x4 grid (one group per core column)
+# fill all virtual rows, which selects the no-mcast factory.
+@pytest.mark.parametrize("N, HW, core_grid", [(1, 1024, (8, 8)), (8, 128, (8, 4))], ids=["mcast", "no_mcast"])
+def test_group_norm_interleaved_wide_groups_fp32_dest(
+    device, C, dtype, fp32_dest_acc_en, dst_full_sync_en, N, HW, core_grid
+):
+    torch.manual_seed(0)
+    G = 4
+    x = torch.randn(N, 1, HW, C)
+    if dtype == ttnn.bfloat16:
+        x = x.bfloat16().float()
+    ref = torch.nn.functional.group_norm(x.double().permute(0, 3, 1, 2), G, eps=1e-5).permute(0, 2, 3, 1)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        # HiFi4 with fp32_dest_acc_en is avoided on Wormhole (#38306).
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        dst_full_sync_en=dst_full_sync_en,
+    )
+    tt_input = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.group_norm(
+        tt_input,
+        num_groups=G,
+        epsilon=1e-5,
+        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
+        inplace=False,
+        compute_kernel_config=compute_kernel_config,
+    )
+    out = ttnn.to_torch(tt_output).double()
+
+    max_abs_err = (out - ref).abs().max().item()
+    tolerance = 0.03 if dtype == ttnn.float32 else 0.08
+    assert max_abs_err < tolerance, f"max abs error {max_abs_err} at C={C} ({C // G // 32} channel tiles per group)"

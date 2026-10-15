@@ -12,12 +12,7 @@
 #include "ckernel_sfpu_logit_bf16_horner.h"
 #include "ckernel_sfpu_logit_bf16_normalized_log_odds_core.h"
 namespace ckernel::sfpu::bf16 {
-template <typename Config>
-inline void init_normalized_log_odds() {
-    sfpi::vConstFloatPrgm1 = Config::kLut[6];
-    sfpi::vConstFloatPrgm2 = Config::kLut[5];
-    sfpi::vConstFloatPrgm0 = Config::kLut[4];
-}
+// No init: the core reads every constant from Config::kLut, none from the programmable registers.
 template <typename Config, int Iterations = 32>
 inline void calculate_normalized_log_odds() {
     static_assert(Iterations == 32, "normalized log odds requires a complete tile");

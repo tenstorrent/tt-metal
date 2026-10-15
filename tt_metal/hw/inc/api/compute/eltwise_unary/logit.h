@@ -39,10 +39,7 @@ ALWI void logit_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void logit_tile_init() {
-    MATH(SFPU_UNARY_INIT(unused));
-    MATH(sfpu::init_logit_bf16());
-}
+ALWI void logit_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
 
 }  // namespace ckernel
 

@@ -505,7 +505,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
 
     const std::string compute_path = fmt::format(
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}",
-        bf16_kernel_defines ? std::string_view{"eltwise_sfpu.cpp"}
+        bf16_kernel_defines ? std::string_view{"eltwise_sfpu_metal2.cpp"}
                             : get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     DataFormat dfb_data_format_for_input =
