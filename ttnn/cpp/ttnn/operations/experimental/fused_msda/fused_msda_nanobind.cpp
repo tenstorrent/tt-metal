@@ -126,8 +126,9 @@ void bind_fused_msda(nb::module_& mod) {
 
         Args:
             * :attr:`value`: (B, S, H, D) or packed (B, S, H*D) ROW_MAJOR bfloat16
-            * :attr:`reference_points`: (B, Q, R, 2) ROW_MAJOR bfloat16, normalized (x, y)
-              in [0, 1]. The 4-D box form is rejected, not reinterpreted.
+            * :attr:`reference_points`: (B, Q, R, 2) ROW_MAJOR bfloat16 or float32, normalized
+              (x, y) in [0, 1]. float32 keeps the sampling position sub-pixel on wide maps.
+              The 4-D box form is rejected, not reinterpreted.
             * :attr:`sampling_offsets`: (B, Q, H, L, P, 2) or packed (B, Q, H, L*P*2)
               ROW_MAJOR bfloat16. Raw, in feature-map pixel units — the reader applies
               scale_l (1/[W_l, H_l], or 1/[W_l-1, H_l-1] when align_corners is set).

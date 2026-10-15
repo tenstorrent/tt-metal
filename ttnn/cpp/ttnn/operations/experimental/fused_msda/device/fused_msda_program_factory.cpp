@@ -179,7 +179,11 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     push_cb(attn_scratch_cb, TILE_MAX_ROWS * attn_sticks_per_row, attn_stick_aligned, attn_fmt);
     push_cb(loc_scratch_cb, TILE_MAX_ROWS * loc_sticks_per_row, loc_stick_aligned, loc_fmt);
     if (attrs.from_offsets) {
-        push_cb(ref_scratch_cb, TILE_MAX_ROWS * s.num_refs, ref_stick_aligned, loc_fmt);
+        push_cb(
+            ref_scratch_cb,
+            TILE_MAX_ROWS * s.num_refs,
+            ref_stick_aligned,
+            datatype_to_dataformat_converter(tensor_args.reference_points->dtype()));
     }
     // Reader -> compute, double-buffered.
     push_cb(input_tile_cb, 2 * n_d_tiles, tile_nbytes, data_format);
@@ -233,6 +237,9 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_ct);
+    if (attrs.from_offsets && tensor_args.reference_points->dtype() == DataType::FLOAT32) {
+        reader_desc.defines = {{"REF_FP32", "1"}};
+    }
     reader_desc.config = ReaderConfigDescriptor{};
 
     // ---- compute (shared by V1 and V2) ----
