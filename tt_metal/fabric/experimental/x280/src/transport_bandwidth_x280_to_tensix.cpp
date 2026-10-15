@@ -91,7 +91,7 @@ extern "C" __attribute__((hot)) int main(uint64_t hartid) {
     switch (store.section.backend.store_width) {
         case 4u: run<4u>(state, store.section, r); break;
         case 8u: run<8u>(state, store.section, r); break;
-        case 64u: run<64u>(state, store.section, r); break;
+        case X280_VEC_M1_BYTES: run<X280_VEC_M1_BYTES>(state, store.section, r); break;
     }
     return 0;
 }

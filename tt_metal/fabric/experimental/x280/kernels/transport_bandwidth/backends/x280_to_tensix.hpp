@@ -313,7 +313,6 @@ inline __attribute__((always_inline)) void store_line(volatile uint32_t* line, c
             :
             : "r"(line), "r"(p[0]), "r"(p[1]), "r"(p[2]), "r"(p[3]), "r"(p[4]), "r"(p[5]), "r"(p[6]), "r"(p[7]));
     } else {
-        static_assert(StoreWidth == X280_VEC_M1_BYTES, "StoreWidth is not an admitted store width");
         __asm__ volatile(X280_VEC_ASM("vse32.v v1, (%0)\n") : : "r"(line));
     }
 }

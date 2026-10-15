@@ -188,7 +188,7 @@ inline __attribute__((always_inline)) void run_timed_dispatch(typename Backend::
  *
  * Compile-time-specialized on TransferSize for consistency with the timed
  * loop -- some backends require a static TransferSize for issue() (X280's
- * unrolled `sw` burst) and gracefully ignore it on backends that don't
+ * unrolled store burst) and gracefully ignore it on backends that don't
  * (Tensix's noc_async_write passes the size as a runtime argument to the NIU).
  * -------------------------------------------------------------------------- */
 template <typename Backend>

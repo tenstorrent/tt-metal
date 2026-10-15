@@ -197,11 +197,17 @@ inline void run_axis(
     std::vector<uint32_t> l1_readback;
     ttmd::EnqueueReadMeshBuffer(f.mesh->mesh_command_queue(), l1_readback, l1.buffer, /*blocking=*/true);
     ASSERT_GE(l1_readback.size(), transfer_size / sizeof(uint32_t));
+    uint32_t mismatches = 0;
+    uint32_t first_mismatch = 0;
     for (uint32_t k = 0; k < transfer_size / sizeof(uint32_t); ++k) {
-        const uint32_t expected = pattern_word(run_nonce, k);
-        EXPECT_EQ(l1_readback[k], expected) << "destination word " << k << " did not receive the staging pattern; "
-                                            << "did the transport drop writes?";
+        if (l1_readback[k] != pattern_word(run_nonce, k) && mismatches++ == 0) {
+            first_mismatch = k;
+        }
     }
+    EXPECT_EQ(mismatches, 0u) << "destination words did not receive the staging pattern, first at word "
+                              << first_mismatch << " (read 0x" << std::hex << l1_readback[first_mismatch]
+                              << ", expected 0x" << pattern_word(run_nonce, first_mismatch) << std::dec
+                              << "); did the transport drop writes?";
 
     const auto body = x280::harness::output::record(x280_to_tensix_record(
         result, {.transfer_size = transfer_size, .boundary = boundary, .warmup = W, .samples = N}, store_width));
