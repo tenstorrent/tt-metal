@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.common.utility_functions import is_quasar
 from models.experimental.ops.quasar.gpt_oss.utils.general_utils import get_compute_grid_size
 
 from .config import AttentionConfig, ProgramConfig
@@ -126,11 +125,8 @@ def decode_forward(
         use_height_and_width_as_shard_shape=True,
     )
     # Scaled dot-product attention
-    # The mainline SDPA ops build DataMovementKernel kernels, which Quasar does not support. The
-    # ttnn.experimental.quasar.transformer versions take the same arguments.
-    sdpa_ops = ttnn.experimental.quasar.transformer if is_quasar() else ttnn.transformer
     if page_table is not None:
-        tt_sdpa_tensor = sdpa_ops.paged_scaled_dot_product_attention_decode(
+        tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q,
             k_cache,
             v_cache,
@@ -149,7 +145,7 @@ def decode_forward(
         # GQA (num_kv_heads > 1) rejects sharded output in the SDPA decode
         # device op — match the paged path: write to DRAM, then to_memory_config
         # into the height-sharded layout that downstream concat_heads needs.
-        tt_sdpa_tensor = sdpa_ops.scaled_dot_product_attention_decode(
+        tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
             tt_q,
             k_cache,
             v_cache,
