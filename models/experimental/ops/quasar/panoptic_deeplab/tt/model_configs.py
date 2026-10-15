@@ -16,6 +16,7 @@ from models.tt_cnn.tt.builder import (
     BlockShardedStrategyConfiguration,
     HeightShardedStrategyConfiguration,
 )
+from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype
 
 
 class BaseModelOptimiser(ABC):
@@ -103,21 +104,23 @@ class ModelOptimisations:
     def __init__(
         self,
         device,
-        conv_act_dtype=ttnn.bfloat8_b,
-        conv_w_dtype=ttnn.bfloat8_b,
+        conv_act_dtype=None,
+        conv_w_dtype=None,
     ):
         """
         Initialize model optimization configurations.
 
         Args:
             device: Target device on which model optimizations will be applied.
-            conv_act_dtype: Default data type for convolution activations.
-            conv_w_dtype: Default data type for convolution weights.
+            conv_act_dtype: Default data type for convolution activations
+                (default: ``block_float_dtype(device)``, bfloat8_b except on Quasar).
+            conv_w_dtype: Default data type for convolution weights (same default).
         """
         self.device = device
-        self.conv_output_dtype = conv_act_dtype
-        self.conv_w_dtype = conv_w_dtype
-        self.conv_ws_dtype = ttnn.bfloat8_b
+        self.conv_output_dtype = conv_act_dtype or block_float_dtype(device)
+        self.conv_w_dtype = conv_w_dtype or block_float_dtype(device)
+        conv_act_dtype, conv_w_dtype = self.conv_output_dtype, self.conv_w_dtype
+        self.conv_ws_dtype = block_float_dtype(device)
 
         # Default overrides applied to all layers
         self.default_overrides = {
@@ -440,7 +443,7 @@ class TwentyCoreOptimiser(BaseModelOptimiser):
         self.config.register_layer_override(
             "stem.maxpool",
             slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
-            dtype=ttnn.bfloat8_b,
+            dtype=block_float_dtype(self.config.device),
             output_layout=ttnn.TILE_LAYOUT,
         )
 
@@ -776,7 +779,7 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         self.config.register_layer_override(
             "stem.maxpool",
             slice_strategy=L1FullSliceStrategyConfiguration(),
-            dtype=ttnn.bfloat8_b,
+            dtype=block_float_dtype(self.config.device),
             output_layout=ttnn.TILE_LAYOUT,
         )
 
