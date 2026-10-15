@@ -397,6 +397,14 @@ def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -
             "Pass tp_axis, sp_axis, num_links and topology explicitly to run an untuned shape."
         )
         raise ValueError(msg)
+    # Servers derive the fabric they open from this preset's topology, so the override has to live
+    # here for the fabric and the pipeline's CCLs to agree.
+    override = os.environ.get("MINIMAX_H3_TOPOLOGY")
+    if override:
+        topologies = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}
+        if override.lower() not in topologies:
+            raise ValueError(f"MINIMAX_H3_TOPOLOGY must be one of {sorted(topologies)}, got {override!r}")
+        preset = {**preset, "topology": topologies[override.lower()]}
     return preset
 
 
@@ -514,7 +522,11 @@ class MiniMaxH3Pipeline:
         tp_axis = preset["tp_axis"] if tp_axis is None else tp_axis
         sp_axis = preset["sp_axis"] if sp_axis is None else sp_axis
         num_links = preset["num_links"] if num_links is None else num_links
-        topology = preset["topology"] if topology is None else topology
+        if topology is None:
+            # A ring collective on a line fabric has no forwarding direction and aborts, so the open
+            # fabric overrides the preset's Ring.
+            fabric_is_line = ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D
+            topology = ttnn.Topology.Linear if fabric_is_line else preset["topology"]
         coresident = preset.get("coresident", True) if coresident is None else coresident
         self.trace_denoise = preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise
         env_audio_t_shard = os.environ.get("MINIMAX_H3_AUDIO_T_SHARD")
