@@ -55,19 +55,29 @@ __attribute__((noinline)) void calculate_sqrt_rsqrt_fresh_cpp()
         }
         else
         {
+            // Every negative x is also below +inf, so the NaN case is a
+            // refinement of the finite-x case.
             const sfpi::vFloat half_xy = 0.5f * xy;
-            v_if (sfpi::as<sfpi::vInt>(x) < infinity_bits)
+            v_if (x < infinity)
             {
                 y = one_minus_xyy * half_xy + xy;
+                v_if (x < 0.0f)
+                {
+                    y = std::numeric_limits<float>::quiet_NaN();
+                }
+                v_endif;
             }
             v_endif;
         }
 
-        v_if (x < 0.0f)
+        if constexpr (RECIPROCAL)
         {
-            y = std::numeric_limits<float>::quiet_NaN();
+            v_if (x < 0.0f)
+            {
+                y = std::numeric_limits<float>::quiet_NaN();
+            }
+            v_endif;
         }
-        v_endif;
         if constexpr (RECIPROCAL)
         {
             // The SFPU arithmetic path flushes subnormals to signed zero.  Make
