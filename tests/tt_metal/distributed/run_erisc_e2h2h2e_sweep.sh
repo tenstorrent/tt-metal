@@ -10,7 +10,7 @@
 # Examples (run from anywhere; build target erisc_pipeline_benchmark first):
 #   VERIFY=0 MD=1 MIB=256 OUT=pipe_perf.md tests/tt_metal/distributed/run_erisc_e2h2h2e_sweep.sh
 #   MD=1 RAND=1 SEED=42 N=40 OUT=pipe_random_42.md tests/tt_metal/distributed/run_erisc_e2h2h2e_sweep.sh
-set -u
+set -uo pipefail
 cd "$(dirname "$0")/../../.." || exit 2
 B=${B:-./build_Release/test/tt_metal/distributed/erisc_pipeline_benchmark}
 # RING=1 swaps the two 1x2 meshes for one 1x4 spanning both hosts, so the bridged link is
