@@ -21,8 +21,6 @@ class MuseGlimmerForConditionalGeneration:
         "supports_chunked_prefill": True,
         "supports_async_decode": True,
         "supports_device_penalties": False,
-        "supports_partial_prefill_device_sampling": True,
-        "requires_explicit_decode_read": True,
         "max_device_top_k": 32,
     }
 
@@ -31,11 +29,13 @@ class MuseGlimmerForConditionalGeneration:
         self.batch_size = batch_size
         self.generator = None
         self.page_table_groups = None
-        self.allow_host_sampling = os.environ.get("MUSE_VLLM_ALLOW_HOST_SAMPLING") == "1"
+        # Requests the device sampler cannot serve (top_k above 32, penalties,
+        # logprobs, structured outputs) and prefill steps that carry an
+        # intermediate chunk arrive without device sampling params and sample on
+        # the host. MUSE_VLLM_ALLOW_HOST_SAMPLING=0 refuses them instead.
+        self.allow_host_sampling = os.environ.get("MUSE_VLLM_ALLOW_HOST_SAMPLING", "1") == "1"
         event_path = os.environ.get("MUSE_VLLM_EVENTS")
         self.events = open(event_path, "a", buffering=1) if event_path else None
-        if self.events is None:
-            self.record_vllm_prefill_schedule = None
         self.audit_path = os.environ.get("MUSE_VLLM_AUDIT_JSON")
         self.audit = {"host_sampling_calls": 0, "device_sampling_calls": 0}
         self._sampling = dict(
@@ -180,13 +180,6 @@ class MuseGlimmerForConditionalGeneration:
         )
         return cache
 
-    def configure_kv_cache_groups(self, layer_to_group):
-        if self.generator is not None:
-            raise RuntimeError("Configure page-table groups before generator allocation/capture")
-        if len(layer_to_group) != len(self.model.config.layer_types):
-            raise ValueError("Native KV groups must cover every configured layer")
-        self.page_table_groups = [layer_to_group[idx] for idx in self.model.layer_indices]
-
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, **kwargs):
         self.generator._check_cache(kv_cache)
         self.generator.prepare()
@@ -263,7 +256,7 @@ class MuseGlimmerForConditionalGeneration:
 
     def _check_sampling(self, params):
         if params is None and not self.allow_host_sampling:
-            raise ValueError("Host sampling requires explicit MUSE_VLLM_ALLOW_HOST_SAMPLING=1")
+            raise ValueError("Host sampling is disabled (MUSE_VLLM_ALLOW_HOST_SAMPLING=0)")
         if params is None:
             self.audit["host_sampling_calls"] += 1
             self._event(dict(event="host_sampling_compatibility"))
@@ -282,19 +275,15 @@ class MuseGlimmerForConditionalGeneration:
         sampling_params=None,
         enable_trace=True,
         page_tables_per_layer=None,
-        intermediate_prefill_mask=None,
         **kwargs,
     ):
         if kwargs:
             raise TypeError(f"Unsupported prefill options: {sorted(kwargs)}")
         slots = list(range(len(prompt_lens))) if empty_slots is None else list(empty_slots)
-        intermediate = (
-            [False] * len(slots)
-            if intermediate_prefill_mask is None
-            else torch.as_tensor(intermediate_prefill_mask).flatten().tolist()
-        )
-        final_slots = [slot for slot, pending in zip(slots, intermediate) if not pending]
-        sample = self._check_sampling(sampling_params) if final_slots else sampling_params is not None
+        # The plugin samples any step that carries an intermediate chunk on the
+        # host, so a device-sampled prefill only holds final rows. Host-sampled
+        # steps return logits for every row; the plugin drops intermediate ones.
+        sample = self._check_sampling(sampling_params)
         starts = [0] * len(slots) if start_pos is None else torch.as_tensor(start_pos).flatten().tolist()
         # The plugin supplies the full prefix and absolute chunk end positions;
         # the generator API consumes only this chunk and its logical lengths.
@@ -303,16 +292,9 @@ class MuseGlimmerForConditionalGeneration:
         for row, (start, length) in enumerate(zip(starts, lengths)):
             chunks[row, :length] = tokens[row, start : start + length]
         tables = self._tables(page_table, page_tables_per_layer, slots)
-        previous = {name: list(values) for name, values in self._sampling.items()}
-        old_bases = list(self._seed_bases)
-        params = None
-        if sample and final_slots:
-            params = self._sampling_params(sampling_params, slots, [int(end) - 1 for end in prompt_lens])
-            for slot in range(self.batch_size):
-                if slot not in final_slots:
-                    for name in self._sampling:
-                        self._sampling[name][slot] = previous[name][slot]
-                    self._seed_bases[slot] = old_bases[slot]
+        params = (
+            self._sampling_params(sampling_params, slots, [int(end) - 1 for end in prompt_lens]) if sample else None
+        )
         out = self.generator.prefill_forward(
             chunks,
             page_table=tables[0],
@@ -323,15 +305,13 @@ class MuseGlimmerForConditionalGeneration:
             start_pos=starts,
             sample=sample,
             sampling_params=params,
-            sample_slots=final_slots,
-            read_from_device=bool(final_slots),
+            sample_slots=slots,
+            read_from_device=True,
         )
-        self.generator._event("prefill_complete", slots=slots, sampled_slots=final_slots, sample=sample)
-        if sample and final_slots:
-            for slot in final_slots:
+        self.generator._event("prefill_complete", slots=slots, sampled_slots=slots, sample=sample)
+        if sample:
+            for slot in slots:
                 self._sampling["seeds"][slot] += 1
-        if not final_slots:
-            return torch.zeros((len(slots), 1), dtype=torch.int64), None
         return (out[slots].reshape(len(slots), 1), None) if sample else (out[slots], None)
 
     def decode_forward(
@@ -403,9 +383,10 @@ class MuseGlimmerForConditionalGeneration:
         return (result, [ttnn.record_event(self.model.mesh, 0)]) if async_read else result
 
     def process_decode_output_host(self, tt_out, is_tokens=False):
+        if ttnn.is_tensor_storage_on_device(tt_out[0]):
+            # Synchronous decode hands over the device output unread.
+            tt_out = self.read_decode_output(tt_out)
         host, tokens = tt_out
-        if ttnn.is_tensor_storage_on_device(host):
-            raise ValueError("The plugin must call read_decode_output before host processing")
         if tokens:
             out = (
                 ttnn.to_torch(ttnn.get_device_tensors(host)[0])
@@ -417,18 +398,6 @@ class MuseGlimmerForConditionalGeneration:
             out = ttnn.to_torch(host, mesh_composer=ttnn.ConcatMeshToTensor(self.model.mesh, dim=-1))
             out = out.reshape(self.batch_size, 1, -1)[:, :, : self.model.vocab_size]
         return out, None
-
-    def record_vllm_prefill_schedule(self, model_input, active_decode_req_ids):
-        self._event(
-            dict(
-                event="scheduler_prefill",
-                requests=model_input.row_req_ids,
-                starts=model_input.input_positions.tolist(),
-                ends=model_input.prompt_lens.tolist(),
-                intermediate=model_input.intermediate_prefill_mask.tolist(),
-                active_decode_requests=active_decode_req_ids,
-            )
-        )
 
     def release_persistent_capture(self):
         if self.generator is not None:
