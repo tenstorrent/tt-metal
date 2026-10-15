@@ -13,7 +13,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_metal.hpp>  // tt::tt_metal::detail::CompileProgram
+#include <tt-metalium/experimental/dispatch_context.hpp>  // tt::tt_metal::experimental::CompileProgram
 
 #include "ttnn/graph/graph_processor.hpp"
 #include <tt-metalium/graph_tracking.hpp>  // GraphTracker (for real-alloc hook tweak)
@@ -143,7 +143,7 @@ CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int
                     // Compile-only: builds kernels into the on-disk JIT cache. No command
                     // queue / program-cache state is touched, so distinct programs compile
                     // concurrently and safely. Buffer addresses are irrelevant to compile.
-                    tt::tt_metal::detail::CompileProgram(dev, *progs[i]);
+                    tt::tt_metal::experimental::CompileProgram(dev, *progs[i]);
                 } catch (...) {
                     errors.fetch_add(1);
                 }
