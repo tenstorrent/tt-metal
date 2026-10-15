@@ -818,16 +818,13 @@ def test_linear_yolov7(
         mcast_in0=False,
     )
 
-    shard_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 7),
-            ),
-        }
-    )
+    # Shard grid must match the factory's actual work-core set (div_up(M, per_core_M)); using the full 8x8
+    # with any smaller work set leaves tail cores unused and silently drops their data.
+    m_tiles = (nhw + 31) // 32
+    work_cores = (m_tiles + per_core_M - 1) // per_core_M
+    shard_grid = ttnn.num_cores_to_corerangeset(work_cores, ttnn.CoreCoord(8, 8), row_wise=True)
 
-    shard_height = (nhw + num_cores * 32 - 1) // (num_cores * 32) * 32
+    shard_height = (nhw + work_cores * 32 - 1) // (work_cores * 32) * 32
     x = tt_input_tensor
     in0_shard_shape = [shard_height, input_channels]
     in0_shard_spec = ttnn.ShardSpec(shard_grid, in0_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)

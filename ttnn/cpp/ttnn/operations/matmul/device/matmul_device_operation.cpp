@@ -2230,8 +2230,49 @@ void validate_matmul_mcast1d_config(
 
         TT_FATAL(!optional_bias.has_value(), "{}: Bias is not supported when using gather_in0.", config_name);
     } else {
+        // Sharded in0 must equal the factory's row-major core set; containment+count would accept a mis-shaped grid.
         const auto device_grid_1d = input_tensor_a.device()->compute_with_storage_grid_size();
-        check_tensor_in_grid(input_tensor_a, device_grid_1d);
+        if (input_tensor_a.is_sharded()) {
+            // Mirror MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts anchor.
+            const auto& worker_bbox = program_config.allowed_worker_cores.value().bounding_box();
+            CoreCoord start_core = worker_bbox.start_coord;
+            if (attributes.sub_device_id.has_value()) {
+                start_core = input_tensor_a.device()
+                                 ->worker_cores(
+                                     tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                                     attributes.sub_device_id.value())
+                                 .bounding_box()
+                                 .start_coord;
+            }
+            const auto cwsg = worker_bbox.grid_size();
+            const CoreRangeSet matmul_core_rect(CoreRange(
+                start_core, CoreCoord(start_core.x + cwsg.x - 1, start_core.y + cwsg.y - 1)));
+            const uint32_t M =
+                operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
+            const auto& shard_grid = input_tensor_a.shard_spec().value().grid;
+            // mcast_in0 uses shard_grid.num_cores(); mcast_in1 uses div_up(M, per_core_M) (num_blocks_x == 1).
+            const uint32_t expected_cores =
+                program_config.mcast_in0 ? shard_grid.num_cores() : tt::div_up(M, program_config.per_core_M);
+            const auto expected_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+                start_core, expected_cores, matmul_core_rect, /*row_wise=*/true);
+            // Core-wise compare: CoreRangeSet::operator== is sensitive to range decomposition.
+            const auto shard_cores = tt::tt_metal::corerange_to_cores(shard_grid, std::nullopt, /*row_wise=*/true);
+            const auto expected_cores_vec =
+                tt::tt_metal::corerange_to_cores(expected_grid, std::nullopt, /*row_wise=*/true);
+            TT_FATAL(
+                shard_cores == expected_cores_vec,
+                "{}: sharded in0 grid {} must exactly match the factory core set {} "
+                "(row-major from sub-device origin {}, {} cores inside cwsg {}x{}).",
+                config_name,
+                shard_grid,
+                expected_grid,
+                start_core,
+                expected_cores,
+                cwsg.x,
+                cwsg.y);
+        } else {
+            check_tensor_in_grid(input_tensor_a, device_grid_1d);
+        }
         if (!attributes.global_cb.has_value()) {
             check_tensor_in_grid(input_tensor_b, device_grid_1d);
         }
