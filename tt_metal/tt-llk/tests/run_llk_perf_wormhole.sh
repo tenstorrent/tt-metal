@@ -19,7 +19,7 @@ set -euo pipefail
 
 GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
 N_GROUPS="${2:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
+SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-false}"
 export LLK_PERF_RUN_TYPES="L1_TO_L1" # cost experiment arm f1
 export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
 
