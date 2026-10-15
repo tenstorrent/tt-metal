@@ -4,7 +4,6 @@
 
 #include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
 #include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
-#include <ttnn/operations/pool/pool_utils.hpp>
 #include <ttnn/operations/pool/grid_sample/device/grid_sample_utils.hpp>
 
 #include <cmath>
@@ -286,10 +285,12 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             0U,                             // ct_arg[37]: indexes_32_bit
             DUMMY_CB_ID};                   // ct_arg[38]: fast_tilize_cb_id (tiled-output only, unused here)
 
-        const auto pool_defines_map = pool::get_defines(pool::Pool2DType::AVG_POOL2D);
+        const auto pool_defines_map =
+            std::map<std::string, std::string>{{"REDUCE_OP", "PoolType::AVG"}, {"REDUCE_DIM", "ReduceDim::REDUCE_COL"}};
         KernelDescriptor::Defines compute_defines(pool_defines_map.begin(), pool_defines_map.end());
 
         KernelDescriptor compute_desc;
+        // TODO(nuked-op pool): this kernel was deleted with max/avg pool; restore compute_pool_2d.cpp
         compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = std::move(cores);

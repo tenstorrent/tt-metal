@@ -484,6 +484,7 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
         1                       // block_size_height_ntiles
     };
 
+    // TODO(nuked-op halo): this kernel was deleted with halo; restore a pack_untilize compute kernel
     const std::string compute_kernel =
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize.cpp";
 

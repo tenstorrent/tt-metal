@@ -11,9 +11,6 @@
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/pad/pad.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/sliding_window/halo/halo.hpp"
-#include "ttnn/operations/experimental/quasar/halo/halo.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -312,50 +309,12 @@ static void validate_height_sharding(const Tensor& tensor) {
 // Helper function to apply halo padding to sharded tensors
 static Tensor apply_halo_padding(
     const Tensor& input_tensor, uint32_t pad_top, uint32_t pad_bottom, uint32_t pad_left, uint32_t pad_right) {
-    using namespace ttnn::operations::sliding_window;
-
-    auto input_shape = input_tensor.logical_shape();
-    auto shard_spec = input_tensor.shard_spec().value();
-
-    SlidingWindowConfig sliding_window_config{
-        .batch_size = input_shape[0],
-        .input_hw = {input_shape[1], input_shape[2]},
-        .window_hw = {1, 1},
-        .stride_hw = {1, 1},
-        .padding = {pad_top, pad_bottom, pad_left, pad_right},
-        .dilation_hw = {1, 1},
-        .num_cores_nhw = static_cast<uint32_t>(shard_spec.grid.num_cores()),
-        .num_cores_c = 1,
-        .core_range_set = shard_spec.grid,
-        .snap_to_tile = false};
-
-    ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
-    auto reshaped_tensor = ttnn::operations::experimental::quasar::reshape(input_tensor, new_shape);
-
-    const auto arch = input_tensor.device()->arch();
-    const auto compute_kernel_config = ttnn::init_device_compute_kernel_config(
-        arch,
-        std::nullopt,
-        tt::tt_metal::MathFidelity::HiFi4,
-        /*default_approx_mode=*/true,
-        /*default_fp32_acc=*/reshaped_tensor.dtype() == DataType::FLOAT32,
-        /*default_l1_acc=*/false);
-    // The standard ttnn::halo builds a legacy DataMovementKernel (ProgramDescriptor path), which is
-    // rejected on Quasar (Gen2 requires QuasarDataMovementKernel / Metal-2.0). Use the Metal-2.0 quasar
-    // halo op there, matching the standard call's flags (pad_val=0, remote_read=false,
-    // transpose_mcast=false, is_out_tiled=false). WH/BH keep the standard halo (unchanged).
-    Tensor halo_output;
-    if (arch == tt::ARCH::QUASAR) {
-        halo_output = ttnn::operations::experimental::quasar::halo(
-            reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
-    } else {
-        halo_output = ttnn::halo(reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
-    }
-
-    // Reshape back to padded original dimensions
-    ::ttnn::Shape padded_shape(
-        {input_shape[0], input_shape[1] + pad_top + pad_bottom, input_shape[2] + pad_left + pad_right, input_shape[3]});
-    return ttnn::operations::experimental::quasar::reshape(halo_output, padded_shape);
+    // TODO(nuked-op halo): restore real call (halo padding of the sharded input via sliding_window config)
+    (void)pad_top;
+    (void)pad_bottom;
+    (void)pad_left;
+    (void)pad_right;
+    return input_tensor;
 }
 
 // Each core needs to process multiple of (stride_h * input_width) rows to ensure that

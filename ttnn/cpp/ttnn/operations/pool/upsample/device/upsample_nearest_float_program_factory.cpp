@@ -14,14 +14,13 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
-#include <ttnn/operations/pool/pool_utils.hpp>
 
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
 namespace metal2 = tt::tt_metal::experimental;
 
-constexpr std::uint32_t BUFFERING_FACTOR = 2;
+constexpr std::uint32_t NEAREST_FLOAT_BUFFERING_FACTOR = 2;
 
 ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::create_program_artifacts(
     const UpsampleParams& operation_attributes, const Tensor& input, Tensor& output_tensor) {
@@ -87,13 +86,13 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
 
     // Reader writes aligned_input_page_size bytes per entry, writer reads aligned_output_page_size.
     // Take the larger so both fit and every entry stays DRAM-aligned if either tensor is in DRAM.
-    const std::uint32_t num_cb_pages = BUFFERING_FACTOR;
+    const std::uint32_t num_cb_pages = NEAREST_FLOAT_BUFFERING_FACTOR;
     const std::uint32_t output_cb_page_size = std::max(aligned_input_page_size, aligned_output_page_size);
 
     metal2::DataflowBufferSpec out_dfb{
         .unique_id = OUT,
         .entry_size = output_cb_page_size,
-        .num_entries = num_cb_pages * BUFFERING_FACTOR,
+        .num_entries = num_cb_pages * NEAREST_FLOAT_BUFFERING_FACTOR,
         .data_format_metadata = output_cb_data_format,
     };
 
