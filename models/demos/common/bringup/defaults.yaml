@@ -53,6 +53,7 @@ box:
 serving:
   server_repo: ""           # tt-d-gen checkout; "" = /localdev/$USER/tt-d-gen. Asked at intake; the dgen-build agent fetches and builds it
   require_engine: true      # runner tests fail without a tt-d-gen engine build; false lets tt-metal's prefill_producer stand in
+  max_chunk: 5120           # F67: the serving chunk (deploy.chunk, fixed on every box) and every test chunk stay at or below
 
 contract:
   num_users: 2             # slots the contract test allocates (the serving contract may ask for more)
