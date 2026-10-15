@@ -296,19 +296,32 @@ def format_paths(repo: Path, paths: list[str]) -> None:
             return
 
 
+def _git_retry(cmd: list[str], repo, check: bool = True, tries: int = 20, wait: float = 3.0):
+    """Run a git command, waiting out another process's index.lock (a person's or the overseer's git command) instead
+    of crashing the run (F74). Other failures are returned (check=False) or raised (check=True) as before."""
+    for i in range(tries):
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+        if r.returncode == 0 or "index.lock" not in (r.stderr + r.stdout) or i == tries - 1:
+            break
+        time.sleep(wait)
+    if check and r.returncode != 0:
+        raise subprocess.CalledProcessError(r.returncode, cmd, r.stdout, r.stderr)
+    return r
+
+
 def git_commit(spec: Spec, paths: list[str], subject: str, body: str) -> str | None:
     """Commit only the given paths, so work in progress elsewhere in the tree never leaks into a gate commit."""
     repo = spec.repo
-    subprocess.run(["git", "add", "-A", "--", *paths], cwd=repo, check=True)
+    _git_retry(["git", "add", "-A", "--", *paths], repo)
     if subprocess.run(["git", "diff", "--cached", "--quiet", "--", *paths], cwd=repo).returncode == 0:
         return None
     trailer = spec.get("commit_trailer", DEFAULT_TRAILER)
     msg = f"{subject}\n\n{body}\n" + (f"\n{trailer}\n" if trailer else "")
     commit = ["git", "commit", "-q", "-m", msg, "--", *paths]
     # pre-commit hooks may still rewrite files (black, EOF fixer): re-stage and retry once.
-    if subprocess.run(commit, cwd=repo, capture_output=True).returncode != 0:
-        subprocess.run(["git", "add", "-A", "--", *paths], cwd=repo, check=True)
-        r = subprocess.run(commit, cwd=repo, capture_output=True, text=True)
+    if _git_retry(commit, repo, check=False).returncode != 0:
+        _git_retry(["git", "add", "-A", "--", *paths], repo)
+        r = _git_retry(commit, repo, check=False)
         if r.returncode != 0:
             raise RuntimeError(f"git commit failed:\n{r.stdout}\n{r.stderr}")
     return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=repo, text=True).strip()

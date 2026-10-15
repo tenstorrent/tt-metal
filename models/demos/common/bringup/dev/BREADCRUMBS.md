@@ -1039,3 +1039,13 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   bias limits are still fixed (owner's thresholds review pending).
 - Why (DeepSeek-V4.1 S.swa.06, OV-3 answered "disagree" with evidence by C.swa.ffn_collapse's agent, DS41-20): the
   fast window attention's precision model is 2.2 %, the step measured 2.1 %, the 2 % cap failed it.
+
+## F74 (2026-10-15): the overseer's git use can no longer crash or fool a run
+
+- core/gate.py `_git_retry`: the framework's git add / commit wait out another process's index.lock (up to a minute)
+  instead of raising. Why: the overseer committed links.yaml while the orchestrator committed a gate; the
+  orchestrator's `git add` hit the lock and the run crashed (DeepSeek-V4.1 run1, C.swa_engram.q_a).
+- dashboard/links.py: the publish time lives in the run dir (`dashboard_published.json`, outside git); links.yaml keeps
+  only the links. Why: every gate commit's pre-commit hooks stash unstaged changes, so an uncommitted publish time
+  read as the old committed one for seconds (false DASHBOARD STALE twice). The overseer never commits during a run.
+- Selftests: test_publish_time_lives_in_the_run_dir, test_git_commit_waits_out_an_index_lock.
