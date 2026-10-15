@@ -212,6 +212,7 @@ endif()
 
 # H2E leg benchmark: one device, no MPI. Carries its own main(), so no benchmark_main.
 add_executable(erisc_h2e_benchmark)
+target_precompile_headers(erisc_h2e_benchmark REUSE_FROM metal_test_pch)
 target_sources(erisc_h2e_benchmark PRIVATE benchmark_erisc_h2e_leg.cpp)
 target_link_libraries(
     erisc_h2e_benchmark
