@@ -8,7 +8,43 @@ implementation plan. It then records what was actually implemented in this PR.
 
 ---
 
-## 0. TL;DR
+## ⭐ RESOLUTION (read this first — supersedes the per-mesh-`FabricContext` / #8 framing below)
+
+The deep audit below treated the fabric as one process that must represent several meshes at once,
+which led to the conclusion that a per-mesh `FabricContext` (#8) was required. **That premise is wrong
+for how fabric actually runs.** `tt-run` launches **one MPI rank (process) per mesh**, each with its own
+`TT_MESH_ID` (`tools/scaleout/exabox/run_fabric_tests.sh:33`; rank-binding = `rank N → mesh_id N`), and
+`ControlPlane::fabric_config_` is **per-process**. So **each fabric process owns exactly one mesh with one
+config** — heterogeneity is *across processes*, which the architecture already supports. There is nothing
+to make per-mesh *inside* a process.
+
+The hang was simply that a rank built its `FabricContext` with the launch's process-wide override
+(`FABRIC_2D`, from the test's `topology: Mesh`) instead of **its own mesh's** config: rank 1 owns the
+`TORUS_X` mesh but built everything for `MESH`, so its genuine ring routed in `ROUTING_MODE_MESH` and
+deadlocked.
+
+**Fix (one method):** `ControlPlane::adopt_local_mesh_fabric_config()` sets this process's `fabric_config_`
+to its local mesh's resolved config (`MeshGraph::get_fabric_config`: MGD-declared > override > default)
+as soon as the local-mesh binding is known. Each process is then internally homogeneous, so the **entire
+existing global-config pipeline is correct per rank with no per-mesh machinery** — `topology_`, the global
+`ROUTING_MODE` kernel define, VC config, deadlock avoidance, bubble flow control and packet specs all
+resolve to the rank's own mesh. No-op when the MGD declares no explicit per-mesh config (resolves back to
+the override) or on the single-host multi-mesh *testing* path.
+
+Consequently the earlier per-mesh lookups in `need_deadlock_avoidance_support` (#3) and
+`is_bubble_flow_control_enabled` (#5) were **reverted** — they were compensating for the wrong global
+config and are unnecessary once each rank adopts its own. The DA builder already keys off
+`this->local_fabric_node_id` (this rank's node), so it already follows the per-process model.
+
+The 17-gap audit below remains a valid catalogue of *global-config reads*, but under the per-rank model
+the **type-B "make it per-mesh" items are not needed inside a process**; the only ones that still matter
+are the **type-A cross-process constraints** at an inter-mesh link (payload size / slot count / VC
+contract must match on both ends), which become a validation to add if/when per-mesh *sizing* is ever
+introduced — today they are uniform because all meshes share packet geometry.
+
+---
+
+## 0. TL;DR (original framing — see RESOLUTION above for the correction)
 
 We added **per-mesh FabricConfig** (#56561): an MGD can declare a different `fabric_config` per
 `mesh_descriptor` (e.g. mesh `M_Y = FABRIC_2D_TORUS_Y` connected to mesh `M_X = FABRIC_2D_TORUS_X`),
@@ -249,6 +285,7 @@ rather than new support; implement real per-mesh support only where the feature 
 | `38671263096` | #3 DA fix only (reverted to common sanity config) | **HANG** (15-min timeout) | `MeshNeighborExchange_num_links_1_ntype_unicast_write` on `topology: Mesh`: ranks `[1,0]`,`[1,2]` logged "Finished", ranks `[1,1]`,`[1,3]` never did → deadlock. CI tt-triage produced no artifact. |
 | `38674433232` | #3 DA fix + #5 tensix-mux bubble per-mesh | **HANG** (15-min timeout) | same case/pattern as run 2: ranks `[1,1]`,`[1,3]` never finish. Confirms #6 (`ROUTING_MODE_MESH`) is the remaining blocker. |
 | `38677621333` | #3 + #5 + #6-interim (global topology→Torus upgrade) | **HANG** (15-min timeout) | identical signature. Upgrading only `topology_`/`routing_mode_` is NOT enough — reverted. |
+| run 5 (dispatched) | **per-rank fix**: each rank adopts its own mesh's config (#3/#5 reverted) | *pending* | rank 1 now builds its FabricContext for TORUS_X, not FABRIC_2D — see ⭐ RESOLUTION |
 
 **Corrected conclusion.** The passing run-1 envelope differs from every failing run in two compounding
 ways: (1) it opens the whole fabric with a **torus global config**, which satisfies *all* per-mesh gaps
