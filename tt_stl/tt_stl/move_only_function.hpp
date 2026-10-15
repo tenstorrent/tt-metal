@@ -150,8 +150,7 @@ public:
 
     move_only_function& operator=(move_only_function&& other) noexcept {
         if (this != &other) {
-            destroy_target();
-            take(other);
+            replace(other);
         }
         return *this;
     }
@@ -264,7 +263,8 @@ private:
     // never wrote. Copying indeterminate bytes as unsigned storage is well-defined, but gcc reports
     // it as -W(maybe-)uninitialized once inlined. Zeroing those bytes instead adds a store to every
     // construction and was not faster. __builtin_memcpy keeps the copy out of glibc's fortified memcpy
-    // wrapper, so the suppression below applies to it.
+    // wrapper, so the suppression below applies to it. It covers replace() too, where gcc cannot see that a
+    // heap tag means the pointer was written.
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
@@ -282,6 +282,24 @@ private:
             table()->relocate(buffer_, other.buffer_);
         }
         other.tag_ = empty_tag();
+    }
+
+    // Takes other's target in place of the current one. other may be owned by the current target, as when
+    // a callback replaces itself with its successor, so it is read before that target is destroyed.
+    void replace(move_only_function& other) noexcept {
+        if (tag_ & kNoDestroy) {
+            take(other);
+        } else if (tag_ & kHeapPointer) {
+            alignas(void*) std::byte old_target[sizeof(void*)];
+            __builtin_memcpy(old_target, buffer_, sizeof(void*));
+            const VTable* old_table = table();
+            take(other);
+            old_table->destroy(old_target);
+        } else {
+            move_only_function incoming(std::move(other));
+            destroy_target();
+            take(incoming);
+        }
     }
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
