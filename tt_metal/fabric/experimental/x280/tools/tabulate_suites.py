@@ -260,6 +260,7 @@ P2P_VALUES = quantile_columns("wall", samples("wall"), "ticks", converted=True) 
 )
 P2P_TABLES = (Table("", {}, tuple(P2P_IDENTITY + P2P_VALUES)),)
 METAL_PEER_MEMBERS = {"p2p_latency tensix_peer_tile", "p2p_latency erisc_peer_tile", "p2p_latency drisc_peer_tile"}
+TX_MODES = ("wait_for_completion", "wait_for_departure")
 
 BATCH_WALL = field("raw_wall_ticks")
 BATCH_VALUES = [
@@ -668,9 +669,62 @@ EC_HOP_TABLES = (
 EC_DIAGNOSTIC = (Table("", {}),)
 
 
+class SplitRow(NamedTuple):
+    label: str
+
+
 def tx_mode(record):
     """A p2p record's transmit mode; records written before the setting waited for completion."""
     return record.get("tx_mode", "wait_for_completion")
+
+
+def turn_split(member, rows):
+    """The Metal peer's TURN at each transmit mode and their difference, per first direction, as a
+    Tabulated titled "<member> TURN split"; None unless some first direction has both modes.
+
+    Each mode pools the peer's TURN samples over every record of that mode. Both terms are the
+    peer's own wall ticks, so the difference crosses no clock. ns columns convert at the records'
+    one validated rate and are blank when they hold more than one rate or an unvalidated one.
+    Raises ParseError when the records name more than one wall counter.
+    """
+    turns = [row for row in rows if row.record.get("participant") != "X280" and row.record.get("sample_kind") == "TURN"]
+    if len({row.record.get("wall_counter") for row in turns}) > 1:
+        raise ParseError("[%s] peer TURN records name more than one wall counter" % member)
+    cells = []
+    for first in sorted({row.record.get("first_direction") for row in turns}):
+        by_mode = [
+            [row for row in turns if row.record.get("first_direction") == first and tx_mode(row.record) == mode]
+            for mode in TX_MODES
+        ]
+        if not all(by_mode):
+            continue
+        rates = {(row.hz, row.warning) for mode_rows in by_mode for row in mode_rows}
+        hz = None
+        if len(rates) == 1:
+            ((hz, warning),) = rates
+            hz = None if warning else hz
+        pooled = [[t for row in mode_rows for t in raw_samples(row.record, "wall")] for mode_rows in by_mode]
+        stats = [(sum(p) / len(p), floor_index_percentile(p, 0.5)) for p in pooled]
+        stats.append(tuple(c - d for c, d in zip(*stats)))
+        line = [len(p) for p in pooled]
+        for mean_ticks, p50_ticks in stats:
+            line += [mean_ticks, p50_ticks, ticks_to_ns(mean_ticks, hz), ticks_to_ns(p50_ticks, hz)]
+        cells.append([first] + [cell(v) for v in line])
+    if not cells:
+        return None
+    heads = ["first dir", "completion N", "departure N"] + [
+        "%s %s" % (term, stat)
+        for term in ("completion", "departure", "ack")
+        for stat in ("mean ticks", "p50 ticks", "mean ns", "p50 ns")
+    ]
+    return Tabulated(
+        member + " TURN split",
+        ["wall counter=%s" % cell(turns[0].record.get("wall_counter"))],
+        heads,
+        [False] + [True] * (len(heads) - 1),
+        [SplitRow(line[0]) for line in cells],
+        cells,
+    )
 
 
 # Each member's table spec, keyed by its records' suite and member.
@@ -933,6 +987,10 @@ def tabulate(member, rows):
         out.append(
             Tabulated(member + (" " + table.title if table.title else ""), constant, heads, right, table_rows, cells)
         )
+    if member in METAL_PEER_MEMBERS:
+        split = turn_split(member, rows)
+        if split is not None:
+            out.append(split)
     return out
 
 

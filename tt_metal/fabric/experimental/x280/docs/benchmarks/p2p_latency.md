@@ -138,7 +138,9 @@ peer's transmit mode: `wait_for_completion` (also when unset) ends `transmit()`
 at the write's acknowledgement, `wait_for_departure` at the NIU having sent it.
 The X280 side always waits for completion. Every record names its participant's
 mode in `tx_mode`. The manifest's `.departure` configurations run the second
-mode.
+mode, and the tabulator's `TURN split` table gives, per Metal peer and first
+direction, the peer's TURN at each mode and their difference, the
+acknowledgement wait. Both terms are the peer's own wall ticks.
 
 `x280_p2p_latency_erisc_peer_tile` launches only an inactive Ethernet core in
 `Eth::IDLE` mode and exchanges 4-byte tokens over same-chip NOC; it sends no

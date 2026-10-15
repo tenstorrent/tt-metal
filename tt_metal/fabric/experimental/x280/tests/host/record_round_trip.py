@@ -95,12 +95,20 @@ PI_THROUGHPUT_HEADS = PI_RUN_HEADS | {
     "stall episodes",
     "counter writes",
 }
+TURN_SPLIT_HEADS = (
+    {"first dir", "completion N", "departure N", "wall counter"}
+    | {f"{term} {stat}" for term in ("completion", "departure", "ack") for stat in ("mean ticks", "p50 ticks")}
+    | {f"{term} {stat}" for term in ("completion", "departure", "ack") for stat in ("mean ns", "p50 ns")}
+)
 HEADS = {
     "p2p_latency x280_same_tile": P2P_HEADS,
     "p2p_latency x280_peer_tile": P2P_HEADS | {"hw", "peer", "hops a->b", "hops b->a", "lap hops"},
     "p2p_latency tensix_peer_tile": P2P_HEADS,
     "p2p_latency erisc_peer_tile": P2P_HEADS,
     "p2p_latency drisc_peer_tile": P2P_HEADS,
+    "p2p_latency tensix_peer_tile TURN split": TURN_SPLIT_HEADS,
+    "p2p_latency erisc_peer_tile TURN split": TURN_SPLIT_HEADS,
+    "p2p_latency drisc_peer_tile TURN split": TURN_SPLIT_HEADS,
     "transport_bandwidth x280_to_tensix": BATCH_HEADS
     | {
         "size B",
@@ -211,6 +219,16 @@ X280_PHASE = {
     "cpu p99 cycles": "362",
 }
 METAL_PHASE = {"wall p50 ticks": "331", "wall p99 ticks": "362", "wall p50 ns": "331.000", "cpu p50 cycles": "51"}
+TURN_SPLIT = {
+    "first dir": "A->B",
+    "completion N": "64",
+    "departure N": "64",
+    "completion p50 ticks": "331",
+    "departure p50 ticks": "231",
+    "ack mean ticks": "100.000",
+    "ack p50 ticks": "100",
+    "ack mean ns": "100.000",
+}
 PS_X280 = {
     "wall ticks": "40000",
     "cpu cycles": "70000",
@@ -243,6 +261,9 @@ EXPECTED = {
     ("p2p_latency erisc_peer_tile", 5): METAL_PHASE,
     ("p2p_latency drisc_peer_tile", 5): METAL_PHASE,
     ("p2p_latency tensix_peer_tile", 1): {"tx": "wait_for_departure", "wall p50 ticks": "231"},
+    ("p2p_latency tensix_peer_tile TURN split", 0): TURN_SPLIT,
+    ("p2p_latency erisc_peer_tile TURN split", 0): TURN_SPLIT,
+    ("p2p_latency drisc_peer_tile TURN split", 0): TURN_SPLIT,
     ("transport_bandwidth x280_to_tensix", 0): {
         "wall ticks": "200000",
         "cpu cycles": "350000",
