@@ -16,6 +16,10 @@ void kernel_main() {
     constexpr bool wt_need_bcast = (get_arg(args::wt_need_bcast) == 1);
     constexpr bool ht_need_bcast = (get_arg(args::ht_need_bcast) == 1);
 
+    DataflowBuffer dfb_in0_obj(dfb::in0);
+    DataflowBuffer dfb_in1_obj(dfb::in1);
+    DataflowBuffer dfb_out0_obj(dfb::out0);
+
     compute_kernel_hw_startup(dfb::in1, dfb::in0, dfb::out0);
 
     constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
@@ -41,13 +45,14 @@ void kernel_main() {
                     bcast_dim,
                     ckl::WaitPolicy::PerTile,
                     ckl::PopPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>>{},
+                    ckl::DataFormatReconfig::Disabled)>>{dfb_in1_obj, dfb_in0_obj},
         ckl::Optional<
             !has_bcast,
             ckl::CopyTile<
                 ckl::input(
                     dfb::in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                ckl::Dst::D0>>{},
+                ckl::Dst::D0>>{dfb_in0_obj},
         ckl::PackTile<ckl::output(
-            dfb::out0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb::out0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_out0_obj});
 }
