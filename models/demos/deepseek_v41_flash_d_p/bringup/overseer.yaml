@@ -45,3 +45,14 @@ notes:
   text: 'DS41-20 is fixed in the framework (F73): a swapped step''s limit is now 2 x its own component error (no 2 % cap).
     Update DS41-20 to say so (or remove it if nothing model-specific remains) the next time you touch known_issues.md; answer
     n/a if your task does not touch it.'
+- id: OV-5
+  tasks:
+  - C.*.experts
+  status: open
+  t: '2026-10-15T22:27:15'
+  text: 'The run is now the scaled model (F75): 24 routed experts per chip. Store the routed experts as bfp8 at load (exact
+    for this checkpoint''s fp4 e2m1 x ue8m0 values: measured, plan.md ''Weights''), so no expert is decoded per chunk; keep
+    the packed-fp4 + per-chunk decode path as a setting (EXPERTS_IMPL), not the default (it is the path for boxes where
+    bfp8 does not fit, e.g. the real-size 4x4). Answer with the expert step''s time per chunk before and after.'
+  roles:
+  - implement

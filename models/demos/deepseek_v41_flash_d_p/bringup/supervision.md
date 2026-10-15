@@ -117,3 +117,4 @@ Every intervention by the supervising session: time, task, trigger, classificati
   C / S tasks of layers 0 and 1 (re-run and re-frozen on the scaled model; their real-size passes stay in git
   history only). Real-size goldens deleted; the scaled s55296 golden (from SG.1) is reused. Intake and plan
   re-approved (delegated).
+- 23:10 C.swa.attention (scaled) attempt 1: the agent found the frozen contract tests read hf/inference/config.json, absent / unscaled in the scaled checkpoint (KNOWLEDGE CONTRADICTED DS41-11). Framework gap: orchestrator stopped; F75(2): scale.py copies weight-less subfolders and rewrites scaling.yaml config_files with the cut counts; hard links broken first (the scaled inference/ files were hard links to the real checkpoint: rewriting in place would have changed the real config). scaling.yaml: config_files for inference/config.json (n_heads, o_groups, n_routed_experts). Re-cut reused the weights; real config verified unchanged. Resumed.
