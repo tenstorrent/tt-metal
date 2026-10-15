@@ -1,0 +1,67 @@
+{
+ "used": [
+  {
+   "id": "DS41-1",
+   "how": "identified the swap tail failure as fp8 quantizer flips amplifying a last-bits matmul difference, so fixed the matmul's precision instead of the quantizer",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "kept the exchange and the partial-sum adds on the SFPU (ttnn.add fp32) in tt/exact_mm.py; probed whether the FPU's TF32 behaviour also hits bf16 operands (it does, in the in-tile sum: DS41-16)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-51",
+   "how": "explicit MatmulMultiCoreReuseMultiCastProgramConfig with out_block_h for the [32 M, K] batched matmul in tt/exact_mm.py (auto config 11.6 ms -> 5.2 ms)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "deleted tests/ttnn/unit_tests/operations/ds41_kv_mm/ (tt-probe scripts) before finishing",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "read the collect-pass FAIL lines of the C.swa.kv / C.swa.q_a re-runs as the precompile stash; the real pass passed",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-15",
+   "evidence": "'kv gate: 0.8 % fp8 flips, all from the GEMM sum order' was wrong: tt-probe on the 2x2 BH mesh (HiFi4 + fp32 DEST, bf16 e4m3-grid operands): one tile-dot 1 + 2^-12 -> 1.0, 1 + 2^-11 -> 1 + 2^-10 (in-tile partial rounded to ~TF32), cross-tile 1 + 2^-23 exact; ttnn.linear rel vs fp64 1.8e-4 at LoFi / HiFi2 / HiFi4 and K 32..2560 (torch fp32 4e-8); one nonzero per tile-dot: 3.5e-9. With tt/exact_mm.py the kv fp8 mismatch vs CPU is 3e-6 (was 0.0084). Entry amended to point to DS41-16.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "K-30 covers fp32 operands only; nothing said that the FPU also rounds each in-tile partial dot product to ~TF32 with bf16 operands (now DS41-16, a candidate for the shared file)"
+ ],
+ "cited_only": [
+  "DS41-16"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.swa.05",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T13:43:28",
+  "head": "719f8f5d29a",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.swa.05.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/exact_mm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
