@@ -24,8 +24,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.common.utils import block_cyclic_reorder
+from models.demos.common.prefill.chunk_layout import pack_segment_rows
 from models.demos.minimax_m3.config import MeshConfig
-from models.demos.minimax_m3.tt.attention import Attention, AttentionConfig, allocate_kv_caches
+from models.demos.minimax_m3.tt.attention import Attention, AttentionConfig, allocate_kv_caches, msa
 from models.demos.minimax_m3.tt.attention_configs import MiniMaxM3AttentionProgramConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import create_rope_setup
@@ -38,20 +40,11 @@ HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_
 NIDX, INDEX_DIM = 4, 128
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
-@pytest.mark.parametrize("chunk_local", [640], ids=["chunk640"])  # chunk=5120; 2 chunks -> T=10240 (40 blocks)
-@pytest.mark.parametrize("layer_kind", ["dense", "sparse"])
-def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, reset_seeds):
+def _random_attention(mesh_device, is_sparse, total):
+    """One attention layer with random weights on the 8x4 mesh (TP on the columns), sized for ``total``
+    positions; returns it with its rope tables."""
     rows, cols = tuple(mesh_device.shape)
-    assert (rows, cols) == (8, 4)
-    sp, tp, sp_axis = rows, cols, 0
-    chunk = sp * chunk_local  # 5120
-    total = 2 * chunk  # 10240
-    is_sparse = layer_kind == "sparse"
-
-    torch.manual_seed(0)
-    x = torch.randn(1, total, HIDDEN) * 0.1
-
+    tp = cols
     w = {
         "q": torch.rand(NQ * HEAD_DIM, HIDDEN) * 0.02,
         "k": torch.rand(NKV * HEAD_DIM, HIDDEN) * 0.02,
@@ -123,6 +116,24 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
         global_layer_idx=0,
         transformation_mats=rope_setup.get_both_trans_mats(),
     )
+    return attn, rope_setup
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
+@pytest.mark.parametrize("chunk_local", [640], ids=["chunk640"])  # chunk=5120; 2 chunks -> T=10240 (40 blocks)
+@pytest.mark.parametrize("layer_kind", ["dense", "sparse"], ids=["dense", "sparse"])
+def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, reset_seeds):
+    rows, cols = tuple(mesh_device.shape)
+    assert (rows, cols) == (8, 4)
+    sp, tp, sp_axis = rows, cols, 0
+    chunk = sp * chunk_local  # 5120
+    total = 2 * chunk  # 10240
+    is_sparse = layer_kind == "sparse"
+
+    torch.manual_seed(0)
+    x = torch.randn(1, total, HIDDEN) * 0.1
+
+    attn, rope_setup = _random_attention(mesh_device, is_sparse, total)
 
     in_dims = [None, None]
     in_dims[sp_axis] = 2  # seq -> SP rows (contiguous)
@@ -178,7 +189,7 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
 # chunk=2048, T=4096 (32 blocks) keeps the fp32 CPU ref fast; chunk=1024 makes chunk 0 a cold MSA chunk below the
 # 2048-token top-k window (cache-read path).
 @pytest.mark.parametrize("chunk_local", [256, 128], ids=["chunk256", "chunk128"])
-@pytest.mark.parametrize("layer_kind", ["dense", "sparse"])
+@pytest.mark.parametrize("layer_kind", ["dense", "sparse"], ids=["dense", "sparse"])
 def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, chunk_local, reset_seeds):
     """Chunked-prefill chunk 0 and chunk 1 outputs vs the self-contained torch CPU reference (absolute correctness).
 
@@ -337,3 +348,131 @@ def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, ch
     )
     assert passing0, f"{layer_kind} cold chunk0 vs CPU ref PCC fail: {pcc0}"
     assert passing, f"{layer_kind} chunked vs CPU ref PCC fail: {pcc}"
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
+@pytest.mark.parametrize("layer_kind", ["dense", "sparse"], ids=["dense", "sparse"])
+def test_attention_packed_segments(mesh_device, device_params, layer_kind, reset_seeds, monkeypatch):
+    """One packed forward of three users' segments (two with a cached chunk, one cold) against the three per-chunk
+    calls, both with the indexed RoPE the runtime uses. On the sparse layer the two warm segments take the
+    gather/compute overlap; with the overlap off the packed forward must produce the same bits. The caches the
+    packed forward writes are compared slot by slot."""
+    rows, cols = tuple(mesh_device.shape)
+    assert (rows, cols) == (8, 4)
+    sp, sp_axis = rows, 0
+    chunk_local = 256
+    chunk = sp * chunk_local
+    total = 2 * chunk  # per user: a cached chunk and the segment
+    is_sparse = layer_kind == "sparse"
+    users = [(0, chunk), (1, chunk), (2, 0)]  # (user, cached_len): two warm segments, one cold
+
+    torch.manual_seed(0)
+    x = torch.randn(len(users), 2, chunk, HIDDEN) * 0.1  # per user: [the cached chunk, the segment]
+    attn, rope_setup = _random_attention(mesh_device, is_sparse, total)
+
+    in_dims = [None, None]
+    in_dims[sp_axis] = 2
+
+    def shard_seq(t):
+        return ttnn.from_torch(
+            t,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=in_dims),
+        )
+
+    def indexed(dev_mat):
+        # the whole-cache block-cyclic cos/sin with the segment as the period (TtPrefillRuntime._build_indexed_rope)
+        full = ttnn.to_torch(ttnn.get_device_tensors(dev_mat)[0])[:, :, :total, :]
+        return shard_seq(block_cyclic_reorder(full, chunk_local, sp, seq_dim=2))
+
+    rope_idx = [indexed(rope_setup.cos_matrix_prefill), indexed(rope_setup.sin_matrix_prefill)]
+
+    def run(x_rows, user, cached_len, kv_cache, segments=None):
+        x_tt = shard_seq(x_rows.reshape(1, 1, -1, HIDDEN))
+        out = attn(
+            x_tt,
+            rope_mats=rope_idx,
+            kv_cache=kv_cache,
+            user_id=user,
+            cached_len=cached_len,
+            indexed_rope=True,
+            segments=segments,
+        )
+        dts = ttnn.get_device_tensors(out)
+        return torch.cat([compose_tp_hidden(dts, r, cols) for r in range(rows)], dim=2)  # [1, 1, rows, H]
+
+    def cache_slots(kvc):
+        # [chips, users*layers, heads, seq_local, hd] per cache: the slot dim indexes the users (one layer)
+        return [
+            torch.stack(
+                [
+                    ttnn.to_torch(d).float()
+                    for d in ttnn.get_device_tensors(ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG))
+                ]
+            )
+            for t in (kvc.k, kvc.v, kvc.index_k)
+        ]
+
+    def segment_rows(u, cached_len):
+        return x[u, 1] if cached_len else x[u, 0]
+
+    def fill(kvc):
+        for u, cached_len in users:
+            if cached_len:
+                run(x[u, 0], u, 0, kvc)
+
+    # the chip-major order of the packed rows (what prefill_segments' input holds), as row ids
+    order = torch.tensor(pack_segment_rows([list(range(i * chunk, (i + 1) * chunk)) for i in range(len(users))], sp))
+    order = order.reshape(-1)
+
+    def packed(overlap_on):
+        monkeypatch.setattr(msa, "MSA_SEGMENT_OVERLAP", overlap_on)
+        kvc = allocate_kv_caches(mesh_device, num_layers=1, max_seq_len=total, sp_axis=sp_axis, num_users=len(users))
+        try:
+            fill(kvc)
+            natural = torch.cat([segment_rows(u, c) for u, c in users])  # [N*chunk, H], segment after segment
+            out = run(natural[order], 0, 0, kvc, segments=users)[0, 0]  # chip-major rows
+            ttnn.synchronize_device(mesh_device)
+            back = torch.empty_like(out)
+            back[order] = out
+            outs = [back[i * chunk : (i + 1) * chunk].reshape(1, 1, chunk, -1) for i in range(len(users))]
+            return outs, cache_slots(kvc)
+        finally:
+            kvc.deallocate()
+
+    try:
+        # Reference: every segment through the per-chunk entry point.
+        kvc_ref = allocate_kv_caches(
+            mesh_device, num_layers=1, max_seq_len=total, sp_axis=sp_axis, num_users=len(users)
+        )
+        try:
+            fill(kvc_ref)
+            ref = [run(segment_rows(u, c), u, c, kvc_ref) for u, c in users]
+            ttnn.synchronize_device(mesh_device)
+            ref_caches = cache_slots(kvc_ref)
+        finally:
+            kvc_ref.deallocate()
+
+        outs, caches = packed(True)
+        if is_sparse:
+            assert attn.ccl_manager._msa_overlap is not None, "the on run did not take the pipelined path"
+        # Device against device with the same ops and weights: only the fused QKV projection sees more rows per
+        # chip, so the residual is bf16 rounding (0.9999 measured); 0.999 leaves a 10x margin.
+        for i, (u, c) in enumerate(users):
+            passing, pcc = comp_pcc(ref[i], outs[i], 0.999)
+            logger.info(f"[{layer_kind}] packed segment {i} (user {u}, cached {c}) vs per-chunk: pcc={pcc}")
+            assert passing, f"{layer_kind} packed segment {i} differs from the per-chunk path: {pcc}"
+        for name, a, b in zip(("k", "v", "index_k"), ref_caches, caches):
+            for u, _ in users:  # one check per (cache, user slot); a dense layer's index_k is zeros on both sides
+                passing, pcc = comp_pcc(a[:, u], b[:, u], 0.999)
+                assert passing, f"{layer_kind} packed forward wrote a different {name} cache for user {u}: {pcc}"
+        if is_sparse:
+            outs_off, caches_off = packed(False)
+            for i in range(len(users)):
+                assert torch.equal(outs[i], outs_off[i]), f"overlap on/off differ on segment {i}"
+            for a, b in zip(caches, caches_off):
+                assert torch.equal(a, b)
+    finally:
+        attn.ccl_manager.release_msa_overlap()

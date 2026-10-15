@@ -14,6 +14,8 @@ or the tokens are written / roped / MoE-masked at the wrong positions.
 import pytest
 
 from models.demos.common.prefill.chunk_layout import (
+    pack_segment_rows,
+    packed_segments_real_counts,
     rotate_chunk_tokens,
     rotated_chunk_positions,
     rotated_chunk_real_counts,
@@ -55,3 +57,26 @@ def test_rotated_layout_matches_writer_and_engine(sp, chunk_local):
             )
         if start % chunk_global == 0:
             assert rotate_chunk_tokens(tokens, start, sp) == tokens  # chunk-aligned: identity
+
+
+@pytest.mark.parametrize(
+    "n_reals,sp,s_local,expected",
+    [
+        ([2048, 2048], 2, 1024, None),  # every row real
+        ([2048, 1024], 2, 1024, [2048, 1024]),  # the last segment is ragged: chip 1 holds only its first slice
+        ([2048, 1536], 2, 1024, [2048, 1536]),  # ragged inside chip 1's slice: right padding, skipped
+        ([1024, 2048], 2, 1024, None),  # chip 1: a pad row before a real row -> every row routed, like a full chip
+        ([2048, 256, 2048, 2048], 4, 512, None),  # the ragged segment precedes real ones on every chip
+        ([2048, 2048, 2048, 256], 4, 512, [1792, 1536, 1536, 1536]),
+    ],
+    ids=["full", "trailing_ragged", "ragged_in_slice", "pad_before_real", "four_mid_ragged", "four_trailing_ragged"],
+)
+def test_packed_segments_real_counts(n_reals, sp, s_local, expected):
+    """The packed forward's MoE padding counts: per chip, its leading real rows, or the whole chip when a pad
+    row would precede a real one; None when nothing is padded."""
+    assert packed_segments_real_counts(n_reals, sp, s_local) == expected
+
+
+def test_pack_segment_rows():
+    """Chip c of a packed forward holds each segment's c-th slice in segment order."""
+    assert pack_segment_rows([[0, 1, 2, 3], [4, 5, 6, 7]], 2) == [[0, 1, 4, 5], [2, 3, 6, 7]]
