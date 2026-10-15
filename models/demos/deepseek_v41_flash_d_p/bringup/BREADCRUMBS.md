@@ -506,3 +506,21 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   <= 2.5e-8; determinism bit-identical. The pcc-0 FAIL lines before the real pass are the precompile collect pass (K-52).
 - OV-4: known_issues.md not touched; DS41-20 already states the F73 fix.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_residual.py`
+
+## C.swa_engram.engram_rows implement (attempt 1)
+- Step tagged CPU (owner rule: hash + lookup on the host). `tt/engram.py:TtEngramRows`: `host_rows(tokens, tail,
+  valid)` = EngramHasher.hashes + EngramTable.rows (memory-mapped, rows read on demand) -> [S, 6144] bf16 (exact:
+  e4m3 x 2^k); `to_device` = one `ttnn.from_torch` [1, 1, S/SP, 6144] bf16 TILE DRAM, rows over axis 0, replicated
+  over axis 1 (SP read from mesh.shape). `__call__` returns (device rows, new tail): the assembled model calls it in
+  `begin_chunk`, never inside a layer; the tail is host state per slot (device keeps no engram state).
+- Pads (DS41-26): only [start, actual_end) is hashed (explicit `valid`, else the first id outside the vocabulary);
+  rows after it are zero, the tail is the last 3 real compressed ids. Host check: padded == unpadded prefix, chunked
+  == one-shot (rows and tail bit-equal).
+- hooks.py: `_engram_rows_host_fn` (tail from ctx.state.tail in the hybrid, updated there; from the golden
+  state_prefix in component tests; DEAD at start 0; ctx.extra["end"] -> valid), `_device_step_fn("engram_rows")`,
+  DEVICE_STEPS["swa_engram"] = {"engram_rows"}; the hybrid hands the reference's EngramHasher via shared (the
+  compressed token map takes seconds to build; `engram_hasher` caches one per path otherwise).
+- Gate: PASS. pcc 1.000000; vs CPU and vs golden rel 0 on golden and chunk0; determinism bit-identical. The pcc-0
+  FAIL block before the real pass is the precompile collect pass (K-52).
+- OV-4: DS41-20 already states the F73 fix; nothing to change.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_rows.py`
