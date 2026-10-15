@@ -234,11 +234,13 @@ class PrefillTracker:
     def update(self, p: int, end: int, tokens: torch.Tensor) -> None:
         self.users[p] = (int(end), tokens[: int(end)].clone().reshape(-1).long())
 
-    def find(self, start: int, prefix: torch.Tensor):
-        """physical slot of the in-progress user whose processed prefix is exactly ``prefix`` (``start`` tokens), else None."""
+    def find(self, start: int, prefix: torch.Tensor, exclude=()):
+        """physical slot of the in-progress user whose processed prefix is exactly ``prefix`` (``start`` tokens), else None. ``exclude``: slots already taken by another row of the same call
+        (two prompts that share their first ``start`` tokens have identical carried state, each continuation must get its own).
+        """
         prefix = prefix.reshape(-1).long()
         for p, (end, toks) in self.users.items():
-            if end == start and toks.numel() == start and torch.equal(toks, prefix):
+            if p not in exclude and end == start and toks.numel() == start and torch.equal(toks, prefix):
                 return p
         return None
 

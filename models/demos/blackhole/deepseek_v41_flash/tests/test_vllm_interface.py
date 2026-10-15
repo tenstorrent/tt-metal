@@ -602,7 +602,7 @@ class FakeInterleaveModel(FakeModel):
         self.pf_resume = {}
         self.calls = []
 
-    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False):
+    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False, vis=None):
         self.calls.append(([(b, st, e) for b, _, st, e in items], chunk, s_pad_max, want_logits))
         out = {}
         for b, t, st, e in items:
@@ -722,6 +722,51 @@ def test_release_drops_in_progress_user(interleave_gen):
     assert gen.inprog.parked() == {1: 512}
     gen.release_request(1)
     assert gen.inprog.parked() == {} and m.pool.released == [1]
+
+
+def test_continuations_with_a_shared_prefix_get_distinct_users(interleave_gen):
+    """APC plan M1: two prompts that share their first chunk (a few-shot header) are in progress at once; both continue in ONE call and must not be mapped to the same user."""
+    gen, m = interleave_gen
+    t1 = torch.arange(10, 1210, dtype=torch.int32).reshape(1, -1)
+    t2 = t1.clone()
+    t2[0, 600:] += 1  # same first 512 tokens, different tails
+    gen.prefill_forward(t1[:, :512], prompt_lens=[512], start_pos=[0], empty_slots=[1], sampling_params=None)
+    gen.prefill_forward(t2[:, :512], prompt_lens=[512], start_pos=[0], empty_slots=[2], sampling_params=None)
+    u1, u2 = (c[0][0][0] for c in m.calls[-2:])
+    assert u1 != u2
+    toks = torch.cat([t1[:, :1024], t2[:, :1024]])
+    gen.prefill_forward(toks, prompt_lens=[1024, 1024], start_pos=[512, 512], empty_slots=[4, 5], sampling_params=None)
+    items = m.calls[-1][0]
+    assert sorted(b for b, _, _ in items) == sorted([u1, u2]) and all(st == 512 for _, st, _ in items)  # no recompute
+
+
+def test_chunked_prefill_capabilities_follow_the_chunk_and_the_prefill_slots(monkeypatch, expect_error):
+    import models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm as GV
+
+    monkeypatch.setenv("DSV41_VLLM_INTERLEAVE", "1")
+    monkeypatch.delenv("DSV41_VLLM_CHUNK", raising=False)
+    monkeypatch.delenv("DSV41_PREFILL_UP", raising=False)
+    monkeypatch.delenv("DSV41_VLLM_MAX_PARTIAL", raising=False)
+    caps = importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities
+    assert (caps["prefill_chunk_alignment"], caps["max_partial_prefills"]) == (512, 3)  # chunk 512, rows x Up - 1
+    monkeypatch.setenv("DSV41_VLLM_CHUNK", "1024")
+    monkeypatch.setenv("DSV41_PREFILL_UP", "2")
+    caps = importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities
+    assert (caps["prefill_chunk_alignment"], caps["max_partial_prefills"]) == (1024, 7)
+    monkeypatch.setenv("DSV41_VLLM_MAX_PARTIAL", "0")
+    assert importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["max_partial_prefills"] == 0
+    monkeypatch.setenv("DSV41_VLLM_CHUNK", "100")
+    with expect_error(ValueError, "multiple of 128"):
+        importlib.reload(GV)
+    monkeypatch.setenv("DSV41_VLLM_CHUNK", "512")
+    monkeypatch.setenv("DSV41_VLLM_INTERLEAVE", "0")
+    caps = importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities
+    assert "prefill_chunk_alignment" not in caps  # whole-batch path: prompts are not split
+    monkeypatch.delenv("DSV41_VLLM_INTERLEAVE")
+    monkeypatch.delenv("DSV41_VLLM_CHUNK")
+    monkeypatch.delenv("DSV41_PREFILL_UP")
+    monkeypatch.delenv("DSV41_VLLM_MAX_PARTIAL")
+    importlib.reload(GV)
 
 
 def test_start_position_without_interleave_is_rejected(expect_error):

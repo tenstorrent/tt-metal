@@ -85,6 +85,19 @@ def _interleave_on():
     return True  # (also with --speculative-config: the drafter is seeded lazily at the first verify round of a request, see ``_spec_seed_active``)
 
 
+def _chunked_prefill_capabilities():
+    """``prefill_chunk_alignment`` (the traced chunk, ``DSV41_VLLM_CHUNK`` default 512) and ``max_partial_prefills`` of the plugin's scheduler (see ``model_capabilities``); empty without interleaved
+    prefill (the whole-batch path does not split prompts). Read at import time like ``_interleave_on``."""
+    if not _interleave_on():
+        return {}
+    chunk = int(os.environ.get("DSV41_VLLM_CHUNK", "512"))
+    if chunk <= 0 or chunk % 128:
+        raise ValueError(f"DSV41_VLLM_CHUNK={chunk} must be a positive multiple of 128")
+    up = int(os.environ.get("DSV41_PREFILL_UP", "1"))
+    cap = int(os.environ.get("DSV41_VLLM_MAX_PARTIAL", str(VS.MESH_ROWS * up - 1)))
+    return {"prefill_chunk_alignment": chunk, "max_partial_prefills": max(cap, 0)}
+
+
 def _resolve_weights_dir(hf_config):
     """Checkpoint directory: DSV41_CKPT, else the config's _name_or_path / MODEL_WEIGHTS_DIR / HF_MODEL when it is a directory."""
     if os.environ.get("DSV41_CKPT"):
@@ -128,6 +141,10 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
 
     model_capabilities = {
         "supports_prefix_caching": False,
+        # a split prompt resumes only at a multiple of the traced chunk (``pf_resume``), and a mesh row holds ONE carried prefill state per prefill slot (``DSV41_PREFILL_UP``): the plugin's scheduler
+        # ends every non-final prefill piece on a multiple of the chunk and keeps at most (rows x Up - 1) prompts part-way through prefill (a new prompt of a row takes the slot of the one in progress)
+        # (``DSV41_VLLM_MAX_PARTIAL`` overrides the cap, 0 = no cap). APC_CHUNKED_PREFILL_PLAN.md section 2.
+        **_chunked_prefill_capabilities(),
         # chunked prefill / interleaving of prefill with decode (INTERLEAVE_NOTES.md): only with DSV41_VLLM_INTERLEAVE=1
         "supports_chunked_prefill": _interleave_on(),
         "supports_async_decode": False,
@@ -765,7 +782,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 raise ValueError(f"chunk [{st}, {e}) of row {i} is empty or reversed")
             p = None
             if st > 0:
-                p = self.inprog.find(st, toks[i, :st])
+                p = self.inprog.find(
+                    st, toks[i, :st], exclude=phys
+                )  # (prompts with the same prefix have the same carried state: each continuation takes a distinct one)
                 if p is not None and self.m.__dict__.get("pf_resume", {}).get(p) != st:
                     p = None  # its carried prefill state was lost (re-captured trace / unmasked trace): recompute from position 0
                 if p is not None:
