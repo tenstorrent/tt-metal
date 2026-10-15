@@ -9,6 +9,9 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, assert_allclose
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    assert_all_nonfinite,
+    assert_finite_matches_golden,
+    bf16_binade_samples,
     generate_float32_bits,
     generate_float32_bits_in_range,
     to_float32_tt_tensor,
@@ -78,36 +81,6 @@ Accuracy criteria (SNB = smallest normal bfloat16)
 assert_allclose scales rtol by the device output, not the golden as its
 docstring says. This is a quirk of the shared helper.
 """
-
-
-def _assert_all_nonfinite(result, desc):
-    """Every element must be non-finite. NaN or ±inf both pass, since bfloat16 packing can turn NaN into inf."""
-    nonfinite = ~torch.isfinite(result)
-    assert nonfinite.all(), f"expected all {desc} outputs to be non-finite; {int((~nonfinite).sum())} were finite"
-
-
-def _assert_finite_matches_golden(golden, result, desc):
-    """Wherever the golden is finite, the device output must be finite too.
-
-    PCC zeroes non-finite values on both sides, so on its own it can hide a stray NaN or inf.
-    """
-    unexpected_nonfinite = torch.isfinite(golden) & ~torch.isfinite(result)
-    assert (
-        not unexpected_nonfinite.any()
-    ), f"{desc}: {int(unexpected_nonfinite.sum())} finite-input elements produced a non-finite device output"
-
-
-def _bf16_binade_samples(min_magnitude):
-    """Positive magnitudes from min_magnitude to MAX_BF16, as float32.
-
-    Takes the first, middle and last bfloat16 mantissa of every binade (power-of-two
-    interval) from 2^6 up, plus min_magnitude and MAX_BF16 themselves.
-    """
-    exponent_fields = torch.arange(127 + 6, 255, dtype=torch.int32)
-    mantissas = torch.tensor([0x00, 0x40, 0x7F], dtype=torch.int32)
-    bits = ((exponent_fields[:, None] << 7) | mantissas).flatten().to(torch.int16)
-    magnitudes = torch.cat([bits.view(torch.bfloat16).float(), torch.tensor([min_magnitude, MAX_BF16])]).unique()
-    return magnitudes[magnitudes >= min_magnitude]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -189,7 +162,7 @@ def test_root_ops_negative_domain(device, ttnn_op, high):
     tt_in = to_float32_tt_tensor(input_tensor, device)
 
     result = ttnn.to_torch(ttnn_op(tt_in, fast_and_approximate_mode=False))
-    _assert_all_nonfinite(result, f"{ttnn_op.__name__}(x<=0)" if high == 0.0 else f"{ttnn_op.__name__}(x<0)")
+    assert_all_nonfinite(result, f"{ttnn_op.__name__}(x<=0)" if high == 0.0 else f"{ttnn_op.__name__}(x<0)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,7 +190,8 @@ def test_exp_fast(device):
     golden = torch.exp(input_tensor.float()).to(torch.float32)
     result = ttnn.to_torch(ttnn.exp(tt_in, fast_and_approximate_mode=True)).to(torch.float32)
 
-    _assert_finite_matches_golden(golden, result, "exp(fast)")
+    assert_finite_matches_golden(golden, result, "exp(fast)")
+    assert_with_pcc(golden, result, pcc=0.999)
     assert_allclose(expected_result=golden, actual_result=result, rtol=0.05, atol=1e-6)
 
 
@@ -233,7 +207,7 @@ def test_exp_underflow(device, fast):
     Every input here flushes to 0, so a few values per binade (power-of-two
     interval) are enough to catch a magnitude where range reduction breaks.
     """
-    input_tensor = -_bf16_binade_samples(87.5)
+    input_tensor = -bf16_binade_samples(87.5)
     tt_in = to_float32_tt_tensor(input_tensor, device)
 
     result = ttnn.to_torch(ttnn.exp(tt_in, fast_and_approximate_mode=fast))
@@ -245,8 +219,8 @@ def test_exp_underflow(device, fast):
     [
         False,
         pytest.param(
-            True,
-            marks=pytest.mark.xfail(reason="fast-mode float32 exp returns NaN instead of +inf for x >= 89"),
+            strict=True,
+            reason="#60792: fast-mode float32 exp returns NaN instead of +inf for x >= 89",
         ),
     ],
     ids=["accurate", "fast"],
@@ -262,7 +236,7 @@ def test_exp_overflow(device, fast):
     Every input here overflows to +inf, so a few values per binade are enough.
     Fast mode returns NaN for every input here.
     """
-    input_tensor = _bf16_binade_samples(89.0)
+    input_tensor = bf16_binade_samples(89.0)
     tt_in = to_float32_tt_tensor(input_tensor, device)
 
     result = ttnn.to_torch(ttnn.exp(tt_in, fast_and_approximate_mode=fast))
@@ -387,7 +361,7 @@ def test_gelu_fast(device):
     golden = F.gelu(input_tensor.double()).to(torch.float32)
     result = ttnn.to_torch(ttnn.gelu(tt_in, fast_and_approximate_mode=True)).to(torch.float32)
 
-    _assert_finite_matches_golden(golden, result, "gelu(fast)")
+    assert_finite_matches_golden(golden, result, "gelu(fast)")
     assert_with_pcc(golden, result, pcc=0.999)
     assert_allclose(expected_result=golden, actual_result=result, rtol=0.05, atol=0.05)
 
@@ -439,7 +413,7 @@ def test_log_family_nonpositive_domain(device, ttnn_op, fast):
     tt_in = to_float32_tt_tensor(input_tensor, device)
 
     result = ttnn.to_torch(ttnn_op(tt_in, fast_and_approximate_mode=fast))
-    _assert_all_nonfinite(result, f"{ttnn_op.__name__}(x<=0)")
+    assert_all_nonfinite(result, f"{ttnn_op.__name__}(x<=0)")
 
 
 def test_log1p_accurate(device):
@@ -464,7 +438,7 @@ def test_log1p_accurate(device):
 
     out_of_domain = x <= -1.0
     assert out_of_domain.any(), "expected x <= -1 band to be non-empty for this exhaustive sweep"
-    _assert_all_nonfinite(result[out_of_domain], "log1p(x<=-1)")
+    assert_all_nonfinite(result[out_of_domain], "log1p(x<=-1)")
 
 
 @pytest.mark.parametrize(
