@@ -5,9 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -18,6 +16,7 @@
 #include "optimizers/adamw_composite.hpp"
 #include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/sgd.hpp"
+#include "test_utils/optimizer_state.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
@@ -56,20 +55,8 @@ Parameter make_parameter(ttnn::DataType dtype) {
     return {autograd::create_tensor(value, /* requires_grad */ true), core::from_xtensor(g0, device)};
 }
 
-using NamedTensors = std::vector<std::pair<std::string, autograd::TensorPtr>>;
-
-// The tensors in an optimizer's state, such as its moments or momentum buffers, by "<entry>/<parameter>".
-NamedTensors state_tensors(const optimizers::OptimizerBase& optimizer) {
-    NamedTensors tensors;
-    for (const auto& [key, value] : optimizer.get_state_dict()) {
-        if (const auto* named = std::get_if<serialization::NamedParameters>(&value)) {
-            for (const auto& [name, tensor] : *named) {
-                tensors.emplace_back(key + "/" + name, tensor);
-            }
-        }
-    }
-    return tensors;
-}
+using test_utils::NamedTensors;
+using test_utils::state_tensors;
 
 // Reads each tensor's `derived` view, so a cached copy exists, then runs `step`. Afterwards each stored value must
 // have moved, and its `derived` view must be exactly the cast of it.
