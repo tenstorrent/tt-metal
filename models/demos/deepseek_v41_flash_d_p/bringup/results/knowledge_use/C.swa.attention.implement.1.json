@@ -1,106 +1,43 @@
 {
  "used": [
   {
-   "id": "K-31",
-   "how": "attention on ttnn.bringup.sparse_sdpa(high_precision=True) (Float32 running state, exact exp); extended the fork for the sink it refused",
+   "id": "DS41-11",
+   "how": "the scaled checkpoint has no inference/; wrote hf_scaled/quietbox_2x2/inference/config.json = ds41_ref.inference_config(scaled) (+ symlinks to the source's code files, so inference_dir still finds model.py) so the frozen contract test's caches.py:53 can read it; entry updated",
    "traced": true,
    "cited": true
   },
   {
-   "id": "K-27",
-   "how": "folded 512^-0.5 into q and passed scale 1 (exact) so neither the scores' exp nor the sink's sees a bf16-rounded scale; the fork's HP sink exp now rounds the scale like the scores'",
+   "id": "DS41-28",
+   "how": "checked hooks.py DEVICE_STEPS['swa'] already lists attention (and every passed swa step) before running the contract",
    "traced": true,
-   "cited": true
-  },
-  {
-   "id": "K-30",
-   "how": "wo_b partials summed with tp_sum gather_add (all_gather + SFPU add) then mesh_partition, not reduce_scatter (setting ATTN_O_SUM)",
-   "traced": false,
-   "cited": true
-  },
-  {
-   "id": "K-19",
-   "how": "concatenated the 8 heads of each wo_a group with nlp_concat_heads on the bf16 fp8_qdq output (not fp32) so its CBs fit L1",
-   "traced": false,
-   "cited": false
-  },
-  {
-   "id": "K-1",
-   "how": "only deallocate the ROW_MAJOR copy in interleave_tail when to_layout made a new tensor",
-   "traced": false,
-   "cited": false
-  },
-  {
-   "id": "K-72",
-   "how": "hybrid embed(tokens, start) clamps PAD_ID ids into the vocabulary before the embedding",
-   "traced": false,
    "cited": false
   },
   {
    "id": "K-52",
-   "how": "read the collect pass's pcc 0 / NaN lines as the precompile stub and judged the real pass",
+   "how": "read the pcc=0 FAIL lines in the component gate as the precompile collect pass, not the real result",
    "traced": true,
    "cited": true
-  },
-  {
-   "id": "K-56",
-   "how": "deleted tests/ttnn/unit_tests/operations/ds41_attn_probe after the probes",
-   "traced": true,
-   "cited": false
-  },
-  {
-   "id": "K-57",
-   "how": "the mesh probe opened the whole 2x2 box with FABRIC_2D",
-   "traced": true,
-   "cited": false
-  },
-  {
-   "id": "DS41-5",
-   "how": "the attention writes and reads a per-position served 0_window_kv cache (not the 128-slot ring); the ring is a view of it for the ladder state",
-   "traced": false,
-   "cited": false
-  },
-  {
-   "id": "DS41-13",
-   "how": "reused tt/quant.py:fp8_qdq for q_resid, the un-roped output and the wo_a output",
-   "traced": false,
-   "cited": false
-  },
-  {
-   "id": "DS41-15",
-   "how": "wq_b's per-head rope rows de-interleaved at load, RoPE in fp32 SFPU (rope_heads), the kv table's tail de-interleaved to match, the output re-interleaved by a ROW_MAJOR transpose",
-   "traced": true,
-   "cited": false
-  },
-  {
-   "id": "DS41-16",
-   "how": "kept a plain ttnn.linear for wq_b (its ~TF32 partials vanish in q's bf16 cast) instead of ExactMatmul",
-   "traced": false,
-   "cited": false
-  },
-  {
-   "id": "DS41-1",
-   "how": "predicted the error budget with a CPU emulation of the device roundings before the fp8 q-dqs (0.0206 predicted, 0.0212 measured)",
-   "traced": false,
-   "cited": false
   }
  ],
  "contradicted": [
   {
-   "id": "K-31",
-   "evidence": "out of date after this task: ttnn.bringup.sparse_sdpa(high_precision=True) now takes attention_sink (ttnn/ttnn/bringup/sdpa/CHANGELOG.md 'sparse_sdpa: attention_sink under high_precision'; compute_streaming.hpp normalize_row_streaming reconfig; test_sparse_sdpa_high_precision.py::test_high_precision_sink 4 passed)",
+   "id": "DS41-11",
+   "evidence": "the fix covered only the reference: tests/bringup/contract/caches.py:53 (model_args) still reads <hf>/inference/config.json directly; the gate's test_cache_starts failed 4/4 with FileNotFoundError (runs/run1/logs/C.swa.attention.log:2437). Entry updated in the model's known_issues.md.",
    "cited": true
   }
  ],
  "missing": [
-  "the window attention's precision-model limit before building (computed with component_checks.precision_model on the CPU)",
-  "that update_padded_kv_cache(tp_axis) writes exactly the plan's TP-dedup position map from per-row server-order input (now DS41-17)",
-  "why sparse_sdpa high_precision refused the sink: the unpacker's srcB still holds the Float32 row-sum format at the sink subtraction"
+  "a scaled checkpoint needs every file the frozen tests read (inference/config.json), not only what the reference reads; scale.py should write it (framework)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "touched known_issues.md (DS41-11); DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x the step's own component error, no cap'; left as is"
+  }
  ],
  "cited_only": [
-  "DS41-17",
-  "DS41-18",
-  "K-55"
+  "DS41-20"
  ],
  "meta": {
   "model": "deepseek_v41_flash_d_p",
@@ -109,24 +46,12 @@
   "role": "implement",
   "attempt": 1,
   "agent": "bringup-engineer",
-  "t": "2026-10-15T14:31:46",
-  "head": "9d7fd50b6ff",
+  "t": "2026-10-15T22:56:42",
+  "head": "ceef1c0b8d0",
   "touched": [
    "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
-   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
    "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
-   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
-   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.attention.implement.1.json",
-   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
-   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
-   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
-   "ttnn/ttnn/bringup/INDEX.md",
-   "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
-   "ttnn/ttnn/bringup/sdpa/device/kernels/compute/compute_streaming.hpp",
-   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp",
-   "ttnn/ttnn/bringup/sdpa/sdpa_nanobind.cpp",
-   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.hpp",
-   "ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py"
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.attention.implement.1.json"
   ]
  }
 }
