@@ -20,7 +20,10 @@ constant per layer and no carry is shifted. Index keys are a ``[users_per_rank, 
 
 Rows reach the pool through :func:`scatter_rows` (``kernels/scatter_rows.cpp``): the destination row of each source
 row comes from a device tensor, so the captured step writes where the step's inputs say, and a join copies a
-prefill state's rows into one rank's slot with the other ranks' indices set to the sentinel.
+prefill state's rows into one rank's slot with the other ranks' indices set to the sentinel. The destination may
+store its logical rows as row-major rows, as tiled bf16 (each row lands in its tile's faces, so a pool the indexer
+scores stays tiled and is never converted again) or as block pages of ``BLOCK_ROWS`` rows (the pages the candidate
+scorer gathers); a user's rows are addressed as logical rows ``u * (cap + 32) + t`` in every form.
 """
 
 from dataclasses import dataclass
@@ -41,18 +44,38 @@ SENTINEL = 0xFFFFFFFF
 _KERNEL = "models/demos/deepseek_v3_d_p/tt/v41/kernels/scatter_rows.cpp"
 
 
+BLOCK_ROWS = 8  # logical rows per block page (CANDIDATE_BLOCK_SIZE: the candidate scorer reads a block as one page)
+
+
+def _dst_mode(dst, src_width: int) -> int:
+    """How ``dst`` stores a logical row of ``src_width`` elements: 0 row-major rows, 1 tiled bf16, 2 block pages."""
+    if dst.layout == ttnn.TILE_LAYOUT:
+        assert dst.dtype == ttnn.bfloat16 and dst.shape[3] == src_width, (dst.dtype, tuple(dst.shape), src_width)
+        return 1
+    if dst.shape[3] == src_width:
+        return 0
+    assert dst.shape[3] == BLOCK_ROWS * src_width, (tuple(dst.shape), src_width)
+    return 2
+
+
 def scatter_rows(src, dst, idx, src_base: int = 0, dst_base: int = 0, stride: int = 0, rows: int | None = None):
-    """Copy row ``src_base + i`` of ``src`` to row ``dst_base + i * stride + idx[i]`` of ``dst`` for ``i`` below
-    ``rows`` (default: ``idx``'s length), skipping the rows whose ``idx`` is the sentinel; in place on ``dst``. Both
-    row-major DRAM-interleaved with rows of equal bytes; ``idx`` ``[1, 1, 1, n]`` uint32 row-major (per chip: a
-    sharded index tensor scatters differently on each chip). One data-movement op."""
+    """Copy row ``src_base + i`` of ``src`` to logical row ``dst_base + i * stride + idx[i]`` of ``dst`` for ``i``
+    below ``rows`` (default: ``idx``'s length), skipping the rows whose ``idx`` is the sentinel; in place on ``dst``.
+    ``src`` row-major DRAM-interleaved; ``idx`` ``[1, 1, 1, n]`` uint32 row-major (per chip: a sharded index tensor
+    scatters differently on each chip). ``dst`` DRAM-interleaved in one of three forms of the same logical rows
+    (``kernels/scatter_rows.cpp``): row-major rows of ``src``'s width; tiled bf16 of that width (the row lands in
+    its tile's faces); or row-major block pages of ``BLOCK_ROWS * width`` (row ``r`` at page ``r // BLOCK_ROWS``,
+    the layout ``candidate_scores`` reads). One data-movement op."""
     for t, what in ((src, "src"), (dst, "dst"), (idx, "idx")):
         memory = t.memory_config()
-        assert t.layout == ttnn.ROW_MAJOR_LAYOUT, f"scatter_rows {what}: row-major, got {t.layout}"
         assert memory.buffer_type == ttnn.BufferType.DRAM and not memory.is_sharded(), f"scatter_rows {what}: DRAM"
+        if what != "dst":
+            assert t.layout == ttnn.ROW_MAJOR_LAYOUT, f"scatter_rows {what}: row-major, got {t.layout}"
     assert idx.dtype == ttnn.uint32 and idx.shape[2] == 1, tuple(idx.shape)
+    assert dst.dtype == src.dtype, (src.dtype, dst.dtype)
     row_bytes = src.shape[3] * src.element_size()
-    assert dst.shape[3] * dst.element_size() == row_bytes, (tuple(src.shape), tuple(dst.shape))
+    mode = _dst_mode(dst, src.shape[3])
+    assert mode != 1 or row_bytes % 64 == 0, row_bytes  # whole tiles across
     n = idx.shape[3] if rows is None else rows
     assert 0 < n <= idx.shape[3] and src_base + n <= src.shape[2], (n, tuple(idx.shape), src_base, tuple(src.shape))
     coords, cores = _cores(src.device(), min(n, 64))
@@ -77,11 +100,12 @@ def scatter_rows(src, dst, idx, src_base: int = 0, dst_base: int = 0, stride: in
     kernel = ttnn.KernelDescriptor(
         kernel_source=_KERNEL,
         core_ranges=cores,
-        compile_time_args=[0, row_bytes] + accessors,
+        compile_time_args=[0, row_bytes, mode, BLOCK_ROWS] + accessors,
         runtime_args=args,
         config=ttnn.ReaderConfigDescriptor(),
     )
-    scratch = 64 + (n * 4 + 63) // 64 * 64 + 2 * ((row_bytes + 63) // 64 * 64)
+    per_core = max(count for _, count in _split(n, len(coords))) + 16  # a core's index window, line-aligned
+    scratch = 64 + (per_core * 4 + 63) // 64 * 64 + 2 * ((row_bytes + 63) // 64 * 64)
     page = ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=scratch)
     cbs = [ttnn.CBDescriptor(total_size=scratch, core_ranges=cores, format_descriptors=[page])]
     return ttnn.generic_op([src, idx, dst], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs))
