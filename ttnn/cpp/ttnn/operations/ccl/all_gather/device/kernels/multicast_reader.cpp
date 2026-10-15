@@ -11,47 +11,61 @@
 #include <cstdint>
 
 #include "gather_walk.hpp"
+#include "gather_args.hpp"
 #include "gather_noc.hpp"
 #include "gather_fabric.hpp"
 
 using address_t = uint32_t;
 
 void kernel_main() {
+    namespace ct = gather_args::multicast_reader::ct;
+    namespace rt = gather_args::multicast_reader::rt;
+
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
     ///////////////////////////////////////////////////
-    constexpr uint32_t split_factor = get_compile_time_arg_val(0);
-    constexpr uint32_t output_chunk_size = get_compile_time_arg_val(1);
-    constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(2);
-    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(3);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(4);
-    constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_depth = get_compile_time_arg_val(6);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(7);
-    constexpr uint32_t packet_size = get_compile_time_arg_val(8);
-    constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(9) != 0;
-    constexpr uint32_t num_connections = get_compile_time_arg_val(10);
-    constexpr uint32_t run_cap_bytes = get_compile_time_arg_val(11);  // longest run the walk may emit; 0 = no cap
-    constexpr auto input_tensor_args = TensorAccessorArgs<12>();
+    constexpr uint32_t in_cpp = get_compile_time_arg_val(ct::in_cpp);
+    constexpr uint32_t chunk_size = get_compile_time_arg_val(ct::chunk_size);
+    constexpr uint32_t out_cpp = get_compile_time_arg_val(ct::out_cpp);
+    constexpr uint32_t cps = get_compile_time_arg_val(ct::cps);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(ct::num_devices);
+    constexpr uint32_t cb0_id = get_compile_time_arg_val(ct::cb_id);
+    constexpr uint32_t cb_depth = get_compile_time_arg_val(ct::cb_depth);
+    constexpr uint32_t cb_page_size = get_compile_time_arg_val(ct::cb_page_size);
+    constexpr uint32_t packet_size = get_compile_time_arg_val(ct::packet_size);
+    constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(ct::alt_routes) != 0;
+    constexpr uint32_t num_connections = get_compile_time_arg_val(ct::num_connections);
+    constexpr uint32_t k = get_compile_time_arg_val(ct::k);
+    constexpr uint32_t walk_stride = get_compile_time_arg_val(ct::walk_stride);
+    constexpr uint32_t walk_xfer = get_compile_time_arg_val(ct::walk_xfer);
+    constexpr uint32_t slot_bytes = get_compile_time_arg_val(ct::slot_bytes);
+    constexpr RunSource in_runs = run_source_from_bits(get_compile_time_arg_val(ct::in_runs));
+    constexpr RunSource out_runs = run_source_from_bits(get_compile_time_arg_val(ct::out_runs));
+    constexpr auto input_tensor_args = TensorAccessorArgs<ct::tensor_args>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr bool enable_fabric = (num_connections > 0);
-    constexpr uint32_t chunks_per_cb_entry = cb_page_size / output_chunk_size;
-    constexpr uint32_t xfer_max = chunks_per_transfer(packet_size, output_chunk_size, run_cap_bytes);
+    static_assert(in_cpp % k == 0 && out_cpp % k == 0 && cps % k == 0, "pages and stripes are whole walk pages");
+    static_assert(chunk_size <= slot_bytes && cb_page_size % slot_bytes == 0, "a CB entry is whole slots");
+    static_assert(slot_bytes == chunk_size || (out_cpp == 1 && k == 1), "a padded slot is one chunk per page");
+    static_assert(walk_xfer == 1 || walk_xfer * slot_bytes <= packet_size, "a column fits one packet");
+    static_assert(walk_xfer == 1 || walk_xfer * slot_bytes <= NOC_MAX_BURST_SIZE, "a column is one NoC command");
+    constexpr uint32_t chunks_per_cb_entry = cb_page_size / slot_bytes;
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
     ///////////////////////////////////////////////////
-    size_t arg_idx = 0;
-    const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const uint32_t slice_first_chunk = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t slice_chunks = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
-    const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t barrier_wait_value = get_arg_val<uint32_t>(arg_idx++);
+    const address_t input_tensor_address = get_arg_val<address_t>(rt::input_addr);
+    const address_t output_tensor_address = get_arg_val<address_t>(rt::output_addr);
+    const uint32_t slice_first_chunk = get_arg_val<uint32_t>(rt::slice_first);
+    const uint32_t slice_chunks = get_arg_val<uint32_t>(rt::slice_chunks);
+    const uint32_t device_idx = get_arg_val<uint32_t>(rt::device_idx);
+    const address_t barrier_sem = get_arg_val<uint32_t>(rt::barrier_sem);
+    const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(rt::barrier_noc_x);
+    const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(rt::barrier_noc_y);
+    const uint32_t barrier_wait_value = get_arg_val<uint32_t>(rt::barrier_wait_value);
+    const uint32_t rot = get_arg_val<uint32_t>(rt::rot);
+    size_t arg_idx = rt::route_args;
     const auto route_args = McastRouteArgs::from_args(arg_idx);
     size_t arg_for_fab = arg_idx;
 
@@ -76,7 +90,7 @@ void kernel_main() {
 
     // Allocate header and set state for data sends
     McastSink<load_balance_across_alt_routes> sink(noc, fabric_connection, num_connections, ranges, ranges_alt);
-    PacketPacker<packet_size, output_chunk_size, McastSink<load_balance_across_alt_routes>> fabric(sink);
+    PacketPacker<packet_size, slot_bytes, McastSink<load_balance_across_alt_routes>> fabric(sink);
 
     // Allocate header and set state for semaphore sends
     uint8_t sem_route_id = 0;
@@ -121,27 +135,25 @@ void kernel_main() {
     auto l1_write_addr = l1_base_addr;
     auto l1_read_addr = l1_base_addr;
 
-    const auto plan = walk_plan<output_chunks_per_page, output_chunk_size, xfer_max>(output_tensor_accessor);
-    // Our input yields runs only when it strides the way the walk does.
-    const auto in_src = run_source(
-        input_tensor_accessor.get_aligned_page_size() == split_factor * output_chunk_size,
-        split_factor,
-        input_tensor_accessor.contiguous_page_stride(),
-        plan.stride);
+    // The walk stride was derived on the host from the output accessor's contiguous_page_stride().
+    ASSERT(out_cpp > k || output_tensor_accessor.contiguous_page_stride() == walk_stride);
+    const RunSource in_src = checked_run_source<k, in_cpp>(in_runs, input_tensor_accessor, walk_stride);
+    const RunSource out_src = checked_run_source<k, out_cpp>(out_runs, output_tensor_accessor, walk_stride);
     const uint32_t input_end_chunk = slice_first_chunk + slice_chunks;
 
-    StripeMap<output_chunks_per_stripe, num_devices> map;
-    map.init(device_idx);
-    // Same walk, one CB entry apart: reads stay in flight while the entry before them is sent.
-    TiledWalk read_walk;
-    read_walk.init(slice_first_chunk, slice_chunks, 0, plan.stride, plan.xfer);
-    TiledWalk send_walk = read_walk;
+    StripeMap<cps, num_devices> map;
+    map.init(device_idx, input_end_chunk);
+    // Same walk, one CB entry apart: reads stay in flight while the entry before them is sent. The writer
+    // drains the CB with the same walk (same rot), so every entry holds the same seqnos on both sides.
+    TiledWalk<k, walk_stride, walk_xfer> read_walk;
+    read_walk.init(input_end_chunk, rot, walk_start(slice_first_chunk));
+    auto send_walk = read_walk;
     uint32_t chunks_read = 0;
     uint32_t chunks_sent = 0;
 
     auto input_addr = [&](uint32_t chunk) {
         return input_tensor_accessor.get_noc_addr(
-            page_of<split_factor>(chunk), byte_off_of<split_factor, output_chunk_size>(chunk), noc.get_noc_id());
+            page_of<in_cpp>(chunk), byte_off_of<in_cpp, chunk_size>(chunk), noc.get_noc_id());
     };
 
     auto output_addr = [&](uint32_t page, uint32_t off) {
@@ -151,7 +163,7 @@ void kernel_main() {
     // Read input tensor and fill CB page
     auto fill_entry = [&]() __attribute__((always_inline)) {
         const uint32_t batch = std::min(chunks_per_cb_entry, slice_chunks - chunks_read);
-        l1_write_addr = read_input_runs<split_factor, output_chunk_size>(
+        l1_write_addr = read_input_runs<in_cpp, chunk_size, slot_bytes>(
             read_walk,
             input_tensor_accessor,
             in_src,
@@ -160,7 +172,7 @@ void kernel_main() {
             batch,
             input_addr,
             [&](uint64_t src, uint32_t l1, uint32_t run) {
-                read_run<output_chunk_size>(noc, src, l1, run, curr_trid);
+                read_run<slot_bytes, chunk_size>(noc, src, l1, run, curr_trid);
             });
         chunks_read += batch;
         if (l1_write_addr == l1_end_addr) {
@@ -172,11 +184,11 @@ void kernel_main() {
     auto send_entry = [&]() __attribute__((always_inline)) {
         if constexpr (enable_fabric) {
             const uint32_t batch = std::min(chunks_per_cb_entry, slice_chunks - chunks_sent);
-            l1_read_addr = emit_runs<output_chunks_per_page, output_chunk_size>(
+            l1_read_addr = emit_runs<out_cpp, chunk_size, slot_bytes>(
                 send_walk,
                 map,
                 output_tensor_accessor,
-                plan.out,
+                out_src,
                 l1_read_addr,
                 batch,
                 output_addr,
@@ -184,7 +196,7 @@ void kernel_main() {
                     fabric.queue_segment(
                         l1,
                         tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page, off),
-                        run * output_chunk_size);
+                        run * slot_bytes);
                 });
             chunks_sent += batch;
             fabric.flush_packet_and_wait();

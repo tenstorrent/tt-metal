@@ -4,6 +4,10 @@
 
 #include "all_gather_multicast_factory.hpp"
 #include "all_gather_geometry.hpp"
+#include "kernels/gather_args.hpp"
+
+#include <algorithm>
+#include <array>
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
@@ -145,7 +149,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // be skipped even for a persistent output buffer: that buffer may be reused across invocations of this CCL,
     // and the caller may write into it between invocations.
 
-    const uint32_t packet_size = operation_attributes.packet_size;
+    const auto& tuning = operation_attributes.tuning;  // TEST HOOK (all_gather_tuning.hpp)
+    const uint32_t packet_size = tuning.packet_size_override.value_or(operation_attributes.packet_size);
 
     ////////////////////////////////////////////////////////////////
     // Core selection
@@ -190,22 +195,22 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         worker_cores.size());
 
     ////////////////////////////////////////////////////////////////
-    // Page indexing (glossary and copy modes: all_gather_geometry.hpp)
+    // Page indexing (glossary and copy modes: all_gather_geometry.hpp, walk terms: kernels/gather_walk.hpp)
     //
-    // Host supplies geometry and each worker's slice. The kernels derive the walk order
-    // themselves from TensorAccessor and the packet size (see kernels/gather_walk.hpp), so no
-    // layout is special-cased here.
+    // GatherGeometry is in walk pages and independent of k, so the heuristics below key on it and k cannot
+    // perturb one. WalkGeometry (k, stride, xfer, run sources, CB entry) is computed once from it and handed to
+    // both kernels as CT args: they share one CB, so they must walk identically.
     ////////////////////////////////////////////////////////////////
 
     const auto arch = input_tensor.device()->arch();
 
-    // --- Geometry: copy mode, chunk count, stripe (see all_gather_geometry.hpp) ---
+    // --- Geometry: copy mode, walk pages, stripe (see all_gather_geometry.hpp) ---
     // Multicast never reads the output back, so unlike unicast it has no relay precondition.
-    const auto geom = GatherGeometry::make(input_tensor, output_tensor, operation_attributes.dim_from_end, num_devices);
-    const uint32_t split_factor = geom.in_chunks_per_page;
-    const uint32_t output_chunk_size = geom.chunk_size;
-    const uint32_t output_chunks_per_page = geom.out_chunks_per_page;
-    const uint32_t output_chunks_per_stripe = geom.chunks_per_stripe;
+    const auto geom =
+        GatherGeometry::make(input_tensor, output_tensor.tensor_spec(), operation_attributes.dim_from_end);
+    // The heuristics' keys, in walk pages / bytes (k-independent):
+    const uint32_t stripe_pages = geom.chunks_per_stripe;  // walk pages per stripe row
+    const uint32_t page_bytes = geom.chunk_size;           // walk page bytes
 
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
@@ -241,19 +246,24 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             any_ring = any_ring || (operation_attributes.axis_num_devices[ax] > 1 &&
                                     tt::tt_fabric::is_ring_or_torus(operation_attributes.axis_topology[ax]));
         }
-        const bool long_stripe = output_chunks_per_stripe >= 32;
+        // Keyed on walk pages (k-independent).
+        const bool long_stripe = stripe_pages >= 32;
         // ...and only while the link count is low. With 4 links the per-hop send is no longer the
         // serialising step, so the amortisation a four-packet entry buys comes back.
         const bool few_links = min_num_links <= 2;
         packets_per_cb_entry = (!any_ring && long_stripe && few_links) ? 1 : 4;  // unicast differs here
-        // Past ~8 KB a run gains little packet fill but keeps the walk in one DRAM bank longer. Only chunks
+        // Past ~8 KB a run gains little packet fill but keeps the walk in one DRAM bank longer. Only pages
         // big enough to still span a few runs are worth capping; below that the packet's own limit wins.
-        run_cap_bytes = output_chunk_size >= 1024 ? 8192 : 0;
+        // Keyed on the walk page (k-independent); the cap itself is bytes, so it bounds a run whatever k is,
+        // and choose_k fills min(packet, cap) -- under this cap k stays 1 for pages >= 1 KB.
+        run_cap_bytes = page_bytes >= 1024 ? 8192 : 0;
     }
 
-    // --- CB sizing ---
-    // A CB entry holds a whole number of packet loads, and of input pages (split) or output pages
-    // (concat), so the entry boundary never cuts a page (see WalkGeometry::make, EntryPolicy::Legacy).
+    // TEST HOOK overrides (all_gather_tuning.hpp), after the per-arch defaults.
+    run_cap_bytes = tuning.run_cap_bytes.value_or(run_cap_bytes);
+    cb_depth = tuning.mcast_cb_depth.value_or(cb_depth);  // parse() enforces >= 2
+
+    // --- Walk and CB sizing (see WalkGeometry::make) ---
     const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
     const auto walk = WalkGeometry::make(
         geom,
@@ -261,19 +271,24 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         *output_tensor.buffer(),
         packet_size,
         run_cap_bytes,
-        EntryPolicy::Legacy,
+        WalkPolicy::from(tuning),
         packets_per_cb_entry,
         cb_depth,
         max_l1_space);
     const uint32_t cb_page_size = walk.cb_entry_bytes;
     log_debug(
         tt::LogOp,
-        "all_gather multicast walk: stride {} xfer {} (max {}) in_runs sub_page {} cross_page {}",
+        "all_gather multicast walk: k {} chunk {} slot {} stride {} xfer {} entry {} in_runs {}/{} out_runs {}/{}",
+        walk.k,
+        walk.chunk_size,
+        walk.slot_bytes,
         walk.stride,
         walk.xfer,
-        walk.xfer_max,
-        walk.in_runs.sub_page,
-        walk.in_runs.cross_page);
+        walk.chunks_per_entry,
+        walk.in_runs.whole_page,
+        walk.in_runs.cross_page,
+        walk.out_runs.whole_page,
+        walk.out_runs.cross_page);
 
     // Input CB
     uint32_t cb0_id = tt::CB::c_in0;
@@ -284,37 +299,48 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
     // KERNEL CREATION
+    // CT args by name (kernels/gather_args.hpp); every count is in chunks (k included).
+    namespace mcr = gather_args::multicast_reader;
+    namespace mcw = gather_args::multicast_writer;
+
     // Reader (covers forward directions E-line + S-rect)
-    std::vector<uint32_t> reader_compile_args = {
-        split_factor,                    // chunks per input page (1 unless split)
-        output_chunk_size,               // NOC write size = min(input, output)
-        output_chunks_per_page,          // chunks per output buffer page (1 unless concat)
-        output_chunks_per_stripe,        // stripe length in chunks
-        num_devices,                     // device count (stripe indexing)
-        cb0_id,                          // cb id
-        cb_depth,                        // cb depth
-        cb_page_size,                    // cb entry size
-        packet_size,                     // packet_size (sets the transfer size, hence the walk order)
-        load_balance_across_alt_routes,  // load_balance_across_alt_routes
-        (e_hops > 0) + (s_hops > 0),     // num_connections
-        run_cap_bytes,                   // longest run the walk may emit; 0 = no cap
-    };
+    std::vector<uint32_t> reader_compile_args(mcr::ct::tensor_args);
+    reader_compile_args[mcr::ct::in_cpp] = walk.in_cpp;
+    reader_compile_args[mcr::ct::chunk_size] = walk.chunk_size;
+    reader_compile_args[mcr::ct::out_cpp] = walk.out_cpp;
+    reader_compile_args[mcr::ct::cps] = walk.cps;
+    reader_compile_args[mcr::ct::num_devices] = num_devices;
+    reader_compile_args[mcr::ct::cb_id] = cb0_id;
+    reader_compile_args[mcr::ct::cb_depth] = cb_depth;
+    reader_compile_args[mcr::ct::cb_page_size] = cb_page_size;
+    reader_compile_args[mcr::ct::packet_size] = packet_size;
+    reader_compile_args[mcr::ct::alt_routes] = load_balance_across_alt_routes;
+    reader_compile_args[mcr::ct::num_connections] = (e_hops > 0) + (s_hops > 0);
+    reader_compile_args[mcr::ct::k] = walk.k;
+    reader_compile_args[mcr::ct::walk_stride] = walk.stride;
+    reader_compile_args[mcr::ct::walk_xfer] = walk.xfer;
+    reader_compile_args[mcr::ct::slot_bytes] = walk.slot_bytes;
+    reader_compile_args[mcr::ct::in_runs] = run_source_bits(walk.in_runs);
+    reader_compile_args[mcr::ct::out_runs] = run_source_bits(walk.out_runs);
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
 
     // Writer (covers backward directions W-line + N-rect)
-    std::vector<uint32_t> writer_compile_args = {
-        output_chunk_size,               // NOC write size = min(input, output)
-        output_chunks_per_page,          // chunks per output buffer page (1 unless concat)
-        output_chunks_per_stripe,        // stripe length in chunks
-        num_devices,                     // device count (stripe indexing)
-        cb0_id,                          // cb id
-        cb_page_size,                    // cb entry size
-        packet_size,                     // packet_size (sets the transfer size, hence the walk order)
-        load_balance_across_alt_routes,  // load_balance_across_alt_routes
-        (w_hops > 0) + (n_hops > 0),     // num_connections
-        run_cap_bytes,                   // longest run the walk may emit; 0 = no cap
-    };
+    std::vector<uint32_t> writer_compile_args(mcw::ct::tensor_args);
+    writer_compile_args[mcw::ct::chunk_size] = walk.chunk_size;
+    writer_compile_args[mcw::ct::out_cpp] = walk.out_cpp;
+    writer_compile_args[mcw::ct::cps] = walk.cps;
+    writer_compile_args[mcw::ct::num_devices] = num_devices;
+    writer_compile_args[mcw::ct::cb_id] = cb0_id;
+    writer_compile_args[mcw::ct::cb_page_size] = cb_page_size;
+    writer_compile_args[mcw::ct::packet_size] = packet_size;
+    writer_compile_args[mcw::ct::alt_routes] = load_balance_across_alt_routes;
+    writer_compile_args[mcw::ct::num_connections] = (w_hops > 0) + (n_hops > 0);
+    writer_compile_args[mcw::ct::k] = walk.k;
+    writer_compile_args[mcw::ct::walk_stride] = walk.stride;
+    writer_compile_args[mcw::ct::walk_xfer] = walk.xfer;
+    writer_compile_args[mcw::ct::slot_bytes] = walk.slot_bytes;
+    writer_compile_args[mcw::ct::out_runs] = run_source_bits(walk.out_runs);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -338,10 +364,14 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         CoreCoord core = worker_cores[link];
         CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
-        // This link's slice of input pages, scaled to output chunks (see GatherGeometry::slice_of).
-        const Slice slice = geom.slice_of(link, min_num_links);
+        // This link's slice of input pages, in chunks (see GatherGeometry::slice_of, WalkGeometry::in_chunks).
+        const Slice pages = geom.slice_of(link, min_num_links);
+        const Slice slice = walk.in_chunks(pages);
         const uint32_t local_output_start = slice.first_chunk;
         const uint32_t num_worker_output_chunks = slice.num_chunks;
+        // One rot for both kernels: they fill and drain one CB, so they must walk in the same order (direction 0;
+        // the direction stagger is unicast-only).
+        const uint32_t rot = walk.rot(pages, link, min_num_links, 0);
 
         // Per-link barrier fan-in = N-1 in every case. Every other chip sends me one atomic_inc:
         //   1D: e_hops + w_hops (or n_hops + s_hops) along the active axis = axis_size - 1.
@@ -349,29 +379,35 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         // Both equal num_devices - 1.
         uint32_t barrier_wait_value = num_devices - 1;
 
-        std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),   // input tensor address
-            output_tensor.buffer()->address(),  // output tensor address
-            local_output_start,                 // this worker's slice start (chunk id)
-            num_worker_output_chunks,           // this worker's slice length (chunks)
-            device_idx,                         // this device's index (initial stripe)
-            barrier_sem.address(),              // barrier_sem L1 address
-            virtual_core.x,                     // barrier_sem location (core.x)
-            virtual_core.y,                     // barrier_sem location (core.y)
-            barrier_wait_value,                 // barrier counter to wait for
-            e_hops,                             // line_hops
-            e_hops,                             // rect_e_hops
-            w_hops,                             // rect_w_hops
-            s_hops,                             // rect_spine_hops
-            ew_load_balance ? w_hops : e_hops,  // line_hops_alt
-            ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
-            ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
-            ns_load_balance ? n_hops : s_hops,  // rect_spine_hops_alt
-            e_dir,                              // line_dir
-            e_dir,                              // rect_e_dir
-            w_dir,                              // rect_w_dir
-            s_dir,                              // rect_spine_dir
-        };
+        std::vector<uint32_t> reader_rt_args(mcr::rt::fabric_args);
+        reader_rt_args[mcr::rt::input_addr] = input_tensor.buffer()->address();
+        reader_rt_args[mcr::rt::output_addr] = output_tensor.buffer()->address();
+        reader_rt_args[mcr::rt::slice_first] = local_output_start;
+        reader_rt_args[mcr::rt::slice_chunks] = num_worker_output_chunks;
+        reader_rt_args[mcr::rt::device_idx] = device_idx;  // initial stripe
+        reader_rt_args[mcr::rt::barrier_sem] = barrier_sem.address();
+        reader_rt_args[mcr::rt::barrier_noc_x] = virtual_core.x;
+        reader_rt_args[mcr::rt::barrier_noc_y] = virtual_core.y;
+        reader_rt_args[mcr::rt::barrier_wait_value] = barrier_wait_value;
+        reader_rt_args[mcr::rt::rot] = rot;
+        {
+            // McastRouteArgs, in kernel read order: line then rect, as (hops, hops_alt, dir).
+            const std::array<uint32_t, 12> route = {
+                e_hops,                             // line_hops
+                e_hops,                             // rect_e_hops
+                w_hops,                             // rect_w_hops
+                s_hops,                             // rect_spine_hops
+                ew_load_balance ? w_hops : e_hops,  // line_hops_alt
+                ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
+                ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
+                ns_load_balance ? n_hops : s_hops,  // rect_spine_hops_alt
+                e_dir,                              // line_dir
+                e_dir,                              // rect_e_dir
+                w_dir,                              // rect_w_dir
+                s_dir,                              // rect_spine_dir
+            };
+            std::copy(route.begin(), route.end(), reader_rt_args.begin() + mcr::rt::route_args);
+        }
         // Reader forward connection info: E-line (axis 1) then S-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> reader_dst_nodes;
         if (e_hops > 0 && e_coord.has_value()) {
@@ -392,27 +428,32 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
                 fabric_is_2d ? tt::tt_fabric::FabricApiType::Mesh : tt::tt_fabric::FabricApiType::Linear);
         }
 
-        std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),  // output tensor address
-            local_output_start,                 // this worker's slice start (chunk id)
-            num_worker_output_chunks,           // this worker's slice length (chunks)
-            device_idx,                         // this device's index (initial stripe)
-            barrier_sem.address(),              // barrier_sem L1 address
-            virtual_core.x,                     // barrier_sem location (core.x)
-            virtual_core.y,                     // barrier_sem location (core.y)
-            w_hops,                             // line_hops
-            e_hops,                             // rect_e_hops
-            w_hops,                             // rect_w_hops
-            n_hops,                             // rect_spine_hops
-            ew_load_balance ? e_hops : w_hops,  // line_hops_alt
-            ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
-            ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
-            ns_load_balance ? s_hops : n_hops,  // rect_spine_hops_alt
-            w_dir,                              // line_dir
-            e_dir,                              // rect_e_dir
-            w_dir,                              // rect_w_dir
-            n_dir,                              // rect_spine_dir
-        };
+        std::vector<uint32_t> writer_rt_args(mcw::rt::fabric_args);
+        writer_rt_args[mcw::rt::output_addr] = output_tensor.buffer()->address();
+        writer_rt_args[mcw::rt::slice_first] = local_output_start;
+        writer_rt_args[mcw::rt::slice_chunks] = num_worker_output_chunks;
+        writer_rt_args[mcw::rt::device_idx] = device_idx;
+        writer_rt_args[mcw::rt::barrier_sem] = barrier_sem.address();
+        writer_rt_args[mcw::rt::barrier_noc_x] = virtual_core.x;
+        writer_rt_args[mcw::rt::barrier_noc_y] = virtual_core.y;
+        writer_rt_args[mcw::rt::rot] = rot;
+        {
+            const std::array<uint32_t, 12> route = {
+                w_hops,                             // line_hops
+                e_hops,                             // rect_e_hops
+                w_hops,                             // rect_w_hops
+                n_hops,                             // rect_spine_hops
+                ew_load_balance ? e_hops : w_hops,  // line_hops_alt
+                ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
+                ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
+                ns_load_balance ? s_hops : n_hops,  // rect_spine_hops_alt
+                w_dir,                              // line_dir
+                e_dir,                              // rect_e_dir
+                w_dir,                              // rect_w_dir
+                n_dir,                              // rect_spine_dir
+            };
+            std::copy(route.begin(), route.end(), writer_rt_args.begin() + mcw::rt::route_args);
+        }
         // Writer backward connections: W-line (axis 1) then N-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> writer_dst_nodes;
         if (w_hops > 0 && w_coord.has_value()) {
@@ -461,16 +502,16 @@ void AllGatherMulticastFactory::override_runtime_arguments(
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
+        namespace mcr = gather_args::multicast_reader;
+        namespace mcw = gather_args::multicast_writer;
         for (const auto& core : shared_vars.worker_cores) {
-            // reader: [0]=input_addr, [1]=output_addr, [5]=barrier_sem
             auto& reader_args = reader_args_by_core[core.x][core.y];
-            reader_args[0] = input_addr;
-            reader_args[1] = output_addr;
-            reader_args[5] = barrier_sem_addr;
-            // writer: [0]=output_addr, [4]=barrier_sem
+            reader_args[mcr::rt::input_addr] = input_addr;
+            reader_args[mcr::rt::output_addr] = output_addr;
+            reader_args[mcr::rt::barrier_sem] = barrier_sem_addr;
             auto& writer_args = writer_args_by_core[core.x][core.y];
-            writer_args[0] = output_addr;
-            writer_args[4] = barrier_sem_addr;
+            writer_args[mcw::rt::output_addr] = output_addr;
+            writer_args[mcw::rt::barrier_sem] = barrier_sem_addr;
         }
     }
 }

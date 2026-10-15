@@ -279,9 +279,14 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const auto& input_tensor = tensor_args.input_tensor;
         const uint32_t axis = args.get_1d_axis();
         const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
+        // The output's spec as the factories will see it: a persistent output's own spec (its sharding may
+        // differ from args.output_spec -- validate does not compare shard specs), else the one we would create.
+        // Both per_link_bytes and the geometry below derive from it, as they do in the factories.
+        const tt::tt_metal::TensorSpec& out_spec = tensor_args.persistent_output_tensor.has_value()
+                                                       ? tensor_args.persistent_output_tensor->tensor_spec()
+                                                       : args.output_spec;
         // Packed bytes of the gathered output crossing one link.
-        const uint64_t per_link_bytes =
-            ::ttnn::operations::ccl::per_link_bytes(args.output_spec, args.axis_num_links[axis]);
+        const uint64_t per_link_bytes = ::ttnn::operations::ccl::per_link_bytes(out_spec, args.axis_num_links[axis]);
 
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
@@ -333,9 +338,10 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         // tiled by chunks. Multicast never reads the output.
         // Heuristic branch only: the branches above have no alternative, and the unicast factory
         // TT_FATALs there instead.
+        // step 3: route on relay_ok instead (also sends a DRAM output whose chunk misses the DRAM read alignment to
+        // multicast), together with require_relay_packed().
         if (use_unicast) {
-            use_unicast =
-                GatherGeometry::make(input_tensor, args.output_spec, args.dim_from_end, args.num_devices).out_packed;
+            use_unicast = GatherGeometry::make(input_tensor, out_spec, args.dim_from_end).out_packed;
         }
     }
 

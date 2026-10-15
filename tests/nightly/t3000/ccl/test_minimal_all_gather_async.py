@@ -764,8 +764,9 @@ def test_ag_page_size(
 #                  one case with the op's defaults). An empty entry (or "default") is the
 #                  defaults case. Each entry is "key=value,key=value" with the keys of
 #                  ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_tuning.hpp:
-#                    factory=multicast|unicast  rotation=none|absolute|absolute_dir_stagger
-#                    entry=legacy|scatter_aware  padded_slot=0|1  run_cap=<bytes>
+#                    factory=multicast|unicast  k=auto|<power of 2>  xfer=legacy|segments
+#                    rotation=none|absolute|absolute_dir_stagger
+#                    entry=legacy|scatter_aware|one_packet  padded_slot=0|1  run_cap=<bytes>
 #                    workers=<n>  signals=<n>  mcast_cb_depth=<n>  packet=<bytes>
 #                  e.g. AG_KNOBS="factory=unicast;factory=unicast,rotation=absolute;"
 #   AG_KNOBS_FILE  path to a file with one tuning string per line ('#' comments and blank
@@ -886,8 +887,10 @@ _AG_SHAPE_IDS = [s for s in _os.environ.get("AG_SHAPES", "512K,2M,25M").split(",
 # after the mesh is opened. Order = Tuning::attribute_names, so equal tunings get equal strings.
 _AG_TUNING_KEYS = {
     "factory": ("multicast", "unicast"),
+    "k": None,  # "auto" or a power of 2
+    "xfer": ("legacy", "segments"),
     "rotation": ("none", "absolute", "absolute_dir_stagger"),
-    "entry": ("legacy", "scatter_aware"),
+    "entry": ("legacy", "scatter_aware", "one_packet"),
     "padded_slot": ("0", "1", "true", "false"),
     "run_cap": None,
     "workers": None,
@@ -913,8 +916,11 @@ def _canonical_ag_tuning(spec):
         if k not in _AG_TUNING_KEYS:
             raise ValueError(f"AG_KNOBS: unknown key '{k}' in '{spec}' (known: {', '.join(_AG_TUNING_KEYS)})")
         allowed = _AG_TUNING_KEYS[k]
-        if (allowed is not None and v not in allowed) or (allowed is None and not v.isdigit()):
-            raise ValueError(f"AG_KNOBS: {k}={v} in '{spec}' (want {'|'.join(allowed) if allowed else '<uint>'})")
+        if (allowed is not None and v not in allowed) or (
+            allowed is None and not (v.isdigit() or (k == "k" and v == "auto"))
+        ):
+            want = "|".join(allowed) if allowed else ("auto|<uint>" if k == "k" else "<uint>")
+            raise ValueError(f"AG_KNOBS: {k}={v} in '{spec}' (want {want})")
         if k in kv:
             raise ValueError(f"AG_KNOBS: key '{k}' repeated in '{spec}'")
         kv[k] = v
@@ -1023,6 +1029,216 @@ def test_ag_knobs(mesh_device, shape_id, ag_tuning, device_params, all_gather_to
             skip_check=not check,
             use_blaze=True,
         )
+
+
+####################################################################################
+# Device cases for the walk-v2 step (functional only; every case compares bit-exactly).
+#   concat_relay_32B_*   concat: 32 B chunks into a packed 256 B DRAM output page, relayed by forced
+#                        unicast on the 8-device line. The relay reads 32 B chunks back from DRAM at
+#                        32 B offsets, which breaks the BH NoC read congruence ((l1 ^ dram) & 63 == 0).
+#   bfp8_16x32_*         16x32 bfloat8_b tiles (544 B page, 576 B DRAM aligned page) DRAM -> DRAM.
+#   ring_ragged_*        even ring, row-major, 997 pages per device: per-slice chunk counts are not a
+#                        multiple of xfer * stride, so slices end in a ragged unrotated tail.
+#   nd_sharded_*         ND-sharded output (3 non-unit shard dims) on both factories.
+#   persistent_twice_*   two calls with persistent outputs (and inputs) at different addresses: the
+#                        second is a program-cache hit, so only override_runtime_arguments moves it.
+####################################################################################
+
+_LINE_PARAMS = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+    "trace_region_size": 200000,
+    "fabric_router_config": create_fabric_router_config(_AG_PACKET),
+}
+_RING_PARAMS = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+    "trace_region_size": 200000,
+    "fabric_router_config": create_fabric_router_config(_AG_PACKET),
+}
+_L1_INTERLEAVED = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+_DRAM_INTERLEAVED = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+
+def _nd_sharded(buffer_type, shard_shape, num_cores=8):
+    # A DRAM bank id is the core's x coordinate, so a DRAM grid must be a single row.
+    grid_extent = ttnn.CoreCoord(8, 1) if buffer_type == ttnn.BufferType.DRAM else ttnn.CoreCoord(8, 8)
+    grid = ttnn.num_cores_to_corerangeset(num_cores, grid_extent, row_wise=True)
+    return ttnn.MemoryConfig(
+        buffer_type,
+        ttnn.NdShardSpec(
+            ttnn.Shape(shard_shape),
+            grid,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+
+def _ag_case_input(mesh_device, full, dim, layout, dtype, mem_config, tile=None):
+    kwargs = {"tile": tile} if tile is not None else {}
+    tt_in = ttnn.from_torch(
+        full,
+        device=mesh_device,
+        layout=layout,
+        dtype=dtype,
+        memory_config=mem_config,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=dim),
+        **kwargs,
+    )
+    # What the devices actually hold (bfloat8_b is lossy on the way in); the gather must reproduce it exactly.
+    expected = ttnn.to_torch(tt_in, mesh_composer=ConcatMeshToTensor(mesh_device, dim=dim))
+    return tt_in, expected
+
+
+def _ag_case_check(tt_out, expected, label):
+    for d, dev_out in enumerate(ttnn.get_device_tensors(tt_out)):
+        got = ttnn.to_torch(dev_out)
+        _, pcc = comp_pcc(got, expected, 1.0)
+        logger.info(f"{label}: device {d} {pcc}")
+        assert got.shape == expected.shape and torch.equal(got, expected), f"{label}: device {d} mismatch ({pcc})"
+
+
+def _ag_case_simple(mesh_device, tuning, full_shape, dim, layout, dtype, in_mc, out_mc, tile=None):
+    torch.manual_seed(0)
+    full = torch.randn(full_shape, dtype=torch.float32).to(torch.bfloat16)
+    tt_in, expected = _ag_case_input(mesh_device, full, dim, layout, dtype, in_mc, tile)
+    with _ag_tuning_env(tuning):
+        tt_out = ttnn.all_gather(tt_in, dim=dim, memory_config=out_mc)
+    ttnn.synchronize_device(mesh_device)
+    _ag_case_check(tt_out, expected, f"TT_AG_TUNING={tuning!r}")
+
+
+def _ag_case_persistent_twice(mesh_device, tuning):
+    full_shape, dim = [1, 1, 512, 8 * 512], 3
+    outs = []
+    with _ag_tuning_env(tuning):
+        for call in range(2):
+            torch.manual_seed(call)
+            full = torch.randn(full_shape, dtype=torch.float32).to(torch.bfloat16)
+            tt_in, expected = _ag_case_input(mesh_device, full, dim, ttnn.TILE_LAYOUT, ttnn.bfloat16, _DRAM_INTERLEAVED)
+            if call == 1:
+                # Shift the allocator so the second input and output land at new addresses.
+                spacer = ttnn.from_torch(
+                    torch.zeros([1, 1, 96, 1024], dtype=torch.bfloat16),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    memory_config=_DRAM_INTERLEAVED,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+            persistent = ttnn.from_torch(
+                torch.zeros(full_shape, dtype=torch.bfloat16),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=_DRAM_INTERLEAVED,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            entries_before = mesh_device.num_program_cache_entries()
+            tt_out = ttnn.all_gather(tt_in, dim=dim, output_tensor=persistent)
+            ttnn.synchronize_device(mesh_device)
+            entries_after = mesh_device.num_program_cache_entries()
+            logger.info(
+                f"call {call}: output buffer 0x{persistent.buffer_address():x}, cache {entries_before}->{entries_after}"
+            )
+            outs.append((tt_out, persistent, expected, persistent.buffer_address(), entries_after - entries_before))
+    assert outs[0][3] != outs[1][3], "the two persistent outputs must be at different addresses"
+    assert outs[1][4] == 0, "the second call must be a program-cache hit (override_runtime_arguments)"
+    for call, (tt_out, persistent, expected, _, _) in enumerate(outs):
+        _ag_case_check(persistent, expected, f"TT_AG_TUNING={tuning!r} call {call}")
+
+
+# id -> (device_params, runner)
+_AG_CASES = {
+    "concat_relay_32B_unicast": (
+        _LINE_PARAMS,
+        lambda m: _ag_case_simple(
+            m,
+            "factory=unicast",
+            [1, 1, 4096, 8 * 16],
+            3,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            _L1_INTERLEAVED,
+            _DRAM_INTERLEAVED,
+        ),
+    ),
+    "bfp8_16x32_default": (
+        _RING_PARAMS,
+        lambda m: _ag_case_simple(
+            m,
+            "",
+            [1, 1, 256, 8 * 512],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            _DRAM_INTERLEAVED,
+            _DRAM_INTERLEAVED,
+            tile=ttnn.Tile((16, 32)),
+        ),
+    ),
+    "bfp8_16x32_multicast_padded_slot": (
+        _RING_PARAMS,
+        lambda m: _ag_case_simple(
+            m,
+            "factory=multicast,padded_slot=1",
+            [1, 1, 256, 8 * 512],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            _DRAM_INTERLEAVED,
+            _DRAM_INTERLEAVED,
+            tile=ttnn.Tile((16, 32)),
+        ),
+    ),
+}
+for _page in (1024, 2048):  # 2 KB and 4 KB row-major pages (k=auto gives k=2 at 4 KB on BH)
+    for _tuning in (
+        "factory=unicast",
+        "factory=unicast,xfer=segments",
+        "factory=unicast,k=auto,rotation=absolute_dir_stagger,entry=one_packet,xfer=segments",
+    ):
+        _AG_CASES[f"ring_ragged_p{_page * 2 // 1024}K_{_ag_tuning_id(_tuning)}"] = (
+            _RING_PARAMS,
+            lambda m, p=_page, t=_tuning: _ag_case_simple(
+                m, t, [8, 1, 997, p], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, _DRAM_INTERLEAVED, _DRAM_INTERLEAVED
+            ),
+        )
+for _bt, _bname in ((ttnn.BufferType.L1, "l1"), (ttnn.BufferType.DRAM, "dram")):
+    for _tuning in ("factory=unicast", "factory=multicast"):
+        _AG_CASES[f"nd_sharded_{_bname}_{_ag_tuning_id(_tuning)}"] = (
+            _LINE_PARAMS,
+            lambda m, bt=_bt, t=_tuning: _ag_case_simple(
+                m,
+                t,
+                [2, 8, 128, 256],
+                1,
+                ttnn.TILE_LAYOUT,
+                ttnn.bfloat16,
+                _DRAM_INTERLEAVED,
+                _nd_sharded(bt, [1, 2, 64, 128]),
+            ),
+        )
+for _tuning in ("factory=unicast", "factory=multicast"):
+    _AG_CASES[f"persistent_twice_{_ag_tuning_id(_tuning)}"] = (
+        _RING_PARAMS,
+        lambda m, t=_tuning: _ag_case_persistent_twice(m, t),
+    )
+
+_AG_CASE_XFAIL = {
+    "concat_relay_32B_unicast": pytest.mark.xfail(
+        strict=True, raises=AssertionError, reason="relay read congruence; fixed in step 3"
+    ),
+}
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params, case_id",
+    [pytest.param(p, cid, id=cid, marks=_AG_CASE_XFAIL.get(cid, ())) for cid, (p, _) in _AG_CASES.items()],
+    indirect=["device_params"],
+)
+def test_ag_cases(mesh_device, device_params, case_id):
+    _AG_CASES[case_id][1](mesh_device)
 
 
 ####################################################################################

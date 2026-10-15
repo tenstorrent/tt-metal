@@ -68,6 +68,24 @@ Tuning Tuning::parse(std::string_view spec) {
             } else {
                 TT_THROW("TT_AG_TUNING: factory={} (want multicast|unicast)", value);
             }
+        } else if (key == "k") {
+            if (value == "auto") {
+                t.walk_k = Tuning::kAutoK;
+            } else {
+                t.walk_k = ag_tuning_parse_u32(key, value);
+                TT_FATAL(
+                    t.walk_k != 0 && (t.walk_k & (t.walk_k - 1)) == 0,
+                    "TT_AG_TUNING: k={} (want auto or a power of 2)",
+                    value);
+            }
+        } else if (key == "xfer") {
+            if (value == "legacy") {
+                t.xfer_policy = XferPolicy::Legacy;
+            } else if (value == "segments") {
+                t.xfer_policy = XferPolicy::Segments;
+            } else {
+                TT_THROW("TT_AG_TUNING: xfer={} (want legacy|segments)", value);
+            }
         } else if (key == "rotation") {
             if (value == "none") {
                 t.rotation = RotationMode::None;
@@ -81,10 +99,10 @@ Tuning Tuning::parse(std::string_view spec) {
         } else if (key == "entry") {
             if (value == "legacy") {
                 t.entry_policy = EntryPolicy::Legacy;
-            } else if (value == "scatter_aware") {
+            } else if (value == "scatter_aware" || value == "one_packet") {
                 t.entry_policy = EntryPolicy::ScatterAware;
             } else {
-                TT_THROW("TT_AG_TUNING: entry={} (want legacy|scatter_aware)", value);
+                TT_THROW("TT_AG_TUNING: entry={} (want legacy|scatter_aware|one_packet)", value);
             }
         } else if (key == "padded_slot") {
             t.padded_slot = ag_tuning_parse_bool(key, value);
@@ -96,12 +114,14 @@ Tuning Tuning::parse(std::string_view spec) {
             t.signals_per_stripe = ag_tuning_parse_u32(key, value);
         } else if (key == "mcast_cb_depth") {
             t.mcast_cb_depth = ag_tuning_parse_u32(key, value);
+            // Two entries is the floor: the reader runs one entry ahead of the sender, so one deadlocks.
+            TT_FATAL(*t.mcast_cb_depth >= 2, "TT_AG_TUNING: mcast_cb_depth={} (want >= 2)", value);
         } else if (key == "packet") {
             t.packet_size_override = ag_tuning_parse_u32(key, value);
         } else {
             TT_THROW(
-                "TT_AG_TUNING: unknown key '{}' (known: factory, rotation, entry, padded_slot, run_cap, workers, "
-                "signals, mcast_cb_depth, packet)",
+                "TT_AG_TUNING: unknown key '{}' (known: factory, k, xfer, rotation, entry, padded_slot, run_cap, "
+                "workers, signals, mcast_cb_depth, packet)",
                 key);
         }
     }
@@ -109,18 +129,8 @@ Tuning Tuning::parse(std::string_view spec) {
 }
 
 void Tuning::require_only_wired_keys() const {
-    const Tuning defaults;
-    auto check = [](bool is_default, std::string_view key) {
-        TT_FATAL(is_default, "TT_AG_TUNING: key '{}' is parsed but not wired into all_gather yet", key);
-    };
-    check(rotation == defaults.rotation, "rotation");
-    check(entry_policy == defaults.entry_policy, "entry");
-    check(padded_slot == defaults.padded_slot, "padded_slot");
-    check(!run_cap_bytes.has_value(), "run_cap");
-    check(!workers_per_dir.has_value(), "workers");
-    check(!signals_per_stripe.has_value(), "signals");
-    check(!mcast_cb_depth.has_value(), "mcast_cb_depth");
-    check(!packet_size_override.has_value(), "packet");
+    // Every key has a consumer as of step 2 (see APPLY2.md for where each is read), so nothing is rejected.
+    // A key added later and not yet wired goes here as `TT_FATAL(field == Tuning{}.field, ...)`.
 }
 
 Tuning Tuning::from_env() {

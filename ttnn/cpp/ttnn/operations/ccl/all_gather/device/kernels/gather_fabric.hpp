@@ -19,8 +19,8 @@
 
 #include "gather_packer.hpp"
 
-static_assert(gather_scatter_max_chunks == NOC_SCATTER_WRITE_MAX_CHUNKS, "gather_packer.hpp is out of date");
-static_assert(gather_scatter_min_chunks == NOC_SCATTER_WRITE_MIN_CHUNKS, "gather_packer.hpp is out of date");
+static_assert(gather_scatter_max_chunks == NOC_SCATTER_WRITE_MAX_CHUNKS, "gather_rules.hpp is out of date");
+static_assert(gather_scatter_min_chunks == NOC_SCATTER_WRITE_MIN_CHUNKS, "gather_rules.hpp is out of date");
 
 // The store-and-forward path always speaks the linear API (it runs on any effectively-1D topology, both
 // Fabric 1D and 2D); multicast picks the API by FABRIC_2D.

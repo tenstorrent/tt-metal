@@ -15,6 +15,8 @@
 
 #include <cstdint>
 
+#include "gather_rules.hpp"  // gather_scatter_{max,min}_chunks
+
 ////////////////////////////////////////////////////////////////
 // Packet packing, shared by both all_gather algorithms. Host-safe: no fabric includes, so a host test
 // can drive it with a recording Sink.
@@ -32,11 +34,6 @@
 //   void flush();  // the NoC flush that must precede popping a CB entry a packet pointed into
 // Each write is responsible for its own pre-send NoC flush (the packet header slot is reused).
 ////////////////////////////////////////////////////////////////
-
-// Scatter limits of NocUnicastScatterCommandHeader (fabric_edm_packet_header.hpp), mirrored so this
-// header stays host-safe. gather_fabric.hpp static_asserts they still match.
-constexpr uint32_t gather_scatter_max_chunks = 4;  // NOC_SCATTER_WRITE_MAX_CHUNKS
-constexpr uint32_t gather_scatter_min_chunks = 2;  // NOC_SCATTER_WRITE_MIN_CHUNKS
 
 // Host stand-in for NocUnicastScatterCommandHeader: the fields the packer writes, same names.
 struct GatherScatterSlots {

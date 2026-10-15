@@ -15,206 +15,232 @@
 
 #include <cstdint>
 
+#include "gather_rules.hpp"
+
 ////////////////////////////////////////////////////////////////
-// Page walk, shared by both all_gather algorithms.
+// Page walk v2, shared by both all_gather algorithms. The integer rules (k, xfer caps, run sources, seek,
+// rotation) live in gather_rules.hpp, which the host compiles too; everything here is per-chunk kernel code.
 //
 // Glossary:
-//   chunk    -- the transfer unit, min(input page, output page).
+//   k        -- chunks per walk page, a power of 2 chosen by the host (1 = the v1 walk).
+//   chunk    -- the transfer unit: min(input page, output page) / k.
+//   walk page-- k consecutive chunk ids; chunk id c sits in walk page c / k at sub-chunk c % k. A walk
+//               page is the smaller of the input and output pages, so each accessor's page is a whole
+//               number of walk pages: in_cpp = split_factor * k, out_cpp = output_pages_ratio * k.
+//   slot     -- a chunk's CB slot: chunk bytes, or (padded-slot policy, one chunk per output page) the
+//               output's aligned page, so L1 and the output step alike and output runs can cross pages.
 //   chunk id -- a chunk's index in this device's contribution.
 //   global   -- a chunk's index in the output tensor. Rows are strided: between them the output
-//               holds the other devices' stripes.
+//               holds the other devices' stripes. Rows are whole walk pages.
 //   seqno    -- a chunk's position in the emission order.
-//   stride   -- chunk step between neighbours in memory, from TensorAccessor.
-//   lane     -- residue class mod stride, i.e. one line of chunks contiguous in memory.
-//   xfer     -- chunks per transfer: the most that fits a packet, one NOC command, and the
-//               host's run cap.
-//   tile     -- xfer * stride chunks, read column-major.
-//   run      -- one tile column: chunks contiguous at the destination, sent as one transfer.
+//   stride   -- walk-page step between neighbours in memory (the output accessor's contiguous_page_stride,
+//               or 1 where several walk pages share an output page). Host-chosen, CT in kernels.
+//   lane     -- the walk pages first_page + l + m * stride, m = 0, 1, ... (one bank, interleaved).
+//               A lane's chunk stream at position q is walk page first_page + l + (q / k) * stride,
+//               sub-chunk q % k: page-major, sub-chunk-minor.
+//   xfer     -- chunks per column: what fits a packet, one NOC command, the host's run cap and the
+//               scatter-segment cap. Host-chosen, CT in kernels.
+//   tile     -- positions [t * xfer, (t + 1) * xfer) of every lane, read column-major (lane after lane).
+//   column   -- one lane's part of a tile: xfer chunks, the most one transfer may carry.
+//   run      -- consecutive chunks of one column that are also contiguous in memory: one NOC command
+//               / one scatter segment. next_run() is the only place that forms runs.
+//   rot      -- lane rotation of full tiles: lane order rot, rot + 1, ..., stride - 1, 0, ..., rot - 1.
 //   stripe   -- the chunks this device contributes per row of the output.
 //
-// A run is chunks contiguous in memory, sent as one transfer. Where they are comes from
-// TensorAccessor, so no layout is special-cased here or on the host: `stride` is the accessor's own
-// chunk step between neighbours, and `xfer` is how many chunks fit one transfer.
+// The walk is the full tile grid clipped at the slice end: a column stops at `end`, an empty lane ends
+// the tile. Lane lengths only fall with the lane index, so empty lanes are always a suffix and no tail
+// state is needed. Full tiles (every lane holds xfer chunks) are emitted in rotated lane order; the
+// rest unrotated. At k == 1 and rot == 0 the order is exactly the v1 TiledWalk's.
 //
-// Long runs alone are not enough. Stepping by `stride` parks a worker in one DRAM bank, which costs
-// more bandwidth than the runs win, so the walk is a tiled transpose: `xfer` chunks from one lane,
-// then the next lane. Every fallback then falls out of `xfer` -- a padded page or a page-sized
-// packet gives xfer == 1, which is plain ascending order.
+// The kernel never seeks: the host computes a WalkPos with walk_seek() for any resume point.
 ////////////////////////////////////////////////////////////////
 
-// Chunks in one transfer: the most that fits a packet, a single NOC command, and the host's run
-// cap (0 = no cap). A cap trades packet fill for DRAM bank spread. Hardware already bounds a
-// transfer at min(fabric packet, NOC_MAX_BURST_SIZE) -- 7616 B on Wormhole, 15232 B on Blackhole --
-// so a host cap only bites below that figure.
-// `burst` is NOC_MAX_BURST_SIZE; it is a parameter only so a host test can model either arch.
-constexpr uint32_t chunks_per_transfer(
-    uint32_t packet_size, uint32_t chunk_size, uint32_t run_cap_bytes, uint32_t burst) {
-    uint32_t cap = packet_size < burst ? packet_size : burst;
-    if (run_cap_bytes != 0 && run_cap_bytes < cap) {
-        cap = run_cap_bytes;
-    }
-    return cap < chunk_size ? 1u : cap / chunk_size;
+////////////////////////////////////////////////////////////////
+// Run formation
+////////////////////////////////////////////////////////////////
+
+// The host's RunSource for an accessor with `cpp` chunks per page. The host derives cross_page from its
+// mirror of contiguous_page_stride() (all_gather_geometry.cpp contiguous_page_stride, which TT_FATALs where
+// that mirror cannot be trusted), so the two agree by construction; debug builds check it here, once per
+// kernel launch. There is no release-mode fallback: a disagreement is a host bug, not a slow path.
+template <uint32_t k, uint32_t cpp, typename Accessor>
+FORCE_INLINE RunSource
+checked_run_source(RunSource host, [[maybe_unused]] const Accessor& acc, [[maybe_unused]] uint32_t stride) {
+    // cross_page was granted for page_stride == stride (cpp == k) or page_stride == 1 (cpp > k, stride 1).
+    ASSERT(!host.cross_page || acc.contiguous_page_stride() == (cpp == k ? stride : 1u));
+    return host;
 }
 
-#if defined(KERNEL_BUILD) || defined(FW_BUILD) || defined(NOC_MAX_BURST_SIZE)
-constexpr uint32_t chunks_per_transfer(uint32_t packet_size, uint32_t chunk_size, uint32_t run_cap_bytes = 0) {
-    return chunks_per_transfer(packet_size, chunk_size, run_cap_bytes, NOC_MAX_BURST_SIZE);
-}
-#endif
-
-// Whether a tensor's contiguity lines up with the walk, so a run can hold more than one chunk.
-struct RunSource {
-    bool sub_page;    // chunks inside one page are consecutive seqnos
-    bool cross_page;  // a run may carry on into the next page
-};
-
-// `packed` has to be false for a padded page: a run steps by the aligned page size while the CB is
-// packed, so the pad would land in the payload.
-FORCE_INLINE RunSource run_source(bool packed, uint32_t chunks_per_page, uint32_t page_stride, uint32_t stride) {
-    if (!packed) {
-        return {false, false};
-    }
-    const bool sub_page = chunks_per_page > 1 && stride == 1;
-    return {sub_page, chunks_per_page > 1 ? (sub_page && page_stride == 1) : (page_stride == stride)};
-}
-
-// Chunks contiguous in memory from `chunk` on, stepping the way the walk steps, capped at
-// `end_chunk`. Can reach past the current run, so the caller has to clip it with run_limit().
-template <uint32_t chunks_per_page, typename Accessor>
-FORCE_INLINE uint32_t contiguous_chunks(const Accessor& acc, RunSource src, uint32_t chunk, uint32_t end_chunk) {
-    if constexpr (chunks_per_page == 1) {
-        return src.cross_page ? acc.num_contiguous_pages(chunk, end_chunk) : 1u;
+// Chunks contiguous in memory from `chunk` on, stepping the way the walk steps, capped at `bound`
+// (accessor chunk space; a whole number of walk pages: every bound is a slice end or a row end). Can
+// reach past the current column, so next_run() clips it with run_limit().
+//
+// The `room` clip: with stride 1 the walk's chunks are consecutive ids, so bound - chunk is exact; it
+// trims the rounded-up end_page when bound is mid accessor page (concat: a row ends inside an output
+// page). With stride > 1 it is a loose bound (lane chunks below bound are a subset of [chunk, bound)),
+// and exactness comes from bound being page-aligned in the accessor: either cpp == k, or no cross-page
+// run at all.
+template <uint32_t k, uint32_t cpp, typename Accessor>
+FORCE_INLINE uint32_t contiguous_chunks(const Accessor& acc, RunSource src, uint32_t chunk, uint32_t bound) {
+    static_assert(k != 0 && (k & (k - 1)) == 0, "k is a power of 2");
+    static_assert(cpp % k == 0, "an accessor page is a whole number of walk pages");
+    ASSERT(bound % k == 0);
+    ASSERT(chunk < bound);
+    if constexpr (cpp == 1) {
+        return src.cross_page ? acc.num_contiguous_pages(chunk, bound) : 1u;
     } else {
-        uint32_t n = src.sub_page ? chunks_per_page - chunk % chunks_per_page : 1u;
+        uint32_t n = src.whole_page ? cpp - chunk % cpp : k - chunk % k;
         if (src.cross_page) {
-            const uint32_t end_page = (end_chunk + chunks_per_page - 1) / chunks_per_page;
-            n += (acc.num_contiguous_pages(chunk / chunks_per_page, end_page) - 1) * chunks_per_page;
+            const uint32_t end_page = (bound + cpp - 1) / cpp;
+            n += (acc.num_contiguous_pages(chunk / cpp, end_page) - 1) * cpp;
         }
-        // end_page rounds up, so clip in chunks too. stride is 1 whenever a page holds several
-        // chunks, so chunks left and seqnos left are the same number here.
-        const uint32_t room = end_chunk - chunk;
+        const uint32_t room = bound - chunk;
         return n < room ? n : room;
     }
 }
 
-// The walk order plus the output's runs. Reader and writer build this the same way, so their walks
-// cannot diverge.
-// Run grouping can still differ per side; that is safe only because the CB is packed -- chunk k
-// sits at k * chunk_size.
-struct WalkPlan {
-    uint32_t stride;
-    uint32_t xfer;
-    RunSource out;
-};
+////////////////////////////////////////////////////////////////
+// The walk
+////////////////////////////////////////////////////////////////
 
-template <uint32_t chunks_per_page, uint32_t chunk_size, uint32_t xfer_max, typename Accessor>
-FORCE_INLINE WalkPlan walk_plan(const Accessor& out) {
-    const uint32_t page_stride = out.contiguous_page_stride();
-    // Concat packs chunks inside one output page, so there neighbours are one chunk apart.
-    const uint32_t stride = chunks_per_page > 1 ? 1u : page_stride;
-    // `packed`: the output's aligned page is exactly tiled by chunks. Perf-only for multicast (no
-    // run merging when false), but a correctness precondition for unicast, which relays by reading
-    // its own output back into the packed CB. The host enforces it, so unicast always sees true.
-    const bool packed = out.get_aligned_page_size() == chunks_per_page * chunk_size;
-    return {stride, packed ? xfer_max : 1u, run_source(packed, chunks_per_page, page_stride, stride)};
-}
-
-// Walks a chunk id range as tiles of `xfer * stride`, reading each tile column-major: `xfer` chunks
-// `stride` apart, then the next lane. One column is one run. `xfer == 1` is plain ascending order.
+// Walks a slice of whole walk pages lane by lane, xfer chunks per column, tiles column-major. One
+// column bounds one transfer; next_run() splits it where memory is not contiguous.
 //
-// The last tile is ragged -- its columns are `hb_` or `hb_ + 1` tall -- which is the only reason this
-// holds state beyond the position.
+// STRIDE / XFER are the kernel's CT args; 0 makes them runtime (host tests). K is always CT: page_of /
+// byte_off_of divide by it and advance() shifts by it.
+//
+// State: c_, rem_, base_, lane_, rot_, end_ (+ stride_/xfer_ when runtime). run_limit() is the column's
+// room only -- the end clip belongs to next_run()'s bound, which every caller already has (input: the
+// slice end; output: StripeMap's bound). advance() has no division: K is a power of 2.
+template <uint32_t K, uint32_t STRIDE = 0, uint32_t XFER = 0>
 class TiledWalk {
+    static_assert(K != 0 && (K & (K - 1)) == 0, "k is a power of 2");
+
 public:
-    // Walk [first, first + count) from seqno `skip`. `stride` and `xfer` are at least 1.
-    FORCE_INLINE void init(uint32_t first, uint32_t count, uint32_t skip, uint32_t stride, uint32_t xfer) {
+    static constexpr uint32_t k = K;
+
+    // Walk the slice ending at `end` (a whole walk page) from `pos`, `rot` < stride.
+    FORCE_INLINE void init(uint32_t end, uint32_t rot, WalkPos pos) {
+        static_assert(STRIDE != 0 && XFER != 0, "runtime stride/xfer: use the 5-argument init");
+        start(end, rot, pos);
+    }
+    FORCE_INLINE void init(uint32_t end, uint32_t stride, uint32_t xfer, uint32_t rot, WalkPos pos) {
+        ASSERT(STRIDE == 0 || stride == STRIDE);
+        ASSERT(XFER == 0 || xfer == XFER);
         stride_ = stride;
         xfer_ = xfer;
-        tile_ = xfer * stride;
-        const uint32_t full = count / tile_;
-        const uint32_t rem = count - full * tile_;
-        tail_first_ = first + full * tile_;
-        hb_ = rem / stride;
-        he_ = rem - hb_ * stride;
-        lane_ = 0;
-        k_ = 0;
-        if (count == 0) {
-            tile_first_ = c_ = first;
-            return;
-        }
-        if (skip < full * tile_) {
-            const uint32_t tile = skip / tile_;
-            const uint32_t in_tile = skip - tile * tile_;
-            tile_first_ = first + tile * tile_;
-            lane_ = in_tile / xfer;
-            k_ = in_tile - lane_ * xfer;
-        } else {
-            // Lanes below he_ hold one extra chunk, so seqnos before lane r are r*hb_ + min(r, he_).
-            tile_first_ = tail_first_;
-            const uint32_t s = skip - full * tile_;
-            const uint32_t tall = he_ * (hb_ + 1);
-            if (s < tall) {
-                lane_ = s / (hb_ + 1);
-                k_ = s - lane_ * (hb_ + 1);
-            } else {
-                // hb_ > 0 here: at hb_ == 0 the tile holds only its taller lanes, so `s < tall`.
-                const uint32_t rest = s - tall;
-                lane_ = he_ + rest / hb_;
-                k_ = rest - (lane_ - he_) * hb_;
-            }
-        }
-        c_ = tile_first_ + lane_ + k_ * stride_;
+        start(end, rot, pos);
     }
 
     FORCE_INLINE uint32_t chunk() const { return c_; }
 
-    // Chunks left in this column, i.e. the longest run still allowed here.
-    FORCE_INLINE uint32_t run_limit() const { return col() - k_; }
+    // Same position and future (host tests compare a resumed walk against a stepped one). C++17: kernels.
+    bool operator==(const TiledWalk& o) const {
+        return c_ == o.c_ && rem_ == o.rem_ && base_ == o.base_ && lane_ == o.lane_ && rot_ == o.rot_ &&
+               end_ == o.end_ && stride() == o.stride() && xfer() == o.xfer();
+    }
+
+    // Chunks left in this column: the longest run allowed here. Not clipped at end -- see the class note.
+    FORCE_INLINE uint32_t run_limit() const { return rem_; }
 
     FORCE_INLINE void advance(uint32_t n) {
-        ASSERT(n != 0 && n <= run_limit());
-        k_ += n;
-        if (k_ < col()) {
-            c_ += n * stride_;
+        ASSERT(n != 0 && n <= rem_);
+        // A run past the slice end means the caller's bound was not the slice end.
+        ASSERT(lane_adv(c_, n - 1) < end_);
+        rem_ -= n;
+        c_ = lane_adv(c_, n);
+        if (rem_ != 0 && c_ < end_) {
             return;
         }
-        k_ = 0;
-        if (++lane_ == lanes()) {
+        // Next lane; the tile ends at its first lane again, or at an empty lane (always a suffix).
+        lane_ += K;
+        if (lane_ == stride() * K) {
             lane_ = 0;
-            tile_first_ += tile_;
         }
-        c_ = tile_first_ + lane_;
+        if (lane_ != rot_ && base_ + lane_ < end_) {
+            c_ = base_ + lane_;
+            rem_ = xfer();
+            return;
+        }
+        base_ = lane_adv(base_, xfer());
+        if (rot_ != 0 && !full(base_)) {
+            rot_ = 0;  // full tiles are a prefix: from here on, unrotated
+        }
+        lane_ = rot_;
+        c_ = base_ + lane_;
+        rem_ = xfer();
     }
 
 private:
-    FORCE_INLINE bool in_tail() const { return tile_first_ == tail_first_; }
-    FORCE_INLINE uint32_t col() const { return in_tail() ? hb_ + (lane_ < he_ ? 1u : 0u) : xfer_; }
-    // Empty columns can only be a tail of lanes, so a lane step never has to skip one.
-    FORCE_INLINE uint32_t lanes() const { return (in_tail() && hb_ == 0) ? he_ : stride_; }
+    FORCE_INLINE uint32_t stride() const {
+        if constexpr (STRIDE != 0) {
+            return STRIDE;
+        } else {
+            return stride_;
+        }
+    }
+    FORCE_INLINE uint32_t xfer() const {
+        if constexpr (XFER != 0) {
+            return XFER;
+        } else {
+            return xfer_;
+        }
+    }
 
-    uint32_t c_, stride_, xfer_, tile_, lane_, k_, tile_first_, tail_first_, hb_, he_;
+    // `n` positions further along c's lane: n chunks, plus (stride - 1) pages per walk page crossed.
+    FORCE_INLINE uint32_t lane_adv(uint32_t c, uint32_t n) const {
+        return c + n + (((c & (K - 1)) + n) / K) * ((stride() - 1) * K);
+    }
+
+    // The tile anchored at `base` holds xfer chunks in every lane: lane stride - 1, the shortest, does.
+    FORCE_INLINE bool full(uint32_t base) const { return lane_adv(base, xfer() - 1) + (stride() - 1) * K < end_; }
+
+    FORCE_INLINE void start(uint32_t end, uint32_t rot, WalkPos pos) {
+        ASSERT(end % K == 0);  // slices are whole walk pages (pos.base is mid-page when xfer % K != 0)
+        ASSERT(rot < stride() && pos.slot < stride() && pos.i < xfer());
+        end_ = end;
+        base_ = pos.base;
+        rot_ = (rot != 0 && full(base_)) ? rot * K : 0u;
+        uint32_t lane = pos.slot * K + rot_;
+        if (lane >= stride() * K) {
+            lane -= stride() * K;
+        }
+        lane_ = lane;
+        c_ = lane_adv(base_ + lane_, pos.i);
+        rem_ = xfer() - pos.i;
+    }
+
+    uint32_t c_;                              // current chunk id
+    uint32_t rem_;                            // chunks left in this column
+    uint32_t base_;                           // the tile's anchor: lane 0's chunk at the tile's first position
+    uint32_t lane_;                           // current lane * K (lanes are K chunk ids apart at equal position)
+    uint32_t rot_;                            // first lane of this tile * K: rot * K on full tiles, else 0
+    uint32_t end_;                            // slice end (chunk id)
+    uint32_t stride_ = STRIDE, xfer_ = XFER;  // read only when the template's are 0
 };
 
-// Longest run allowed at the walk's current position, given `left` chunks still wanted. At one chunk
-// the query is skipped: it cannot help, and on a sharded tensor it loops over rank.
-template <uint32_t chunks_per_page, typename Accessor>
+// Longest run allowed at the walk's current position, given `left` chunks still wanted. `bound` must
+// be at most the slice end in the accessor's chunk space (the input end chunk, or StripeMap's bound).
+// At one chunk the query is skipped: it cannot help, and on a sharded tensor it loops over rank.
+template <uint32_t k, uint32_t cpp, typename Walk, typename Accessor>
 FORCE_INLINE uint32_t
-next_run(const TiledWalk& walk, const Accessor& acc, RunSource src, uint32_t chunk, uint32_t end_chunk, uint32_t left) {
+next_run(const Walk& walk, const Accessor& acc, RunSource src, uint32_t chunk, uint32_t bound, uint32_t left) {
+    static_assert(Walk::k == k, "walk and accessor disagree on k");
     const uint32_t room = walk.run_limit();
     const uint32_t limit = room < left ? room : left;
     if (limit <= 1) {
         return limit;
     }
-    const uint32_t run = contiguous_chunks<chunks_per_page>(acc, src, chunk, end_chunk);
+    const uint32_t run = contiguous_chunks<k, cpp>(acc, src, chunk, bound);
     return run < limit ? run : limit;
 }
 
-// Debug only: a run has to be one linear stretch of memory, which is what one transfer assumes.
-// `walk` is a copy, so probing it does not move the caller's.
-template <typename AddrFn>
-FORCE_INLINE bool run_is_linear(TiledWalk walk, uint32_t run, uint32_t chunk_size, uint64_t first, AddrFn addr) {
+// Debug only: a run has to be one linear stretch of memory (`step` bytes per chunk: the slot), which is
+// what one transfer assumes. `walk` is a copy, so probing it does not move the caller's.
+template <typename Walk, typename AddrFn>
+FORCE_INLINE bool run_is_linear(Walk walk, uint32_t run, uint32_t step, uint64_t first, AddrFn addr) {
     for (uint32_t i = 0; i < run; ++i) {
-        if (addr(walk.chunk()) != first + i * chunk_size) {
+        if (addr(walk.chunk()) != first + i * step) {
             return false;
         }
         walk.advance(1);
@@ -222,29 +248,41 @@ FORCE_INLINE bool run_is_linear(TiledWalk walk, uint32_t run, uint32_t chunk_siz
     return true;
 }
 
-// A chunk's index in this device's contribution -> its index in the output tensor. Between rows the
-// output holds the other devices' stripes, so a run stops at the row edge.
+// A chunk's index in this device's contribution -> its index in the output tensor, plus the bound a
+// run from it must stop at: the end of our stripe in this row, or the slice end, whichever is first.
+// chunks_per_stripe is in chunks (the stripe's walk pages * k), so rows are whole walk pages.
 template <uint32_t chunks_per_stripe, uint32_t num_devices>
 class StripeMap {
 public:
     struct Pos {
-        uint32_t global;   // chunk index in the output tensor
-        uint32_t row_end;  // one past this row's last chunk of our stripe
+        uint32_t global;  // chunk index in the output tensor
+        uint32_t bound;   // one past the last chunk a run from here may take
     };
 
-    FORCE_INLINE void init(uint32_t stripe) { offset_ = stripe * chunks_per_stripe; }
+    // `end` is the slice end in local chunk ids.
+    FORCE_INLINE void init(uint32_t stripe, uint32_t end) {
+        offset_ = stripe * chunks_per_stripe;
+        end_ = end;
+    }
 
     FORCE_INLINE Pos at(uint32_t local) const {
+        ASSERT(local < end_);
         const uint32_t row = local / chunks_per_stripe;
-        const uint32_t base = row * (num_devices * chunks_per_stripe) + offset_;
-        return {base + local - row * chunks_per_stripe, base + chunks_per_stripe};
+        const uint32_t in_row = local - row * chunks_per_stripe;
+        const uint32_t global = row * (num_devices * chunks_per_stripe) + offset_ + in_row;
+        const uint32_t to_row_end = chunks_per_stripe - in_row;
+        const uint32_t to_end = end_ - local;
+        return {global, global + (to_row_end < to_end ? to_row_end : to_end)};
     }
 
 private:
     uint32_t offset_;
+    uint32_t end_;
 };
 
-// A chunk index split into the page holding it and the byte offset inside that page.
+// A chunk index split into the page holding it and the byte offset inside that page. chunks_per_page
+// is the accessor's (in_cpp or out_cpp), k included; chunk_size is the content chunk (in-page chunks
+// sit at chunk stride; only one-chunk pages can have a slot that differs, and their offset is 0).
 template <uint32_t chunks_per_page>
 FORCE_INLINE uint32_t page_of(uint32_t chunk) {
     return chunk / chunks_per_page;
@@ -257,28 +295,31 @@ FORCE_INLINE uint32_t byte_off_of(uint32_t chunk) {
 
 ////////////////////////////////////////////////////////////////
 // Run loops, shared by all four kernels. Each consumes `left` chunks of `walk` as runs, hands every
-// run to `f`, and returns the L1 address past the last run (CB slots are packed: chunk k of an entry
-// sits at k * chunk_size).
+// run to `f`, and returns the L1 address past the last run. CB slots are packed: chunk j of an entry sits
+// at j * slot_bytes, whatever the run grouping (so reader and writer may group differently).
 //
 // `addr` is only used by the debug ASSERT that a run is one linear stretch of memory; with asserts
 // compiled out it is never called.
 ////////////////////////////////////////////////////////////////
 
-// Output side: runs of this device's stripe in the output tensor, clipped at the row edge.
-// f(l1, page, off, run) -- `page`/`off` locate the run's first chunk in the output.
+// Output side: runs of this device's stripe in the output tensor, clipped at the row edge and slice end.
+// f(l1, page, off, run) -- `page`/`off` locate the run's first chunk in the output; the run covers
+// run * slot_bytes bytes on both sides (a padded slot's pad included).
 // addr(page, off) -> uint64_t NoC address of that chunk (debug only).
 // Used by every writer-side loop (unicast/multicast writer, multicast reader's send) and by the
 // unicast reader's relay, which reads back what upstream delivered into our output.
 template <
     uint32_t chunks_per_page,
     uint32_t chunk_size,
+    uint32_t slot_bytes,
+    typename Walk,
     uint32_t chunks_per_stripe,
     uint32_t num_devices,
     typename Accessor,
     typename AddrFn,
     typename F>
 FORCE_INLINE uint32_t emit_runs(
-    TiledWalk& walk,
+    Walk& walk,
     const StripeMap<chunks_per_stripe, num_devices>& map,
     const Accessor& acc,
     RunSource src,
@@ -286,6 +327,8 @@ FORCE_INLINE uint32_t emit_runs(
     uint32_t left,
     AddrFn addr,
     F f) {
+    constexpr uint32_t k = Walk::k;
+    static_assert(slot_bytes == chunk_size || chunks_per_page == 1, "a padded slot needs one chunk per page");
     [[maybe_unused]] auto run_addr = [&](uint32_t chunk) {
         const uint32_t global = map.at(chunk).global;
         return addr(page_of<chunks_per_page>(global), byte_off_of<chunks_per_page, chunk_size>(global));
@@ -294,21 +337,30 @@ FORCE_INLINE uint32_t emit_runs(
         const auto pos = map.at(walk.chunk());
         const uint32_t page = page_of<chunks_per_page>(pos.global);
         const uint32_t off = byte_off_of<chunks_per_page, chunk_size>(pos.global);
-        const uint32_t run = next_run<chunks_per_page>(walk, acc, src, pos.global, pos.row_end, left);
-        ASSERT(run_is_linear(walk, run, chunk_size, addr(page, off), run_addr));
+        const uint32_t run = next_run<k, chunks_per_page>(walk, acc, src, pos.global, pos.bound, left);
+        ASSERT(run_is_linear(walk, run, slot_bytes, addr(page, off), run_addr));
         f(l1_addr, page, off, run);
-        l1_addr += run * chunk_size;
+        l1_addr += run * slot_bytes;
         left -= run;
         walk.advance(run);
     }
     return l1_addr;
 }
 
-// Input side: runs of this device's own input, chunk ids [.., end_chunk).
-// addr(chunk) -> uint64_t NoC address of an input chunk; f(src, l1, run) reads `run` chunks from `src`.
-template <uint32_t split_factor, uint32_t chunk_size, typename Accessor, typename AddrFn, typename F>
+// Input side: runs of this device's own input, chunk ids [.., end_chunk) (the slice end).
+// addr(chunk) -> uint64_t NoC address of an input chunk; f(src, l1, run) reads `run` chunks from `src` into
+// `run` slots. A multi-chunk run exists only where the input steps by the slot (the host's in_runs), so
+// it is (run - 1) * slot_bytes + chunk_size contiguous bytes.
+template <
+    uint32_t chunks_per_page,
+    uint32_t chunk_size,
+    uint32_t slot_bytes,
+    typename Walk,
+    typename Accessor,
+    typename AddrFn,
+    typename F>
 FORCE_INLINE uint32_t read_input_runs(
-    TiledWalk& walk,
+    Walk& walk,
     const Accessor& acc,
     RunSource src,
     uint32_t end_chunk,
@@ -316,13 +368,14 @@ FORCE_INLINE uint32_t read_input_runs(
     uint32_t left,
     AddrFn addr,
     F f) {
+    constexpr uint32_t k = Walk::k;
     while (left > 0) {
         const uint32_t chunk = walk.chunk();
-        const uint32_t run = next_run<split_factor>(walk, acc, src, chunk, end_chunk, left);
+        const uint32_t run = next_run<k, chunks_per_page>(walk, acc, src, chunk, end_chunk, left);
         const uint64_t src_addr = addr(chunk);
-        ASSERT(run_is_linear(walk, run, chunk_size, src_addr, addr));
+        ASSERT(run_is_linear(walk, run, slot_bytes, src_addr, addr));
         f(src_addr, l1_addr, run);
-        l1_addr += run * chunk_size;
+        l1_addr += run * slot_bytes;
         left -= run;
         walk.advance(run);
     }

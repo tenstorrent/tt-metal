@@ -243,16 +243,18 @@ struct Run {
 };
 
 template <uint32_t cpp, uint32_t chunk_size, uint32_t cps, uint32_t ndev>
-void emit_equivalence(uint32_t stride, uint32_t xfer, uint32_t run_pages, bool sub_page, bool cross_page) {
+void emit_equivalence(uint32_t stride, uint32_t xfer, uint32_t run_pages, bool whole_page, bool cross_page) {
     MockAccessor acc{run_pages};
-    const RunSource src{sub_page, cross_page};
-    StripeMap<cps, ndev> map;
-    map.init(1);
+    const RunSource src{whole_page, cross_page};
     const uint32_t first = 3, count = 4 * cps + 5, batch = 7;
+    const uint32_t end_chunk = first + count;
+    StripeMap<cps, ndev> map;
+    map.init(1, end_chunk);
     auto addr = [](uint32_t page, uint32_t off) { return uint64_t(page) * cpp * chunk_size + off; };
 
-    TiledWalk w_old, w_new;
-    w_old.init(first, count, 0, stride, xfer);
+    // k = 1, rot = 0, runtime stride/xfer: the v1 emission order (test_all_gather_walk.cpp MatchesLegacy).
+    TiledWalk<1> w_old, w_new;
+    w_old.init(end_chunk, stride, xfer, 0, walk_start(first));
     w_new = w_old;
     std::vector<Run> got_old, got_new;
     for (uint32_t done = 0; done < count; done += batch) {
@@ -263,13 +265,13 @@ void emit_equivalence(uint32_t stride, uint32_t xfer, uint32_t run_pages, bool s
             const auto pos = map.at(w_old.chunk());
             const uint32_t page = page_of<cpp>(pos.global);
             const uint32_t off = byte_off_of<cpp, chunk_size>(pos.global);
-            const uint32_t run = next_run<cpp>(w_old, acc, src, pos.global, pos.row_end, left);
+            const uint32_t run = next_run<1, cpp>(w_old, acc, src, pos.global, pos.bound, left);
             got_old.push_back({l1, page, off, run});
             l1 += run * chunk_size;
             left -= run;
             w_old.advance(run);
         }
-        const uint32_t end = emit_runs<cpp, chunk_size>(
+        const uint32_t end = emit_runs<cpp, chunk_size, chunk_size>(
             w_new, map, acc, src, 0x1000u, n, addr, [&](uint32_t l1, uint32_t page, uint32_t off, uint32_t run) {
                 got_new.push_back({l1, page, off, run});
             });
@@ -280,22 +282,21 @@ void emit_equivalence(uint32_t stride, uint32_t xfer, uint32_t run_pages, bool s
     // read_input_runs vs the old input loops (unicast_reader from_input / multicast_reader fill_entry)
     constexpr uint32_t split = cpp;
     auto in_addr = [](uint32_t chunk) { return uint64_t(chunk) * chunk_size; };
-    w_old.init(first, count, 0, stride, xfer);
+    w_old.init(end_chunk, stride, xfer, 0, walk_start(first));
     w_new = w_old;
     std::vector<Run> in_old, in_new;
-    const uint32_t end_chunk = first + count;
     for (uint32_t done = 0; done < count; done += batch) {
         const uint32_t n = std::min(batch, count - done);
         uint32_t l1 = 0x2000;
         for (uint32_t left = n; left > 0;) {
             const uint32_t chunk = w_old.chunk();
-            const uint32_t run = next_run<split>(w_old, acc, src, chunk, end_chunk, left);
+            const uint32_t run = next_run<1, split>(w_old, acc, src, chunk, end_chunk, left);
             in_old.push_back({l1, uint32_t(in_addr(chunk)), 0, run});
             l1 += run * chunk_size;
             left -= run;
             w_old.advance(run);
         }
-        const uint32_t end = read_input_runs<split, chunk_size>(
+        const uint32_t end = read_input_runs<split, chunk_size, chunk_size>(
             w_new, acc, src, end_chunk, 0x2000u, n, in_addr, [&](uint64_t s, uint32_t l1, uint32_t run) {
                 in_new.push_back({l1, uint32_t(s), 0, run});
             });

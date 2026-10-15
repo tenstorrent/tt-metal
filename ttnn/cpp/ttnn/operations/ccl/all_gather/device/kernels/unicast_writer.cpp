@@ -22,49 +22,67 @@ using address_t = uint32_t;
 // Maintains the downstream reader's data_valid (= chunks delivered; see the note in unicast_common.hpp), and
 // sends its one-shot "alive" barrier inc up front.
 void kernel_main() {
+    namespace ct = gather_args::unicast_writer::ct;
+    namespace rt = gather_args::unicast_writer::rt;
+
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
     ///////////////////////////////////////////////////
-    constexpr uint32_t output_chunk_size = get_compile_time_arg_val(0);
-    constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(1);
-    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(2);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(3);
-    constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t packet_size = get_compile_time_arg_val(6);
-    constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(7);
-    constexpr uint32_t run_cap_bytes = get_compile_time_arg_val(8);  // longest run the walk may emit; 0 = no cap
-    constexpr auto output_tensor_args = TensorAccessorArgs<9>();
+    constexpr uint32_t chunk_size = get_compile_time_arg_val(ct::chunk_size);
+    constexpr uint32_t out_cpp = get_compile_time_arg_val(ct::out_cpp);
+    constexpr uint32_t cps = get_compile_time_arg_val(ct::cps);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(ct::num_devices);
+    constexpr uint32_t cb0_id = get_compile_time_arg_val(ct::cb_id);
+    constexpr uint32_t cb_page_size = get_compile_time_arg_val(ct::cb_page_size);
+    constexpr uint32_t packet_size = get_compile_time_arg_val(ct::packet_size);
+    constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(ct::data_valid_granularity);
+    constexpr uint32_t k = get_compile_time_arg_val(ct::k);
+    constexpr uint32_t walk_stride = get_compile_time_arg_val(ct::walk_stride);
+    constexpr uint32_t walk_xfer = get_compile_time_arg_val(ct::walk_xfer);
+    constexpr uint32_t slot_bytes = get_compile_time_arg_val(ct::slot_bytes);
+    constexpr RunSource out_runs = run_source_from_bits(get_compile_time_arg_val(ct::out_runs));
+    constexpr auto output_tensor_args = TensorAccessorArgs<ct::tensor_args>();
 
-    constexpr uint32_t chunks_per_cb_entry = cb_page_size / output_chunk_size;
-    constexpr uint32_t xfer_max = chunks_per_transfer(packet_size, output_chunk_size, run_cap_bytes);
+    static_assert(out_cpp % k == 0 && cps % k == 0, "pages and stripes are whole walk pages");
+    static_assert(chunk_size <= slot_bytes && cb_page_size % slot_bytes == 0, "a CB entry is whole slots");
+    static_assert(slot_bytes == chunk_size || (out_cpp == 1 && k == 1), "a padded slot is one chunk per page");
+    static_assert(walk_xfer == 1 || walk_xfer * slot_bytes <= packet_size, "a column fits one packet");
+    static_assert(walk_xfer == 1 || walk_xfer * slot_bytes <= NOC_MAX_BURST_SIZE, "a column is one NoC command");
+    constexpr uint32_t chunks_per_cb_entry = cb_page_size / slot_bytes;
     // A run is emitted as one scatter chunk starting at its source offset within the packet, so every chunk
     // size has to keep source and destination NoC-write aligned.
-    static_assert(output_chunk_size % 16 == 0, "chunk size must be a multiple of the NoC write alignment");
+    static_assert(
+        chunk_size % 16 == 0 && slot_bytes % 16 == 0, "chunk size must be a multiple of the NoC write alignment");
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
     ///////////////////////////////////////////////////
-    size_t arg_idx = 0;
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const uint32_t initial_stripe = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t stripe_step = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_iters = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t slice_first_chunk = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t slice_chunks = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t final_skip = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t final_take = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t do_local_write = get_arg_val<uint32_t>(arg_idx++);
-    const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // neighbor opposite-dir core
-    const uint8_t barrier_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t data_valid_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (data_valid_sem target)
-    const uint8_t data_valid_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_granular_sends = get_arg_val<uint32_t>(arg_idx++);  // leading sends the downstream relays
-    const uint16_t neighbor_chip_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint16_t neighbor_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] size_t arg_for_fab = arg_idx;  // fabric connection args start here (non-mux path)
+    const address_t output_tensor_address = get_arg_val<address_t>(rt::output_addr);
+    const uint32_t initial_stripe = get_arg_val<uint32_t>(rt::initial_stripe);
+    const uint32_t stripe_step = get_arg_val<uint32_t>(rt::stripe_step);
+    const uint32_t num_iters = get_arg_val<uint32_t>(rt::num_iters);
+    const uint32_t slice_first_chunk = get_arg_val<uint32_t>(rt::slice_first);
+    const uint32_t slice_chunks = get_arg_val<uint32_t>(rt::slice_chunks);
+    const uint32_t final_skip = get_arg_val<uint32_t>(rt::final_skip);
+    const uint32_t final_take = get_arg_val<uint32_t>(rt::final_take);
+    const uint32_t rot = get_arg_val<uint32_t>(rt::rot);
+    const WalkPos final_pos = {
+        get_arg_val<uint32_t>(rt::final_pos_base),
+        get_arg_val<uint32_t>(rt::final_pos_slot),
+        get_arg_val<uint32_t>(rt::final_pos_i)};
+    const uint32_t do_local_write = get_arg_val<uint32_t>(rt::do_local_write);
+    const address_t barrier_sem = get_arg_val<uint32_t>(rt::barrier_sem);
+    const address_t data_valid_sem = get_arg_val<uint32_t>(rt::data_valid_sem);
+    const uint8_t barrier_sem_noc_x = get_arg_val<uint32_t>(rt::barrier_noc_x);  // neighbor opposite-dir core
+    const uint8_t barrier_sem_noc_y = get_arg_val<uint32_t>(rt::barrier_noc_y);
+    const uint8_t data_valid_sem_noc_x = get_arg_val<uint32_t>(rt::data_valid_noc_x);  // mirror core
+    const uint8_t data_valid_sem_noc_y = get_arg_val<uint32_t>(rt::data_valid_noc_y);
+    const uint32_t num_granular_sends =
+        get_arg_val<uint32_t>(rt::num_granular_sends);  // leading sends the downstream relays
+    const uint16_t neighbor_chip_id = get_arg_val<uint32_t>(rt::neighbor_chip_id);
+    const uint16_t neighbor_mesh_id = get_arg_val<uint32_t>(rt::neighbor_mesh_id);
+    size_t arg_idx = rt::fabric_args;  // mux or fabric connection args start here
+    [[maybe_unused]] size_t arg_for_fab = arg_idx;
 
     // A direction with no neighbor (a line endpoint) relays nothing; no fabric/mux connection was appended.
     if (num_iters == 0) {
@@ -100,7 +118,7 @@ void kernel_main() {
 #endif
 
     HopSink<SenderT> hop(noc, sender, neighbor_chip_id, neighbor_mesh_id);
-    PacketPacker<packet_size, output_chunk_size, HopSink<SenderT>> fabric(hop);
+    PacketPacker<packet_size, slot_bytes, HopSink<SenderT>> fabric(hop);
 
     // Init handshake (send only): tell the neighbor's opposite-direction reader we're alive, so it lets its
     // paired writer start writing into our output. Our own reader does the matching wait.
@@ -114,10 +132,13 @@ void kernel_main() {
     // RUN SETUP
     ///////////////////////////////////////////////////
 
-    const auto plan = walk_plan<output_chunks_per_page, output_chunk_size, xfer_max>(output_tensor_accessor);
+    // The walk stride was derived on the host from this accessor's contiguous_page_stride().
+    ASSERT(out_cpp > k || output_tensor_accessor.contiguous_page_stride() == walk_stride);
+    const RunSource out_src = checked_run_source<k, out_cpp>(out_runs, output_tensor_accessor, walk_stride);
+    const uint32_t slice_end = slice_first_chunk + slice_chunks;
 
-    TiledWalk walk;
-    StripeMap<output_chunks_per_stripe, num_devices> map;
+    TiledWalk<k, walk_stride, walk_xfer> walk;
+    StripeMap<cps, num_devices> map;
 
     auto output_addr = [&](uint32_t page, uint32_t off) {
         return output_tensor_accessor.get_noc_addr(page, off, noc.get_noc_id());
@@ -136,20 +157,21 @@ void kernel_main() {
         const uint32_t take = last ? final_take : slice_chunks;
         // The walk does not stop itself: past the slice it would send another worker's chunks.
         ASSERT(skip + take <= slice_chunks);
-        const bool granular = (iter < num_granular_sends);  // downstream relays this stripe -> signal fine-grained
         const bool local_copy = (iter == 0) && (do_local_write != 0);
-        map.init(stripe);
-        walk.init(slice_first_chunk, slice_chunks, skip, plan.stride, plan.xfer);
+        const bool granular = (iter < num_granular_sends);  // downstream relays this stripe -> signal fine-grained
+        map.init(stripe, slice_end);
+        // final_pos is the host's walk_seek(final_skip); every other iteration starts at seqno 0.
+        walk.init(slice_end, rot, last ? final_pos : walk_start(slice_first_chunk));
 
         uint32_t pending_chunks = 0, pending_pages = 0;
         for (uint32_t chunks_sent = 0; chunks_sent < take;) {
             const uint32_t batch = std::min(chunks_per_cb_entry, take - chunks_sent);
             cb.wait_front(1);
-            emit_runs<output_chunks_per_page, output_chunk_size>(
+            emit_runs<out_cpp, chunk_size, slot_bytes>(
                 walk,
                 map,
                 output_tensor_accessor,
-                plan.out,
+                out_src,
                 cb.get_read_ptr(),
                 batch,
                 output_addr,
@@ -157,10 +179,10 @@ void kernel_main() {
                     fabric.queue_segment(
                         l1,
                         tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page, off),
-                        run * output_chunk_size);
+                        run * slot_bytes);
                     if (local_copy) {
                         // Local data -> our output stripe (same address).
-                        local_write<output_chunk_size>(noc, l1, output_addr(page, off), run);
+                        local_write<slot_bytes>(noc, l1, output_addr(page, off), run);
                     }
                 });
             if (local_copy) {
