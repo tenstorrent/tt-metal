@@ -81,11 +81,12 @@ def factors(spec: Spec, plan: dict, box: str) -> dict[str, float]:
 
 
 def context(spec: Spec, plan: dict, box: str) -> dict:
-    """The deployment's context scaled by the box's sequence factor: {seq, chunk, exact}."""
+    """The deployment's context scaled by the box's sequence factor, in whole chunks: {seq, chunk, exact}. The chunk is
+    the serving chunk (deploy.chunk), the same on every box (F67): only the context scales."""
     f = factors(spec, plan, box).get("sequence", 1.0)
-    seq, chunk = spec.deploy_seq * f, spec.deploy_chunk * f
-    exact = seq == int(seq) and chunk == int(chunk) and int(chunk) % 32 == 0 and int(seq) % max(int(chunk), 1) == 0
-    return {"seq": int(seq), "chunk": int(chunk), "exact": bool(exact)}
+    chunk = spec.deploy_chunk
+    seq = int(spec.deploy_seq * f) // chunk * chunk
+    return {"seq": seq, "chunk": chunk, "exact": bool(seq and chunk % 32 == 0)}
 
 
 def conditions(spec: Spec, plan: dict, box: str, seq: int, chunk: int) -> list[dict]:

@@ -22,9 +22,13 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 - **Mode**: `partial` (the first layers that cover every layer type bring up the layout; on a box smaller than the
   deployment box the run also goes scaled: heads and experts cut so each chip holds what a deployment chip holds) or
   `full` (every layer at real size, every end-to-end check; only where the full model fits, which the plan gate checks).
-- **Target**: this run's context length and chunk size at real size (default 56320 tokens in 5120-token chunks).
-- **Ladder**: default four rungs: 2 chunks of 2048 with full dumps, 2 chunks of 8192, the last chunk after a golden
-  prefix, then the full target. A scaled run gets its own ladder at the scaled context (`scaled.ladder` overrides it).
+- **Serving chunk**: the chunk size the server sends (`deploy.chunk`). Always ask; propose 5120. It is one fixed size on
+  every box (only the context scales with the box, F67) and never above `serving.max_chunk` (5120, the owner's limit).
+- **Target**: this run's context at real size, whole serving chunks (default 56320 = 11 x 5120).
+- **Ladder**: every rung at the serving chunk (no test at a chunk that is never served): default three rungs: 2 chunks
+  with full dumps (they feed the component and swap tests), the last chunk after a golden prefix, then the full target.
+  A scaled run gets its own ladder (`scaled.ladder`), also at the serving chunk and at most the canonical prompt's
+  length.
 - **Layer subset**: in partial mode, the first layers that cover every layer type; in full mode, every layer.
 - **Owner rules** for every agent of this model (beyond the standing ones in the agent definition, such as always
   2D fabric). They go in `agents.rules` and appear in every brief.
