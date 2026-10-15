@@ -19,15 +19,22 @@ struct AllGatherWeightMinimalMatmulAsyncProgramFactory {
         tt::tt_metal::KernelHandle in1_receiver_kernels_id{};
         bool transpose_core_grid{};
     };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
-    static cached_program_t create(
+    static cached_mesh_workload_t create_mesh_workload(
         const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
+        ttnn::Tensor& tensor_return_value);
+
+    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
+        const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,
+        const ttnn::MeshCoordinate& mesh_coordinate,
         const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
         ttnn::Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
+        cached_mesh_workload_t& cached_workload,
         const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,
         const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
         ttnn::Tensor& tensor_return_value);

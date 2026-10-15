@@ -62,9 +62,26 @@ constexpr uint32_t kRtInputAddrIdx = 0;
 constexpr uint32_t kRtOutputAddrIdx = 1;
 }  // namespace
 
-AllGatherWeightMinimalMatmulAsyncProgramFactory::cached_program_t
-AllGatherWeightMinimalMatmulAsyncProgramFactory::create(
+AllGatherWeightMinimalMatmulAsyncProgramFactory::cached_mesh_workload_t
+AllGatherWeightMinimalMatmulAsyncProgramFactory::create_mesh_workload(
     const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
+    ttnn::Tensor& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+    }
+    return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
+}
+
+ttnn::device_operation::CachedProgram<AllGatherWeightMinimalMatmulAsyncProgramFactory::shared_variables_t>
+AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
+    const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,
+    const ttnn::MeshCoordinate&,
     const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
     tt::tt_metal::Program program{};
@@ -394,7 +411,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create(
         tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {M_start_tile, M_end_tile});
     }
 
-    return cached_program_t{
+    return {
         std::move(program),
         shared_variables_t{
             .cores = cores,
@@ -406,29 +423,35 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create(
 }
 
 void AllGatherWeightMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    cached_mesh_workload_t& cached_workload,
     const AllGatherWeightMinimalMatmulAsyncParams&,
     const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& vars = cached_program.shared_variables;
-    auto& in0_sender_args = GetRuntimeArgs(program, vars.in0_sender_kernels_id);
-    auto& in0_receiver_args = GetRuntimeArgs(program, vars.in0_receiver_kernels_id);
-    auto& in1_sender_args = GetRuntimeArgs(program, vars.in1_sender_kernels_id);
-    auto& in1_receiver_args = GetRuntimeArgs(program, vars.in1_receiver_kernels_id);
     const uint32_t in0_addr = tensor_args.input_tensor.buffer()->address();
     const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();
     const uint32_t out_addr = tensor_return_value.buffer()->address();
 
-    for (const auto& core : vars.cores) {
-        const uint32_t in0_idx = vars.transpose_core_grid ? core.x : core.y;
-        const uint32_t in1_idx = vars.transpose_core_grid ? core.y : core.x;
-        auto& in0_args = (in1_idx == 0 ? in0_sender_args : in0_receiver_args)[core.x][core.y];
-        in0_args[kRtInputAddrIdx] = in0_addr;
-        in0_args[kRtOutputAddrIdx] = out_addr;
-        auto& in1_args = (in0_idx == 0 ? in1_sender_args : in1_receiver_args)[core.x][core.y];
-        in1_args[kRtInputAddrIdx] = in1_addr;
-        in1_args[kRtOutputAddrIdx] = out_addr;
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto vars_it = cached_workload.shared_variables.find(range);
+        TT_FATAL(
+            vars_it != cached_workload.shared_variables.end(),
+            "No cached program state for mesh coordinate range {}: the cached workload does not match its programs.",
+            range);
+        const auto& vars = vars_it->second;
+        auto& in0_sender_args = GetRuntimeArgs(program, vars.in0_sender_kernels_id);
+        auto& in0_receiver_args = GetRuntimeArgs(program, vars.in0_receiver_kernels_id);
+        auto& in1_sender_args = GetRuntimeArgs(program, vars.in1_sender_kernels_id);
+        auto& in1_receiver_args = GetRuntimeArgs(program, vars.in1_receiver_kernels_id);
+        for (const auto& core : vars.cores) {
+            const uint32_t in0_idx = vars.transpose_core_grid ? core.x : core.y;
+            const uint32_t in1_idx = vars.transpose_core_grid ? core.y : core.x;
+            auto& in0_args = (in1_idx == 0 ? in0_sender_args : in0_receiver_args)[core.x][core.y];
+            in0_args[kRtInputAddrIdx] = in0_addr;
+            in0_args[kRtOutputAddrIdx] = out_addr;
+            auto& in1_args = (in0_idx == 0 ? in1_sender_args : in1_receiver_args)[core.x][core.y];
+            in1_args[kRtInputAddrIdx] = in1_addr;
+            in1_args[kRtOutputAddrIdx] = out_addr;
+        }
     }
 }
 }  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async
