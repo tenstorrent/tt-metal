@@ -244,7 +244,7 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_input_tiles", "id_range_length", "start_id", "dim", "reduce_tile_size", "inner_tile_size"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // The split writer routes every tile of a full-width output row to the left or right region.  The
@@ -268,7 +268,7 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
              {"left_width", static_cast<uint32_t>(operation_attributes.split_output_width.value_or(0) / TILE_WIDTH)},
              {"full_width", Wt}},
         .runtime_arg_schema = {.runtime_arg_names = {"id_range_length", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     if (split_output) {
         writer.tensor_bindings.push_back(
@@ -290,13 +290,13 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     // carries the four knobs (math_fidelity / math_approx_mode / fp32_dest_acc_en /
     // dst_full_sync_en) to their Metal 2.0 equivalents.
     ComputeHardwareConfig compute_hw =
-        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+        ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     // Metal 2.0 requires an explicit unpack_modes entry when a compute kernel consumes a
     // Float32 DFB with enable_32_bit_dest = true. Legacy set no unpack_to_dest_mode (Default),
     // which maps to UnpackToSrc. Only the input DFB (c_0) can be Float32; the zero DFB is BF16.
-    // unpack_modes() reaches the member on whichever config generation the arch resolved to.
+    // unpack_modes is a plain member of the (single, generation-agnostic) ComputeHardwareConfig.
     if (fp32_dest_acc_en && input_data_format == tt::DataFormat::Float32) {
-        unpack_modes(compute_hw).emplace(FRNC_IN0, UnpackMode::UnpackToSrc);
+        compute_hw.unpack_modes.emplace(FRNC_IN0, UnpackMode::UnpackToSrc);
     }
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_cols_per_core_group) {
