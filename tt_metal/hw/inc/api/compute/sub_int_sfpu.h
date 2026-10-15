@@ -42,6 +42,17 @@ ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         "Unsupported data format for sub_int. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _sub_int_,
+        (APPROX, 32 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::None)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -51,6 +62,7 @@ ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
+#endif
 }
 
 // clang-format off
@@ -82,6 +94,17 @@ ALWI void rsub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         "Unsupported data format for rsub_int. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_rsub_int,
+        (APPROX, INSTRUCTION_MODE, 32 /* ITERATIONS */),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::None)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -91,6 +114,7 @@ ALWI void rsub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
+#endif
 }
 /**
  * Please refer to documentation for any_init.

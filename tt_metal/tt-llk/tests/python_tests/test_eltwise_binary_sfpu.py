@@ -469,6 +469,14 @@ def sfpu_binary(
     # variant near its tolerance fail unreproducibly.
     torch.manual_seed(0)
 
+    # Blackhole runs the Int32 add and sub in two's complement, so their operands are encoded that way.
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and formats.input_format == DataFormat.Int32
+        and mathop in (MathOperation.SfpuElwadd, MathOperation.SfpuElwsub)
+    ):
+        twos_complement = True
+
     # SfpuElwpowTile and SfpuElwmulTile are pow and mul through the bodies power_binary_tile and mul_binary_tile run:
     # their ops' stimuli, golden and contract.
     golden_op = {
@@ -1117,12 +1125,6 @@ def test_eltwise_binary_sfpu_int_comparison_across_zero(formats, dest_acc, matho
 def _int_arith_negative_spec():
     """Paired Int32 stimuli where both operands independently take either sign.
 
-    The Int32 add/sub kernels convert each operand out of sign-magnitude before the integer
-    add and the result back into it, so three sign folds run per element. The positive-only
-    default never sets an operand's sign bit, which leaves the two input-side folds unreached
-    by every other Int32 test here -- only the output-side one is exercised, and then only
-    because `a - b` on non-negative operands still goes negative.
-
     The two operands vary at different rates so the face walks the full 8x8 product of
     operand values rather than a single diagonal. A mirrored pair would collapse `a + b` to a
     constant zero and test nothing. Values stay small so neither sum nor difference can
@@ -1148,17 +1150,7 @@ def _int_arith_negative_spec():
     dest_acc=[DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_int_arith_across_zero(formats, dest_acc, mathop):
-    """Negative and mixed-sign operands for the Int32 add/sub kernels.
-
-    Covers the input-side sign folds in _add_int_ / _sub_int_, which no other Int32 test in
-    this file reaches.
-
-    Unlike test_eltwise_binary_sfpu_int_comparison_across_zero above, this one keeps the
-    sign-magnitude default rather than passing twos_complement=True. These kernels are
-    sign-magnitude end to end -- operands in, result out -- so two's-complement stimuli are
-    read back with the sign bit as a magnitude bit and every negative lane diverges. The
-    comparison ops can take either encoding on the way out only because they emit 0 or 1.
-    """
+    """Negative and mixed-sign operands for the Int32 add/sub kernels."""
     spec_A, spec_B = _int_arith_negative_spec()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 

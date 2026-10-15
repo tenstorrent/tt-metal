@@ -20,7 +20,7 @@ inline void calculate_rsub_int(
         is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
 
     // Reverse subtract in 2's complement: out = in1 - in0 (B - A). `b - a` lowers to the same single
-    // SFPIADD (2's-complement of A) the raw path used, but leaves the loads/store and dst walk to the
+    // SFPIADD (2's-complement of A) the raw path used, but leaves the loads and the store to the
     // compiler. Pick the DataLayout whose load/store format byte matches the original
     // InstrModLoadStore (LO16->U16, INT32/2S_COMP->I32; on Blackhole INT32_2S_COMP is raw int32).
     constexpr sfpi::DataLayout layout =
@@ -30,12 +30,15 @@ inline void calculate_rsub_int(
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
+    // The store steps Dest through ADDR_MOD_6 instead of a dst_reg++ per row; an op that reads ADDR_MOD_6 after this
+    // one runs its own init first.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vType a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<layout>();
         vType b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<layout>();
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>() = b - a;
-        sfpi::dst_reg++;
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>(ADDR_MOD_6) = b - a;
     }
 }
 
