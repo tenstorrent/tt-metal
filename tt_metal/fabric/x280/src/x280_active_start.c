@@ -10,7 +10,7 @@
  *
  *     _start (entry_active.o) -> x280_active_start(hartid) -> main(hartid)
  *
- * The five obligations this leaves to the image are in x280/README.md § 6.
+ * The five obligations this leaves to the image are in README.md § 3.
  * The load-bearing one is that main returns once
  * x280_hart_stop_requested(hartid, run_value) is true, on every hart.
  *

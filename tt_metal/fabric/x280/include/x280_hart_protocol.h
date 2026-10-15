@@ -109,8 +109,7 @@
 /* args addresses a caller-owned block in the tile's available LIM, or is zero
  * when the image takes no arguments. args_bytes is the validated extent. The
  * runtime validates placement, not freshness or contents, so each image must
- * validate its own layout marker. Older runtimes publish zero for args_bytes;
- * older images ignore it. */
+ * validate its own layout marker. */
 typedef struct __attribute__((aligned(X280_HART_RECORD_STRIDE))) {
     uint64_t run_value;
     uint64_t entry;

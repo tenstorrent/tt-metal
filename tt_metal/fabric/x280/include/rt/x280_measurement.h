@@ -5,12 +5,11 @@
 /*
  * rt/x280_measurement.h -- fenced measurement bracket for X280 microbenchmarks.
  *
- * The p2p_latency and transport_bandwidth suites bracket each timed sample
+ * X280 microbenchmarks bracket each timed sample
  * with a rdcycle read at start and end. rt/x280_hw.h supplies the raw counter
  * read; this header adds the fences the measurement contract requires.
  *
- * Two hazards these brackets avoid, both mentioned in
- * x280/CHARACTERIZATION_UBENCH_DESIGN.md §Kernel entry point and §Timed loop:
+ * Two hazards these brackets avoid:
  *
  *   - The compiler is free to hoist code out of, or sink code into, a
  *     measurement window if nothing anchors the boundary. `fence io, io`
@@ -68,7 +67,7 @@ static inline __attribute__((always_inline)) uint64_t x280_rdcycle_fenced(void) 
 
 /* Fenced wall-clock read: for cases where a PLL-independent reference is
  * preferred to a `rdcycle` reading at the running PLL -- for example a
- * `transport_bandwidth` bracket where the batch time is dominated by a
+ * bandwidth bracket where the batch time is dominated by a
  * NOC read whose latency is set by the fabric, not by
  * the core's operating frequency, and reporting in seconds against a fixed
  * 50 MHz reference is more useful than reporting in cycles that then need
@@ -81,9 +80,9 @@ static inline __attribute__((always_inline)) uint64_t x280_rdcycle_fenced(void) 
  * a device-space memory-mapped load) and cannot be optimised away as a
  * plain memory fence would sometimes let happen inside a hot loop.
  *
- * 20 ns tick length is coarse compared to `rdcycle`, but every
- * transport_bandwidth batch this suite reports is >= 10 µs, i.e. hundreds
- * of mtime ticks, so the resolution is not the bottleneck.
+ * 20 ns tick length is coarse compared to `rdcycle`, but a batch of
+ * >= 10 µs spans hundreds of mtime ticks, so the resolution is not the
+ * bottleneck there.
  */
 static inline __attribute__((always_inline)) uint64_t x280_mtime_fenced(void) {
     uint64_t t;
@@ -102,8 +101,7 @@ typedef struct {
 } x280_paired_t;
 
 /* Reads a paired bracket end, wall then CPU: the one order of every X280
- * paired bracket (x280/MEASUREMENT.md "Paired reads"). The packet_injection
- * aggregate, which nests its reads, reads them by hand. */
+ * paired bracket. */
 static inline __attribute__((always_inline)) x280_paired_t x280_paired_now(void) {
     x280_paired_t t;
     t.wall = x280_mtime_fenced();

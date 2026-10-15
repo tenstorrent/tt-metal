@@ -72,11 +72,9 @@ constexpr uint64_t kResetVectorStride = 8;  // per hart: {lo, hi}
 constexpr uint32_t kLimEccPrimeBytes = 0x20000;
 constexpr uint32_t kLimEccPrimeLineSize = 64;
 
-// Extent assumed for a marker that carries no extent word: the 16 KiB the
-// original prime walked. Nothing in the record says which walk left a bare
-// marker -- earlier tooling took a narrower explicit extent, and the build that
-// first walked the whole piece recorded none -- so this can admit more than was
-// primed, or refuse what was. It bounds images on such a tile in place of
+// Extent assumed for a marker that carries no extent word: 16 KiB. Nothing in
+// the record says what extent left a bare marker, so this can admit more than
+// was primed, or refuse what was. It bounds images on such a tile in place of
 // kLimEccPrimeBytes.
 constexpr uint32_t kLimEccUnrecordedPrimeBytes = 0x4000;
 

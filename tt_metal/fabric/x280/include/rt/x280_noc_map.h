@@ -12,18 +12,10 @@
  *
  * INDICES 0..8 ARE NOT RELIABLE. ARC overwrites them after the firmware
  * configures them, so a configure/read-back check there fails; anything that
- * verifies its TLB configuration needs 16 or above. Three consumers sit in the
- * range regardless and tolerate it:
- *
- *   the DMA engine (0, 1)        reprograms the slot immediately before every
- *                                kick. The DMA NIU master only honours the
- *                                window programmed right before the kick, and
- *                                higher indices are empirically flaky here.
- *   multi-window bench (0..7)    never reads a TLB config back
- *   scatter bench (0..31)        never reads a TLB config back
- *
- * For those three the slot index is part of what is measured, so moving them
- * higher changes their results rather than fixing anything.
+ * verifies its TLB configuration needs 16 or above. The DMA engine is the
+ * exception: its NIU master only honours the window programmed right before
+ * the kick, and higher indices are empirically flaky for it, so a DMA user
+ * reprograms slots 0 and 1 immediately before every kick.
  */
 #ifndef X280_RT_NOC_MAP_H
 #define X280_RT_NOC_MAP_H
@@ -31,9 +23,6 @@
 /* 2 MiB CPU NOC TLB slots
  *
  *   slots     owner                      declared in
- *   0, 1      DMA engine src/dst         the DMA engine image
- *   0..7      multi-window bench         its image
- *   0..31     scatter, per-Tensix        its image
  *   16..23    NOC write/read tests       X280_TLB_NOC_TEST_BASE, below
  *   16..155   packet-injection credits   X280_TLB_PACKET_INJECTION_CREDIT_BASE, below
  *   16..19    eth_credit forwarders      X280_TLB_ETH_CREDIT_BASE, below
@@ -43,10 +32,7 @@
  *   40..43    per-hart DDR bandwidth     X280_TLB_DDR_MULTIHART_BASE, below
  *   47, 48    DDR fill / read windows    X280_TLB_DDR_FILL / _READ, below
  *   50        PCIe pinned-host write     X280_TLB_PCIE_SPIKE, below
- *   50..81    scatter, per-core          its image
  *   60..71    socket data/notify/DRAM    socket_layout.h (X280_SOCKET_TLB_*)
- *   100..103  scatter, per-hart          its image
- *   100..107  stress, per-hart wr/rd     the stress image
  *   120..127  paired-case outbound       X280_TLB_PAIRED_BASE, below
  *   156       packet-injection timer      X280_TLB_PACKET_INJECTION_TIMER, below
  *   157..160  core-sync barrier          X280_TLB_CORE_SYNC_BASE, below
@@ -197,13 +183,13 @@ _Static_assert(
 /* NOC destination tiles, as (x, y); pack with x280_noc_xy_pack from x280_noc_coord.h.
  *
  * Only DRAM (9,3) and (9,8) are reachable from L2CPU0 -- every other bank
- * hangs the access (BUG-3). Tensix y=0 is router-only and y=1 is the ethernet
+ * hangs the access. Tensix y=0 is router-only and y=1 is the ethernet
  * row, so the first worker on any column is at y=2.
  */
 
-#define X280_NOC_DRAM_L2CPU0_X 9 /* paired DRAM bank, BUG-3 safe */
+#define X280_NOC_DRAM_L2CPU0_X 9 /* paired DRAM bank, reachable */
 #define X280_NOC_DRAM_L2CPU0_Y 3
-#define X280_NOC_DRAM_L2CPU1_X 9 /* peer DRAM bank,   BUG-3 safe */
+#define X280_NOC_DRAM_L2CPU1_X 9 /* peer DRAM bank,   reachable */
 #define X280_NOC_DRAM_L2CPU1_Y 8
 
 #define X280_NOC_TENSIX_A_X 1 /* Tensix worker (1,11)  */

@@ -278,7 +278,7 @@ only while every L2CPU remains in reset; it refuses a request that would expand
 LIM.
 
 The `x280_images` target builds the two operation-specific images; no
-executable in this tree runs them, the pipeline benchmarks do. Each runs as
+executable in this tree runs them. Each runs as
 an active image on a tile in confirmed healthy resident idle, with no other
 session live: prepare once, run the compatible pipeline configurations
 sequentially on the same tile, then tear down.
@@ -348,10 +348,6 @@ chip. Both return a `TranslatedCoord` (`x280/device/translated_coord.hpp`),
 which nothing else constructs, so a logical or NOC0 value cannot reach a device
 argument; device code carries it as `x280_noc_coord_t` (`include/x280_noc_coord.h`). Hardware tile indices are not logical coordinates. These queries perform
 no device I/O, and the caller must not close or reshape the mesh concurrently.
-P2P, transport-bandwidth and pipeline forwarding resolve their Tensix and X280
-destinations through these methods,
-as do core-sync's L2CPU sites, participant arrival and release-probe groups,
-and the eth_credit and packet-injection L2CPU sites.
 The ISA's L2CPU translated range and UMD's mapping differ; the software lookup
 does not establish NIU configuration or prove traffic delivery on silicon.
 
@@ -385,7 +381,7 @@ the opt-in `x280_pll_test`; neither is part of the runtime API.
 
 `X280Runtime::enqueue(tile, request)` accepts only a healthy runtime-owned tile
 from that runtime. The C++ runtime uses four per-hart control, state, and trap
-records at migration-control `+0x1800..+0x1AFF`; the older tile-global mailbox
+records at migration-control `+0x1800..+0x1AFF`; the tile-global mailbox
 addresses remain reserved but are not part of this path. Each hart has one cache
 line for each record. All four harts run the same image, entry, run value, and
 argument-block address and byte extent.
@@ -629,13 +625,7 @@ VLEN=512 → 64 bytes per `vse32.v` store. This is what gets you to
 
 ### Host → X280 NOC writes
 
-```python
-chip.noc_write32(0, noc_x, noc_y, addr, value)        # 32-bit
-chip.noc_write(0, noc_x, noc_y, addr, byte_data)      # bulk
-chip.noc_read(0, noc_x, noc_y, addr, buf)             # bulk
-```
-
-`addr` is the L2CPU-local address (for example, `X280_LIM_BASE` =
+A host NOC access to an L2CPU takes the L2CPU-local address (for example, `X280_LIM_BASE` =
 `0x08000000` and `X280_LOCAL_DDR_TILE_BASE` = `0x400030000000`, from
 `x280_address_map.h`).
 

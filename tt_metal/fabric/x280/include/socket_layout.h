@@ -144,8 +144,7 @@
  *
  * UNITS NOTE: every *_CYCLES_* mailbox below holds CLINT mtime ticks
  * at 50 MHz, not rdcycle ticks at PLL frequency. rdcycle does not advance
- * during CPU stalls (MEASUREMENT.md
- * "Unconfirmed hardware assumptions", item 5). Host readers
+ * during CPU stalls. Host readers
  * divide by 50_000_000 to get seconds. The *_CYCLES_* names are fixed
  * wire identifiers despite carrying mtime ticks.
  *
@@ -540,13 +539,13 @@ static_assert(
 /* ------------------------------------------------------------------
  * TLB index reservations for socket use.
  * ------------------------------------------------------------------
- * x280.h documents indices in use by other phases:
- *   16-23  Phase 4 NOC write
- *   24-28  Phase 5 NOC read / ordering
- *   32-33  Phase 6 integration
- *   34-36  Phase 8 bench
- *   37-44  Phase 9 experiments
- *   45-46  Phase 9b memport
+ * rt/x280_noc_map.h documents indices in use elsewhere:
+ *   16-23  NOC write
+ *   24-28  NOC read / ordering
+ *   32-33  integration
+ *   34-36  bench
+ *   37-44  experiments
+ *   45-46  Memory Port
  *   50     PCIe NoC-write spike
  * Sockets reserve a small block starting at 60 to leave headroom for
  * future probe / experiment indices. */

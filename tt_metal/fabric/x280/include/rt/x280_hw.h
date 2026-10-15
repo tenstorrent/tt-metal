@@ -43,9 +43,8 @@ static inline __attribute__((always_inline)) void x280_fence_ow(void) { __asm__ 
  * --------------------------------------------------------------------------
  * Counts the core cycles the hart executes, at the PLL clock. It does not
  * advance while the hart is stalled on memory, a NoC transaction or a BRESP
- * (MEASUREMENT.md "Unconfirmed hardware assumptions", item 5; SiFive X280 MC
- * Manual 21G3.04.00 §3.10.2.1, "clock cycles the hart has executed"), so use
- * it only for executed-cycle cost. For elapsed time and timeouts -- and in
+ * (SiFive X280 MC Manual 21G3.04.00 §3.10.2.1, "clock cycles the hart has
+ * executed"), so use it only for executed-cycle cost. For elapsed time and timeouts -- and in
  * particular for cross-hart overlap -- use x280_mtime() instead. See the units
  * note in socket_layout.h.
  */
@@ -58,10 +57,9 @@ static inline uint64_t x280_rdcycle(void) {
 /* --------------------------------------------------------------------------
  * Wall clock -- CLINT mtime, fixed 50 MHz, independent of the PLL
  * --------------------------------------------------------------------------
- * The 50 MHz rate and its independence from the PLL are an owner
- * assumption (MEASUREMENT.md "Unconfirmed hardware assumptions", item 6): the SiFive X280
- * MC Manual §5.13.1 defers the rtc_toggle rate to an X280 MC User Guide, and no
- * Blackhole document gives it.
+ * The 50 MHz rate and its independence from the PLL are an assumption: the
+ * SiFive X280 MC Manual §5.13.1 defers the rtc_toggle rate to an X280 MC User
+ * Guide, and no Blackhole document gives it.
  *
  * Because it is PLL-independent it is the reference used to measure the core
  * clock (see rt/x280_pll.h) and the only honest basis for timeouts, which is

@@ -5,9 +5,8 @@
 /*
  * rt/x280_pll.h -- measure the X280 core clock on the device.
  *
- * This is the honest alternative to the pattern the eight DRAM benchmarks use,
- * where the host writes a PLL value into a mailbox and the firmware trusts it
- * with a hardcoded fallback:
+ * This is the honest alternative to a host writing a PLL value into a mailbox
+ * and the firmware trusting it with a hardcoded fallback:
  *
  *     uint64_t pll_mhz = *X_PLL_INPUT_ADDR;
  *     if (pll_mhz == 0 || pll_mhz > 10000) pll_mhz = 1750;   // or 1000
@@ -29,8 +28,8 @@
  * the two boundaries. Polling mtime inside the loop under-counts cycles --
  * worse after heavy DMA/NOC activity has left the fabric busy, giving
  * spuriously low readings like 800 instead of 1750. rdcycle does not advance
- * while the hart stalls (MEASUREMENT.md "Unconfirmed hardware assumptions",
- * item 5); a register-only loop makes no memory access, so it does not stall.
+ * while the hart stalls; a register-only loop makes no memory access, so it
+ * does not stall.
  *
  *   freq = d_rdcycle / d_mtime * 50 MHz
  *
@@ -57,23 +56,22 @@ static uint32_t __attribute__((unused)) x280_measure_pll_khz(void) {
 }
 
 /* ---------------------------------------------------------------------------
- * Host-supplied clock, with the historical fallback.
+ * Host-supplied clock, with a fallback.
  * ---------------------------------------------------------------------------
- * The eight DRAM benchmarks do not measure the clock; the host writes it into a
- * mailbox before releasing reset and the firmware echoes it into META[0] so the
- * host can check the round-trip.
+ * A firmware that does not measure the clock reads it from a mailbox the host
+ * writes before releasing reset, and echoes it into META[0] so the host can
+ * check the round-trip.
  *
  * The fallback is a wart: if the mailbox looks wrong the firmware invents a
  * clock, and the host then trusts META[0], so a mis-set mailbox yields
  * plausible-but-wrong bandwidth numbers rather than an error. Prefer
- * x280_measure_pll_khz() in new code. Removing the fallback changes what seven
- * shipping firmwares report.
+ * x280_measure_pll_khz() in new code.
  * ------------------------------------------------------------------------- */
 #define X280_PLL_FALLBACK_MHZ 1750
 
-/* A statement expression, not a static inline function: inlining a function
- * here costs one extra branch in the epilogue of four firmwares, and this
- * helper needs to be a pure textual substitution. */
+/* A statement expression, not a static inline function: an inlined function
+ * here costs one extra branch in the caller's epilogue, and this helper needs
+ * to be a pure textual substitution. */
 #define X280_PLL_FROM_MAILBOX_OR(mbox, fallback_mhz) \
     __extension__({                                  \
         uint64_t _x280_mhz = *(mbox);                \
@@ -85,7 +83,7 @@ static uint32_t __attribute__((unused)) x280_measure_pll_khz(void) {
 /* The common case: the driver writes the mailbox, so the fallback never fires.
  *
  * The fallback is per-firmware because it is NOT always dead. A firmware driven
- * by more than one host script may have one driver that writes the mailbox and
+ * by more than one host may have one driver that writes the mailbox and
  * another that does not, and the second silently depends on the fallback value
  * matching the clock it programmed. Spell it out at the call
  * site rather than assuming 1750. */

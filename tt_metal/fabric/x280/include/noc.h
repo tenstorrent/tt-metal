@@ -6,7 +6,6 @@
  * noc.h - NOC TLB configuration and write helpers for X280 bare-metal
  *
  * Provides 2M TLB window programming and NOC write-verify primitives.
- * Reused by Phase 5 (NOC reads) and Phase 6 (ordering) firmware.
  *
  * Style: free inline functions, no global state, shared X280 CPU primitives.
  */
@@ -404,7 +403,7 @@ static inline int noc_verify_tlb_2m(uint32_t index, const noc_tlb_2m_t* expected
  *
  * Refuses, never masks. A bounded coordinate is still only a well-formed one --
  * reaching a harvested or router-only tile hangs the access rather than
- * faulting (BUG-3), so the caller remains responsible for aiming at tiles that
+ * faulting, so the caller remains responsible for aiming at tiles that
  * answer.
  *
  * `ordering` must be a noc_ordering_t member (noc_ordering_valid); Counted
@@ -460,7 +459,7 @@ static inline volatile void* noc_configure_tlb_2m_mcast(
  * Refuses, never masks: masking a coordinate produces a different real tile,
  * which is the failure this exists to stop rather than a safe fallback. A
  * bounded coordinate is still only a well-formed one -- reaching a harvested or
- * router-only tile hangs the access rather than faulting (BUG-3), so the caller
+ * router-only tile hangs the access rather than faulting, so the caller
  * remains responsible for aiming at a tile that answers.
  *
  * `ordering` must be a noc_ordering_t member (noc_ordering_valid); Counted
@@ -562,7 +561,7 @@ static inline noc_window_status_t noc_open_window_2m(
  * No fence: callers batch these and fence once, and fence spacing is itself
  * under measurement. Use noc_write_verify_u64 for a single fenced, confirmed
  * write. Two u32 stores rather than one u64 is the measured shape; memcpy()
- * does not work through a NOC window (BUG-4).
+ * does not work through a NOC window.
  *
  * @param window_ptr  Pointer returned by noc_configure_tlb_2m().
  * @param value       64-bit value to write (lo half first).
@@ -587,7 +586,7 @@ static inline void noc_write_u64(volatile void* window_ptr, uint64_t value) {
  * For non-posted windows: each store gets an ACK before the next one
  * proceeds, and the read-back directly confirms the data landed.
  *
- * WARNING: Do not use memcpy() to write through NOC windows (BUG-4).
+ * WARNING: Do not use memcpy() to write through NOC windows.
  * Always use explicit volatile pointer stores.
  *
  * @param window_ptr  Pointer returned by noc_configure_tlb_2m().
@@ -615,7 +614,7 @@ static inline int noc_write_verify_u64(volatile void* window_ptr, uint64_t value
 }
 
 /* ------------------------------------------------------------------
- * NOC read helpers (Phase 5)
+ * NOC read helpers
  * Reads through System Port TLB windows are inherently non-posted:
  * each load stalls the pipeline until the NOC response arrives.
  * No fence needed — the load itself is the synchronization.

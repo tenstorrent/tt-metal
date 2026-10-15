@@ -228,7 +228,7 @@
 #define AB_STATUS_READY 0x10000001u     /* config latched, probing    */
 #define AB_STATUS_RUNNING 0x10000002u   /* phases executing           */
 #define AB_STATUS_DONE 0x10000003u      /* all phases done, clean exit */
-#define AB_STATUS_STOPPED 0x10000004u   /* cancelled by runtime/legacy STOP */
+#define AB_STATUS_STOPPED 0x10000004u   /* cancelled by runtime/mailbox STOP */
 #define AB_STATUS_AMO_UNSUP 0xE0000001u /* AMO probe failed; aborting  */
 
 /* X280_HART_COUNT is the hardware hart count. */
@@ -360,7 +360,7 @@ static inline void set_status(uint32_t s) {
     __asm__ volatile("fence ow, ow");
 }
 
-/* Runtime STOP is generation-matched; the legacy mailbox remains part of the
+/* Runtime STOP is generation-matched; the STOP mailbox is part of the
  * benchmark wire contract. Every control wait observes both. Cancellation can
  * wait for one in-progress timed phase, but never for dispatch or a barrier. */
 static inline int atomic_stop_requested(uint64_t hartid, uint64_t run_value) {

@@ -10,7 +10,7 @@
 
 #include <stdint.h>
 
-/* --- Phase 3: Memory test constants --- */
+/* --- DDR memory test constants --- */
 
 /* DDR mailbox layout (valid in DDR mode only -- WayEnable=0xf).
  * LIM addresses become Zero Device in DDR mode; do NOT use LIM for mailbox. */
@@ -43,11 +43,11 @@ extern uint64_t _bss_end;
  * Images on the per-hart protocol use x280_hart_probe() instead. */
 extern uint64_t _probe_active;
 
-/* --- Phase 4: NOC test constants --- */
+/* --- NOC write test constants --- */
 
-/* Phase 3 used offsets: 0x100000 (READY), 0x100008 (DONE), 0x100010 (BUF_SIZE),
- *                       0x200000 (INPUT_BUF), 0x300000 (OUTPUT_BUF), 0x800000+ (EVICT).
- * Phase 4 NOC mailbox starts at 0x400000 -- clear of all Phase 3 regions. */
+/* The memory test uses 0x100000 (READY), 0x100008 (DONE), 0x100010 (BUF_SIZE),
+ *                      0x200000 (INPUT_BUF), 0x300000 (OUTPUT_BUF), 0x800000+ (EVICT).
+ * The NOC write mailbox starts at 0x400000 -- clear of all memory test regions. */
 
 /* Host writes desired write count here before booting firmware (0 = use default of 1) */
 #define NOC_WRITE_COUNT_ADDR ((volatile uint64_t*)(X280_LOCAL_DDR_TILE_BASE + 0x400000ULL))
@@ -56,37 +56,37 @@ extern uint64_t _probe_active;
 /* Firmware writes per-target noc_result structs here (indexed by target index) */
 #define NOC_RESULT_BASE_ADDR ((volatile uint8_t*)(X280_LOCAL_DDR_TILE_BASE + 0x410000ULL))
 
-/* --- Phase 5: NOC read + ordering test constants --- */
+/* --- NOC read + ordering test constants --- */
 
 /* TLB slot indices live in rt/x280_noc_map.h. */
 
-/* Phase 5 result region at DDR+0x420000 (clear of Phase 4 at 0x410000) */
+/* NOC read result region at DDR+0x420000 (clear of the NOC write results at 0x410000) */
 #define NOC_PHASE5_RESULT_ADDR ((volatile uint8_t*)(X280_LOCAL_DDR_TILE_BASE + 0x420000ULL))
 
-/* Phase 5 test mode selector: host writes before boot to choose test
- * 0 = Phase 4 write-only
- * 1 = Phase 5 read roundtrip + ordering tests */
+/* NOC test mode selector: host writes before boot to choose test
+ * 0 = NOC write-only
+ * 1 = NOC read roundtrip + ordering tests */
 #define NOC_TEST_MODE_ADDR ((volatile uint64_t*)(X280_LOCAL_DDR_TILE_BASE + 0x400010ULL))
 #define NOC_TEST_MODE_WRITES 0
 #define NOC_TEST_MODE_PHASE5 1
 #define NOC_TEST_MODE_NIU_REPLAY 2
 
-/* --- Phase 5 NOC-04: DMA/NIU register probing region in DDR --- */
+/* --- DMA/NIU register probing region in DDR --- */
 /* Layout: 16 x u32 DMA regs, 16 x u32 NIU0 regs, 16 x u32 NIU1 regs = 192 bytes */
 #define NOC_DMA_PROBE_ADDR ((volatile uint32_t*)(X280_LOCAL_DDR_TILE_BASE + 0x430000ULL))
 #define NOC_DMA_PROBE_COUNT 16 /* registers to read per region */
 #define NOC_DMA_PROBE_DONE_ADDR ((volatile uint64_t*)(X280_LOCAL_DDR_TILE_BASE + 0x430100ULL))
 #define NOC_DMA_PROBE_DONE_FLAG 0xBE00000000000001ULL
 
-/* --- Phase 6: Integration test constants --- */
+/* --- Integration test constants --- */
 
-/* Integration test base: clear of all Phase 3-5 regions.
- * Phase 5 highest offset: 0x430100 (NOC_DMA_PROBE_DONE_ADDR).
+/* Integration test base: clear of the memory and NOC test regions.
+ * Highest NOC test offset: 0x430100 (NOC_DMA_PROBE_DONE_ADDR).
  * Integration starts at 0x440000 with 16 KiB total layout.
  *
- * Phase 3 uses: 0x100000-0x8FFFFF (mailbox + bufs + eviction)
- * Phase 4 uses: 0x400000-0x41FFFF
- * Phase 5 uses: 0x420000-0x430107
+ * Memory test uses:    0x100000-0x8FFFFF (mailbox + bufs + eviction)
+ * NOC write test uses: 0x400000-0x41FFFF
+ * NOC read test uses:  0x420000-0x430107
  */
 #define INT_BASE_OFFSET 0x440000ULL
 #define INT_INPUT_OFFSET 0x440000ULL         /* [+0x0000..+0x0FFF] host writes, X280 reads */
@@ -117,12 +117,12 @@ extern uint64_t _probe_active;
 #define NIU_REPLAY_DONE_ADDR ((volatile uint64_t*)(X280_LOCAL_DDR_TILE_BASE + 0x460200ULL))
 #define NIU_REPLAY_DONE_FLAG 0xC0DE000000000007ULL
 
-/* --- Phase 7: Vector + Multi-Hart test constants --- */
+/* --- Vector + Multi-Hart test constants --- */
 
-/* Phase 7 base offset: clear of all prior phases.
- * Highest prior offset: NIU_REPLAY_DONE_ADDR =
+/* Vector + multi-hart base offset: clear of every region above.
+ * Highest offset above: NIU_REPLAY_DONE_ADDR =
  * X280_LOCAL_DDR_TILE_BASE + 0x460200 + 8.
- * Phase 7 starts at clean 64KB boundary: 0x470000. */
+ * Starts at clean 64KB boundary: 0x470000. */
 #define P7_BASE_OFFSET 0x470000ULL
 
 /* Multi-hart: each hart writes its mhartid here (4 x u64 = 32 bytes) */
@@ -148,7 +148,7 @@ extern uint64_t _probe_active;
 #define VEC_VLEN_CHECK_ADDR ((volatile uint64_t*)(X280_LOCAL_DDR_TILE_BASE + VEC_VLEN_CHECK_OFFSET))
 #define VEC_EXPECTED_VL 16 /* VLEN=512, SEW=32, LMUL=1 -> VLMAX=16 */
 
-/* Phase 7 done sentinel */
+/* Vector + multi-hart done sentinel */
 #define P7_SENTINEL_OFFSET (P7_BASE_OFFSET + 0x348ULL)
 #define P7_SENTINEL_ADDR ((volatile uint64_t*)(X280_LOCAL_DDR_TILE_BASE + P7_SENTINEL_OFFSET))
 #define P7_SENTINEL_DONE 0xCAFEF00D00000007ULL
@@ -161,16 +161,16 @@ extern uint64_t _probe_active;
 #define HART0_BOOT_FLAG_ADDR ((volatile uint64_t*)(X280_LOCAL_DDR_TILE_BASE + HART0_BOOT_FLAG_OFFSET))
 #define HART0_BOOT_DONE 0xB007000000000000ULL
 
-/* --- Phase 8: Benchmark suite constants --- */
+/* --- Benchmark suite constants --- */
 
-/* Phase 8 DDR layout: highest prior offset = HART0_BOOT_FLAG at 0x470358.
- * Phase 8 starts at clean 64KB boundary: 0x480000. */
+/* Benchmark DDR layout: highest offset above = HART0_BOOT_FLAG at 0x470358.
+ * Starts at clean 64KB boundary: 0x480000. */
 #define BENCH_BASE_OFFSET 0x480000ULL
 
 /* Result region: array of bench_result_t structs.
  * Each struct is 32 bytes: { id[4], pad[4], cycles[8], iterations[8], bytes[8] }.
  * Max 64 results = 2048 bytes at [0x480000..0x4807FF].
- * (28 cache-sweep benchmarks added in Phase 8 extension: 29 + 28 = 57 total) */
+ * (29 benchmarks + 28 cache-sweep benchmarks = 57 total) */
 #define BENCH_RESULT_ADDR ((volatile uint8_t*)(X280_LOCAL_DDR_TILE_BASE + BENCH_BASE_OFFSET))
 #define BENCH_MAX_RESULTS 64
 
@@ -190,7 +190,7 @@ extern uint64_t _probe_active;
 /* NOC DRAM target offset for benchmark writes/reads (clear of all other regions) */
 #define BENCH_NOC_TARGET_OFFSET 0x500000UL
 
-/* --- Phase 8 extension: Cache hierarchy sweep benchmarks ---
+/* --- Cache hierarchy sweep benchmarks ---
  *
  * The cache sweep uses the same DRAM region as BENCH_NOC_TARGET_OFFSET.
  * Cache sweep benchmarks run LAST in main(), after all NOC/DDR benchmarks,
