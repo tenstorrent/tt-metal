@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "dev_mem_map.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"

@@ -40,8 +40,10 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         Subsequent groups use ``tail_a`` and ``tail_b`` instead of the head summaries.
 
         Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
-        the same lifetime as ``actual_start``. It defines a nonempty 32-aligned
-        interval within physical capacity; omission uses the full capacity.
+        the same lifetime as ``actual_start``. It defines a nonempty interval within
+        physical capacity and need not be 32-aligned: a partial last chunk is
+        valid, and its rows past the end must be identity steps, as produced by
+        ``prepare_chunk_recurrence``. Omission uses the full capacity.
         Bounds may change during trace replay. Padded group outputs are unspecified.
         Bounds are caller preconditions and are not read back on the host.
 
