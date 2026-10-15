@@ -1151,8 +1151,6 @@ def test_tril_triu_rank_coverage(device, ttnn_op, shape, diagonal):
 # ulp(rounded reference), below 1.
 # The inputs in DECLARED are stored as the class given there, the first row that holds; where
 # that differs from torch, it is the class the TT-NN op this kernel replaces stores.
-# Each run logs one ULP line: the largest pure ULP error against torch and the outputs of
-# another class, for this program and for the path it replaces on the same input.
 LOGIT_SMALLEST_NORMAL = 2.0**-126
 LOGIT_CLASS_CODES = {"inf": 0, "-inf": 1, "zero": 2, "finite": 3}
 
@@ -1223,35 +1221,14 @@ def _logit_pure_ulp(reference, actual):
     return torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
 
 
-def _logit_versus_torch(x64, output):
-    """The largest pure ULP error against torch over outputs of torch's stored class, and the number
-    of outputs of another class."""
-    ulp = torch.minimum(
-        _logit_pure_ulp(_logit_reference(x64), output), _logit_pure_ulp(_logit_reference(_logit_flush(x64)), output)
-    )
-    mismatched = torch.isinf(ulp)
-    return (ulp[~mismatched].max().item() if (~mismatched).any() else 0.0), int(mismatched.sum())
-
-
 @run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
 def test_logit_exhaustive_bfloat16(device):
     x = generate_all_bfloat16_bitpatterns(torch.bfloat16)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.logit(tt_x)).to(torch.bfloat16)
-    # The path this program replaces, on the same input (see the device-perf test).
-    stock = ttnn.to_torch(
-        ttnn.unary_chain(
-            tt_x, [ttnn.UnaryWithParam(ttnn.UnaryOpType.LOGIT, -1.0), ttnn.UnaryWithParam(ttnn.UnaryOpType.IDENTITY)]
-        )
-    ).to(torch.bfloat16)
 
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     x64 = x.to(torch.float64)
-    (ours, ours_classes), (old, old_classes) = _logit_versus_torch(x64, actual), _logit_versus_torch(x64, stock)
-    print(
-        f"ULP logit {board} ours={ours:.3f} stock={old:.3f} "
-        f"ours_class_mismatches={ours_classes} stock_class_mismatches={old_classes}"
-    )
     expected = torch.full(x.shape, -1, dtype=torch.int8)
     for inputs, stored in LOGIT_DECLARED[board]:
         lanes = eval(
@@ -1313,6 +1290,21 @@ def test_logit_every_placement_matches_interleaved_tiles(device, placement):
         ttnn.logit(tt_x)
     actual = ttnn.to_torch(ttnn.logit(tt_x))
     assert torch.equal(actual, expected)
+
+
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
+def test_logit_many_tiles_per_core_match_torch(device):
+    """One core holds 128 tiles, so the kernel's per-call state carries across many tiles of one program."""
+    x = _logit_inputs((1, 1, 2048, 64))
+    shard = ttnn.create_sharded_memory_config(
+        x.shape, core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT
+    )
+    actual = ttnn.to_torch(ttnn.logit(_logit_on_device(x, device, memory_config=shard))).to(torch.bfloat16)
+    x64 = x.to(torch.float64)
+    ulp = torch.minimum(
+        _logit_pure_ulp(_logit_reference(x64), actual), _logit_pure_ulp(_logit_reference(_logit_flush(x64)), actual)
+    )
+    assert ulp.max().item() < 1.0, f"{(ulp >= 1.0).sum().item()} of {ulp.numel()} outputs at or beyond 1 ulp of torch"
 
 
 @run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")

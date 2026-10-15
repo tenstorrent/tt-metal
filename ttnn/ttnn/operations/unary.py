@@ -944,7 +944,7 @@ def _golden_function_logit_torch(input_tensor_a, *args, eps=None, **kwargs):
 
     ``_golden_function_logit`` disagrees with torch on 59 of the 65,536 BF16 inputs. For BF16 at
     the parameters the spec covers, this returns torch's result: its own at its special inputs and the exact
-    log(x / (1 - x)) elsewhere, in float64, rounded once to BF16, with NaN as the BF16 pack stores it (+Inf).
+    log(x / (1 - x)) elsewhere, in float64, rounded once to BF16, NaN included.
     Every other call keeps ``_golden_function_logit``.
     """
     import math
@@ -970,7 +970,6 @@ def _golden_function_logit_torch(input_tensor_a, *args, eps=None, **kwargs):
     inexact = torch.isfinite(result) & (f32.to(torch.float64) != result)
     bits = f32.view(torch.int32) - (inexact & (f32.to(torch.float64).abs() > result.abs())).to(torch.int32)
     rounded = (bits | inexact.to(torch.int32)).view(torch.float32).to(torch.bfloat16)
-    rounded = torch.where(torch.isnan(rounded), torch.full_like(rounded, math.inf), rounded)
     return rounded
 
 

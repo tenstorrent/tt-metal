@@ -9,6 +9,8 @@ namespace ckernel::sfpu {
 struct LogitBf16Config {
     static constexpr unsigned kLogDegree = 2u;
     static constexpr unsigned kCorrectionDegree = 1u;
+    // Wormhole's own TT-NN kernel stores -inf for finite |x| from BF16 word 0x7E81 up, 510 inputs
+    // of both signs. The word is read from that board's TT-NN outputs, so each board's header has its own.
     static constexpr unsigned kPositiveFirst = 32385u;
     static constexpr unsigned kPositiveEnd = 32640u;
     static constexpr unsigned kNegativeFirst = 65153u;
@@ -24,7 +26,7 @@ struct LogitBf16Config {
         __builtin_bit_cast(float, 0x3de5a23cu)};
 };
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_bf16_normalized_log_odds.h"
+#include "ckernel_sfpu_logit_bf16_normalized_log_odds.h"
 
 namespace ckernel::sfpu {
 

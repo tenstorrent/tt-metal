@@ -218,6 +218,8 @@ enum class SfpuType : std::uint32_t
     tan,
     max_pool_with_indices,
     signbit,
+    rand,
+    ema,
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its

@@ -12,6 +12,8 @@
 #include "api/scratchpad_binding_token.h"
 #include "experimental/kernel_args.h"
 
+enum class DataFormat : std::uint8_t;
+
 /**
  * @brief Kernel-side typed span over a Program-scope scratchpad.
  *
@@ -52,7 +54,10 @@ public:
 
     // Metal 2.0 ctor: Create a Scratchpad from its binding token:
     [[nodiscard]] explicit Scratchpad(const ScratchpadBindingToken& token) noexcept :
-        Scratchpad(pointer{get_common_arg_val<uint32_t>(token.crta_offset_)}, token.size_in_bytes_) {}
+        Scratchpad(
+            pointer{get_common_arg_val<uint32_t>(token.crta_offset_)},
+            token.size_in_bytes_,
+            static_cast<DataFormat>(token.llk_metadata_.format)) {}
 
     /** @brief Get the element at the given index
      *
@@ -86,6 +91,12 @@ public:
         // get_address() returns uintptr_t (64-bit on Gen2); narrow explicitly (always safe).
         return static_cast<size_type>(sentinel_addr_.get_address() - start_addr_.get_address());
     }
+
+    /** @brief Get the LLK data format configured for this scratchpad.
+     *
+     * Returns DataFormat::Invalid when the host ScratchpadSpec did not provide data format metadata.
+     */
+    [[nodiscard]] constexpr DataFormat get_dataformat() const noexcept { return data_format_; }
 
     /** @brief L1 base address of the scratchpad, as a raw uint32_t byte address.
      *
@@ -139,8 +150,10 @@ private:
     // Create a Scratchpad from an SRAM (L1) base address and size in bytes.
     // This ctor is private because a Scratchpad represents an allocated SRAM (L1) region.
     // A user may NOT construct a Scratchpad from an arbitrary address/size. (Use CoreLocalMem for that use case.)
-    [[nodiscard]] Scratchpad(pointer base_addr, size_type size_in_bytes) noexcept :
-        start_addr_(base_addr), sentinel_addr_(pointer{base_addr.get_address() + uintptr_t{size_in_bytes}}) {
+    [[nodiscard]] Scratchpad(pointer base_addr, size_type size_in_bytes, DataFormat data_format) noexcept :
+        start_addr_(base_addr),
+        sentinel_addr_(pointer{base_addr.get_address() + uintptr_t{size_in_bytes}}),
+        data_format_(data_format) {
         ASSERT(base_addr.get_address() % alignof(T) == 0);
         ASSERT(size_in_bytes % sizeof(T) == 0);
     }
@@ -148,7 +161,7 @@ private:
     // constexpr note:
     // The following members could be `constexpr` if `CoreLocalMem<T>` supported constexpr
     // construction/copy and a constexpr `get_address()`:
-    //   - Scratchpad(pointer, size_type)
+    //   - Scratchpad(pointer, size_type, DataFormat)
     //   - size(), size_in_bytes()
     //   - get_base_address(), local_mem()
     //   - begin(), end()
@@ -162,6 +175,7 @@ private:
     // Note:
     // sentinel_addr_ could be omitted in class layout if we inject the size information as a template parameter.
     pointer start_addr_, sentinel_addr_;
+    DataFormat data_format_;
 };
 
 // A scratchpad is a node-local SRAM (L1) allocation, so it can be either endpoint of a NoC transaction.
