@@ -2171,20 +2171,22 @@ class LMHeadSampling:
                     )
 
                     # --- Final-core-only softmax / top-P / RNG compute CBs ------------
-                    # sampling_max_cb reuses the L1 of sampling_softmax_in_cb, which is consumed before max_cb is packed.
-                    for _sampling_compute_cb_ids in (
-                        (sampling_softmax_out_cb,),
-                        (sampling_softmax_exp_cb,),
-                        (sampling_softmax_sub_cb,),
-                        (sampling_max_cb, sampling_softmax_in_cb),
-                        (sampling_sum_cb,),
-                        (sampling_scaler_cb,),
-                        (sampling_probs_out_cb,),
-                        (sampling_rand_cb,),
+                    # Each is a single bf16 tile (2 KB). Mirrors the final-device
+                    # block in _op_mesh_topk under `is_final_mesh_device`.
+                    for _sampling_compute_cb_id in (
+                        sampling_softmax_in_cb,
+                        sampling_softmax_out_cb,
+                        sampling_softmax_exp_cb,
+                        sampling_softmax_sub_cb,
+                        sampling_max_cb,
+                        sampling_sum_cb,
+                        sampling_scaler_cb,
+                        sampling_probs_out_cb,
+                        sampling_rand_cb,
                     ):
                         cbs_list.append(
                             ttnn.CBDescriptor(
-                                total_size=len(_sampling_compute_cb_ids) * sampling_bf16_tile_size,
+                                total_size=sampling_bf16_tile_size,
                                 core_ranges=sampling_final_core_crs,
                                 format_descriptors=[
                                     ttnn.CBFormatDescriptor(
@@ -2192,7 +2194,6 @@ class LMHeadSampling:
                                         data_format=ttnn.bfloat16,
                                         page_size=sampling_bf16_tile_size,
                                     )
-                                    for _sampling_compute_cb_id in _sampling_compute_cb_ids
                                 ],
                             )
                         )
