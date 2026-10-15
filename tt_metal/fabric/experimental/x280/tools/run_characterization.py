@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Run explicitly selected fixed configurations in an already prepared device epoch.
+
+Preparation, ownership verification and recovery use the existing launch tools.
+A failure stops the sequence; each invocation retains a fresh attempt directory.
+"""
+
+import argparse
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import tempfile
+from string import Template
+import xml.etree.ElementTree as ET
+
+from tabulate_suites import ParseError, read_attempt
+
+
+def sha256(path):
+    """Hash a retained file without changing it."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def write_attempt(path, record):
+    """Atomically update this runner's attempt record; retain its last state on failure."""
+    pending = path.with_suffix(".tmp")
+    with pending.open("x") as output:
+        output.write(json.dumps(record, indent=2) + "\n")
+    pending.replace(path)
+
+
+def command_for(manifest, config, values):
+    """Resolve argv/environment as data and clear inherited suite selection knobs and dispatch mode."""
+    prefixes = ("X280_", "PACKET_INJECTION_", "PIPELINE_STAGE_", "P2P_LATENCY_", "TRANSPORT_BW_")
+    environment = {k: v for k, v in os.environ.items() if not k.startswith(prefixes)}
+    environment.pop("TT_METAL_WATCHER", None)
+    environment.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+    selected = dict(manifest["common_environment"], **config["environment"])
+    environment.update({k: Template(v).substitute(values) for k, v in selected.items()})
+    return [Template(a).substitute(values) for a in config["argv"]], environment
+
+
+def validate_test_report(path, expected):
+    """Reject zero tests, skips, failures and a different filtered test."""
+    root = ET.parse(path).getroot()
+    cases = list(root.iter("testcase"))
+    if len(cases) != 1:
+        raise ValueError(f"expected one filtered test, got {len(cases)}")
+    case = cases[0]
+    if case.get("classname") + "." + case.get("name") != expected:
+        raise ValueError("gtest identity differs from requested filter")
+    if case.get("status") != "run" or case.get("result") != "completed" or list(case):
+        raise ValueError("gtest failed, skipped or did not complete")
+
+
+def run_one(manifest, config, values, campaign, engine):
+    """Retain one attempt and validate its exact record set; never reset hardware."""
+    attempt = Path(tempfile.mkdtemp(prefix=config["id"] + ".", dir=campaign / "attempts"))
+    values = dict(values, CAMPAIGN=str(attempt))
+    record = {
+        "configuration": config["id"],
+        "status": "running",
+        "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    write_attempt(attempt / "attempt.json", record)
+    try:
+        argv, environment = command_for(manifest, config, values)
+        filters = [a.split("=", 1)[1] for a in argv if a.startswith("--gtest_filter=")]
+        if len(filters) != 1:
+            raise ValueError("one exact gtest filter is required")
+        argv.append("--gtest_output=xml:" + str(attempt / "gtest.xml"))
+        record.update(
+            argv=argv,
+            environment={k: environment[k] for k in set(manifest["common_environment"]) | set(config["environment"])},
+        )
+        record["producer_sha"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=engine, text=True).strip()
+        record["binary_sha256"] = sha256(argv[0])
+        record["firmware_sha256"] = {k: sha256(v) for k, v in environment.items() if k.endswith("_FW_IMAGE")}
+        write_attempt(attempt / "attempt.json", record)
+        with (attempt / "run.log").open("x") as log:
+            result = subprocess.run(
+                argv, env=environment, cwd=engine, stdout=log, stderr=subprocess.STDOUT, timeout=180
+            )
+        record["returncode"] = result.returncode
+        if result.returncode:
+            raise ValueError(f"benchmark exit {result.returncode}; inspect run.log before device reuse")
+        validate_test_report(attempt / "gtest.xml", filters[0])
+        read_attempt(config, sorted((attempt / "raw").glob("*.jsonl")))
+        record["status"] = "passed"
+    except (ValueError, KeyError, OSError, ET.ParseError, ParseError, subprocess.SubprocessError) as error:
+        record["status"] = "failed"
+        record["error"] = str(error)
+        print(f"{config['id']}: {error}", flush=True)
+    record["ended_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    artifacts = [attempt / "run.log", attempt / "gtest.xml", *sorted((attempt / "raw").glob("*.jsonl"))]
+    record["artifacts_sha256"] = {str(path.relative_to(attempt)): sha256(path) for path in artifacts if path.is_file()}
+    write_attempt(attempt / "attempt.json", record)
+    print(f"{record['status']}: {config['id']} ({attempt})", flush=True)
+    return record["status"] == "passed"
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--manifest", type=Path, default=Path(__file__).resolve().parents[1] / "characterization_manifest.json"
+    )
+    parser.add_argument("--campaign", type=Path, required=True)
+    parser.add_argument("--host-build", type=Path, required=True)
+    parser.add_argument("--fw-build", type=Path, required=True)
+    parser.add_argument("--metal-src", type=Path, required=True)
+    parser.add_argument("--device", required=True)
+    parser.add_argument("--id", action="append", required=True)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    manifest = json.loads(args.manifest.read_text())
+    if set(manifest) != {"host", "common_environment", "configurations"}:
+        parser.error("manifest requires only host, common_environment and configurations")
+    for config in manifest["configurations"]:
+        if set(config) != {"id", "member", "argv", "environment"}:
+            parser.error("each configuration requires only id, member, argv and environment")
+    engine = Path(__file__).resolve().parents[2]
+    values = {
+        "ENGINE": str(engine),
+        "HOST_BUILD": str(args.host_build.resolve()),
+        "FW_BUILD": str(args.fw_build.resolve()),
+        "METAL_SRC": str(args.metal_src.resolve()),
+        "DEVICE": args.device,
+        "CAMPAIGN": str(args.campaign.resolve()),
+    }
+    configs = {c["id"]: c for c in manifest["configurations"]}
+    if not configs or len(configs) != len(manifest["configurations"]):
+        parser.error("configurations must be nonempty and have unique IDs")
+    selected = [configs[key] for key in args.id]
+    if len(set(args.id)) != len(args.id):
+        parser.error("duplicate configuration selection")
+    if args.dry_run:
+        for config in selected:
+            argv, environment = command_for(manifest, config, values)
+            print(
+                json.dumps(
+                    {
+                        "configuration": config["id"],
+                        "argv": argv,
+                        "environment": {
+                            k: environment[k] for k in set(manifest["common_environment"]) | set(config["environment"])
+                        },
+                    },
+                    indent=2,
+                )
+            )
+        return 0
+    if socket.getfqdn() != manifest["host"]:
+        parser.error("campaign is restricted to the authorized host")
+    if subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=engine).returncode:
+        parser.error("commit producer changes before collection")
+    untracked = subprocess.check_output(
+        ["git", "ls-files", "--others", "--exclude-standard", "x280"], cwd=engine, text=True
+    )
+    if any(not path.startswith("x280/benchmarks/campaigns/") for path in untracked.splitlines()):
+        parser.error("untracked X280 inputs must be committed before collection")
+    campaign = args.campaign.resolve()
+    campaign.mkdir(parents=True, exist_ok=True)
+    frozen = campaign / "manifest.json"
+    if frozen.exists() and json.loads(frozen.read_text()) != manifest:
+        parser.error("campaign manifest differs; choose a new campaign directory")
+    if not frozen.exists():
+        with frozen.open("x") as output:
+            output.write(json.dumps(manifest, indent=2) + "\n")
+    (campaign / "attempts").mkdir(exist_ok=True)
+    for config in selected:
+        if not run_one(manifest, config, values, campaign, engine):
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

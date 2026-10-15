@@ -1,0 +1,2223 @@
+{
+  "host": "x280-characterization-host",
+  "common_environment": {
+    "TT_VISIBLE_DEVICES": "${DEVICE}",
+    "TT_METAL_RUNTIME_ROOT": "${METAL_SRC}",
+    "X280_PLL_MHZ": "1750",
+    "X280_IDLE_FW_IMAGE": "${FW_BUILD}/firmware-lim-idle.bin",
+    "X280_CHARACTERIZATION_OUTPUT_DIR": "${CAMPAIGN}/raw"
+  },
+  "configurations": [
+    {
+      "id": "x280_same_tile.AInitiatesFirst",
+      "member": "p2p_latency/x280_same_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_x280_same_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyX280SameTile.TwoHartsOnOneTilePingPongThroughLim/AInitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_X280_SAME_TILE_W": "8",
+        "P2P_LATENCY_X280_SAME_TILE_N": "64",
+        "X280_P2P_LATENCY_X280_SAME_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-x280-same-tile.bin"
+      }
+    },
+    {
+      "id": "x280_same_tile.BInitiatesFirst",
+      "member": "p2p_latency/x280_same_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_x280_same_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyX280SameTile.TwoHartsOnOneTilePingPongThroughLim/BInitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_X280_SAME_TILE_W": "8",
+        "P2P_LATENCY_X280_SAME_TILE_N": "64",
+        "X280_P2P_LATENCY_X280_SAME_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-x280-same-tile.bin"
+      }
+    },
+    {
+      "id": "x280_peer_tile.AInitiatesFirst",
+      "member": "p2p_latency/x280_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_x280_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyX280PeerTile.TwoComplexesPingPongOverNoc/AInitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_X280_PEER_TILE_W": "8",
+        "P2P_LATENCY_X280_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_X280_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-x280-peer-tile.bin",
+        "P2P_LATENCY_X280_PEER_TILE_PAIR": "0,1"
+      }
+    },
+    {
+      "id": "x280_peer_tile.BInitiatesFirst",
+      "member": "p2p_latency/x280_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_x280_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyX280PeerTile.TwoComplexesPingPongOverNoc/BInitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_X280_PEER_TILE_W": "8",
+        "P2P_LATENCY_X280_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_X280_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-x280-peer-tile.bin",
+        "P2P_LATENCY_X280_PEER_TILE_PAIR": "0,1"
+      }
+    },
+    {
+      "id": "tensix_peer_tile.X280InitiatesFirst",
+      "member": "p2p_latency/tensix_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_tensix_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyTensixPeerTile.PairedPingPongMeasuresRttAndTurnPerSide/X280InitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_TENSIX_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin"
+      }
+    },
+    {
+      "id": "tensix_peer_tile.TensixInitiatesFirst",
+      "member": "p2p_latency/tensix_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_tensix_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyTensixPeerTile.PairedPingPongMeasuresRttAndTurnPerSide/TensixInitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_TENSIX_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin"
+      }
+    },
+    {
+      "id": "erisc_peer_tile.X280InitiatesFirst",
+      "member": "p2p_latency/erisc_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_erisc_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyEriscPeerTile.PairedPingPongMeasuresRawLocalDeltas/X280InitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_ERISC_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin"
+      }
+    },
+    {
+      "id": "erisc_peer_tile.EriscInitiatesFirst",
+      "member": "p2p_latency/erisc_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_erisc_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyEriscPeerTile.PairedPingPongMeasuresRawLocalDeltas/EriscInitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_ERISC_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin"
+      }
+    },
+    {
+      "id": "drisc_peer_tile.X280InitiatesFirst",
+      "member": "p2p_latency/drisc_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_drisc_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyDriscPeerTile.PairedPingPongMeasuresRawLocalDeltas/X280InitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_DRISC_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin"
+      }
+    },
+    {
+      "id": "drisc_peer_tile.DriscInitiatesFirst",
+      "member": "p2p_latency/drisc_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_drisc_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyDriscPeerTile.PairedPingPongMeasuresRawLocalDeltas/DriscInitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_DRISC_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.64.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/size64_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.64.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/size64_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.256.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/size256_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.256.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/size256_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.64.drained",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size64_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.64.injection",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size64_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.128.drained",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size128_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.128.injection",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size128_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.256.drained",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size256_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.256.injection",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size256_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.320.drained",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size320_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.320.injection",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size320_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.384.drained",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size384_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.384.injection",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size384_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.512.drained",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size512_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.512.injection",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size512_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.1024.drained",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size1024_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.1024.injection",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size1024_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.2048.drained",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size2048_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.2048.injection",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size2048_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.4096.drained",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size4096_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.4096.injection",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size4096_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.8192.drained",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size8192_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.8192.injection",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size8192_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.16384.drained",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size16384_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.tensix_to_x280.16384.injection",
+      "member": "transport_bandwidth/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_tensix_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthTensixToX280.RepeatedIssueMeasuresSustainedAndInjection/size16384_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "pipeline.x280.route_compute.direction_table_plain",
+      "member": "pipeline_stage/route_compute",
+      "argv": [
+        "${HOST_BUILD}/x280_pipeline_stage_route_compute",
+        "--gtest_filter=Sweep/PipelineStageRouteCompute.BatchedStageCostPerItem/direction_table_plain"
+      ],
+      "environment": {
+        "PIPELINE_STAGE_W": "128",
+        "PIPELINE_STAGE_N": "16384",
+        "X280_PIPELINE_STAGE_ROUTE_COMPUTE_FW_IMAGE": "${FW_BUILD}/firmware-pipeline-stage-route-compute.bin"
+      }
+    },
+    {
+      "id": "pipeline.x280.route_compute.direction_table_instrumented",
+      "member": "pipeline_stage/route_compute",
+      "argv": [
+        "${HOST_BUILD}/x280_pipeline_stage_route_compute",
+        "--gtest_filter=Sweep/PipelineStageRouteCompute.BatchedStageCostPerItem/direction_table_instrumented"
+      ],
+      "environment": {
+        "PIPELINE_STAGE_W": "128",
+        "PIPELINE_STAGE_N": "4096",
+        "X280_PIPELINE_STAGE_ROUTE_COMPUTE_FW_IMAGE": "${FW_BUILD}/firmware-pipeline-stage-route-compute.bin"
+      }
+    },
+    {
+      "id": "pipeline.x280.route_forward.decide_plain",
+      "member": "pipeline_stage/route_forward",
+      "argv": [
+        "${HOST_BUILD}/x280_pipeline_stage_route_forward",
+        "--gtest_filter=Sweep/PipelineStageRouteForward.BatchedForwardDecisionCostPerItem/decide_plain"
+      ],
+      "environment": {
+        "PIPELINE_STAGE_W": "128",
+        "PIPELINE_STAGE_N": "16384",
+        "X280_PIPELINE_STAGE_ROUTE_FORWARD_FW_IMAGE": "${FW_BUILD}/firmware-pipeline-stage-route-forward.bin"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T1",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "1",
+        "PACKET_INJECTION_TILES": "0,0",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T1.c8k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "1",
+        "PACKET_INJECTION_TILES": "0,0",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T1",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "1",
+        "PACKET_INJECTION_TILES": "0,0",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T2",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "2",
+        "PACKET_INJECTION_TILES": "0,0;1,0",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T2",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "2",
+        "PACKET_INJECTION_TILES": "0,0;1,0",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.c4k8",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "4",
+        "PACKET_INJECTION_K": "8",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.c8k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.s4",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "4",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.s8",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "8",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.s64",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.s64.c1k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.s64.c2k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "2",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.s64.c4k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "4",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.s64.c8k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.s64.c16k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "16",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.s64.c1k2",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "2",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.s64.c1k4",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "4",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.s64.c1k8",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "8",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.b4",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "4",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.c4k8",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "4",
+        "PACKET_INJECTION_K": "8",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.c8k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.s4",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "4",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.s8",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "8",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.s64",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.s64.c1k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.s64.c2k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "2",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.s64.c4k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "4",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.s64.c8k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.s64.c16k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "16",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.s64.c1k2",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "2",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.s64.c1k4",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "4",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.s64.c1k8",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "8",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T4.b4",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "4",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T8",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "8",
+        "PACKET_INJECTION_TILES": "0,0;1,0;2,0;3,0;0,1;1,1;2,1;3,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T8",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "8",
+        "PACKET_INJECTION_TILES": "0,0;1,0;2,0;3,0;0,1;1,1;2,1;3,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.latency-include.brisc.T1",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/LatencyInclude"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-latency-include.bin",
+        "PACKET_INJECTION_TILES": "0,0",
+        "PACKET_INJECTION_T": "1",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "100",
+        "PACKET_INJECTION_N": "3",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.latency-exclude.brisc.T1",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/LatencyExclude"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-latency-exclude.bin",
+        "PACKET_INJECTION_TILES": "0,0",
+        "PACKET_INJECTION_T": "1",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "100",
+        "PACKET_INJECTION_N": "3",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.backpressure-include.brisc.T1",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/BackpressureInclude"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-backpressure-include.bin",
+        "PACKET_INJECTION_TILES": "0,0",
+        "PACKET_INJECTION_T": "1",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "100",
+        "PACKET_INJECTION_N": "1000",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.backpressure-exclude.brisc.T1",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/BackpressureExclude"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-backpressure-exclude.bin",
+        "PACKET_INJECTION_TILES": "0,0",
+        "PACKET_INJECTION_T": "1",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "100",
+        "PACKET_INJECTION_N": "1000",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.writers2.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers2_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.writers4.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers4_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.writers8.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers8_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.writers1.b4",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b4"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.writers1.b8",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b8"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.writers4.b4",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers4_b4"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.writers4.b8",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers4_b8"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c1k8.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "8",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c1k8.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "8",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c1k16.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c1k16.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c4k8.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "4",
+        "PACKET_INJECTION_K": "8",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c4k8.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "4",
+        "PACKET_INJECTION_K": "8",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c4k16.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "4",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c4k16.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "4",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c8k8.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "8",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c8k8.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "8",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c8k16.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c8k16.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c8k16.writers2.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers2_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c8k16.writers4.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers4_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c8k16.writers8.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers8_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c8k16.writers1.b4",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b4"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c8k16.writers1.b8",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b8"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c8k16.writers4.b4",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers4_b4"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c8k16.writers4.b8",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers4_b8"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.c8k16.writers_all.b1.n4096",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "4096",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s32.c8k16.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "32",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s32.c8k16.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "32",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s32.c8k16.writers1.b4",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b4"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "32",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s32.c8k32.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "32",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s32.c8k32.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "32",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s32.c8k32.writers1.b4",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b4"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "32",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s32.c16k32.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "32",
+        "PACKET_INJECTION_C": "16",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s32.c16k32.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "32",
+        "PACKET_INJECTION_C": "16",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s32.c16k32.writers1.b4",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b4"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "32",
+        "PACKET_INJECTION_C": "16",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s32.c32k32.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "32",
+        "PACKET_INJECTION_C": "32",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s32.c32k32.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "32",
+        "PACKET_INJECTION_C": "32",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s32.c32k32.writers1.b4",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b4"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "32",
+        "PACKET_INJECTION_C": "32",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s64.c8k16.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s64.c8k16.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s64.c8k16.writers1.b4",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b4"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s64.c8k32.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s64.c8k32.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s64.c8k32.writers1.b4",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b4"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s64.c16k32.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_C": "16",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s64.c16k32.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_C": "16",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s64.c16k32.writers1.b4",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b4"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_C": "16",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s64.c32k32.writers1.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_C": "32",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s64.c32k32.writers_all.b1",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers_all_b1"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_C": "32",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "packet.erisc_header.s64.c32k32.writers1.b4",
+      "member": "packet_injection/erisc_to_x280_header",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_erisc_to_x280_header",
+        "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b4"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_S": "64",
+        "PACKET_INJECTION_C": "32",
+        "PACKET_INJECTION_K": "32",
+        "PACKET_INJECTION_N": "1024",
+        "PACKET_INJECTION_PHASE_TIMEOUT_MS": "5000",
+        "PACKET_INJECTION_HOST_TIMEOUT_MS": "50000"
+      }
+    },
+    {
+      "id": "core_sync.release_skew.fixed4x4",
+      "member": "core_sync/x280_director_characterization",
+      "argv": [
+        "${HOST_BUILD}/x280_core_sync_characterization",
+        "--gtest_filter=CoreSync/X280CoreSyncCharacterization.ReleaseSkewDistribution/0"
+      ],
+      "environment": {
+        "X280_CORE_SYNC_DIRECTOR_FW_IMAGE": "${FW_BUILD}/firmware-core-sync-director.bin"
+      }
+    },
+    {
+      "id": "eth_credit.throughput",
+      "member": "eth_credit/eth_credit",
+      "argv": [
+        "${HOST_BUILD}/x280_eth_credit",
+        "--gtest_filter=EthCredit/EthCreditHw.ThroughputBySlotBatchAndP/0"
+      ],
+      "environment": {
+        "TT_VISIBLE_DEVICES": "0,1",
+        "X280_ETH_CREDIT_FW_IMAGE": "${FW_BUILD}/firmware-eth-credit-x280-fwd.bin"
+      }
+    }
+  ]
+}
