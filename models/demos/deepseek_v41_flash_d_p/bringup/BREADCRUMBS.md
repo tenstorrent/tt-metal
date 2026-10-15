@@ -168,3 +168,23 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   DEVICE_STEPS["swa"] += attn_norm.
 - Gate: pcc 0.999999; vs CPU rel 7.9e-8 (limit 6.1e-3), vs golden rel 1.7e-3; all second inputs pass; A,B,A bit-identical.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_norm.py`
+
+## C.swa.q_a implement (attempt 1)
+- `tt/quant.py:fp8_qdq` (new; plan.md "Quantizer flips": C.swa.q_a builds it): act_quant_dequant(x, 32) on fp32 TILE
+  [.., R, W]: reshape to [R W/32, 32] -> abs -> ttnn.max(dim=-1) -> max(., 1e-4) -> x fp32(1/448) -> scale bits
+  (b + 0x7FFFFF) & 0x7F800000, 1/scale bits 0x7F000000 - b -> y = x / s, clamp +-448 -> e4m3 RNE: normals on the int
+  bits ((b + 0x7FFFF + lsb20) & ~0xFFFFF), |y| < 2^-6: round(y 2^9) 2^-9 -> sign -> x s -> bf16 (exact).
+  Probe (whole 2x2 mesh, FABRIC_2D; script kept out of the tree, K-56): ttnn.max fp32 exact, scalar multiply exact,
+  ttnn.round half-to-even, fp8_qdq 0 mismatches vs kernels.act_quant_dequant on randn, wide-range, row-scaled,
+  tiny + zero groups, e4m3 ties (normal + subnormal), amax = 448 x 2^k (512 x 2560 each). DS41-13.
+- `tt/q_a.py`: `TtAttnInProj` = q(attn_norm) [S/SP, H/TP] bf16 @ the chip's K rows of [wq_a | wkv]^T (bf16, exact
+  for e4m3 x 2^k; HiFi4 + fp32 acc, fp32 out) -> `tp_sum` (all_gather axis 1 + SFPU add, K-30) -> [S/SP, 1792] fp32
+  replicated over TP (`cols` names the blocks; the kv step slices [1280, 1792)). `TtQa` = fp8_qdq -> proj -> slice
+  q -> `TtDistributedRmsNorm(split=False)` q_norm (eps 1e-20, K-12: not ttnn.rms_norm). Out [S/SP, 1280] fp32.
+- `tt/norm.py`: `split=False` option (replicated weight, no exchange); default unchanged (attn_norm gate re-run: PASS).
+- hooks.py: `_hidden_to_rows_host_fn` (hidden-split in, row-split TP-replicated out), DEVICE_STEPS["swa"] += q_a.
+- Gate: pcc 0.999974; vs CPU rel 1.0e-4 (limit 7.0e-3; summation order only, q(x) is bit-exact), vs golden 7.3e-3
+  (limit 1.4e-2); second inputs rel <= 2.0e-4; A,B,A bit-identical. ~25 s.
+- Perf later: fp8_qdq is ~25 eltwise ops + a TILE reshape per call; a fork of per_token_cast_to_fp8 (block 32, RNE)
+  is the alternative (components.yaml header); linear uses the auto config (K-51).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_q_a.py`

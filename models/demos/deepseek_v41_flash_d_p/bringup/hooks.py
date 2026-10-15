@@ -55,7 +55,7 @@ def state_sources(spec, layer):
 # Device steps of the hybrid model, per block type: every step listed passed its component gate on the device.
 # Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "swa": {"attn_hc", "attn_collapse", "attn_norm"},
+    "swa": {"attn_hc", "attn_collapse", "attn_norm", "q_a"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -130,7 +130,29 @@ def _hidden_host_fn(mesh, module):
     return fn
 
 
+def _hidden_to_rows_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> host [S, W] fp32 (harness boundary: x rows split over axis 0 and hidden columns over
+    axis 1 in; the output rows split over axis 0, replicated over axis 1, read back from mesh column 0)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_device, row_split_to_host
+
+    def fn(ctx, x):
+        xd = hidden_split_to_device(mesh, x)
+        od = module(xd)
+        out = row_split_to_host(mesh, od).float()
+        ttnn.deallocate(xd)
+        ttnn.deallocate(od)
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _device_step_fn(mesh, spec, layer, step, ck, cfg):
+    if step == "q_a":
+        from models.demos.deepseek_v41_flash_d_p.tt.q_a import build_q_a
+
+        return _hidden_to_rows_host_fn(mesh, build_q_a(mesh, ck, cfg, layer))
     if step == "attn_norm":
         from models.demos.deepseek_v41_flash_d_p.tt.norm import build_norm
 
