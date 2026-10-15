@@ -591,7 +591,7 @@ class CUSTOM_MM_IN1_WINDOW(TemplateParameter):
     stride: int = 0
     col_start: int = 0
     split_acc: bool = False
-    read_transposed: bool = False
+    in1_read_transposed: bool = False
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
@@ -599,7 +599,7 @@ class CUSTOM_MM_IN1_WINDOW(TemplateParameter):
                 f"constexpr std::uint32_t CUSTOM_MM_IN1_STRIDE = {self.stride}u;",
                 f"constexpr std::uint32_t CUSTOM_MM_IN1_COL_START = {self.col_start}u;",
                 f"constexpr bool CUSTOM_MM_SPLIT_ACC = {str(self.split_acc).lower()};",
-                f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.read_transposed).lower()};",
+                f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.in1_read_transposed).lower()};",
             ]
         )
 

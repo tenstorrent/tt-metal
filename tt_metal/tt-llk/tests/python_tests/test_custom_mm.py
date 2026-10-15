@@ -166,7 +166,7 @@ def _run_custom_mm(
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * in1_tile_w
     col_start = in1_window.col_start
-    read_transposed = in1_window.read_transposed
+    read_transposed = in1_window.in1_read_transposed
     in1_row_tiles = col_start + ct + 1 if read_transposed else in1_window.stride or ct
     in1_col_tiles = in1_window.stride or kt if read_transposed else kt
     in1_tile_dims = [DEFAULT_TILE_R_DIM, in1_tile_w]
@@ -494,7 +494,7 @@ def test_custom_mm_read_transposed(M, kt, ct, stride, col_start, in1_format):
         formats,
         DestAccumulation.No,
         in1_window=CUSTOM_MM_IN1_WINDOW(
-            stride=stride, col_start=col_start, read_transposed=True
+            stride=stride, col_start=col_start, in1_read_transposed=True
         ),
     )
 
