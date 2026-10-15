@@ -69,6 +69,7 @@ DEVICE_STEPS = {
         "router",
         "experts",
         "shared_expert",
+        "moe_add",
     },
 }
 
@@ -324,6 +325,25 @@ def _rows_to_hidden_host_fn(mesh, module):
     return fn
 
 
+def _two_hidden_host_fn(mesh, module):
+    """fn(ctx, a_host [S, H], b_host [S, H]) -> host [S, H] fp32 (harness boundary: both inputs rows over axis 0 and
+    hidden columns over axis 1, fp32, in and out)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_device, hidden_split_to_host
+
+    def fn(ctx, a, b):
+        ad = hidden_split_to_device(mesh, a)
+        bd = hidden_split_to_device(mesh, b)
+        od = module(ad, bd)
+        out = hidden_split_to_host(mesh, od).float()
+        for t in (ad, bd, od):
+            ttnn.deallocate(t)
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _chunk(spec):
     """The serving chunk the window tables are built for (the run's target chunk; every ladder rung uses it)."""
     return int(spec.get("target.chunk"))
@@ -367,6 +387,10 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         from models.demos.deepseek_v41_flash_d_p.tt.shared_expert import build_shared_expert
 
         return _rows_to_hidden_host_fn(mesh, build_shared_expert(mesh, ck, cfg, layer))
+    if step == "moe_add":
+        from models.demos.deepseek_v41_flash_d_p.tt.moe_add import build_moe_add
+
+        return _two_hidden_host_fn(mesh, build_moe_add(cfg))
     if step == "router":
         from models.demos.deepseek_v41_flash_d_p.tt.router import build_router
 

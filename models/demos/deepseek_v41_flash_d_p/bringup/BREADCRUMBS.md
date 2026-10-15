@@ -482,3 +482,14 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   second inputs rel 0.0015-0.0035; span outside w2 0.00014-0.00023 (limit 0.003; DS41-25: fp32 partials keep it low);
   determinism bit-identical. 14 s test body on 2x2.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_shared_expert.py`
+
+## C.swa.moe_add implement (attempt 1)
+- `tt/moe_add.py:TtMoeAdd` (from xing40 TtMoeAdd): `ttnn.add(experts, shared, dtype=fp32)` on the [S/SP, H/TP] fp32
+  hidden-split layout TtExperts / TtSharedExpert return; fp32 + fp32 runs on the SFPU, so it equals torch's fp32 sum
+  (K-30). Local, no CCL, no weights, no box constants. In the assembled model the add moves onto the fp32 partials
+  before the one MoE exchange (components.yaml notes); this module is the standalone step.
+- hooks: `moe_add` in DEVICE_STEPS["swa"]; `_two_hidden_host_fn` (both inputs and the output hidden-split, fp32).
+- Gate: PASS. pcc 0.999998; vs CPU step rel 0 (bit-exact) on golden, layer24, mixed, small, big; vs golden rel 0.0022
+  (limit 0.0058); determinism bit-identical. 23 s total.
+- OV-4: known_issues.md not touched; DS41-20 already states the F73 fix.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_moe_add.py`
