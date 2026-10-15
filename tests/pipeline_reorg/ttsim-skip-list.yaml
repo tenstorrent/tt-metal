@@ -38,3 +38,11 @@ blackhole:
   # ZEROACC failures
   # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
+
+  # The generated BF16 kernel issues SFPLOADMACRO, which ttsim does not model; it has no
+  # DISABLE_SFPLOADMACRO path, so these cases run on silicon only.
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_atan_bf16_nonzero_dest_index
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_atan_bf16_several_tiles_per_core
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_atan_bf16_unflushed_zero_and_subnormal_inputs
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_atan_with_sqrt_in_sfpu_chain
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_trig_ops_out_ftz[ttnn_op=ttnn.atan-low=-100.0-high=100.0]

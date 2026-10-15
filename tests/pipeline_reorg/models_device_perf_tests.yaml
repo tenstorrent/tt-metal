@@ -37,7 +37,7 @@
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_atan_bf16_several_tiles_per_core
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_atan_bf16_unflushed_zero_and_subnormal_inputs
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_atan_with_sqrt_in_sfpu_chain
-    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_trig_ops_out_ftz[ttnn.atan--100.0-100.0]
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_trig_ops_out_ftz[ttnn_op=ttnn.atan-low=-100.0-high=100.0]
   skus:
     bh_p150b_civ2:
       timeout: 2

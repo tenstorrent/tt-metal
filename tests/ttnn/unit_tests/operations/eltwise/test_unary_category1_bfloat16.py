@@ -823,9 +823,9 @@ def test_atan_bf16_nonzero_dest_index(device):
 
 
 def test_atan_bf16_bfloat8_b(device):
-    """bfloat8_b in and out: the unpacker hands the SFPU BF16, so the generated kernel runs. Each output is
-    within two bfloat8_b steps of [1, 2) of torch's value on the input as stored: one for the output's
-    shared-exponent rounding, one for the kernel."""
+    """bfloat8_b in and out. The unpacker keeps Bfp8_b in the source registers and the BF16 kernel installs only
+    on Float16_b, so this runs the stock kernel. Each output is within two bfloat8_b steps of [1, 2) of torch's
+    value on the input as stored: one for the output's shared-exponent rounding, one for the kernel."""
     if not ttnn.device.is_blackhole(device):
         pytest.skip("ttnn.atan keeps its stock kernel off Blackhole")
     torch.manual_seed(0)
