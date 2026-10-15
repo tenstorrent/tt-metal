@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import re
 import shutil
 import sys
@@ -19,7 +20,6 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
-
 
 RE_TS = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)")
 RE_DEV = re.compile(r"\b(?:Device|Chip)\s+ID\s+(?P<dev>\d+)\b")
@@ -33,7 +33,7 @@ RE_PROGRAM_ROW = re.compile(
     r"^\s*"
     r"(?P<grid>\d+x\d+)\s+"
     r"(?P<cores>\d+)\s+"
-    r"(?:(?P<tiles_per_core>\d+(?:\s*/\s*\d+)?)\s+)?"
+    r"(?:(?P<blocks_per_core>\d+(?:\s*/\s*\d+)?)\s+)?"
     r"(?P<algo_time_s>\d+(?:\.\d+)?)\s+"
     r"(?P<tflops>\d+(?:\.\d+)?)\s+"
     r"(?P<per_iter_ms>\d+(?:\.\d+)?)\s+"
@@ -42,18 +42,21 @@ RE_PROGRAM_ROW = re.compile(
     r"\s*$"
 )
 
-# Matches the device-side profiler "zone name" markers emitted by DeviceTimestampedData()
-# in the reader/compute/writer kernels (see long_matmul), e.g. "READER_KERNEL_START".
-# The initial version of this analysis only looks at whole-kernel start/end, not the
-# per-iteration TRANSFER_START/END or SHMEM_READ/WRITE markers.
+# Matches the start/end markers long_matmul's reader/compute/writer kernels record with
+# DeviceTimestampedData() once per run, e.g. "READER_KERNEL_START" (see its
+# kernels/profile_markers.h).
 RE_KERNEL_ZONE = re.compile(r"^(?P<kernel>READER|COMPUTE|WRITER)_KERNEL_(?P<edge>START|END)$")
 
 # Matches the aggregate wait-vs-active cycle counters emitted once per kernel invocation (see
 # long_matmul's reader/compute/writer kernels), e.g. "READER_WAIT_CYCLES",
-# "READER_TRANSFER_CYCLES", "COMPUTE_WAIT_CYCLES", "COMPUTE_COMPUTE_CYCLES". WAIT = blocked on
-# the circular buffer; TRANSFER/COMPUTE (grouped as "active" below) = actual NoC transfer or
-# matmul/pack work. There's no on-device OVERHEAD marker (see compute_kernel_utilization_rows
+# "READER_TRANSFER_CYCLES", "COMPUTE_WAIT_CYCLES", "COMPUTE_COMPUTE_CYCLES". WAIT = blocked
+# waiting on another kernel; TRANSFER/COMPUTE (grouped as "active" below) = actual NoC transfer
+# or math/pack work. There's no on-device OVERHEAD marker (see compute_kernel_utilization_rows
 # for why) -- it's derived on the host instead, as lifetime_s - wait_s - active_s.
+# 1 mAh = 3.6 A*s and 1 mWh = 3.6 J (3600 s/h / 1000).
+AS_PER_MAH = 3.6
+J_PER_MWH = 3.6
+
 RE_KERNEL_CYCLES = re.compile(r"^(?P<kernel>READER|COMPUTE|WRITER)_(?P<metric>WAIT|TRANSFER|COMPUTE)_CYCLES$")
 
 
@@ -74,7 +77,7 @@ class Sample:
 class ProgramInterval:
     grid: str
     cores: int
-    tiles_per_core: Optional[str]
+    blocks_per_core: Optional[str]
     algo_time_s: float
     tflops: float
     per_iter_ms: float
@@ -280,7 +283,7 @@ def parse_program_log(path: Path) -> List[ProgramInterval]:
                 ProgramInterval(
                     grid=m.group("grid"),
                     cores=int(m.group("cores")),
-                    tiles_per_core=m.group("tiles_per_core"),
+                    blocks_per_core=m.group("blocks_per_core"),
                     algo_time_s=float(m.group("algo_time_s")),
                     tflops=float(m.group("tflops")),
                     per_iter_ms=float(m.group("per_iter_ms")),
@@ -291,6 +294,14 @@ def parse_program_log(path: Path) -> List[ProgramInterval]:
 
     rows.sort(key=lambda r: r.start_time)
     return rows
+
+
+def read_chip_freq_hz(path: Path) -> Optional[float]:
+    """The profiler CSV's first line carries the chip clock, e.g.
+    "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 72"."""
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        m = re.search(r"CHIP_FREQ\[MHz\]:\s*(\d+(?:\.\d+)?)", f.readline())
+    return float(m.group(1)) * 1e6 if m else None
 
 
 def load_device_kernel_markers(path: Path) -> List[DeviceMarker]:
@@ -336,70 +347,26 @@ def load_device_kernel_markers(path: Path) -> List[DeviceMarker]:
 
 
 def compute_kernel_intervals(
-    markers: List[DeviceMarker],
     intervals: List[ProgramInterval],
+    windows: List[Optional[Tuple[int, int, float]]],
+    run_slices: List[Dict[str, Tuple[List[DeviceMarker], List[DeviceMarker]]]],
 ) -> List[Dict[str, object]]:
     """
     Convert device-cycle KERNEL_START/KERNEL_END markers into absolute host wall-clock
-    start/end times, one row per kernel (reader/compute/writer) per grid run.
-
-    Each core emits its own marker independently: reader/writer once per core, compute once
-    per TRISC (x3, since TRISC0/1/2 all execute the same compute kernel source). So a run on
-    N cores has N READER_KERNEL_START, N WRITER_KERNEL_START and 3*N COMPUTE_KERNEL_START
-    markers -- not a fixed count. Runs execute strictly sequentially on one device, so sorting
-    each zone's markers by cycle and slicing off `cores * multiplier` at a time (using each
-    run's own core count from the program log) recovers the per-run boundaries without an
-    explicit run id in the CSV.
-
-    Anchors each run to that run's Start/End Time from the program log (RE_PROGRAM_ROW), using
-    the run's global min(*_KERNEL_START cycle) / max(*_KERNEL_END cycle) across all three
-    kernels as the two anchor points -- NOT each kernel's own min/max, which would trivially
-    reproduce the run's start/end time and hide real inter-kernel timing differences (e.g.
-    writer starting later than reader because it waits on the first compute result).
+    start/end times, one row per kernel (reader/compute/writer) per grid run. The per-run marker
+    slices and time anchors come from compute_run_windows.
     """
-    PER_CORE_MULTIPLIER = {"READER": 1, "COMPUTE": 3, "WRITER": 1}
-
-    by_kernel_edge: Dict[tuple, List[DeviceMarker]] = defaultdict(list)
-    for m in markers:
-        match = RE_KERNEL_ZONE.match(m.zone_name)
-        if match:
-            by_kernel_edge[(match.group("kernel"), match.group("edge"))].append(m)
-    for marker_list in by_kernel_edge.values():
-        marker_list.sort(key=lambda m: m.cycle)
-
-    cursor = {key: 0 for key in by_kernel_edge}
     results: List[Dict[str, object]] = []
 
-    for run in intervals:
-        run_slices: Dict[str, tuple] = {}
-        for kernel_name, multiplier in PER_CORE_MULTIPLIER.items():
-            count = run.cores * multiplier
-            starts = by_kernel_edge.get((kernel_name, "START"), [])
-            ends = by_kernel_edge.get((kernel_name, "END"), [])
-            s0 = cursor.get((kernel_name, "START"), 0)
-            e0 = cursor.get((kernel_name, "END"), 0)
-            run_slices[kernel_name] = (starts[s0 : s0 + count], ends[e0 : e0 + count])
-            cursor[(kernel_name, "START")] = s0 + count
-            cursor[(kernel_name, "END")] = e0 + count
-
-        all_starts = [m for s, _ in run_slices.values() for m in s]
-        all_ends = [m for _, e in run_slices.values() for m in e]
-        if not all_starts or not all_ends:
+    for run, window, slices in zip(intervals, windows, run_slices):
+        if window is None:
             continue
+        anchor_a, _anchor_b, freq_hz = window
 
-        anchor_cycle_a = min(m.cycle for m in all_starts)
-        anchor_cycle_b = max(m.cycle for m in all_ends)
-        duration_s = (run.end_time - run.start_time).total_seconds()
-
-        if anchor_cycle_b <= anchor_cycle_a or duration_s <= 0:
-            continue
-
-        freq_hz = (anchor_cycle_b - anchor_cycle_a) / duration_s
-
-        def to_host_time(cycle: int, _start=run.start_time, _a=anchor_cycle_a, _f=freq_hz) -> datetime:
+        def to_host_time(cycle: int, _start=run.start_time, _a=anchor_a, _f=freq_hz) -> datetime:
             return _start + timedelta(seconds=(cycle - _a) / _f)
 
-        for kernel_name, (kernel_starts, kernel_ends) in run_slices.items():
+        for kernel_name, (kernel_starts, kernel_ends) in slices.items():
             if not kernel_starts or not kernel_ends:
                 continue
 
@@ -457,6 +424,13 @@ def save_kernel_intervals_csv(kernel_intervals: List[Dict[str, object]], csv_pat
 
 _KERNEL_CORE_MULTIPLIER = {"READER": 1, "COMPUTE": 3, "WRITER": 1}
 
+# A wait or active total may exceed the kernel's lifetime by this factor (timer and rounding
+# noise) before the row is treated as corrupt.
+LIFETIME_TOLERANCE = 1.01
+
+# Where the kernel wait/active/overhead charts go, inside the run directory.
+KERNEL_FIGURES_DIR = "kernel_figures"
+
 
 def check_marker_counts(markers: List[DeviceMarker], intervals: List[ProgramInterval]) -> bool:
     """Markers are assigned to runs by count, in cycle order, so every run must have recorded
@@ -486,15 +460,26 @@ def check_marker_counts(markers: List[DeviceMarker], intervals: List[ProgramInte
 def compute_run_windows(
     markers: List[DeviceMarker],
     intervals: List[ProgramInterval],
-) -> List[Optional[Tuple[int, int, float]]]:
+    chip_freq_hz: Optional[float] = None,
+) -> Tuple[List[Optional[Tuple[int, int, float]]], List[Dict[str, Tuple[List[DeviceMarker], List[DeviceMarker]]]]]:
     """
     For each run (in the same order as `intervals`), return (anchor_cycle_a, anchor_cycle_b,
-    freq_hz) -- the run's overall device-cycle window and device-cycles-per-host-second rate,
-    anchored to that run's Start/End Time. Anchors use the GLOBAL min(*_KERNEL_START cycle) /
-    max(*_KERNEL_END cycle) across all three kernels (see compute_kernel_intervals for why: a
-    kernel's own min/max would trivially reproduce the run's start/end time).
+    freq_hz) -- the run's device-cycle window and the device-cycles-per-second rate used to
+    convert cycles to host time -- plus that run's KERNEL_START/KERNEL_END markers per kernel.
 
-    Returns None for a run whose markers couldn't be resolved (e.g. missing/misaligned data).
+    Each core records its own markers: reader/writer once per core, compute once per TRISC. So a
+    run on N cores has N READER, N WRITER and 3*N COMPUTE start markers. Runs execute one after
+    another on one device, so sorting each zone's markers by cycle and slicing off
+    `cores * multiplier` at a time (each run's core count comes from the program log) recovers
+    the per-run boundaries; check_marker_counts verifies the totals first.
+
+    The anchors are the run's global min(*_KERNEL_START cycle) / max(*_KERNEL_END cycle) across
+    all three kernels, so inter-kernel timing differences stay visible. The start anchor is
+    pinned to the run's Start Time from the program log. freq_hz is chip_freq_hz (the profiler
+    CSV's CHIP_FREQ) when given; otherwise (legacy mode) the cycle span divided by the host
+    Start-to-End window, which also contains host-side work and so reads low.
+
+    A run whose markers can't be resolved gets None.
     """
     by_kernel_edge: Dict[Tuple[str, str], List[DeviceMarker]] = defaultdict(list)
     for m in markers:
@@ -506,21 +491,23 @@ def compute_run_windows(
 
     cursor = {key: 0 for key in by_kernel_edge}
     windows: List[Optional[Tuple[int, int, float]]] = []
+    run_slices: List[Dict[str, Tuple[List[DeviceMarker], List[DeviceMarker]]]] = []
 
     for run in intervals:
-        all_starts: List[DeviceMarker] = []
-        all_ends: List[DeviceMarker] = []
+        slices: Dict[str, Tuple[List[DeviceMarker], List[DeviceMarker]]] = {}
         for kernel_name, multiplier in _KERNEL_CORE_MULTIPLIER.items():
             count = run.cores * multiplier
             starts = by_kernel_edge.get((kernel_name, "START"), [])
             ends = by_kernel_edge.get((kernel_name, "END"), [])
             s0 = cursor.get((kernel_name, "START"), 0)
             e0 = cursor.get((kernel_name, "END"), 0)
-            all_starts.extend(starts[s0 : s0 + count])
-            all_ends.extend(ends[e0 : e0 + count])
+            slices[kernel_name] = (starts[s0 : s0 + count], ends[e0 : e0 + count])
             cursor[(kernel_name, "START")] = s0 + count
             cursor[(kernel_name, "END")] = e0 + count
+        run_slices.append(slices)
 
+        all_starts = [m for st, _ in slices.values() for m in st]
+        all_ends = [m for _, en in slices.values() for m in en]
         if not all_starts or not all_ends:
             windows.append(None)
             continue
@@ -533,10 +520,10 @@ def compute_run_windows(
             windows.append(None)
             continue
 
-        freq_hz = (anchor_cycle_b - anchor_cycle_a) / duration_s
+        freq_hz = chip_freq_hz if chip_freq_hz else (anchor_cycle_b - anchor_cycle_a) / duration_s
         windows.append((anchor_cycle_a, anchor_cycle_b, freq_hz))
 
-    return windows
+    return windows, run_slices
 
 
 def find_run_index(cycle: int, windows: List[Optional[Tuple[int, int, float]]]) -> Optional[int]:
@@ -552,12 +539,14 @@ def find_run_index(cycle: int, windows: List[Optional[Tuple[int, int, float]]]) 
 def compute_kernel_utilization_rows(
     markers: List[DeviceMarker],
     intervals: List[ProgramInterval],
+    windows: List[Optional[Tuple[int, int, float]]],
 ) -> List[Dict[str, object]]:
     """
     Build one row per (grid run, kernel, core, RISC) with that core's own kernel lifetime
     (start/end, converted to host wall-clock time) and its wait/active/overhead breakdown:
-      wait_s / wait_pct       -- blocked waiting on the other kernels: circular buffers for the
-                                 reader, writer and TRISC0, DEST for TRISC1 and TRISC2 (see
+      wait_s / wait_pct       -- blocked waiting on another kernel: circular buffers for the
+                                 reader, writer and TRISC0; DEST for TRISC1; math done or
+                                 output CB space for TRISC2, i.e. mostly the writer (see
                                  docs/device-side-instrumentation.md)
       active_s / active_pct   -- actual NoC transfer (reader/writer) or matmul/pack (compute)
       overhead_s / overhead_pct -- everything else (index arithmetic, tile-register handshake,
@@ -579,7 +568,6 @@ def compute_kernel_utilization_rows(
     NOC coordinates, not necessarily the logical 0-based grid coordinates used to launch the
     kernels.
     """
-    windows = compute_run_windows(markers, intervals)
 
     starts_by_core: Dict[Tuple[str, int, int, str], List[DeviceMarker]] = defaultdict(list)
     ends_by_core: Dict[Tuple[str, int, int, str], List[DeviceMarker]] = defaultdict(list)
@@ -648,9 +636,9 @@ def compute_kernel_utilization_rows(
             # exceed that invocation's own lifetime. If it does, the reading is corrupted (rare
             # profiler marker export artifacts near 2^32/2^64 boundaries have been observed) --
             # discard it as invalid rather than let one bad row skew an average across cores.
-            if lifetime_s <= 0 or wait_s > lifetime_s * 1.01:
+            if lifetime_s <= 0 or wait_s > lifetime_s * LIFETIME_TOLERANCE:
                 wait_s = float("nan")
-            if lifetime_s <= 0 or active_s > lifetime_s * 1.01:
+            if lifetime_s <= 0 or active_s > lifetime_s * LIFETIME_TOLERANCE:
                 active_s = float("nan")
 
             # overhead_s is derived, not measured -- see the docstring above. Only valid when
@@ -1035,6 +1023,16 @@ def plot_combined_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: 
     return out_files
 
 
+# drop_startup_transient: shortest window it looks at, the most of a window it may drop, how
+# long the current must stay settled, and the settle tolerance (max of an absolute floor in A,
+# since TDC reports whole amps, and a multiple of the back half's MAD).
+SETTLE_MIN_SAMPLES = 20
+SETTLE_MAX_FRACTION = 0.10
+SETTLE_CONFIRM_MS = 2.0
+SETTLE_TOL_FLOOR_A = 2.0
+SETTLE_TOL_MADS = 3.0
+
+
 def drop_startup_transient(
     samples: List[Sample],
     settle_max_ms: float,
@@ -1063,7 +1061,7 @@ def drop_startup_transient(
 
     Returns the surviving samples and how many milliseconds were removed.
     """
-    if settle_max_ms <= 0.0 or len(samples) < 20:
+    if settle_max_ms <= 0.0 or len(samples) < SETTLE_MIN_SAMPLES:
         return samples, 0.0
 
     span_s = (samples[-1].ts - samples[0].ts).total_seconds()
@@ -1071,7 +1069,7 @@ def drop_startup_transient(
         return samples, 0.0
 
     # Never eat more than a tenth of the window, however the cap is set.
-    budget_ms = min(settle_max_ms, span_s * 1000.0 * 0.10)
+    budget_ms = min(settle_max_ms, span_s * 1000.0 * SETTLE_MAX_FRACTION)
     if budget_ms <= 0.0:
         return samples, 0.0
 
@@ -1080,10 +1078,10 @@ def drop_startup_transient(
     mad = float(np.median([abs(c - steady) for c in back_half]))
     # TDC is reported as whole amps, so MAD collapses to 0 on a flat window; the floor keeps
     # the tolerance meaningful there and stops quantisation noise from looking like a spike.
-    tol = max(2.0, 3.0 * mad)
+    tol = max(SETTLE_TOL_FLOOR_A, SETTLE_TOL_MADS * mad)
 
     t0 = samples[0].ts
-    confirm = timedelta(milliseconds=2.0)
+    confirm = timedelta(milliseconds=SETTLE_CONFIRM_MS)
     cutoff = t0 + timedelta(milliseconds=budget_ms)
 
     settled_at = None
@@ -1135,6 +1133,7 @@ def compute_pause_base_currents(
     raw_samples: List[Sample],
     intervals: List[ProgramInterval],
     trim_ms: float,
+    legacy: bool = False,
 ) -> Tuple[List[float], List[int]]:
     trim_delta = timedelta(milliseconds=trim_ms)
     pause_base_currents: List[float] = []
@@ -1142,9 +1141,14 @@ def compute_pause_base_currents(
 
     for i in range(len(intervals) - 1):
         # Shrink the pause by the trim on both sides, away from the runs, so no sample from
-        # either neighbouring run counts toward the idle baseline.
-        prev_end = intervals[i].end_time + trim_delta
-        next_start = intervals[i + 1].start_time - trim_delta
+        # either neighbouring run counts toward the idle baseline. Legacy mode widens it by the
+        # trim into both runs instead, as the published analysis did.
+        if legacy:
+            prev_end = intervals[i].end_time - trim_delta
+            next_start = intervals[i + 1].start_time + trim_delta
+        else:
+            prev_end = intervals[i].end_time + trim_delta
+            next_start = intervals[i + 1].start_time - trim_delta
 
         if next_start <= prev_end:
             pause_base_currents.append(float("nan"))
@@ -1163,18 +1167,16 @@ def compute_pause_base_currents(
 def attach_dynamic_baseline(
     results: List[Dict[str, object]],
     pause_base_currents: List[float],
+    legacy: bool = False,
 ) -> List[Dict[str, object]]:
     """Baseline is the current measured in the pause right after the *first* interval, used as
     one fixed reference for every interval in the run -- it is not re-estimated per interval.
 
-    Previously each interval got its own local estimate (the mean of the pause immediately
-    before and after it), which tracks the board's own warm-up drift within a run -- but that
-    same drift means two separately-run cases (e.g. run 5 minutes apart, one further into a
-    multi-case sweep than the other) get baselines from different points on that drift curve,
-    which can make whichever case ran later look artificially lower in dynamic current even
-    when its raw current was actually higher. A single fixed reference per run removes that
-    per-interval tracking (and reintroduces later-interval drift as apparent "dynamic" current
-    within the run instead) in exchange for not itself drifting.
+    A per-interval estimate would track the board's warm-up drift within a run, but separately
+    run cases (minutes apart in a sweep) would then get baselines from different points on that
+    drift, which can make the later case look lower in dynamic current even when its raw current
+    was higher. A single reference per run does not drift between cases; the cost is that drift
+    within the run shows up as dynamic current in the later intervals.
     """
     if not results:
         return results
@@ -1185,7 +1187,7 @@ def attach_dynamic_baseline(
 
     out: List[Dict[str, object]] = []
 
-    for i, r in enumerate(results):
+    for r in results:
         rr = dict(r)
 
         base_current_a = reference_base_current_a
@@ -1194,13 +1196,17 @@ def attach_dynamic_baseline(
         peak_current_a = rr["peak_current_a"]
         window_s = rr["window_s"]
 
+        # Updated mode keeps the sign: a run that dips below the baseline gives negative
+        # dynamic current, so differences between separately run cases (the per-engine ablation)
+        # are not biased by a floor. Legacy mode floors at 0, as the published analysis did.
+        floor = 0.0 if legacy else -np.inf
         dynamic_avg_current_a = (
-            max(0.0, avg_current_a - base_current_a)
+            max(floor, avg_current_a - base_current_a)
             if np.isfinite(avg_current_a) and np.isfinite(base_current_a)
             else float("nan")
         )
         dynamic_peak_current_a = (
-            max(0.0, peak_current_a - base_current_a)
+            max(floor, peak_current_a - base_current_a)
             if np.isfinite(peak_current_a) and np.isfinite(base_current_a)
             else float("nan")
         )
@@ -1210,14 +1216,18 @@ def attach_dynamic_baseline(
             if np.isfinite(dynamic_avg_current_a) and np.isfinite(window_s)
             else float("nan")
         )
-        dynamic_charge_avg_mah = dynamic_charge_avg_as / 3.6 if np.isfinite(dynamic_charge_avg_as) else float("nan")
+        dynamic_charge_avg_mah = (
+            dynamic_charge_avg_as / AS_PER_MAH if np.isfinite(dynamic_charge_avg_as) else float("nan")
+        )
 
         dynamic_charge_peak_as = (
             dynamic_peak_current_a * window_s
             if np.isfinite(dynamic_peak_current_a) and np.isfinite(window_s)
             else float("nan")
         )
-        dynamic_charge_peak_mah = dynamic_charge_peak_as / 3.6 if np.isfinite(dynamic_charge_peak_as) else float("nan")
+        dynamic_charge_peak_mah = (
+            dynamic_charge_peak_as / AS_PER_MAH if np.isfinite(dynamic_charge_peak_as) else float("nan")
+        )
 
         rr["base_current_a"] = base_current_a
         rr["dynamic_avg_current_a"] = dynamic_avg_current_a
@@ -1237,6 +1247,7 @@ def compute_interval_metrics(
     intervals: List[ProgramInterval],
     trim_ms: float,
     settle_max_ms: float = 0.0,
+    legacy: bool = False,
 ) -> List[Dict[str, object]]:
     results: List[Dict[str, object]] = []
     trim_delta = timedelta(milliseconds=trim_ms)
@@ -1292,16 +1303,16 @@ def compute_interval_metrics(
         avg_power_vi_w = safe_mean(powers_vi)
 
         charge_avg_as = avg_current_a * window_s if np.isfinite(avg_current_a) else float("nan")
-        charge_avg_mah = charge_avg_as / 3.6 if np.isfinite(charge_avg_as) else float("nan")
+        charge_avg_mah = charge_avg_as / AS_PER_MAH if np.isfinite(charge_avg_as) else float("nan")
 
         charge_peak_as = peak_current_a * window_s if np.isfinite(peak_current_a) else float("nan")
-        charge_peak_mah = charge_peak_as / 3.6 if np.isfinite(charge_peak_as) else float("nan")
+        charge_peak_mah = charge_peak_as / AS_PER_MAH if np.isfinite(charge_peak_as) else float("nan")
 
         energy_j_tdp = avg_tdp_w * window_s if np.isfinite(avg_tdp_w) else float("nan")
-        energy_mwh_tdp = energy_j_tdp / 3.6 if np.isfinite(energy_j_tdp) else float("nan")
+        energy_mwh_tdp = energy_j_tdp / J_PER_MWH if np.isfinite(energy_j_tdp) else float("nan")
 
         energy_j_vi = avg_power_vi_w * window_s if np.isfinite(avg_power_vi_w) else float("nan")
-        energy_mwh_vi = energy_j_vi / 3.6 if np.isfinite(energy_j_vi) else float("nan")
+        energy_mwh_vi = energy_j_vi / J_PER_MWH if np.isfinite(energy_j_vi) else float("nan")
 
         results.append(
             {
@@ -1333,9 +1344,10 @@ def compute_interval_metrics(
         raw_samples=raw_samples,
         intervals=intervals,
         trim_ms=trim_ms,
+        legacy=legacy,
     )
 
-    results = attach_dynamic_baseline(results, pause_base_currents)
+    results = attach_dynamic_baseline(results, pause_base_currents, legacy=legacy)
     if len(intervals) < 2:
         print(
             "WARNING: only one run in the program log, so there is no idle pause to measure the base "
@@ -1343,15 +1355,12 @@ def compute_interval_metrics(
             file=sys.stderr,
         )
 
-    # base_current_a now comes from a single reference pause (the one right after the first
-    # interval -- see attach_dynamic_baseline), so that is the only pause any row's baseline
-    # quality depends on. base_pause_left_samples is kept at 0 throughout (no "left" pause is
-    # used anymore); base_pause_right_samples reports that one reference pause's sample count
-    # for every row, so a thin reference pause is visible as a quality flag across the whole run.
+    # base_current_a comes from a single reference pause (the one right after the first
+    # interval -- see attach_dynamic_baseline). base_pause_samples reports that pause's sample
+    # count on every row, so a thin reference pause shows up as a quality flag for the whole run.
     reference_pause_samples = pause_sample_counts[0] if pause_sample_counts else 0
     for r in results:
-        r["base_pause_left_samples"] = 0
-        r["base_pause_right_samples"] = reference_pause_samples
+        r["base_pause_samples"] = reference_pause_samples
 
     return results
 
@@ -1440,8 +1449,7 @@ def save_interval_csv(results: List[Dict[str, object]], csv_path: Path) -> None:
         "dynamic_charge_avg_mah",
         "dynamic_charge_peak_as",
         "dynamic_charge_peak_mah",
-        "base_pause_left_samples",
-        "base_pause_right_samples",
+        "base_pause_samples",
         "settle_trim_ms",
     ]
 
@@ -1464,38 +1472,7 @@ def plot_duration_and_metric(
     out_path: Path,
     dpi: int,
 ) -> None:
-    x = np.arange(len(grids), dtype=float)
-
-    color_left = "tab:blue"
-    color_right = "tab:red"
-
-    fig, ax1 = plt.subplots(figsize=(12, 6))
-    ax2 = ax1.twinx()
-
-    line1 = ax1.plot(x, durations, marker="o", color=color_left, label="Duration [s]")
-    line2 = ax2.plot(x, metric, marker="s", color=color_right, label=metric_label)
-
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(grids, rotation=45, ha="right")
-    ax1.set_xlabel("Grid size")
-
-    ax1.set_ylabel("Duration [s]", color=color_left)
-    ax2.set_ylabel(metric_label, color=color_right)
-
-    ax1.tick_params(axis="y", colors=color_left)
-    ax2.tick_params(axis="y", colors=color_right)
-
-    ax1.grid(True)
-    ax1.set_title(title)
-
-    lines = line1 + line2
-    labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc="best")
-
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
+    plot_dual_metric(grids, durations, metric, "Duration [s]", metric_label, title, out_path, dpi)
 
 
 def plot_single_metric(
@@ -1799,30 +1776,6 @@ def plot_program_interval_figures(
                 dpi=dpi,
             ),
         ),
-        (
-            fig_dir / "execution_time_vs_dynamic_peak_current.png",
-            lambda p: plot_duration_and_metric(
-                grids=grids,
-                durations=durations,
-                metric=dynamic_peak_currents,
-                metric_label="Dynamic peak current [A]",
-                title="Execution Time vs Dynamic Peak Current",
-                out_path=p,
-                dpi=dpi,
-            ),
-        ),
-        (
-            fig_dir / "execution_time_vs_dynamic_avg_current.png",
-            lambda p: plot_duration_and_metric(
-                grids=grids,
-                durations=durations,
-                metric=dynamic_avg_currents,
-                metric_label="Dynamic average current [A]",
-                title="Execution Time vs Dynamic Average Current",
-                out_path=p,
-                dpi=dpi,
-            ),
-        ),
     ]
 
     for out_path, plot_fn in figure_specs:
@@ -1892,6 +1845,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Trim each interval by this many ms on both sides when --program-log is used (default 6.0)",
     )
     ap.add_argument(
+        "--mode",
+        choices=("updated", "legacy"),
+        default=os.environ.get("LONG_MATMUL_MODE") or "updated",
+        help=(
+            "legacy reproduces how the published tt-ember results were analysed (idle-pause window "
+            "widened by the trim, dynamic current floored at 0, kernel cycles converted with the "
+            "host window); updated fixes those. Default: $LONG_MATMUL_MODE, else updated."
+        ),
+    )
+    ap.add_argument(
         "--settle-max-ms",
         type=float,
         default=25.0,
@@ -1931,6 +1894,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     args = ap.parse_args(argv)
+    legacy = args.mode == "legacy"
+    incomplete = False  # set when an output is written but something it needs was missing
 
     if not args.input.exists():
         print(f"ERROR: input file not found: {args.input}", file=sys.stderr)
@@ -1978,6 +1943,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("ERROR: Parsed samples, but no devices remained after filtering.", file=sys.stderr)
         return 4
 
+    if args.device_id is None and len(devices) > 1 and args.program_log is not None:
+        print(
+            f"ERROR: the telemetry has {len(devices)} devices ({sorted(devices)}); pass --device-id so "
+            "the interval metrics use only the device the workload ran on.",
+            file=sys.stderr,
+        )
+        return 11
+
     t, dev_ids, v_v, i_a, p_w = build_timeseries(slots, devices)
     if t.size == 0:
         print("ERROR: Parsed samples, but no slots produced.", file=sys.stderr)
@@ -2015,7 +1988,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             intervals=intervals,
             trim_ms=args.trim_ms,
             settle_max_ms=args.settle_max_ms,
+            legacy=legacy,
         )
+        print(f"Analysis mode: {args.mode}", file=sys.stderr)
+        empty = [r["grid"] for r in interval_results if r["sample_count"] == 0]
+        if empty:
+            print(f"WARNING: no telemetry samples in grid(s) {', '.join(map(str, empty))}.", file=sys.stderr)
+        if empty or not all(np.isfinite(r["base_current_a"]) for r in interval_results):
+            incomplete = True
 
         print_interval_report(interval_results, args.trim_ms)
 
@@ -2040,52 +2020,53 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"Copied device profiler csv to: {copied_device_csv}", file=sys.stderr)
 
             device_markers = load_device_kernel_markers(args.device_profiler_csv)
-            check_marker_counts(device_markers, intervals)
-            kernel_intervals = compute_kernel_intervals(device_markers, intervals)
-
-            if not kernel_intervals:
-                print(
-                    "WARNING: no kernel start/end intervals could be computed from the "
-                    "device profiler csv (check that the app ran with "
-                    "TT_METAL_DEVICE_PROFILER=1).",
-                    file=sys.stderr,
-                )
+            if not check_marker_counts(device_markers, intervals):
+                print("Skipping the kernel analysis.", file=sys.stderr)
+                incomplete = True
             else:
-                print_kernel_interval_report(kernel_intervals)
+                chip_freq_hz = None if legacy else read_chip_freq_hz(args.device_profiler_csv)
+                windows, run_slices = compute_run_windows(device_markers, intervals, chip_freq_hz)
+                kernel_intervals = compute_kernel_intervals(intervals, windows, run_slices)
 
-                kernel_csv = args.kernel_csv
-                if kernel_csv is None:
-                    kernel_csv = run_dir / "kernel_intervals.csv"
+                if not kernel_intervals:
+                    print(
+                        "WARNING: no kernel start/end intervals could be computed from the "
+                        "device profiler csv (check that the app ran with "
+                        "TT_METAL_DEVICE_PROFILER=1).",
+                        file=sys.stderr,
+                    )
+                else:
+                    print_kernel_interval_report(kernel_intervals)
+                    kernel_csv = args.kernel_csv or run_dir / "kernel_intervals.csv"
+                    save_kernel_intervals_csv(kernel_intervals, kernel_csv)
+                    print(f"Kernel interval CSV written to: {kernel_csv}", file=sys.stderr)
 
-                save_kernel_intervals_csv(kernel_intervals, kernel_csv)
-                print(f"Kernel interval CSV written to: {kernel_csv}", file=sys.stderr)
+                utilization_rows = compute_kernel_utilization_rows(device_markers, intervals, windows)
+                if not utilization_rows:
+                    print(
+                        "WARNING: no per-core wait/active utilization rows could be computed from "
+                        "the device profiler csv.",
+                        file=sys.stderr,
+                    )
+                else:
+                    utilization_csv = run_dir / "kernel_utilization.csv"
+                    save_kernel_utilization_csv(utilization_rows, utilization_csv)
+                    print(f"Kernel utilization CSV written to: {utilization_csv}", file=sys.stderr)
 
-            utilization_rows = compute_kernel_utilization_rows(device_markers, intervals)
+                    kernel_fig_dir = run_dir / KERNEL_FIGURES_DIR
+                    utilization_agg = aggregate_kernel_utilization(utilization_rows)
+                    for fig_path in plot_kernel_utilization(utilization_agg, kernel_fig_dir, args.dpi):
+                        print(f"Kernel utilization figure written to: {fig_path}", file=sys.stderr)
 
-            if not utilization_rows:
-                print(
-                    "WARNING: no per-core wait/active utilization rows could be computed from "
-                    "the device profiler csv.",
-                    file=sys.stderr,
-                )
-            else:
-                utilization_csv = run_dir / "kernel_utilization.csv"
-                save_kernel_utilization_csv(utilization_rows, utilization_csv)
-                print(f"Kernel utilization CSV written to: {utilization_csv}", file=sys.stderr)
+                    combined_agg = aggregate_combined_utilization(utilization_rows)
+                    for fig_path in plot_combined_utilization(combined_agg, kernel_fig_dir, args.dpi):
+                        print(f"Combined utilization figure written to: {fig_path}", file=sys.stderr)
 
-                utilization_agg = aggregate_kernel_utilization(utilization_rows)
-                new_fig_dir = run_dir / "FiguresNew"
-                utilization_figures = plot_kernel_utilization(utilization_agg, new_fig_dir, args.dpi)
-
-                for fig_path in utilization_figures:
-                    print(f"Kernel utilization figure written to: {fig_path}", file=sys.stderr)
-
-                combined_agg = aggregate_combined_utilization(utilization_rows)
-                combined_figures = plot_combined_utilization(combined_agg, new_fig_dir, args.dpi)
-
-                for fig_path in combined_figures:
-                    print(f"Combined utilization figure written to: {fig_path}", file=sys.stderr)
-
+    if incomplete:
+        # Outputs are written, but something the analysis needs was missing; a non-zero exit
+        # stops auto.py from marking the run as complete.
+        print("ERROR: the run is incomplete (see the warnings above).", file=sys.stderr)
+        return 10
     return 0
 
 
