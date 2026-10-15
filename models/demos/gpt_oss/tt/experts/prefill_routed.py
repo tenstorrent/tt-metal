@@ -615,7 +615,9 @@ class RoutedPrefillExperts:
             ttnn.deallocate(tok_max)
             tok_of_row = ttnn.to_layout(tok_u, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(tok_u)
-        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+        # The row-major copy of x lives in L1 (47 MB at C = 8192) only for the gather: the untilize skips a DRAM write
+        # and the gather reads the local pairs' rows from L1 (measured 0.94 -> 0.77 ms per layer at 8K, one device).
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
         x_rm = ttnn.reshape(x_rm, (C, H))
         # padding_idx=0: every row that reads token 0 (about 3/4 of the k*C buffer rows on each of the N devices are
         # unwritten and read token 0) is served from a per-core L1 copy of x[0] instead of DRAM; same values.
