@@ -29,6 +29,7 @@ from models.experimental.bevformer.model_config import (
     BOX_VELOCITY,
     BOX_YAW,
     CAN_BUS_DIMS,
+    CENTERS_FIRST,
     CODE_SIZE,
     CODE_XY,
     CODE_Z,
@@ -673,6 +674,12 @@ def build_reg_branches(seed=1):
     return branches.eval().requires_grad_(False)
 
 
+def reference_box_codes(outputs, reg_branches):
+    """Each layer's reg branch on the reference decoder's ``(L, nq, bs, C)`` outputs: the box codes
+    the TT decoder also returns, ``(L, bs, nq, code_size)`` in its ``CENTERS_FIRST`` order."""
+    return torch.stack([branch(out.permute(1, 0, 2)) for branch, out in zip(reg_branches, outputs)])[..., CENTERS_FIRST]
+
+
 def random_reference_points(batch_size, generator=None):
     """Uniform in [0, 1], with a slice of points on and just inside the grid edges.
 
@@ -750,10 +757,26 @@ def build_reference_head(bev_shape, seed=0):
     return model.eval().requires_grad_(False)
 
 
+# Box center error bounds in metres, about twice what the head's dummy-weight tests measure: PCC
+# alone allows metres of error on x and y, which span 102.4 m, where nuScenes matches boxes from
+# 0.5 m.
+CENTER_MEAN_ATOL = 0.01
+CENTER_MAX_ATOL = 0.15
+
+
 def center_channels():
-    """The box code's cx, cy and cz channels."""
+    """Indexes of cx, cy and cz in the box code, which are not contiguous."""
     channels = list(range(CODE_SIZE))
     return channels[CODE_XY] + channels[CODE_Z]
+
+
+def assert_centers_close(expected, actual):
+    """The box predictions' center channels within ``CENTER_MEAN_ATOL`` and ``CENTER_MAX_ATOL``."""
+    centers = center_channels()
+    error = (expected[..., centers] - actual[..., centers]).abs()
+    logger.info(f"box center error: mean {error.mean():.4f} m, max {error.max():.4f} m")
+    assert error.mean() <= CENTER_MEAN_ATOL, f"mean box center error {error.mean():.4f} m"
+    assert error.max() <= CENTER_MAX_ATOL, f"max box center error {error.max():.4f} m"
 
 
 def assert_boxes_close(expected, actual, pcc=0.99):
@@ -805,7 +828,7 @@ def assert_topk_close(cls_scores, bbox_preds, tt_cls_scores, tt_bbox_preds, tt_t
     # logits exactly, which order as their exact sigmoid does.
     score_error = (cls_scores.sigmoid() - tt_cls_scores.float().sigmoid()).abs().amax((1, 2))
     for i in range(cls_scores.shape[0]):
-        labels, query_index = tt_labels[i].long(), tt_query_index[i, :, 0].long()
+        labels, query_index = tt_labels[i].long(), tt_query_index[i].long()
         ref_scores, ref_labels, ref_query_index, _ = reference.topk(cls_scores[i], bbox_preds[i])
         assert (tt_scores[i][1:] <= tt_scores[i][:-1]).all(), f"sample {i}: top-k scores are not sorted"
         # With e the score error and s_k the reference's k-th score: every reference top-k pair

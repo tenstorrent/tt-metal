@@ -254,14 +254,14 @@ Tests the detection head, and the coder on the head's outputs.
 - The tiny grid, a traced run on new BEV features, batch size 2, and the base 200x200 grid
 - PCC 0.99 on the class logits and, channel by channel, on the box predictions, over all layers
   and on the last one; a joint PCC would be carried by the metre-scale centers alone
-- The box centers within a mean and a max error in metres (`tests/head_common.py`), which PCC
+- The box centers within a mean and a max error in metres (`tests/common.py`), which PCC
   over the 102.4 m axes does not bound
 - That the coder, on the head's outputs, selects pairs within twice the score error of the reference
   head's top 300 covering at least 90% of it, with the reference's scores (within 0.02) at those
   pairs, and that its device box decoding matches the host's on the same predictions
 
-The decoder and reg branches use `tests/decoder_common.py`'s dummy-weight init, and the reference
-points BEVFormer's xavier init (`tests/head_common.py`).
+The decoder and reg branches use `tests/common.py`'s dummy-weight init, and the reference
+points BEVFormer's xavier init (`tests/common.py`).
 
 **Usage:**
 ```bash

@@ -4,16 +4,15 @@
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
-    assert_topk_close,
+    assert_centers_close,
     assert_channels_close,
     assert_pcc,
+    assert_topk_close,
     build_reference_head,
-    center_channels,
     random_bev,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_head_parameters
@@ -105,7 +104,7 @@ def test_head_detections(device, reset_seeds):
     bev_embed = _bev_embed(bev_shape, batch_size, seed=0)
     cls_scores, bbox_preds = torch_model(bev_embed)
     tt_cls_scores, tt_bbox_preds = tt_model(_to_device(bev_embed, device))
-    tt_topk = tuple(ttnn.to_torch(t) for t in TtNMSFreeCoder().topk(tt_cls_scores[-1], tt_bbox_preds[-1]))
+    tt_topk = tuple(ttnn.to_torch(t) for t in TtNMSFreeCoder(device).topk(tt_cls_scores[-1], tt_bbox_preds[-1]))
     assert_topk_close(
         cls_scores[-1], bbox_preds[-1], ttnn.to_torch(tt_cls_scores[-1]), ttnn.to_torch(tt_bbox_preds[-1]), tt_topk
     )

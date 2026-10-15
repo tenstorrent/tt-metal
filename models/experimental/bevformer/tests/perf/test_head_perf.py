@@ -20,6 +20,7 @@ from tracy import signpost
 import ttnn
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
+    assert_centers_close,
     assert_channels_close,
     assert_pcc,
     build_reference_head,

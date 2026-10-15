@@ -24,7 +24,7 @@ import dataclasses
 import math
 
 import ttnn
-from models.experimental.bevformer.model_config import CODE_XY, CODE_Z, GRID_DTYPE
+from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_common import TtFFN, layer_norm, signpost
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 
@@ -127,7 +127,7 @@ class TtDetectionTransformerDecoder:
 
         Returns every layer's output ``(L, nq, bs, C)`` (``(L, bs, nq, C)`` with ``batch_first``),
         refined reference points ``(L, bs, nq, 3)`` and the reg branches' raw box codes
-        ``(L, bs, nq, code_size)`` in ``config/decoder_config.py``'s ``CENTERS_FIRST`` order
+        ``(L, bs, nq, code_size)`` in ``model_config.py``'s ``CENTERS_FIRST`` order
         (batch-first either way), both ``GRID_DTYPE``. The codes' center channels are logit
         offsets; the refined points are their outcome.
         """
@@ -152,9 +152,9 @@ class TtDetectionTransformerDecoder:
             signpost(header="Decoder RegBranch Start")
             box_code = self._reg_branch(output, branch)
             signpost(header="Decoder RegBranch Complete")
-            center_delta = ttnn.concat([box_code[..., CODE_XY], box_code[..., CODE_Z]], dim=-1)
-            # The clamp (a no-op on the first layer's logit output) runs inside the add.
-            logits = ttnn.add(center_delta, logits, input_tensor_b_activations=CLAMP_LOGITS)
+            # The codes come centers first (CENTERS_FIRST). The clamp (a no-op on the first
+            # layer's logit output) runs inside the add.
+            logits = ttnn.add(box_code[..., 0:3], logits, input_tensor_b_activations=CLAMP_LOGITS)
             reference_points = ttnn.sigmoid(logits)
 
             intermediate.append(output)
