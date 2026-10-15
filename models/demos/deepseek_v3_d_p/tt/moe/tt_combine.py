@@ -172,7 +172,7 @@ class TtCombine2dModule(LightweightModule):
     That transport needs one input the direct op does not: `all_expert_offsets`, which tells every chip
     where each ORIGIN chip's run starts inside each expert's region. It is a separate class rather
     than a flag on TtCombineModule because the two ops take different inputs and have different
-    capabilities — notably there is no fp8 output path here.
+    capabilities.
     """
 
     def __init__(
@@ -185,6 +185,7 @@ class TtCombine2dModule(LightweightModule):
         cluster_axis: int = 0,
         num_links: int = 1,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+        fp8_scale_block: int = 0,
     ):
         """
         Initialize the fabric2d combine module.
@@ -200,11 +201,14 @@ class TtCombine2dModule(LightweightModule):
             num_links: Number of fabric links per chip-to-chip connection. Each (link, direction)
                 pair is one stream, so the op runs 2 * num_links streams per chip.
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
+            fp8_scale_block: 0 sends BFLOAT16 tokens. 128 has combine's untilizers quantize each token
+                to FP8_E4M3 with a power-of-two fp32 scale per 128 elements, so the output rows are
+                [emb_dim e4m3 | emb_dim / 128 fp32 scales]. Needs a TILE dispatched buffer and emb_dim a
+                multiple of 2048.
 
         Note there is no dispatch_group_size: combine_fabric2d derives the ring from cluster_axis
-        and the mesh shape, and no fp8_output, because the op has no fp8 stage on the way out.
-        There is no topology either: __init__ checks that the fabric wraps cluster_axis into a ring,
-        so the op is always given Ring.
+        and the mesh shape. There is no topology either: __init__ checks that the fabric wraps
+        cluster_axis into a ring, so the op is always given Ring.
         """
         check_fabric2d_setup(mesh_device, cluster_axis, emb_dim)
         super().__init__()
@@ -215,6 +219,7 @@ class TtCombine2dModule(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.memory_config = memory_config
+        self.fp8_scale_block = fp8_scale_block
 
     def forward(
         self,
@@ -248,7 +253,9 @@ class TtCombine2dModule(LightweightModule):
 
         Returns:
             output: Combined token embeddings, shape per device
-                (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim), BFLOAT16 ROW_MAJOR.
+                (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim), BFLOAT16 ROW_MAJOR; with
+                fp8_scale_block, the packed FP8_E4M3 rows (1, 1, seq_len_per_chip, num_experts_per_tok,
+                emb_dim + emb_dim / 32).
                 A slot whose pick went to another dispatch group, or that dispatch dropped because its
                 page fell past the end of dispatched_buffer, is not written and holds whatever the
                 buffer held before; the output is never zeroed.
@@ -266,4 +273,5 @@ class TtCombine2dModule(LightweightModule):
             num_links=self.num_links,
             topology=ttnn.Topology.Ring,
             memory_config=self.memory_config,
+            fp8_scale_block=self.fp8_scale_block,
         )

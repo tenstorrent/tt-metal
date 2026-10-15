@@ -33,7 +33,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_y_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
+from models.demos.deepseek_v3_d_p.tt.moe.fabric2d_contract import fabric2d_min_payload_size
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config, get_gate_outputs
 
 # One 5120-token chunk spread over the 8-chip dispatch group.
@@ -274,15 +277,15 @@ class _Fixture:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def tt_payload(self, layout):
+    def tt_payload(self, layout, dtype=ttnn.bfloat16):
         """The payload on device in `layout`, uploaded once. A TILE upload runs a tilize program."""
-        if layout not in self._tt_payload:
-            self._tt_payload[layout] = self._shard(self.payload, (0, 1), ttnn.bfloat16, layout=layout)
-        return self._tt_payload[layout]
+        if (layout, dtype) not in self._tt_payload:
+            self._tt_payload[layout, dtype] = self._shard(self.payload, (0, 1), dtype, layout=layout)
+        return self._tt_payload[layout, dtype]
 
-    def run(self, cluster_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT):
+    def run(self, cluster_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, fp8_scale_block=0):
         return ttnn.experimental.deepseek_prefill.combine_fabric2d(
-            self.tt_payload(layout),
+            self.tt_payload(layout, dtype),
             self.tt_meta,
             self.tt_counts,
             self.tt_region,
@@ -294,6 +297,7 @@ class _Fixture:
             num_links=num_links,
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            fp8_scale_block=fp8_scale_block,
         )
 
     def picks_by_distance(self):
@@ -334,6 +338,41 @@ class _Fixture:
         assert checked > 0, f"{label}: no kept picks; the reference or the routing is wrong"
         assert bad == 0, f"{label}: {bad} of {self.H * self.G} devices differ from the combine reference"
         logger.info(f"{label}: {checked} slots byte-exact")
+
+    def check_fp8(self, output, label, block):
+        """Every kept slot's fp8 token, dequantized on device, against the host's 1xblock quantization of the page
+        dispatch put it at: e4m3 = rne(x / scale), scale = 2^ceil(log2(max(amax, 1e-4) / 448)).
+
+        Values that quantize to an e4m3 subnormal (below 2^-6 after scaling) are only bounded: the Blackhole packer
+        and unpacker do not keep them, and they are under 2^-14.8 of their block's amax.
+        """
+        r = self.routing
+        deq = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+            output, None, output_dtype=ttnn.float32, scale_block_w=block, scales_in_row_tail=True
+        )
+        got_all = ttnn.get_device_tensors(deq)
+        normal_total = normal_exact = 0
+        for dev in range(self.H * self.G):
+            s, g = dev // self.G, dev % self.G
+            mask = self.kept[g, s]
+            if not mask.any():
+                continue
+            got = ttnn.to_torch(got_all[dev]).float().reshape(self.seq_len_per_chip, self.topk, self.emb_dim)[mask]
+            x = self.payload[r.holder_pos[g, s][mask], g, r.page[g, s][mask]].float()
+            amax = x.reshape(-1, self.emb_dim // block, block).abs().amax(-1).clamp(min=1e-4)
+            scale = torch.pow(2.0, torch.ceil(torch.log2(amax / 448.0))).repeat_interleave(block, -1)
+            q = x / scale
+            want = q.to(torch.float8_e4m3fn).float() * scale
+            normal = q.abs() >= 2.0**-6
+            normal_total += int(normal.sum())
+            normal_exact += int((got[normal] == want[normal]).sum())
+            tiny = got[~normal].abs() - 2.0**-6 * scale[~normal]
+            assert (tiny <= 0).all(), f"{label}: device {dev}: a subnormal-range value dequantized past 2^-6 * scale"
+        assert normal_total > 0, f"{label}: no kept picks; the reference or the routing is wrong"
+        match = normal_exact / normal_total
+        logger.info(f"{label}: {normal_exact}/{normal_total} normal values exact ({match:.6%})")
+        # A block whose amax / 448 lands within an ulp of a power of two may take the other scale on device.
+        assert match >= 0.999, f"{label}: only {match:.4%} of normal fp8 values match the host quantization"
 
 
 @pytest.mark.parametrize(
@@ -696,3 +735,62 @@ def test_combine_fabric2d_overlapped_skew(mesh_device, device_params, num_links)
     for i, (fx, output) in enumerate(zip(order, results)):
         fx.check(output, f"launch {i} of {launches}, chip 1 starved")
     logger.info(f"overlapped skew: {launches} launches byte-exact")
+
+
+def _fp8_cases():
+    """emb 2048, the narrowest fp8 token (2112 B), at the full payload; then GLM 5.3's 6144 at its model payload,
+    where a packed 6336 B token crosses as one packet, and at half a bf16 token plus 64 B, where it crosses as two."""
+    full = [param for param in _MESH_CONFIGS if param.id == "fabric2d-torus-y-8x1-2link"]
+    cases = [pytest.param(*p.values, 2048, marks=p.marks, id=f"{p.id}-emb2048") for p in full]
+    for payload, label in (
+        (6144 + 6144 // 128 * 4 + 64, "one-packet"),
+        (fabric2d_min_payload_size(6144), "two-packet"),
+    ):
+        cases.append(
+            pytest.param(
+                (8, 1),
+                torus_y_device_params(fabric_payload_size=payload),
+                2,
+                6144,
+                marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+                id=f"fabric2d-torus-y-8x1-2link-payload{payload}-emb6144-{label}",
+            )
+        )
+    return cases
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, emb_dim",
+    _fp8_cases(),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="FP8_E4M3 is packed by the Blackhole packer")
+@pytest.mark.timeout(900)
+def test_combine_fabric2d_fp8(mesh_device, device_params, num_links, emb_dim, expect_error):
+    """fp8_scale_block=128: the untilizers quantize every token to [e4m3 | fp32 scale per 128] on its way out, and
+    each kept slot receives the quantization of the page dispatch put it at. The routed expert hands combine
+    BFLOAT8_B tiles; BFLOAT16 ones take the same path. A ROW_MAJOR buffer has no untilize, so it is refused.
+    """
+    block = 128
+    cfg = extract_mesh_config(mesh_device)
+    H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups
+    fx = _Fixture(mesh_device, H, G, seed=9, emb_dim=emb_dim)
+    # Magnitudes spread over several octaves per 32 columns, so a block boundary in the wrong place moves a scale.
+    generator = torch.Generator().manual_seed(1)
+    octaves = torch.randint(-6, 6, fx.payload.shape[:-1] + (emb_dim // 32, 1), generator=generator).float()
+    spread = torch.pow(2.0, octaves).expand(*fx.payload.shape[:-1], emb_dim // 32, 32).reshape(fx.payload.shape)
+    fx.payload = (fx.payload.float() * spread).to(torch.bfloat16)
+
+    with expect_error(RuntimeError, "only a TILE dispatched_buffer"):
+        fx.run(cfg.sp_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT, fp8_scale_block=block)
+
+    for dtype, label in ((ttnn.bfloat16, "bf16 tiles"), (ttnn.bfloat8_b, "bf8 tiles")):
+        if dtype == ttnn.bfloat8_b:
+            # The reference quantizes what the device holds: the payload rounded to bfp8 the way the upload does.
+            fx.payload = ttnn.to_torch(ttnn.from_torch(fx.payload, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(
+                torch.bfloat16
+            )
+        output = fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, dtype=dtype, fp8_scale_block=block)
+        assert output.dtype == ttnn.fp8_e4m3, output.dtype
+        assert tuple(output.shape)[-3:] == (fx.seq_len_per_chip, fx.topk, emb_dim + emb_dim // 32), output.shape
+        fx.check_fp8(output, f"combine fp8 from {label}", block)

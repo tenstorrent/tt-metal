@@ -19,7 +19,8 @@ ttnn::Tensor combine_fabric2d(
     uint32_t cluster_axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    const tt::tt_metal::MemoryConfig& memory_config) {
+    const tt::tt_metal::MemoryConfig& memory_config,
+    uint32_t fp8_scale_block) {
     return ttnn::prim::combine_fabric2d(
         dispatched_buffer.device(),
         dispatched_buffer,
@@ -33,7 +34,8 @@ ttnn::Tensor combine_fabric2d(
         cluster_axis,
         num_links,
         topology,
-        memory_config);
+        memory_config,
+        fp8_scale_block);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d

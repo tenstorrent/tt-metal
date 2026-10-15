@@ -181,6 +181,9 @@ def run_model(
     hybrid_token_threshold_model_config=None,
     overlap_shared_expert_with_dispatch=True,
     traced_replays=0,
+    dispatch_wire="bf16",
+    fp8_scale_block=32,
+    combine_wire="bf16",
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -622,6 +625,9 @@ def run_model(
         overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
         overlap_routed_expert_with_combine_eager=overlap_routed_expert_with_combine_eager,
         overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        dispatch_wire=dispatch_wire,
+        fp8_scale_block=fp8_scale_block,
+        combine_wire=combine_wire,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -852,8 +858,18 @@ def run_model(
             logger.debug(f"  {name} tt shape: {tt_intermediates.combined_output.shape}")
             logger.debug(f"  {name} torch shape: {torch_intermediates.combined_output.shape}")
 
+            tt_combined = tt_intermediates.combined_output
+            if tt_combined.dtype == ttnn.fp8_e4m3:
+                # Packed [e4m3 | fp32 scale per block] rows off the fp8 combine wire: dequantized as the reduce does.
+                tt_combined = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+                    tt_combined,
+                    None,
+                    output_dtype=ttnn.bfloat16,
+                    scale_block_w=fp8_scale_block,
+                    scales_in_row_tail=True,
+                )
             tt_combined_torch = ttnn.to_torch(
-                tt_intermediates.combined_output,
+                tt_combined,
                 mesh_composer=get_ep_mesh_composer(mesh_device),
                 dtype=torch.bfloat16,
             )
@@ -1213,6 +1229,96 @@ def test_moe_fabric2d_model_payload(
         overlap_routed_expert_with_combine_eager=overlap,
         overlap_shared_expert_with_dispatch=not traced_replays,
         traced_replays=traced_replays,
+    )
+
+
+# The fp8 dispatch wire: Q1 quantizes each row to e4m3 with a pow2 fp32 scale per 128 elements packed in its
+# tail, dispatch_fabric2d moves the packed rows, and DQ1 hands the routed expert bf16 rows again. Run with the
+# routed expert overlapped with combine_fabric2d, as the model runs it. At DeepSeek V3's model payload a packed row
+# does not fit one packet, so it crosses the fabric as two, cut at a 64 B line; GLM 5.3's payload holds it whole.
+@pytest.mark.parametrize("traced_replays", [0, 8], ids=["overlapped", "traced"])
+@pytest.mark.parametrize(
+    "model_cfg, mesh_device, device_params, num_links",
+    _combine_fabric2d_model_payload_cases(),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["ds-ref"])
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(900)
+def test_moe_fabric2d_fp8_dispatch(
+    variant, config_only, model_cfg, mesh_device, device_params, num_links, request, traced_replays
+):
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
+        emb_dim=model_cfg.EMB_SIZE,
+        hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
+        num_routed_experts=model_cfg.NUM_ROUTED_EXPERTS,
+        num_experts_per_tok=model_cfg.NUM_EXPERTS_PER_TOKEN,
+        dispatch_buffer_capacity_factor=8,
+        run_pcc_check=True,
+        num_links=num_links,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        request=request,
+        dispatch_impl="fabric2d",
+        combine_impl="fabric2d",
+        overlap_routed_expert_with_combine=True,
+        overlap_routed_expert_with_combine_eager=True,
+        overlap_shared_expert_with_dispatch=not traced_replays,
+        traced_replays=traced_replays,
+        dispatch_wire="fp8",
+        fp8_scale_block=128,
+    )
+
+
+def _fp8_wire_cases():
+    """The model-payload cases whose routed rows the fp8 combine wire can pack: emb a multiple of 2048, which of the
+    models here is GLM 5.3. Its payload holds a packed row plus 64 B, so each row crosses as one packet."""
+    return [case for case in _combine_fabric2d_model_payload_cases() if case.values[0].EMB_SIZE % 2048 == 0]
+
+
+# Both wires fp8: Q1 before dispatch_fabric2d, DQ1 into the routed expert's bf8 tiles, and Q2 in combine_fabric2d's
+# untilizers inside the overlapped program, so combine moves [e4m3 | fp32 scale per 128] rows and post_combine_reduce
+# dequantizes them in its weighted sum (DQ2).
+@pytest.mark.parametrize("traced_replays", [0, 8], ids=["overlapped", "traced"])
+@pytest.mark.parametrize(
+    "model_cfg, mesh_device, device_params, num_links",
+    _fp8_wire_cases(),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["ds-ref"])
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(900)
+def test_moe_fabric2d_fp8_wire(
+    variant, config_only, model_cfg, mesh_device, device_params, num_links, request, traced_replays
+):
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
+        emb_dim=model_cfg.EMB_SIZE,
+        hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
+        num_routed_experts=model_cfg.NUM_ROUTED_EXPERTS,
+        num_experts_per_tok=model_cfg.NUM_EXPERTS_PER_TOKEN,
+        dispatch_buffer_capacity_factor=8,
+        run_pcc_check=True,
+        num_links=num_links,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        request=request,
+        dispatch_impl="fabric2d",
+        combine_impl="fabric2d",
+        overlap_routed_expert_with_combine=True,
+        overlap_routed_expert_with_combine_eager=True,
+        overlap_shared_expert_with_dispatch=not traced_replays,
+        traced_replays=traced_replays,
+        dispatch_wire="fp8",
+        fp8_scale_block=128,
+        combine_wire="fp8",
     )
 
 

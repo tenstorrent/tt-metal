@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// 1x32 fp8 quantize helper shared by per_token_cast_to_fp8 (FAST_1X32) and the routed expert's Q2 epilogue:
-// from a row-max tile (column 0, one value per tile row), write the exact power-of-two 1/scale in place.
+// fp8 quantize helpers shared by per_token_cast_to_fp8 (FAST_1X32), the routed expert's Q2 epilogue and
+// combine_fabric2d's quantizing untilize: from a row-max tile (column 0, one value per tile row), write the exact
+// power-of-two 1/scale in place, and round the scaled values to the e4m3 grid.
 #pragma once
 
 #include <cstdint>
@@ -57,6 +58,24 @@ inline void pow2_inv_scale_lreg(uint32_t r, uint32_t clamp_lreg) {
 
 template <bool kPow2>
 inline void amax_rows_tile(uint32_t clamp_min_bits, uint32_t inv_448_bits);
+
+// Round fp32 to the e4m3 mantissa grid (3 explicit bits) with round-to-nearest-even, so the
+// truncating fp8 packer then sees exact values. Same "add half-ulp - 1 + lsb, clear" bit trick as
+// float32_to_bf16_rne, at bit 20 instead of 16. Inputs are already scaled to |x| <= 448, so no
+// rounding reaches 480 (NaN in e4m3fn). e4m3 subnormals (|x| < 2^-6) keep packer truncation below
+// their coarser grid; at these scales that is < 2^-14.8 of the block amax.
+template <int ITERATIONS = 8>
+inline void calculate_round_to_e4m3_rne() {
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat value = sfpi::dst_reg[0];
+        sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(value);
+        sfpi::vUInt lsb = (bits >> 20) & 1;
+        bits = bits + 0x7ffffU + lsb;
+        bits = bits & 0xfff00000U;
+        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(bits);
+        sfpi::dst_reg++;
+    }
+}
 
 inline void calculate_amax_pow2_inv_scale(uint32_t clamp_min_bits, uint32_t inv_448_bits) {
     amax_rows_tile<true>(clamp_min_bits, inv_448_bits);
@@ -185,6 +204,11 @@ inline void fold4_pow2_inv_scale_tile(uint32_t idst, uint32_t clamp_min_bits, ui
         inv_448_bits);
 }
 
+inline void round_to_e4m3_rne_tile(uint32_t idst) {
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_round_to_e4m3_rne, (8 /* ITERATIONS */), idst, VectorMode::RC);
+}
+
 // Column 0 lives in faces 0 and 2, so VectorMode::C (the left faces) covers it at half the work.
 inline void pow2_inv_scale_tile(uint32_t idst, uint32_t clamp_min_bits, uint32_t inv_448_bits) {
     SFPU_UNARY_CALL(
@@ -198,6 +222,7 @@ inline void pow2_inv_scale_tile(uint32_t idst, uint32_t clamp_min_bits, uint32_t
         inv_448_bits);
 }
 #else
+inline void round_to_e4m3_rne_tile(uint32_t) {}
 inline void pow2_inv_scale_tile(uint32_t, uint32_t, uint32_t) {}
 inline void amax_pow2_inv_scale_tile(uint32_t, uint32_t, uint32_t) {}
 inline void amax_rows_tile_call(uint32_t) {}

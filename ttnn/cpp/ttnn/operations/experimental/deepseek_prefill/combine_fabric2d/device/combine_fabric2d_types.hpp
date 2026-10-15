@@ -34,6 +34,9 @@ struct CombineFabric2dParams {
     uint32_t routed_expert_go_addr = 0;
     tt::tt_metal::MemoryConfig output_mem_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    // 0: tokens cross the wire as BFLOAT16. 128: the untilizers quantize each token to FP8_E4M3 with one
+    // power-of-two fp32 scale per 128 values, and a token is [emb e4m3 | emb / 128 fp32 scales].
+    uint32_t fp8_scale_block = 0;
 };
 
 struct CombineFabric2dInputs {

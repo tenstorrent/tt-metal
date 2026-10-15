@@ -5,6 +5,7 @@
 #include "combine_fabric2d_program_factory.hpp"
 #include "combine_fabric2d_placement.hpp"
 #include "combine_fabric2d_assignments.hpp"
+#include "combine_fabric2d_untilizer.hpp"
 #include "kernels/dataflow/combine_fabric2d_reader_ct_args.hpp"
 #include "kernels/dataflow/combine_fabric2d_reader_rt_args.hpp"
 #include "kernels/dataflow/combine_fabric2d_untilizer_rt_args.hpp"
@@ -75,18 +76,9 @@ uint32_t fwd_pages_per_stream(const CombineFabric2dParams& args) {
 
 constexpr uint32_t align_l1(uint32_t addr) { return (addr + 63u) & ~63u; }
 
-// Where an untilizer core's circular buffers end. The framework lays a program's circular buffers out from
-// the L1 allocator base in declaration order, DRAM-aligned, so this is both what cb_out's address is and
-// what the hand-placed control tables have to clear.
-uint32_t untilizer_cb_end(uint32_t base, uint32_t token_size_bytes, const CombineFabric2dInputs& tensor_args) {
-    uint32_t end = align_l1(base) + cmbf2d::UNT_RING_BATCHES * cmbf2d::UNT_BATCH_ROWS * token_size_bytes;
-    end = align_l1(end) + BATCH_COUNT_PAGE_BYTES;  // the batch count
-    end = align_l1(end) + 2 * untilize_block_tiles(tensor_args) * tile_size_bytes(tensor_args);
-    return align_l1(end);
-}
-
 L1Layout compute_l1_layout(
     ttnn::MeshDevice* mesh,
+    const CombineFabric2dParams& args,
     const CombineFabric2dInputs& tensor_args,
     uint32_t num_l1_slots,
     uint32_t token_size_bytes,
@@ -111,7 +103,7 @@ L1Layout compute_l1_layout(
         // Untilizer cores share no hand-placed memory with the cores above, so their layout starts over at
         // the base -- it has to, because that is where the framework puts cb_out and cb_out IS the batch ring.
         l.unt_ring = align_l1(base);
-        l.unt_control = untilizer_cb_end(base, token_size_bytes, tensor_args);
+        l.unt_control = untilizer_cbs_end(base, args, tensor_args);
         end = std::max(end, l.unt_control + control_bytes);
     }
     TT_FATAL(
@@ -141,11 +133,11 @@ void validate_allocations(
         TT_FATAL(tensor->buffer() != nullptr, "combine_fabric2d: {} has no device buffer", name);
     }
     TT_FATAL(
-        output.buffer()->aligned_page_size() == token_size_bytes(tensor_args),
+        output.buffer()->aligned_page_size() == token_size_bytes(args, tensor_args),
         "combine_fabric2d: output page size {} must equal the token page size {} — the op moves whole tokens "
         "between the two",
         output.buffer()->aligned_page_size(),
-        token_size_bytes(tensor_args));
+        token_size_bytes(args, tensor_args));
     TT_FATAL(
         output.buffer()->num_pages() >= args.seq_len_per_chip * args.num_experts_per_tok,
         "combine_fabric2d: output holds {} pages but seq_len_per_chip x num_experts_per_tok = {} are needed",
@@ -259,7 +251,7 @@ ForwardingBuffer allocate_forwarding_buffer(
     ttnn::MeshDevice* mesh, const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
     ForwardingBuffer fwd;
     fwd.pages_per_stream = fwd_pages_per_stream(args);
-    const uint32_t page_bytes = token_size_bytes(tensor_args) + cmbf2d::FORWARDING_METADATA_SIZE;
+    const uint32_t page_bytes = token_size_bytes(args, tensor_args) + cmbf2d::FORWARDING_METADATA_SIZE;
     TT_FATAL(
         page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
     const uint32_t pages = stream_count(args.num_links) * fwd.pages_per_stream;
@@ -317,38 +309,6 @@ uint32_t control_region_bytes(const CombineFabric2dParams& args, const CombineFa
            static_cast<uint32_t>(sizeof(uint32_t)) * num_routed_experts(tensor_args) * (ring_extent(args) + 2);
 }
 
-// cb_out FIRST: the framework lays these out from the L1 allocator base in declaration order, which is what
-// makes cb_out the same memory as L1Layout::unt_ring and so lets a reader address a row by core and offset.
-void add_untilizer_cbs(
-    tt::tt_metal::ProgramDescriptor& desc, const CombineFabric2dInputs& tensor_args, const CoreRangeSet& core) {
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = cmbf2d::UNT_RING_BATCHES * cmbf2d::UNT_BATCH_ROWS * token_size_bytes(tensor_args),
-        .core_ranges = core,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = cmbf2d::UNT_CB_OUT,
-            .data_format = tt::DataFormat::Float16_b,
-            .page_size = token_size_bytes(tensor_args),
-        }}}});
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = BATCH_COUNT_PAGE_BYTES,
-        .core_ranges = core,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = cmbf2d::UNT_CB_BATCHES,
-            .data_format = tt::DataFormat::UInt32,
-            .page_size = BATCH_COUNT_PAGE_BYTES,
-        }}}});
-    // In the dispatched buffer's own format, so the unpacker dequantises a bfp8 tile on its way to the
-    // BFLOAT16 cb_out.
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = 2 * untilize_block_tiles(tensor_args) * tile_size_bytes(tensor_args),
-        .core_ranges = core,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = cmbf2d::UNT_CB_IN,
-            .data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.dispatched_buffer.dtype()),
-            .page_size = tile_size_bytes(tensor_args),
-        }}}});
-}
-
 ReaderUntilizers untilizers_for_stream(
     const UntilizerGroups& groups, StreamId stream, const RingSemaphores& sems, const L1Layout& l1) {
     if (sems.unt_freed.empty()) {
@@ -397,7 +357,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
         snd.compile_time_args =
-            cmbf2d::SenderCtArgs(tensor_args, self, downstream, returning, l1, plan).to_ct_word_arr();
+            cmbf2d::SenderCtArgs(args, tensor_args, self, downstream, returning, l1, plan).to_ct_word_arr();
         snd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -446,7 +406,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     for (uint32_t g = 0; g < UNTILIZER_GROUPS; g++) {
         for (uint32_t j = 0; j < groups[g].size(); j++) {
             const CoreRangeSet core(CoreRange(groups[g][j].logical));
-            add_untilizer_cbs(desc, tensor_args, core);
+            add_untilizer_cbs(desc, args, tensor_args, core, nullptr);
 
             UntilizerPlan plan;
             plan.my_expert_base = chip_plan.my_expert_base;
@@ -479,23 +439,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 .noc = tt::tt_metal::NOC::NOC_0,
             };
             cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, groups[g][j].logical);
+            if (args.fp8_scale_block != 0) {
+                kernel.defines.emplace_back("CMBF2D_FP8_ROWS", "1");
+            }
             desc.kernels.push_back(std::move(kernel));
-
-            tt::tt_metal::KernelDescriptor untilize;
-            untilize.kernel_source =
-                "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/compute/"
-                "untilize_combine_fabric2d.cpp";
-            untilize.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-            untilize.core_ranges = core;
-            untilize.compile_time_args = {
-                cmbf2d::UNT_CB_IN,
-                cmbf2d::UNT_CB_OUT,
-                cmbf2d::UNT_CB_BATCHES,
-                tiles_per_token_row(tensor_args),
-                untilize_block_tiles(tensor_args),
-                cmbf2d::UNT_BATCH_ROWS};
-            untilize.config = tt::tt_metal::ComputeConfigDescriptor{};
-            desc.kernels.push_back(std::move(untilize));
+            desc.kernels.push_back(untilizer_compute_kernel(args, tensor_args, core));
         }
     }
 
@@ -511,13 +459,15 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     auto* mesh_device = operation_attributes.device;
     validate_allocations(operation_attributes, tensor_args, tensor_return_value);
 
-    const uint32_t per_group = dispatched_is_tiled(tensor_args) ? untilizers_per_group() : 0;
+    const uint32_t per_group =
+        dispatched_is_tiled(tensor_args) ? untilizers_per_group(operation_attributes.fp8_scale_block != 0) : 0;
     const auto sems = allocate_ring_semaphores(mesh_device, operation_attributes.num_links, per_group);
     const auto l1 = compute_l1_layout(
         mesh_device,
+        operation_attributes,
         tensor_args,
         cmbf2d::NUM_L1_SLOTS,
-        token_size_bytes(tensor_args),
+        token_size_bytes(operation_attributes, tensor_args),
         control_region_bytes(operation_attributes, tensor_args),
         sems.lowest_address());
     const auto placement =

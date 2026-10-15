@@ -851,22 +851,29 @@ class TtRoutedExpert(LightweightModule):
         seq_len_per_chip: int,
         combine_semaphores,
         forwarding_buffer: Optional[ttnn.Tensor] = None,
+        combine_fp8_scale_block: int = 0,
     ) -> ttnn.Tensor:
         """The routed expert overlapped with combine_fabric2d in one program; returns combine's output.
 
         `combine_semaphores` is the (fwd_arrived, final_arrived, expert_go, launch_credit) set the caller keeps for
         the mesh's lifetime; see TT_CCL.get_combine_overlap_semaphores. The op frees the rest of its L1 on return.
 
-        Blackhole only, on the ROW_MAJOR bf16 dispatch buffer: the routed expert writes bf8 tiles, as it does
-        for the separate combine, and combine's untilizers dequantise them to bf16 rows. The threshold splits the experts as in forward(), except that the
+        Blackhole only, on a ROW_MAJOR bf16 or a TILE bf8 dispatch buffer: the routed expert writes bf8 tiles, as it
+        does for the separate combine, and combine's untilizers dequantise them to bf16 rows. The threshold splits the experts as in forward(), except that the
         fused-only sentinel is not available: the one-program op always runs the unified half.
+
+        `combine_fp8_scale_block` 128 has the untilizers quantize the rows to fp8 instead, and combine returns
+        FP8_E4M3 [e4m3 | fp32 scale per 128] rows; `forwarding_buffer` must then be sized for them.
         """
         if not self._is_blackhole:
             raise NotImplementedError("the routed expert / combine overlap is Blackhole-only")
-        if dispatched_buffer.layout != ttnn.ROW_MAJOR_LAYOUT or dispatched_buffer.dtype != ttnn.bfloat16:
+        if (dispatched_buffer.layout, dispatched_buffer.dtype) not in (
+            (ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+            (ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        ):
             raise ValueError(
-                f"the routed expert / combine overlap needs a ROW_MAJOR bfloat16 dispatch buffer, got "
-                f"{dispatched_buffer.layout} {dispatched_buffer.dtype}"
+                f"the routed expert / combine overlap needs a ROW_MAJOR bfloat16 or TILE bfloat8_b dispatch buffer, "
+                f"got {dispatched_buffer.layout} {dispatched_buffer.dtype}"
             )
         threshold = 0 if self.hybrid_token_threshold is None else self.hybrid_token_threshold
         if threshold >= self.max_tokens:
@@ -902,4 +909,5 @@ class TtRoutedExpert(LightweightModule):
             expert_go_semaphore=combine_semaphores[2],
             launch_credit_semaphore=combine_semaphores[3],
             forwarding_buffer=forwarding_buffer,
+            combine_fp8_scale_block=combine_fp8_scale_block,
         )

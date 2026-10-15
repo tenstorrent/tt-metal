@@ -229,10 +229,13 @@ DevicePlacement decide_device_placement(
 
 }  // namespace
 
-uint32_t untilizers_per_group() {
-    static const uint32_t n = [] {
+uint32_t untilizers_per_group(bool fp8_tokens) {
+    static const uint32_t from_env = [] {
         const char* env = std::getenv("CMBF2D_UNTILIZERS_PER_GROUP");
-        const uint32_t v = env != nullptr ? static_cast<uint32_t>(std::atoi(env)) : DEFAULT_UNTILIZERS_PER_GROUP;
+        if (env == nullptr) {
+            return 0u;
+        }
+        const auto v = static_cast<uint32_t>(std::atoi(env));
         TT_FATAL(
             v >= 1 && v <= MAX_UNTILIZERS_PER_GROUP,
             "CMBF2D_UNTILIZERS_PER_GROUP is {}, outside 1..{}",
@@ -240,7 +243,10 @@ uint32_t untilizers_per_group() {
             MAX_UNTILIZERS_PER_GROUP);
         return v;
     }();
-    return n;
+    if (from_env != 0) {
+        return from_env;
+    }
+    return fp8_tokens ? DEFAULT_FP8_UNTILIZERS_PER_GROUP : DEFAULT_UNTILIZERS_PER_GROUP;
 }
 
 MeshPlacement decide_placement(

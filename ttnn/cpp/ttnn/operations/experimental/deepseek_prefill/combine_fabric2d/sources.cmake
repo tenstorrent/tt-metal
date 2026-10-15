@@ -8,6 +8,7 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_COMBINE_FABRIC2D_SRCS
     device/combine_fabric2d_assignments.cpp
     device/combine_fabric2d_placement.cpp
     device/combine_fabric2d_program_factory.cpp
+    device/combine_fabric2d_untilizer.cpp
     combine_fabric2d.cpp
 )
 

@@ -6,6 +6,7 @@
 #include "combine_fabric2d_collector.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_placement.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_assignments.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_untilizer.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_reader_ct_args.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_reader_rt_args.hpp"
@@ -82,16 +83,6 @@ uint32_t fwd_pages_per_stream(const CombineFabric2dParams& args) {
 
 constexpr uint32_t align_l1(uint32_t addr) { return (addr + 63u) & ~63u; }
 
-// Where an untilizer core's circular buffers end. The framework lays a program's circular buffers out from
-// the L1 allocator base in declaration order, DRAM-aligned, so this is both what cb_out's address is and
-// what the hand-placed control tables have to clear.
-uint32_t untilizer_cb_end(uint32_t base, uint32_t token_size_bytes, const CombineFabric2dInputs& tensor_args) {
-    uint32_t end = align_l1(base) + cmbf2d::UNT_RING_BATCHES * cmbf2d::UNT_BATCH_ROWS * token_size_bytes;
-    end = align_l1(end) + BATCH_COUNT_PAGE_BYTES;  // the batch count
-    end = align_l1(end) + 2 * untilize_block_tiles(tensor_args) * tile_size_bytes(tensor_args);
-    return align_l1(end);
-}
-
 // Where combine's L1 starts: the allocator base, or the arena a program sharing the chip laid over it.
 uint32_t l1_base(ttnn::MeshDevice* mesh, const tt::tt_metal::Buffer* arena) {
     return arena != nullptr
@@ -101,6 +92,7 @@ uint32_t l1_base(ttnn::MeshDevice* mesh, const tt::tt_metal::Buffer* arena) {
 
 L1Layout compute_l1_layout(
     ttnn::MeshDevice* mesh,
+    const CombineFabric2dParams& args,
     const CombineFabric2dInputs& tensor_args,
     uint32_t num_l1_slots,
     uint32_t token_size_bytes,
@@ -131,7 +123,7 @@ L1Layout compute_l1_layout(
         // Untilizer cores share no hand-placed memory with the cores above, so their layout starts over at
         // the base -- it has to, because that is where the framework puts cb_out and cb_out IS the batch ring.
         l.unt_ring = align_l1(base);
-        l.unt_control = untilizer_cb_end(base, token_size_bytes, tensor_args);
+        l.unt_control = untilizer_cbs_end(base, args, tensor_args);
         end = std::max(end, l.unt_control + control_bytes);
     }
     TT_FATAL(
@@ -161,11 +153,11 @@ void validate_allocations(
         TT_FATAL(tensor->buffer() != nullptr, "combine_fabric2d: {} has no device buffer", name);
     }
     TT_FATAL(
-        output.buffer()->aligned_page_size() == token_size_bytes(tensor_args),
+        output.buffer()->aligned_page_size() == token_size_bytes(args, tensor_args),
         "combine_fabric2d: output page size {} must equal the token page size {} — the op moves whole tokens "
         "between the two",
         output.buffer()->aligned_page_size(),
-        token_size_bytes(tensor_args));
+        token_size_bytes(args, tensor_args));
     TT_FATAL(
         output.buffer()->num_pages() >= args.seq_len_per_chip * args.num_experts_per_tok,
         "combine_fabric2d: output holds {} pages but seq_len_per_chip x num_experts_per_tok = {} are needed",
@@ -292,13 +284,13 @@ ForwardingBuffer allocate_forwarding_buffer(
     tt::tt_metal::Buffer* provided) {
     ForwardingBuffer fwd;
     fwd.pages_per_stream = fwd_pages_per_stream(args);
-    const uint32_t page_bytes = token_size_bytes(tensor_args) + cmbf2d::FORWARDING_METADATA_SIZE;
+    const uint32_t page_bytes = token_size_bytes(args, tensor_args) + cmbf2d::FORWARDING_METADATA_SIZE;
     if (provided != nullptr) {
         fwd.buffer = provided;
     } else {
         // Throws if it does not fit DRAM, which IS the "verify it fits" check.
         fwd.owner = std::make_shared<ttnn::Tensor>(
-            create_device_tensor(forwarding_buffer_spec(args, token_size_bytes(tensor_args)), mesh));
+            create_device_tensor(forwarding_buffer_spec(args, token_size_bytes(args, tensor_args)), mesh));
         fwd.buffer = fwd.owner->buffer();
     }
     TT_FATAL(fwd.buffer != nullptr, "combine_fabric2d: forwarding buffer has no device buffer");
@@ -356,50 +348,6 @@ uint32_t control_region_bytes(const CombineFabric2dParams& args, const CombineFa
         static_cast<uint32_t>(sizeof(uint32_t)) * num_routed_experts(tensor_args) * (ring_extent(args) + 2);
     return cmbf2d::META_PREFETCH * cmbf2d::META_PAD_STRIDE + cmbf2d::align_control(tables_bytes) +
            ring_extent(args) * cmbf2d::expert_table_row_stride(args.experts_per_chip);
-}
-
-// cb_out FIRST: the framework lays these out from the L1 allocator base in declaration order, which is what
-// makes cb_out the same memory as L1Layout::unt_ring and so lets a reader address a row by core and offset.
-//
-// Over an arena they sit at the same offsets from its start, so untilizer_cb_end holds for both.
-void add_untilizer_cbs(
-    tt::tt_metal::ProgramDescriptor& desc,
-    const CombineFabric2dInputs& tensor_args,
-    const CoreRangeSet& core,
-    tt::tt_metal::Buffer* arena) {
-    const size_t first = desc.cbs.size();
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = cmbf2d::UNT_RING_BATCHES * cmbf2d::UNT_BATCH_ROWS * token_size_bytes(tensor_args),
-        .core_ranges = core,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = cmbf2d::UNT_CB_OUT,
-            .data_format = tt::DataFormat::Float16_b,
-            .page_size = token_size_bytes(tensor_args),
-        }}}});
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = BATCH_COUNT_PAGE_BYTES,
-        .core_ranges = core,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = cmbf2d::UNT_CB_BATCHES,
-            .data_format = tt::DataFormat::UInt32,
-            .page_size = BATCH_COUNT_PAGE_BYTES,
-        }}}});
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = 2 * untilize_block_tiles(tensor_args) * tile_size_bytes(tensor_args),
-        .core_ranges = core,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = cmbf2d::UNT_CB_IN,
-            .data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.dispatched_buffer.dtype()),
-            .page_size = tile_size_bytes(tensor_args),
-        }}}});
-    if (arena != nullptr) {
-        uint32_t offset = 0;
-        for (size_t i = first; i < desc.cbs.size(); i++) {
-            desc.cbs[i].buffer = arena;
-            desc.cbs[i].address_offset = offset;
-            offset = align_l1(offset + desc.cbs[i].total_size);
-        }
-    }
 }
 
 ReaderUntilizers untilizers_for_stream(
@@ -495,7 +443,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
         snd.compile_time_args =
-            cmbf2d::SenderCtArgs(tensor_args, self, downstream, returning, l1, plan).to_ct_word_arr();
+            cmbf2d::SenderCtArgs(args, tensor_args, self, downstream, returning, l1, plan).to_ct_word_arr();
         snd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -554,7 +502,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     for (uint32_t g = 0; g < UNTILIZER_GROUPS; g++) {
         for (uint32_t j = 0; j < groups[g].size(); j++) {
             const CoreRangeSet core(CoreRange(groups[g][j].logical));
-            add_untilizer_cbs(desc, tensor_args, core, arena);
+            add_untilizer_cbs(desc, args, tensor_args, core, arena);
 
             UntilizerPlan plan;
             plan.my_expert_base = chip_plan.my_expert_base;
@@ -592,24 +540,12 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, groups[g][j].logical);
             add_combine_defines(kernel);
             kernel.defines.emplace_back("CMBF2D_PROGRESS_SEM", std::to_string(sems.progress()));
+            if (args.fp8_scale_block != 0) {
+                kernel.defines.emplace_back("CMBF2D_FP8_ROWS", "1");
+            }
             desc.kernels.push_back(std::move(kernel));
-
-            tt::tt_metal::KernelDescriptor untilize;
             // The standalone op's kernel, unchanged: the untilize depends on nothing the overlap alters.
-            untilize.kernel_source =
-                "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/compute/"
-                "untilize_combine_fabric2d.cpp";
-            untilize.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-            untilize.core_ranges = core;
-            untilize.compile_time_args = {
-                cmbf2d::UNT_CB_IN,
-                cmbf2d::UNT_CB_OUT,
-                cmbf2d::UNT_CB_BATCHES,
-                tiles_per_token_row(tensor_args),
-                untilize_block_tiles(tensor_args),
-                cmbf2d::UNT_BATCH_ROWS};
-            untilize.config = tt::tt_metal::ComputeConfigDescriptor{};
-            desc.kernels.push_back(std::move(untilize));
+            desc.kernels.push_back(untilizer_compute_kernel(args, tensor_args, core));
         }
     }
 
@@ -651,13 +587,14 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     auto* mesh_device = operation_attributes.device;
     validate_allocations(operation_attributes, tensor_args, tensor_return_value);
 
-    const uint32_t per_group = untilizers_per_group();
+    const uint32_t per_group = untilizers_per_group(operation_attributes.fp8_scale_block != 0);
     const auto sems = allocate_ring_semaphores(mesh_device, operation_attributes.num_links, per_group, l1_resources);
     const auto l1 = compute_l1_layout(
         mesh_device,
+        operation_attributes,
         tensor_args,
         cmbf2d::NUM_L1_SLOTS,
-        token_size_bytes(tensor_args),
+        token_size_bytes(operation_attributes, tensor_args),
         control_region_bytes(operation_attributes, tensor_args),
         sems.lowest_address(),
         l1_resources.arena);

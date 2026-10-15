@@ -36,10 +36,14 @@ inline uint32_t ring_extent(const CombineFabric2dParams& args) {
     return args.device->shape()[static_cast<int32_t>(args.axis)];
 }
 
-// One token's row of the embedding. Read off the tensor rather than taken as a parameter — and off its
-// SHAPE, not its page: a ROW_MAJOR dispatched buffer pages by exactly one token, a TILE one does not.
-inline uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
-    return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) * sizeof(uint16_t);
+// One token's row of the embedding as it crosses the wire. Read off the tensor rather than taken as a parameter —
+// and off its SHAPE, not its page: a ROW_MAJOR dispatched buffer pages by exactly one token, a TILE one does not.
+inline uint32_t token_size_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    const uint32_t emb = static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]);
+    if (args.fp8_scale_block != 0) {
+        return emb + emb / args.fp8_scale_block * static_cast<uint32_t>(sizeof(float));
+    }
+    return emb * static_cast<uint32_t>(sizeof(uint16_t));
 }
 
 inline bool dispatched_is_tiled(const CombineFabric2dInputs& tensor_args) {
@@ -69,7 +73,15 @@ constexpr uint32_t BATCH_COUNT_PAGE_BYTES = 32 * 32 * sizeof(uint16_t);
 
 constexpr uint32_t UNTILIZE_MAX_BLOCK_TILES = 8;
 
-inline uint32_t untilize_block_tiles(const CombineFabric2dInputs& tensor_args) {
+// Tiles of one fp8 scale block, the unit the quantizing untilize works in.
+constexpr uint32_t FP8_SCALE_BLOCK_TILES = 4;
+
+inline uint32_t untilize_block_tiles(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    if (args.fp8_scale_block != 0) {
+        // Whole scale blocks, so no block's amax needs a tile from the next one.
+        return tiles_per_token_row(tensor_args) % (2 * FP8_SCALE_BLOCK_TILES) == 0 ? 2 * FP8_SCALE_BLOCK_TILES
+                                                                                   : FP8_SCALE_BLOCK_TILES;
+    }
     for (uint32_t block = UNTILIZE_MAX_BLOCK_TILES; block > 1; block--) {
         if (tiles_per_token_row(tensor_args) % block == 0) {
             return block;
@@ -215,6 +227,10 @@ constexpr uint32_t UNT_RING_BATCHES = 2;
 constexpr uint32_t UNT_CB_OUT = 0;
 constexpr uint32_t UNT_CB_IN = 1;
 constexpr uint32_t UNT_CB_BATCHES = 2;
+// fp8 tokens only: the 1/scale tile the compute kernel quantizes a scale block with, and a copy of it the
+// dataflow kernel turns into the scales at the end of each row.
+constexpr uint32_t UNT_CB_INV_SCALE = 3;
+constexpr uint32_t UNT_CB_SCALE = 4;
 // Words per entry in a handshake block: [noc_x, noc_y, counter_slot].
 constexpr uint32_t UNT_PEER_WORDS = 3;
 

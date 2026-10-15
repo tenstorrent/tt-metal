@@ -45,8 +45,14 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
 
         The output is BFLOAT16 whatever the input: a BFLOAT8_B buffer is dequantised by the untilize,
         exactly, since every bfp8 value is representable in BFLOAT16. There is no BFLOAT8_B ROW_MAJOR
-        input (bfp8 only exists tiled) and no fp8 output path: fp8 comes out of the packer, and the
-        untilize here runs on cores that do not write the output.
+        input (bfp8 only exists tiled).
+
+        fp8_scale_block=128 (Blackhole, TILE dispatched_buffer) has the untilize quantize each token
+        instead: e4m3 values, each 128 scaled by a power of two 2^ceil(log2(max(amax, 1e-4) / 448)) and
+        rounded to nearest even, followed by those scales as fp32. The output is then
+        (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim + emb_dim / 32) FP8_E4M3, one byte per
+        element, which post_combine_reduce dequantizes with fp8_scale_block_w=128. A token row must be
+        a multiple of 64 B, so emb_dim a multiple of 2048.
         )doc",
         &combine_fabric2d,
         nb::arg("dispatched_buffer"),
@@ -60,7 +66,8 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         nb::arg("cluster_axis"),
         nb::arg("num_links"),
         nb::arg("topology"),
-        nb::arg("memory_config"));
+        nb::arg("memory_config"),
+        nb::arg("fp8_scale_block") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::detail

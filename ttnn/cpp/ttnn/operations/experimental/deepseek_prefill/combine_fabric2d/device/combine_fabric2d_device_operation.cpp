@@ -101,7 +101,7 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
 
     // ---- Token data. The last dim is the embedding and the rest is the flat slot index. BFLOAT16 in either
     // layout, or BFLOAT8_B TILE, which the untilizer cores unpack to BFLOAT16 rows. Tokens move as BFLOAT16
-    // from there on, so the output is BFLOAT16 whatever the input.
+    // from there on, or as fp8 when fp8_scale_block is set, whatever the input.
     const auto& buf = tensor_args.dispatched_buffer;
     validate_dram_interleaved(buf, "dispatched_buffer");
     TT_FATAL(
@@ -115,9 +115,27 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         "{}. A BFLOAT8_B buffer is dequantised by the untilize, which only the TILE path has.",
         buf.dtype(),
         buf.layout());
+    // fp8 tokens are quantized by the untilizers, from tiles: one 1/scale per row of four tiles.
+    if (args.fp8_scale_block != 0) {
+        TT_FATAL(
+            args.fp8_scale_block == 128,
+            "combine_fabric2d: fp8_scale_block must be 0 (BFLOAT16 tokens) or 128, got {}",
+            args.fp8_scale_block);
+        TT_FATAL(
+            args.device->arch() == tt::ARCH::BLACKHOLE,
+            "combine_fabric2d: fp8 tokens are packed by the Blackhole packer's FP8_E4M3 format");
+        TT_FATAL(
+            buf.layout() == tt::tt_metal::Layout::TILE,
+            "combine_fabric2d: fp8 tokens are quantized by the untilizers, which only a TILE dispatched_buffer has");
+        TT_FATAL(
+            buf.logical_shape()[-1] % args.fp8_scale_block == 0,
+            "combine_fabric2d: emb {} must be a multiple of fp8_scale_block {}",
+            buf.logical_shape()[-1],
+            args.fp8_scale_block);
+    }
     // The op does not take a token size, it reads it off the tensor the caller staged. A ROW_MAJOR buffer
     // pages by exactly one token; a TILE one is untilized into tokens on the way through.
-    const uint32_t token_page = token_size_bytes(tensor_args);
+    const uint32_t token_page = token_size_bytes(args, tensor_args);
     TT_FATAL(
         buf.layout() == tt::tt_metal::Layout::TILE ||
             token_page == static_cast<uint32_t>(buf.buffer()->aligned_page_size()),
@@ -130,7 +148,8 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         token_page % 16 == 0,
         "combine_fabric2d: token page {} B must be 16-byte aligned for NoC transfers",
         token_page);
-    // Token + metadata is a DRAM page of the forwarding buffer, which needs DRAM alignment.
+    // Token + metadata is a DRAM page of the forwarding buffer, which needs DRAM alignment. An fp8 token is emb * 33/32
+    // bytes, so this holds for emb a multiple of 2048.
     TT_FATAL(
         (token_page + cmbf2d::FORWARDING_METADATA_SIZE) % 64 == 0,
         "combine_fabric2d: token page {} B + {} B of forwarding metadata must be 64-byte aligned for DRAM",
@@ -247,13 +266,16 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_hit(
 
 CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // one page per (token, top-k slot), the embedding along the last dim.
-    const uint32_t emb_dim = static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]);
-    const ttnn::Shape output_shape({1, 1, args.seq_len_per_chip, args.num_experts_per_tok, emb_dim});
+    // one page per (token, top-k slot), the token as it crossed the wire along the last dim: the embedding, or for fp8
+    // its e4m3 values and their scales, one byte per element.
+    const bool fp8 = args.fp8_scale_block != 0;
+    const uint32_t row = fp8 ? token_size_bytes(args, tensor_args)
+                             : static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]);
+    const ttnn::Shape output_shape({1, 1, args.seq_len_per_chip, args.num_experts_per_tok, row});
     return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
+            fp8 ? tt::tt_metal::DataType::FP8_E4M3 : tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             args.output_mem_config));
 }
@@ -279,7 +301,8 @@ ttnn::Tensor combine_fabric2d(
     uint32_t axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    const tt::tt_metal::MemoryConfig& memory_config) {
+    const tt::tt_metal::MemoryConfig& memory_config,
+    uint32_t fp8_scale_block) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -291,7 +314,8 @@ ttnn::Tensor combine_fabric2d(
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
-            .output_mem_config = memory_config},
+            .output_mem_config = memory_config,
+            .fp8_scale_block = fp8_scale_block},
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,

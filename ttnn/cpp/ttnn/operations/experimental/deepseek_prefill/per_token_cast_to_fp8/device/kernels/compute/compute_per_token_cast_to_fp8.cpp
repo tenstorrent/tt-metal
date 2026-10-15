@@ -66,33 +66,6 @@ inline void ceil_power_of_two_tile(uint32_t idst) {
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_ceil_power_of_two, (8 /* ITERATIONS */), idst, VectorMode::RC);
 }
 
-namespace ckernel::sfpu {
-
-// Round fp32 to the e4m3 mantissa grid (3 explicit bits) with round-to-nearest-even, so the
-// truncating fp8 packer then sees exact values. Same "add half-ulp - 1 + lsb, clear" bit trick as
-// float32_to_bf16_rne, at bit 20 instead of 16. Inputs are already scaled to |x| <= 448, so no
-// rounding reaches 480 (NaN in e4m3fn). e4m3 subnormals (|x| < 2^-6) keep packer truncation below
-// their coarser grid; at these scales that is < 2^-14.8 of the block amax.
-template <int ITERATIONS = 8>
-inline void calculate_round_to_e4m3_rne() {
-    for (int d = 0; d < ITERATIONS; ++d) {
-        sfpi::vFloat value = sfpi::dst_reg[0];
-        sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(value);
-        sfpi::vUInt lsb = (bits >> 20) & 1;
-        bits = bits + 0x7ffffU + lsb;
-        bits = bits & 0xfff00000U;
-        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(bits);
-        sfpi::dst_reg++;
-    }
-}
-
-}  // namespace ckernel::sfpu
-
-inline void round_to_e4m3_rne_tile(uint32_t idst) {
-    SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_round_to_e4m3_rne, (8 /* ITERATIONS */), idst, VectorMode::RC);
-}
-
 #endif
 
 void kernel_main() {

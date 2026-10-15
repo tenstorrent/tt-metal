@@ -73,7 +73,8 @@ void validate_overlap(const HybridRoutedExpertFfnParams& op, const HybridRoutedE
     if (t.forwarding_buffer.has_value()) {
         const auto expected = combine::forwarding_buffer_spec(
             combine_attributes(op, t),
-            ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::token_size_bytes(combine_inputs(t)));
+            ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::token_size_bytes(
+                combine_attributes(op, t), combine_inputs(t)));
         TT_FATAL(
             t.forwarding_buffer->tensor_spec() == expected,
             "hybrid routed expert overlapped with combine: forwarding_buffer is {} {} {}, combine needs {} {} {}",
