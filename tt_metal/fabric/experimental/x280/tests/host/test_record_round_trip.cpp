@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -535,43 +536,25 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
             .shape = {1u, 8u, 8u, 4192u, 4u}};
         const char* ec_id = "eth_credit.throughput";
         write(ec_id, x280::suites::eth_credit::throughput_record(window, forwarder, erisc_clock, erisc_clock));
-        // The same window at E1, the Ethernet hop alone, on its ERISC wall clock.
-        auto hop = window;
-        hop.case_name = "ethernet_hop_sweep";
-        hop.path = x280::suites::eth_credit::kEthernetHop;
-        write(
-            "eth_credit.ethernet_hop",
-            x280::suites::eth_credit::throughput_record(hop, forwarder, erisc_clock, erisc_clock));
-        // At the sending forwarder, the NoC hop alone, which counts what it sent.
-        auto noc_hop = window;
-        noc_hop.case_name = "noc_hop_sweep";
-        noc_hop.path = x280::suites::eth_credit::kNocHop;
-        write(
-            "eth_credit.noc_hop",
-            x280::suites::eth_credit::throughput_record(noc_hop, forwarder, erisc_clock, erisc_clock));
-        // At the receiving forwarder again, the receive side alone.
-        auto receive_side = window;
-        receive_side.case_name = "receive_side_sweep";
-        receive_side.path = x280::suites::eth_credit::kReceiveSide;
-        write(
-            "eth_credit.receive_side",
-            x280::suites::eth_credit::throughput_record(receive_side, forwarder, erisc_clock, erisc_clock));
-        // Each write alone at the sending forwarder.
-        for (const auto& [id, path] :
-             {std::pair{"eth_credit.w1_alone", x280::suites::eth_credit::kW1Alone},
-              std::pair{"eth_credit.w2_alone", x280::suites::eth_credit::kW2Alone},
-              std::pair{"eth_credit.r1_alone", x280::suites::eth_credit::kR1Alone}}) {
-            auto alone = window;
-            alone.path = path;
-            write(id, x280::suites::eth_credit::throughput_record(alone, forwarder, erisc_clock, erisc_clock));
+        // The same window measured by each leg alone: the Ethernet hop at E1 on its
+        // ERISC wall clock; the NoC hop and each write alone at the sending
+        // forwarder, which counts what it sent; the receive side, and E0 sourcing
+        // into it, at the receiving forwarder.
+        namespace ec = x280::suites::eth_credit;
+        for (const auto& [id, case_name, path] : {
+                 std::tuple{"eth_credit.ethernet_hop", "ethernet_hop_sweep", ec::kEthernetHop},
+                 std::tuple{"eth_credit.noc_hop", "noc_hop_sweep", ec::kNocHop},
+                 std::tuple{"eth_credit.receive_side", "receive_side_sweep", ec::kReceiveSide},
+                 std::tuple{"eth_credit.w1_alone", "throughput_sweep", ec::kW1Alone},
+                 std::tuple{"eth_credit.w2_alone", "throughput_sweep", ec::kW2Alone},
+                 std::tuple{"eth_credit.r1_alone", "throughput_sweep", ec::kR1Alone},
+                 std::tuple{"eth_credit.e0_source_depth", "e0_source_depth", ec::kE0Source},
+             }) {
+            auto leg = window;
+            leg.case_name = case_name;
+            leg.path = path;
+            write(id, ec::throughput_record(leg, forwarder, erisc_clock, erisc_clock));
         }
-        // E0 sourcing into the receiving forwarder.
-        auto e0_source = window;
-        e0_source.case_name = "e0_source_depth";
-        e0_source.path = x280::suites::eth_credit::kE0Source;
-        write(
-            "eth_credit.e0_source_depth",
-            x280::suites::eth_credit::throughput_record(e0_source, forwarder, erisc_clock, erisc_clock));
         // The sending forwarder's timed round trips at one packet in flight, the
         // hop loop and the loop through the remote consume, at the same placement.
         const ec_stall_t timed{.site = EC_SITE_FWD_ROUND_TRIP, .pad = 0, .count = 1000, .ticks = 250000};
