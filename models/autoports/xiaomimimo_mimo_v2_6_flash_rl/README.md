@@ -19,7 +19,7 @@ in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
 | `tt/moe.py` | fp32 routing + TP-sharded experts with `sparse_matmul` |
 | `tt/decoder.py`, `tt/model.py` | Decoder layer and full model for one 1x8 replica |
 | `tt/generator.py` | `MiMoGalaxyGenerator`: four replicas on the Galaxy rows (DP=4) |
-| `tests/` | TP=8 x DP=4 tests on the 4x8 mesh |
+| `tests/` | TP=8 x DP=4 tests on the 4x8 mesh; results in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md#validation-tests-measured-2026-10-15-on-one-bh-galaxy-branch-mimo-v26tp8-dp4) |
 
 ## Running
 
@@ -32,6 +32,7 @@ export MIMO_GOLDEN=golden_48l.pt
 pytest models/autoports/xiaomimimo_mimo_v2_6_flash_rl/tests/test_decoder_tp8_dp4.py   # one layer per type
 pytest models/autoports/xiaomimimo_mimo_v2_6_flash_rl/tests/test_moe_tp8_dp4.py       # routing + expert math
 pytest models/autoports/xiaomimimo_mimo_v2_6_flash_rl/tests/test_model_tp8_dp4.py     # 48 layers
+pytest models/autoports/xiaomimimo_mimo_v2_6_flash_rl/tests/test_model_traced_tp8_dp4.py  # traced decode, 1 vs 4 rows
 ```
 
 On a Galaxy whose CPLD firmware predates v1.16, reset with `tt-smi -glx_reset`: after `tt-smi -r`
@@ -41,6 +42,7 @@ some Ethernet links can stay untrained, and opening the mesh then fails in
 ## Not done yet
 
 - Chunked prefill (`start_pos > 0`) and prefix caching.
-- Tracing, performance tuning (everything is DRAM-interleaved with default program configs).
+- Prefill tracing and performance tuning (decode is traced; everything is DRAM-interleaved with default program configs).
+- Device sampling (the host reads full logits each step).
 - KV layout for B=4 @ 1M (global-layer KV heads are replicated on chip pairs and V is padded to 192).
 - vLLM integration (vllm-tt-plugin#216), sampling on device, speculative decoding.
