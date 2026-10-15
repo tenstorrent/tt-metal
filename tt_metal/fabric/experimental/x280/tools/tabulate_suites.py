@@ -908,6 +908,81 @@ MEMBERS = {
 DERIVED = {member: [lambda m, rows, spec=spec: placement_table(m, rows, spec)] for member, spec in PLACEMENT.items()}
 for member in METAL_PEER_MEMBERS:
     DERIVED[member].append(turn_split)
+
+# eth_credit's whole path beside each of its legs measured alone, by the writes inside the leg's
+# window: the stretches matched at the path's shape, the pointer stores at its P, since no shape
+# but P changes a pointer store. The NoC hop, Ethernet hop and receive side are disjoint and cover
+# the path.
+EC_SHAPE = ("P", "N_LINK", "N_DELIVER", "SLOT_SIZE", "BATCH")
+EC_CEILING_STRETCHES = (
+    ("NoC hop", "W1 W2 R3"),
+    ("W1", "W1"),
+    ("Ethernet hop", "W3 W4 R2"),
+    ("receive side", "W5 W6 R1"),
+)
+EC_CEILING_STORES = (("W2", "W2"), ("R1", "R1"))
+EC_MPKT = ratio(product(EC_PACKETS, constant(1000)), EC_NS)
+
+
+def ec_ceilings(rows):
+    """eth_credit's one-direction whole-path packet rate beside each leg's alone, the slowest leg
+    and the path's share of it, as a Tabulated titled "eth_credit ceilings"; None without a
+    one-direction whole-path row.
+
+    A stretch's rate is its Mpkt/s at the path's shape; a pointer store's is BATCH times its
+    million stores per second at the path's P, as the forwarder stores once per batch. Each is the
+    mean over every row of that leg and key (every p and run), at the row's own clock; a row left
+    raw is no measurement. Ethernet hop records written before records named their legs are
+    recognised by their member.
+    """
+    names = {legs: name for name, legs in EC_CEILING_STRETCHES + EC_CEILING_STORES}
+    stores = [name for name, _ in EC_CEILING_STORES]
+    leg_names = [name for name, _ in EC_CEILING_STRETCHES] + stores
+    groups = {}
+    for row in rows:
+        if row.member == "eth_credit eth_credit" and not row.record.get("bidirectional"):
+            name = "path"
+        elif row.member == "eth_credit eth_credit_hop":
+            name = "Ethernet hop"
+        elif row.member == "eth_credit eth_credit_leg":
+            name = names.get(row.record.get("legs"))
+        else:
+            continue
+        rate = EC_MPKT(row) if name else None
+        if rate is not None:
+            key = (lookup(row.record, ("P",)),) if name in stores else tuple(lookup(row.record, (k,)) for k in EC_SHAPE)
+            groups.setdefault((name, key), []).append((row, rate))
+    mean = {group: sum(r for _, r in measured) / len(measured) for group, measured in groups.items()}
+    shown, cells = [], []
+    for shape in sorted(key for name, key in groups if name == "path"):
+        # shape[0] is P and shape[4] BATCH (EC_SHAPE).
+        legs = [mean.get((name, shape)) for name, _ in EC_CEILING_STRETCHES]
+        legs += [shape[4] * mean[(name, shape[:1])] if (name, shape[:1]) in mean else None for name in stores]
+        measured = [(rate, name) for rate, name in zip(legs, leg_names) if rate is not None]
+        slowest = min(measured) if measured else (None, None)
+        path = mean[("path", shape)]
+        line = list(shape) + [path] + legs + [slowest[1], path / slowest[0] if slowest[0] else None]
+        shown.append(groups[("path", shape)][0][0])
+        cells.append([cell(value) for value in line])
+    if not cells:
+        return None
+    heads = ["P", "N_LINK", "N_DELIVER", "slot B", "BATCH", "path Mpkt/s"]
+    heads += ["%s Mpkt/s" % name for name in leg_names]
+    heads += ["slowest leg", "path/slowest"]
+    right = [True] * (len(heads) - 2) + [False, True]
+    return Tabulated("eth_credit ceilings", [], heads, right, shown, cells)
+
+
+# Tables computed across members' rows, which no one member's tables can hold; each returns a
+# Tabulated or None.
+CROSS_MEMBER = (ec_ceilings,)
+
+
+def cross_member_tables(rows):
+    """The CROSS_MEMBER tables of `rows`, every member's, that hold any row."""
+    return [table for table in (derive(rows) for derive in CROSS_MEMBER) if table is not None]
+
+
 # A table's title names it in both outputs.
 assert all(
     len({table.title for table in tables}) == len(tables) for tables in MEMBERS.values()
@@ -1140,8 +1215,13 @@ def tabulate(member, rows):
 
 def render(member, rows, markdown=False):
     """`member`'s tables (tabulate) as aligned text, or as Markdown whose rows lead with their label."""
+    return render_tables(tabulate(member, rows), markdown)
+
+
+def render_tables(tables, markdown=False):
+    """Tabulated `tables` as render() prints them."""
     out = []
-    for table in tabulate(member, rows):
+    for table in tables:
         size = "%d row%s" % (len(table.rows), "" if len(table.rows) == 1 else "s")
         if markdown:
             summary = size + "." + (" Constant: %s." % ", ".join(table.constant) if table.constant else "")
@@ -1579,6 +1659,7 @@ def campaign_report(campaign, destination):
     complete = all(entry["status"] == "passed" for entry in coverage.values())
     table_rows = [row for _, _, row, _ in master]
     results = [render(member, [row for row in table_rows if row.member == member], markdown=True) for member in MEMBERS]
+    results.append(render_tables(cross_member_tables(table_rows), markdown=True))
     wall_rows = [row for row in table_rows if "wall_counter" in row.record]
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "coverage.json").write_text(json.dumps(coverage, indent=2) + "\n")
@@ -1711,13 +1792,13 @@ def main():
         return 1
 
     tables = []
-    for member in MEMBERS:
-        member_rows = [row for row in rows if row.member == member]
-        try:
-            tables.append(render(member, member_rows))
-        except ParseError as error:
-            print("FAIL: %s" % error, file=sys.stderr)
-            return 1
+    try:
+        for member in MEMBERS:
+            tables.append(render(member, [row for row in rows if row.member == member]))
+        tables.append(render_tables(cross_member_tables(rows)))
+    except ParseError as error:
+        print("FAIL: %s" % error, file=sys.stderr)
+        return 1
     print("\n\n".join(table for table in tables if table))
     return 0
 

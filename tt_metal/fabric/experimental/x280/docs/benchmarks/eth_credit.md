@@ -706,6 +706,14 @@ the `packet_injection` host does.
   is an `eth_credit_leg` record with legs `W1`, `W2` or `R1`, one request per
   write. The benchmark image is built without the measurement modes, so they
   leave its code unchanged.
+- Ceilings: the tabulator's `eth_credit ceilings` table sets each one-direction
+  whole-path shape's packet rate beside each leg's alone: the NoC hop, W1, the
+  Ethernet hop and the receive side at the same shape, and W2 and R1 at the
+  same P as `BATCH` packets per store, since the forwarder stores each once per
+  batch. Each is the mean over every `p` and run at its own clock. The table
+  names the slowest leg and gives the path's rate as a share of it. The NoC hop,
+  the Ethernet hop and the receive side are disjoint and cover the path, so a
+  share near 1 names the bound.
 - Per kernel, on its own clock: stall counts and stall time per stall site, and
   per-packet service time, written as one `eth_credit_kernel` JSONL record per
   launched kernel: case, chip, role, kernel id, state, code, detail, packets in

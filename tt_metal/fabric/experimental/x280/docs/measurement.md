@@ -493,7 +493,8 @@ python3 tt_metal/fabric/experimental/x280/tools/tabulate_suites.py --campaign /p
 The report checks raw hashes and exact configuration populations and emits
 `master_results.jsonl`, `coverage.json`, `campaign.json` and `MASTER_RESULTS.md`.
 `MASTER_RESULTS.md` holds the coverage table and, under "Results", a result table
-per member and record shape, each row linking its raw file. Table mode,
+per member and record shape, each row linking its raw file, then the tables
+computed across members: eth_credit's ceilings. Table mode,
 `python3 tt_metal/fabric/experimental/x280/tools/tabulate_suites.py FILE...`, prints the same tables for
 current-format JSONL. Both render the p2p_latency, transport_bandwidth,
 pipeline_stage, packet_injection, core_sync and eth_credit members; eth_credit's
@@ -530,7 +531,7 @@ Tabulate current-format JSONL records of the p2p_latency, transport_bandwidth,
 pipeline_stage, packet_injection, core_sync and eth_credit members, one result
 table per member and record shape, and two tables derived across a member's
 records: its `placement` (§ Placement) and, for each Metal p2p peer, a
-`TURN split`:
+`TURN split`; then eth_credit's ceilings across its members:
 
 ```bash
 # Tabulate suite results to stdout:

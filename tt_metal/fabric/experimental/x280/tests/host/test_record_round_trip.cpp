@@ -549,6 +549,22 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
         write(
             "eth_credit.noc_hop",
             x280::suites::eth_credit::throughput_record(noc_hop, forwarder, erisc_clock, erisc_clock));
+        // At the receiving forwarder again, the receive side alone.
+        auto receive_side = window;
+        receive_side.case_name = "receive_side_sweep";
+        receive_side.path = x280::suites::eth_credit::kReceiveSide;
+        write(
+            "eth_credit.receive_side",
+            x280::suites::eth_credit::throughput_record(receive_side, forwarder, erisc_clock, erisc_clock));
+        // Each write alone at the sending forwarder.
+        for (const auto& [id, path] :
+             {std::pair{"eth_credit.w1_alone", x280::suites::eth_credit::kW1Alone},
+              std::pair{"eth_credit.w2_alone", x280::suites::eth_credit::kW2Alone},
+              std::pair{"eth_credit.r1_alone", x280::suites::eth_credit::kR1Alone}}) {
+            auto alone = window;
+            alone.path = path;
+            write(id, x280::suites::eth_credit::throughput_record(alone, forwarder, erisc_clock, erisc_clock));
+        }
         ec_result_t kernel{};
         kernel.magic = EC_RESULT_MAGIC;
         kernel.status.state = EC_STATE_DONE;
@@ -564,5 +580,5 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                  .erisc_clock = &erisc_clock}));
     }
 
-    validate(23);
+    validate(27);
 }

@@ -32,9 +32,11 @@ from tabulate_suites import (
     MEMBERS,
     ParseError,
     campaign_report,
+    cross_member_tables,
     parse_jsonl,
     read_attempt,  # noqa: E402
     render,
+    render_tables,
     tabulate,
 )
 
@@ -235,6 +237,22 @@ HEADS = {
         "Mpkt/s",
         "useful GB/s",
         "slot GB/s",
+    },
+    "eth_credit ceilings": {
+        "P",
+        "N_LINK",
+        "N_DELIVER",
+        "slot B",
+        "BATCH",
+        "path Mpkt/s",
+        "NoC hop Mpkt/s",
+        "Ethernet hop Mpkt/s",
+        "receive side Mpkt/s",
+        "W1 Mpkt/s",
+        "W2 Mpkt/s",
+        "R1 Mpkt/s",
+        "slowest leg",
+        "path/slowest",
     },
     "eth_credit eth_credit_leg": {
         "legs",
@@ -458,6 +476,20 @@ EXPECTED = {
         "slot GB/s": "27.950",
         "400G Mpkt/s": "12.207",
     },
+    # The windows above at one shape, beside each other; the receive side's is
+    # the whole path's window again, and W2 and R1 count BATCH (4) packets per
+    # store of the same window.
+    ("eth_credit ceilings", 0): {
+        "path Mpkt/s": "0.333",
+        "NoC hop Mpkt/s": "0.333",
+        "Ethernet hop Mpkt/s": "6.668",
+        "receive side Mpkt/s": "0.333",
+        "W1 Mpkt/s": "0.333",
+        "W2 Mpkt/s": "1.334",
+        "R1 Mpkt/s": "1.334",
+        "slowest leg": "NoC hop",
+        "path/slowest": "1.000",
+    },
     # The same window at the sending forwarder, the NoC hop alone: k1 and the
     # rates as above, the count from packets_out.
     ("eth_credit eth_credit_leg", 0): {
@@ -520,14 +552,15 @@ def check_report(directory, configs, paths):
 
 
 def tables_of(rows):
-    """The tables tabulate() makes of `rows` as {title: (constants, rows)}, each row a {head: cell} dict."""
+    """The tables tabulate() and cross_member_tables() make of `rows` as {title: (constants, rows)},
+    each row a {head: cell} dict."""
+    tables = [table for member in MEMBERS for table in tabulate(member, [r for r in rows if r.member == member])]
     return {
         table.title: (
             dict(c.split("=", 1) for c in table.constant),
             [dict(zip(table.heads, cells)) for cells in table.cells],
         )
-        for member in MEMBERS
-        for table in tabulate(member, [r for r in rows if r.member == member])
+        for table in tables + cross_member_tables(rows)
     }
 
 
@@ -586,7 +619,13 @@ def check_outputs(directory, paths):
     run = subprocess.run(
         [sys.executable, str(TOOLS / "tabulate_suites.py")] + [str(p) for p in paths], capture_output=True, text=True
     )
-    printed = "\n\n".join(filter(None, (render(m, [r for r in rows if r.member == m]) for m in MEMBERS)))
+    printed = "\n\n".join(
+        filter(
+            None,
+            [render(m, [r for r in rows if r.member == m]) for m in MEMBERS]
+            + [render_tables(cross_member_tables(rows))],
+        )
+    )
     if run.returncode != 0 or run.stdout != printed + "\n":
         failures.append(f"table mode exited {run.returncode} and printed other tables: {run.stderr.strip()}")
 
