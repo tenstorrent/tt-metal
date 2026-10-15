@@ -142,7 +142,13 @@ def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None, q_dtype=None, kv_
                 ep,
                 num_heads=num_heads,
                 num_kv_heads=num_kv_heads,
-                memory_config=kwargs.get("memory_config"),
+                # QWEN_HEADS_Q_L1=1: Q to L1 interleaved too (unchunked calls; a chunked call writes into the caller's
+                # preallocated Q). SDPA then reads Q, K and V from L1.
+                memory_config=(
+                    ttnn.L1_MEMORY_CONFIG
+                    if os.getenv("QWEN_HEADS_Q_L1", "0") == "1" and "out_tensors" not in chunk_kwargs
+                    else kwargs.get("memory_config")
+                ),
                 **rot_kwargs,
                 **chunk_kwargs,
             )
@@ -503,6 +509,14 @@ class PplxBidirectionalAttention(Attention):
                 ttnn.experimental.minimal_matmul, ttnn.experimental.nlp_create_qkv_heads = self._qkv_chunk_hooks(
                     x_11SH, halves, *_saved_chunk, q_dtype, kv_dtype
                 )
+        # QWEN_HEADS_Q_L1=1 (unchunked layers): Q / K / V preallocated in L1 right before the QKV matmul, so they sit at
+        # the top of L1 above the QKV output; allocated by the heads op they landed below it, and once it was freed
+        # they split L1 under SDPA's static CBs (bs16: 61 KB short).
+        if halves is None and _saved_chunk is None and os.getenv("QWEN_HEADS_Q_L1", "0") == "1" and rot is not None:
+            _saved_chunk = (ttnn.experimental.minimal_matmul, ttnn.experimental.nlp_create_qkv_heads)
+            ttnn.experimental.minimal_matmul, ttnn.experimental.nlp_create_qkv_heads = self._qkv_prealloc_hooks(
+                x_11SH, *_saved_chunk, q_dtype, kv_dtype
+            )
         try:
             return super().forward_prefill(
                 x_11SH,
@@ -514,6 +528,9 @@ class PplxBidirectionalAttention(Attention):
                 kv_cache=kv_cache,
             )
         finally:
+            # restore in reverse order of installation: the chunk / prealloc hooks wrap whatever was installed before
+            if _saved_chunk is not None:
+                ttnn.experimental.minimal_matmul, ttnn.experimental.nlp_create_qkv_heads = _saved_chunk
             ttnn.transformer.scaled_dot_product_attention = original_sdpa
             ttnn.experimental.nlp_create_qkv_heads = original_create_heads
             ttnn.experimental.nlp_concat_heads = original_concat_heads
@@ -527,8 +544,35 @@ class PplxBidirectionalAttention(Attention):
                 ttnn.experimental.minimal_matmul, ttnn.linear = _saved_mm
             if _saved_reshape is not None:
                 ttnn.reshape = _saved_reshape
-            if _saved_chunk is not None:
-                ttnn.experimental.minimal_matmul, ttnn.experimental.nlp_create_qkv_heads = _saved_chunk
+
+    def _qkv_prealloc_hooks(self, x, inner_mm, heads, q_dtype, kv_dtype):
+        """(minimal_matmul, nlp_create_qkv_heads) replacements that allocate Q / K / V in L1 before the QKV matmul and
+        hand them to the heads op as its outputs."""
+        B, S = int(x.shape[0]), int(x.shape[-2])
+        dev = x.device()
+        stash = {}
+
+        def mm(a, b, *args, **kw):
+            if b is self.wqkv and "qkv" not in stash:
+                alloc = lambda shp, dt: ttnn.allocate_tensor_on_device(
+                    ttnn.Shape(shp), dt, ttnn.TILE_LAYOUT, dev, ttnn.L1_MEMORY_CONFIG
+                )
+                q_dt, kv_dt = q_dtype or ttnn.bfloat8_b, kv_dtype or ttnn.bfloat8_b
+                hd = self.head_dim
+                stash["qkv"] = (
+                    alloc([B, self.n_local_heads, S, hd], q_dt),
+                    alloc([B, self.n_local_kv_heads, S, hd], kv_dt),
+                    alloc([B, self.n_local_kv_heads, S, hd], kv_dt),
+                )
+            return inner_mm(a, b, *args, **kw)
+
+        def create_heads(xqkv, *args, **kw):
+            qkv = stash.pop("qkv", None)
+            if qkv is not None:
+                kw = dict(kw, out_tensors=qkv, batch_offset=0)
+            return heads(xqkv, *args, **kw)
+
+        return mm, create_heads
 
     def _qkv_chunk_hooks(self, standin, halves, inner_mm, heads, q_dtype, kv_dtype):
         """(minimal_matmul, nlp_create_qkv_heads) replacements running this layer's QKV + heads per half batch."""

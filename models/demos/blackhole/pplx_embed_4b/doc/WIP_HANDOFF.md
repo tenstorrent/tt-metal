@@ -157,6 +157,11 @@ its analytic formulation slightly overstates, structure -0.17 ms at bs32); bs32 
    16 / 32 the faster compute lines up Q's DRAM writes into a hotspot two or three columns east of the east DRAM column
    and the op gets slower (bs16 175 -> ~215); NoC swaps / splits and write flushes do not help. With Q in L1 the same
    op runs 151 µs: compute cuts at the batched sizes now wait on the pinned L1-space item.
+   **L1 space (§74).** Maps of the per-op L1 peaks; Q / K / V preallocated at the top of L1, Q in L1 + one rsqrt landed
+   at bs8 (cold −0.35 ms). The user wants all of these, in turn: (a) bs16 Q in L1 (QKV matmul ~91 KB short); (b) the
+   QKV+heads fusion as the L1 saver for the QKV phase (frees 435 / 223 KB: bs16 Q in L1, bs32 without QKV chunks);
+   (c) the MLP-phase peak at bs32 for the post-attention sum (FF13 ~170 KB, FF2 ~85 KB short), or instead the
+   residual add in a lean WO / FF2 epilogue (minimal_matmul mode; the existing fused ternary costs too much).
    **Pinned (user, 2026-10-15): the L1 the fusion frees.** It removes no DRAM round trip (the QKV output already lives in
    L1; Q's DRAM write / read is hidden at both ends, §64 / §67), but without the 223-446 KB per core QKV intermediate bs32
    could drop its quarter-batch chunks (on paper: norm outputs 362 KB + K / V 290 KB beside the matmul's CBs fit), ~−1.1

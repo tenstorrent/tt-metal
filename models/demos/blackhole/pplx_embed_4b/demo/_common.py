@@ -480,6 +480,14 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
         os.environ.setdefault("TT_PREFILL_QKV_L1", "1")
         if os.getenv("TT_PREFILL_QKV_L1") == "1":
             os.environ.setdefault("QWEN_FUSED_COMPUTE_V3", "1")
+    # bs8: Q in L1 too (Q / K / V preallocated in L1 before the QKV matmul, tt/attention.py), and with Q's DRAM writes
+    # gone the heads op's one-rsqrt compute pays (99.5 -> 90.7 us standalone; at Q in DRAM it lines the writes up into
+    # a NoC hotspot): cold 75.8 / 75.7 / 75.8 -> 75.4 / 75.4 / 75.4 ms, bit-identical (NEGATIVE_RESULTS 74). bs16 does
+    # not fit yet (QKV matmul ~91 KB short). Opt out: QWEN_HEADS_Q_L1=0 QWEN_HEADS_ONE_RSQRT=0.
+    if batch_size == 8 and seq_len == 512:
+        os.environ.setdefault("QWEN_HEADS_Q_L1", "1")
+        if os.getenv("QWEN_HEADS_Q_L1") == "1":
+            os.environ.setdefault("QWEN_HEADS_ONE_RSQRT", "1")
     # The post-MLP add+RMSNorm output (the next layer's QKV input) preallocated in L1 before FF2 (tt/decoder_fusion.py):
     # allocated by the add, it lands below FF2's output and the post-attention sum, which are live then and freed
     # right after, and splits L1's free space. At bs16 that lets the post-attention sum stay in L1 beside the QKV

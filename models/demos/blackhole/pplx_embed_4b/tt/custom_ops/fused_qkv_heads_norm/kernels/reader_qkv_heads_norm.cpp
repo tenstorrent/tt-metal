@@ -22,7 +22,7 @@ void kernel_main() {
     const uint32_t trans_addr = get_arg_val<uint32_t>(7);
     const uint32_t num_work_units = get_arg_val<uint32_t>(8);
     const uint32_t work_unit_start = get_arg_val<uint32_t>(9);
-    // 1: one-rsqrt path, G_h / P_h already sit in CBs 19 / 20 (aliased per-core shard): reserve and push only
+    // one-rsqrt path: 1 = the reader builds G_h / P_h in CBs 19 / 20, 2 = they sit in the aliased resident shard
     const uint32_t one_rsqrt = get_arg_val<uint32_t>(10);
 
     constexpr uint32_t q_heads_per_kv = get_compile_time_arg_val(0);
@@ -124,13 +124,48 @@ void kernel_main() {
         ceps.push_back(1);
     }
 
-    // one-rsqrt constants (resident, never popped): G_0..G_{cap-1} in CB 19, P_0..P_{cap-1} in CB 20
+    // one-rsqrt constants (never popped): G_h (column h = 1/head_dim) in CB 19, P_h (row h = 1) in CB 20, h < cap.
+    // With resident constants (bs1) they are part of that shard; otherwise built here once per call: bf16 tiles
+    // zero-filled from the hardware zeros region, then 32 values set per tile (~2 us; a shard of their own, allocated
+    // at the first call, landed wherever L1 was free then and split it for later ops).
     constexpr uint32_t cap = sub_q_tiles / head_dim_tiles + heads_per_group;
-    if (one_rsqrt) {
+    if (one_rsqrt == 2) {
         CircularBuffer cg(cb_gath), cs(cb_scat);
         cg.reserve_back(cap);
-        cg.push_back(cap);
         cs.reserve_back(cap);
+        cg.push_back(cap);
+        cs.push_back(cap);
+    } else if (one_rsqrt == 1) {
+        CircularBuffer cg(cb_gath), cs(cb_scat);
+        cg.reserve_back(cap);
+        cs.reserve_back(cap);
+        const uint32_t g_base = get_write_ptr(cb_gath), s_base = get_write_ptr(cb_scat);
+        const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+        for (uint32_t i = 0; i < cap; ++i) {
+            for (uint32_t off = 0; off < const_tile_bytes; off += MEM_ZEROS_SIZE) {
+                noc_async_read(zeros, g_base + i * const_tile_bytes + off, MEM_ZEROS_SIZE);
+                noc_async_read(zeros, s_base + i * const_tile_bytes + off, MEM_ZEROS_SIZE);
+            }
+        }
+        noc_async_read_barrier();
+        union {
+            float f;
+            uint32_t u;
+        } inv_hd = {1.0f / (head_dim_tiles * 32)};
+        const uint16_t g_val = inv_hd.u >> 16, one = 0x3F80;  // bf16
+        // element (r, c) of a 32x32 bf16 tile: face (r / 16) * 2 + c / 16, row-major 16x16 inside the face
+        auto idx = [](uint32_t r, uint32_t c) { return ((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15); };
+        for (uint32_t h = 0; h < cap; ++h) {
+            volatile tt_l1_ptr uint16_t* g =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(g_base + h * const_tile_bytes);
+            volatile tt_l1_ptr uint16_t* p =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(s_base + h * const_tile_bytes);
+            for (uint32_t j = 0; j < 32; ++j) {
+                g[idx(j, h)] = g_val;
+                p[idx(h, j)] = one;
+            }
+        }
+        cg.push_back(cap);
         cs.push_back(cap);
     }
 

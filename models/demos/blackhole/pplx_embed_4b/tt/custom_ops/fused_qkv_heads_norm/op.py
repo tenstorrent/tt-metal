@@ -35,40 +35,22 @@ TILE = 32
 # unit reaches compute sooner. Keyed by the RoPE table buffers: prefill always starts at position 0 here, so a
 # table buffer's content is fixed by its shape.
 _RESIDENT_CACHE = {}
-# One-rsqrt constants (v3, QWEN_HEADS_ONE_RSQRT=1): G_0..G_{cap-1} (column h = 1/head_dim) then P_0..P_{cap-1} (row h =
-# 1), as a per-core L1 shard (one copy per core) that CBs 19 / 20 alias: no reads (114 cores reading the same few DRAM
-# pages before their first unit cost the op more than the rsqrt saved). Keyed by the core plan; same caveat as above:
-# the first miss must not be inside a trace capture.
-_SEL_CACHE = {}
 
 
-def _sel_tiles(device, used_cores, per_core, cap, head_dim):
-    key = (id(device), cap, head_dim, tuple(per_core))
-    if key not in _SEL_CACHE:
-        import torch
-
-        order = [(int(c.x), int(c.y)) for c in ttnn.corerange_to_cores(used_cores, row_wise=False)]
-        if order != [(cx, cy) for cx, cy, _ in per_core]:
-            _SEL_CACHE[key] = None
-            return None
-        t = torch.zeros(TILE, 2 * cap * TILE)
-        for h in range(cap):
-            t[:, h * TILE + h] = 1.0 / head_dim  # G_h[:, h]
-            t[h, (cap + h) * TILE : (cap + h + 1) * TILE] = 1.0  # P_h[h, :]
-        n = len(per_core)
-        host = t.repeat(n, 1).reshape(1, 1, n * TILE, 2 * cap * TILE)
-        spec = ttnn.ShardSpec(used_cores, [TILE, 2 * cap * TILE], ttnn.ShardOrientation.COL_MAJOR)
-        mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
-        _SEL_CACHE[key] = ttnn.from_torch(
-            host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc
-        )
-    return _SEL_CACHE[key]
-
-
-def _resident_layout(head_dim_tiles):
-    """Tile offsets inside a resident shard: cos | sin | rotation | scaler | eps."""
+def _resident_layout(head_dim_tiles, cap=0):
+    """Tile offsets inside a resident shard: cos | sin | rotation | scaler | eps [| G_0..G_{cap-1} | P_0..P_{cap-1}]
+    (G / P: the one-rsqrt gather / scatter tiles, cap > 0 with QWEN_HEADS_ONE_RSQRT)."""
     wt = head_dim_tiles
-    return {"cos": 0, "sin": wt, "trans": 2 * wt, "scaler": 2 * wt + 1, "eps": 2 * wt + 2, "tiles": 2 * wt + 3}
+    return {
+        "cos": 0,
+        "sin": wt,
+        "trans": 2 * wt,
+        "scaler": 2 * wt + 1,
+        "eps": 2 * wt + 2,
+        "gath": 2 * wt + 3,
+        "scat": 2 * wt + 3 + cap,
+        "tiles": 2 * wt + 3 + 2 * cap,
+    }
 
 
 def _core_seq_tiles(per_core, head_groups, q_split, seq_tiles):
@@ -83,7 +65,7 @@ def _core_seq_tiles(per_core, head_groups, q_split, seq_tiles):
     return out
 
 
-def _build_resident(device, used_cores, per_core, core_seq, rot_cos, rot_sin, trans_mat, head_dim, eps):
+def _build_resident(device, used_cores, per_core, core_seq, rot_cos, rot_sin, trans_mat, head_dim, eps, cap=0):
     import torch
 
     # The shard of core i must land on the core that runs work list entry i: shard order follows the column-major
@@ -91,15 +73,24 @@ def _build_resident(device, used_cores, per_core, core_seq, rot_cos, rot_sin, tr
     order = [(int(c.x), int(c.y)) for c in ttnn.corerange_to_cores(used_cores, row_wise=False)]
     if order != [(cx, cy) for cx, cy, _ in per_core]:
         return None
-    lay = _resident_layout(head_dim // TILE)
+    lay = _resident_layout(head_dim // TILE, cap)
     cos, sin = ttnn.to_torch(rot_cos).float(), ttnn.to_torch(rot_sin).float()
     trans = ttnn.to_torch(trans_mat).float().reshape(-1, TILE)[:TILE]
     scaler = torch.full((TILE, TILE), 1.0 / head_dim)
     eps_t = torch.full((TILE, TILE), float(eps))
+    sel = []
+    for h in range(cap):  # G_h: column h = 1/head_dim
+        g = torch.zeros(TILE, TILE)
+        g[:, h] = 1.0 / head_dim
+        sel.append(g)
+    for h in range(cap):  # P_h: row h = 1
+        p = torch.zeros(TILE, TILE)
+        p[h, :] = 1.0
+        sel.append(p)
     rows = []
     for s in core_seq:
         r = slice(s * TILE, (s + 1) * TILE)
-        rows.append(torch.cat([cos[0, 0, r, :], sin[0, 0, r, :], trans, scaler, eps_t], dim=1))
+        rows.append(torch.cat([cos[0, 0, r, :], sin[0, 0, r, :], trans, scaler, eps_t] + sel, dim=1))
     host = torch.cat(rows, dim=0).reshape(1, 1, len(core_seq) * TILE, lay["tiles"] * TILE)
     spec = ttnn.ShardSpec(used_cores, [TILE, lay["tiles"] * TILE], ttnn.ShardOrientation.COL_MAJOR)
     mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
@@ -217,6 +208,10 @@ def nlp_create_qkv_heads_norm_headsplit(
 
     Wt = plan.head_dim_tiles
     res_tensor = None
+    # one rsqrt per unit (v3, bit-identical): G / P tiles ride in the resident shard when there is one, else the reader
+    # builds them in CBs 19 / 20 each call
+    one_rsqrt = use_v3 and os.getenv("QWEN_HEADS_ONE_RSQRT", "0") == "1"
+    nh_cap = (heads_per_group * plan.q_heads_per_kv) // q_split + heads_per_group if one_rsqrt else 0
     if resident and fuse_rotary and norm_eps is not None and not use_v2:
         core_seq = _core_seq_tiles(per_core, head_groups, q_split, plan.seq_tiles)
         if core_seq is not None:
@@ -229,13 +224,14 @@ def nlp_create_qkv_heads_norm_headsplit(
                 plan.head_dim,
                 float(norm_eps),
                 tuple(per_core),
+                nh_cap,
             )
             if key not in _RESIDENT_CACHE:
                 _RESIDENT_CACHE[key] = _build_resident(
-                    device, used_cores, per_core, core_seq, rot_cos, rot_sin, trans_mat, plan.head_dim, norm_eps
+                    device, used_cores, per_core, core_seq, rot_cos, rot_sin, trans_mat, plan.head_dim, norm_eps, nh_cap
                 )
             res_tensor = _RESIDENT_CACHE[key]
-    res_lay = _resident_layout(Wt)
+    res_lay = _resident_layout(Wt, nh_cap)
     # v3: cos / sin read once per seq tile instead of once per unit (a core's units span a few seq tiles; per-unit
     # re-reads were half the reader's traffic, NEGATIVE_RESULTS 73). Not with resident constants (the reader pushes
     # those every unit). Opt out: QWEN_HEADS_ROT_CACHE=0.
@@ -250,10 +246,6 @@ def nlp_create_qkv_heads_norm_headsplit(
     out_tiles = kv_parts * group_kv_tiles if separate_q else unit_tiles
     # intermediate CBs hold one head (v1) or all of a unit's Q and K heads (v3)
     nh = (sub_q_tiles + group_kv_tiles) // Wt if use_v3 else 1
-    # v3: one rsqrt per unit (gather the heads' mean squares into one tile, scatter the result); not bit-identical
-    one_rsqrt = use_v3 and os.getenv("QWEN_HEADS_ONE_RSQRT", "0") == "1"
-    sel = _sel_tiles(device, used_cores, per_core, nh, plan.head_dim) if one_rsqrt else None
-    one_rsqrt = sel is not None
 
     def cb(index, tiles, dtype, tsize):
         return ttnn.CBDescriptor(
@@ -274,12 +266,6 @@ def nlp_create_qkv_heads_norm_headsplit(
     ]
     if separate_q:
         cbs.append(cb(17, sub_q_tiles * 2, q_dtype, _TILE_BYTES[q_dtype]))  # Q out in its own dtype
-    if one_rsqrt:
-        cbs += [
-            cb(18, 1, ttnn.bfloat16, _BF16_TILE),  # inv_all = rsqrt(ms_all + eps)
-            ttnn.cb_descriptor_from_sharded_tensor(19, sel, address_offset=0, total_size=nh * _BF16_TILE),  # G_h
-            ttnn.cb_descriptor_from_sharded_tensor(20, sel, address_offset=nh * _BF16_TILE, total_size=nh * _BF16_TILE),
-        ]
 
     def aliased(index, name, tiles):
         return ttnn.cb_descriptor_from_sharded_tensor(
@@ -292,6 +278,13 @@ def nlp_create_qkv_heads_norm_headsplit(
         cbs += [
             cb(3, 1, ttnn.bfloat16, _BF16_TILE),  # 1/head_dim scaler (resident)
             cb(4, 1, ttnn.bfloat16, _BF16_TILE),  # eps (resident)
+        ]
+    if one_rsqrt:
+        cbs += [
+            cb(18, 1, ttnn.bfloat16, _BF16_TILE),  # inv_all = rsqrt(ms_all + eps)
+            # G_h / P_h: from the resident shard, or built by the reader (resident for the call)
+            aliased(19, "gath", nh) if res_tensor is not None else cb(19, nh, ttnn.bfloat16, _BF16_TILE),
+            aliased(20, "scat", nh) if res_tensor is not None else cb(20, nh, ttnn.bfloat16, _BF16_TILE),
         ]
     # cos / sin double-buffered: the reader's cos / sin read for the next unit need not wait for compute to pop this
     # unit's (it did, and only the V copy covered it). Bit-identical, bs16 214.7 -> 209.0 us (NEGATIVE_RESULTS 67).
@@ -378,7 +371,7 @@ def nlp_create_qkv_heads_norm_headsplit(
                     trans_t.buffer_address(),
                     n_units,
                     cursor,
-                    int(one_rsqrt),
+                    (2 if res_tensor is not None else 1) if one_rsqrt else 0,  # 2: G / P aliased, 1: build
                 ],
             )
         )
@@ -439,7 +432,5 @@ def nlp_create_qkv_heads_norm_headsplit(
         io += [cos_t, sin_t, trans_t]
     if res_tensor is not None:
         io.append(res_tensor)
-    if one_rsqrt:
-        io.append(sel)
     ttnn.generic_op(io + [q_tensor, k_tensor, v_tensor], program_descriptor)
     return q_tensor, k_tensor, v_tensor

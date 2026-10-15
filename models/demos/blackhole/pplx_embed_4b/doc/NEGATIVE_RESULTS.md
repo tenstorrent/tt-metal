@@ -1853,7 +1853,8 @@ ms_all = Σ_h Σ_j x²[h, j] @ G_h (G_h's column h = 1/head_dim) puts head h's m
 add + rsqrt; inv[h] = inv_all @ P_h (P_h's row h all ones) broadcasts column h back for the unchanged bcast_cols
 multiply. Bit-identical at bs1 / 8 / 16 (the matmul gather sums in the reduce's order). G / P live in a per-core L1
 shard aliased to CBs 19 / 20: read from DRAM by every core before its first unit they cost more than the rsqrt saved
-(bs16 175.7 -> 241.5). Compute only, bs16: 169.7 -> 146.4 (−14%); bs1 29.2 -> 26.2.
+(bs16 175.7 -> 241.5). (Superseded in §74: the separate shard fragmented L1 in the model; G / P now ride in the bs1
+resident shard or are built by the reader.) Compute only, bs16: 169.7 -> 146.4 (−14%); bs1 29.2 -> 26.2.
 
 **cos / sin once per seq tile (`QWEN_HEADS_ROT_CACHE`, v3, default on in the op).** The reader re-read a unit's 8
 cos / sin tiles (16 KB, half its traffic) for every unit although a core's 18 units span ~3 seq tiles; it now reads
@@ -1902,3 +1903,53 @@ not waiting on acks, they cannot inject). Q in L1 avoids it: the one-rsqrt op ru
 370.8, 289.1 / 377.9 -> 289.3 / 375.2, 289.0 / 375.3. Within noise, as the standalone gains (≤ 3 µs a call) predict;
 the rot cache's value is the lower DM floor for later compute cuts. One rsqrt at bs8 / 16 / 32 waits for Q in L1
 (the pinned L1-space item).
+
+## 74. L1 budget: where the peaks are; Q in L1 at bs8 (landed with one rsqrt); the residual add in the matmul epilogue (2026-10-15)
+
+**L1 maps** (`l1_map_first_layer.py 16|32`; CB region from 109 KB, L1 to 1,485 KB per core), steady-state peaks, KB
+per core:
+
+| op | live L1 buffers | room for its static CBs | its CBs (est.) |
+|---|---|---|---|
+| bs16 QKV matmul | QKV output 435 | ~940 | ~485 |
+| bs16 heads op | QKV output 435 + K / V 146 | ~794 | ~300 |
+| bs16 FF13 (K_block 40) | 2 × 181 | ~854 | **~820** |
+| bs16 FF2 | 3 × 181 | ~854 | ~480 |
+| bs32 WO | norm out 363 + WO out 363 | ~650 | ~480 |
+| bs32 FF13 | norm out 363 | ~1,010 | ~820 |
+| bs32 FF2 | 4 × 91 norm parts + FF2 out 363 | ~650 | ~480 |
+
+What we would fit and what it needs: bs16 Q in L1 (297 KB through the heads op and SDPA; below); bs32's post-attention
+sum in L1 (363 KB through FF13 and FF2: FF13 ~170 KB and FF2 ~85 KB short, two of the four 44.6 MB DRAM passes per
+layer); bs32 without QKV chunks (needs the QKV intermediate gone: the QKV+heads fusion, §71).
+
+**Q in L1 (`QWEN_HEADS_Q_L1`).** Allocated by the heads op, Q / K / V land below the live QKV output; once that is
+freed they sit mid-L1 and SDPA's static CBs clash (bs16: buffer at 627,072, CBs end at 688,256). `tt/attention.py`
+now preallocates Q / K / V in L1 just before the QKV matmul (a matmul / heads hook pair like the chunk hooks), so
+they sit at the top. That also exposed a hook-restore order bug: the `finally` block restored the matmul wrapper
+before the chunk hooks, re-installing a captured wrapper each layer (RecursionError with the new hook; latent in the
+chunk path); hooks are now restored in reverse order. bs8 fits. bs16: the QKV matmul is ~91 KB short (Q / K / V 443
+KB + QKV output 435 KB above its CBs, which end at 717,952).
+
+Q in L1 alone at bs8 is neutral (3 alternating rounds on chips 1 and 3, cold 75.8 / 75.7 / 75.7 -> 75.7 / 75.8 / 75.5
+and 75.8 / 75.7 / 75.7 -> 75.7 / 75.7 / 75.6 ms): it is the enabler for one rsqrt (§73), whose faster compute no longer
+lines up Q's DRAM writes. bs8 heads op, Q in L1: 99.5 -> 90.7 µs with one rsqrt. E2e, chip 1, 3 alternating rounds,
+both off -> both on: cold 75.8 / 75.7 / 75.8 -> 75.4 / 75.4 / 75.4 ms; sustained 97.4 / 98.7 / 100.2 -> 97.9 / 98.4 /
+99.0. Bit-identical. **Landed at bs8** (`apply_workload_env`).
+
+**One rsqrt's constant tiles.** §73 kept G / P in a separate per-core L1 shard allocated at the first call: wherever
+L1 was free then, so in the model it split L1 for later ops (bs16 with Q in L1: a clash at 1,305,664). Now: with
+resident constants (bs1) they are part of that shard (`_resident_layout(..., cap)`), otherwise the reader builds them
+in CBs 19 / 20 each call (zero-fill from `MEM_ZEROS_BASE`, 32 stores per tile). Building costs ~2 µs a call, which
+erased bs1's gain (heads 28.4 µs), hence the shard at bs1 (26.8 µs, bs1 e2e cold 14.0 / 14.0 / 14.0 -> 13.9 / 13.9 /
+14.0). Bit-identical in both modes.
+
+**Residual add in the WO / FF2 epilogue** (`bench_resid_mm.py`): `ttnn.experimental.dit_minimal_matmul_addcmul_fused(x,
+w, 1.0, resid, ones)` (minimal_matmul's fused ternary, resid + 1·(x @ w)·ones) would let the add+norm become norm-only
+(no sum write, no b read). It requires the residual's tile size to equal the weights' (bfp4 weights, bfp8 residual:
+`TT_FATAL ternary_a_tile_size == in1_tile_size`). With bfp8 weights as a proxy, µs a call, plain -> fused: FF2 765.8 ->
+798.6 (bs16), 1512.9 -> 1585.6 (bs32); WO 343.1 -> 413.7, 660.5 -> 800.0; PCC 0.9992-0.99997. +104 / +213 µs a layer
+against ~70 / ~246 µs a layer the norm-only add+norm would save: the epilogue's three passes (a multiply by the ones
+row, a scalar multiply, the add) cost too much. A lean epilogue (one dest-reuse add per output tile in the last K
+block, like the fused SwiGLU's partial-sum add, the residual streamed through the ternary DM path) is estimated at
+~−6 ms at bs32 and ~−1.3 ms at bs16; it needs a minimal_matmul mode (host C++).
