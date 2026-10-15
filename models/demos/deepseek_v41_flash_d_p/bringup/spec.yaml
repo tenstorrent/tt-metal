@@ -14,7 +14,8 @@ hooks: models.demos.deepseek_v41_flash_d_p.bringup.hooks
 num_layers: 40
 prior: null
 layers: "0-3,14,20,21,24"          # one of each block type (a subset result is never reported as full-model)
-deploy: {box: galaxy_4x4, seq: 524288, chunk: 8192}    # the system the plan is for (F64); 1M fits only galaxy_8x4 exactly
+deploy: {box: galaxy_4x4, seq: 522240, chunk: 5120}    # the system the plan is for (F64); 1M fits only galaxy_8x4 exactly;
+                                                        # chunk: the serving chunk, the same on every box (owner, F67)
 boxes:
   galaxy_4x4:
     name: Blackhole Galaxy, 4 rows as a 4x4 torus (FABRIC_2D_TORUS_XY)
@@ -46,15 +47,14 @@ boxes:
     test_timeout_s: 3600
 run: {box: quietbox_2x2, mode: partial}
 target: {seq: 56320, chunk: 5120, dtype: bf16}          # this run's context at real size
-ladder:                            # rungs in order; the first rung with full_dumps feeds component and swap tests
-  - {name: s4096, seq: 4096, chunk: 2048, full_dumps: true}     # 2k->2k; > the window (128) and the compressed top-k
-  - {name: s16384, seq: 16384, chunk: 8192}                     # 8k->8k
+ladder:                            # rungs in order; every rung at the serving chunk (owner, F67: no test at a chunk never served)
+  - {name: s10240, seq: 10240, chunk: 5120, full_dumps: true}   # 2 chunks; > the window (128) and the compressed top-k
   - {name: last, seq: 56320, chunk: 5120, golden: s56320, prefix_from_golden: true}   # golden 51k prefix, device 51k->56k
   - {name: s56320, seq: 56320, chunk: 5120}                     # all 11 chunks on device
-scaled:                            # the scaled run (plan: sequence 0.5 -> chunk 4096, 2048 rows per mesh row as on the
-  ladder:                          # deployment), capped at 64k tokens by the owner (CPU golden time)
-    - {name: scaled, seq: 53248, chunk: 4096}             # 13 chunks: the canonical prompt has 56320 tokens
-    - {name: scaled_last, seq: 53248, chunk: 4096, golden: scaled, prefix_from_golden: true}
+scaled:                            # the scaled run at the serving chunk (fixed on every box), ~56K like the real run
+  ladder:
+    - {name: scaled, seq: 56320, chunk: 5120}             # the serving chunk, 11 chunks (the prompt's 56320 tokens)
+    - {name: scaled_last, seq: 56320, chunk: 5120, golden: scaled, prefix_from_golden: true}
 block_types:                       # every layer exactly once; representative = the layer swap tests use
   swa:                             # attention over the 128-token window only (compress ratio 0)
     layers: [0]
