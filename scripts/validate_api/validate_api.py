@@ -39,13 +39,13 @@ BANNED_HEADERS = {
 # the UMD surface from public headers.  If you need a UMD type in a public header,
 # prefer forward declarations or move the dependency to a .cpp file.
 ALLOWED_UMD_HEADERS = {
-    "umd/device/types/arch.hpp",
-    "umd/device/types/cluster_descriptor_types.hpp",
-    "umd/device/types/core_coordinates.hpp",
-    "umd/device/types/xy_pair.hpp",
+    "tt-umd/types/arch.hpp",
+    "tt-umd/types/cluster_descriptor_types.hpp",
+    "tt-umd/types/core_coordinates.hpp",
+    "tt-umd/types/xy_pair.hpp",
     # PhysicalSystemDescriptor holds a tt::umd::SemVer by value. semver.hpp already reached the
     # API through cluster_descriptor_types.hpp; it is listed so the header can include it directly.
-    "umd/device/utils/semver.hpp",
+    "tt-umd/utils/semver.hpp",
 }
 
 ALLOWED_PREFIXES = {

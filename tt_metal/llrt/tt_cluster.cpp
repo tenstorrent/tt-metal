@@ -35,7 +35,7 @@
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
 #include "tunnels_from_mmio_device.hpp"
-#include "umd/device/utils/semver.hpp"
+#include <tt-umd/utils/semver.hpp>
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/firmware/firmware_utils.hpp>
