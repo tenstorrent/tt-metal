@@ -65,7 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 static_cast<DataFormat>(formats.unpack_S_src),
                 L1_ADDRESS(buffer_Res[0]),
                 static_cast<DataFormat>(formats.pack_S_dst),
-                IMPLIED_MATH_FORMAT);
+                false /*implied_math_format*/);
             Op::run(TILE_CNT);
         });
 

@@ -11,7 +11,7 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
-from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
+from helpers.llk_params import MathOperation, format_dict
 from helpers.param_config import (
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
@@ -30,7 +30,6 @@ from helpers.stimuli_generator import (
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
-    IMPLIED_MATH_FORMAT,
     NUM_FACES,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -53,19 +52,17 @@ SFPU_ADD_FORMATS = input_output_formats(
 ) + quasar_mx_smoke(DataFormat.MxFp8P, DataFormat.Float16_b)
 
 SFPU_ADD_COMBINATIONS = [
-    (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
+    (fmt, dest_acc, runtime(input_dimensions))
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
         SFPU_ADD_FORMATS
     )
-    for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     for input_dimensions in [[32, 32], [64, 64]]
 ]
 
 SFPU_ADD_INT_FORMATS = input_output_formats([DataFormat.Int32], same=True)
 
-# Implied formats stay off for Int32, as in the Dest Int32 tests (TEN-4674).
 SFPU_ADD_INT_COMBINATIONS = [
-    (fmt, dest_acc, ImpliedMathFormat.No, runtime(input_dimensions))
+    (fmt, dest_acc, runtime(input_dimensions))
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
         SFPU_ADD_INT_FORMATS
     )
@@ -74,15 +71,13 @@ SFPU_ADD_INT_COMBINATIONS = [
 
 
 @pytest.mark.quasar
-@parametrize(formats_dest_acc_implied_math_input_dims=SFPU_ADD_COMBINATIONS)
-def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
+@parametrize(formats_dest_acc_input_dims=SFPU_ADD_COMBINATIONS)
+def test_isolate_sfpu_add_quasar(formats_dest_acc_input_dims):
     """
     Test isolated SFPU add (binary): UNPACK2 (UNP_S) x2 -> SrcS -> SFPU -> PACK1 -> L1.
     No MATH kernel (stub only). Two input operands unpacked to SrcS, added, packed.
     """
-    (formats, dest_acc, implied_math_format, input_dimensions) = (
-        formats_dest_acc_implied_math_input_dims[0]
-    )
+    formats, dest_acc, input_dimensions = formats_dest_acc_input_dims[0]
 
     torch.manual_seed(42)
 
@@ -140,9 +135,7 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
     configuration = TestConfig(
         "sources/quasar/isolate_sfpu_add_quasar_test.cpp",
         formats,
-        templates=[
-            IMPLIED_MATH_FORMAT(implied_math_format),
-        ],
+        templates=[],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
@@ -162,7 +155,6 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
         ),
         unpack_to_srcs=True,
         dest_acc=dest_acc,
-        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result
@@ -174,12 +166,10 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
 
 
 @pytest.mark.quasar
-@parametrize(formats_dest_acc_implied_math_input_dims=SFPU_ADD_INT_COMBINATIONS)
-def test_isolate_sfpu_add_int_quasar(formats_dest_acc_implied_math_input_dims):
+@parametrize(formats_dest_acc_input_dims=SFPU_ADD_INT_COMBINATIONS)
+def test_isolate_sfpu_add_int_quasar(formats_dest_acc_input_dims):
     """Int32 out = in0 + in1 on the SrcS path, wrapping like 2's complement Int32."""
-    (formats, dest_acc, implied_math_format, input_dimensions) = (
-        formats_dest_acc_implied_math_input_dims[0]
-    )
+    formats, dest_acc, input_dimensions = formats_dest_acc_input_dims[0]
 
     torch.manual_seed(42)
 
@@ -215,9 +205,7 @@ def test_isolate_sfpu_add_int_quasar(formats_dest_acc_implied_math_input_dims):
     configuration = TestConfig(
         "sources/quasar/isolate_sfpu_add_quasar_test.cpp",
         formats,
-        templates=[
-            IMPLIED_MATH_FORMAT(implied_math_format),
-        ],
+        templates=[],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),

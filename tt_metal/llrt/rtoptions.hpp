@@ -418,8 +418,8 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
-    // Serve simulation devices over sockets, you can disable it with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=0.
-    bool simulator_serve_over_sockets = true;
+    // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
+    bool simulator_serve_over_sockets = false;
 
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
@@ -828,15 +828,19 @@ public:
         return runtime_target_device_ == TargetDevice::Simulator || runtime_target_device_ == TargetDevice::Emule;
     }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
-    // The qsr.s1 (Grendel) emulation model, recognised by its simulator directory name (emu-qsr-s1-*).
-    bool is_qsr_s1_simulator() const {
+    // The simulator directory name: the last component of TT_METAL_SIMULATOR, trailing '/' ignored.
+    // Empty unless the simulator target is selected.
+    std::string get_simulator_name() const {
+        if (!get_simulator_enabled()) {
+            return {};
+        }
         std::string simulator = simulator_path.string();
         while (simulator.size() > 1 && simulator.back() == '/') {
             simulator.pop_back();
         }
-        return get_simulator_enabled() &&
-               std::filesystem::path(simulator).filename().string().starts_with("emu-qsr-s1");
+        return std::filesystem::path(simulator).filename().string();
     }
+    bool is_qsr_s1_simulator() const { return get_simulator_name().starts_with("emu-qsr-s1"); }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
