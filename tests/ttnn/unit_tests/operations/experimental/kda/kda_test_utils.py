@@ -155,8 +155,8 @@ def assert_accurate(
     result but stays near 1 under a uniform scale error (a state decayed 5% too much keeps
     PCC 1.0). NRMSE (``nrmse``) measures the error's energy against the expected signal, so
     it sees scale errors and precision regressions. ``nrmse_threshold`` is required: pass
-    1.5x the clean NRMSE measured for the tensor at hand (noting the measurement beside it),
-    or ``None`` with the reason it cannot be measured. With ``nrmse_keep_dims`` the gate applies to the worst slice (e.g. per head of a
+    the clean NRMSE measured for the tensor at hand plus headroom, rounded down to one significant
+    digit (0.0X5 if that leaves under 10%), or ``None`` with the reason it cannot be measured. With ``nrmse_keep_dims`` the gate applies to the worst slice (e.g. per head of a
     recurrent state), so one drifting slice is not averaged away.
 
     Both still average: eleven wrong rows in 1280 held PCC at 0.9996 and lifted NRMSE only

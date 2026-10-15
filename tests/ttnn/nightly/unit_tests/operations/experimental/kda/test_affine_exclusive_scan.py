@@ -279,14 +279,14 @@ def test_affine_exclusive_scan_contract_and_trace(
 
     actual = ttnn.to_torch(first)
     assert_accurate(
-        expected, actual, name=f"{summary_dtype} exclusive entry states", pcc_threshold=0.999, nrmse_threshold=0.013
-    )  # 1.5x measured NRMSE 8.28e-03
+        expected, actual, name=f"{summary_dtype} exclusive entry states", pcc_threshold=0.999, nrmse_threshold=0.01
+    )
     assert_accurate(
         snapshots[2],
         actual.reshape(batch_heads, groups_per_head, key_dim, value_dim)[:, 0],
         name="exclusive first entry",
         pcc_threshold=0.999,
-        nrmse_threshold=0.00061,  # 1.5x measured NRMSE 4.06e-04
+        nrmse_threshold=0.0006,
     )
     assert_bit_identical(actual, ttnn.to_torch(traced), name="trace replay")
     for name, snapshot, tensor in zip(("a", "b", "initial_state"), snapshots, (a_tt, b_tt, state_tt), strict=True):
@@ -334,7 +334,7 @@ def test_affine_exclusive_scan_shape_accuracy(
         ttnn.to_torch(output),
         name=f"{summary_dtype} shape-sweep exclusive entry states",
         pcc_threshold=0.999,
-        nrmse_threshold=0.007,  # 1.5x measured NRMSE 4.61e-03
+        nrmse_threshold=0.007,
     )
 
 
@@ -361,8 +361,8 @@ def test_affine_exclusive_scan_is_device_deterministic(
         name=f"{summary_dtype} exclusive scan device-side exact-value determinism marker",
     )
     assert_accurate(
-        expected, output, name=f"{summary_dtype} exclusive entry states", pcc_threshold=0.999, nrmse_threshold=0.013
-    )  # 1.5x measured NRMSE 8.26e-03
+        expected, output, name=f"{summary_dtype} exclusive entry states", pcc_threshold=0.999, nrmse_threshold=0.01
+    )
     ttnn.deallocate(output_tt)
 
 
@@ -396,12 +396,8 @@ def test_affine_exclusive_scan_cache_hit_rebinds_fresh_tensors(
     expected_b = _oracle(*host_b, case.batch_heads, case.groups_per_head)
     actual_a = ttnn.to_torch(output_a)
     actual_b = ttnn.to_torch(output_b)
-    assert_accurate(
-        expected_a, actual_a, name="cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.013
-    )  # 1.5x measured NRMSE 8.36e-03
-    assert_accurate(
-        expected_b, actual_b, name="cache hit fresh tensors", pcc_threshold=0.999, nrmse_threshold=0.012
-    )  # 1.5x measured NRMSE 7.99e-03
+    assert_accurate(expected_a, actual_a, name="cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.01)
+    assert_accurate(expected_b, actual_b, name="cache hit fresh tensors", pcc_threshold=0.999, nrmse_threshold=0.01)
     assert not torch.equal(actual_a, actual_b)
 
 
@@ -453,12 +449,10 @@ def test_affine_exclusive_scan_approximate_math_uses_distinct_accurate_program(
     )
     assert device.num_program_cache_entries() == entries + 1
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)
+    assert_accurate(expected, ttnn.to_torch(exact), name="exact math", pcc_threshold=0.999, nrmse_threshold=0.01)
     assert_accurate(
-        expected, ttnn.to_torch(exact), name="exact math", pcc_threshold=0.999, nrmse_threshold=0.013
-    )  # 1.5x measured NRMSE 8.12e-03
-    assert_accurate(
-        expected, ttnn.to_torch(approximate), name="approximate math", pcc_threshold=0.999, nrmse_threshold=0.0024
-    )  # 1.5x measured NRMSE 1.54e-03
+        expected, ttnn.to_torch(approximate), name="approximate math", pcc_threshold=0.999, nrmse_threshold=0.002
+    )
 
 
 def test_affine_exclusive_scan_rejects_unsupported_compute_config(
@@ -529,7 +523,7 @@ def test_affine_exclusive_scan_production_performance(
         name=f"{case.case_id} production output",
         pcc_threshold=0.999,
         nrmse_threshold=0.02,
-    )  # 1.5x measured NRMSE 1.27e-02
+    )
     performance = _affine_exclusive_scan_performance(
         *device_inputs,
         output,
@@ -569,15 +563,15 @@ def test_affine_exclusive_scan_matches_composed_ttnn_baseline(zero_actual_start,
         composed = _composed_ttnn_baseline(a, b, initial_state, device, batch_heads, groups_per_head)
     ttnn.synchronize_device(device)
     assert_accurate(
-        expected, ttnn.to_torch(fused), name="fused exclusive scan", pcc_threshold=0.999, nrmse_threshold=0.013
-    )  # 1.5x measured NRMSE 8.33e-03
+        expected, ttnn.to_torch(fused), name="fused exclusive scan", pcc_threshold=0.999, nrmse_threshold=0.01
+    )
     assert_accurate(
         expected,
         ttnn.to_torch(composed),
         name="composed TTNN exclusive scan",
         pcc_threshold=0.999,
-        nrmse_threshold=0.0025,
-    )  # 1.5x measured NRMSE 1.65e-03
+        nrmse_threshold=0.002,
+    )
 
 
 @pytest.mark.parametrize(

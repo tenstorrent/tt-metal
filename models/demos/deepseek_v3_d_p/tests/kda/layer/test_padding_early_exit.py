@@ -174,9 +174,7 @@ def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis,
                     # the inherited peak-error gate without padding. These
                     # cases require exact unpadded carries plus CPU PCC/RMSE.
                     state_linf_threshold=None if p == 1 or length == sequence else 0.60,
-                    nrmse=LayerNrmseThresholds(
-                        output=0.02, recurrent=0.038, convolution=0.0042
-                    ),  # 1.5x measured NRMSE 1.33e-02/2.52e-02/2.76e-03
+                    nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.004),
                 )
                 physical = reconstruct_sp_tp_tensor(output, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
                 valid_output = physical[:, torch.argsort(permutation)][:, :length].clone()

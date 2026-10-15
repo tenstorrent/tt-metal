@@ -77,21 +77,21 @@ def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> No
         (golden_state.q_convolution, golden_state.k_convolution, golden_state.v_convolution), dim=-1
     ).to(torch.bfloat16)
     assert_accurate(
-        golden_output, ttnn.to_torch(output_tt), name="layer output", pcc_threshold=0.999, nrmse_threshold=0.018
-    )  # 1.5x measured NRMSE 1.17e-02
+        golden_output, ttnn.to_torch(output_tt), name="layer output", pcc_threshold=0.999, nrmse_threshold=0.015
+    )
     assert_accurate(
         golden_state.recurrent,
         ttnn.to_torch(recurrent_tt),
         name="layer recurrent state",
         pcc_threshold=0.999,
-        nrmse_threshold=0.035,  # 1.5x measured NRMSE 2.33e-02
+        nrmse_threshold=0.03,
     )
     assert_accurate(
         golden_convolution,
         ttnn.to_torch(convolution_tt),
         name="layer convolution state",
         pcc_threshold=0.999,
-        nrmse_threshold=0.0037,  # 1.5x measured NRMSE 2.44e-03
+        nrmse_threshold=0.003,
     )
     assert all(marker.item() == 0 for marker in mismatch_markers), "KDA layer is not bit-identical across runs"
 
@@ -141,21 +141,21 @@ def test_forward_contract(device: ttnn.Device) -> None:
         input_convolution_before, ttnn.to_torch(input_state.convolution), name="input convolution state"
     )
     assert_accurate(
-        golden_output, actual_output, name="segmented layer output", pcc_threshold=0.999, nrmse_threshold=0.017
-    )  # 1.5x measured NRMSE 1.12e-02
+        golden_output, actual_output, name="segmented layer output", pcc_threshold=0.999, nrmse_threshold=0.015
+    )
     assert_accurate(
         golden_state.recurrent,
         ttnn.to_torch(final_state.recurrent),
         name="segmented recurrent state",
         pcc_threshold=0.999,
-        nrmse_threshold=0.031,  # 1.5x measured NRMSE 2.06e-02
+        nrmse_threshold=0.03,
     )
     assert_accurate(
         golden_convolution,
         ttnn.to_torch(final_state.convolution),
         name="segmented convolution state",
         pcc_threshold=0.999,
-        nrmse_threshold=0.004,  # 1.5x measured NRMSE 2.61e-03
+        nrmse_threshold=0.004,
     )
 
 

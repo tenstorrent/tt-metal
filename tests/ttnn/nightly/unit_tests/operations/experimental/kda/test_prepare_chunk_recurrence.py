@@ -302,9 +302,7 @@ def _assert_output_accurate(
     t_inv_max_abs_threshold: float = _T_INV_MAX_ABS,
 ) -> None:
     assert torch.isfinite(actual).all(), f"{context} {name} contains nonfinite values"
-    assert_accurate(
-        expected, actual, name=f"{context} {name}", pcc_threshold=0.999, nrmse_threshold=0.0078
-    )  # 1.5x measured NRMSE 5.19e-03
+    assert_accurate(expected, actual, name=f"{context} {name}", pcc_threshold=0.999, nrmse_threshold=0.007)
     if name == "t_inv":
         _assert_t_inv_strict_lower_accurate(
             expected,
@@ -347,7 +345,7 @@ def _assert_t_inv_strict_lower_accurate(
         actual_strict_lower,
         name=f"{context} t_inv strictly-lower",
         pcc_threshold=0.999,
-        nrmse_threshold=0.012,  # 1.5x measured NRMSE 7.99e-03
+        nrmse_threshold=0.01,
     )
     max_abs = float((expected_strict_lower - actual_strict_lower).abs().max())
     assert (

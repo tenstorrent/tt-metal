@@ -95,9 +95,7 @@ def test_changing_actual_start_single_capture(mesh_device, sp_axis, tp_axis, dev
                 config=config,
                 label=f"dynamic SP{p} actual_start_value={actual_start_value}",
                 state_linf_threshold=0.65 if local_rows == 2560 else 0.6,
-                nrmse=LayerNrmseThresholds(
-                    output=0.021, recurrent=0.034, convolution=0.0039
-                ),  # 1.5x measured NRMSE 1.34e-02/2.22e-02/2.58e-03
+                nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.003),
             )
             before = snapshots((output, state.recurrent, state.convolution))
             ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
@@ -140,9 +138,7 @@ def test_changing_actual_start_single_capture(mesh_device, sp_axis, tp_axis, dev
                 config=config,
                 label=f"dynamic continuation SP{p} chunk={chunk}",
                 state_linf_threshold=0.65 if local_rows == 2560 else 0.6,
-                nrmse=LayerNrmseThresholds(
-                    output=0.021, recurrent=0.034, convolution=0.0039
-                ),  # 1.5x measured NRMSE 1.34e-02/2.22e-02/2.58e-03
+                nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.003),
             )
             for i, (a, b) in enumerate(
                 zip(carry_before, snapshots((initial.recurrent, initial.convolution)), strict=True)
@@ -211,9 +207,7 @@ def test_production_local_trace(mesh_device, tp_axis, device_params, local_rows)
                     label=f"compact SP{sp} start={actual_start}",
                     state_linf_threshold=None,
                     pcc_threshold=0.9995,
-                    nrmse=LayerNrmseThresholds(
-                        output=0.019, recurrent=0.051, convolution=0.0075
-                    ),  # 1.5x measured NRMSE 1.20e-02/3.34e-02/4.98e-03
+                    nrmse=LayerNrmseThresholds(output=0.015, recurrent=0.05, convolution=0.007),
                 )
         finally:
             ttnn.release_trace(mesh_device, trace)

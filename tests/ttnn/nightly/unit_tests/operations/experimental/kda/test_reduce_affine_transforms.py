@@ -279,8 +279,8 @@ def test_reduce_affine_transforms_contract_and_trace(
     for name, golden, actual_tt, traced_tt in zip(("A", "B"), (expected_a, expected_b), first, traced, strict=True):
         actual = ttnn.to_torch(actual_tt)
         assert_accurate(
-            golden, actual, name=f"{summary_dtype} reduced {name}", pcc_threshold=0.999, nrmse_threshold=0.022
-        )  # 1.5x measured NRMSE 1.45e-02
+            golden, actual, name=f"{summary_dtype} reduced {name}", pcc_threshold=0.999, nrmse_threshold=0.02
+        )
         assert_bit_identical(actual, ttnn.to_torch(traced_tt), name=f"{name} trace replay")
 
     assert_bit_identical(snapshots[0], ttnn.to_torch(a_tt), name="a immutability")
@@ -330,7 +330,7 @@ def test_reduce_affine_transforms_shape_accuracy(
             ttnn.to_torch(output),
             name=f"{summary_dtype} shape-sweep reduced {name}",
             pcc_threshold=0.999,
-            nrmse_threshold=0.013,  # 1.5x measured NRMSE 8.10e-03
+            nrmse_threshold=0.01,
         )
 
 
@@ -354,8 +354,8 @@ def test_reduce_affine_transforms_is_device_deterministic(
     )
     for name, golden, output in zip(("A", "B"), expected, outputs, strict=True):
         assert_accurate(
-            golden, output, name=f"{summary_dtype} reduced {name}", pcc_threshold=0.999, nrmse_threshold=0.023
-        )  # 1.5x measured NRMSE 1.50e-02
+            golden, output, name=f"{summary_dtype} reduced {name}", pcc_threshold=0.999, nrmse_threshold=0.02
+        )
     for output in reference_outputs:
         ttnn.deallocate(output)
 
@@ -386,11 +386,11 @@ def test_reduce_affine_transforms_cache_hit_rebinds_fresh_tensors(
         actual_a = ttnn.to_torch(actual_a_tt)
         actual_b = ttnn.to_torch(actual_b_tt)
         assert_accurate(
-            golden_a, actual_a, name=f"{name} cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.022
-        )  # 1.5x measured NRMSE 1.45e-02
+            golden_a, actual_a, name=f"{name} cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.02
+        )
         assert_accurate(
-            golden_b, actual_b, name=f"{name} cache hit fresh tensors", pcc_threshold=0.999, nrmse_threshold=0.023
-        )  # 1.5x measured NRMSE 1.51e-02
+            golden_b, actual_b, name=f"{name} cache hit fresh tensors", pcc_threshold=0.999, nrmse_threshold=0.02
+        )
         assert not torch.equal(actual_a, actual_b)
 
 
@@ -445,15 +445,15 @@ def test_reduce_affine_transforms_approximate_math_uses_distinct_accurate_progra
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)
     for name, golden, exact_output, approximate_output in zip(("A", "B"), expected, exact, approximate, strict=True):
         assert_accurate(
-            golden, ttnn.to_torch(exact_output), name=f"{name} exact math", pcc_threshold=0.999, nrmse_threshold=0.024
-        )  # 1.5x measured NRMSE 1.54e-02
+            golden, ttnn.to_torch(exact_output), name=f"{name} exact math", pcc_threshold=0.999, nrmse_threshold=0.02
+        )
         assert_accurate(
             golden,
             ttnn.to_torch(approximate_output),
             name=f"{name} approximate math",
             pcc_threshold=0.999,
-            nrmse_threshold=0.0036,
-        )  # 1.5x measured NRMSE 2.39e-03
+            nrmse_threshold=0.003,
+        )
 
 
 def test_reduce_affine_transforms_rejects_unsupported_compute_config(
@@ -508,8 +508,8 @@ def test_reduce_affine_transforms_production_performance(zero_actual_start, devi
     assert all(output.dtype == ttnn.float32 for output in outputs)
     for name, golden, output in zip(("A", "B"), expected, outputs, strict=True):
         assert_accurate(
-            golden, ttnn.to_torch(output), name=f"production reduced {name}", pcc_threshold=0.999, nrmse_threshold=0.016
-        )  # 1.5x measured NRMSE 1.03e-02
+            golden, ttnn.to_torch(output), name=f"production reduced {name}", pcc_threshold=0.999, nrmse_threshold=0.015
+        )
     performance = _reduce_affine_transforms_performance(
         a_tt,
         b_tt,
@@ -544,11 +544,11 @@ def test_reduce_affine_transforms_matches_composed_ttnn_baseline(zero_actual_sta
     ttnn.synchronize_device(device)
     for name, golden, fused_tt, composed_tt in zip(("A", "B"), expected, fused, composed, strict=True):
         assert_accurate(
-            golden, ttnn.to_torch(fused_tt), name=f"fused {name}", pcc_threshold=0.999, nrmse_threshold=0.022
-        )  # 1.5x measured NRMSE 1.44e-02
+            golden, ttnn.to_torch(fused_tt), name=f"fused {name}", pcc_threshold=0.999, nrmse_threshold=0.02
+        )
         assert_accurate(
             golden, ttnn.to_torch(composed_tt), name=f"composed TTNN {name}", pcc_threshold=0.999, nrmse_threshold=0.004
-        )  # 1.5x measured NRMSE 2.60e-03
+        )
 
 
 @pytest.mark.parametrize(

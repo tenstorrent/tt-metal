@@ -123,10 +123,10 @@ def test_cached_and_in_memory_layers_match(device: ttnn.Device, tmp_path: Path) 
         name="preloaded cache",
         pcc_threshold=0.9999,
         nrmse_threshold=1e-06,
-    )  # 1.5x measured NRMSE 0.00e+00
+    )
     assert_accurate(
         outputs["in-memory"], outputs["cache-only"], name="cache-only", pcc_threshold=0.9999, nrmse_threshold=1e-06
-    )  # 1.5x measured NRMSE 0.00e+00
+    )
 
 
 @pytest.mark.use_module_device

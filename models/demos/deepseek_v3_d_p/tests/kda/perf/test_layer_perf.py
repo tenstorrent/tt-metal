@@ -148,11 +148,11 @@ def _trace_wall_samples_ms(
         ttnn.synchronize_device(mesh_device)
         validation = (
             validate_first_replay(
-                next_state, output, nrmse=LayerNrmseThresholds(output=0.031, recurrent=0.04, convolution=0.0071)
+                next_state, output, nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=0.007)
             )
             if validate_first_replay is not None
             else None
-        )  # 1.5x measured NRMSE 2.05e-02/2.66e-02/4.67e-03
+        )
 
         samples_ms = []
         for _ in range(_TIMING_SAMPLES):
@@ -237,9 +237,7 @@ def test_kimi_k3_layer_1_perf(
             mesh_device,
             tensor_parallel_axis,
             pcc_threshold=_PCC_THRESHOLD,
-            nrmse=LayerNrmseThresholds(
-                output=0.031, recurrent=0.04, convolution=0.0071
-            ),  # 1.5x measured NRMSE 2.05e-02/2.66e-02/4.67e-03
+            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=0.007),
         )
     finally:
         ttnn.deallocate(output)

@@ -157,9 +157,7 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                     # below, while retaining CPU PCC/RMSE and all other gates.
                     state_linf_threshold=None if sp == 4 and start == 96 and length == capacity - 64 else 0.6,
                     label=f"K3 {'trace' if traced else 'eager'} SP{sp} start={start} length={length}",
-                    nrmse=LayerNrmseThresholds(
-                        output=0.02, recurrent=0.038, convolution=0.0042
-                    ),  # 1.5x measured NRMSE 1.31e-02/2.49e-02/2.78e-03
+                    nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.004),
                 )
                 current = cache.read(1)
                 assert (current.recurrent.buffer_address(), current.convolution.buffer_address()) == addresses

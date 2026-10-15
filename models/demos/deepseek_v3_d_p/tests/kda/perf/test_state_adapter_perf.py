@@ -200,9 +200,7 @@ def test_kimi_k3_state_adapter_cost(
             mesh_device,
             tensor_parallel_axis,
             pcc_threshold=_PCC_THRESHOLD,
-            nrmse=LayerNrmseThresholds(
-                output=0.031, recurrent=0.04, convolution=0.0071
-            ),  # 1.5x measured NRMSE 2.05e-02/2.66e-02/4.67e-03
+            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=0.007),
         )
     finally:
         ttnn.deallocate(output)

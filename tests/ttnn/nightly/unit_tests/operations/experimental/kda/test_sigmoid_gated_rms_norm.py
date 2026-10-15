@@ -275,9 +275,7 @@ def _assert_accurate_and_exact_value_deterministic(
         mismatch_marker,
         name=f"{name} device-side exact-value determinism marker",
     )
-    assert_accurate(
-        expected, actual, name=f"{name} invocation 0", pcc_threshold=0.999, nrmse_threshold=0.0042
-    )  # 1.5x measured NRMSE 2.75e-03
+    assert_accurate(expected, actual, name=f"{name} invocation 0", pcc_threshold=0.999, nrmse_threshold=0.004)
 
 
 def _assert_inputs_unchanged(
@@ -489,12 +487,8 @@ def test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors(
     )
     actual_a = ttnn.to_torch(output_a)
     actual_b = ttnn.to_torch(output_b)
-    assert_accurate(
-        expected_a, actual_a, name="cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.0029
-    )  # 1.5x measured NRMSE 1.88e-03
-    assert_accurate(
-        expected_b, actual_b, name="cache hit fresh tensors", pcc_threshold=0.999, nrmse_threshold=0.0025
-    )  # 1.5x measured NRMSE 1.66e-03
+    assert_accurate(expected_a, actual_a, name="cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.0025)
+    assert_accurate(expected_b, actual_b, name="cache hit fresh tensors", pcc_threshold=0.999, nrmse_threshold=0.002)
     assert not torch.equal(actual_a, actual_b)
 
 

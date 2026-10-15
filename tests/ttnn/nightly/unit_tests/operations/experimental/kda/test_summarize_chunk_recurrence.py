@@ -179,11 +179,11 @@ def test_summarize_chunk_recurrence_contract_trace_and_semantics(
         names=("affine_a", "affine_b"),
         dtypes=(ttnn.bfloat16, ttnn.bfloat16),
         shapes=((batch_heads, dim, dim), (batch_heads, dim, dim)),
-        nrmse_threshold=0.0045,  # 1.5x measured NRMSE 2.99e-03
+        nrmse_threshold=0.004,
     )
     assert_summary_reconstructs_state(
         host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]), nrmse_threshold=0.004
-    )  # 1.5x measured NRMSE 2.64e-03
+    )
 
 
 def _regression_protocol(
@@ -250,7 +250,7 @@ def _log_summary_subtraction_conditioning(
         actual,
         names=("affine_a", "affine_b"),
         context=f"summary subtraction conditioning {case_id}",
-        nrmse_threshold=0.021,  # 1.5x measured NRMSE 1.37e-02
+        nrmse_threshold=0.02,
     )
 
 
@@ -285,11 +285,9 @@ def test_summarize_chunk_recurrence_is_device_deterministic(zero_actual_start, d
             output.float(),
             name=f"deterministic summary reference {name}",
             pcc_threshold=0.999,
-            nrmse_threshold=0.0056,  # 1.5x measured NRMSE 3.69e-03
+            nrmse_threshold=0.005,
         )
-    assert_summary_reconstructs_state(
-        host_inputs, outputs[0], outputs[1], nrmse_threshold=0.0051
-    )  # 1.5x measured NRMSE 3.39e-03
+    assert_summary_reconstructs_state(host_inputs, outputs[0], outputs[1], nrmse_threshold=0.005)
     for output in reference:
         ttnn.deallocate(output)
 
@@ -313,14 +311,14 @@ def test_summarize_chunk_recurrence_cache_hit_rebinds_fresh_tensors(
         outputs_a,
         names=("affine_a", "affine_b"),
         context="summary cache miss tensors",
-        nrmse_threshold=0.0056,  # 1.5x measured NRMSE 3.73e-03
+        nrmse_threshold=0.005,
     )
     assert_outputs_accurate(
         summary_oracle(host_b),
         outputs_b,
         names=("affine_a", "affine_b"),
         context="summary cache hit fresh tensors",
-        nrmse_threshold=0.0057,  # 1.5x measured NRMSE 3.76e-03
+        nrmse_threshold=0.005,
     )
 
 
@@ -362,14 +360,14 @@ def test_summarize_chunk_recurrence_approximate_math_uses_distinct_accurate_prog
     assert device.num_program_cache_entries() == entries + 1
     expected = summary_oracle(host_inputs)
     assert_outputs_accurate(
-        expected, exact, names=("affine_a", "affine_b"), context="exact summary math", nrmse_threshold=0.0057
-    )  # 1.5x measured NRMSE 3.76e-03
+        expected, exact, names=("affine_a", "affine_b"), context="exact summary math", nrmse_threshold=0.005
+    )
     assert_outputs_accurate(
         expected,
         approximate,
         names=("affine_a", "affine_b"),
         context="approximate summary math",
-        nrmse_threshold=0.0057,  # 1.5x measured NRMSE 3.76e-03
+        nrmse_threshold=0.005,
     )
 
 
@@ -480,11 +478,11 @@ def test_summarize_chunk_recurrence_height_sharded_l1_output(zero_actual_start, 
         dtypes=(ttnn.bfloat16, ttnn.bfloat16),
         shapes=((batch_heads, dim, dim), (batch_heads, dim, dim)),
         expected_memory_config=output_memory,
-        nrmse_threshold=0.0044,  # 1.5x measured NRMSE 2.87e-03
+        nrmse_threshold=0.004,
     )
     assert_summary_reconstructs_state(
         host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]), nrmse_threshold=0.003
-    )  # 1.5x measured NRMSE 1.95e-03
+    )
 
 
 @pytest.mark.parametrize("host_index", range(7))
