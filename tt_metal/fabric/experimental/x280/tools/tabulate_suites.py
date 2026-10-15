@@ -867,15 +867,10 @@ PLACEMENT["eth_credit eth_credit_hop"] = Placement(
 )
 
 
-# eth_credit's credit round trip as built, set against an on-paper estimate: the NoC
-# traversals on its loop and a processing allowance per stage that handles the packet or its
-# credit. The hop loop runs W2 into E0 (x280->e0), W5 out of E1 (e1->x280) and its
-# acknowledgement, which E1 waits for before W6 and R2, and R3 out of E0 (e0->x280); the
-# consume loop adds W6 into the receiving forwarder (e1->x280) and its R1 back (x280->e1). A traversal of h router links costs ~5 + 9h + ~5 NoC cycles
-# (BlackholeA0/NoC/README.md, Performance) at its chip's AICLK, the NoC's clock domain
-# (BlackholeA0/PCIExpressTile/README.md). The hop loop's stages are E0 and E1 twice each at
-# their chips' AICLK and the sending forwarder at the X280 PLL; the consume loop adds E1 once
-# more and the receiving forwarder. The two Ethernet crossings are in neither term.
+# eth_credit's credit round trip as built, set against the on-paper estimate of its NoC
+# traversals and per-stage processing that docs/benchmarks/eth_credit.md (Instrumentation)
+# states. A traversal's NoC cycles count at its chip's AICLK, the NoC's clock domain
+# (BlackholeA0/PCIExpressTile/README.md).
 # Per loop: its NoC traversals, each an eth_credit placement leg (PLACEMENT) and whether it is
 # that leg's acknowledgement; and its stages, ERISC per chip side and X280.
 EC_LEGS = {leg.name: leg for leg in PLACEMENT["eth_credit eth_credit"].legs}
