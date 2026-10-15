@@ -199,6 +199,7 @@ struct SenderKernelParams {
     uint32_t write_primitive = 0;
     uint32_t do_barrier = 0;
     uint32_t num_threads = 1;
+    uint32_t counter_base = 0;  // pattern value of the first staged entry
 
     uint32_t data_pattern() const { return cross_node_dfb_test::data_pattern_for_write_primitive(write_primitive); }
 };
@@ -269,7 +270,8 @@ Program make_sender_program(distributed::MeshDevice& device, m2::PrefetcherPipe&
         p.data_pattern(),
         p.entry_size,
         p.num_entries,
-        pipe.receiver_cores().num_cores());
+        pipe.receiver_cores().num_cores(),
+        p.counter_base);
     m2::SetProgramRunArgs(program, pipe_run_args(pipe, {sender_staging_args("sender", pipe)}));
     return program;
 }
@@ -483,10 +485,10 @@ uint32_t run_persistent_mt_sender_partition_r(
 // Relay DFB (pipe -> TRISC) helpers
 // ============================================================================
 
-uint32_t prefetcher_pipe_relay_expected_checksum(uint32_t total_entries) {
+uint32_t prefetcher_pipe_relay_expected_checksum(uint32_t total_entries, uint32_t counter_base = 0) {
     uint32_t checksum = 0;
     for (uint32_t i = 0; i < total_entries; ++i) {
-        checksum += static_cast<uint32_t>(static_cast<uint8_t>(i)) * 0x01010101u;
+        checksum += static_cast<uint32_t>(static_cast<uint8_t>(counter_base + i)) * 0x01010101u;
     }
     return checksum;
 }
@@ -503,7 +505,16 @@ struct PrefetcherPipeRelayParams {
     uint32_t batch_size = 1;
     uint32_t num_producers = 1;
     uint32_t num_consumers = 1;
+    m2::DFBAccessPattern pap = m2::DFBAccessPattern::STRIDED;
     m2::DFBAccessPattern cap = m2::DFBAccessPattern::STRIDED;
+    // Block of the BLOCKED side in relay entries (a BLOCKED producer's block is one pipe entry, i.e.
+    // relay_pages_per_entry). The TRISC batch and the pipe batch are derived from it.
+    uint32_t block_size = 0;
+    // Resuming BLOCKED consumers in a later program: index of this run's first block in the relay's
+    // block sequence (block b of the run belongs to consumer (first_block + b) % C), and the pattern
+    // value of the run's first pipe entry, so a resumed run stages different bytes.
+    uint32_t first_block = 0;
+    uint32_t counter_base = 0;
     std::optional<uint32_t> receiver_entry_size_override = std::nullopt;
     uint32_t trisc_delay_iterations = 0;
     // Relay entries per pipe entry: the relay pages each pipe entry this much finer (1 = like the
@@ -534,8 +545,14 @@ struct RelayConsumerParams {
     uint32_t trisc_delay_iterations = 0;
     uint32_t num_producers = 1;  // receiver DM threads = pipe credit lanes
     uint32_t num_consumers = 1;  // TRISC threads
+    m2::DFBAccessPattern pap = m2::DFBAccessPattern::STRIDED;
     m2::DFBAccessPattern cap = m2::DFBAccessPattern::STRIDED;
+    uint32_t block_size = 0;             // block of the BLOCKED side, in relay entries
     uint32_t relay_pages_per_entry = 1;  // relay entries per pipe entry
+    // BLOCKED consumers: blocks in this run (0 = every consumer pops entries_per_consumer) and the
+    // index of the run's first block in the relay's block sequence.
+    uint32_t total_blocks = 0;
+    uint32_t first_block = 0;
 };
 
 RelayConsumerSpecs make_relay_consumer(std::vector<m2::PrefetcherPipeParamName> pipes, const RelayConsumerParams& p) {
@@ -553,18 +570,24 @@ RelayConsumerSpecs make_relay_consumer(std::vector<m2::PrefetcherPipeParamName> 
             },
     };
     bind_pipe(c.receiver, std::move(pipes), "in");
-    c.receiver.dfb_bindings.push_back(m2::ProducerOf(relay_name, "relay"));
+    c.receiver.dfb_bindings.push_back(
+        p.pap == m2::DFBAccessPattern::BLOCKED ? m2::BlockedProducerOf(relay_name, "relay", p.block_size)
+                                               : m2::ProducerOf(relay_name, "relay"));
     c.receiver.compile_time_args = {
         {"total_entries", p.pipe_total_entries},
         {"batch_size", p.pipe_batch_size},
         {"relay_pages_per_entry", p.relay_pages_per_entry}};
     c.compute.dfb_bindings.push_back(
-        p.cap == m2::DFBAccessPattern::ALL ? m2::AllConsumerOf(relay_name, "relay")
-                                           : m2::StridedConsumerOf(relay_name, "relay"));
+        p.cap == m2::DFBAccessPattern::ALL       ? m2::AllConsumerOf(relay_name, "relay")
+        : p.cap == m2::DFBAccessPattern::BLOCKED ? m2::BlockedConsumerOf(relay_name, "relay", p.block_size)
+                                                 : m2::StridedConsumerOf(relay_name, "relay"));
     c.compute.compile_time_args = {
         {"entries_this_thread", p.entries_per_consumer},
         {"batch_size", p.trisc_batch_size},
-        {"delay_iterations", p.trisc_delay_iterations}};
+        {"delay_iterations", p.trisc_delay_iterations},
+        {"total_blocks", p.total_blocks},
+        {"first_block", p.first_block},
+        {"num_consumers", p.num_consumers}};
     c.compute.runtime_arg_schema.runtime_arg_names = {"result_addr"};
     return c;
 }
@@ -589,9 +612,14 @@ uint32_t verify_relay_results(
     m2::DFBAccessPattern cap,
     uint32_t entries_per_consumer,
     uint32_t total_entries,
-    uint32_t relay_pages_per_entry = 1) {
-    const uint32_t expected_checksum =
-        relay_pages_per_entry * prefetcher_pipe_relay_expected_checksum(total_entries / relay_pages_per_entry);
+    uint32_t relay_pages_per_entry = 1,
+    uint32_t counter_base = 0,
+    // Per-consumer expectations when the consumers' shares differ, or when each consumer's entries
+    // are known (empty: every consumer pops entries_per_consumer; no per-consumer checksum).
+    std::span<const uint32_t> expected_entries_per_consumer = {},
+    std::span<const uint32_t> expected_checksum_per_consumer = {}) {
+    const uint32_t expected_checksum = relay_pages_per_entry * prefetcher_pipe_relay_expected_checksum(
+                                                                   total_entries / relay_pages_per_entry, counter_base);
     uint32_t pass_count = 0;
     for (const CoreCoord& core : corerange_to_cores(receiver_cores)) {
         std::vector<uint32_t> result(num_consumers * 2, 0);
@@ -606,8 +634,15 @@ uint32_t verify_relay_results(
         uint32_t got_entries = 0;
         uint32_t got_checksum = 0;
         for (uint32_t tid = 0; tid < num_consumers; ++tid) {
-            const bool count_ok = result[tid * 2 + 0] == entries_per_consumer;
-            const bool checksum_ok = cap != m2::DFBAccessPattern::ALL || result[tid * 2 + 1] == expected_checksum;
+            const uint32_t expected_entries =
+                expected_entries_per_consumer.empty() ? entries_per_consumer : expected_entries_per_consumer[tid];
+            const bool count_ok = result[tid * 2 + 0] == expected_entries;
+            bool checksum_ok = true;
+            if (cap == m2::DFBAccessPattern::ALL) {
+                checksum_ok = result[tid * 2 + 1] == expected_checksum;
+            } else if (!expected_checksum_per_consumer.empty()) {
+                checksum_ok = result[tid * 2 + 1] == expected_checksum_per_consumer[tid];
+            }
             if (!count_ok || !checksum_ok) {
                 ok = false;
                 log_error(
@@ -616,7 +651,7 @@ uint32_t verify_relay_results(
                     core.str(),
                     tid,
                     result[tid * 2 + 0],
-                    entries_per_consumer,
+                    expected_entries,
                     result[tid * 2 + 1]);
             }
             got_entries += result[tid * 2 + 0];
@@ -709,6 +744,7 @@ uint32_t run_prefetcher_pipe_relay(
     // iteration, or the DM would block in pop_front waiting for consumers that are still
     // waiting for their batch. batch_size == 1 never needs the factor.
     uint32_t pipe_batch_size = params.batch_size;
+    uint32_t trisc_batch_size = params.batch_size;
     if (params.batch_size > 1 && params.cap == m2::DFBAccessPattern::STRIDED &&
         params.num_consumers > params.num_producers) {
         TT_FATAL(
@@ -716,6 +752,58 @@ uint32_t run_prefetcher_pipe_relay(
             "STRIDED relay: num_consumers must be a multiple of num_producers");
         pipe_batch_size *= params.num_consumers / params.num_producers;
     }
+    // BLOCKED relays move whole shares per op. The TRISC batch is the consumer share. A BLOCKED
+    // consumer needs every block of a round published before the DM pops (pop_front waits for all
+    // of this hart's acks), so the pipe batch covers one round of consumer blocks; a BLOCKED
+    // producer's block is one pipe entry, so the pipe batch stays as given.
+    const uint32_t bs = params.block_size;
+    std::vector<uint32_t> expected_entries;    // per consumer, when the shares differ
+    std::vector<uint32_t> expected_checksums;  // per consumer, when each one's entries are known
+    uint32_t total_blocks = 0;
+    if (params.cap == m2::DFBAccessPattern::BLOCKED) {
+        TT_FATAL(bs > 0 && params.batch_size == 1, "BLOCKED consumer: set block_size and leave batch_size at 1");
+        TT_FATAL(relay_total_entries % bs == 0, "BLOCKED consumer: the run must be whole blocks");
+        trisc_batch_size = bs;
+        total_blocks = relay_total_entries / bs;
+        // Block b of the run belongs to consumer (first_block + b) % C, so a run that is not a whole
+        // number of consumer rounds gives the consumers different shares.
+        expected_entries.assign(params.num_consumers, 0);
+        for (uint32_t b = 0; b < total_blocks; ++b) {
+            expected_entries[(params.first_block + b) % params.num_consumers] += bs;
+        }
+        if (params.pap != m2::DFBAccessPattern::BLOCKED) {
+            // STRIDED lanes publish relay entry e of the run into block e / bs, so each consumer's bytes
+            // are known: relay entry e carries the pattern word of pipe entry e / relay_pages.
+            expected_checksums.assign(params.num_consumers, 0);
+            for (uint32_t e = 0; e < relay_total_entries; ++e) {
+                expected_checksums[(params.first_block + e / bs) % params.num_consumers] +=
+                    static_cast<uint32_t>(static_cast<uint8_t>(params.counter_base + e / relay_pages)) * 0x01010101u;
+            }
+        }
+        const uint32_t round = params.num_consumers * bs;
+        if (total_blocks % params.num_consumers == 0) {
+            TT_FATAL(
+                round % (params.num_producers * relay_pages) == 0,
+                "BLOCKED consumer: a round of blocks ({} relay entries) must be whole pipe entries per producer",
+                round);
+            pipe_batch_size = round / (params.num_producers * relay_pages);
+        } else {
+            // A partial round: the DM pops one block at a time (pop_front waits only for that block's
+            // consumer).
+            TT_FATAL(
+                params.num_producers == 1 && bs % relay_pages == 0,
+                "BLOCKED consumer partial round: one lane, and a block must be whole pipe entries");
+            pipe_batch_size = bs / relay_pages;
+        }
+    } else if (params.pap == m2::DFBAccessPattern::BLOCKED) {
+        TT_FATAL(
+            bs == relay_pages, "BLOCKED relay producer: block_size must be relay_pages_per_entry (one pipe entry)");
+        trisc_batch_size = params.cap == m2::DFBAccessPattern::ALL ? bs : bs / params.num_consumers;
+        TT_FATAL(trisc_batch_size > 0, "BLOCKED producer with STRIDED consumers: num_consumers must divide the block");
+    }
+    TT_FATAL(
+        !expected_entries.empty() || entries_per_consumer % trisc_batch_size == 0,
+        "entries_per_consumer must be divisible by the TRISC batch");
     TT_FATAL(
         (recv_total_entries / params.num_producers) % pipe_batch_size == 0,
         "per-hart pipe entries {} must be divisible by pipe batch {}",
@@ -736,7 +824,8 @@ uint32_t run_prefetcher_pipe_relay(
         .entry_size = params.entry_size,
         .num_entries = params.total_entries,
         .write_primitive = 0,
-        .num_threads = params.num_sender_threads};
+        .num_threads = params.num_sender_threads,
+        .counter_base = params.counter_base};
     RelayConsumerSpecs consumer = make_relay_consumer(
         {pipe_param},
         RelayConsumerParams{
@@ -745,12 +834,16 @@ uint32_t run_prefetcher_pipe_relay(
             .pipe_total_entries = recv_total_entries,
             .pipe_batch_size = pipe_batch_size,
             .entries_per_consumer = entries_per_consumer,
-            .trisc_batch_size = params.batch_size,
+            .trisc_batch_size = trisc_batch_size,
             .trisc_delay_iterations = params.trisc_delay_iterations,
             .num_producers = params.num_producers,
             .num_consumers = params.num_consumers,
+            .pap = params.pap,
             .cap = params.cap,
+            .block_size = bs,
             .relay_pages_per_entry = relay_pages,
+            .total_blocks = total_blocks,
+            .first_block = params.first_block,
         });
 
     if (params.same_program) {
@@ -774,7 +867,8 @@ uint32_t run_prefetcher_pipe_relay(
             sender_params.data_pattern(),
             params.entry_size,
             params.total_entries,
-            1);
+            1,
+            params.counter_base);
         m2::SetProgramRunArgs(
             program,
             pipe_run_args(
@@ -811,7 +905,10 @@ uint32_t run_prefetcher_pipe_relay(
         params.cap,
         entries_per_consumer,
         relay_total_entries,
-        relay_pages);
+        relay_pages,
+        params.counter_base,
+        expected_entries,
+        expected_checksums);
 }
 
 // 1P1C relay with an optional receiver-side entry size that differs from the sender's.
@@ -2640,6 +2737,218 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Backpressure_NoOverwrite) 
                 .batch_size = 1,
                 .trisc_delay_iterations = 1000,
                 .same_program = true,
+            }),
+        1u);
+}
+
+// --- BLOCKED relays -------------------------------------------------------------------------
+// A relay DFB is a normal local DFB, so either side may be BLOCKED. On the producer side a
+// block is one pipe entry (relay_pages_per_entry relay entries), which is exactly what a credit
+// lane already owns, so the pipe protocol is unchanged.
+
+// STRIDED pipe lanes feeding a BLOCKED compute consumer: one consumer takes whole blocks of 4.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Blocked_SB_1P1C) {
+    if (!is_quasar_arch()) {
+        GTEST_SKIP() << "BLOCKED relay DFBs require Quasar";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t ring_depth = 8;
+    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    EXPECT_EQ(
+        run_prefetcher_pipe_relay(
+            mesh_device,
+            pipe,
+            PrefetcherPipeRelayParams{
+                .entry_size = entry_size,
+                .ring_depth = ring_depth,
+                .total_entries = 8,
+                .cap = m2::DFBAccessPattern::BLOCKED,
+                .block_size = 4,
+            }),
+        1u);
+}
+
+// Two BLOCKED consumers alternate blocks of 2 while the pipe keeps filling (same program, slow TRISC).
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Blocked_SB_1P2C_Backpressure) {
+    if (!is_quasar_arch()) {
+        GTEST_SKIP() << "BLOCKED relay DFBs require Quasar";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t ring_depth = 8;
+    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    EXPECT_EQ(
+        run_prefetcher_pipe_relay(
+            mesh_device,
+            pipe,
+            PrefetcherPipeRelayParams{
+                .entry_size = entry_size,
+                .ring_depth = ring_depth,
+                .total_entries = 16,
+                .num_consumers = 2,
+                .cap = m2::DFBAccessPattern::BLOCKED,
+                .block_size = 2,
+                .trisc_delay_iterations = 1000,
+                .same_program = true,
+            }),
+        1u);
+}
+
+// A second program resumes the relay at the durable checkpoint, which sits on block 2: each
+// BLOCKED consumer must snap to its own next block (consumer 0 to block 2, consumer 1 to block 3).
+// The second run stages different bytes and each consumer's sum is checked, so a consumer that did
+// not snap cannot pass on the stale bytes of the first run.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Blocked_SB_1P2C_CrossProgram_Resume) {
+    if (!is_quasar_arch()) {
+        GTEST_SKIP() << "BLOCKED relay DFBs require Quasar";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t ring_depth = 8;
+    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    PrefetcherPipeRelayParams params{
+        .entry_size = entry_size,
+        .ring_depth = ring_depth,
+        .total_entries = 4,
+        .num_consumers = 2,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .block_size = 2,
+    };
+    EXPECT_EQ(run_prefetcher_pipe_relay(mesh_device, pipe, params), 1u);
+    params.first_block = 2;
+    params.counter_base = 4;
+    EXPECT_EQ(run_prefetcher_pipe_relay(mesh_device, pipe, params), 1u);
+}
+
+// A resumed program that does not start on a whole round of consumers: the first run hands block 0
+// to consumer 0 only, so the second run must put consumer 1 on block 1 (its first block, two entries
+// into the ring) and consumer 0 on block 2. Different bytes per run and per-consumer sums catch a
+// consumer that resumes a period too far.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Blocked_SB_1P2C_CrossProgram_Resume_PartialRound) {
+    if (!is_quasar_arch()) {
+        GTEST_SKIP() << "BLOCKED relay DFBs require Quasar";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t ring_depth = 8;
+    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    PrefetcherPipeRelayParams params{
+        .entry_size = entry_size,
+        .ring_depth = ring_depth,
+        .total_entries = 2,  // block 0 only
+        .num_consumers = 2,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .block_size = 2,
+    };
+    EXPECT_EQ(run_prefetcher_pipe_relay(mesh_device, pipe, params), 1u);
+    params.total_entries = 6;  // blocks 1, 2 and 3: two for consumer 1, one for consumer 0
+    params.first_block = 1;
+    params.counter_base = 2;
+    EXPECT_EQ(run_prefetcher_pipe_relay(mesh_device, pipe, params), 1u);
+}
+
+// BLOCKED producer lanes (one pipe entry = one block of 2 relay entries) feeding BLOCKED consumers.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_RelayProducers2_Blocked_BB_2P2C) {
+    if (!is_quasar_arch()) {
+        GTEST_SKIP() << "BLOCKED relay DFBs require Quasar";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 512;  // two relay entries of 256
+    constexpr uint32_t ring_depth = 4;
+    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    EXPECT_EQ(
+        run_prefetcher_pipe_relay(
+            mesh_device,
+            pipe,
+            PrefetcherPipeRelayParams{
+                .entry_size = entry_size,
+                .ring_depth = ring_depth,
+                .total_entries = 4,
+                .num_producers = 2,
+                .num_consumers = 2,
+                .pap = m2::DFBAccessPattern::BLOCKED,
+                .cap = m2::DFBAccessPattern::BLOCKED,
+                .block_size = 2,
+                .relay_pages_per_entry = 2,
+                .num_sender_threads = 2,
+            }),
+        1u);
+}
+
+// BLOCKED producer lanes feeding STRIDED consumers: each consumer takes one entry of every block.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_RelayProducers2_Blocked_BS_2P2C) {
+    if (!is_quasar_arch()) {
+        GTEST_SKIP() << "BLOCKED relay DFBs require Quasar";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 512;  // two relay entries of 256
+    constexpr uint32_t ring_depth = 4;
+    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    EXPECT_EQ(
+        run_prefetcher_pipe_relay(
+            mesh_device,
+            pipe,
+            PrefetcherPipeRelayParams{
+                .entry_size = entry_size,
+                .ring_depth = ring_depth,
+                .total_entries = 4,
+                .num_producers = 2,
+                .num_consumers = 2,
+                .pap = m2::DFBAccessPattern::BLOCKED,
+                .cap = m2::DFBAccessPattern::STRIDED,
+                .block_size = 2,
+                .relay_pages_per_entry = 2,
+                .num_sender_threads = 2,
+            }),
+        1u);
+}
+
+// BLOCKED producer lanes feeding one ALL consumer, which sees every block whole.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_RelayProducers2_Blocked_BALL_2P1C) {
+    if (!is_quasar_arch()) {
+        GTEST_SKIP() << "BLOCKED relay DFBs require Quasar";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 512;  // two relay entries of 256
+    constexpr uint32_t ring_depth = 4;
+    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), entry_size * ring_depth);
+    EXPECT_EQ(
+        run_prefetcher_pipe_relay(
+            mesh_device,
+            pipe,
+            PrefetcherPipeRelayParams{
+                .entry_size = entry_size,
+                .ring_depth = ring_depth,
+                .total_entries = 4,
+                .num_producers = 2,
+                .num_consumers = 1,
+                .pap = m2::DFBAccessPattern::BLOCKED,
+                .cap = m2::DFBAccessPattern::ALL,
+                .block_size = 2,
+                .relay_pages_per_entry = 2,
+                .num_sender_threads = 2,
             }),
         1u);
 }

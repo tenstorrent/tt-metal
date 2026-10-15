@@ -14,7 +14,13 @@
 //   args::entries_this_thread - relay entries each consumer thread pops
 //                               STRIDED: total_entries / num_consumers
 //                               ALL:     total_entries (each Neo consumes the full stream)
-//   args::batch_size          - entries per wait_front / pop_front
+//   args::batch_size          - entries per wait_front / pop_front (on a BLOCKED relay: the
+//                               consumer share, i.e. the block; the harness derives it)
+//   args::total_blocks        - BLOCKED consumers only: blocks in this run; block b belongs to
+//                               consumer (first_block + b) % num_consumers, which overrides
+//                               entries_this_thread (0 = every thread pops entries_this_thread)
+//   args::first_block         - index of this run's first block in the relay's block sequence
+//   args::num_consumers       - compute threads sharing the relay
 //   args::delay_iterations    - busy-loop iterations per batch (backpressure tests)
 // Args (named RTAs):
 //   args::result_addr         - per-thread [entries_consumed, checksum] at
@@ -32,13 +38,27 @@
 
 void kernel_main() {
 #ifdef UCK_CHLKC_UNPACK
-    constexpr uint32_t entries_this_thread = get_arg(args::entries_this_thread);
     constexpr uint16_t batch_size = get_arg(args::batch_size);
     constexpr uint32_t delay_iterations = get_arg(args::delay_iterations);
+    constexpr uint32_t total_blocks = get_arg(args::total_blocks);
 
     DataflowBuffer relay(dfb::relay);
     volatile tt_l1_ptr uint32_t* result = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg(args::result_addr));
     const uint32_t tid = get_my_thread_id();
+
+    uint32_t entries_this_thread = get_arg(args::entries_this_thread);
+    if constexpr (total_blocks > 0) {
+        // BLOCKED consumer: count the blocks of this run that are this thread's.
+        constexpr uint32_t first_block = get_arg(args::first_block);
+        constexpr uint32_t num_consumers = get_arg(args::num_consumers);
+        uint32_t owned_blocks = 0;
+        for (uint32_t b = 0; b < total_blocks; ++b) {
+            if ((first_block + b) % num_consumers == tid) {
+                ++owned_blocks;
+            }
+        }
+        entries_this_thread = owned_blocks * batch_size;
+    }
 
     uint32_t checksum = 0;
     for (uint32_t offset = 0; offset < entries_this_thread; offset += batch_size) {
@@ -50,7 +70,8 @@ void kernel_main() {
 #else
         const uint32_t read_ptr = relay.get_read_ptr() << cb_addr_shift;
 #endif
-        // STRIDED batches are stride_size apart (not contiguous entry_size).
+        // STRIDED batches are stride_size apart (not contiguous entry_size); a BLOCKED consumer's
+        // block is contiguous, so its stride_size is one entry.
         const uint32_t stride_size = relay.get_stride_size();
         for (uint32_t i = 0; i < batch_size; ++i) {
             checksum += *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_ptr + i * stride_size);
