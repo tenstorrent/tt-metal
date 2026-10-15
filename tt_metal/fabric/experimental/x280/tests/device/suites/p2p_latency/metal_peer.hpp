@@ -5,6 +5,7 @@
 #ifndef X280_SUITES_P2P_LATENCY_METAL_PEER_HPP
 #define X280_SUITES_P2P_LATENCY_METAL_PEER_HPP
 
+#include "harness/artifacts/artifacts.hpp"
 #include "harness/measurement/measurement.hpp"
 #include "harness/output/output.hpp"
 #include "harness/regions/regions.hpp"
@@ -57,6 +58,39 @@ inline const char* state_name(uint32_t state) {
         case P2P_LATENCY_STATE_ARG_LAYOUT_MISMATCH: return "ARG_LAYOUT_MISMATCH";
         default: return "?";
     }
+}
+
+// Returns a stable report label, or '?' for an unknown wire value.
+inline const char* tx_mode_name(uint32_t mode) {
+    switch (mode) {
+        case P2P_LATENCY_TRANSMIT_FIRE_AND_FORGET: return "fire_and_forget";
+        case P2P_LATENCY_TRANSMIT_WAIT_FOR_DEPARTURE: return "wait_for_departure";
+        case P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION: return "wait_for_completion";
+        default: return "?";
+    }
+}
+
+// The Metal peer's transmit mode, named by P2P_LATENCY_METAL_PEER_TX_MODE as its
+// record label; unset or empty is wait_for_completion. Throws std::runtime_error
+// for any value other than wait_for_completion or wait_for_departure.
+inline p2p_latency_transmit_mode_t metal_peer_tx_mode() {
+    const std::string value = x280::harness::artifacts::env_str("P2P_LATENCY_METAL_PEER_TX_MODE");
+    if (value.empty() || value == tx_mode_name(P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION)) {
+        return P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION;
+    }
+    if (value == tx_mode_name(P2P_LATENCY_TRANSMIT_WAIT_FOR_DEPARTURE)) {
+        return P2P_LATENCY_TRANSMIT_WAIT_FOR_DEPARTURE;
+    }
+    throw std::runtime_error(
+        "P2P_LATENCY_METAL_PEER_TX_MODE must be 'wait_for_completion' or 'wait_for_departure', got: " + value);
+}
+
+// The Metal peer kernel's define selecting `mode`, one metal_peer_tx_mode() returns.
+inline std::pair<std::string, std::string> tx_mode_define(p2p_latency_transmit_mode_t mode) {
+    return {
+        "P2P_LATENCY_METAL_PEER_TX_MODE",
+        mode == P2P_LATENCY_TRANSMIT_WAIT_FOR_DEPARTURE ? "P2P_LATENCY_TRANSMIT_WAIT_FOR_DEPARTURE"
+                                                        : "P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION"};
 }
 
 struct X280Regions {
@@ -225,7 +259,8 @@ struct MetalClock {
  * phase's protocol fields, the ordering of the window it writes through
  * (`window_mode`, null for a participant that opens none: x280_same_tile and
  * every Metal participant), the pair's X280 window slot as its X280 section
- * names it (`tlb_index`, null for x280_same_tile, which has none), and its raw
+ * names it (`tlb_index`, null for x280_same_tile, which has none), the
+ * transmit mode it ran (`tx_mode`), and its raw
  * wall and CPU sample populations. An X280 participant (backend class
  * 1) stores CPU cycles first and is on the fixed mtime clock; a Metal one
  * stores its `metal` wall counter's ticks first, with `metal`'s evidence as its
@@ -242,6 +277,7 @@ inline hout::RecordSpec phase_record(
     const p2p_latency_common_args_t& common,
     std::optional<uint32_t> tlb_index,
     std::optional<noc_ordering_t> window,
+    p2p_latency_transmit_mode_t tx_mode,
     std::optional<MetalClock> metal,
     const x280::harness::measurement::WarmupSelection& warmup) {
     using x280::harness::measurement::Counter;
@@ -273,6 +309,7 @@ inline hout::RecordSpec phase_record(
             {"same_chip", true},
             {"window_mode", window ? hout::Value(x280::noc_ordering_name(*window)) : hout::Value()},
             {"tlb_index", tlb_index ? hout::Value(*tlb_index) : hout::Value()},
+            {"tx_mode", tx_mode_name(tx_mode)},
             {"backend_id", result.backend_id},
             {"run_nonce", common.run_nonce},
             {"path_sentinel", result.path_sentinel},

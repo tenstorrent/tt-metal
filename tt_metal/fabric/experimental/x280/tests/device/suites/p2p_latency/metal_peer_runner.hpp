@@ -92,7 +92,7 @@ struct PeerLaunch {
 // failures leave `out` partial; a peer window too small for the layout throws
 // std::invalid_argument from Arena::allocate. `run_concurrently` launches the peer,
 // runs the supplied X280 launch while it is active, waits for the peer, and
-// returns the X280 outcome.
+// returns the X280 outcome; it builds the peer kernel with `tx_mode`.
 template <typename RunConcurrently>
 inline void launch_peer(
     x280::harness::session::Fixture& fixture,
@@ -104,6 +104,7 @@ inline void launch_peer(
     uint32_t samples,
     uint32_t run_nonce,
     uint64_t run_value,
+    p2p_latency_transmit_mode_t tx_mode,
     bool assess_clock,
     PeerLaunch& out) {
     ASSERT_LE(static_cast<uint64_t>(run_nonce) + 2ull * (static_cast<uint64_t>(warmup) + samples) - 1ull, UINT32_MAX);
@@ -206,7 +207,7 @@ inline void launch_peer(
         clock_start = hexec::read_aiclk_start(x280::harness::cluster(), *clock_device, peer_core);
         ASSERT_TRUE(clock_start.errors.empty()) << "pre-run AICLK evidence is unavailable";
     }
-    const auto outcome = run_concurrently(source, peer_args, launch);
+    const auto outcome = run_concurrently(source, peer_args, tx_mode, launch);
     if (assess_clock) {
         const auto clock_end = hexec::read_aiclk_end(x280::harness::cluster(), *clock_device, peer_core);
         out.clock = hmeas::assess_aiclk_run(out.expected_aiclk_hz, clock_start, clock_end);
@@ -262,6 +263,7 @@ inline void run_axis(
     const uint32_t samples = hart_::env_u32(target.samples_env, kDefaultSamples);
     ASSERT_GT(samples, 0u);
     ASSERT_LE(samples, P2P_LATENCY_MAX_SAMPLES);
+    const p2p_latency_transmit_mode_t tx_mode = metal_peer_tx_mode();
     hmeas::WarmupSelection selection{.warmup = explicit_warmup.value_or(kDefaultWarmup)};
     ASSERT_GT(selection.warmup, 0u);
 
@@ -281,6 +283,7 @@ inline void run_axis(
             samples,
             pilot_nonce,
             pilot_value,
+            tx_mode,
             false,
             pilot));
         selection = hmeas::calibrate_warmup(warmup_calibration_request(
@@ -292,7 +295,18 @@ inline void run_axis(
 
     PeerLaunch run{};
     ASSERT_NO_FATAL_FAILURE(launch_peer(
-        fixture, spec, first_direction, target, run_concurrently, warmup, samples, run_nonce, run_value, true, run));
+        fixture,
+        spec,
+        first_direction,
+        target,
+        run_concurrently,
+        warmup,
+        samples,
+        run_nonce,
+        run_value,
+        tx_mode,
+        true,
+        run));
     const auto& x280_args = run.x280_args;
     const auto& result_x = run.result_x;
     const auto& result_peer = run.result_peer;
@@ -343,6 +357,7 @@ inline void run_axis(
                 x280_args.common,
                 x280_args.backend.peer_tlb_index,
                 is_x280 ? std::optional{P2P_LATENCY_X280_NOC_ORDERING} : std::nullopt,
+                is_x280 ? P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION : tx_mode,
                 is_x280 ? std::nullopt : std::optional{MetalClock{target.counter, clock}},
                 selection)));
     };

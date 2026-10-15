@@ -2,7 +2,7 @@
 
 The maintained P2P, transport-bandwidth, pipeline-stage, packet-injection,
 core-sync and eth_credit suites retain native measurements. Legacy experiments are excluded.
-`characterization_manifest.json` selects 233 configurations: 28 of the 40 of the
+`characterization_manifest.json` selects 239 configurations: 28 of the 40 of the
 2026-09-23 campaign (39 evidenced prior configurations and the explicitly
 authorized first fixed-4×4 core-sync run, less its ten DRISC and idle-ERISC
 `pipeline_stage` configurations and its two X280 `route_forward` COPY ones), the nine
@@ -33,8 +33,10 @@ campaign has yet measured, and the 20 `bw.x280_to_tensix` points that add 4096
 and 65536 B transfers and the `sd` (8 B) and `vse32.v` (64 B) store widths
 under both boundaries, the 24
 `bw.x280_to_tensix.h{2,4}` points that run each store width at 64 and 65536 B on 2 and 4
-harts under both boundaries, and the 44
-`bw.erisc_to_x280.w{1,2,4,8}` INJECTION points over the Tensix -> X280 sizes. An ERISC point's record count comes from
+harts under both boundaries, the 44
+`bw.erisc_to_x280.w{1,2,4,8}` INJECTION points over the Tensix -> X280 sizes, and the six
+`{tensix,erisc,drisc}_peer_tile.*.departure` p2p points, whose Metal peer waits for
+departure instead of completion. An ERISC point's record count comes from
 its gtest filter, or for `writers_all` from its run record. An
 ERISC point the device cannot host -- more writers than inactive Ethernet cores,
 none at all, or `IDLE_ETH` not enabled -- is an availability skip, and like every
@@ -159,7 +161,8 @@ These are the only converted values the contract admits:
 ## Quantities that share a label
 
 Where one record label covers different quantities in different members, this
-section names each one. The records carry no field that distinguishes them.
+section names each one. Except where a row names one, the records carry no field that
+distinguishes them.
 
 | Suite and label | Member | Quantity |
 |---|---|---|
@@ -171,7 +174,7 @@ section names each one. The records carry no field that distinguishes them.
 | transport_bandwidth batch (`wall ticks`, `GB/s`) | `erisc_to_x280`, `writers` > 1 | Writer 0's batch. `run GB/s` is every writer's bytes over the slowest writer's interval, each at writer 0's AICLK evidence; the writers' wall clocks share no documented origin, so that their timed loops start together rests on the host start gate after warm-up (`gate ns`), not on a measured span. |
 | p2p_latency `TURN` (the responder's transmit) | `x280_same_tile` | Store issue: a LIM store and `fence ow, ow`, which waits for nothing remote. |
 | | `x280_peer_tile`, and the X280 side of `tensix_peer_tile`, `erisc_peer_tile` and `drisc_peer_tile` | Store to BRESP: the window is in ordering mode 1 (Strict AXI), which holds BRESP until the NoC write completes. |
-| | The Metal side of those three | `noc_async_write` to its write acknowledgement (`noc_async_write_barrier()`). |
+| | The Metal side of those three | By `tx_mode`: `wait_for_completion`, `noc_async_write` to its write acknowledgement (`noc_async_write_barrier()`); `wait_for_departure`, to the NIU having sent it (`noc_async_writes_flushed()`). |
 | packet_injection bytes | per-worker `throughput` | `useful_bytes_per_request` 96 (the header) and `slot_bytes_per_request` 128 (the slot); counter writes excluded. |
 | | aggregate | P·N·96, headers only, which the tabulator derives over the aggregate's interval. |
 | | `erisc_to_x280_header` publication bytes | Headers plus 4 bytes per counter write, derived by the tabulator from the workers' `producer_counter_writes`; `tensix_to_x280` has no such figure. None of the three counts NoC wire bytes. |
@@ -410,10 +413,10 @@ executables that launch on a core-local RISC link `x280_slow_dispatch`, which
 sets `TT_METAL_SLOW_DISPATCH_MODE=1` before `main`; `common_environment` does not
 set it, and the runner clears an inherited value, so every other executable runs
 fast dispatch. A frozen manifest whose `common_environment` sets the variable ran
-all its configurations under slow dispatch, so comparing one of these 130 of the
-233 configurations with such a campaign also compares dispatch modes:
+all its configurations under slow dispatch, so comparing one of these 132 of the
+239 configurations with such a campaign also compares dispatch modes:
 `x280_same_tile.{A,B}InitiatesFirst`, `x280_peer_tile.{A,B}InitiatesFirst`,
-`tensix_peer_tile.{X280,Tensix}InitiatesFirst`,
+`tensix_peer_tile.{X280,Tensix}InitiatesFirst{,.departure}`,
 `bw.x280_to_tensix.{,sd.,vse32.}{64,256,4096,65536}.{retired,injection}`,
 `bw.x280_to_tensix.h{2,4}.{,sd.,vse32.}{64,65536}.{retired,injection}`,
 `bw.tensix_to_x280.{64,128,256,320,384,512,1024,2048,4096,8192,16384}.{drained,injection}`,

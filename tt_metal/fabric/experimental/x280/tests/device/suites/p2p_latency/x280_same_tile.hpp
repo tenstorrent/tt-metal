@@ -179,6 +179,7 @@ inline void run_axis(
             block.sections[0].common,
             std::nullopt,
             std::nullopt,
+            P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION,
             std::nullopt,
             x280::harness::measurement::WarmupSelection{.warmup = block.sections[0].common.warmup_count}));
         x280::harness::output::write_jsonl("p2p_latency_x280_same_tile", body);

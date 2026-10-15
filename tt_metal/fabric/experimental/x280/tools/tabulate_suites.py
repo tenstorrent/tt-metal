@@ -252,12 +252,14 @@ P2P_IDENTITY = [
     # null for a participant that opens no window (x280_same_tile, every Metal peer).
     ident("window_mode", "window", lambda row: lookup(row.record, ("window_mode",)) or "none"),
     ident("tlb_index", "tlb"),
+    ident("tx_mode", "tx", lambda row: tx_mode(row.record)),
     ident("path_sentinel", "sentinel"),
 ] + COUNTERS
 P2P_VALUES = quantile_columns("wall", samples("wall"), "ticks", converted=True) + quantile_columns(
     "cpu", samples("cpu_cycles"), "cycles"
 )
 P2P_TABLES = (Table("", {}, tuple(P2P_IDENTITY + P2P_VALUES)),)
+METAL_PEER_MEMBERS = {"p2p_latency tensix_peer_tile", "p2p_latency erisc_peer_tile", "p2p_latency drisc_peer_tile"}
 
 BATCH_WALL = field("raw_wall_ticks")
 BATCH_VALUES = [
@@ -664,6 +666,12 @@ EC_HOP_TABLES = (
 )
 # Its diagnostic records: recognised, tabulated by no table.
 EC_DIAGNOSTIC = (Table("", {}),)
+
+
+def tx_mode(record):
+    """A p2p record's transmit mode; records written before the setting waited for completion."""
+    return record.get("tx_mode", "wait_for_completion")
+
 
 # Each member's table spec, keyed by its records' suite and member.
 MEMBERS = {
@@ -1172,9 +1180,13 @@ def validate_campaign_records(config, rows):
         keys = {(r["participant"], r["phase"]) for r in rows}
         if len(participants) != 2 or keys != {(p, n) for p in participants for n in (0, 1)}:
             raise ValueError("P2P participant/phase set mismatch")
+        peer_tx_mode = environment.get("P2P_LATENCY_METAL_PEER_TX_MODE") or "wait_for_completion"
         for row in rows:
             if row["samples"] != int(environment[f"P2P_LATENCY_{member.upper()}_N"]):
                 raise ValueError("P2P sample count mismatch")
+            metal_peer = f"{family} {member}" in METAL_PEER_MEMBERS and row["participant"] != "X280"
+            if tx_mode(row) != (peer_tx_mode if metal_peer else "wait_for_completion"):
+                raise ValueError("P2P transmit mode mismatch")
             for name in ("wall", "cpu_cycles"):
                 if len(row[name]["raw_ticks"]) != row["samples"] or row[name]["count"] != row["samples"]:
                     raise ValueError("P2P raw population mismatch")

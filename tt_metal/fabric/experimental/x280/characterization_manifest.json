@@ -74,6 +74,19 @@
       }
     },
     {
+      "id": "tensix_peer_tile.X280InitiatesFirst.departure",
+      "member": "p2p_latency/tensix_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_tensix_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyTensixPeerTile.PairedPingPongMeasuresRttAndTurnPerSide/X280InitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_TENSIX_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin",
+        "P2P_LATENCY_METAL_PEER_TX_MODE": "wait_for_departure"
+      }
+    },
+    {
       "id": "tensix_peer_tile.TensixInitiatesFirst",
       "member": "p2p_latency/tensix_peer_tile",
       "argv": [
@@ -83,6 +96,19 @@
       "environment": {
         "P2P_LATENCY_TENSIX_PEER_TILE_N": "64",
         "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin"
+      }
+    },
+    {
+      "id": "tensix_peer_tile.TensixInitiatesFirst.departure",
+      "member": "p2p_latency/tensix_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_tensix_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyTensixPeerTile.PairedPingPongMeasuresRttAndTurnPerSide/TensixInitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_TENSIX_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin",
+        "P2P_LATENCY_METAL_PEER_TX_MODE": "wait_for_departure"
       }
     },
     {
@@ -98,6 +124,19 @@
       }
     },
     {
+      "id": "erisc_peer_tile.X280InitiatesFirst.departure",
+      "member": "p2p_latency/erisc_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_erisc_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyEriscPeerTile.PairedPingPongMeasuresRawLocalDeltas/X280InitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_ERISC_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin",
+        "P2P_LATENCY_METAL_PEER_TX_MODE": "wait_for_departure"
+      }
+    },
+    {
       "id": "erisc_peer_tile.EriscInitiatesFirst",
       "member": "p2p_latency/erisc_peer_tile",
       "argv": [
@@ -107,6 +146,19 @@
       "environment": {
         "P2P_LATENCY_ERISC_PEER_TILE_N": "64",
         "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin"
+      }
+    },
+    {
+      "id": "erisc_peer_tile.EriscInitiatesFirst.departure",
+      "member": "p2p_latency/erisc_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_erisc_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyEriscPeerTile.PairedPingPongMeasuresRawLocalDeltas/EriscInitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_ERISC_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin",
+        "P2P_LATENCY_METAL_PEER_TX_MODE": "wait_for_departure"
       }
     },
     {
@@ -122,6 +174,19 @@
       }
     },
     {
+      "id": "drisc_peer_tile.X280InitiatesFirst.departure",
+      "member": "p2p_latency/drisc_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_drisc_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyDriscPeerTile.PairedPingPongMeasuresRawLocalDeltas/X280InitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_DRISC_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin",
+        "P2P_LATENCY_METAL_PEER_TX_MODE": "wait_for_departure"
+      }
+    },
+    {
       "id": "drisc_peer_tile.DriscInitiatesFirst",
       "member": "p2p_latency/drisc_peer_tile",
       "argv": [
@@ -131,6 +196,19 @@
       "environment": {
         "P2P_LATENCY_DRISC_PEER_TILE_N": "64",
         "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin"
+      }
+    },
+    {
+      "id": "drisc_peer_tile.DriscInitiatesFirst.departure",
+      "member": "p2p_latency/drisc_peer_tile",
+      "argv": [
+        "${HOST_BUILD}/x280_p2p_latency_drisc_peer_tile",
+        "--gtest_filter=FirstDirection/X280P2PLatencyDriscPeerTile.PairedPingPongMeasuresRawLocalDeltas/DriscInitiatesFirst"
+      ],
+      "environment": {
+        "P2P_LATENCY_DRISC_PEER_TILE_N": "64",
+        "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE": "${FW_BUILD}/firmware-p2p-latency-metal-peer-tile.bin",
+        "P2P_LATENCY_METAL_PEER_TX_MODE": "wait_for_departure"
       }
     },
     {

@@ -59,7 +59,9 @@ TEST(P2PLatencyTensixPeerTileJit, CompilesExtractedMetalNocBackend) {
         ttm::DataMovementConfig{
             .processor = ttm::DataMovementProcessor::RISCV_0,
             .noc = ttm::NOC::RISCV_0_default,
-            .defines = {{"P2P_LATENCY_TARGET_TENSIX", "1"}}});
+            .defines = {
+                {"P2P_LATENCY_TARGET_TENSIX", "1"},
+                x280::suites::p2p_latency::metal_peer::tx_mode_define(P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION)}});
     program.impl().compile(mesh->get_devices()[0]);
 }
 

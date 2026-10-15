@@ -182,6 +182,7 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                         common,
                         std::nullopt,
                         std::nullopt,
+                        P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION,
                         std::nullopt,
                         hmeas::WarmupSelection{.warmup = 8}));
             }
@@ -202,6 +203,7 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                         common,
                         0,
                         P2P_LATENCY_X280_NOC_ORDERING,
+                        P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION,
                         std::nullopt,
                         hmeas::WarmupSelection{.warmup = 8}));
             }
@@ -230,32 +232,45 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                   P2P_LATENCY_BACKEND_ID_DRISC_DRISC_PEER_TILE,
                   Counter::RiscDebugWallClock,
                   &tensix_clock}}) {
-            const auto metal = p2p_result(backend, P2P_LATENCY_PARTICIPANT_B, kP2pSamples);
-            for (uint32_t p = 0; p < 2; ++p) {
-                write(
-                    id,
-                    peer::phase_record(
-                        member,
-                        {{"participant", "X280"}},
-                        x280,
-                        p,
-                        common,
-                        0,
-                        P2P_LATENCY_X280_NOC_ORDERING,
-                        std::nullopt,
-                        calibrated));
-                write(
-                    id,
-                    peer::phase_record(
-                        member,
-                        {{"participant", name}},
-                        metal,
-                        p,
-                        common,
-                        0,
-                        std::nullopt,
-                        peer::MetalClock{counter, *clock},
-                        calibrated));
+            // Departure TURN samples are 100 ticks below completion's.
+            auto departure = p2p_result(backend, P2P_LATENCY_PARTICIPANT_B, kP2pSamples);
+            for (uint32_t i = 0; i < kP2pSamples; ++i) {
+                departure.phases[0].raw_deltas[i] -= 100u;
+            }
+            for (const auto& [config, metal, tx_mode] :
+                 {std::tuple{
+                      std::string(id),
+                      p2p_result(backend, P2P_LATENCY_PARTICIPANT_B, kP2pSamples),
+                      P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION},
+                  std::tuple{std::string(id) + ".departure", departure, P2P_LATENCY_TRANSMIT_WAIT_FOR_DEPARTURE}}) {
+                for (uint32_t p = 0; p < 2; ++p) {
+                    write(
+                        config,
+                        peer::phase_record(
+                            member,
+                            {{"participant", "X280"}},
+                            x280,
+                            p,
+                            common,
+                            0,
+                            P2P_LATENCY_X280_NOC_ORDERING,
+                            P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION,
+                            std::nullopt,
+                            calibrated));
+                    write(
+                        config,
+                        peer::phase_record(
+                            member,
+                            {{"participant", name}},
+                            metal,
+                            p,
+                            common,
+                            0,
+                            std::nullopt,
+                            tx_mode,
+                            peer::MetalClock{counter, *clock},
+                            calibrated));
+                }
             }
         }
     }
@@ -486,5 +501,5 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                  .erisc_clock = &erisc_clock}));
     }
 
-    validate(19);
+    validate(22);
 }

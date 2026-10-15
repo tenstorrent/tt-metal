@@ -119,6 +119,7 @@ inline void launch(
     uint32_t N,
     uint32_t run_nonce,
     uint64_t run_value,
+    p2p_latency_transmit_mode_t tx_mode,
     bool assess_clock,
     Launch& out) {
     const uint64_t max_token = static_cast<uint64_t>(run_nonce) + 2ull * (static_cast<uint64_t>(W) + N) - 1ull;
@@ -188,7 +189,7 @@ inline void launch(
         ttm::DataMovementConfig{
             .processor = ttm::DataMovementProcessor::RISCV_0,
             .noc = ttm::NOC::RISCV_0_default,
-            .defines = {{"P2P_LATENCY_TARGET_TENSIX", "1"}}});
+            .defines = {{"P2P_LATENCY_TARGET_TENSIX", "1"}, metal_peer::tx_mode_define(tx_mode)}});
     ttm::SetRuntimeArgs(program, kernel, worker_set, tensix_args);
 
     ttmd::MeshWorkload workload;
@@ -254,6 +255,7 @@ inline void run_axis(
     const uint32_t N = hart_::env_u32("P2P_LATENCY_TENSIX_PEER_TILE_N", kDefaultSamples);
     ASSERT_GT(N, 0u);
     ASSERT_LE(N, P2P_LATENCY_MAX_SAMPLES);
+    const p2p_latency_transmit_mode_t tx_mode = metal_peer::metal_peer_tx_mode();
     uint32_t run_nonce = 0;
     const uint64_t run_value = mint_run_value(run_nonce);
     hmeas::WarmupSelection warmup{.warmup = explicit_warmup.value_or(kDefaultWarmup)};
@@ -263,7 +265,7 @@ inline void run_axis(
         const uint64_t pilot_value = mint_run_value(pilot_nonce);
         Launch pilot{};
         ASSERT_NO_FATAL_FAILURE(
-            launch(f, spec, first_direction, kDefaultWarmup, N, pilot_nonce, pilot_value, false, pilot));
+            launch(f, spec, first_direction, kDefaultWarmup, N, pilot_nonce, pilot_value, tx_mode, false, pilot));
         warmup = hmeas::calibrate_warmup(metal_peer::warmup_calibration_request(
             pilot.result_x, pilot.result_t, pilot.expected_aiclk_hz, kDefaultWarmup, N, run_nonce));
         ASSERT_FALSE(warmup.refusal.has_value())
@@ -272,7 +274,7 @@ inline void run_axis(
     const uint32_t W = static_cast<uint32_t>(warmup.warmup);
 
     Launch run{};
-    ASSERT_NO_FATAL_FAILURE(launch(f, spec, first_direction, W, N, run_nonce, run_value, true, run));
+    ASSERT_NO_FATAL_FAILURE(launch(f, spec, first_direction, W, N, run_nonce, run_value, tx_mode, true, run));
     const auto& block = run.block;
     const auto& result_x = run.result_x;
     const auto& result_t = run.result_t;
@@ -289,6 +291,7 @@ inline void run_axis(
             block.common,
             block.backend.peer_tlb_index,
             tensix ? std::nullopt : std::optional{P2P_LATENCY_X280_NOC_ORDERING},
+            tensix ? tx_mode : P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION,
             tensix ? std::optional{metal_peer::MetalClock{hmeas::Counter::TensixLiveTimer, clock}} : std::nullopt,
             warmup));
         x280::harness::output::write_jsonl(spec.suite_label, body);

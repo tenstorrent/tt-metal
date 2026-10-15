@@ -72,7 +72,9 @@ TEST(P2PLatencyEriscPeerTileJit, CompilesIdleEriscKernelWithoutLaunchingIt) {
             .eth_mode = ttm::Eth::IDLE,
             .noc = ttm::NOC::NOC_0,
             .processor = ttm::DataMovementProcessor::RISCV_0,
-            .defines = {{"P2P_LATENCY_TARGET_IDLE_ERISC", "1"}},
+            .defines =
+                {{"P2P_LATENCY_TARGET_IDLE_ERISC", "1"},
+                 x280::suites::p2p_latency::metal_peer::tx_mode_define(P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION)},
             .opt_level = ttm::KernelBuildOptLevel::Os,
         });
     program.impl().compile(device);

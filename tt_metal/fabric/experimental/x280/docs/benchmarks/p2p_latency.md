@@ -123,7 +123,8 @@ All three Metal-peer executables consume
 `build/x280/firmware-p2p-latency-metal-peer-tile.bin`. They compile
 `kernels/p2p_latency/metal_peer_entry.cpp` with exactly one of
 `P2P_LATENCY_TARGET_TENSIX`, `P2P_LATENCY_TARGET_IDLE_ERISC`, or
-`P2P_LATENCY_TARGET_DRISC`. The X280 backend ID is `0x10000006`;
+`P2P_LATENCY_TARGET_DRISC`, and with the peer's transmit mode in
+`P2P_LATENCY_METAL_PEER_TX_MODE`. The X280 backend ID is `0x10000006`;
 the Metal result retains its target-specific backend ID. The shared
 `metal_peer_args.h` cookie identifies the 16-word layout, independently of
 target selection.
@@ -131,6 +132,13 @@ Unless `P2P_LATENCY_{TENSIX,ERISC,DRISC}_PEER_TILE_W` is set, each first runs
 an unrecorded `W=8` pilot and sizes the measured launch's warm-up to 25 ms of
 device work, so the AICLK elapsed bound stays well inside its limit
 ([measurement.md](../measurement.md)); a set value is used as given.
+
+The environment variable `P2P_LATENCY_METAL_PEER_TX_MODE` selects the Metal
+peer's transmit mode: `wait_for_completion` (also when unset) ends `transmit()`
+at the write's acknowledgement, `wait_for_departure` at the NIU having sent it.
+The X280 side always waits for completion. Every record names its participant's
+mode in `tx_mode`. The manifest's `.departure` configurations run the second
+mode.
 
 `x280_p2p_latency_erisc_peer_tile` launches only an inactive Ethernet core in
 `Eth::IDLE` mode and exchanges 4-byte tokens over same-chip NOC; it sends no

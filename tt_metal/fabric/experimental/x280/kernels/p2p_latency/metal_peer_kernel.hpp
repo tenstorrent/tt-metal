@@ -16,6 +16,12 @@
 #include "metal_peer_args.h"
 #include "metal_peer_target.hpp"
 
+/* The host selects the peer's transmit mode: P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION
+ * or P2P_LATENCY_TRANSMIT_WAIT_FOR_DEPARTURE. */
+#ifndef P2P_LATENCY_METAL_PEER_TX_MODE
+#error "p2p_latency Metal peer requires P2P_LATENCY_METAL_PEER_TX_MODE"
+#endif
+
 namespace p2p_latency {
 
 /*
@@ -27,6 +33,10 @@ namespace p2p_latency {
  */
 inline void run_metal_peer_kernel() {
     using Member = MetalPeerTarget;
+    static_assert(
+        P2P_LATENCY_METAL_PEER_TX_MODE == P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION ||
+            P2P_LATENCY_METAL_PEER_TX_MODE == P2P_LATENCY_TRANSMIT_WAIT_FOR_DEPARTURE,
+        "Metal peer transmit mode must wait for completion or departure");
     const uint32_t layout_cookie = get_arg_val<uint32_t>(P2P_LATENCY_METAL_PEER_ARG_LAYOUT_COOKIE);
     if (!ubench_layout_is_current(layout_cookie, P2P_LATENCY_METAL_PEER_LAYOUT_COOKIE)) {
         return;
@@ -99,7 +109,9 @@ inline void run_metal_peer_kernel() {
         Backend,
         P2P_LATENCY_TRANSFER_TOKEN_ONLY,
         P2P_LATENCY_POLL_TIGHT,
-        P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION>(state, common, result);
+        P2P_LATENCY_METAL_PEER_TX_MODE>(state, common, result);
+    // WAIT_FOR_DEPARTURE leaves acknowledgements outstanding; firmware requires none at kernel exit.
+    noc_async_write_barrier();
 
     if (!Member::leave_transport_mode()) {
         result.terminal_state = static_cast<uint32_t>(P2P_LATENCY_STATE_TRAP);

@@ -9,6 +9,7 @@
 #include "harness/regions/l1_window.hpp"
 #include "harness/regions/regions.hpp"
 #include "tests/device/suites/p2p_latency/metal_peer.hpp"
+#include "tests/host/scoped_env.hpp"
 #include "tests/host/translated_coord_factory.hpp"
 
 #include <gtest/gtest.h>
@@ -387,14 +388,72 @@ TEST(P2PLatencyRecords, MetalFieldsAreRequiredExactlyForAMetalParticipant) {
     const x280::harness::measurement::AiclkRunEvidence clock{};
     const auto metal = std::optional{peer::MetalClock{x280::harness::measurement::Counter::TensixLiveTimer, clock}};
     const x280::harness::measurement::WarmupSelection explicit_warmup{.warmup = 8};
-    EXPECT_NO_THROW(peer::phase_record("m", {}, x280, 0, common, 0, NOC_ORDER_STRICT, std::nullopt, explicit_warmup));
-    EXPECT_NO_THROW(peer::phase_record("m", {}, tensix, 0, common, 0, NOC_ORDER_STRICT, metal, explicit_warmup));
+    EXPECT_NO_THROW(peer::phase_record(
+        "m",
+        {},
+        x280,
+        0,
+        common,
+        0,
+        NOC_ORDER_STRICT,
+        P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION,
+        std::nullopt,
+        explicit_warmup));
+    EXPECT_NO_THROW(peer::phase_record(
+        "m",
+        {},
+        tensix,
+        0,
+        common,
+        0,
+        NOC_ORDER_STRICT,
+        P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION,
+        metal,
+        explicit_warmup));
     EXPECT_THROW(
-        peer::phase_record("m", {}, x280, 0, common, 0, NOC_ORDER_STRICT, metal, explicit_warmup),
+        peer::phase_record(
+            "m",
+            {},
+            x280,
+            0,
+            common,
+            0,
+            NOC_ORDER_STRICT,
+            P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION,
+            metal,
+            explicit_warmup),
         std::invalid_argument);
     EXPECT_THROW(
-        peer::phase_record("m", {}, tensix, 0, common, 0, NOC_ORDER_STRICT, std::nullopt, explicit_warmup),
+        peer::phase_record(
+            "m",
+            {},
+            tensix,
+            0,
+            common,
+            0,
+            NOC_ORDER_STRICT,
+            P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION,
+            std::nullopt,
+            explicit_warmup),
         std::invalid_argument);
+}
+
+// Spec (metal_peer_tx_mode): unset is wait_for_completion; only the two waiting modes are accepted.
+TEST(P2PLatencyRecords, MetalPeerTransmitModeAcceptsOnlyTheWaitingModes) {
+    namespace peer = x280::suites::p2p_latency::metal_peer;
+    using x280::testing::ScopedEnv;
+    {
+        ScopedEnv unset("P2P_LATENCY_METAL_PEER_TX_MODE", nullptr);
+        EXPECT_EQ(peer::metal_peer_tx_mode(), P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION);
+    }
+    {
+        ScopedEnv departure("P2P_LATENCY_METAL_PEER_TX_MODE", "wait_for_departure");
+        EXPECT_EQ(peer::metal_peer_tx_mode(), P2P_LATENCY_TRANSMIT_WAIT_FOR_DEPARTURE);
+    }
+    {
+        ScopedEnv forget("P2P_LATENCY_METAL_PEER_TX_MODE", "fire_and_forget");
+        EXPECT_THROW(peer::metal_peer_tx_mode(), std::runtime_error);
+    }
 }
 
 TEST(P2PLatencyDriscArgs, WorkingRegionPlacementKeepsLocalAndTaggedViewsDistinct) {

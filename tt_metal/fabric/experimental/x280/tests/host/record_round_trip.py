@@ -65,6 +65,7 @@ P2P_HEADS = (
         "same chip",
         "window",
         "tlb",
+        "tx",
         "sentinel",
         "wall counter",
         "cpu counter",
@@ -236,9 +237,12 @@ EXPECTED = {
     ("p2p_latency x280_same_tile", 0): X280_PHASE,
     ("p2p_latency x280_peer_tile", 0): dict(X280_PHASE, **{"lap hops": "10"}),
     ("p2p_latency tensix_peer_tile", 0): X280_PHASE,
-    ("p2p_latency tensix_peer_tile", 1): METAL_PHASE,
-    ("p2p_latency erisc_peer_tile", 1): METAL_PHASE,
-    ("p2p_latency drisc_peer_tile", 1): METAL_PHASE,
+    # Each Metal peer's departure configuration repeats its completion one with the
+    # peer's TURN 100 ticks lower; its four rows sort first.
+    ("p2p_latency tensix_peer_tile", 5): METAL_PHASE,
+    ("p2p_latency erisc_peer_tile", 5): METAL_PHASE,
+    ("p2p_latency drisc_peer_tile", 5): METAL_PHASE,
+    ("p2p_latency tensix_peer_tile", 1): {"tx": "wait_for_departure", "wall p50 ticks": "231"},
     ("transport_bandwidth x280_to_tensix", 0): {
         "wall ticks": "200000",
         "cpu cycles": "350000",

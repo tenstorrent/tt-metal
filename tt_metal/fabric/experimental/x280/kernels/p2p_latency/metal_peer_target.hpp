@@ -99,10 +99,7 @@ struct MetalPeerTarget {
     // owns (experimental/drisc_mode.h), so a NOC0 kernel can initiate without switching.
     static bool enter_transport_mode() { return noc_index == 0u && !experimental::drisc_is_noc2axi_mode(0); }
 
-    static bool leave_transport_mode() {
-        noc_async_write_barrier();
-        return true;
-    }
+    static bool leave_transport_mode() { return true; }
 };
 
 }  // namespace p2p_latency

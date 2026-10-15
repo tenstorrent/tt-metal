@@ -85,6 +85,7 @@ inline void run_axis(
         target,
         [&](const std::filesystem::path& source,
             const std::vector<uint32_t>& runtime_args,
+            p2p_latency_transmit_mode_t tx_mode,
             const x280::harness::execution::X280Launch& launch) {
             ttm::Program program = ttm::CreateProgram();
             const ttm::KernelHandle kernel = ttm::CreateKernel(
@@ -95,7 +96,7 @@ inline void run_axis(
                     .eth_mode = ttm::Eth::IDLE,
                     .noc = ttm::NOC::NOC_0,
                     .processor = ttm::DataMovementProcessor::RISCV_0,
-                    .defines = {{"P2P_LATENCY_TARGET_IDLE_ERISC", "1"}},
+                    .defines = {{"P2P_LATENCY_TARGET_IDLE_ERISC", "1"}, metal_peer::tx_mode_define(tx_mode)},
                     .opt_level = ttm::KernelBuildOptLevel::Os,
                 });
             ttm::SetRuntimeArgs(program, kernel, logical_core, runtime_args);

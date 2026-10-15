@@ -278,6 +278,7 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
                         block.common,
                         block.backend.peer_tlb_index,
                         P2P_LATENCY_X280_NOC_ORDERING,
+                        P2P_LATENCY_TRANSMIT_WAIT_FOR_COMPLETION,
                         std::nullopt,
                         x280::harness::measurement::WarmupSelection{.warmup = block.common.warmup_count})));
             }
