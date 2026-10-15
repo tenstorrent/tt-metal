@@ -27,8 +27,10 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         by ``affine_exclusive_scan`` in the grouped recurrence pipeline.
 
         Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
-        the same lifetime as ``actual_start``. It defines a nonempty 32-aligned
-        interval within physical capacity; omission uses the full capacity.
+        the same lifetime as ``actual_start``. It defines a nonempty interval within
+        physical capacity and need not be 32-aligned: a partial last chunk is
+        valid, and its rows past the end must be identity steps, as produced by
+        ``prepare_chunk_recurrence``. Omission uses the full capacity.
         Bounds may change during trace replay. Padded group outputs are unspecified.
         Bounds are caller preconditions and are not read back on the host.
 
@@ -127,8 +129,10 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             A = F(I) - B
 
         Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
-        the same lifetime as ``actual_start``. It defines a nonempty 32-aligned
-        interval within physical capacity; omission uses the full capacity.
+        the same lifetime as ``actual_start``. It defines a nonempty interval within
+        physical capacity and need not be 32-aligned: a partial last chunk is
+        valid, and its rows past the end must be identity steps, as produced by
+        ``prepare_chunk_recurrence``. Omission uses the full capacity.
         Bounds may change during trace replay. Padded group outputs are unspecified.
         Bounds are caller preconditions and are not read back on the host.
 
@@ -160,9 +164,16 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration.
 
+            packed_head (bool, optional): With one group per head, return only the head
+                transform as one ``[1,B*H,K,K+V]`` tensor whose rows are ``[A | B]``, the
+                layout the distributed prefix gathers. A rank with no valid chunk writes the
+                identity ``(I, 0)``; the tail is not written.
+                Requires an interleaved ``memory_config``. Defaults to False.
+
         Returns:
             tuple[ttnn.Tensor, ...]: Four BFLOAT16 TILE tensors: head A/B followed by
-                tail A/B. A has shape ``[B*H*G,K,K]`` and B ``[B*H*G,K,V]``.
+                tail A/B. A has shape ``[B*H*G,K,K]`` and B ``[B*H*G,K,V]``. With
+                ``packed_head``, the single packed head transform.
 
         Note:
             Summaries accumulate in FLOAT32 and pack directly to BFLOAT16 for transport.
@@ -190,7 +201,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("actual_end") = nb::none());
+        nb::arg("actual_end") = nb::none(),
+        nb::arg("packed_head") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail

@@ -78,6 +78,9 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
 string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool has_blaze_experimental_ct_args) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
+    // The kernel's defines come first, as -D flags would: the generated headers below pull in API headers
+    // (e.g. compute_kernel_hw_startup.h) that test them, and #pragma once fixes what they saw.
+    prolog << "#include \"defines_generated.h\"\n";
     if (is_metal2_kernel) {
         prolog << "#include \"kernel_bindings_generated.h\"\n";
         prolog << "#include \"kernel_args_generated.h\"\n";
@@ -90,7 +93,6 @@ string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool 
         prolog << "#include \"named_args_generated.h\"\n";
     }
     ////////////////////////////////////////////////////////////
-    prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
 

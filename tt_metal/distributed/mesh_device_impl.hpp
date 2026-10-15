@@ -151,12 +151,35 @@ private:
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
-    // Only ever read on the dispatch path, which holds the api lock.
+    // The view's local devices, which the view fixes when it is constructed. Held here because the
+    // accessors that cross-check a property against every device would otherwise rebuild this list
+    // on every call. Rewritten when a reshape swaps the view, under the api lock.
+    std::vector<IDevice*> local_devices_;
+    // Filled on first use per range and cleared by reshape, both under the api lock, which the
+    // dispatch path also holds while it reads an entry by reference.
     mutable std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>> local_devices_by_range_;
-    // Established once the devices are open (see establish_device_property_caches) so that the
-    // accessors below stay pure reads: ttnn calls them from many threads without the api lock.
-    std::optional<CoreCoord> compute_with_storage_grid_size_;
-    std::optional<uint32_t> l1_size_per_core_;
+    // The mesh-wide properties that are fixed once the devices are open. Each is otherwise answered
+    // by a cross-device agreement check that walks the whole mesh, and the dispatch path asks for
+    // several of them once per program on every enqueue. Established as a unit (see
+    // establish_device_property_caches) so that the accessors below never write, which is what lets
+    // ttnn call them from many threads without holding the api lock. Initialization and reshape are
+    // the only writers; reshape takes the api lock, so it cannot rewrite these under the dispatch
+    // path, but it is still the caller's job not to reshape a mesh other threads are reading. Each
+    // accessor keeps the agreement check as its unestablished path, which covers the window before
+    // initialization runs and a remote-only mesh, where there is no local device to agree with and
+    // the check raises as it always did.
+    struct MeshProperties {
+        uint8_t num_hw_cqs = 0;
+        CoreCoord compute_with_storage_grid_size;
+        CoreCoord grid_size;
+        CoreCoord logical_grid_size;
+        CoreCoord dram_grid_size;
+        uint32_t l1_size_per_core = 0;
+        uint32_t dram_size_per_channel = 0;
+        std::set<CoreCoord> ethernet_cores;
+        std::set<CoreCoord> storage_only_cores;
+    };
+    std::optional<MeshProperties> mesh_properties_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
@@ -168,8 +191,6 @@ private:
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
     std::shared_ptr<ThreadPool> reader_thread_pool_;
-    // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
-    std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
 
     // Owns the real-time profiler subsystem (per-device sockets, receiver thread, Tracy
@@ -314,7 +335,6 @@ public:
     std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
-    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) const;
     CoreCoord compute_with_storage_grid_size() const override;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
@@ -410,8 +430,6 @@ public:
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
     bool has_noc_mcast_txns(SubDeviceId sub_device_id) const;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(
