@@ -280,34 +280,58 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto out = ttml::autograd::create_tensor(attn_output);
 
     // ========== Register Backward Function using sdpa_bw kernel ==========
-    ttml::autograd::GradFunction grad =
-        [query, key, value, mask_type, mask_tensor, out, attn_output, intermediates, dropout_probability, gate_ptr]() {
-            auto grad_output = out->get_grad();
+    // With a gate, sdpa_bw writes grad_gate into Y (attn_output) and the gated dO into dY (grad_output): the Q
+    // reader reads each row of both into L1 before that row's outputs are written. After backward, out holds dG
+    // as its value and dO as its gradient, so out->get_grad() must not be shared with another tensor. Single
+    // backward only: a second gated pass (retain_graph=true) throws.
+    ttml::autograd::GradFunction grad = [query,
+                                         key,
+                                         value,
+                                         mask_type,
+                                         mask_tensor,
+                                         out,
+                                         saved_attn_output = std::optional<ttnn::Tensor>(attn_output),
+                                         intermediates,
+                                         dropout_probability,
+                                         gate_ptr]() mutable {
+        if (!saved_attn_output.has_value()) {
+            throw std::runtime_error(
+                "scaled_dot_product_attention: backward ran twice with a gate. The first pass overwrote the "
+                "forward output and its gradient, so retain_graph=true is not supported for the gated op.");
+        }
+        const ttnn::Tensor attn_output = saved_attn_output.value();
+        if (gate_ptr) {
+            saved_attn_output.reset();  // consumed: this pass overwrites Y with dG
+        }
 
-            // Call sdpa_bw kernel - returns [grad_Q, grad_K, grad_V, grad_gate]
-            // dL_dQ: (B, H, S, D)
-            // dL_dK: (B, G, S, D) for GQA, (B, H, S, D) for MHA
-            // dL_dV: (B, G, S, D) for GQA, (B, H, S, D) for MHA
-            // dL_dGate: (B, H, S, Dv) when a gate was given, nullopt otherwise
-            auto [dL_dQ, dL_dK, dL_dV, dL_dGate] = ttml::metal::sdpa_bw(
-                grad_output,
-                attn_output,
-                query->get_value(),
-                key->get_value(),
-                value->get_value(),
-                intermediates,
-                mask_type,
-                mask_tensor,
-                dropout_probability,
-                gate_ptr ? std::make_optional(gate_ptr->get_value()) : std::nullopt);
+        auto grad_output = out->get_grad();
 
-            query->add_grad(dL_dQ);
-            key->add_grad(dL_dK);
-            value->add_grad(dL_dV);
-            if (gate_ptr && dL_dGate.has_value()) {
-                gate_ptr->add_grad(dL_dGate.value());
-            }
-        };
+        // Call sdpa_bw kernel - returns [grad_Q, grad_K, grad_V, grad_gate]
+        // dL_dQ: (B, H, S, D)
+        // dL_dK: (B, G, S, D) for GQA, (B, H, S, D) for MHA
+        // dL_dV: (B, G, S, D) for GQA, (B, H, S, D) for MHA
+        // dL_dGate: (B, H, S, Dv) when a gate was given, nullopt otherwise
+        auto [dL_dQ, dL_dK, dL_dV, dL_dGate] = ttml::metal::sdpa_bw(
+            grad_output,
+            attn_output,
+            query->get_value(),
+            key->get_value(),
+            value->get_value(),
+            intermediates,
+            mask_type,
+            mask_tensor,
+            dropout_probability,
+            gate_ptr ? std::make_optional(gate_ptr->get_value()) : std::nullopt,
+            /*preallocated_grad_gate=*/gate_ptr ? std::make_optional(attn_output) : std::nullopt,
+            /*preallocated_gated_grad_output=*/gate_ptr ? std::make_optional(grad_output) : std::nullopt);
+
+        query->add_grad(dL_dQ);
+        key->add_grad(dL_dK);
+        value->add_grad(dL_dV);
+        if (gate_ptr && dL_dGate.has_value()) {
+            gate_ptr->add_grad(dL_dGate.value());
+        }
+    };
 
     // The gate is a differentiable input only when present; a null entry is ignored by add_backward_node.
     out->set_node(ttml::autograd::add_backward_node(

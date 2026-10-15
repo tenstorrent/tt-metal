@@ -164,7 +164,8 @@ void assign_per_core_runtime_args_balanced(
         const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
         const auto& [start_pair_idx, num_pairs] = pair_distribution[i];
 
-        // Reader kernel: (query_addr, key_addr, value_addr, mask_addr(unused), num_pairs, start_pair_idx)
+        // Reader kernel: (query_addr, key_addr, value_addr, mask_addr(unused), gate_addr (optional), num_pairs,
+        // start_pair_idx)
         SetRuntimeArgs(
             program,
             kernels.reader,
@@ -361,6 +362,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, num_attn_mask_tiles);
     }
 
+    // Create gate buffer if the model has a gating mechanism. Double-buffered to overlap DRAM reads with compute.
     if (args.has_gate) {
         [[maybe_unused]] auto cb_gate = create_circular_buffer(
             program, all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
