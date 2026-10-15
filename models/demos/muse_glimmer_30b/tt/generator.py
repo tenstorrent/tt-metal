@@ -63,7 +63,7 @@ class MuseGlimmerGenerator:
         from models.common.sampling.generator import SamplingParams, format_sampling_params
 
         sp = sampling or {}
-        t = float(sp.get("temperature", 0.0) or 0.0)
+        t = float(sp.get("temperature", 1.0) or 0.0)
         if sampling is None or t <= 0:
             return format_sampling_params(SamplingParams(temperature=0.0, top_k=1, top_p=1.0), 32)
         # len(temperature) sets the active lane count; a scalar would leave lanes 1..31 greedy.
@@ -174,6 +174,8 @@ class MuseGlimmerGenerator:
     ) -> dict:
         n = len(prompts)
         assert 0 < n <= self.global_batch_size
+        if max_new_tokens <= 0:
+            raise ValueError("max_new_tokens must be positive")
         gb = self.global_batch_size
         stop = set(stop_token_ids or [])
         gen = torch.Generator().manual_seed(seed)

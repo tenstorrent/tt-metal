@@ -15,10 +15,10 @@ from models.demos.muse_glimmer_30b.reference.model import MLP, DecoderLayer, Rot
 from models.demos.muse_glimmer_30b.tt.ccl import MuseCCL
 from models.demos.muse_glimmer_30b.tt.common import RopeTables
 from models.demos.muse_glimmer_30b.tt.mesh_utils import mesh_test_params, skip_and_submesh
-from models.demos.muse_glimmer_30b.tt.model_config import DEFAULT_CKPT_DIR, MuseGlimmerModelArgs
+from models.demos.muse_glimmer_30b.tt.model_config import MuseGlimmerModelArgs, checkpoint_dir
 
 pytestmark = pytest.mark.skipif(
-    not os.path.exists(os.path.join(DEFAULT_CKPT_DIR, "config.json")), reason="checkpoint not available"
+    not os.path.exists(os.path.join(checkpoint_dir(), "config.json")), reason="checkpoint not available"
 )
 
 PCC = 0.99

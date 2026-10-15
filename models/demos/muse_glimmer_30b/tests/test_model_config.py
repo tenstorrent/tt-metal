@@ -10,15 +10,17 @@ import os
 import pytest
 import torch
 
-from models.demos.muse_glimmer_30b.tt.model_config import DEFAULT_CKPT_DIR, MuseGlimmerModelArgs
+from models.demos.muse_glimmer_30b.tt.model_config import MuseGlimmerModelArgs, checkpoint_dir
+
+CKPT = checkpoint_dir()
 
 pytestmark = pytest.mark.skipif(
-    not os.path.exists(os.path.join(DEFAULT_CKPT_DIR, "config.json")), reason="checkpoint not available"
+    not os.path.exists(os.path.join(CKPT, "config.json")), reason="checkpoint not available"
 )
 
 
 def _args(tp, **kw):
-    return MuseGlimmerModelArgs.from_checkpoint(DEFAULT_CKPT_DIR, tp=tp, **kw)
+    return MuseGlimmerModelArgs.from_checkpoint(CKPT, tp=tp, **kw)
 
 
 def test_tp4():
