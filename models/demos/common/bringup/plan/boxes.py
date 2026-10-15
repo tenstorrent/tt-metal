@@ -256,7 +256,7 @@ def table(rows: list[dict]) -> str:
 
 
 def scaling_applies(spec: Spec) -> bool:
-    """A partial run on a box with fewer chips than the deployment box also runs scaled (plan/scale.py)."""
+    """A partial run on a box with fewer chips than the deployment box runs the scaled model only (F75, plan/scale.py)."""
     if not spec.has_deploy or spec.mode != "partial":
         return False
     run, dep = spec.boxes[spec.run_box]["mesh"], spec.boxes[spec.deploy_box]["mesh"]
