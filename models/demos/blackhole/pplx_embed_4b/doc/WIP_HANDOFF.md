@@ -146,6 +146,17 @@ its analytic formulation slightly overstates, structure -0.17 ms at bs32); bs32 
 2. **Inits / handshakes / blocking in the custom ops** (heads, add+RMSNorm): fusing their phases into the neighbouring
    matmuls (norm as a QKV / FF1 prologue, QK-norm + RoPE as a QKV epilogue) removes most of it and their data movement.
    Before that, per-phase device-profiler zones would split phase overhead from primitive slowness.
+   **2026-10-15: sized with dummy epilogue work (NEGATIVE_RESULTS §71): the QKV epilogue nets only ~−50 µs a call
+   (~1% of bs16).** The pack thread hides SFPU work only under the last K block's math (1/10 at K_block 8), and math-thread
+   work is fully exposed. The heads op's own ~97 µs a call of overhead is the cheaper target.
+   **2026-10-15, heads op:** v3 phase split at today's placement (§72): compute-bound, eps + rsqrt 38% of the math
+   thread. The column-only rsqrt landed (bit-identical; bs16 op 208.7 -> 176.3 µs, cold −1.0 to −1.4 ms at bs16 / 32).
+   Next cuts listed in §72: one rsqrt tile per unit, gamma folded into the inv broadcast, rotate-half as a tile swap.
+   **Pinned (user, 2026-10-15): the L1 the fusion frees.** It removes no DRAM round trip (the QKV output already lives in
+   L1; Q's DRAM write / read is hidden at both ends, §64 / §67), but without the 223-446 KB per core QKV intermediate bs32
+   could drop its quarter-batch chunks (on paper: norm outputs 362 KB + K / V 290 KB beside the matmul's CBs fit), ~−1.1
+   ms of heads-op fixed cost at bs32, and other tensors could take the space. Chunk count does not drive bs32's
+   host / dispatch gap (cold − replay 14.2 ms at 2 chunks vs 14.6 at 4, chip 0, §66).
 3. **Formulation fixes** with direct payback: gamma folded into weights / RoPE tables, rotate-half as a tile swap instead
    of the rotation matmul, V written by QKV instead of copied through, SDPA row sums as a ones column in P.V.
 4. **Data movement not hidden**: FF1+FF3's output round trip through DRAM (an FF13 -> FF2 fusion in token chunks would

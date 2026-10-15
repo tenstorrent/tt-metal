@@ -1756,3 +1756,90 @@ runs five 1-row groups (compute only 35.1 against 25.2 for six rows in three gro
 grid rows, which turns the K / V chain multicast off (DM only 26.0 against 11.7). Fixing both (ragged 2 + 2 + 1 row
 groups in the streaming compute; K / V delivery for heads spanning grid rows) bounds bs1 SDPA at ~23 µs: ≈ −0.17 ms
 (1.2%) of bs1 for two tt-metal changes. Not pursued; bs1 stays on q192 / 11×8.
+
+## 71. QK-norm + RoPE as a QKV epilogue: the matmul hides almost none of it; sized at ~−1% of bs16, not pursued yet (diagnostic) (2026-10-15)
+
+Question: the heads op (head split + Q/K RMSNorm + RoPE, 208.7 µs a call at bs16, §67) is mostly inits and handshakes
+(3.5 ms of bs16's gap). Fusing it into the QKV `minimal_matmul` as an epilogue would retire the op. How much epilogue
+work can QKV hide? `perf_tools/bench_qkv_epilogue_dummy.py` patches dummy work into the plain path's last K block, at
+the model's bs16 QKV call (M 8192, K 2560, N 6144, bfp4 DRAM-sharded weights, in0 L1, LoFi), chip 1, device µs a call:
+- **pack-thread SFPU**: per DST tile, n dependent `y = y·0.5 + x` SFPMADs per row vector, after the math thread's commit
+  (the fused SwiGLU's mechanism, §58), so it can overlap the math thread's next subblock. One op ≈ 65 cycles a tile
+  (slope 20.8 µs per op over ~430 tiles per core: 32 vectors × a 2-cycle dependent MAD).
+- **math thread**: per DST tile, n dest-reuse LoFi multiplies by an in1 tile before the commit (the cost of bringing
+  cos / sin into DST, or an FPU RoPE pass).
+
+| blocks (M, K, N, 1×8) / output | base | SFPU 2 | 4 | 8 | 12 | 16 | math 1 | 2 | 4 |
+|---|---|---|---|---|---|---|---|---|---|
+| 8,8,8 (model) / L1 | 527.5 | +50 | +91 | +174 | | +340 | +27 | +50 | +96 |
+| 8,8,8 / DRAM | 537.6 | | +87 | +167 | | | | | |
+| 8,16,8 / L1 | 532.0 | | +50 | +131 | | | | +46 | |
+| 8,16,8 / DRAM | 541.0 | | +45 | +123 | | | | | |
+| 4,40,8 / DRAM | 711.8 | | +21 | +29 | +80 | +136 | | +21 | |
+
+4,40,8 and 8,80,8 with the output in L1, and 8,40,8 either way, do not fit (static CBs clash with L1 buffers).
+
+The pack thread overlaps only the last K block's math, as the SwiGLU did: one subblock's last-K-block math is
+K_block × 8 tiles × ~18 cycles, so at the model's K_block 8 (144 cycles a tile) almost every SFPU cycle shows, K_block 16
+hides ~2 ops, K_block 40 ~6-8. But K_block 40 needs M_block 4 to fit, which costs QKV +174 µs before any epilogue.
+Math-thread work is fully exposed (~24 µs per op per tile), as expected of a compute-bound matmul.
+
+**Sizing the real epilogue** (not built): sum of squares (load + MAD per vector), a cross-lane row reduce and rsqrt per
+head row, RoPE with rotate-half as a tile swap and gamma folded into the tables (2 table loads, 2 multiplies and an add
+per vector), and the row scale: ~13 SFPU instructions per vector, ~420 cycles a tile at one instruction per cycle, ~6.5
+dummy ops, on the 160 Q / K tiles of every 192 (V passes through). At K_block 8: ≈ +117 µs (SFPU) + ≈ +42 µs (cos / sin
+into DST on the math thread, 2 tiles per Q / K tile), ≈ +160 µs on QKV against the heads op's 209 µs: ≈ −50 µs a call,
+−1.8 ms (~1.3%) of bs16's replay, ± tens of µs. Not counted: the cos / sin tiles do not fit next to a 1×8 subblock in
+half of DST (8 bf16 tiles), so the subblock shrinks to 1×4 (one head), which costs the matmul itself an unmeasured
+amount. The handoff's expectation that the fusion "removes most" of the heads op's overhead does not hold: the matmul is
+compute-bound and has ~1/10 of its math (the last K block) to hide work under.
+
+Conclusion: the fusion is worth ~1% at best for a large kernel change (SFPU row reduce + rsqrt, table loads, head-major
+writer). The heads op's own inits / handshakes (~97 µs a call above its roofline + formulation at bs16) are the cheaper
+target. The add+RMSNorm-into-epilogue plan (norm scale in the QKV / FF13 epilogue, add + sum of squares in the WO / FF2
+epilogue) runs into the same budget: its per-tile work is smaller (one row-scale multiply on the consumer side) but its
+producer side needs a sum of squares over every output tile.
+
+## 72. Heads op v3 at today's placement: compute-bound, rsqrt is 38% of it; the column-only rsqrt lands (2026-10-15)
+
+`bench_heads_bs16_phases.py` now has v3 anchors (K / V out in L1 as in the model). Math thread per unit at bs16 (L1
+input, 114 cores, 18 units per core; a unit = 4 Q + 1 K heads normalised + V copied, 15.6k cycles), pack / unpack
+totals match:
+
+| phase | eps + rsqrt | x² | gamma | sin mul | add | cos mul | bcast inv | rot matmul | reduce | V copy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| cycles | 5966 | 2672 | 1672 | 1091 | 921 | 909 | 854 | 834 | 629 | 292 |
+| % | 37.6 | 16.8 | 10.5 | 6.9 | 5.8 | 5.7 | 5.4 | 5.3 | 4.0 | 1.8 |
+
+bs8 is the same per unit. Compute waits for its input ~20 cycles a unit (`PH_MODE=unit`): the reader keeps up.
+`bench_heads_placement_ablate.py`, µs a call: bs16 full 209.3, compute only 204.3, DM only (copy compute) 232.4, read
+only 242.5, write only 161.6, handshakes only 61.6; bs32 quarter chunk 117.9 / 112.2 / 108.7 / 109.9 / 88.1 / 35.8.
+The DM-only arms read above full: with the copy compute nothing paces the reads and they bunch (§57); they are not a
+floor.
+
+**Column-only rsqrt (`QWEN_FUSED_RSQRT_COL`, §57), retested** (Q in DRAM / Q in L1 at bs16):
+
+| | bs1 | bs8 | bs16 | bs16, Q in L1 | bs32 chunk |
+|---|---|---|---|---|---|
+| off | 33.3 | 117.8 | 208.7 | 208.7 | 117.7 |
+| on | 29.4 | 101.5 | **176.3** | 175.5 | **101.7** |
+
+Bit-identical Q / K / V at bs1 / 8 / 16 (same inputs, both settings). §57's slowdown was the Q / K / V DRAM writes
+bunching once compute got faster; with K / V in L1 (§64 / §66) the op is compute-bound and the cut shows. **Landed:
+default on in the op.** E2e `sustained_run.sh`, 30 iterations, 2 alternating rounds, cold / sustained ms, off -> on:
+bs1 (chip 3) 14.1 / 14.2, 14.1 / 14.2 -> 14.0 / 14.1, 13.9 / 14.0; bs8 (chip 1) 76.4 / 99.7, 76.3 / 99.5 -> 75.8 /
+98.7, 75.9 / 99.5; bs16 (chip 2) 143.3 / 193.6, 143.2 / 194.7 -> 142.0 / 193.1, 141.8 / 195.1; bs32 (chip 0) 290.1 /
+374.1, 291.4 / 378.6 -> 288.3 / 375.7, 290.3 / 378.2. Cold −1.0 to −1.4 ms at bs16 / 32 (−0.9 / −0.5%), sustained
+within noise (the power cap).
+
+**What is left in the compute**, math-thread cycles per unit beyond the rsqrt (~3.4k after this change):
+- rsqrt on one tile per unit instead of one per head: gather the 5 heads' column-0 mean squares into columns 0-4 of
+  one tile (a matmul by a column-move tile per head), one add + rsqrt, then broadcast column h back (a matmul by a
+  ones-row tile), ~−2.5k, not bit-identical;
+- gamma folded into the inv broadcast (one `inv x gamma` tile per head, then one multiply per x tile instead of two),
+  ~−1.2k, not bit-identical;
+- rotate-half as a tile swap: Q / K weights and q / k-norm gamma kept in HF's rotate-half layout (today
+  `reverse_permute`d to interleaved pairs, which is why RoPE needs the 32×32 rotation matmul), sign folded into the sin
+  table: the rot matmul phase goes, ~−0.8k;
+- V straight from the reader to the writer, ~−0.3k;
+- x² at 2.7k against 0.85k for the same 20 tiles in the bcast phase: unexplained.

@@ -35,7 +35,7 @@
 namespace ckernel {
 // rsqrt over the two left faces only (0 and 2, columns 0-15): a row-reduce result lives in column 0 and the
 // bcast_cols multiply that consumes it reads column 0 only, so the output is bit-identical with half the SFPU work
-// (compile-time arg 9, QWEN_FUSED_RSQRT_COL=1).
+// (compile-time arg 9, QWEN_FUSED_RSQRT_COL, default on).
 ALWI void rsqrt_col_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,

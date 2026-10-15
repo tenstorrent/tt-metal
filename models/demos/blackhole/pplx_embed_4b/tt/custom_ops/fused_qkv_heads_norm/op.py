@@ -295,7 +295,10 @@ def nlp_create_qkv_heads_norm_headsplit(
         head_groups,
         plan.seq_tiles,
         q_split,
-        int(os.getenv("QWEN_FUSED_RSQRT_COL", "0") == "1"),  # v3: rsqrt over column 0's faces only (bit-identical)
+        # v3: rsqrt over column 0's faces only, bit-identical. Default since K / V moved to L1 left the op compute-bound:
+        # bs16 208.7 -> 176.3 us, bs32 quarter chunk 117.7 -> 101.7 (NEGATIVE_RESULTS 72; 57 was slower with Q / K / V
+        # in DRAM). Opt out: QWEN_FUSED_RSQRT_COL=0.
+        int(os.getenv("QWEN_FUSED_RSQRT_COL", "1") == "1"),
     ]
     writer_ct = [
         plan.seq_tiles,

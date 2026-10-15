@@ -1,9 +1,10 @@
-# bs16 fused heads op (v1 compute): where the compute time goes, phase by phase.
+# Fused heads op (v1 or v3 compute): where the compute time goes, phase by phase.
 # A scratch copy of the compute kernel adds, on each TRISC (unpack / math / pack), the wall-clock time since the
 # previous phase marker to that phase's total, and DPRINTs the totals once per core. Phases are serialized through
 # CBs, so the pack thread's split is each phase's latency (unpack + math + pack). One untraced call, input in L1 (the
-# fused design's case: the read is gone) or DRAM; cos / sin in L1 as in the model. PH_MODE=unit: per-unit split only
-# (wait for input / output space / cos-sin, compute), which works for v1 and v3 (QWEN_FUSED_COMPUTE_V3=1).
+# fused design's case: the read is gone) or DRAM; cos / sin in L1 as in the model; K / V out in L1 (PH_KV_L1=0: DRAM).
+# Per-phase anchors for v1 and v3 (QWEN_FUSED_COMPUTE_V3=1); PH_MODE=unit: per-unit split only (wait for input /
+# output space / cos-sin, compute).
 # Usage: bench_heads_bs16_phases.py [batch] [L1|DRAM]
 import os
 import re
@@ -68,10 +69,28 @@ UNIT_MARKS = [
 ]
 
 
+V3_MARKS = [  # the same phases in the v3 compute (each phase once per unit, over all of its normalised heads)
+    ("    x2.push_back(T);\n", 0),
+    ("    reduce_uninit(cb_x2);\n", 1),
+    ("    red.pop_front(CAP);\n", 2),
+    ("    inv.pop_front(CAP);\n", 3),
+    ("    if constexpr (rotary) {\n        nrm.push_back(T);\n", 4),
+    ("        rot.push_back(T);\n", 5),
+    ("        rot.pop_front(T);\n", 6),
+    ("        nrm.pop_front(T);\n", 7),
+    ("        si.pop_front(T);\n", 8),
+    ("            csin.wait_front(Wt);\n        }\n", 9),
+    ("                tile_regs_release();\n            }\n        }\n", 10),
+    ("        in.pop_front(unit_tiles);\n", 11),
+]
+
+
 def instrument(src):
     marks = (
         UNIT_MARKS
         if MODE == "unit"
+        else V3_MARKS
+        if V3
         else [  # (anchor, marker index): PH(i) goes right after the anchor
             ("    x2.push_back(Wt);\n", 0),
             ("    reduce_uninit(cb_x2);\n", 1),
@@ -105,7 +124,6 @@ def instrument(src):
 
 
 def main():
-    assert MODE == "unit" or not V3, "per-phase anchors are v1's; use PH_MODE=unit for v3"
     cattr = "COMPUTE_KERNEL_BS1" if V3 else "COMPUTE_KERNEL"
     kern = os.path.join(SCRATCH, "compute_phases.cpp")
     # PH_KERNEL=path: instrument that kernel source instead of the op's (same contract as the selected compute)
@@ -131,6 +149,7 @@ def main():
         outs = hop.nlp_create_qkv_heads_norm_headsplit(
             x, GQ, GK, SC, EP, num_heads=NH, num_kv_heads=NKV, memory_config=DR, rot_cos=cos, rot_sin=sin,
             trans_mat=T, q_dtype=ttnn.bfloat8_b, kv_dtype=ttnn.bfloat8_b, norm_eps=EPS,
+            kv_memory_config=L1 if os.getenv("PH_KV_L1", "1") == "1" else DR,
         )  # fmt: skip
         ttnn.synchronize_device(D)
         [ttnn.deallocate(t) for t in outs]
