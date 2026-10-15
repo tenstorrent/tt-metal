@@ -194,13 +194,9 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         }
         return any_dm && !disabled;
     };
-    TT_FATAL(
-        dfb_spec->advanced_options.prefetcher_pipe_relays.empty() ||
-            (producer_access_pattern != experimental::dfb::AccessPattern::BLOCKED &&
-             consumer_access_pattern != experimental::dfb::AccessPattern::BLOCKED),
-        "DFB '{}': a PrefetcherPipe relay DFB does not support the BLOCKED access pattern on either side yet; bind "
-        "the relay's producer and consumer as STRIDED or ALL.",
-        dfb_spec->unique_id);
+    const bool is_relay = !dfb_spec->advanced_options.prefetcher_pipe_relays.empty();
+    const bool blocked_relay_producer =
+        is_relay && producer_access_pattern == experimental::dfb::AccessPattern::BLOCKED;
     return experimental::dfb::DataflowBufferConfig{
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
@@ -212,7 +208,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .num_consumers = static_cast<uint8_t>(consumer->num_threads),
         .cap = consumer_access_pattern,
         .consumer_block_size = consumer_binding->block_size,
-        .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
+        .enable_producer_implicit_sync =
+            !blocked_relay_producer && side_implicit_sync_enabled(dfb_endpoint_info.producers),
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
@@ -223,9 +220,9 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         // PrefetcherPipe ring the relay aliases.
         .borrows_memory = dfb_spec->borrowed_from.has_value() ||
                           dfb_spec->advanced_options.allocation_override.has_value() ||
-                          !dfb_spec->advanced_options.prefetcher_pipe_relays.empty(),
+                          is_relay,
         // A PrefetcherPipe relay is lane-interleaved (producer h owns entries h, h+P, ...).
-        .is_relay = !dfb_spec->advanced_options.prefetcher_pipe_relays.empty()};
+        .is_relay = is_relay};
 }
 
 }  // namespace
