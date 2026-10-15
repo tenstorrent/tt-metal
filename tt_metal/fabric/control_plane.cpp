@@ -820,6 +820,14 @@ struct MeshFabricConfigObservation {
     uint32_t rank;
     uint32_t mesh_host_rank;
     FabricConfig fabric_config;
+    // Process-wide channel-geometry knobs that must be IDENTICAL on every rank. They select the per-VC
+    // buffer-slot table and the channel buffer size; two inter-mesh-linked processes (and transitively the
+    // whole fabric) must agree on them or the inter-mesh channel geometry diverges -> silent credit stall.
+    // Unlike fabric_config these come from env/rtoptions + the router-config override, which the launcher
+    // does not otherwise guarantee uniform across ranks.
+    uint8_t vc2_enabled;
+    uint8_t mesh_pass_through_enabled;
+    uint64_t max_payload_override;  // std::numeric_limits<uint64_t>::max() == no override
 };
 
 // Validate the gathered per-mesh FabricConfigs. Rules:
@@ -855,6 +863,41 @@ void validate_fabric_configs(
             enchantum::to_string(o.fabric_config),
             mesh_graph_path,
             observed_values);
+    }
+
+    // Channel-geometry env knobs must be identical on EVERY rank (globally, not just per-mesh). Unlike
+    // fabric_config -- which may legitimately differ across 2D meshes -- enable_fabric_vc2,
+    // enable_fabric_mesh_pass_through, and the max_packet_payload_size override select the per-VC
+    // buffer-slot table and the channel buffer size. Any disagreement across an inter-mesh link (and these
+    // are process-wide env/override values the launcher does not guarantee uniform) makes the two ends of
+    // the channel size their buffers differently -> silent credit stall. Assert uniformity up front.
+    if (!observations.empty()) {
+        const auto& ref = observations.front();
+        for (const auto& o : observations) {
+            TT_FATAL(
+                o.vc2_enabled == ref.vc2_enabled && o.mesh_pass_through_enabled == ref.mesh_pass_through_enabled &&
+                    o.max_payload_override == ref.max_payload_override,
+                "Fabric channel-geometry settings must be identical on every rank, but rank {} (mesh {}) reports "
+                "(enable_fabric_vc2={}, enable_fabric_mesh_pass_through={}, max_packet_payload_size_override={}) "
+                "while rank {} (mesh {}) reports ({}, {}, {}). These select the per-VC buffer-slot counts and the "
+                "channel buffer size; a mismatch across an inter-mesh link silently stalls the fabric. Set the "
+                "fabric env (enable_fabric_vc2, enable_fabric_mesh_pass_through) and any max_packet_payload_size "
+                "override identically on all ranks. MGD path: {}.",
+                o.rank,
+                *o.mesh_id,
+                o.vc2_enabled != 0,
+                o.mesh_pass_through_enabled != 0,
+                o.max_payload_override == std::numeric_limits<uint64_t>::max() ? std::string("<default>")
+                                                                               : std::to_string(o.max_payload_override),
+                ref.rank,
+                *ref.mesh_id,
+                ref.vc2_enabled != 0,
+                ref.mesh_pass_through_enabled != 0,
+                ref.max_payload_override == std::numeric_limits<uint64_t>::max()
+                    ? std::string("<default>")
+                    : std::to_string(ref.max_payload_override),
+                mesh_graph_path);
+        }
     }
 }
 
@@ -908,6 +951,16 @@ void ControlPlane::validate_fabric_config_across_ranks() {
     distributed_context.all_reduce(
         ttsl::Span<uint32_t>(&local_binding_count, 1), ttsl::Span<uint32_t>(&max_binding_count, 1), ReduceOp::MAX);
 
+    // Process-wide channel-geometry knobs (same for every mesh this rank owns); gathered so we can assert
+    // they are identical on every rank -- see validate_fabric_configs.
+    const auto& rtoptions = this->rtoptions_.get();
+    const uint8_t vc2_enabled = rtoptions.get_enable_fabric_vc2() ? 1 : 0;
+    const uint8_t mesh_pass_through_enabled = rtoptions.get_enable_fabric_mesh_pass_through() ? 1 : 0;
+    const uint64_t max_payload_override =
+        this->fabric_router_config_.max_packet_payload_size_bytes.has_value()
+            ? static_cast<uint64_t>(*this->fabric_router_config_.max_packet_payload_size_bytes)
+            : std::numeric_limits<uint64_t>::max();
+
     std::vector<MeshFabricConfigObservation> local_observations(max_binding_count);
     for (uint32_t i = 0; i < local_binding_count; ++i) {
         const auto mesh_host_rank = this->topology_mapper_->get_local_host_rank(local_mesh_ids[i]);
@@ -919,7 +972,10 @@ void ControlPlane::validate_fabric_config_across_ranks() {
             .mesh_id = local_mesh_ids[i],
             .rank = rank,
             .mesh_host_rank = *mesh_host_rank.value(),
-            .fabric_config = this->fabric_config_};
+            .fabric_config = this->fabric_config_,
+            .vc2_enabled = vc2_enabled,
+            .mesh_pass_through_enabled = mesh_pass_through_enabled,
+            .max_payload_override = max_payload_override};
     }
 
     std::vector<uint32_t> binding_counts(world_size);

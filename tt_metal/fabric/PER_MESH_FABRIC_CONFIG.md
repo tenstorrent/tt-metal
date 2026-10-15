@@ -117,9 +117,59 @@ the original `galaxy-fabric-per-mesh-torus-yx` on the common (Mesh-first) sanity
   (errors out on a 1D↔2D link instead of corrupting; allows all 2D↔2D incl. mesh↔torus). CPU-level, runs
   at MGD build; no regression (74/74 MeshGraph tests pass).
 - Plus the existing **1D-multimesh rule** and the new **"config set in two places" warning**.
-- A thorough audit of *all other* per-process values that feed an inter-mesh boundary (VC config #13,
-  ROUTING_MODE, packet header, credit/stream addresses, MAX_NUM_VCS) is in progress to confirm none can
-  reachably mismatch (or to find + guard any that can); results appended below when complete.
+
+### Inter-mesh mismatch audit — complete (no MGD-reachable mismatch)
+A full audit of every per-process value that must agree across an inter-mesh link (18 values) concluded:
+**no MGD per-mesh config combination can produce a divergent slot count, packet geometry, or credit
+layout** across an inter-mesh link. The structural reasons:
+- **Slot tables** (`fabric_static_sized_channels_allocator.cpp:484-497`) select the **same table for Mesh
+  and Torus** (keyed only by arch + VC-presence), and whenever an inter-mesh link exists the **boundary
+  router family (5 VC0 / 4 VC1) is enumerated into the channel maxima on both sides**
+  (`fabric_builder_context.cpp:82-156`), pinning the slot counts identically regardless of
+  express/Mesh/Torus. → **slots can't diverge**.
+- **Packet header/payload** come from a **system-wide** action-map survey + `is_2D`/global override
+  (`fabric_context.cpp:64-75,147-222`) → uniform.
+- **IntermeshVCConfig** (`fabric_builder_context.cpp:342-393`) is a **system-wide** survey of the whole
+  mesh graph → same on both ends (#13 is not per-mesh).
+- **Inter-mesh EDMs force DA/first-level-ack off** (#56515, `erisc_datamover_builder.cpp:1075-1104,1174-1180`)
+  → the cross-boundary credit accounting is **decoupled** (the deepest reason mismatches can't bite).
+- **ROUTING_MODE** (#12) does differ per-mesh, but the on-wire header format is the uniform pre-baked 2D
+  action map, so the decode is not sensitive to the TORUS/MESH bit; and under the per-process model each
+  process owns one mesh, so this is correct (Tier-2 only if one process ever owns multiple topologies).
+
+**The only way to force a mismatch is a non-uniform ENVIRONMENT across ranks (not reachable from the
+MGD):** setting `enable_fabric_vc2`, `enable_fabric_mesh_pass_through`, or the `max_packet_payload_size`
+override *differently per process* (these are read per-process from `rtoptions` and are **not**
+cross-rank-validated the way `fabric_config` is). Each would diverge the VC/slot/buffer geometry → credit
+stall. The launcher normally guarantees a uniform env, so this is a latent env-hygiene gap, not an MGD
+risk.
+
+**Env-parity guard — IMPLEMENTED (`control_plane.cpp`).** The cross-rank parity check at fabric bring-up
+is now in place, folded into the existing `ControlPlane::validate_fabric_config_across_ranks` collective.
+`MeshFabricConfigObservation` (the trivially-copyable struct already MPI-`all_gather`-ed per rank) carries
+three extra process-wide knobs — `vc2_enabled` (`enable_fabric_vc2`), `mesh_pass_through_enabled`
+(`enable_fabric_mesh_pass_through`), and `max_payload_override` (the `max_packet_payload_size` override,
+`uint64::max` sentinel = default). `validate_fabric_configs` then `TT_FATAL`s unless all three are
+**globally identical across every rank** (not just per-mesh — these are the knobs that select the per-VC
+buffer-slot table and the channel buffer size, so any disagreement across an inter-mesh link diverges the
+geometry and silently credit-stalls). This converts the only reachable exposure from a silent hang into a
+clear startup error that throws **consistently on every rank** (so no partial-rank MPI deadlock). The
+per-mesh *config* itself needs no further cross-mesh check beyond the routing-dimensionality guard above,
+which is satisfied by all 2D combos.
+
+**Hardware validation (BH galaxy, single-galaxy `single_galaxy_per_mesh_torus_yx` MGD, 3 processes):**
+- **Non-uniform env** — `TT_METAL_ENABLE_FABRIC_VC2` set on even ranks only (rank 0 on, rank 1 off):
+  all three ranks `TT_FATAL` at bring-up with the identical message
+  *"Fabric channel-geometry settings must be identical on every rank, but rank 1 (mesh 1) reports
+  (enable_fabric_vc2=false, …) while rank 0 (mesh 0) reports (true, …)"* — caught **before** any hang.
+- **Uniform env** (control run, same MGD, env identical on all ranks): clean pass, `2 executed, 0 failed`
+  on every rank, `tt-run` exit 0 — **no false positive**.
+- Regression: full `fabric_unit_tests` mesh-graph/fabric-config suite green (77 passed; the 2 skips need
+  hardware / ≥2 ranks).
+
+A matching CPU/multi-rank gtest, `MultiHost.BHDualGalaxyNonUniformFabricEnvAcrossRanksFatal`
+(`test_multi_host.cpp`), exercises the same path in CI alongside the existing
+`BHDualGalaxyFabricConfigMismatchAcrossRanksFatal` (both skip below 2 ranks).
 
 ---
 

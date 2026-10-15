@@ -1467,6 +1467,43 @@ TEST(MultiHost, BHDualGalaxyFabricConfigMismatchAcrossRanksFatal) {
         control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     });
 }
+
+// Non-uniform ENV guard: enable_fabric_vc2 (like enable_fabric_mesh_pass_through and the
+// max_packet_payload_size override) is a process-wide knob that selects the per-VC buffer-slot table and
+// channel buffer size. The launcher does not guarantee it is set identically on every rank, so a user can
+// export it on one process and not another; the two ends of an inter-mesh channel then size their buffers
+// differently and the fabric silently credit-stalls. The cross-rank parity check in
+// ControlPlane::validate_fabric_config_across_ranks must catch this and TT_FATAL consistently on every rank.
+TEST(MultiHost, BHDualGalaxyNonUniformFabricEnvAcrossRanksFatal) {
+    const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    if (*world_ctx->size() < 2) {
+        GTEST_SKIP() << "Requires at least 2 ranks";
+    }
+
+    const auto my_rank = static_cast<int>(*world_ctx->rank());
+
+    // Same (valid) fabric config on every rank -- the only disagreement is the env knob below, so the
+    // failure we observe is the env-parity guard and nothing else.
+    const auto fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y;
+
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const bool saved_vc2 = rtoptions.get_enable_fabric_vc2();
+    // Even ranks enable VC2, odd ranks disable it -> non-uniform across the launch.
+    rtoptions.set_enable_fabric_vc2(my_rank % 2 == 0);
+
+    const std::filesystem::path dual_bh_galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_bh_galaxy_torus_xy_graph_descriptor.textproto";
+    EXPECT_ANY_THROW({
+        auto control_plane = make_control_plane(
+            dual_bh_galaxy_mesh_graph_desc_path.string(),
+            fabric_config,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    });
+
+    rtoptions.set_enable_fabric_vc2(saved_vc2);
+}
 // Negative test: mesh 2 is a single (1x1) exit chip cabled to BOTH mesh 0 and mesh 1, and both boundaries are
 // marked assign_z_direction. They both try to claim mesh 2's one Z lane; the losing boundary is Z-only (never
 // falls back to NESW), so it resolves zero routers -> control-plane initialization must fail. This exercises
