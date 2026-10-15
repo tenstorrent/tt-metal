@@ -29,7 +29,13 @@ void kernel_main() {
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(1);
     constexpr uint32_t Wt = get_compile_time_arg_val(2);
     constexpr uint32_t unit_tiles = (heads_per_group * q_heads_per_kv + 2 * heads_per_group) * Wt;
+    // cos / sin popped in lockstep with the reader: per unit, or per seq tile with the op's cache_rot (arg 5)
+    constexpr uint32_t cache_rot = get_compile_time_arg_val(5);
+    constexpr uint32_t head_groups = get_compile_time_arg_val(6);
+    constexpr uint32_t seq_tiles = get_compile_time_arg_val(7);
     const uint32_t n = get_arg_val<uint32_t>(0);
+    const uint32_t start = get_arg_val<uint32_t>(1);
+    uint32_t group = start % head_groups, s_tile = (start / head_groups) % seq_tiles;
     CircularBuffer in(0), out(16), sc(3), ep(4), ct(11), ccos(9), csin(10);
     compute_kernel_hw_startup(0, 0, 16);
     sc.wait_front(1);
@@ -49,8 +55,16 @@ void kernel_main() {
             for (uint32_t j = 0; j < 4; ++j) pack_tile(j, 16, t0 + j);
             tile_regs_release();
         }
-        ccos.pop_front(Wt);
-        csin.pop_front(Wt);
+        uint32_t next_s = s_tile;
+        if (++group == head_groups) {
+            group = 0;
+            if (++next_s == seq_tiles) next_s = 0;
+        }
+        if (!cache_rot || next_s != s_tile || w + 1 == n) {
+            ccos.pop_front(Wt);
+            csin.pop_front(Wt);
+        }
+        s_tile = next_s;
         out.push_back(unit_tiles);
         in.pop_front(unit_tiles);
     }

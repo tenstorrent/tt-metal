@@ -17,6 +17,11 @@
 //   y   = x * bcast_cols(inv)          (CB 8,  nh*Wt)
 //   xn  = y * gamma                    (CB 15 when rotary follows, else the outputs)
 //   rot = xn @ T; si = rot * sin; ci = xn * cos; out = ci + si   (CBs 12 / 13 / 14 -> outputs)
+// One rsqrt per unit (compile-time arg 10, QWEN_HEADS_ONE_RSQRT=1): the mean squares are gathered instead of
+// row-reduced, ms_all = sum_h sum_j x2[h, j] @ G_h with G_h's column h = 1/head_dim (head h's mean square lands in
+// column h of one tile), then inv_all = rsqrt(ms_all + eps) once, and inv[h] = inv_all @ P_h (P_h's row h is all ones:
+// column h broadcast to every column, so bcast_cols reads it from column 0). G / P are exact (powers of two, 0 / 1);
+// the gather sums in matmul order, so the output is not bit-identical to the row reduce.
 // Every phase moves the CBs' full capacity (CAP heads) even when a unit normalises fewer heads (q_split 2 without K),
 // so each CB's pointers return to 0 and the indexed tile accesses never run past the end of a CB. Same CB contract
 // with the reader and writer as v1. One instantiation of each phase with compile-time CB ids keeps the binary about
@@ -53,6 +58,7 @@ constexpr uint32_t cb_in = 0, cb_gq = 1, cb_gk = 2, cb_scaler = 3, cb_eps = 4;
 constexpr uint32_t cb_x2 = 5, cb_red = 6, cb_inv = 7, cb_tmp = 8, cb_out = 16;
 constexpr uint32_t cb_cos = 9, cb_sin = 10, cb_trans = 11, cb_rot = 12, cb_si = 13, cb_ci = 14, cb_norm = 15;
 constexpr uint32_t cb_qsep = 17;
+constexpr uint32_t cb_iall = 18, cb_gath = 19, cb_scat = 20;  // one-rsqrt path: inv_all, G_h, P_h
 constexpr uint32_t kDst = 4;  // DST tiles per acquire (fp32 accumulation, half sync)
 
 // op(h, j, dst_slot) for heads [h_begin, h_end), Wt tiles per acquire; tile j of head h is packed to cb_pack at
@@ -76,19 +82,11 @@ inline void per_head(uint32_t h_begin, uint32_t h_end, uint32_t pack_base, Op op
 
 // All phases for one unit: nq Q heads (tiles [0, nq*Wt) of cb_in) and nk K heads right after them. Q results go to
 // cb_qout at 0, K results to cb_out at kv_base.
-template <uint32_t CAP, uint32_t Wt, bool rotary, uint32_t cb_qout>
-inline void unit_heads(uint32_t nq, uint32_t nk, uint32_t kv_base) {
-    CircularBuffer x2(cb_x2), red(cb_red), inv(cb_inv), tmp(cb_tmp), nrm(cb_norm);
-    constexpr uint32_t T = CAP * Wt;  // tiles moved per phase (the CB capacity)
-    const uint32_t nh = nq + nk;
-    // x^2
-    reconfig_data_format(cb_in, cb_in);
-    pack_reconfig_data_format(cb_x2);
-    mul_init(cb_in, cb_in);
-    x2.reserve_back(T);
-    per_head<Wt, cb_x2>(
-        0, nh, 0, [](uint32_t h, uint32_t j, uint32_t d) { mul_tiles(cb_in, cb_in, h * Wt + j, h * Wt + j, d); });
-    x2.push_back(T);
+// inv = rsqrt(ms + eps) for every head of the unit, one tile per head in cb_inv (column 0 is what bcast_cols reads)
+template <uint32_t CAP, uint32_t Wt>
+inline void inv_per_head(uint32_t nh) {
+    CircularBuffer x2(cb_x2), red(cb_red), inv(cb_inv);
+    constexpr uint32_t T = CAP * Wt;
     // mean of squares: head h reduces into DST slot h % kDst
     reconfig_data_format(cb_x2, cb_scaler);
     pack_reconfig_data_format(cb_red);
@@ -142,6 +140,95 @@ inline void unit_heads(uint32_t nq, uint32_t nk, uint32_t kv_base) {
     }
     inv.push_back(CAP);
     red.pop_front(CAP);
+}
+
+// The same cb_inv contents from one rsqrt per unit (see the header): gather, rsqrt, scatter. cb_red and cb_iall hold
+// one tile; G_h / P_h are resident in cb_gath / cb_scat (CAP tiles each, never popped).
+template <uint32_t CAP, uint32_t Wt>
+inline void inv_one_rsqrt(uint32_t nh) {
+    CircularBuffer x2(cb_x2), red(cb_red), iall(cb_iall), inv(cb_inv);
+    constexpr uint32_t T = CAP * Wt;
+    // ms_all[:, h] = mean of head h's squares
+    reconfig_data_format(cb_x2, cb_gath);
+    pack_reconfig_data_format(cb_red);
+    matmul_init(cb_x2, cb_gath);
+    cb_wait_front(cb_gath, CAP);
+    cb_wait_front(cb_scat, CAP);
+    x2.wait_front(T);
+    red.reserve_back(1);
+    tile_regs_acquire();
+    for (uint32_t h = 0; h < nh; ++h) {
+        for (uint32_t j = 0; j < Wt; ++j) {
+            matmul_tiles(cb_x2, cb_gath, h * Wt + j, h, 0);
+        }
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_red);
+    tile_regs_release();
+    red.push_back(1);
+    x2.pop_front(T);
+    // inv_all = rsqrt(ms_all + eps), columns 0..nh-1 used (faces 0 and 2)
+    reconfig_data_format(cb_red, cb_eps);
+    pack_reconfig_data_format(cb_iall);
+    add_init(cb_red, cb_eps);
+    red.wait_front(1);
+    iall.reserve_back(1);
+    tile_regs_acquire();
+    add_tiles(cb_red, cb_eps, 0, 0, 0);
+    rsqrt_tile_init();
+    if constexpr (get_compile_time_arg_val(9)) {
+        rsqrt_col_tile(0);
+    } else {
+        rsqrt_tile(0);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_iall);
+    tile_regs_release();
+    iall.push_back(1);
+    red.pop_front(1);
+    // inv[h] = inv_all @ P_h: column h broadcast across the tile
+    reconfig_data_format(cb_iall, cb_scat);
+    pack_reconfig_data_format(cb_inv);
+    matmul_init(cb_iall, cb_scat);
+    iall.wait_front(1);
+    inv.reserve_back(CAP);
+    for (uint32_t h0 = 0; h0 < nh; h0 += kDst) {
+        const uint32_t n = (nh - h0 < kDst) ? (nh - h0) : kDst;
+        tile_regs_acquire();
+        for (uint32_t h = 0; h < n; ++h) {
+            matmul_tiles(cb_iall, cb_scat, 0, h0 + h, h);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t h = 0; h < n; ++h) {
+            pack_tile(h, cb_inv, h0 + h);
+        }
+        tile_regs_release();
+    }
+    inv.push_back(CAP);
+    iall.pop_front(1);
+}
+
+template <uint32_t CAP, uint32_t Wt, bool rotary, uint32_t cb_qout, bool one_rsqrt>
+inline void unit_heads(uint32_t nq, uint32_t nk, uint32_t kv_base) {
+    CircularBuffer x2(cb_x2), inv(cb_inv), tmp(cb_tmp), nrm(cb_norm);
+    constexpr uint32_t T = CAP * Wt;  // tiles moved per phase (the CB capacity)
+    const uint32_t nh = nq + nk;
+    // x^2
+    reconfig_data_format(cb_in, cb_in);
+    pack_reconfig_data_format(cb_x2);
+    mul_init(cb_in, cb_in);
+    x2.reserve_back(T);
+    per_head<Wt, cb_x2>(
+        0, nh, 0, [](uint32_t h, uint32_t j, uint32_t d) { mul_tiles(cb_in, cb_in, h * Wt + j, h * Wt + j, d); });
+    x2.push_back(T);
+    if constexpr (one_rsqrt) {
+        inv_one_rsqrt<CAP, Wt>(nh);
+    } else {
+        inv_per_head<CAP, Wt>(nh);
+    }
     // y = x * bcast_cols(inv)
     reconfig_data_format(cb_in, cb_inv);
     pack_reconfig_data_format(cb_tmp);
@@ -230,6 +317,11 @@ void kernel_main() {
     constexpr uint32_t fuse_rotary = get_compile_time_arg_val(3);
     constexpr uint32_t separate_q = get_compile_time_arg_val(4);  // Q -> cb_qsep (own dtype), K|V -> cb_out
     constexpr uint32_t q_split = get_compile_time_arg_val(8);     // 1, or 2: unit = half the Q heads + (K xor V)
+    constexpr uint32_t one_rsqrt = get_compile_time_arg_val(10);  // 1: gather / one rsqrt / scatter per unit
+    // 1: the reader pushes cos / sin only when the seq tile changes (QWEN_HEADS_ROT_CACHE); pop them in lockstep
+    constexpr uint32_t cache_rot = get_compile_time_arg_val(5);
+    constexpr uint32_t head_groups = get_compile_time_arg_val(6);
+    constexpr uint32_t seq_tiles = get_compile_time_arg_val(7);
     const uint32_t num_work_units = get_arg_val<uint32_t>(0);
     const uint32_t work_unit_start = get_arg_val<uint32_t>(1);
 
@@ -254,7 +346,10 @@ void kernel_main() {
         ct.wait_front(1);
     }
 
-    uint32_t sub = work_unit_start % q_split;  // Q half of the current unit, advanced as a rotating counter
+    // Q half / head group / seq tile of the current unit, advanced as rotating counters (as in the reader)
+    uint32_t sub = work_unit_start % q_split;
+    uint32_t group = (work_unit_start / q_split) % head_groups;
+    uint32_t s_tile = (work_unit_start / q_split / head_groups) % seq_tiles;
     for (uint32_t w = 0; w < num_work_units; ++w) {
         const bool has_k = (q_split == 1) || sub == 0;
         const bool has_v = (q_split == 1) || sub == 1;
@@ -270,11 +365,25 @@ void kernel_main() {
             ccos.wait_front(Wt);
             csin.wait_front(Wt);
         }
-        unit_heads<cap, Wt, fuse_rotary != 0, cb_qout>(sub_q_heads, has_k ? heads_per_group : 0, kv_base);
+        unit_heads<cap, Wt, fuse_rotary != 0, cb_qout, one_rsqrt != 0>(
+            sub_q_heads, has_k ? heads_per_group : 0, kv_base);
+        // the next unit's position
+        uint32_t next_sub = sub + 1, next_group = group, next_s = s_tile;
+        if (next_sub == q_split) {
+            next_sub = 0;
+            if (++next_group == head_groups) {
+                next_group = 0;
+                if (++next_s == seq_tiles) {
+                    next_s = 0;
+                }
+            }
+        }
         if constexpr (fuse_rotary) {
-            CircularBuffer ccos(cb_cos), csin(cb_sin);
-            ccos.pop_front(Wt);
-            csin.pop_front(Wt);
+            if (!cache_rot || next_s != s_tile || w + 1 == num_work_units) {
+                CircularBuffer ccos(cb_cos), csin(cb_sin);
+                ccos.pop_front(Wt);
+                csin.pop_front(Wt);
+            }
         }
         // V passes through
         if (has_v) {
@@ -300,8 +409,8 @@ void kernel_main() {
         }
         out.push_back(out_tiles);
         in.pop_front(unit_tiles);
-        if (++sub == q_split) {
-            sub = 0;
-        }
+        sub = next_sub;
+        group = next_group;
+        s_tile = next_s;
     }
 }

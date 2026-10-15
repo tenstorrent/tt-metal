@@ -39,7 +39,7 @@ PRELUDE = r"""
 #include "risc_common.h"
 #include "api/debug/dprint.h"
 namespace {
-uint32_t ph_acc[12];
+uint32_t ph_acc[16];
 uint32_t ph_last;
 }
 #define PH(i)                                         \
@@ -83,6 +83,11 @@ V3_MARKS = [  # the same phases in the v3 compute (each phase once per unit, ove
     ("                tile_regs_release();\n            }\n        }\n", 10),
     ("        in.pop_front(unit_tiles);\n", 11),
 ]
+# PH_X2_SPLIT=1 (v3): x2's reconfig + init get their own phase, so the first phase of a unit splits into set-up and loop
+X2_SPLIT = V3 and MODE != "unit" and os.getenv("PH_X2_SPLIT", "0") == "1"
+if X2_SPLIT:
+    V3_MARKS.append(("    mul_init(cb_in, cb_in);\n", 12))
+    PHASES.append("x2 setup")
 
 
 def instrument(src):

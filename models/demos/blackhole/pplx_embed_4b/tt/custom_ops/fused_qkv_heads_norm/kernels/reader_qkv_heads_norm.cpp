@@ -22,6 +22,8 @@ void kernel_main() {
     const uint32_t trans_addr = get_arg_val<uint32_t>(7);
     const uint32_t num_work_units = get_arg_val<uint32_t>(8);
     const uint32_t work_unit_start = get_arg_val<uint32_t>(9);
+    // 1: one-rsqrt path, G_h / P_h already sit in CBs 19 / 20 (aliased per-core shard): reserve and push only
+    const uint32_t one_rsqrt = get_arg_val<uint32_t>(10);
 
     constexpr uint32_t q_heads_per_kv = get_compile_time_arg_val(0);
     constexpr uint32_t num_kv_heads = get_compile_time_arg_val(1);
@@ -48,6 +50,7 @@ void kernel_main() {
     constexpr uint32_t cb_id = 0;  // fused QKV tiles for compute
     constexpr uint32_t cb_gq = 1, cb_gk = 2, cb_scaler = 3, cb_eps = 4;
     constexpr uint32_t cb_cos = 9, cb_sin = 10, cb_trans = 11;
+    constexpr uint32_t cb_gath = 19, cb_scat = 20;
 
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
     const auto sgq = TensorAccessor(gq_args, gq_addr);
@@ -119,6 +122,16 @@ void kernel_main() {
         cgk.push_back(head_dim_tiles);
         csc.push_back(1);
         ceps.push_back(1);
+    }
+
+    // one-rsqrt constants (resident, never popped): G_0..G_{cap-1} in CB 19, P_0..P_{cap-1} in CB 20
+    constexpr uint32_t cap = sub_q_tiles / head_dim_tiles + heads_per_group;
+    if (one_rsqrt) {
+        CircularBuffer cg(cb_gath), cs(cb_scat);
+        cg.reserve_back(cap);
+        cg.push_back(cap);
+        cs.reserve_back(cap);
+        cs.push_back(cap);
     }
 
     uint32_t last_s_tile = 0xFFFFFFFFu;

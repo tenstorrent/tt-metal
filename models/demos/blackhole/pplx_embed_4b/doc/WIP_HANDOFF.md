@@ -152,6 +152,11 @@ its analytic formulation slightly overstates, structure -0.17 ms at bs32); bs32 
    **2026-10-15, heads op:** v3 phase split at today's placement (§72): compute-bound, eps + rsqrt 38% of the math
    thread. The column-only rsqrt landed (bit-identical; bs16 op 208.7 -> 176.3 µs, cold −1.0 to −1.4 ms at bs16 / 32).
    Next cuts listed in §72: one rsqrt tile per unit, gamma folded into the inv broadcast, rotate-half as a tile swap.
+   Then (§73): cos / sin once per seq tile (landed, bit-identical: the reader's half that was cos / sin re-reads is
+   gone, DM floor 236 -> 162 at bs16) and one rsqrt per unit (bit-identical, compute −14%; landed at bs1 only). At bs8 /
+   16 / 32 the faster compute lines up Q's DRAM writes into a hotspot two or three columns east of the east DRAM column
+   and the op gets slower (bs16 175 -> ~215); NoC swaps / splits and write flushes do not help. With Q in L1 the same
+   op runs 151 µs: compute cuts at the batched sizes now wait on the pinned L1-space item.
    **Pinned (user, 2026-10-15): the L1 the fusion frees.** It removes no DRAM round trip (the QKV output already lives in
    L1; Q's DRAM write / read is hidden at both ends, §64 / §67), but without the 223-446 KB per core QKV intermediate bs32
    could drop its quarter-batch chunks (on paper: norm outputs 362 KB + K / V 290 KB beside the matmul's CBs fit), ~−1.1

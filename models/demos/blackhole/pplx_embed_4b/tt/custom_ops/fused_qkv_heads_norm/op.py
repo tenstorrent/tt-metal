@@ -35,6 +35,34 @@ TILE = 32
 # unit reaches compute sooner. Keyed by the RoPE table buffers: prefill always starts at position 0 here, so a
 # table buffer's content is fixed by its shape.
 _RESIDENT_CACHE = {}
+# One-rsqrt constants (v3, QWEN_HEADS_ONE_RSQRT=1): G_0..G_{cap-1} (column h = 1/head_dim) then P_0..P_{cap-1} (row h =
+# 1), as a per-core L1 shard (one copy per core) that CBs 19 / 20 alias: no reads (114 cores reading the same few DRAM
+# pages before their first unit cost the op more than the rsqrt saved). Keyed by the core plan; same caveat as above:
+# the first miss must not be inside a trace capture.
+_SEL_CACHE = {}
+
+
+def _sel_tiles(device, used_cores, per_core, cap, head_dim):
+    key = (id(device), cap, head_dim, tuple(per_core))
+    if key not in _SEL_CACHE:
+        import torch
+
+        order = [(int(c.x), int(c.y)) for c in ttnn.corerange_to_cores(used_cores, row_wise=False)]
+        if order != [(cx, cy) for cx, cy, _ in per_core]:
+            _SEL_CACHE[key] = None
+            return None
+        t = torch.zeros(TILE, 2 * cap * TILE)
+        for h in range(cap):
+            t[:, h * TILE + h] = 1.0 / head_dim  # G_h[:, h]
+            t[h, (cap + h) * TILE : (cap + h + 1) * TILE] = 1.0  # P_h[h, :]
+        n = len(per_core)
+        host = t.repeat(n, 1).reshape(1, 1, n * TILE, 2 * cap * TILE)
+        spec = ttnn.ShardSpec(used_cores, [TILE, 2 * cap * TILE], ttnn.ShardOrientation.COL_MAJOR)
+        mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+        _SEL_CACHE[key] = ttnn.from_torch(
+            host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc
+        )
+    return _SEL_CACHE[key]
 
 
 def _resident_layout(head_dim_tiles):
@@ -208,6 +236,11 @@ def nlp_create_qkv_heads_norm_headsplit(
                 )
             res_tensor = _RESIDENT_CACHE[key]
     res_lay = _resident_layout(Wt)
+    # v3: cos / sin read once per seq tile instead of once per unit (a core's units span a few seq tiles; per-unit
+    # re-reads were half the reader's traffic, NEGATIVE_RESULTS 73). Not with resident constants (the reader pushes
+    # those every unit). Opt out: QWEN_HEADS_ROT_CACHE=0.
+    if use_v3 and fuse_rotary and res_tensor is None and os.getenv("QWEN_HEADS_ROT_CACHE", "1") == "1":
+        cache_rot = True
     group_q_tiles = heads_per_group * plan.q_heads_per_kv * Wt
     group_kv_tiles = heads_per_group * Wt
     sub_q_tiles = group_q_tiles // q_split
@@ -217,6 +250,10 @@ def nlp_create_qkv_heads_norm_headsplit(
     out_tiles = kv_parts * group_kv_tiles if separate_q else unit_tiles
     # intermediate CBs hold one head (v1) or all of a unit's Q and K heads (v3)
     nh = (sub_q_tiles + group_kv_tiles) // Wt if use_v3 else 1
+    # v3: one rsqrt per unit (gather the heads' mean squares into one tile, scatter the result); not bit-identical
+    one_rsqrt = use_v3 and os.getenv("QWEN_HEADS_ONE_RSQRT", "0") == "1"
+    sel = _sel_tiles(device, used_cores, per_core, nh, plan.head_dim) if one_rsqrt else None
+    one_rsqrt = sel is not None
 
     def cb(index, tiles, dtype, tsize):
         return ttnn.CBDescriptor(
@@ -231,12 +268,18 @@ def nlp_create_qkv_heads_norm_headsplit(
         cb(1, Wt, ttnn.bfloat16, _BF16_TILE),  # gamma_q tiles (resident)
         cb(2, Wt, ttnn.bfloat16, _BF16_TILE),  # gamma_k tiles (resident)
         cb(5, nh * Wt, ttnn.bfloat16, _BF16_TILE),  # x^2
-        cb(6, nh, ttnn.bfloat16, _BF16_TILE),  # mean-square (row values in col 0)
+        cb(6, 1 if one_rsqrt else nh, ttnn.bfloat16, _BF16_TILE),  # mean-square (row values in col 0 / col h)
         cb(7, nh, ttnn.bfloat16, _BF16_TILE),  # rsqrt
         cb(8, nh * Wt, ttnn.bfloat16, _BF16_TILE),  # x * inv
     ]
     if separate_q:
         cbs.append(cb(17, sub_q_tiles * 2, q_dtype, _TILE_BYTES[q_dtype]))  # Q out in its own dtype
+    if one_rsqrt:
+        cbs += [
+            cb(18, 1, ttnn.bfloat16, _BF16_TILE),  # inv_all = rsqrt(ms_all + eps)
+            ttnn.cb_descriptor_from_sharded_tensor(19, sel, address_offset=0, total_size=nh * _BF16_TILE),  # G_h
+            ttnn.cb_descriptor_from_sharded_tensor(20, sel, address_offset=nh * _BF16_TILE, total_size=nh * _BF16_TILE),
+        ]
 
     def aliased(index, name, tiles):
         return ttnn.cb_descriptor_from_sharded_tensor(
@@ -299,6 +342,7 @@ def nlp_create_qkv_heads_norm_headsplit(
         # bs16 208.7 -> 176.3 us, bs32 quarter chunk 117.7 -> 101.7 (NEGATIVE_RESULTS 72; 57 was slower with Q / K / V
         # in DRAM). Opt out: QWEN_FUSED_RSQRT_COL=0.
         int(os.getenv("QWEN_FUSED_RSQRT_COL", "1") == "1"),
+        int(one_rsqrt),
     ]
     writer_ct = [
         plan.seq_tiles,
@@ -334,6 +378,7 @@ def nlp_create_qkv_heads_norm_headsplit(
                     trans_t.buffer_address(),
                     n_units,
                     cursor,
+                    int(one_rsqrt),
                 ],
             )
         )
@@ -394,5 +439,7 @@ def nlp_create_qkv_heads_norm_headsplit(
         io += [cos_t, sin_t, trans_t]
     if res_tensor is not None:
         io.append(res_tensor)
+    if one_rsqrt:
+        io.append(sel)
     ttnn.generic_op(io + [q_tensor, k_tensor, v_tensor], program_descriptor)
     return q_tensor, k_tensor, v_tensor

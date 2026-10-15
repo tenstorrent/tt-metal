@@ -545,6 +545,10 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
         # (9 phase set-ups per unit instead of 45), bit-identical to v1. Heads op 41.7 -> 28.7 us in-model; e2e
         # 16.474 -> 16.135 ms (3 alternating A/B pairs, chip 0). Opt out: QWEN_FUSED_COMPUTE_V3=0.
         os.environ.setdefault("QWEN_FUSED_COMPUTE_V3", "1")
+        # v3 heads compute with one rsqrt per unit (mean squares gathered into one tile, rsqrt once, scattered back),
+        # bit-identical: 29.2 -> 26.2 us standalone. bs1 only: at bs8 / 16 / 32 the faster compute bunches Q's DRAM
+        # writes into a hotspot and the op gets slower (NEGATIVE_RESULTS 73). Opt out: QWEN_HEADS_ONE_RSQRT=0.
+        os.environ.setdefault("QWEN_HEADS_ONE_RSQRT", "1")
         # Both norms keep their 10x8 block-shard output and QKV / FF1 / FF3 read it as a block-sharded in0 (in0_block_w
         # 8, the shard width), so the ShardedToInterleaved after each norm (72 per forward) goes away. Standalone
         # QKV 51.7 -> 49.6 us, FF1+FF3 152.7 -> 148.1 us (with the S2I). Opt out: QWEN_BS1_NORM_SHARDED_OUT=0.

@@ -1843,3 +1843,62 @@ within noise (the power cap).
   table: the rot matmul phase goes, ~−0.8k;
 - V straight from the reader to the writer, ~−0.3k;
 - x² at 2.7k against 0.85k for the same 20 tiles in the bcast phase: unexplained.
+
+## 73. Heads op: one rsqrt per unit and cos / sin once per seq tile; faster compute turns Q's DRAM writes into a hotspot (2026-10-15)
+
+Standalone, chip 1, µs a call (`bench_heads_placement_ablate.py`; bit-identity with `check_heads_env_bitid.py <ENV>`).
+
+**One rsqrt per unit (`QWEN_HEADS_ONE_RSQRT`, v3).** The mean squares are gathered instead of row-reduced:
+ms_all = Σ_h Σ_j x²[h, j] @ G_h (G_h's column h = 1/head_dim) puts head h's mean square in column h of one tile; one
+add + rsqrt; inv[h] = inv_all @ P_h (P_h's row h all ones) broadcasts column h back for the unchanged bcast_cols
+multiply. Bit-identical at bs1 / 8 / 16 (the matmul gather sums in the reduce's order). G / P live in a per-core L1
+shard aliased to CBs 19 / 20: read from DRAM by every core before its first unit they cost more than the rsqrt saved
+(bs16 175.7 -> 241.5). Compute only, bs16: 169.7 -> 146.4 (−14%); bs1 29.2 -> 26.2.
+
+**cos / sin once per seq tile (`QWEN_HEADS_ROT_CACHE`, v3, default on in the op).** The reader re-read a unit's 8
+cos / sin tiles (16 KB, half its traffic) for every unit although a core's 18 units span ~3 seq tiles; it now reads
+them when the seq tile changes and the compute pops them in lockstep (v2's `cache_rot`; not with resident
+constants). Bit-identical. bs16: read only 237.9 -> 134.6, DM only 236.0 -> 161.7 (= write only), full 175.3 ->
+173.4; bs32 chunk 101.9 -> 99.4; bs8 102.3 -> 99.5.
+
+| bs16, Q in DRAM | full | compute only | DM only | read only | write only |
+|---|---|---|---|---|---|
+| neither | 175.3 | 169.9 | 236.0 | 237.9 | 160.8 |
+| rot cache | 173.4 | 170.0 | 161.4 | 134.6 | 161.7 |
+| rot cache + one rsqrt | 208.7-219.7 | 146.1 | 161.9 | 137.7 | 161.8 |
+| same, Q in L1 | **151.4** | 144.3 | 135.8 | 131.2 | 82.7 |
+
+bs32 quarter chunk with both: 102.0-105.0 (vs 99.4), bs8 101.9-103.9 (vs 99.5).
+
+**Why the faster compute makes the op slower with Q in DRAM.** `bench_heads_dm_waits.py` (reader / writer
+accumulators): with one rsqrt the writer's issue + barrier per unit goes 1.8k -> 4.6k cycles on average, and the
+slowest core's writer total 228k -> 299k cycles (= the op). It is a spatial hotspot, writer issue + barrier in k
+cycles at bs16 (logical cores):
+
+```
+y\x  0   1   2   3   4   5   6   7   8   9  10  11
+ 0  26  27  30  26  28  48  50  41  29  53  71  34
+ 3  25  25  25  25  25  31  37  39  53  81 120  67
+ 5  25  25  25  26  27  31  33  34  37 112 136   -
+ 6  25  25  25  25  25  27  34  35  49 135 132   -
+ 8  25  25  25  25  26  36  41  27  32 128 141   -
+ 9  25  25  25  26  26  25  25  25  28  40  57   -
+```
+
+(rot cache only: 25-57 everywhere; bs32 chunk: the same shape at half the scale). The cores do not follow batch or
+seq-tile parity. `dram_workers.py`: the DRAM-bank-adjacent workers (`get_optimal_dram_bank_to_logical_worker_assignment`)
+are logical columns 0 and 7 (virtual x 1 and 10, right of the DRAM columns at virtual x 0 and 9); the hotspot is
+logical 9-10 (virtual 12-13), two or three columns east of the east DRAM column, where the traffic converging on the
+east banks passes. Slower compute spreads the writes out in time; faster compute lines them up. Tried, no help (all
+bit-identical, removed): reader / writer NoCs swapped on every core (216.2 vs 217.7), swapped on a subset (hot
+columns 9-10: 215.3, columns 8-11: 216.2, odd columns 218.4; checkerboard 234.1, its ~60 single-core kernel ranges
+cost dispatch, §23), and a per-unit `noc_async_writes_flushed` instead of the write barrier (215.0: the cores are
+not waiting on acks, they cannot inject). Q in L1 avoids it: the one-rsqrt op runs at 151.4 (−14% on today's 175).
+
+**Landed:** the rot cache (default on in the op) and one rsqrt at bs1 (`QWEN_HEADS_ONE_RSQRT=1` in
+`apply_workload_env` for batch 1). E2e, 2 alternating rounds, cold / sustained ms, off -> on: bs1 (one rsqrt, chip 3)
+14.0 / 14.0, 13.9 / 14.1 -> 13.9 / 13.9, 13.9 / 14.1; rot cache: bs8 (chip 1) 75.9 / 99.1, 75.8 / 99.1 -> 75.7 /
+99.1, 75.8 / 98.5; bs16 (chip 2) 142.0 / 193.3, 142.0 / 194.3 -> 141.9 / 193.0, 141.7 / 194.4; bs32 (chip 0) 287.9 /
+370.8, 289.1 / 377.9 -> 289.3 / 375.2, 289.0 / 375.3. Within noise, as the standalone gains (≤ 3 µs a call) predict;
+the rot cache's value is the lower DM floor for later compute cuts. One rsqrt at bs8 / 16 / 32 waits for Q in L1
+(the pinned L1-space item).
