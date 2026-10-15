@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "optimizers/adamw_utils.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
 
@@ -51,12 +52,9 @@ public:
 
 private:
     void init_max_exp_avg_sq();
-    // Rebuilds every group's beta1^t / beta2^t with pow from its current betas and m_steps.
-    void reset_beta_pows();
 
     size_t m_steps{0};
-    std::vector<float> m_beta1_pows;
-    std::vector<float> m_beta2_pows;
+    BetaPowers m_beta_pows;
     bool m_amsgrad{false};
     ttml::serialization::NamedParameters m_master_weights;  // fp32 master weights
     ttml::serialization::NamedParameters m_exp_avg;         // fp32 momentum

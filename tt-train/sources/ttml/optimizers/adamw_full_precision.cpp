@@ -6,8 +6,6 @@
 
 #include <fmt/format.h>
 
-#include <cmath>
-
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -50,7 +48,7 @@ AdamWFullPrecision::AdamWFullPrecision(
     }
 
     init_param_groups(param_group_defaults(config), std::move(param_groups));
-    reset_beta_pows();
+    m_beta_pows.reset(m_param_groups, m_steps);
 }
 
 void AdamWFullPrecision::zero_grad() {
@@ -75,8 +73,7 @@ void AdamWFullPrecision::step() {
         const float beta2 = group.options.at("beta2");
         const float epsilon = group.options.at("epsilon");
         const float weight_decay = group.options.at("weight_decay");
-        const float beta1_pow = m_beta1_pows[group_idx] *= beta1;
-        const float beta2_pow = m_beta2_pows[group_idx] *= beta2;
+        const auto [beta1_pow, beta2_pow] = m_beta_pows.advance(group_idx, beta1, beta2);
 
         for (const auto& name : group.params) {
             const auto& theta_ptr = m_parameters.at(name);
@@ -153,13 +150,13 @@ size_t AdamWFullPrecision::get_steps() const {
 
 void AdamWFullPrecision::set_steps(size_t steps) {
     m_steps = steps;
-    reset_beta_pows();
+    m_beta_pows.reset(m_param_groups, m_steps);
 }
 
 void AdamWFullPrecision::set_param_group_option(size_t group_idx, const std::string& key, float value) {
     OptimizerBase::set_param_group_option(group_idx, key, value);
-    if (key == "beta1" || key == "beta2") {
-        reset_beta_pows();
+    if (BetaPowers::depends_on(key)) {
+        m_beta_pows.reset(m_param_groups, m_steps);
     }
 }
 
@@ -177,15 +174,6 @@ void AdamWFullPrecision::set_amsgrad(bool amsgrad) {
 
 const ttml::serialization::NamedParameters& AdamWFullPrecision::get_master_weights() const {
     return m_master_weights;
-}
-
-void AdamWFullPrecision::reset_beta_pows() {
-    m_beta1_pows.clear();
-    m_beta2_pows.clear();
-    for (const auto& group : m_param_groups) {
-        m_beta1_pows.push_back(static_cast<float>(std::pow(group.options.at("beta1"), m_steps)));
-        m_beta2_pows.push_back(static_cast<float>(std::pow(group.options.at("beta2"), m_steps)));
-    }
 }
 
 void AdamWFullPrecision::init_max_exp_avg_sq() {
