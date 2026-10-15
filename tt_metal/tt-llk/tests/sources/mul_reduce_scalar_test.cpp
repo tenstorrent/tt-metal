@@ -89,10 +89,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Switch to the reduce phase: reset counters and re-arm SrcA/SrcB DVALID so
     // MATH can reuse DEST as source operands.
     _llk_unpack_mul_reduce_scalar_switch_to_reduce_();
-    if (two_face_banks)
-    {
-        _llk_unpack_mul_reduce_scalar_two_face_banks_uninit_();
-    }
 }
 
 #endif
