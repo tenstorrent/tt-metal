@@ -216,7 +216,8 @@ struct GeneralizedMoeGate {
 
             // Input indices CB should have the same tile shape as the input CB
             if constexpr (CTArgs::identity_indices) {
-                reconfig_full_operand(CTArgs::input_cb, CTArgs::bias_cb);
+                // deepseek_compute_kernel_init configured both sources from CB 0; reprogram only what differs.
+                reconfig_data_format(0, CTArgs::input_cb, 0, CTArgs::bias_cb);
             } else {
                 reconfig_full_operand(CTArgs::input_indices_cb, CTArgs::bias_cb);
             }
@@ -227,7 +228,10 @@ struct GeneralizedMoeGate {
             // ids (block b = arange + b*256). Block b copies tile b, so the pipeline tracks global ids
             // directly (no in-kernel offset add).
             CircularBuffer input_indices_cb(CTArgs::input_indices_cb);
-            input_indices_cb.wait_front(CTArgs::num_blocks);
+            // The identity route writes its ids on the SFPU and never reads this tile.
+            if constexpr (!CTArgs::identity_indices) {
+                input_indices_cb.wait_front(CTArgs::num_blocks);
+            }
 
             if constexpr (CTArgs::num_blocks == 1) {
                 CircularBuffer bias_cb(CTArgs::bias_cb);
