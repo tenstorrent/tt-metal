@@ -87,7 +87,7 @@ def compute_record(**changes):
         "fixture": "direction_table_v1",
         "header_count": 16,
         "prepared_input_base": 0,
-        "prepared_input_bytes": 4160,
+        "prepared_input_bytes": 4288,
         "wayenable": 1,
         "pinned_way": 1,
         "waymask_bits": 1,
