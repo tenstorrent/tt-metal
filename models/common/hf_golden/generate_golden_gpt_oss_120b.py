@@ -42,6 +42,14 @@ ignores them silently, so this script runs eager only.
 The cache is a DynamicCache built without the config, so sliding layers keep K/V for every position rather than
 the last window; the masks come from config.sliding_window either way, so the forward is unchanged.
 
+The text is prefilled as the model's own final answer, after a complete harmony turn (system, user, a short analysis
+message, then the final channel). Wikitext ppl over the first 2048 tokens: ~430 raw at 1-2k; 10^4-10^5 as a final
+reply with no analysis message before it; 140-340 with one; 10-27 once the user turn also names the WikiText format.
+Calling it a dump of many articles (user and analysis turns) matters past the first article: over the first 6144
+tokens, the worst 256-token window after the article boundary at ~4.4k drops from 297 ("this article") to 67; at
+isl 12288 the worst 512-token window after the next boundary (~9k) drops from 341 to 140, back to ~10 by 11.5k.
+Overall over 12k tokens: ~22, against ~640 raw.
+
     python generate_golden_gpt_oss_120b.py --isl 10240
 """
 
@@ -100,6 +108,17 @@ class GptOssGolden(LayerwiseGolden):
     # GptOss declares _supports_sdpa = False: transformers' sdpa_attention_forward drops s_aux (the sinks) without a
     # word, and flex attention refuses sinks on CPU. Eager is the reference implementation, so it is the only choice.
     attn, attn_choices = "eager", ("eager",)
+    # The harmony template up to the final answer, with the date fixed (the template stamps in today's): see above.
+    prefix = (
+        "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\n"
+        "Knowledge cutoff: 2024-06\nCurrent date: 2026-01-01\n\nReasoning: medium\n\n"
+        "# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|>"
+        "<|start|>user<|message|>Continue this WikiText-2 dump verbatim: a sequence of Wikipedia articles, one after "
+        "another, each starting with a = Title = line, in raw formatting ( @-@ , = = headings = = ).<|end|>"
+        "<|start|>assistant<|channel|>analysis<|message|>The user wants me to continue the WikiText-2 dump, article "
+        "after article, in its raw formatting. I'll just continue it.<|end|>"
+        "<|start|>assistant<|channel|>final<|message|>"
+    )
     recipe = Recipe(
         modules=("mlp.router",),
         routing="mlp.experts",
