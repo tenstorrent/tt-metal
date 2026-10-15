@@ -1,4 +1,4 @@
-# Int32 lcm on specific operand pairs: +-(2**15 - 1) and neighbours.
+# Int32 gcd and lcm on specific operand pairs (|a|, |b| <= 2**15 - 1): +-(2**15 - 1) and neighbours.
 # The operand samples only these values, so every pair of them, (a, b) and (b, a) included, lands in
 # about 1024 / 64 = 16 lanes of the A/B tiles. One stage per file: the fuser misroutes outputs of
 # later stages for this layout.
@@ -22,6 +22,6 @@ operands:
 operations:
   - math:
       - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 64]}
-      - {type: "BinarySfpu", operation: SfpuLcm, approximation_mode: false, sign_magnitude: true, iterations: 32, block_size: [32, 32], indexes: {src0: 0, src1: 1, dest: 2}}
+      - {type: "BinarySfpu", operation: [SfpuGcd, SfpuLcm], approximation_mode: false, sign_magnitude: true, iterations: 32, block_size: [32, 32], indexes: {src0: 0, src1: 1, dest: 2}}
     pack:
       - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 2, out: 0}}
