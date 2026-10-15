@@ -1,15 +1,15 @@
 intake:
   by: dnijemcevic
-  at: '2026-10-15T07:54:58'
+  at: '2026-10-15T08:13:29'
   files:
-    models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml: 473681e088483d510c217222b749494a8bd0356271e08d0b22468888e50994e6
+    models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml: 903cca66d44f87df6daae929049630bf21294b603219562c8923e11f1d32c09d
   note: ''
 plan:
   by: dnijemcevic
-  at: '2026-10-15T07:55:01'
+  at: '2026-10-15T08:13:31'
   files:
     models/demos/deepseek_v41_flash_d_p/bringup/plan.yaml: d14f97080020eb21633212f60a1c9155323686fee61ee09475626dd2e9cfbd5b
-    models/demos/deepseek_v41_flash_d_p/bringup/plan.md: d0b7feafea15b0beea7f08b73aa350d2195159fc20ecc179718a46634da1e84c
+    models/demos/deepseek_v41_flash_d_p/bringup/plan.md: b92b4487dbb48f9a4902c58fde561b7e9fac782a654d11f8883c2713166a6b23
     models/demos/deepseek_v41_flash_d_p/bringup/components.yaml: c62167a984ebe2fa673477098f4b9dc2bc17162ade4f7f9fd69e886b696238c6
   note: ''
-  ledger: 2ae9016efc6854dfb52c845968543b935ace1482cb67c26b2ffeff6d8556733c
+  ledger: 8c05397c681dd0d9e767c4d5178428558c716079d4b210a8756c488ac2909d3b
