@@ -184,7 +184,8 @@ So:
 |---|---|
 | [utils/profiler_utils.py](../../utils/profiler_utils.py) | `zone(name, level)` context manager: emits `M3_ZONE_START/END <name>` Tracy signposts (+ a host Tracy zone). No-op unless `M3_PROFILE_ZONES=1` and `level <= M3_PROFILE_LEVEL`. |
 | [profile_prefill.py](profile_prefill.py) | warmup → fill cache to N tokens (un-profiled) → run ONE chunk inside a `profiled_chunk` zone, with the profiler drained per layer BEFORE the chunk and flushed once after it. |
-| [parse_zone_perf.py](parse_zone_perf.py) | streams the ops CSV, rebuilds the zone hierarchy from the signpost rows, rolls up ns / ops / bytes / GB/s per zone per device. Also a library. |
+| [parse_zone_perf.py](parse_zone_perf.py) | streams the ops CSV, rebuilds the zone hierarchy from the signpost rows, rolls up ns / ops / bytes / GB/s and the device span per zone per device. Also a library. |
+| [budget_sweep.py](budget_sweep.py) / [budget_packed.py](budget_packed.py) | timing harnesses (no profiler by default): the host wall of one `prefill_chunk` at depth, and of one packed `prefill_segments` forward over a composition of segments. `BUDGET_PROFILE=1` zone-profiles one packed forward under `python3 -m tracy` the way profile_prefill.py does. |
 | [visualize_zones.py](visualize_zones.py) | the render step: text table + standalone HTML with the per-layer breakdown, per-chip spread, op-level detail and device-busy accounting. |
 
 Attribution: CSV rows are in host-enqueue order, so the ops between a zone's START and END signposts
@@ -200,6 +201,14 @@ Same mechanism deepseek_v3_d_p uses (`forward_layer_{i}_start` in `tt/tt_prefill
 - **`ms` is the worst device's sum.** With 32 chips the mesh waits for the slowest, so the max is the
   wall-clock-relevant number. `skew ms` (max − min) is what separates a genuinely slow CCL from one
   that is merely waiting on a peer.
+- **`span ms` is the largest firmware wall of the zone over the devices**: last firmware end − first firmware
+  start (from the FW cycle columns), so it also holds every dispatch gap between the zone's ops; under tracy that
+  puts it well above `ms` even for a serial zone. It is the hull over every entry of the zone within its layer:
+  in a packed forward the per-op zones are entered once per segment (and `seg{i}/sparse_sdpa` straddles the
+  window), so only once-entered zones (`attn`, `mlp`, the layer) read as walls and a per-op span covers the
+  segments in between. The overlap signal is a once-entered zone's span falling between a serial and a pipelined
+  capture while `ms` (the kernel sum, which never shrinks under an overlap) stays put. `-` when the CSV has no FW
+  cycle columns.
 - **`GB/s` is bytes-moved ÷ that zone's device time**, with bytes computed from each op's input+output
   shapes and dtypes (block-float formats include their block scales). Compare against the chip's DRAM
   ceiling to judge whether a zone is bandwidth-bound.
