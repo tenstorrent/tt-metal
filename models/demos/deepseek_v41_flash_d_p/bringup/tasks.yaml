@@ -829,6 +829,13 @@ tasks:
     - ffn_norm
     - router
     layer: 0
+  frozen:
+    at: '2026-10-15T16:37:03'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_11_router.py: 17507f141d6913d947a0505bd6bd57651824e519e5ba209869cbb5813ad7d9d5
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.experts
   title: swa experts (moe) on device, layer 0
   step: implement
