@@ -10,7 +10,8 @@ Subclasses ``MLAPrefillAdapter`` for the shared plumbing and replaces what V4 do
   modules and keeps its own state, so ``build_runtime`` loads the native checkpoint on host, one layer
   at a time, and ``allocate_kv_cache`` hands back an empty handle;
 * a pipeline rank other than the first may not start inside the hash-routed layers, which need host
-  token ids that only the first rank has.
+  token ids that only the first rank has;
+* the pipeline boundary carries the hc_mult residual streams, packed on the last dim, in fp32.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
     ttnn_cache_default = ""
     config_builder_overrides_checkpoint = True
     prefill_trace_layout = "chunked_group_a_v1"
+    pipeline_activation_dtype = "float32"
 
     @property
     def config_builder(self) -> Callable:
@@ -67,6 +69,9 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
     def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MlaKvCaches:
         """Empty: every V4 attention allocates and owns its own state."""
         return MlaKvCaches(kvpe=None)
+
+    def pipeline_activation_width(self, hf_config) -> int:
+        return hf_config.hc_mult * hf_config.hidden_size
 
     def layer_split_boundaries(self, num_layers: int) -> set:
         """Layer 0, or any layer past the hash-routed ones."""

@@ -46,6 +46,8 @@ def calls(monkeypatch, tmp_path):
     monkeypatch.setattr(migration, "allgather_kv_stage_layouts", record("allgather", STAGE_LAYOUTS))
     monkeypatch.setattr(migration, "serialize_device_map", record("serialize_json"))
     monkeypatch.setattr(migration, "publish_serialized_table_and_wait_ready", record("publish", "client"))
+    # A two-rank stage vote in which the peer reports what this rank does, unless a test overrides it.
+    monkeypatch.setattr(migration.ttnn, "distributed_context_allgather_int", lambda mine: [mine, mine], raising=False)
     return seen
 
 
@@ -96,10 +98,27 @@ def test_no_stage_single_rank_mock_serves_without_table(calls):
     assert not runtime.built
 
 
+def test_no_stage_on_any_rank_mock_serves_without_table(calls):
+    runtime = _Runtime([])
+
+    assert _setup(runtime, rank=1, num_ranks=2) is None
+    assert calls == ["remove_sidecars"]
+    assert not runtime.built
+
+
+@pytest.mark.parametrize("mine", [[], [KvCacheStage(0x1000, 4, 4)]], ids=["peer-has-stage", "peer-has-none"])
+def test_ranks_that_disagree_on_stages_raise_before_any_gather(monkeypatch, calls, expect_error, mine):
+    monkeypatch.setattr(migration.ttnn, "distributed_context_allgather_int", lambda v: [v, 1 - v], raising=False)
+
+    with expect_error(RuntimeError, "every rank or none"):
+        _setup(_Runtime(mine), rank=1, num_ranks=2)
+    assert not {"allgather", "deliver", "export", "publish"} & set(calls)
+
+
 @pytest.mark.parametrize(
     "enable, export, num_ranks",
-    [("1", "0", 1), ("0", "1", 1), ("0", "0", 2)],
-    ids=["publish", "file-export", "multi-rank"],
+    [("1", "0", 1), ("0", "1", 1), ("1", "0", 2)],
+    ids=["publish", "file-export", "multi-rank-publish"],
 )
 def test_no_stage_raises_when_a_table_is_required(monkeypatch, calls, expect_error, enable, export, num_ranks):
     monkeypatch.setenv("PREFILL_MIGRATION_TABLE_PATH", "/data/shared/table.pb")

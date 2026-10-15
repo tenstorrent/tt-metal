@@ -39,10 +39,12 @@ class TtV4Runtime(TtPrefillRuntime):
             raise ValueError(f"DeepSeek-V4 attention state is single-user; got num_users={self.config.num_users}")
         if self.config.dflash_enabled:
             raise ValueError("DeepSeek-V4 prefill has no DFlash drafter")
-        # The runner's D2D boundary is bf16 at hidden width; V4 hands over fp32 hc_mult * hidden streams.
-        if not (self.config.is_first_rank and self.config.is_last_rank):
+        # The D2D boundary carries only the residual streams, never the token ids a hash-routed layer reads.
+        hash_layers = self.config.model_cfg.NUM_HASH_LAYERS
+        if not self.config.is_first_rank and self.config.first_layer_idx < hash_layers:
             raise ValueError(
-                "DeepSeek-V4 runner is single-rank: the pipeline boundary cannot carry its residual streams"
+                f"a non-first DeepSeek-V4 rank must start past the {hash_layers} hash-routed layers; "
+                f"got first_layer_idx={self.config.first_layer_idx}"
             )
         super()._build_model(state_dict)
 

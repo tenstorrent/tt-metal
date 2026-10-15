@@ -135,10 +135,12 @@ def build_h2d_service(
     return service
 
 
-def activation_global_spec(rows: int, hidden_size: int, planes: int = 1) -> ttnn.TensorSpec:
+def activation_global_spec(
+    rows: int, hidden_size: int, planes: int = 1, dtype: ttnn.DataType = ttnn.bfloat16
+) -> ttnn.TensorSpec:
     return ttnn.TensorSpec(
         shape=ttnn.Shape([1, planes, rows, hidden_size]),
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,
     )

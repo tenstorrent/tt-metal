@@ -35,6 +35,16 @@ _ADAPTERS = [
     pytest.param("deepseek_v4_pro", DeepSeekV4ProConfig, id="pro"),
     pytest.param("deepseek_v4_flash", DeepSeekV4FlashConfig, id="flash"),
 ]
+_SINGLE_RANK = dict(
+    mtp_levels=0,
+    use_trace=False,
+    num_users=1,
+    dflash_enabled=False,
+    is_first_rank=True,
+    is_last_rank=True,
+    first_layer_idx=0,
+    model_cfg=DeepSeekV4FlashConfig,
+)
 
 
 def _call_sites(callee: str, expected: int = 1) -> list[ast.Call]:
@@ -103,18 +113,34 @@ def test_forward_rejects_a_chunk_that_does_not_continue_the_state(expect_error):
         (dict(mtp_levels=0, use_trace=True, num_users=1, dflash_enabled=False), "eager-only"),
         (dict(mtp_levels=0, use_trace=False, num_users=2, dflash_enabled=False), "single-user"),
         (dict(mtp_levels=0, use_trace=False, num_users=1, dflash_enabled=True), "no DFlash"),
-        (dict(mtp_levels=0, use_trace=False, num_users=1, dflash_enabled=False, is_last_rank=False), "single-rank"),
-        (dict(mtp_levels=0, use_trace=False, num_users=1, dflash_enabled=False, is_first_rank=False), "single-rank"),
+        (dict(is_first_rank=False, first_layer_idx=1), "hash-routed"),
     ],
 )
 def test_runtime_rejects_unsupported_config_before_the_shared_build(monkeypatch, expect_error, config, message):
     runtime = object.__new__(TtV4Runtime)
-    runtime.config = SimpleNamespace(**{"is_first_rank": True, "is_last_rank": True, **config})
+    runtime.config = SimpleNamespace(**{**_SINGLE_RANK, **config})
     parent_build = create_autospec(TtPrefillRuntime._build_model)
     monkeypatch.setattr(TtPrefillRuntime, "_build_model", parent_build)
     with expect_error(ValueError, message):
         runtime._build_model({})
     parent_build.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "ranks",
+    [
+        dict(is_first_rank=True, is_last_rank=False, first_layer_idx=0),
+        dict(is_first_rank=False, is_last_rank=False, first_layer_idx=DeepSeekV4FlashConfig.NUM_HASH_LAYERS),
+        dict(is_first_rank=False, is_last_rank=True, first_layer_idx=33),
+    ],
+)
+def test_runtime_builds_a_pipeline_rank_past_the_hash_layers(monkeypatch, ranks):
+    runtime = object.__new__(TtV4Runtime)
+    runtime.config = SimpleNamespace(**{**_SINGLE_RANK, **ranks})
+    parent_build = create_autospec(TtPrefillRuntime._build_model)
+    monkeypatch.setattr(TtPrefillRuntime, "_build_model", parent_build)
+    runtime._build_model({})
+    parent_build.assert_called_once()
 
 
 @pytest.mark.parametrize("actual_start, resets", [(0, True), (5120, False)])
@@ -151,6 +177,14 @@ def test_adapter_keeps_the_hash_layers_on_the_first_rank(name, model_cfg):
     assert 0 in boundaries
     assert not boundaries & set(range(1, model_cfg.NUM_HASH_LAYERS))
     assert set(range(model_cfg.NUM_HASH_LAYERS, model_cfg.NUM_LAYERS)) <= boundaries
+
+
+@pytest.mark.parametrize("name, model_cfg", _ADAPTERS)
+def test_adapter_sizes_the_pipeline_boundary_for_the_packed_fp32_streams(name, model_cfg):
+    adapter = get_adapter(name)
+    assert adapter.pipeline_activation_width(adapter.load_hf_config()) == model_cfg.HC_MULT * model_cfg.EMB_SIZE
+    assert adapter.pipeline_activation_dtype == "float32"
+    assert adapter.pipeline_activation_planes(model_cfg.NUM_HASH_LAYERS) == 1
 
 
 @pytest.mark.parametrize("name, model_cfg", _ADAPTERS)

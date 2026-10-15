@@ -507,8 +507,8 @@ def setup_kv_chunk_table(
     live worker, and ``0`` (mock migration) leaves it on disk for an offline reader. Returns the
     migration client on the rank that published, else None.
 
-    A runtime may report no stage (GPT-OSS with a bounded sliding cache); that serves without a table,
-    and only single-rank in mock mode, since every rank must join the same stage all-gathers."""
+    A runtime may report no stage (GPT-OSS with a bounded sliding cache, DeepSeek-V4's model-owned
+    attention state); that serves without a table, in mock mode only, and only when no rank has a stage."""
     file_export = migration_file_export_enabled()
     publish = migration_publish_enabled() and not file_export
 
@@ -543,13 +543,22 @@ def setup_kv_chunk_table(
         )
     kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
 
+    # Every rank joins the stage all-gathers below, so the ranks must agree on whether there is a stage.
+    has_stages = [bool(kv_stages)]
+    if num_ranks > 1:
+        has_stages = [bool(v) for v in ttnn.distributed_context_allgather_int(1 if kv_stages else 0)]
+    if any(has_stages) and not all(has_stages):
+        raise RuntimeError(
+            f"[migration] rank {rank}: only ranks {[r for r, v in enumerate(has_stages) if v]} of {num_ranks} "
+            "reported a KV cache stage; the stage all-gathers need every rank or none."
+        )
     if not kv_stages:
-        if num_ranks > 1 or publish or file_export:
+        if publish or file_export:
             raise RuntimeError(
                 f"[migration] rank {rank}: {type(runtime).__name__} reported no KV cache stage, so no chunk "
-                f"table can be built, but num_ranks={num_ranks}, PREFILL_ENABLE_MIGRATION="
-                f"{int(migration_publish_enabled())}, PREFILL_MIGRATION_EXPORT_TO_FILE={int(file_export)} "
-                "need one. Serve single-rank with both off, or give the cache a stage."
+                f"table can be built, but PREFILL_ENABLE_MIGRATION={int(migration_publish_enabled())}, "
+                f"PREFILL_MIGRATION_EXPORT_TO_FILE={int(file_export)} need one. Serve with both off, or give "
+                "the cache a stage."
             )
         logger.warning(
             f"[migration] {type(runtime).__name__} reported no KV cache stage (GPT-OSS does this for a "

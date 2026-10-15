@@ -133,6 +133,8 @@ class PrefillModelAdapter(ABC):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
     pipeline_activation_emb_tp_sharded: bool = True
+    # dtype of the cross-rank D2D payload, named as a ttnn attribute so this module needs no ttnn import.
+    pipeline_activation_dtype: str = "bfloat16"
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
     # The drafter checkpoint trained against THIS verifier, and the context-KV golden for it. A drafter has
@@ -169,6 +171,14 @@ class PrefillModelAdapter(ABC):
         function of the boundary alone, so the transfer keeps a static shape and stays trace-capturable.
         """
         return 1
+
+    def pipeline_activation_width(self, hf_config) -> int:
+        """Global width (dim 3) of the D2D payload at a rank boundary, before any DFlash widening.
+
+        The hidden size for every model whose cross-rank state is one activation. A model that packs
+        several residual streams side by side on the last dim overrides this.
+        """
+        return hf_config.hidden_size
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says

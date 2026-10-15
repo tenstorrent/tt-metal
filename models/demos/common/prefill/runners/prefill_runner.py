@@ -90,6 +90,7 @@ D2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
         ttnn.PlacementShard(3) if ADAPTER.pipeline_activation_emb_tp_sharded else ttnn.PlacementReplicate(),
     ]
 )
+D2D_DTYPE = getattr(ttnn, ADAPTER.pipeline_activation_dtype)
 
 _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
@@ -265,7 +266,7 @@ def build_d2d_pipeline_endpoints(
 
     def _common(planes):
         return dict(
-            global_spec=activation_global_spec(d2d_rows, d2d_width, planes),
+            global_spec=activation_global_spec(d2d_rows, d2d_width, planes, D2D_DTYPE),
             mapper=ttnn.create_mesh_mapper(mesh_device, D2D_MAPPER_CONFIG),
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
             sender_worker_cores=workers,
@@ -344,7 +345,7 @@ def _forward_shutdown(d2d_out, rank: int, d2d_rows: int, d2d_width: int, planes:
     dev = d2d_out.get_backing_tensor().device()
     dummy = ttnn.from_torch(
         torch.zeros(1, planes, d2d_rows, d2d_width),
-        dtype=ttnn.bfloat16,
+        dtype=D2D_DTYPE,
         layout=ttnn.TILE_LAYOUT,
         device=dev,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -689,7 +690,7 @@ def main() -> None:
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
     d2d_activation_rows = d2d_rows_for(CHUNK_SIZE, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
-    d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED)
+    d2d_activation_width = d2d_width(ADAPTER.pipeline_activation_width(hf_config), dflash=DFLASH_ENABLED)
     # Planes on dim 1 of the D2D payload, evaluated at BOTH edges of this rank's slice: what it
     # receives and what it sends on. Read off the runtime's own config rather than recomputing the
     # split, so the socket cannot be sized for a range the model was not built with.
