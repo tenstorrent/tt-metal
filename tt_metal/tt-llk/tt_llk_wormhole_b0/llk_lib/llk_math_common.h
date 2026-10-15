@@ -38,7 +38,7 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 #elif defined(LLK_EXP_NOP_MATH)
     asm volatile("nop"); // experiment: INIT NOP
 #endif
-#if defined(LLK_EXP_DEADCFG) // experiment (cpin2): a never taken block, opaque condition: INIT's control flow changes only
+#if 1 // gate test (do not merge): always on; was defined(LLK_EXP_DEADCFG), experiment (cpin2): a never taken block, opaque condition: INIT's control flow changes only
     {
         std::uint32_t llk_exp_z_;
         asm volatile("li %0, 0" : "=r"(llk_exp_z_));

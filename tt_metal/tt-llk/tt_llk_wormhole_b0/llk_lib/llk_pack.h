@@ -349,7 +349,7 @@ inline void _llk_pack_hw_configure_(
 #elif defined(LLK_EXP_NOP_PACK)
     asm volatile("nop"); // experiment: INIT NOP
 #endif
-#if defined(LLK_EXP_DEADCFG) // experiment (cpin2): a never taken block, opaque condition: INIT's control flow changes only
+#if 1 // gate test (do not merge): always on; was defined(LLK_EXP_DEADCFG), experiment (cpin2): a never taken block, opaque condition: INIT's control flow changes only
     {
         std::uint32_t llk_exp_z_;
         asm volatile("li %0, 0" : "=r"(llk_exp_z_));

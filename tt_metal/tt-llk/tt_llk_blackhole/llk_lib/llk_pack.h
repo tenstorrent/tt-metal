@@ -528,6 +528,7 @@ inline void _llk_pack_init_(
     const std::uint32_t num_tiles,
     const bool skip_bh_tilize_workaround)
 {
+asm volatile("nop"); // gate experiment arm bn: one NOP at the top of the init
 #if defined(LLK_EXP_NOP_PACK_INIT) // experiment hook (integ4): N NOPs at the top of _llk_pack_init_
     asm volatile(".rept " LLK_EXP_BH_S_(LLK_EXP_NOP_PACK_INIT) "\n\tnop\n\t.endr");
 #endif
