@@ -493,3 +493,16 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   (limit 0.0058); determinism bit-identical. 23 s total.
 - OV-4: known_issues.md not touched; DS41-20 already states the F73 fix.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_moe_add.py`
+
+## C.swa.ffn_residual implement (attempt 1)
+- `tt/residual.py:TtHcFfnResidual(TtHcResidual)`: the same local fp32 mix (ttnn.bringup.mhc_post default, setting
+  RESIDUAL_MIX) with ffn_hc's mixes, plus the pending pre for the next layer (DS41-3: ffn_hc's pre, mixes[:, 0:4])
+  sliced on the device into its own [1, 1, S/SP, 4] fp32 tensor. Returns (streams, pre); no CCL, no weight, no host
+  work. `build_residual(cfg, step="ffn_residual")` picks it.
+- hooks.py: `_ffn_residual_host_fn` (h_mid [S, 4H] via streams_to_device, mixes row_split_to_device, mlp_out
+  hidden_split_to_device; back streams_to_host + row_split_to_host(pre), concatenated to [S, 4H + 4] only at the
+  harness boundary); `_device_step_fn` "ffn_residual"; DEVICE_STEPS["swa"] += ffn_residual.
+- Gate: PASS. pcc 0.999997; vs CPU rel 2.5e-8 (limit 0.0055); vs golden 0.00255 (limit 0.0081); second inputs rel
+  <= 2.5e-8; determinism bit-identical. The pcc-0 FAIL lines before the real pass are the precompile collect pass (K-52).
+- OV-4: known_issues.md not touched; DS41-20 already states the F73 fix.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_residual.py`

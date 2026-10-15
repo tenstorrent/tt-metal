@@ -86,5 +86,19 @@ class TtHcResidual:
         return z
 
 
-def build_residual(cfg, mode: str | None = None) -> TtHcResidual:
+class TtHcFfnResidual(TtHcResidual):
+    """ffn_residual: the same mix with ffn_hc's mixes, plus the pending pre for the next layer (DS41-3): ffn_hc's
+    pre, mixes[:, 0:n], its own [1, 1, R, n] fp32 tensor (row-split, TP-replicated). Call with (h_mid streams, ffn_hc
+    mixes, mlp_out); returns (out streams [1, 1, R, n x w] fp32, pre [1, 1, R, n] fp32). The [S, 4H + 4] packing is
+    only the harness boundary's (hooks._ffn_residual_host_fn); on the device the two stay separate."""
+
+    def __call__(self, x: ttnn.Tensor, mix: ttnn.Tensor, y: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        out = super().__call__(x, mix, y)
+        pre = ttnn.slice(mix, [0, 0, 0, 0], [1, 1, mix.shape[-2], self.n], memory_config=DRAM)
+        return out, pre
+
+
+def build_residual(cfg, mode: str | None = None, step: str = "attn_residual") -> TtHcResidual:
+    if step == "ffn_residual":
+        return TtHcFfnResidual(n=cfg.hc, mode=mode)
     return TtHcResidual(n=cfg.hc, mode=mode)

@@ -70,6 +70,7 @@ DEVICE_STEPS = {
         "experts",
         "shared_expert",
         "moe_add",
+        "ffn_residual",
     },
 }
 
@@ -172,6 +173,35 @@ def _residual_host_fn(mesh, module, hidden):
         od = module(xd, md, yd)
         out = streams_to_host(mesh, od, hidden).float()
         for t in (xd, md, yd, od):
+            ttnn.deallocate(t)
+        return out
+
+    fn.module = module
+    return fn
+
+
+def _ffn_residual_host_fn(mesh, module, hidden):
+    """fn(ctx, h_mid_host [S, 4H], mix_host [S, 24], y_host [S, H]) -> out host [S, 4H + 4] fp32 (harness boundary:
+    h_mid's streams in, ffn_hc's mixes row-split and TP-replicated, mlp_out rows over axis 0 and hidden columns over
+    axis 1; back the streams and the module's own pending-pre tensor (ffn_hc's pre, DS41-3), packed here only)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import (
+        HC,
+        hidden_split_to_device,
+        row_split_to_device,
+        row_split_to_host,
+        streams_to_device,
+        streams_to_host,
+    )
+
+    def fn(ctx, h, mix, y):
+        assert h.shape[-1] == HC * hidden, h.shape
+        hd = streams_to_device(mesh, h, hidden)
+        md = row_split_to_device(mesh, mix)
+        yd = hidden_split_to_device(mesh, y)
+        od, pd = module(hd, md, yd)
+        out = torch.cat([streams_to_host(mesh, od, hidden).float(), row_split_to_host(mesh, pd).float()], dim=-1)
+        for t in (hd, md, yd, od, pd):
             ttnn.deallocate(t)
         return out
 
@@ -412,6 +442,10 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         from models.demos.deepseek_v41_flash_d_p.tt.residual import build_residual
 
         return _residual_host_fn(mesh, build_residual(cfg), cfg.dim)
+    if step == "ffn_residual":
+        from models.demos.deepseek_v41_flash_d_p.tt.residual import build_residual
+
+        return _ffn_residual_host_fn(mesh, build_residual(cfg, step=step), cfg.dim)
     if step == "attn_collapse":
         from models.demos.deepseek_v41_flash_d_p.tt.collapse import build_collapse
 
