@@ -147,6 +147,17 @@ def _build_quantized_weight_tensors_cpu_prepare(
     return tt_w0_w1, tt_w2
 
 
+def _xfail_on_short_wormhole_grid(mesh_device, layout):
+    """moe_compute cannot place 12 matmul + 16 combine + 4 tilize cores disjointly on the harvested
+    wh_n300_civ2 7x8 worker grid."""
+    worker_grid = mesh_device.compute_with_storage_grid_size()
+    if mesh_device.arch() == ttnn.device.Arch.WORMHOLE_B0 and worker_grid.x <= 7 and worker_grid.y <= 8:
+        pytest.xfail(
+            f"moe_compute cannot place the {layout} core layout on the {worker_grid.x}x{worker_grid.y} "
+            "Wormhole worker grid; https://github.com/tenstorrent/tt-metal/issues/52246"
+        )
+
+
 @torch.no_grad()
 def _run_moe_compute_single_card_test(
     mesh_device,
@@ -1079,6 +1090,7 @@ def test_moe_compute_single_card_flash_next(mesh_device, mesh_shape, compute_onl
     8-bank Blackhole ring the cores own 3 or 2 gate/up columns (odd and even counts on one ring), and on a
     12-core Wormhole ring 2 or 1.
     """
+    _xfail_on_short_wormhole_grid(mesh_device, "flash_next")
     hidden_size = 2560
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
@@ -1185,17 +1197,11 @@ _MOE_50669_SWEEP_TOKENS = [1, 2, 3, 6, 16, 32, 48, 63, 64]
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_single_card_nontile_tokens_sweep(mesh_device, mesh_shape, cfg, tokens_per_device):
     """Regression for tt-metal#50669: correctness across non-tile-aligned token counts / configs."""
-    arch = mesh_device.arch()
     ring_n = effective_matmul_ring_size(mesh_device)
     N = max(cfg["N"], 32 * ring_n)
-    worker_grid = mesh_device.compute_with_storage_grid_size()
-    # The c4 sweep needs 12 matmul + 16 combine + 4 tilize cores on WH. Even after padding N to the
-    # ring width, that layout cannot be placed on the harvested wh_n300_civ2 7x8 worker grid.
-    if arch == ttnn.device.Arch.WORMHOLE_B0 and cfg["name"] == "c4_silu" and worker_grid.x <= 7 and worker_grid.y <= 8:
-        pytest.xfail(
-            f"moe_compute cannot place the c4_silu core layout on the {worker_grid.x}x{worker_grid.y} "
-            "Wormhole worker grid; https://github.com/tenstorrent/tt-metal/issues/52246"
-        )
+    # The c4 sweep layout cannot be placed even after padding N to the ring width.
+    if cfg["name"] == "c4_silu":
+        _xfail_on_short_wormhole_grid(mesh_device, "c4_silu")
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
