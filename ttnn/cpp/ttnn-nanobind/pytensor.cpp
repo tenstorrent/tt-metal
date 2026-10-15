@@ -557,7 +557,7 @@ void pytensor_module(nb::module_& mod) {
             auto buffer = tt::tt_metal::experimental::per_core_allocation::create_l1_tensor_view(
                 mesh,
                 tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
-                distributed::DeviceLocalBufferConfig{
+                tt::tt_metal::distributed::DeviceLocalBufferConfig{
                     .page_size = spec.compute_page_size_bytes(),
                     .buffer_type = spec.memory_config().buffer_type(),
                     .sharding_args = spec.compute_buffer_sharding_args()},
