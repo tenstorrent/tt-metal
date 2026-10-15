@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.experimental.ops.quasar.gpt_oss.utils.general_utils import get_compute_grid_size
 
 
 class CCLManager:
@@ -24,9 +25,7 @@ class CCLManager:
         self.barrier_idx = 0
 
     def _init_subdevice(self):
-        # At most 8x8, and never larger than the device grid (smaller devices have fewer cores).
-        device_grid = self.mesh_device.compute_with_storage_grid_size()
-        compute_grid_size = ttnn.CoreCoord(min(8, device_grid.x), min(8, device_grid.y))
+        compute_grid_size = get_compute_grid_size(self.mesh_device)
         self.ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
