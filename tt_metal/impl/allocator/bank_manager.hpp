@@ -92,6 +92,10 @@ public:
 
     DeviceAddr bank_size() const;
 
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> get_available_ranges(
+        AllocatorDependencies::AllocatorID allocator_id,
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges);
+
     int64_t bank_offset(uint32_t bank_id) const;
 
     DeviceAddr allocate_buffer(

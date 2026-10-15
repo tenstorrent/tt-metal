@@ -635,6 +635,19 @@ void BankManager::deallocate_buffer(DeviceAddr address, BankManager::AllocatorDe
     this->invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
 }
 
+std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::get_available_ranges(
+    AllocatorDependencies::AllocatorID allocator_id,
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) {
+    auto ranges =
+        compute_available_addresses(allocator_id, alignment_bytes_, 0, additional_occupied_ranges, std::nullopt);
+    for (auto& [start, end] : ranges) {
+        start = ((start + alignment_bytes_ - 1) / alignment_bytes_) * alignment_bytes_;
+        end = (end / alignment_bytes_) * alignment_bytes_;
+    }
+    std::erase_if(ranges, [](const auto& range) { return range.second <= range.first; });
+    return ranges;
+}
+
 void BankManager::deallocate_all() {
     for (const auto allocator_id : allocator_dependencies_.allocator_ids()) {
         auto* alloc = this->get_allocator_from_id(allocator_id);

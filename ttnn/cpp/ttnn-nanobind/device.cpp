@@ -652,6 +652,20 @@ void device_module(nb::module_& m_device) {
         nb::arg("device_coord"),
         get_l1_occupied_ranges_doc.data());
 
+    m_device.def(
+        "ExperimentalGetL1FreeRanges",
+        &tt::tt_metal::experimental::per_core_allocation::get_l1_free_ranges,
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        nb::arg("core"),
+        "Return exact allocator-managed free L1 [start, end) ranges; requires HYBRID mode.");
+    m_device.def(
+        "ExperimentalGetL1LockstepOccupiedRanges",
+        &tt::tt_metal::experimental::per_core_allocation::get_l1_lockstep_occupied_ranges,
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        "Return allocator-ID-0 L1 reservations, including range-lockstep; requires HYBRID mode.");
+
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
                 If cq_id is provided then only the operations associated with that cq_id are waited for,
