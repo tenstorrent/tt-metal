@@ -30,7 +30,7 @@ void py_module_types(nb::module_& mod) {
                uint32_t first_record,
                uint32_t record_count,
                uint32_t connect_timeout_ms,
-               nb::sequence layer_ids_seq) {
+               const nb::sequence& layer_ids_seq) {
                 std::vector<uint32_t> layer_ids;
                 layer_ids.reserve(nb::len(layer_ids_seq));
                 for (nb::handle h : layer_ids_seq) {
