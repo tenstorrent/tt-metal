@@ -41,6 +41,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM      = params.CT_DIM;
     const std::uint32_t RT_DIM      = params.RT_DIM;
     const std::uint32_t KT_DIM      = params.KT_DIM;
@@ -51,6 +52,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::make_tensor_shape(params.in0_face_r_dim, params.in0_face_c_dim, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
     const ckernel::TensorShape tensor_shape_B =
         ckernel::make_tensor_shape(params.in1_face_r_dim, params.in1_face_c_dim, params.num_faces_r_dim_B, params.num_faces_c_dim_B);
+#else
+    constexpr ckernel::TensorShape tensor_shape_A = ckernel::make_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
+    constexpr ckernel::TensorShape tensor_shape_B = ckernel::make_tensor_shape(in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
+#endif
 
     {
         START_PERF_MEASURE("INIT")
@@ -101,6 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM       = params.CT_DIM;
     const std::uint32_t RT_DIM       = params.RT_DIM;
     const std::uint32_t KT_DIM       = params.KT_DIM;
@@ -110,6 +116,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::make_tensor_shape(params.in0_face_r_dim, params.in0_face_c_dim, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
     const ckernel::TensorShape tensor_shape_B =
         ckernel::make_tensor_shape(params.in1_face_r_dim, params.in1_face_c_dim, params.num_faces_r_dim_B, params.num_faces_c_dim_B);
+#else
+    constexpr ckernel::TensorShape tensor_shape_A = ckernel::make_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
+    constexpr ckernel::TensorShape tensor_shape_B = ckernel::make_tensor_shape(in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
+#endif
 
     {
         START_PERF_MEASURE("INIT")
@@ -221,6 +231,7 @@ inline void record_face_seq(const std::uint32_t slot)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM      = params.CT_DIM;
     const std::uint32_t RT_DIM      = params.RT_DIM;
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
@@ -229,6 +240,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_T         = params.buffer_T;
     const Operand& buffer_Res       = params.buffer_Res;
     const std::uint32_t num_groups  = params.KT_DIM / params.GROUP_KT_DIM;
+#else
+    constexpr std::uint32_t num_groups = KT_DIM / GROUP_KT_DIM;
+#endif
 
     // Scales and results are fp32, so SrcS runs in 32-bit mode: 4-row slices, 16 per tile.
     // The BFDs below all address L1 in SrcS-slice units (4 rows x 16 columns).
@@ -404,6 +418,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM      = params.CT_DIM;
     const std::uint32_t RT_DIM      = params.RT_DIM;
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
@@ -411,6 +426,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res       = params.buffer_Res;
     const ckernel::TensorShape output_shape =
         ckernel::make_tensor_shape(params.in0_face_r_dim, params.in1_face_c_dim, params.num_faces_r_dim_A, params.num_faces_c_dim_B);
+#else
+    constexpr std::uint32_t num_groups          = KT_DIM / GROUP_KT_DIM;
+    constexpr ckernel::TensorShape output_shape = ckernel::make_tensor_shape(in0_face_r_dim, in1_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_B);
+#endif
 
     constexpr bool active = PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION;
     {
