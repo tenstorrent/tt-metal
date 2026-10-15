@@ -74,13 +74,14 @@ ALWI void compute_kernel_hw_startup(
     static_assert(experimental::is_legal_tile_shape(SO), "compute_kernel_hw_startup: illegal out tile shape.");
     // Map the operands onto the physical source registers. For SrcOrder::Reverse (matmul), in0 -> SrcB and
     // in1 -> SrcA (resolved at compile time). Each descriptor is referenced only inside its own thread's
-    // macro (UNPACK/MATH/PACK), so it is unused on the other threads -- fine under -Wno-unused-variable.
+    // macro (UNPACK/MATH/PACK). The other threads see a set-but-unused variable (-Wunused-but-set-variable),
+    // so the descriptors are marked maybe_unused.
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
-    constexpr experimental::LLKMemDescriptor SRCA =
+    [[maybe_unused]] constexpr experimental::LLKMemDescriptor SRCA =
         reverse ? experimental::LLKOperand<FB, SB>::descriptor : experimental::LLKOperand<FA, SA>::descriptor;
-    constexpr experimental::LLKMemDescriptor SRCB =
+    [[maybe_unused]] constexpr experimental::LLKMemDescriptor SRCB =
         reverse ? experimental::LLKOperand<FA, SA>::descriptor : experimental::LLKOperand<FB, SB>::descriptor;
-    constexpr experimental::LLKMemDescriptor OUT = experimental::LLKOperand<FO, SO>::descriptor;
+    [[maybe_unused]] constexpr experimental::LLKMemDescriptor OUT = experimental::LLKOperand<FO, SO>::descriptor;
 
     UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en, SRCA, SRCB>()));
 
