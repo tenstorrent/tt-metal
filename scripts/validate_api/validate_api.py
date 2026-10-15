@@ -53,7 +53,7 @@ ALLOWED_PREFIXES = {
     "internal",
     "tt-metalium",
     "tt_stl",
-    "umd",
+    "tt-umd",
     "fmt",
     "enchantum",
     "nlohmann",
@@ -387,7 +387,7 @@ class Include(NamedTuple):
 
     def check_for_umd_header(self) -> Optional[str]:
         """Error if a UMD include is not in the frozen allowlist."""
-        if self.prefix == "umd" and self.path not in ALLOWED_UMD_HEADERS:
+        if self.prefix == "tt-umd" and self.path not in ALLOWED_UMD_HEADERS:
             return (
                 f"{self.source_file}:{self.line_num}: "
                 f"New UMD include not allowed in public API: <{self.path}> "
