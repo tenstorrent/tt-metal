@@ -345,7 +345,7 @@ pytest models/experimental/bevformer/tests/pcc/test_temporal_self_attention.py
 
 #### test_spatial_cross_attention.py
 Tests the spatial cross-attention alone, with a rebatch plan from `build_rebatch_plan`, on the
-tiny, base and non-square grids, CARLA's rig, batch size 2 with the second sample's rig turned, a
+tiny, base and non-square grids, the CARLA preset (a synthetic ring at CARLA's image size and range), batch size 2 with the second sample's rig turned, a
 frame no camera sees (an empty plan) and a frame that fills the plan exactly. PCC 0.999 on the
 output and on the attended part alone, except for the empty plan, whose attended part is the output
 projection's bias alone. `test_rebatch_plan_update` refills a plan in place for
@@ -425,8 +425,9 @@ the port:
 - The image size, its padding and normalization.
 - The port's precision and memory choices: the weight dtypes, the float32 reference points and
   class logits, the coder's candidate count, and the backbone and FPN's per-layer DRAM, sharding,
-  act_block_h and fp32-accumulation settings, which `tt_resnet_kwargs()` and `tt_fpn_kwargs()`
-  pass on.
+  act_block_h and fp32-accumulation settings. `tt_resnet_kwargs()` and `tt_fpn_kwargs()` collect
+  them; `create_resnet_parameters` and `create_fpn_parameters` prepare the weights for them and
+  record them in the parameters, which `TtResNet` and `TtFPN` read them from.
 
 The dataset presets (camera rigs, image sizes, point-cloud ranges) that the deformable-attention,
 point-sampling and encoder tests use are test fixtures, in `tests/common.py`.

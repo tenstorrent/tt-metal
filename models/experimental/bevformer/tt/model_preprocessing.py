@@ -23,7 +23,6 @@ import ttnn
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 from models.experimental.bevformer.model_config import (
     CENTERS_FIRST,
-    CONV_WEIGHT_DTYPE,
     GRID_DTYPE,
     WEIGHT_DTYPE,
     tt_fpn_kwargs,
@@ -218,15 +217,13 @@ def _fold_batch_norm(weight, bias, bn):
     return weight * scale.view(-1, 1, 1, 1), bias * scale + shift
 
 
-def _conv_parameters(weight, bias, as_linear, staging_dtype):
+def _conv_parameters(weight, bias, linear_dtype, staging_dtype):
     """A conv's torch ``weight`` and ``bias`` as TtnnConv2D takes them: in ``staging_dtype`` for
-    conv2d to lay out, or, ``as_linear``, a Linear's ``(in, out)`` weight in
-    ``CONV_WEIGHT_DTYPE`` and ``(1, out)`` bias, laid out for ``ttnn.linear``."""
-    if as_linear:
+    conv2d to lay out, or, with a ``linear_dtype``, a Linear's ``(in, out)`` weight in that dtype
+    and ``(1, out)`` bias, laid out for ``ttnn.linear``."""
+    if linear_dtype is not None:
         return {
-            "weight": ttnn.from_torch(
-                weight.flatten(1).T.contiguous(), dtype=CONV_WEIGHT_DTYPE, layout=ttnn.TILE_LAYOUT
-            ),
+            "weight": ttnn.from_torch(weight.flatten(1).T.contiguous(), dtype=linear_dtype, layout=ttnn.TILE_LAYOUT),
             "bias": ttnn.from_torch(bias.reshape((1, -1)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
         }
     return {
@@ -271,19 +268,21 @@ def _dcn_parameters(conv, bn, offset_args):
     return {
         "weight_chunks": weight_chunks,
         "bias": ttnn.from_torch(bias.reshape((1, -1)), dtype=WEIGHT_DTYPE, layout=ttnn.TILE_LAYOUT),
-        "conv_offset": _conv_parameters(offset_weight, offset_bias, False, ttnn.float32),
+        "conv_offset": _conv_parameters(offset_weight, offset_bias, None, ttnn.float32),
     }
 
 
-def _resnet_preprocessor(model, conv_args, dram_activation_stages):
+def _resnet_preprocessor(model, conv_args, tt_kwargs):
     """``preprocess_model_parameters``' hook for the ResNet, given its recorded ``conv_args`` and
-    TtResNet's ``dram_activation_stages``."""
+    TtResNet's ``tt_kwargs``."""
     if not isinstance(model, ResNet):
         return {}
+    dram_activation_stages = tt_kwargs["dram_activation_stages"]
 
-    def conv_parameters(conv, bn, as_linear):
+    def conv_parameters(conv, bn, dram_activation):
         weight, bias = fold_batch_norm2d_into_conv2d(conv, bn)
-        return _conv_parameters(weight, bias, as_linear and is_pointwise(conv), ttnn.float32)
+        linear_dtype = tt_kwargs["weights_dtype"] if dram_activation and is_pointwise(conv) else None
+        return _conv_parameters(weight, bias, linear_dtype, ttnn.float32)
 
     parameters = {"conv1": conv_parameters(model.conv1, model.bn1, False)}
     for layer_idx in range(1, 5):
@@ -310,26 +309,28 @@ def _resnet_preprocessor(model, conv_args, dram_activation_stages):
     return {"res_model": parameters}
 
 
-def create_resnet_parameters(model: ResNet, input_tensor):
+def create_resnet_parameters(model: ResNet, input_tensor, tt_kwargs=None):
     """Preprocess backbone weights and record per-conv shapes from one reference forward, for
-    ``TtResNet`` built with ``model_config.tt_resnet_kwargs()``.
+    ``TtResNet`` with ``tt_kwargs``, ``model_config.tt_resnet_kwargs()`` by default, which the
+    result carries: which 1x1 convs run as matmuls decides their weights' layout.
 
     ``conv_args`` pins every conv's input height, width and batch to ``input_tensor``'s
     shape, so the TT backbone built from these parameters only accepts that shape.
     """
+    tt_kwargs = tt_resnet_kwargs() if tt_kwargs is None else tt_kwargs
     conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
-    dram_activation_stages = tt_resnet_kwargs()["dram_activation_stages"]
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=lambda module, name: _resnet_preprocessor(module, conv_args, dram_activation_stages),
+        custom_preprocessor=lambda module, name: _resnet_preprocessor(module, conv_args, tt_kwargs),
     )
     parameters.conv_args = conv_args
+    parameters.tt_kwargs = tt_kwargs
     return parameters
 
 
-def create_fpn_parameters(model: FPN, input_tensors):
+def create_fpn_parameters(model: FPN, input_tensors, tt_kwargs=None):
     """Preprocess FPN weights and record every conv's geometry and input shape, for ``TtFPN``
-    built with ``model_config.tt_fpn_kwargs()``.
+    with ``tt_kwargs``, ``model_config.tt_fpn_kwargs()`` by default, which the result carries.
 
     ``input_tensors`` are the NCHW backbone outputs the FPN will run on. A conv reads the
     level it belongs to, except the extra output convs: the first reads the last level's
@@ -365,12 +366,13 @@ def create_fpn_parameters(model: FPN, input_tensors):
             )
         )
 
-    dram_activation_levels = tt_fpn_kwargs()["dram_activation_levels"]
+    tt_kwargs = tt_fpn_kwargs() if tt_kwargs is None else tt_kwargs
+    dram_activation_levels = tt_kwargs["dram_activation_levels"]
 
     def conv_weights(conv_module, dram_activation):
         conv = conv_module.conv
-        as_linear = dram_activation and is_pointwise(conv)
-        return {"conv": _conv_parameters(conv.weight.detach(), conv.bias.detach(), as_linear, ttnn.bfloat16)}
+        linear_dtype = tt_kwargs["weights_dtype"] if dram_activation and is_pointwise(conv) else None
+        return {"conv": _conv_parameters(conv.weight.detach(), conv.bias.detach(), linear_dtype, ttnn.bfloat16)}
 
     def preprocessor(module, name):
         if not isinstance(module, FPN):
@@ -395,6 +397,7 @@ def create_fpn_parameters(model: FPN, input_tensors):
         add_extra_convs=model.add_extra_convs,
         relu_before_extra_convs=model.relu_before_extra_convs,
     )
+    parameters["tt_kwargs"] = tt_kwargs
     return parameters
 
 
