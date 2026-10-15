@@ -10,6 +10,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#include "tilize_dram_endpoint.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_tiles_out = get_compile_time_arg_val(0);
@@ -34,7 +35,10 @@ void kernel_main() {
     constexpr uint32_t staging_num_banks = get_compile_time_arg_val(13);
     constexpr uint32_t staging_group_bytes = get_compile_time_arg_val(14);  // one bank group in a slot
     constexpr uint32_t staging_stick_bytes = get_compile_time_arg_val(15);
-    constexpr auto out_args = TensorAccessorArgs<16>();
+    // DRAM endpoint spread (DRAM-interleaved output, Blackhole): each tile write goes to the next of
+    // its bank's 3 NoC endpoints instead of the one the accessor's bank table names.
+    constexpr bool ep_spread = get_compile_time_arg_val(16) != 0;
+    constexpr auto out_args = TensorAccessorArgs<17>();
     // Same gate as the reader: the split applies to single-packet stick copies only.
     constexpr uint32_t writer_copy_sticks = copy_seg_bytes <= NOC_MAX_BURST_SIZE ? writer_copy_sticks_arg : 0;
 
@@ -53,6 +57,17 @@ void kernel_main() {
     }
 
     const auto out_acc = TensorAccessor(out_args, dst_addr, out_page_bytes);
+    [[maybe_unused]] DramEndpointSpread ep;
+    if constexpr (ep_spread) {
+        ep.load(6, get_arg_val<uint32_t>(5));  // arg 5: core index (rotation seed), 6..: endpoint table
+    }
+    auto tile_addr = [&](uint32_t page) -> uint64_t {
+        if constexpr (ep_spread) {
+            return ep.addr(out_acc.get_noc_addr(page), page);
+        } else {
+            return out_acc.get_noc_addr(page);
+        }
+    };
 
     if constexpr (writer_copy_sticks > 0) {
         static_assert(
@@ -98,7 +113,7 @@ void kernel_main() {
             const uint32_t first_tile = (row_start_tile + r) * tensor_cols_tiles + col_start_tile;
             uint32_t l1_read_addr = get_read_ptr(cb_tiles_out);
             for (uint32_t c = 0; c < block_width_tiles; ++c) {
-                noc_async_write(l1_read_addr, out_acc.get_noc_addr(first_tile + c), out_page_bytes);
+                noc_async_write(l1_read_addr, tile_addr(first_tile + c), out_page_bytes);
                 l1_read_addr += out_page_bytes;
             }
             noc_async_writes_flushed();
@@ -130,7 +145,7 @@ void kernel_main() {
 #ifdef TILIZE_ABLATE_WRITE
                         if (l1_read_addr == 0xFFFFFFFF)  // perf ablation: payload dropped, trip count kept
 #endif
-                            noc_async_write(l1_read_addr, out_acc.get_noc_addr(first_tile + c), out_page_bytes);
+                            noc_async_write(l1_read_addr, tile_addr(first_tile + c), out_page_bytes);
                         l1_read_addr += out_page_bytes;
                     }
                 }

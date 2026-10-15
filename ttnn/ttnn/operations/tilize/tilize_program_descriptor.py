@@ -46,6 +46,10 @@ COALESCE_BANK_READS = True
 # it pays under grid-wide DRAM contention (BH: 110 cores 2x faster) and loses ~0.15us on a
 # handful of cores (BH: 4-8 cores). Enable only when cores_used >= this * num_banks.
 COALESCE_MIN_CORES_PER_BANK = 2
+# ...and only for narrow sticks: coalescing pays by replacing many small per-stick reads; a wide stick
+# is already an efficient read, and the local reorder copies then cost more than they save
+# (hand-tune, BH: 512x512 bf16 / 1 KiB sticks on 16 cores 8.6 -> 3.7 us without coalescing).
+COALESCE_MAX_STICK_BYTES = 256
 # Rotate each core's bank walk so the grid's requests spread over all banks at once.
 BANK_STAGGER = True
 # Segment (non-coalesced) reader: rotate each core's start stick within a tile-row (k % tile_h).
@@ -110,6 +114,10 @@ BFP4_ROUND_DTYPES = (ttnn.bfloat16, ttnn.float32, ttnn.fp8_e4m3)  # float inputs
 # Tile-rows rounded per pass (cb_bfp4_rounded window = this x block width). The round pass and the
 # tilize share the TRISCs, so they alternate per window rather than pipeline.
 BFP4_ROUND_TILE_ROWS = 1
+# Split cost of one tile under the bfp4 round pass, in the cost model's tile units (~100 ns of NoC
+# per tile). The SFPU round is ~700 ns/tile (BH), so these shapes are compute-bound: the split
+# weighs tiles this much more and ignores SPLIT_MIN_SEG_BYTES (narrow segments are cheap next to it).
+BFP4_ROUND_TILE_COST = 8
 
 # Input formats unpacked straight into a 32-bit DEST (UnpackToDestFp32 on the stick CBs): the
 # 32-bit formats tilize bit-exact this way (with the helper's Fp32Mode::Lossless — never fast
@@ -120,6 +128,13 @@ UNPACK_TO_DEST_DTYPES = (ttnn.float32, ttnn.int32, ttnn.uint32)
 # back as zeros through a 16-bit DEST — measured).
 DEST32_DTYPES = (ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.fp8_e4m3, ttnn.uint8)
 NUM_CIRCULAR_BUFFERS = 64
+# DRAM endpoint spread (writer; ported from run 1060's Perf 2): a Blackhole DRAM channel has 3 NoC
+# endpoints serving the same memory at the same address, but the bank table (TensorAccessor) names
+# one, so every core's writes to a bank funnel through one endpoint. The writer rotates its tile
+# writes over all 3 (kernels/tilize_dram_endpoint.hpp). Gate = expressibility: DRAM-interleaved
+# output (bank = page % banks) on Blackhole with one bank per channel.
+WRITER_EP_SPREAD = True
+WRITER_EP_PORTS = (0, 1, 2)  # rotation order over a bank's endpoints (3 slots; a port may repeat)
 
 
 def _compute_config(in_dtype, out_dtype):
@@ -205,7 +220,18 @@ def _split_weighted(total, weights):
     return ranges
 
 
-def _choose_split(num_cores, rows, col_units, unit_bytes, num_banks):
+def _dram_endpoint_table(device, num_banks, ports=(0, 1, 2)):
+    """Per DRAM bank, its 3 NoC endpoints packed (y << 6) | x (Blackhole NOC_ADDR_NODE_ID_BITS);
+    bank == channel on Blackhole. Consumed by kernels/tilize_dram_endpoint.hpp."""
+    table = []
+    for ch in range(num_banks):
+        for port in ports:
+            v = device.dram_core_from_logical_core(ttnn.CoreCoord(ch, port))
+            table.append((v.y << 6) | v.x)
+    return table
+
+
+def _choose_split(num_cores, rows, col_units, unit_bytes, num_banks, tile_cost=1):
     """(cores_r, cores_c): the regime selector of op_design.md.
 
     interleaved_row_split (cores_c = 1, cores_r = min(R, grid)) unless the row axis cannot fill the
@@ -213,11 +239,12 @@ def _choose_split(num_cores, rows, col_units, unit_bytes, num_banks):
     busiest core's cost (tiles + SPLIT_ROW_COST_TILES per tile-row), ties -> more row cores (longer
     stick segments), then fewer cores. Column cuts narrower than SPLIT_MIN_SEG_BYTES per stick are
     allowed only for splits of at most SPLIT_SMALL_CORES_PER_BANK * num_banks cores.
+    `tile_cost` > 1: compute-bound tiles (bfp4 round pass); every column cut is allowed.
     """
 
     def cost(cores_r, cores_c):
         rows_pc = math.ceil(rows / cores_r)
-        return rows_pc * math.ceil(col_units / cores_c) + SPLIT_ROW_COST_TILES * rows_pc
+        return rows_pc * math.ceil(col_units / cores_c) * tile_cost + SPLIT_ROW_COST_TILES * rows_pc
 
     best = (cost(min(rows, num_cores), 1), -min(rows, num_cores), 1)
     best_rc = (min(rows, num_cores), 1)
@@ -227,7 +254,7 @@ def _choose_split(num_cores, rows, col_units, unit_bytes, num_banks):
     small_split = SPLIT_SMALL_CORES_PER_BANK * num_banks
     for cores_r in range(1, rows + 1):
         for cores_c in range(1, min(col_units, num_cores // cores_r) + 1):
-            if cores_c > max_c and cores_r * cores_c > small_split:
+            if tile_cost == 1 and cores_c > max_c and cores_r * cores_c > small_split:
                 continue
             key = (cost(cores_r, cores_c), -cores_r, cores_c)
             if key < best:
@@ -235,12 +262,12 @@ def _choose_split(num_cores, rows, col_units, unit_bytes, num_banks):
     return best_rc
 
 
-def _rect_assignment(device, tensor_rows_tiles, tensor_cols_tiles, col_unit_tiles, unit_bytes, num_banks):
+def _rect_assignment(device, tensor_rows_tiles, tensor_cols_tiles, col_unit_tiles, unit_bytes, num_banks, tile_cost=1):
     """Per-core rectangles: [(core, row_start, rows, col_start, cols)], row-wise core order."""
     grid = device.compute_with_storage_grid_size()
     num_cores = grid.x * grid.y
     col_units = math.ceil(tensor_cols_tiles / col_unit_tiles)
-    cores_r, cores_c = _choose_split(num_cores, tensor_rows_tiles, col_units, unit_bytes, num_banks)
+    cores_r, cores_c = _choose_split(num_cores, tensor_rows_tiles, col_units, unit_bytes, num_banks, tile_cost)
     # The first cores_r * cores_c cores of the grid, row-wise (one unit each).
     _, all_cores, _, _, _, _ = ttnn.split_work_to_cores(grid, cores_r * cores_c, row_wise=True)
     cores = ttnn.corerange_to_cores(all_cores, None, True)
@@ -521,6 +548,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             align_unit_tiles,
             align_unit_tiles * seg_unit_bytes,
             _source_count(device, input_tensor),
+            BFP4_ROUND_TILE_COST if bfp4_round else 1,
         )
     else:
         assignment = (in_shards if in_resident else out_shards)[0]
@@ -548,6 +576,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
         and tile_h > 1
         and in_image_height_sticks % tile_h == 0
         and len(assignment) >= COALESCE_MIN_CORES_PER_BANK * num_banks
+        and in_row_bytes <= COALESCE_MAX_STICK_BYTES
     )
     max_core_rows = max(entry[2] for entry in assignment)
     staging_tile_rows = max(1, min(max_core_rows, STAGING_SLOT_BUDGET_BYTES // (tile_h * stick_page_bytes)))
@@ -565,6 +594,20 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
 
     in_addr = input_tensor.buffer_address()
     out_addr = output_tensor.buffer_address()
+    out_mem = output_tensor.memory_config()
+    wr_ep_spread = (
+        WRITER_EP_SPREAD
+        and not out_resident
+        and ttnn.device.is_blackhole(device)
+        and device.dram_grid_size().y == 1
+        and out_mem.buffer_type == ttnn.BufferType.DRAM
+        and not out_mem.is_sharded()
+    )
+    ep_table = (
+        _dram_endpoint_table(device, ttnn.get_memory_view(device, ttnn.BufferType.DRAM).num_banks, WRITER_EP_PORTS)
+        if wr_ep_spread
+        else []
+    )
     out_tile = ttnn.Tile([tile_h, TILE_WIDTH])
     kernels, cbs = [], []
     for core_cols_tiles, entries in groups.items():
@@ -760,6 +803,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             num_banks,
             staging_group_bytes,
             stick_page_bytes,
+            int(wr_ep_spread),
         ]
         writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
         compute_ct = [
@@ -813,7 +857,9 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
                 reader_rt[core.x][core.y] = (
                     [core_rows_tiles] if in_resident and not retile else [in_addr, *rect, stagger, fill_word]
                 )
-                writer_rt[core.x][core.y] = [core_rows_tiles] if out_resident else [out_addr, *rect]
+                writer_rt[core.x][core.y] = (
+                    [core_rows_tiles] if out_resident else [out_addr, *rect, *([k, *ep_table] if wr_ep_spread else [])]
+                )
                 compute_rt[core.x][core.y] = [core_rows_tiles, block_height_tiles]
 
             kernels.append(
