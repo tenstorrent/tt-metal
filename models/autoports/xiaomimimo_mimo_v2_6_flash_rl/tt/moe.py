@@ -54,10 +54,24 @@ class TtMiMoMoE:
         self.w_up = as_weight(w_up, plan, plan.shard(-1), expert_dtype, cache_name(cache_dir, prefix, "w_up"))
         self.w_down = as_weight(w_down, plan, plan.shard(-2), expert_dtype, cache_name(cache_dir, prefix, "w_down"))
 
+        self._zero_cache = {}
         self.router_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True)
         self.expert_config = compute_config(ttnn.MathFidelity.HiFi2, fp32_acc=True)
         self.gate_up_program = mcast_1d_config((4, 2), TILE, self.inter_local, self.hidden, in0_block_w=4)
         self.down_program = mcast_1d_config((8, 4), TILE, self.hidden, self.inter_local, in0_block_w=4)
+
+    def _zeros(self, num_tokens):
+        """Cached [1, 1, T, E] zeros. ``ttnn.zeros`` writes from the host, which a trace capture cannot do,
+        so the tensor is made on first use (warm-up) and reused."""
+        if num_tokens not in self._zero_cache:
+            self._zero_cache[num_tokens] = ttnn.zeros(
+                ttnn.Shape((1, 1, num_tokens, self.num_experts)),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.plan.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self._zero_cache[num_tokens]
 
     def route(self, x, token_mask=None):
         """x [1, 1, T, hidden] -> dense routing weights [1, 1, T, E] (bf16; zero off the top-8)."""
@@ -86,15 +100,9 @@ class TtMiMoMoE:
             weights = ttnn.mul(weights, self.cfg.routed_scaling_factor)
         weights_bf16 = ttnn.typecast(weights, ttnn.bfloat16)
         weights.deallocate(True)
-        zeros = ttnn.zeros(
-            ttnn.Shape((1, 1, num_tokens, self.num_experts)),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.plan.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        zeros = self._zeros(num_tokens)  # scatter is out of place, so one cached zero tensor per T is safe
         dense = ttnn.scatter(zeros, dim=-1, index=indices, src=weights_bf16)
-        for t in (weights_bf16, indices, zeros):
+        for t in (weights_bf16, indices):
             t.deallocate(True)
         if token_mask is not None:
             masked = ttnn.mul(dense, token_mask)

@@ -102,19 +102,30 @@ class MiMoGalaxyGenerator:
             logits[user] = self.models[r].prefill_read(handle)[0]
         return [logits[u] for u in range(len(prompts))] if as_list else logits
 
-    def decode(self, tokens, positions):
-        """tokens, positions: dict user -> int. Users not listed stay idle. Returns dict user -> logits."""
-        pending = []
+    def capture_decode_traces(self):
+        """Capture one decode trace per replica (each on its own row). Decode then replays them."""
         for r, model in enumerate(self.models):
+            t0 = time.time()
+            model.capture_decode_trace()
+            logger.info(f"replica {r}: decode trace captured in {time.time() - t0:.1f}s")
+
+    def decode(self, tokens, positions, replicas=None):
+        """tokens, positions: dict user -> int. Users not listed stay idle. Returns dict user -> logits.
+
+        ``replicas`` restricts the step to those rows (default: all four)."""
+        replicas = range(self.dp) if replicas is None else replicas
+        pending = []
+        for r in replicas:
+            model = self.models[r]
             tok = torch.zeros(self.max_batch, dtype=torch.int32)
             pos = torch.full((self.max_batch,), -1, dtype=torch.int32)
             for slot in range(self.users_per_replica):
                 user = r * self.users_per_replica + slot
                 if user in tokens:
                     tok[slot], pos[slot] = tokens[user], positions[user]
-            pending.append(model.decode_enqueue(tok, pos))
+            pending.append((r, model.decode_enqueue(tok, pos)))
         out = {}
-        for r, handle in enumerate(pending):
+        for r, handle in pending:
             logits = self.models[r].decode_read(handle)
             for slot in range(self.users_per_replica):
                 user = r * self.users_per_replica + slot

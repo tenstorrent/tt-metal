@@ -124,6 +124,7 @@ class TtMiMoModel:
         self.lm_config = compute_config(ttnn.MathFidelity.HiFi2)
         self.kv_caches = None
         self.page_table_tt = None
+        self.decode_trace = None
 
     # ------------------------------------------------------------------ setup
     def allocate_kv_cache(self, num_blocks=None):
@@ -207,43 +208,80 @@ class TtMiMoModel:
         return self.prefill_read(self.prefill_enqueue(tokens, slot, return_hidden))
 
     # ------------------------------------------------------------------ decode
-    def decode_enqueue(self, tokens, positions):
-        """tokens, positions: torch [max_batch]; position -1 marks an empty slot."""
+    def prepare_decode_inputs_host(self, tokens, positions):
+        """Host tensors for one step: tokens [1, B] u32, cur_pos [B] i32, RoPE idx [1, B] u32, MoE token mask."""
         assert tokens.numel() == self.max_batch and positions.numel() == self.max_batch
-        x = self._embed(tokens)
-        cur_pos = ttnn.from_torch(
-            positions.to(torch.int32),
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=self.plan.replicate(),
+        rep = self.plan.replicate()
+
+        def host(t, dtype, layout):
+            return ttnn.from_torch(t, dtype=dtype, layout=layout, mesh_mapper=rep)
+
+        return (
+            host(tokens.reshape(1, -1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            host(positions.to(torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+            self.rope_setups["full"].get_rot_idxs(positions.clamp(min=0), on_host=True),
+            host((positions >= 0).to(torch.bfloat16).reshape(1, 1, -1, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT),
         )
-        rope_pos = positions.clamp(min=0)
+
+    def decode_forward_device(self, tokens_tt, cur_pos_tt, rot_idx_tt, mask_tt):
+        """One decode step from device-resident inputs only (trace-capturable). Returns [1, 1, B, vocab / tp]."""
+        x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        x = ttnn.reshape(x, (1, 1, self.max_batch, self.cfg.hidden_size))
+        # Both thetas share the RoPE index; each layer type looks up its own table.
         rot_mats = {
-            True: self.rope_setups["swa"].get_rot_mats(rope_pos),
-            False: self.rope_setups["full"].get_rot_mats(rope_pos),
+            True: self.rope_setups["swa"].get_rot_mats(rot_idx_tt),
+            False: self.rope_setups["full"].get_rot_mats(rot_idx_tt),
         }
-        mask = (positions >= 0).to(torch.bfloat16).reshape(1, 1, -1, 1)
-        token_mask = ttnn.from_torch(
-            mask,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=self.plan.replicate(),
-        )
         for i, layer in enumerate(self.layers):
-            y = layer.forward_decode(x, rot_mats, cur_pos, self.page_table_tt, self.kv_caches[i], token_mask)
+            y = layer.forward_decode(x, rot_mats, cur_pos_tt, self.page_table_tt, self.kv_caches[i], mask_tt)
             x.deallocate(True)
             x = y
         logits = self._logits(x)
         x.deallocate(True)
-        for t in (cur_pos, token_mask, *rot_mats[True], *rot_mats[False]):
+        for t in (*rot_mats[True], *rot_mats[False]):
+            t.deallocate(True)
+        return logits
+
+    def capture_decode_trace(self):
+        """Compile, then capture one decode step. Later decode calls refresh the inputs and replay it.
+
+        Warm-up and capture run with every slot empty (position -1), so they write no KV-cache entries
+        and are safe to run after users have been prefilled."""
+        assert self.decode_trace is None
+        empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
+        host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty)
+        inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
+        self.decode_forward_device(*inputs).deallocate(True)
+        ttnn.synchronize_device(self.mesh_device)
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        output = self.decode_forward_device(*inputs)
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+        self.decode_trace = {"id": trace_id, "inputs": inputs, "output": output}
+
+    def release_decode_trace(self):
+        if self.decode_trace is not None:
+            ttnn.release_trace(self.mesh_device, self.decode_trace["id"])
+            self.decode_trace = None
+
+    def decode_enqueue(self, tokens, positions):
+        """tokens, positions: torch [max_batch]; position -1 marks an empty slot. Non-blocking."""
+        host = self.prepare_decode_inputs_host(tokens, positions)
+        if self.decode_trace is not None:
+            for h, d in zip(host, self.decode_trace["inputs"]):
+                ttnn.copy_host_to_device_tensor(h, d)
+            ttnn.execute_trace(self.mesh_device, self.decode_trace["id"], cq_id=0, blocking=False)
+            return self.decode_trace["output"]
+        inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
+        logits = self.decode_forward_device(*inputs)
+        for t in inputs:
             t.deallocate(True)
         return logits
 
     def decode_read(self, logits):
         out = self.plan.to_torch_tp_concat(logits, dim=-1).float()
-        logits.deallocate(True)
+        if self.decode_trace is None or logits is not self.decode_trace["output"]:
+            logits.deallocate(True)
         return out.reshape(self.max_batch, -1)
 
     def decode(self, tokens, positions):
