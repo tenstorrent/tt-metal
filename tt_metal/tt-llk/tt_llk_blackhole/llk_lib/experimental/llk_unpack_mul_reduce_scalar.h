@@ -49,9 +49,10 @@ inline bool _llk_unpack_mul_reduce_scalar_two_face_banks_(const ckernel::TensorS
     return tensor_shape.face_r_dim == ckernel::MAX_FACE_R_DIM && tensor_shape.total_num_faces() == 4;
 }
 
-// Call after _llk_unpack_AB_init_.
+// _llk_unpack_AB_init_ for this row: no transpose, two faces per UNPACR.
 inline void _llk_unpack_mul_reduce_scalar_two_face_banks_init_()
 {
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
     TTI_SETADCXX(p_setadc::UNP_AB, 2 * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
     // Ch0 Z steps two faces per UNPACR.
     static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);

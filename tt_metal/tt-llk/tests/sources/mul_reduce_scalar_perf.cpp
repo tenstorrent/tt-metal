@@ -61,10 +61,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             tensor_shape.face_r_dim,
             num_faces,
             num_faces);
-        _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
         if constexpr (TWO_FACE_BANKS)
         {
             _llk_unpack_mul_reduce_scalar_two_face_banks_init_();
+        }
+        else
+        {
+            _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
         }
         PROFILER_SYNC();
     }

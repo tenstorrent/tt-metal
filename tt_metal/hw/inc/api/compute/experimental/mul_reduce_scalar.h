@@ -40,19 +40,18 @@ namespace ckernel {
 // clang-format on
 template <uint32_t row_tiles = 0>
 ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
-    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
 #if defined(ARCH_BLACKHOLE)
-    UNPACK(if constexpr (row_tiles >= 2) {
-        if (llk_unpack_mul_reduce_scalar_two_face_banks(icb0)) {
+    UNPACK(
+        if (row_tiles >= 2 && llk_unpack_mul_reduce_scalar_two_face_banks(icb0)) {
             llk_unpack_mul_reduce_scalar_two_face_banks_init();
-        }
-    });
+        } else { llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1); });
     // The interleaved row sets its own math state in mul_reduce_scalar_tile and runs no multiply MOP.
     MATH(if (!(row_tiles >= 2 && MATH_FIDELITY == MathFidelity::LoFi &&
                llk_math_mul_reduce_scalar_two_face_banks(icb0, row_tiles))) {
         llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/);
     });
 #else
+    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
     MATH((llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/)));
 #endif
 }

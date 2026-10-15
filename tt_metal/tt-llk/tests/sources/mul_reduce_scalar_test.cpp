@@ -68,14 +68,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tensor_shape.total_num_faces(),
         tensor_shape.total_num_faces());
 
-    // mul_reduce_scalar_init: unpack A and B, no broadcast/transpose.
-    _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
-
-    // A compiled row of two or more 32x32 tiles takes two faces per SrcA/SrcB bank, as the API runs it.
+    // mul_reduce_scalar_init: unpack A and B, no broadcast/transpose; a compiled row of two or more 32x32 tiles takes two
+    // faces per SrcA/SrcB bank, as the API runs it.
     const bool two_face_banks = ROW_TILES >= 2 && _llk_unpack_mul_reduce_scalar_two_face_banks_(tensor_shape);
     if (two_face_banks)
     {
         _llk_unpack_mul_reduce_scalar_two_face_banks_init_();
+    }
+    else
+    {
+        _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
     }
 
     // Multiply phase: stream A[i] and B[i] into SrcA/SrcB for each tile.
