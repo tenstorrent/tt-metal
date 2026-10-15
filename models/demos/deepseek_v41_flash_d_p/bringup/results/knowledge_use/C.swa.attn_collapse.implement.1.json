@@ -1,0 +1,45 @@
+{
+ "used": [
+  {
+   "id": "DS41-3",
+   "how": "collapse reads the PENDING pre (columns [4H, 4H+4) of the packed boundary, sent row-split as a second device input), not attn_hc's",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "checked that fp32 multiply / addcmul take the SFPU path (ternary_program_factory.cpp:1311 picks the FPU only for non-fp32), so the chain is exact fp32 and needs no fork",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-64",
+   "how": "the hook's host fn returns .float() so the next CPU step gets fp32",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "which eltwise ops take the SFPU (exact) vs FPU (TF32) path at fp32: ttnn.addcmul is SFPU when any operand is fp32 (ternary_program_factory.cpp:1307-1316)"
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.attn_collapse",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T12:46:56",
+  "head": "ca2ce62a9d7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.attn_collapse.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/collapse.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/layout.py"
+  ]
+ }
+}

@@ -142,3 +142,15 @@ Result: pcc 0.999999; vs CPU rel 6.5e-4 (limit 3.8e-3), worst column (21, a comb
 row ratio -3.5e-4 (the Sinkhorn kernel's SEL / RB / CB matmuls read fp32 at about TF32, K-30); all second inputs pass;
 determinism A,B,A bit-identical. Gate ~30 s.
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_hc.py`
+
+## C.swa.attn_collapse implement (attempt 1)
+- `tt/collapse.py:TtHcCollapse(streams [1,1,S/SP,4 x H/TP], pre [1,1,S/SP,>=4]) -> [1,1,S/SP,H/TP]` fp32: 4 x ttnn.slice of
+  the streams and of the pre columns, ttnn.multiply + 3 x ttnn.addcmul ([S/SP,1] column broadcast). Local, no CCL, no
+  weight, no host work. Pre is the PENDING pre (DS41-3), passed as a separate row-split, TP-replicated tensor (plan.md
+  "Residual"); ffn_collapse can reuse the module with attn_hc's columns 0..3.
+- fp32 addcmul / multiply run on the SFPU (ternary_program_factory.cpp:1311: FPU only for non-fp32), so K-30's TF32
+  read does not apply: device output equals the CPU step (rel 0 on golden, layer24, mixed, small, big).
+- hooks.py: `_collapse_host_fn` (harness boundary: streams_to_device + row_split_to_device of x[:, 4H:], back via
+  `tt/layout.py:hidden_split_to_host`); DEVICE_STEPS["swa"] += attn_collapse (hybrid device_model).
+- Gate: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_collapse.py`
+  -> pcc_attn_collapse_L00 = 1.000000, PASS.
