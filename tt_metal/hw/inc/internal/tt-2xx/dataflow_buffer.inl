@@ -27,6 +27,14 @@
 #define DFB_IS_COMPUTE_MATH 0
 #endif
 
+// Only DM and the UNPACK / PACK TRISCs own DFB state (g_dfb_interface). MATH and the isolated-SFPU TRISC do not,
+// so they never mark or drain a DFB.
+#if !defined(COMPILE_FOR_TRISC) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#define DFB_HAS_LOCAL_INTERFACE 1
+#else
+#define DFB_HAS_LOCAL_INTERFACE 0
+#endif
+
 #if DFB_IS_COMPUTE_MATH
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {
     dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
@@ -271,9 +279,8 @@ inline void DataflowBuffer::wait_relay_consumer_caught_up() const {
 }
 #endif
 
-inline void DataflowBuffer::finish_impl() {
-#if !DFB_IS_COMPUTE_MATH
-#ifndef COMPILE_FOR_TRISC
+inline void DataflowBuffer::post_final_credits_impl() {
+#if !DFB_IS_COMPUTE_MATH && !defined(COMPILE_FOR_TRISC)
     if (ptiles_read_ > 0) {
         handle_final_credits<true>(ptiles_read_, ptxn_id_index_);
     }
@@ -281,15 +288,19 @@ inline void DataflowBuffer::finish_impl() {
         handle_final_credits<false>(ctiles_written_, ctxn_id_index_);
     }
 #endif
+}
+
+inline void DataflowBuffer::wait_all_acked_impl([[maybe_unused]] DFBInterface& dfb_interface) {
+#if DFB_HAS_LOCAL_INTERFACE
     bool all_acked = false;
     WAYPOINT("AAW");
     while (!all_acked) {
         all_acked = true;
-        for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
-            dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
+        for (uint8_t i = 0; i < dfb_interface.num_tcs_to_rr; i++) {
+            dfb::PackedTileCounter packed_tc = dfb_interface.tc_slots[i].packed_tile_counter;
             uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
-            // TRISC drain: finish() must not return until this TC is empty (posted == 0).
+            // TRISC drain: must not return until this TC is empty (posted == 0).
             // On TRISC, tile_counters[].f.posted/.acked are live occupancy / free-space
             // (tiles-available / space-available), NOT the cumulative read_posted/read_acked
             // totals used by the DM overlay path below. The consumer also skips TCs this TRISC
@@ -297,7 +308,7 @@ inline void DataflowBuffer::finish_impl() {
             // LocalDFBInterface, so the gate sits under an inner UNPACK guard (the PACK struct
             // has no such member).
 #ifdef UCK_CHLKC_UNPACK
-            if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
+            if ((dfb_interface.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
                 continue;
             }
 #endif
@@ -323,11 +334,34 @@ inline DataflowBuffer::~DataflowBuffer() {
     if (drain_owner_ != this) {
         return;
     }
-    finish_impl();
+#if DFB_HAS_LOCAL_INTERFACE
+    post_final_credits_impl();
+    const uint32_t dfb_bit = 1u << logical_dfb_id_;
+    dfb_drain::pending_mask |= dfb_bit;
 #ifndef COMPILE_FOR_TRISC
     if (has_outbound_writes_) {
-        write_barrier_impl(noc_index);
+        dfb_drain::pending_write_barrier_mask |= dfb_bit;
     }
+#endif
+#endif
+}
+
+inline void DataflowBuffer::drain_pending() {
+#if DFB_HAS_LOCAL_INTERFACE
+    uint32_t mask = dfb_drain::pending_mask;
+    while (mask != 0) {
+        const uint32_t logical_dfb_id = __builtin_ctz(mask);
+        mask &= mask - 1;
+        DFBInterface& dfb_interface = get_local_dfb_interface(logical_dfb_id);
+        wait_all_acked_impl(dfb_interface);
+#ifndef COMPILE_FOR_TRISC
+        if (dfb_drain::pending_write_barrier_mask & (1u << logical_dfb_id)) {
+            drain_write_barrier_impl(dfb_interface, noc_index);
+        }
+#endif
+    }
+    dfb_drain::pending_mask = 0;
+    dfb_drain::pending_write_barrier_mask = 0;
 #endif
 }
 
@@ -580,15 +614,15 @@ inline void DataflowBuffer::write_barrier_impl([[maybe_unused]] const Noc& noc) 
 
 // Consumer barrier: waits outbound write from DFB writes to arrive at their destination
 // Falls back to a full barrier when no txn_ids are assigned
-inline void DataflowBuffer::write_barrier_impl(uint8_t noc_id) const {
-    if (local_dfb_interface_.num_txn_ids == 0) {
+inline void DataflowBuffer::drain_write_barrier_impl(DFBInterface& dfb_interface, uint8_t noc_id) {
+    if (dfb_interface.num_txn_ids == 0) {
         noc_async_write_barrier(noc_id);
         return;
     } else {
-        for (uint8_t i = 0; i < local_dfb_interface_.num_txn_ids; i++) {
+        for (uint8_t i = 0; i < dfb_interface.num_txn_ids; i++) {
             // Uses internal API rather than user facing noc.async_write_barrier() since it ASSERTs that the txn_id comes
             // from the user tnx ID pool and the DFB txn ids are internal only.
-            noc_async_write_barrier_with_trid(local_dfb_interface_.txn_ids[i], noc_id);
+            noc_async_write_barrier_with_trid(dfb_interface.txn_ids[i], noc_id);
         }
     }
 }

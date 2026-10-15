@@ -204,6 +204,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
         writer.runtime_arg_schema = {
             .runtime_arg_names = {
                 "block_height",
+                "block_num_units",
                 "block_width_bytes",
                 "padded_block_width_bytes",
                 "input_width_offset_bytes",
@@ -343,6 +344,9 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 core,
                 {
                     {"block_height", shard_height},
+                    // The reader (and compute, on a dtype conversion) pushes the whole shard; the last
+                    // height shard may write fewer rows.
+                    {"block_num_units", num_units_per_shard},
                     {"block_width_bytes", shard_width},
                     {"padded_block_width_bytes", padded_shard_width},
                     {"input_width_offset_bytes", curr_idx_w},

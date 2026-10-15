@@ -6,6 +6,8 @@
 
 #ifndef ARCH_QUASAR
 
+#include "api/debug/dprint.h"  // TEMPORARY (WH/BH debug only): report undrained CBs
+
 #include "stream_io_map.h"
 #ifdef COMPILE_FOR_TRISC
 #include "api/compute/common_globals.h"  // defines PACK/UNPACK/MATH macros
@@ -38,6 +40,45 @@ inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
         get_ring_span_bytes());
 }
 #endif
+
+// TEMPORARY (WH/BH debug only, revert before merge): emulate the Quasar deferred DFB drain so DFB credit
+// imbalances (e.g. push without a matching pop) hang on WH/BH too. The tiles_received / tiles_acked stream registers
+// are zeroed at every program launch, so (received - acked) is the live CB occupancy, i.e. the same "posted == acked"
+// condition the Quasar drain spins on.
+inline DataflowBuffer::~DataflowBuffer() {
+#if !DFB_IS_COMPUTE_MATH
+    if (drain_owner_ == this) {
+        dfb_drain::pending_mask |= 1u << logical_dfb_id_;
+    }
+#endif
+}
+
+inline void DataflowBuffer::drain_pending() {
+#if !DFB_IS_COMPUTE_MATH
+    // Poll every marked CB until all are empty. Report each CB still non-empty well past kernel exit (a real
+    // imbalance, not a slow consumer).
+    uint32_t pending = dfb_drain::pending_mask;
+    uint32_t spins = 0;
+    WAYPOINT("AAW");
+    while (pending != 0) {
+        const bool report = (++spins == (1u << 20));
+        uint32_t mask = pending;
+        while (mask != 0) {
+            const uint32_t cb_id = __builtin_ctz(mask);
+            mask &= mask - 1;
+            const uint16_t occupancy = static_cast<uint16_t>(*get_cb_tiles_received_ptr(cb_id)) -
+                                       static_cast<uint16_t>(*get_cb_tiles_acked_ptr(cb_id));
+            if (occupancy == 0) {
+                pending &= ~(1u << cb_id);
+            } else if (report) {
+                DPRINT("DFB drain stuck: cb {} occupancy {}\n", cb_id, static_cast<uint32_t>(occupancy));
+            }
+        }
+    }
+    WAYPOINT("AAD");
+    dfb_drain::pending_mask = 0;
+#endif
+}
 
 inline uint32_t DataflowBuffer::get_entry_size() const {
 #if DFB_IS_COMPUTE_MATH

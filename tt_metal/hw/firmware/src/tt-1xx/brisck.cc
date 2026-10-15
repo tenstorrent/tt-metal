@@ -78,6 +78,11 @@ uint32_t _start() {
         EARLY_RETURN_FOR_DEBUG
         WAYPOINT("K");
         kernel_main();
+        // TEMPORARY (WH/BH debug only, revert before merge): emulate the Quasar deferred DFB drain.
+        // Metal 2.0 kernels only (they get kernel_bindings_generated.h): legacy kernels cannot run on Quasar.
+#if defined(DFB_DRAIN_PENDING) && __has_include("kernel_bindings_generated.h")
+        DFB_DRAIN_PENDING();
+#endif
         WAYPOINT("KD");
         // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
         // DFBs stays trivially copyable.

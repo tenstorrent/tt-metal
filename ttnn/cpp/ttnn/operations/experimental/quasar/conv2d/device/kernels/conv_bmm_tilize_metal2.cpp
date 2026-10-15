@@ -792,6 +792,12 @@ void kernel_main() {
                         in0_num_subblocks * out_subblock_h);
                 }
             }
+            // out is the borrowed output shard and this kernel is its only producer and consumer (self-loop).
+            // Every path above leaves exactly one output block in it; pop it so the buffer is left balanced
+            // (the data stays in place). dummy_unpack orders the pop after the wait on Quasar.
+            cb_out.wait_front(out_block_num_tiles);
+            dummy_unpack(out_cb_id);
+            cb_out.pop_front(out_block_num_tiles);
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
 #ifdef FUSE_BIAS
                 if constexpr (fuse_bias) {
@@ -809,4 +815,13 @@ void kernel_main() {
         }
 #endif
     }  // for in1_num_blocks_w
+#ifdef FUSE_BIAS
+    if constexpr (fuse_bias) {
+        // The writer pushes the bias row once; it is waited and read by tile offset for every block but
+        // never popped. Pop it so the buffer is left balanced.
+        cb_bias.wait_front(bias_ntiles_w);
+        dummy_unpack(bias_cb_id);
+        cb_bias.pop_front(bias_ntiles_w);
+    }
+#endif
 }  // void kernel_main()

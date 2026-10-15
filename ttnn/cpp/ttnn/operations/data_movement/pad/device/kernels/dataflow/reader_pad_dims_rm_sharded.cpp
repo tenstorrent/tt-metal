@@ -66,6 +66,7 @@ void kernel_main() {
         read_noc_xy_ptr_offset += 2;
     }
 
+    // No push_back: the output shard is filled in place (the writer writes the pad sticks into the same shard)
+    // and nothing consumes it as a FIFO, so a push would leave credits that are never popped.
     noc.async_read_barrier();
-    dfb_out0_exp.push_back(num_sticks_padded);
 }

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/tile_move_copy.h"  // dummy_unpack
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
@@ -164,6 +165,12 @@ void kernel_main() {
         // out = cos_interim + sin_interim
         ckl::add<bulk_block_input(dfb::cos_interm), bulk_block_input(dfb::sin_interm), bulk_output(dfb::out)>(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
+        // The output is the borrowed output shard and this kernel is its only producer and consumer (self-loop):
+        // pop each block once it is written so the buffer is left balanced. dummy_unpack orders the pop after
+        // the wait on Quasar (nothing unpacks this buffer).
+        out_dfb_obj.wait_front(Wt);
+        dummy_unpack(dfb::out);
+        out_dfb_obj.pop_front(Wt);
     }
 
     // Done with the sin/cos matrices, so remove from DFB

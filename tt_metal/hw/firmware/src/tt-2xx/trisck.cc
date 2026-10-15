@@ -121,6 +121,10 @@ uint32_t _start() {
 
     WAYPOINT("K");
     run_kernel();
+    // Drain every DFB the kernel used, now that no helper or nested scope can still be producing or consuming.
+#ifdef DFB_DRAIN_PENDING
+    DFB_DRAIN_PENDING();
+#endif
     WAYPOINT("KD");
     EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif
