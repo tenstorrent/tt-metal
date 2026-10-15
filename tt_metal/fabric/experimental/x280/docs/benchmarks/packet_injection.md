@@ -975,7 +975,8 @@ speedup/P:
 `writers_all` agrees between N=1024 (4.8238 M headers/s) and N=4096 (4.8273), a
 0.07% difference.
 
-Reading, by the empty-visit versus stall-episode check: at C=1, K=1 every point
+Reading, by the empty-visit versus stall-episode check, with the credit then
+returned through a mode-1 (strict) window: at C=1, K=1 every point
 is X280-service bound (about 1,000 stall episodes per 1,024 headers, empty
 visits at most 3), and that service time is mostly credit writes -- at K=16 the
 X280 cost per header falls linearly with credits per header, about 570 X280
@@ -986,6 +987,16 @@ batching it to B=4 lifts it from 2.55 to 4.46 M headers/s, so its own per-header
 publication paces it, an attribution from the response to B rather than from
 the counters. C=8, K=16 is the edge of the S=16 grid, so where larger visits and
 credit batches stop helping is not measured.
+
+With the credit posted through the counter window (mode 2), as built now, the
+2026-10-15 whole-suite campaign reads the same S=16, B=1 grid differently: the
+visit cap K is the lever and C is nearly flat at fixed K. Across all writers,
+(C, K) = (1, 16), (4, 16) and (8, 16) run 19.622, 19.660 and 19.580 M headers/s,
+within 0.4%, and (1, 8), (4, 8) and (8, 8) run 16.137, 16.458 and 16.362, within
+2%. At C=1, K=1 all writers are X280-bound at 4.357 M headers/s, about 229.5 ns
+per visit, while one writer runs 2.576 M headers/s with no stall episode, so it
+is writer-bound. C=1, K=16 still writes one credit per header and costs 51.0 ns
+per header, so a posted credit costs at most about 89 X280 cycles.
 
 The first `writers1` attempt, on 2026-09-29 against firmware that still released
 each tile through a one-tile multicast group, failed at the release
