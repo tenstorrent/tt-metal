@@ -24,3 +24,33 @@ Every intervention by the supervising session: time, task, trigger, classificati
   reference (DS41-1: fp8 / fp4 requantization turns last-bit differences into whole steps) -- accepted, both still
   emulate the same kernels. Spec fix (supervisor's error, the reference's DS41-2): topk_idx and candidates are per
   position and grow with the sequence; removed from state.fixed; intake re-approved on the owner's delegation.
+- 23:00-23:37 G.s56320, B.1, SC.1 passed (177596f4f64, 01bc89a9715, fbc3036f462). SC.1's owner questions decided by
+  the supervisor (delegated): recorded in spec serving.owner_answers (bf16 row-major lossless; window KV TP-dedup;
+  1 slot at 1M; prefix reuse on; d2p off; explicit geometry in our tests; runner smoke not required in a partial run).
+- 00:12-07:00 PL.1 sat WAITING FOR A PERSON for ~7 h: the supervisor's own log watcher was not re-armed after the
+  SC.1 event (framework/supervision gap). Fix F66 (b37744c2f2e, local): watch.py + orchestrator pid file, the skill's
+  "Always be watching" section; owner asked for it explicitly.
+- 07:10 framework F66 (b37744c2f2e, local; selftests 385 pass): plan placement `host` (the engram tables were the
+  plan's one error: `skip` is rejected on decoder layers); K.1 requires smoke_runner_ok only for whole-model runs
+  (tasks.yaml K.1 metric removed to match; the regenerated ledger equals tasks.yaml); agent rule 5 reworded to "no
+  unnecessary host work" with the engram-style host input as the one exception (owner request).
+- 07:14 plan.yaml: engram placement skip -> host (mechanical, F66; host 188.8 GB, never per chip). Spec: scaled.ladder
+  (scaled / scaled_last at 64k, chunk 4096 = the deployment's 2048 rows per mesh row), serving.owner_answers; intake
+  re-approved (delegated).
+- 07:15 PLAN APPROVED by the supervisor on the owner's delegation. Reasoning:
+  - Fits: run box 23.1 of 27.2 GiB at real size (8 layers), scaled 13.3; deployment galaxy_4x4 at 1M 26.9 of 27.2.
+    Layout = the Kimi K2.7 4x4 / xing40 SP x TP scheme plus TtCSA's sparse attention; departures each reasoned
+    (head->sequence reshard for sparse_sdpa's 32-head minimum, one sparse table refilled per source group, indexer
+    heads replicated to avoid an all_reduce of 1M-key scores).
+  - Routed experts as the checkpoint's packed fp4 + e8m0 bytes decoded exactly inside the expert op (fork extension
+    of unified_routed_expert_ffn): accepted. The owner's rule asked for a format exact for fp4 (expected bfp8); bfp8
+    is exact but needs 26.9 GiB per chip for this run's 8 layers alone and 33.6 GiB on the deployment, so it fits
+    neither; bfp4 changes 16-17 % of values. Packed fp4 is exact and 0.53 B per value. The interim per-chunk decode
+    into a bf16 temporary is a temporary rule-5 departure behind Setting experts_impl.
+  - OPEN FOR THE OWNER (does not affect this run): the deployment fits 1M on galaxy_4x4 only with bfp8 for the fp8
+    dense weights (lossy: 10 % of values one step, rel. err 3.5e-3); bf16 needs 28.4 GiB. The plan's override applies
+    to galaxy_4x4 only; this run and every other box stay bf16 (exact). Lossless alternatives: an fp8 window cache
+    (-1.2 GiB, server tooling change), an e4m3-decoding matmul fork, or galaxy_8x4. Measurable on this box before the
+    Galaxy (same override at real size).
+  - Scaled run: SG.1 must make the reference read the scaled counts from inference/config.json (scale.py copies only
+    top-level files); in the scale role's scope.
