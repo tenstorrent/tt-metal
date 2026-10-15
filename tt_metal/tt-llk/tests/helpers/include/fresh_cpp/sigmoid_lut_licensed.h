@@ -3,8 +3,6 @@
 
 #pragma once
 
-#include <limits>
-
 namespace ckernel::sfpu
 {
 
@@ -45,9 +43,10 @@ namespace ckernel::sfpu
 // for is bounded: sigmoid(|x|) - 0.5 < 0.5 for every x.  The ramp crosses 0.5
 // at |x| ~= 7.25, so above that it runs away instead of saturating — at
 // |x| = 3.3e38 it returned 1.45e36 where sigmoid is 1.0 (15372 bf16 ULP from
-// the golden for every input in the stratum).  The bound is restated as one
-// min AFTER the dispatch tree, so the tree itself stays the six affine slots
-// the FP16 six-entry LUT selection forms into a single SFPLUTFP32 mod0 7.
+// the golden for every input in the stratum).  The bound is restated as a
+// clamp of the result to [0, 1] AFTER the dispatch tree and the sign restore,
+// so the tree itself stays the six affine slots the FP16 six-entry LUT
+// selection forms into a single SFPLUTFP32 mod0 7 (sign-retain).
 // It only ever binds above |x| = 7.25, where it strictly REDUCES the error
 // (at |x| = 8: 3.4e-4 clamped vs 3.4e-3 un-clamped), so the licensed
 // equal-or-better-than-hand accuracy bar on [-8, 8] is unaffected below the
@@ -58,11 +57,12 @@ namespace ckernel::sfpu
 // min(NaN, 0.5) is 0.5; the sign of a NaN out of SFPMAD is unspecified, so
 // this caught NaN inputs of both signs: +NaN came out as 1.0 (the full-2^32
 // sweep's one newly divergent band, [0x7f800000, 0x80000000)) and -NaN as
-// 0.0, where the golden is NaN and the hand kernel propagates it. A test on
-// x's encoding after the bound passes every NaN input through unchanged.
-// +/-inf are not NaN and keep the bound's 1.0 / 0.0, which is sigmoid at
-// +/-inf; the hand kernel's ramp returns +inf for both. Any min/max form of
-// the bound swallows one NaN sign or the other, hence the encoding test.
+// 0.0, where the golden is NaN and the hand kernel propagates it. A NaN
+// witness of x is added after the bound (witness * 0, +0 on every non-NaN
+// lane), so every NaN input returns a NaN. +/-inf are not NaN and keep the
+// bound's 1.0 / 0.0, which is sigmoid at +/-inf; the hand kernel's ramp
+// returns +inf for both. Any min/max form of the bound swallows one NaN sign
+// or the other, hence the witness.
 //
 // (The previous licensed arm — a 4-region poly-leaf tree, laneGI — was
 // accuracy-passing but MEASURED WORSE than the exact body (+570.60 vs
@@ -100,17 +100,18 @@ __attribute__((noinline)) void calculate_sigmoid_lut_licensed_cpp()
             s = a * 0x1.a08p-5f + 0x1.28cp-2f;
         }
         v_endif;
-        // sigmoid(|x|) - 0.5 is bounded above by 0.5 (see the header note).
-        s              = sfpi::min(s, 0.5f);
-        sfpi::vFloat r = sfpi::copysgn(s, x) + 0.5f;
-        // The bound must not swallow a NaN (see the NaN note above).
-        const sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
-        v_if (sfpi::as<sfpi::vInt>(sfpi::setsgn(x, 0)) > sfpi::as<sfpi::vInt>(infinity))
-        {
-            r = x;
-        }
-        v_endif;
-        sfpi::dst_reg[0] = r;
+        // sigmoid(|x|) - 0.5 is bounded by 0.5 (see the header note). The sign
+        // goes back on first so it folds into the LUT's sign-retain mode, then
+        // the bound is applied to the result on both sides.
+        const sfpi::vFloat s_signed = sfpi::copysgn(s, x);
+        const sfpi::vFloat r        = sfpi::max(sfpi::min(s_signed + 0.5f, 1.0f), 0.0f);
+        // The bound must not swallow a NaN (see the NaN note above). With the
+        // sign cleared and floored at 1.0, an integer decrement takes +inf to
+        // FLT_MAX and leaves every NaN a NaN, so witness * 0 is +0 except on
+        // NaN lanes.
+        const sfpi::vFloat witness =
+            sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(sfpi::max(sfpi::setsgn(x, 0), 1.0f)) - 1);
+        sfpi::dst_reg[0] = witness * 0.0f + r;
         sfpi::dst_reg++;
     }
 }
