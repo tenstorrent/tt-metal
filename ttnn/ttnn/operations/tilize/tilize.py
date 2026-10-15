@@ -416,7 +416,11 @@ def tilize(
     output_padded_shape=None,
     pad_value=None,
     tile: ttnn.Tile | None = None,
+    bfp4_round_to_nearest: bool = False,
 ) -> ttnn.Tensor:
+    """`bfp4_round_to_nearest`: bfloat4_b output only. False (default, like production ttnn.tilize)
+    = the packer's truncation; True = round to nearest-even onto the bfp4 grid, bit-identical to the
+    host conversion (an SFPU pre-pass, ~0.6 us per tile on BH)."""
     validate(
         input_tensor,
         memory_config,
@@ -445,7 +449,12 @@ def tilize(
 
     fill_word = _fill_word(input_tensor.dtype, pad_value) if padded_shape is not None else 0
     program_descriptor = create_program_descriptor(
-        input_tensor, output_tensor, low_l1=low_l1, padded_shape=padded_shape, fill_word=fill_word
+        input_tensor,
+        output_tensor,
+        low_l1=low_l1,
+        padded_shape=padded_shape,
+        fill_word=fill_word,
+        bfp4_round_to_nearest=bfp4_round_to_nearest,
     )
     output_tensor = ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
     if padded_shape is not None and padded_shape != logical_shape:

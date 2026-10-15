@@ -109,11 +109,11 @@ RETILE_STAGING_SLOTS = 2
 
 TILE_WIDTH = 32
 # bfloat4_b output: the packer TRUNCATES each 16-element shared-exponent group to 3 mantissa bits.
-# Compute first rounds the stick pages to nearest-even on the bfp4 grid (SFPU, in DEST) into
+# Opt-in (tilize(..., bfp4_round_to_nearest=True)): compute first rounds the stick pages to nearest-even on the bfp4 grid (SFPU, in DEST) into
 # cb_bfp4_rounded (bf16 — the rounded values are exact there), then tilizes that; the packer's
 # truncation of an on-grid value is exact, so the output equals host round-to-nearest conversion.
-# False = the packer's plain truncation (no round pass; ~2.4x faster on large bfp4 shapes, BH).
-BFP4_ROUND_TO_NEAREST = True
+# Default off (hand-tune): truncation is what production ttnn.tilize does, and the pass costs
+# ~575 ns/tile of SFPU (~2x on the bfp4 golden cells, BH).
 BFP4_ROUND_DTYPES = (ttnn.bfloat16, ttnn.float32, ttnn.fp8_e4m3)  # float inputs the SFPU pass reads
 # Tile-rows rounded per pass (cb_bfp4_rounded window = this x block width). The round pass and the
 # tilize share the TRISCs, so they alternate per window rather than pipeline.
@@ -420,7 +420,9 @@ def _cb(index, num_pages, page_bytes, dtype, cores, tile=None):
     )
 
 
-def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padded_shape=None, fill_word=0):
+def create_program_descriptor(
+    input_tensor, output_tensor, *, low_l1=False, padded_shape=None, fill_word=0, bfp4_round_to_nearest=False
+):
     """`padded_shape`: the output's padded shape (rank >= 2), None = no padding. The input is
     viewed left-expanded with 1s to the same rank; everything past it is filled with `fill_word`
     (the fill encoded in the input format, replicated to 32 bits)."""
@@ -498,7 +500,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
     bounce_col_bytes = tile_h * seg_unit_bytes if seg_bounce else 0  # per column tile
 
     bfp4_round = (
-        BFP4_ROUND_TO_NEAREST and output_tensor.dtype == ttnn.bfloat4_b and input_tensor.dtype in BFP4_ROUND_DTYPES
+        bfp4_round_to_nearest and output_tensor.dtype == ttnn.bfloat4_b and input_tensor.dtype in BFP4_ROUND_DTYPES
     )
     bfp4_rounded_page_bytes = tile_h * TILE_WIDTH * 2  # one bf16 tile
     bfp4_round_col_bytes = BFP4_ROUND_TILE_ROWS * bfp4_rounded_page_bytes if bfp4_round else 0

@@ -39,7 +39,7 @@ def test_tilize_bfp4_matches_host_rounding(device, shape, pad_value, dtype):
     torch.manual_seed(0)
     x = _make(dtype, shape)
     t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    kwargs = {"dtype": ttnn.bfloat4_b}
+    kwargs = {"dtype": ttnn.bfloat4_b, "bfp4_round_to_nearest": True}
     padded = list(shape)
     if pad_value is not None:
         kwargs["pad_value"] = pad_value
