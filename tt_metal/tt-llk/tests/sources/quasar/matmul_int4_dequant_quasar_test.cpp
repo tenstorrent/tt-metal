@@ -123,6 +123,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
+        // A partial last group would stay in a Dest section that is never handed to the SFPU.
+        LLK_ASSERT(GROUP_KT_DIM > 0 && KT_DIM % GROUP_KT_DIM == 0, "KT_DIM must be a whole number of quantization groups");
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
