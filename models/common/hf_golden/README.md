@@ -86,6 +86,11 @@ Anything already on disk is used in place, with no hub access needed: a local ch
 code. A branch such as `main` pins to the commit of the copy on disk; pass `--revision <commit>` to choose another.
 Any shard not on disk is downloaded to `--tmp` and deleted after its last use.
 
+The token cache (`<root>/<hf-repo>/wikitext-2-raw-v1-train.tokens.safetensors`) is built by each model's own
+tokenizer and records its fingerprint (sha256 of the fast tokenizer's full serialization) and the text's sha256. It is
+reused only when both match and it was built for the same repo; otherwise the run exits and says why. A cache from
+before the fingerprint is re-tokenized once and compared. The fingerprint is also in every trace's `metadata.json`.
+
 On a CUDA device each stage's tensors are read with parallel `O_DIRECT` preads into a pinned host buffer, copied to
 the device in one transfer, and routed experts are fused there (`direct_read` in `common.py`; bytes unchanged,
 checked bit-identical against the safetensors path). safe_open's mmap faults one 4 KiB page at a time, which in a

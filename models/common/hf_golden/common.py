@@ -63,13 +63,39 @@ def token_cache(repo: str, root: Path, text: Path, tokenizer_path: str | None = 
     blocks (wikitext is line-structured; the result equals tokenizing the text in one call), no special tokens."""
     out = root / repo / f"{text.stem}.tokens.safetensors"
     if out.exists():
-        return out
-    if not text.exists():
-        raise SystemExit(f"{text} not found: pass --text, or put {TEXT} in --root")
+        with safe_open(str(out), "pt") as f:
+            if f.metadata().get("synthetic"):  # --selftest's random ids: no tokenizer made them
+                return out
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(tokenizer_path or repo, **hub)
+    fingerprint = tokenizer_sha256(tok)
+    if out.exists():
+        check_token_cache(out, repo, tok, fingerprint, text)
+        return out
+    if not text.exists():
+        raise SystemExit(f"{text} not found: pass --text, or put {TEXT} in --root")
     raw = text.read_bytes()
+    ids = tokenize_text(tok, raw)
+    meta = {
+        "hf_repo": repo,
+        "source": text.name,
+        "source_sha256": hashlib.sha256(raw).hexdigest(),
+        "source_bytes": str(len(raw)),
+        "n_tokens": str(len(ids)),
+        "tokenizer_class": type(tok).__name__,
+        "tokenizer_sha256": fingerprint,
+        "add_special_tokens": "false",
+        "block_bytes": str(BLOCK_BYTES),
+    }
+    out.parent.mkdir(parents=True, exist_ok=True)
+    save_file({"token_ids": torch.tensor(ids, dtype=torch.int32)}, str(out), metadata=meta)
+    print(f"[tokens] {len(ids)} tokens -> {out}", flush=True)
+    return out
+
+
+def tokenize_text(tok, raw: bytes) -> list[int]:
+    """Blocks of ~BLOCK_BYTES cut on a line boundary, no special tokens: equal to tokenizing it in one call."""
     ids: list[int] = []
     i = 0
     while i < len(raw):
@@ -79,20 +105,42 @@ def token_cache(repo: str, root: Path, text: Path, tokenizer_path: str | None = 
             j = nl + 1 if nl >= i else j
         ids += tok(raw[i:j].decode("utf-8"), add_special_tokens=False)["input_ids"]
         i = j
-    meta = {
-        "hf_repo": repo,
-        "source": text.name,
-        "source_sha256": hashlib.sha256(raw).hexdigest(),
-        "source_bytes": str(len(raw)),
-        "n_tokens": str(len(ids)),
-        "tokenizer_class": type(tok).__name__,
-        "add_special_tokens": "false",
-        "block_bytes": str(BLOCK_BYTES),
-    }
-    out.parent.mkdir(parents=True, exist_ok=True)
-    save_file({"token_ids": torch.tensor(ids, dtype=torch.int32)}, str(out), metadata=meta)
-    print(f"[tokens] {len(ids)} tokens -> {out}", flush=True)
-    return out
+    return ids
+
+
+def tokenizer_sha256(tok) -> str:
+    """What the tokenizer does, not its class name: the fast tokenizer's full serialization (vocab, merges,
+    normalizer, pre-tokenizer, added tokens), else the vocab and special tokens."""
+    backend = getattr(tok, "backend_tokenizer", None) or getattr(tok, "_tokenizer", None)
+    if backend is not None and hasattr(backend, "to_str"):
+        spec = backend.to_str()
+    else:
+        spec = json.dumps([sorted(tok.get_vocab().items()), tok.all_special_tokens, type(tok).__name__])
+    return hashlib.sha256(spec.encode()).hexdigest()
+
+
+def check_token_cache(path: Path, repo: str, tok, fingerprint: str, text: Path) -> None:
+    """A token cache is reused only if this model's tokenizer built it from this text. One written before the
+    fingerprint existed is re-tokenized once and compared, so a cache copied from another model or another
+    tokenizer revision fails here instead of silently prefilling the wrong ids."""
+    with safe_open(str(path), "pt") as f:
+        meta, ids = f.metadata(), None
+        if meta.get("tokenizer_sha256") is None:
+            ids = f.get_tensor("token_ids")
+    problems = []
+    if meta.get("hf_repo") != repo:
+        problems.append(f"built for {meta.get('hf_repo')}")
+    if text.exists() and meta.get("source_sha256") != hashlib.sha256(text.read_bytes()).hexdigest():
+        problems.append(f"built from a different {meta.get('source')}")
+    if meta.get("tokenizer_sha256") not in (None, fingerprint):
+        problems.append("built by a different tokenizer")
+    if ids is not None and not problems:
+        if not text.exists():
+            raise SystemExit(f"{path} predates tokenizer fingerprints and {text} is missing to re-check it")
+        if not torch.equal(torch.tensor(tokenize_text(tok, text.read_bytes()), dtype=torch.int32), ids):
+            problems.append("its ids differ from this tokenizer's")
+    if problems:
+        raise SystemExit(f"{path}: {'; '.join(problems)}. Delete it to rebuild.")
 
 
 def check_isl(isl: int, strict: bool) -> None:

@@ -467,6 +467,7 @@ class LayerwiseGolden:
             "prefix_ids": prefix_ids,
             "source": tok_meta["source"],
             "source_sha256": tok_meta["source_sha256"],
+            "tokenizer_sha256": tok_meta.get("tokenizer_sha256"),
             "hf_repo": args.hf_repo,
             "revision": revision,
             "trust_remote_code": self.trust_remote_code,
@@ -585,7 +586,7 @@ class LayerwiseGolden:
             tiny.save_pretrained(str(ckpt), max_shard_size="300KB")  # several shards, like the real checkpoint
             vocab = config.get_text_config().vocab_size
             ids = torch.randint(0, vocab, (4 * isl,), generator=torch.Generator().manual_seed(1), dtype=torch.int32)
-            meta = {"source": "selftest", "source_sha256": "0" * 64}
+            meta = {"source": "selftest", "source_sha256": "0" * 64, "synthetic": "random ids, no tokenizer"}
             save_file({"token_ids": ids}, str(ckpt / f"{Path(TEXT).stem}.tokens.safetensors"), metadata=meta)
 
             run = argparse.Namespace(**{**vars(args), "hf_repo": str(ckpt), "isl": isl, "root": Path(tmp)})
