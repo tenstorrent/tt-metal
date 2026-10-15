@@ -4,6 +4,7 @@
 """vLLM side of image input without a device: the multimodal processor (tt/vision_vllm.py) on a ModelConfig built from the serving shim (vllm_config), and the chat template vs the
 checkpoint's ``encoding.encode_messages``. Needs vLLM (the server venv); skipped without it."""
 
+import inspect
 import json
 import os
 import sys
@@ -72,7 +73,9 @@ def _processor():
     )
     ctx = InputProcessingContext(model_config=cfg, tokenizer=cached_tokenizer_from_config(cfg))
     info = DSV41ProcessingInfo(ctx)
-    return info, DSV41MultiModalProcessor(info, DSV41DummyInputsBuilder(info), cache=None)
+    # vLLM >= 0.31 dropped the processor's ``cache`` argument (caching moved out of the processor)
+    kw = {"cache": None} if "cache" in inspect.signature(DSV41MultiModalProcessor.__init__).parameters else {}
+    return info, DSV41MultiModalProcessor(info, DSV41DummyInputsBuilder(info), **kw)
 
 
 def test_processor_expands_placeholders():
@@ -81,12 +84,15 @@ def test_processor_expands_placeholders():
 
     from models.demos.blackhole.deepseek_v41_flash.tt import vision_prompt as VP
     from models.demos.blackhole.deepseek_v41_flash.tt.vision_args import VisionArgs
+    from models.demos.blackhole.deepseek_v41_flash.tt.vision_vllm import PROCESSOR_TAKES_TOKEN_PROMPT
 
     info, proc = _processor()
     va = VisionArgs()
 
     def run(prompt, imgs):
         items = info.get_data_parser().parse_mm_data({"image": imgs} if imgs else {})
+        if PROCESSOR_TAKES_TOKEN_PROMPT:  # vLLM >= 0.31 processors get the renderer's token ids
+            prompt = info.get_tokenizer().encode(prompt, add_special_tokens=False)
         return proc.apply(ProcessorInputs(prompt, items), TimingContext(enabled=False))
 
     t = run("<｜User｜>hello<｜Assistant｜></think>", [])
