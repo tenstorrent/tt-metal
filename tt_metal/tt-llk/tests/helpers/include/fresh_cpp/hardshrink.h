@@ -27,15 +27,14 @@ __attribute__((noinline)) void calculate_hardshrink_fresh_cpp(const float lambda
 {
     for (int d = 0; d < ITERATIONS; ++d)
     {
-        const sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat r       = v;
+        const sfpi::vFloat v         = sfpi::dst_reg[0];
         const sfpi::vFloat magnitude = sfpi::setsgn(v, 0);
+        // Lanes outside the band keep their input in Dest.
         v_if (magnitude <= lambda)
         {
-            r = 0.0f;
+            sfpi::dst_reg[0] = 0.0f;
         }
         v_endif;
-        sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
 }
