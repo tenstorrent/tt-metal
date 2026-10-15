@@ -76,12 +76,8 @@ SPECIALS = {
     "-0.0": (0x80000000, 0x8000),
 }
 
-# Finite controls on either side of each region boundary, each with its expected
-# classify_special() label, or None to match the golden within CONTROL_ATOL. The NaN case
-# returns x, so a misfire on a control would return the control itself, which is still
-# finite: check the values. Saturated controls must be exact; CONTROL_ATOL covers the
-# approx tail and the bf16 output but sits far below the |x| >= 3 that a leaked NaN case
-# would return.
+# Region-boundary controls -> exact classify_special() label, or None: match the golden
+# within CONTROL_ATOL, far below the |x| >= 3 a misfiring NaN case (returns x) gives.
 CONTROLS = {
     3.1719: None,
     3.0: None,
@@ -172,17 +168,12 @@ NON_FINITE = frozenset({"NaN", "+inf", "-inf"})
 
 def _expected_specials(in_fmt, out_fmt, dest_acc):
     """key -> the set of acceptable classify_special() labels."""
-    # The NaN case lives in the fp32-destination arm, and a 32-bit input is unpacked
-    # straight to Dest there, so every NaN reaches it. The bf16 arm keeps 1 / 0 by sign.
+    # Only the fp32-Dest arm has the NaN case; a Float32 input unpacks to it intact.
     if dest_acc == DestAccumulation.Yes and in_fmt == DataFormat.Float32:
         if out_fmt == DataFormat.Float32:
             nan_pos = nan_neg = {"NaN"}
         else:
-            # The kernel leaves a NaN in Dest; what reaches L1 is the fp32 -> bfloat16
-            # pack's rendering of it. Wormhole packs every NaN as an infinity of its
-            # sign (measured: +NaN -> +inf, -NaN -> -inf, both payloads too). Only the
-            # kernel is under test here, so accept any non-finite result: the bug this
-            # pins returned a finite 1 / 0.
+            # The pack turns NaN into an infinity; the bug returned a finite 1 / 0.
             nan_pos = nan_neg = NON_FINITE
     else:
         nan_pos, nan_neg = {"1"}, {"+0.0"}
