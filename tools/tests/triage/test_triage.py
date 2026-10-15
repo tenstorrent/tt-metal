@@ -6,10 +6,11 @@
 # You also need to install everything needed to run tt-triage.py in that environment
 # Run manually ./tools/tt-triage.py --help to see if it works and install requirements
 
-from collections import deque
+from collections import Counter, deque
 from dataclasses import fields
 from datetime import timedelta
 import os
+import re
 import signal
 import struct
 import subprocess
@@ -746,6 +747,17 @@ class TestTriage:
             callstack_with_message = check.result.kernel_callstack_with_message
             callstack = callstack_with_message.callstack
             assert len(callstack) > 0, f"{risc_name}: Callstack is empty"
+
+            # Every local the debugger returned a value for must appear in the Locals column, once per frame it is in
+            frame_locals = check.result.frame_locals or ""
+            expected_locals = Counter(
+                var.name for frame in callstack for var in frame.locals if var.value is not None and var.name
+            )
+            for name, count in expected_locals.items():
+                shown = len(re.findall(rf"\b{re.escape(name)}\b", frame_locals))
+                assert (
+                    shown >= count
+                ), f"{risc_name}: local '{name}' has a value in {count} frame(s) but is shown {shown} time(s)"
 
             # Verify callstack contains expected file and line
             expected_file = expected_data.get("file")
