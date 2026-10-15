@@ -60,17 +60,22 @@ Optional:
                                             its log beside it as <output>/sys_triage/<host>.log. With --use-docker
                                             it runs as root inside that image, which must ship sys-triage;
                                             otherwise (or with --sys-triage-on-host) from the host. Each host
-                                            reads its own BMC address in-band (sudo -n ipmitool lan print). A host
-                                            without sys-triage is named and skipped. Never affects the outcome.
+                                            gets its own address from --bmc-ip. A host without sys-triage is named
+                                            and skipped. Never affects the outcome.
     --sys-triage-on-host                    Run sys-triage from the host (the syseng .deb) via plain mpirun even
                                             with --use-docker, which then still applies to everything else
     --sys-triage-path <path>                The sys-triage executable; must be at the same path on every host, or
                                             in the image when it runs there (default: the one on PATH)
-    --bmc-user <user>                       BMC user for sys-triage (default: \$BMC_USER). Without both the user
-                                            and the password, sys-triage is skipped.
-    --bmc-password <password>               BMC password for sys-triage (default: \$BMC_PASSWORD, which is
-                                            preferred: a flag value is visible in the process list). Reaches
-                                            the hosts through the environment only, never a command line.
+    --bmc-ip <ip>[,<ip>...]                 BMC address for sys-triage, one per host in --hosts order, since every
+                                            Galaxy has its own BMC (default: \$BMC_IP)
+    --bmc-api-url <url>                     BMC API URL for sys-triage, given to it as --bmc-api and as
+                                            \$TT_BMC_API_URL (default: \$TT_BMC_API_URL)
+    --bmc-user <user>                       BMC user for sys-triage (default: \$BMC_USER)
+    --bmc-password <password>               BMC password for sys-triage, given to it as --bmc-password and as
+                                            \$TT_BMC_API_TOKEN (default: \$BMC_PASSWORD, which is preferred: a flag
+                                            value is visible in this script's process list). Reaches the hosts
+                                            through the environment.
+                                            Without all four BMC values, sys-triage is skipped.
     --skip-cross-host-port-down             Skip quiescing cross-host Ethernet ports before each reset
                                             (required for non-Blackhole systems)
     --no-send-traffic                       Disable --send-traffic in cluster validation
@@ -182,6 +187,8 @@ CLUSTER_DEBUG_LOG_ROOT="$CLUSTER_DEBUG_LOG_ROOT_DEFAULT"
 SKIP_SYS_TRIAGE=false
 SYS_TRIAGE_ON_HOST=false
 SYS_TRIAGE_PATH=""
+BMC_IP_LIST="${BMC_IP:-}"
+BMC_API_URL="${TT_BMC_API_URL:-}"
 BMC_USER="${BMC_USER:-}"
 BMC_PASSWORD="${BMC_PASSWORD:-}"
 # A backstop per host, not the expected duration: CPLD DIAG self-bounds at 180 s and the
@@ -335,6 +342,22 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             SYS_TRIAGE_PATH="$2"
+            shift 2
+            ;;
+        --bmc-ip)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --bmc-ip requires a non-empty value"
+                exit 1
+            fi
+            BMC_IP_LIST="$2"
+            shift 2
+            ;;
+        --bmc-api-url)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --bmc-api-url requires a non-empty value"
+                exit 1
+            fi
+            BMC_API_URL="$2"
             shift 2
             ;;
         --bmc-user)
@@ -642,6 +665,31 @@ run_cross_host_port_down() {
 SYS_TRIAGE_IMAGE="$DOCKER_IMAGE"
 [[ "$SYS_TRIAGE_ON_HOST" == true ]] && SYS_TRIAGE_IMAGE=""
 
+# Why sys-triage will not run, or empty. Every Galaxy has its own BMC, so --bmc-ip pairs with
+# --hosts by position; SYS_TRIAGE_BMC_MAP carries the pairs to the ranks as host=ip,...
+SYS_TRIAGE_SKIP_REASON=""
+SYS_TRIAGE_BMC_MAP=""
+if [[ "$SKIP_SYS_TRIAGE" == true ]]; then
+    SYS_TRIAGE_SKIP_REASON="--skip-sys-triage"
+else
+    _missing=()
+    [[ -z "$BMC_IP_LIST" ]] && _missing+=("--bmc-ip/\$BMC_IP")
+    [[ -z "$BMC_API_URL" ]] && _missing+=("--bmc-api-url/\$TT_BMC_API_URL")
+    [[ -z "$BMC_USER" ]] && _missing+=("--bmc-user/\$BMC_USER")
+    [[ -z "$BMC_PASSWORD" ]] && _missing+=("--bmc-password/\$BMC_PASSWORD")
+    IFS=',' read -ra _st_hosts <<< "$HOSTS"
+    IFS=',' read -ra _st_ips <<< "$BMC_IP_LIST"
+    if [[ ${#_missing[@]} -gt 0 ]]; then
+        SYS_TRIAGE_SKIP_REASON="BMC details incomplete, which sys-triage refuses to run without; missing: ${_missing[*]}"
+    elif [[ ${#_st_ips[@]} -ne ${#_st_hosts[@]} ]]; then
+        SYS_TRIAGE_SKIP_REASON="--bmc-ip has ${#_st_ips[@]} address(es) for ${#_st_hosts[@]} host(s); it takes one per host, in --hosts order"
+    else
+        for _i in "${!_st_hosts[@]}"; do
+            SYS_TRIAGE_BMC_MAP+="${SYS_TRIAGE_BMC_MAP:+,}${_st_hosts[$_i]}=${_st_ips[$_i]}"
+        done
+    fi
+fi
+
 # Print summary
 echo "=========================================="
 echo "Cluster recovery"
@@ -672,12 +720,11 @@ echo "Skip reset: $SKIP_RESET"
 echo "Skip validation: $SKIP_VALIDATION"
 echo "Skip version check: $SKIP_VERSION_CHECK"
 echo "Skip MPI stress test: $SKIP_MPI_STRESS_TEST"
-if [[ "$SKIP_SYS_TRIAGE" == true ]]; then
-    echo "sys-triage: skipped"
-elif [[ -z "$BMC_USER" || -z "$BMC_PASSWORD" ]]; then
-    echo "sys-triage: skipped (BMC credentials incomplete; see --bmc-user / --bmc-password)"
+if [[ -n "$SYS_TRIAGE_SKIP_REASON" ]]; then
+    echo "sys-triage: skipped ($SYS_TRIAGE_SKIP_REASON)"
 else
-    echo "sys-triage: every host before recovery, $([[ -n "$SYS_TRIAGE_IMAGE" ]] && echo "in $SYS_TRIAGE_IMAGE" || echo "from the host"), into $OUTPUT_DIR/sys_triage (BMC user $BMC_USER)"
+    echo "sys-triage: every host before recovery, $([[ -n "$SYS_TRIAGE_IMAGE" ]] && echo "in $SYS_TRIAGE_IMAGE" || echo "from the host"), into $OUTPUT_DIR/sys_triage"
+    echo "sys-triage BMC: user $BMC_USER, API $BMC_API_URL, ${SYS_TRIAGE_BMC_MAP//,/ }"
 fi
 echo "Skip cross-host port down: $SKIP_CROSS_HOST_PORT_DOWN"
 echo "Output directory: $OUTPUT_DIR"
@@ -714,15 +761,15 @@ fi
 # Step 0.2: the sys-triage bundle on every host, taken before anything resets so its vuart and
 # scratch reads still describe the state that sent the cluster to recovery. With --use-docker it
 # runs inside the image, which must ship sys-triage; otherwise, or with --sys-triage-on-host, it
-# runs from the syseng .deb on the host via plain mpirun. Every host has its own BMC, so each rank reads its address in-band; the
-# shared user and password reach the ranks through the environment only. Forensics for a person,
-# never a verdict: each host reports PASS, WARN (sections missing) or SKIP with the reason, and
-# only an interrupt stops recovery here.
+# runs from the syseng .deb on the host via plain mpirun. Every host has its own BMC, so each rank
+# picks its address out of the --bmc-ip list; the shared user and password reach the ranks through
+# the environment. Forensics for a person, never a verdict: each host reports PASS, WARN (sections
+# missing) or SKIP with the reason, and only an interrupt stops recovery here.
 SYS_TRIAGE_DIR="$OUTPUT_DIR/sys_triage"
 
 # Args: <bundle root> <sys-triage path or ""> <budget s> <where, for messages> <uid:gid to write
 # the bundle as, when running as root in a container, or ""> <true if this rank tags its own lines
-# with [host]>
+# with [host]> <host=bmc-ip,...> <BMC API URL>. BMC_USER and BMC_PASSWORD come in the environment.
 read -r -d '' SYS_TRIAGE_RANK_CMD <<'SYS_TRIAGE_CMD' || true
 h=$(hostname)
 root="$1"
@@ -730,6 +777,8 @@ bin="$2"
 budget="$3"
 where="$4"
 owner="$5"
+bmc_map="$7"
+bmc_api="$8"
 if [[ "$6" == true ]]; then
     say() { printf '[%s] sys-triage: %s\n' "$h" "$*"; }
 else
@@ -746,11 +795,11 @@ scrub() {
 
 if [[ -n "$bin" ]]; then
     if [[ ! -f "$bin" || ! -x "$bin" ]]; then
-        say "SKIP: $bin is not an executable file in $where"
+        say "SKIP: $bin is not an executable file $where"
         exit 0
     fi
 elif ! bin=$(command -v sys-triage); then
-    say "SKIP: not installed in $where (it ships in the syseng .deb)"
+    say "SKIP: not installed $where (it ships in the syseng .deb)"
     exit 0
 fi
 
@@ -759,7 +808,7 @@ fi
 # writes to a local staging directory, and the bundle and log are written out as the caller.
 if [[ -n "$owner" ]]; then
     if ! command -v setpriv >/dev/null 2>&1; then
-        say "SKIP: setpriv not found in $where; it is needed to write the bundle as ${owner}"
+        say "SKIP: setpriv not found $where; it is needed to write the bundle as ${owner}"
         exit 0
     fi
     as_owner() { setpriv --reuid="${owner%%:*}" --regid="${owner##*:}" --clear-groups "$@"; }
@@ -767,12 +816,20 @@ else
     as_owner() { "$@"; }
 fi
 
-BMC_IP=$(sudo -n ipmitool lan print 2>/dev/null | awk -F': *' '/^IP Address[[:space:]]*:/ { print $2; exit }')
-if [[ -z "$BMC_IP" || "$BMC_IP" == "0.0.0.0" ]]; then
-    say "SKIP: could not read this host's BMC address (sudo -n ipmitool lan print)"
+# --hosts may name a host short or fully qualified, and hostname may answer either way.
+bmc_ip=""
+IFS=',' read -ra pairs <<< "$bmc_map"
+for p in "${pairs[@]}"; do
+    k="${p%%=*}"
+    if [[ "${k%%.*}" == "${h%%.*}" ]]; then
+        bmc_ip="${p#*=}"
+        break
+    fi
+done
+if [[ -z "$bmc_ip" ]]; then
+    say "SKIP: no --bmc-ip entry for this host ($bmc_map)"
     exit 0
 fi
-export BMC_IP
 
 out="$root/$h"
 log="$root/$h.log"
@@ -784,14 +841,17 @@ if ! as_owner mkdir -p "$out" 2>/dev/null; then
 fi
 work="$out"
 if [[ -n "$owner" ]] && ! work=$(mktemp -d); then
-    say "SKIP: cannot create a staging directory in $where"
+    say "SKIP: cannot create a staging directory $where"
     exit 0
 fi
 
 stdout_f=$(mktemp)
 stderr_f=$(mktemp)
 start=$SECONDS
-timeout --signal=TERM --kill-after=30s "$budget" "$bin" "$work" </dev/null >"$stdout_f" 2>"$stderr_f"
+TT_BMC_API_URL="$bmc_api" TT_BMC_API_TOKEN="$BMC_PASSWORD" \
+    timeout --signal=TERM --kill-after=30s "$budget" "$bin" \
+    --bmc-ip "$bmc_ip" --bmc-user "$BMC_USER" --bmc-password "$BMC_PASSWORD" --bmc-api "$bmc_api" \
+    "$work" </dev/null >"$stdout_f" 2>"$stderr_f"
 rc=$?
 dur=$((SECONDS - start))
 if [[ "$work" != "$out" ]]; then
@@ -800,7 +860,9 @@ if [[ "$work" != "$out" ]]; then
     rm -rf "$work"
 fi
 {
-    printf '$ %s %s\nrc=%s  duration=%ss  bmc=%s@%s\n' "$bin" "$work" "$rc" "$dur" "$BMC_USER" "$BMC_IP"
+    printf '$ TT_BMC_API_URL=%s TT_BMC_API_TOKEN=*** %s --bmc-ip %s --bmc-user %s --bmc-password *** --bmc-api %s %s\n' \
+        "$bmc_api" "$bin" "$bmc_ip" "$BMC_USER" "$bmc_api" "$work"
+    printf 'rc=%s  duration=%ss\n' "$rc" "$dur"
     [[ "$work" != "$out" ]] && printf 'bundle copied to %s as %s\n' "$out" "$owner"
     printf '\n--- stdout ---\n'
     scrub <"$stdout_f"
@@ -841,7 +903,7 @@ run_sys_triage() {
         local q=()
         local a
         for a in "$SYS_TRIAGE_RANK_CMD" "$SYS_TRIAGE_DIR" "$SYS_TRIAGE_PATH" "$SYS_TRIAGE_TIMEOUT_S" \
-            "image $SYS_TRIAGE_IMAGE" "$(id -u):$(id -g)" false; do
+            "in image $SYS_TRIAGE_IMAGE" "$(id -u):$(id -g)" false "$SYS_TRIAGE_BMC_MAP" "$BMC_API_URL"; do
             q+=("$(printf '%q' "$a")")
         done
         BMC_USER="$BMC_USER" BMC_PASSWORD="$BMC_PASSWORD" \
@@ -867,18 +929,12 @@ run_sys_triage() {
             -x BMC_USER -x BMC_PASSWORD \
             "${MPI_EXTRA_ARGS[@]}" \
             bash -c "$SYS_TRIAGE_RANK_CMD" _ "$SYS_TRIAGE_DIR" "$SYS_TRIAGE_PATH" "$SYS_TRIAGE_TIMEOUT_S" \
-            "this host" "" true
+            "on this host" "" true "$SYS_TRIAGE_BMC_MAP" "$BMC_API_URL"
     fi
 }
 
-if [[ "$SKIP_SYS_TRIAGE" == true ]]; then
-    echo "Skipping sys-triage (--skip-sys-triage)"
-    echo ""
-elif [[ -z "$BMC_USER" || -z "$BMC_PASSWORD" ]]; then
-    _missing=()
-    [[ -z "$BMC_USER" ]] && _missing+=("--bmc-user/\$BMC_USER")
-    [[ -z "$BMC_PASSWORD" ]] && _missing+=("--bmc-password/\$BMC_PASSWORD")
-    echo "Skipping sys-triage: BMC credentials incomplete, which sys-triage refuses to run without; missing: ${_missing[*]}"
+if [[ -n "$SYS_TRIAGE_SKIP_REASON" ]]; then
+    echo "Skipping sys-triage: $SYS_TRIAGE_SKIP_REASON"
     echo ""
 else
     echo "Collecting the sys-triage bundle on every host into $SYS_TRIAGE_DIR (up to ${SYS_TRIAGE_TIMEOUT_S}s per host)..."
