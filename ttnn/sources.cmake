@@ -61,6 +61,11 @@ set(TTNN_CORE_SRCS
 
 set(TTNNCPP_SRCS
     # FIXME: Move these out to appropriate sub targets
+    cpp/ttnn/kernel_lib/mcast/host/mcast.cpp
+    cpp/ttnn/kernel_lib/mcast/host/mcast_impl.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_legacy_program_adapter.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_descriptor_adapter.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_spec_adapter.cpp
     cpp/ttnn/operations/compute_throttle_utils.cpp
     cpp/ttnn/operations/trace.cpp
     cpp/ttnn/graph/capture_program_config_registry.cpp
@@ -137,6 +142,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/operations/core.cpp
     cpp/ttnn-nanobind/operations/trace.cpp
     cpp/ttnn-nanobind/tensor_accessor_args.cpp
+    cpp/ttnn-nanobind/mcast_host.cpp
     cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
 )
 
