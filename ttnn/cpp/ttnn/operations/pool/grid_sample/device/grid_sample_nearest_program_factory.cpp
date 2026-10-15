@@ -7,13 +7,13 @@
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "grid_sample_utils.hpp"
-#include "ttnn/operations/pool/pool_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
+#include "ttnn/operations/pool/device/aligned_stick_size.hpp"
 
 namespace ttnn::prim {
 

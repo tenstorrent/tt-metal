@@ -11,21 +11,15 @@
 
 namespace ttnn::prim {
 
-static std::array<uint32_t, 4> get_input_shape(const UpsampleParams& args, const Tensor& input) {
-    // For bilinear mode, input is haloed - use sliding_window_config for original dimensions
-    if (args.mode == "bilinear" && args.sliding_window_config.has_value()) {
-        const auto& swc = args.sliding_window_config.value();
-        return {swc.batch_size, swc.input_hw.first, swc.input_hw.second, swc.channels};
-    }
+static std::array<uint32_t, 4> get_input_shape([[maybe_unused]] const UpsampleParams& args, const Tensor& input) {
     const auto& s = input.logical_shape();
     return {s[0], s[1], s[2], s[3]};
 }
 
 UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
     const operation_attributes_t& args, const Tensor& input) {
-    if (args.mode == "bilinear") {
-        return UpsampleBilinearProgramFactory{};
-    }
+    // TODO(nuked-op halo): restore UpsampleBilinearProgramFactory
+    TT_FATAL(args.mode != "bilinear", "upsample bilinear mode is not available (halo / sliding_window removed)");
 
     operations::pool::upsample::UpsamplePath path =
         operations::pool::upsample::select_upsample_path(input, args.scale_factor_h, args.scale_factor_w, args.mode);
@@ -142,16 +136,14 @@ ttnn::Tensor upsample(
     const float scale_factor_w,
     const std::string& mode,
     const MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config) {
     return ttnn::device_operation::launch<UpsampleOperation>(
         UpsampleParams{
             .scale_factor_h = scale_factor_h,
             .scale_factor_w = scale_factor_w,
             .mode = mode,
             .output_mem_config = output_mem_config,
-            .compute_kernel_config = compute_kernel_config,
-            .sliding_window_config = sliding_window_config},
+            .compute_kernel_config = compute_kernel_config},
         input_tensor);
 }
 

@@ -517,6 +517,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceTileProgramFactory::create_p
     };
 
     // ---- Kernels ----
+    // TODO(nuked-op halo): this kernel lives under the nuked halo op; restore a pack_untilize compute kernel
     // The Metal 2.0 fork of sliding_window/halo's pack_untilize compute kernel. Its binding and argument
     // names (dfb::src, dfb::out0, tiles_per_row, block_size, total_blocks) are the fork's interface,
     // inherited here. The kernel packs alternate blocks into dfb::out0 / dfb::out1; without the fork's
