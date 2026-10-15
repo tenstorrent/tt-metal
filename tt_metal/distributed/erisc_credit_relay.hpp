@@ -31,7 +31,7 @@ struct CreditRelay {
     // The mesh's own env, not the singleton: handed in because the caller already holds it.
     tt::tt_metal::MetalEnvImpl* env = nullptr;
     tt::tt_metal::IDevice* dev = nullptr;
-    tt::tt_metal::CoreCoord eth{};
+    tt::tt_metal::CoreCoord eth;
     std::uint32_t channels = 0;
     std::uint32_t arena = 0;
     std::uint32_t recv_credits_addr = 0;  // rx

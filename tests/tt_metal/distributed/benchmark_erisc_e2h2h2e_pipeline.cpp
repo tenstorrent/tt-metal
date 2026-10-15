@@ -95,7 +95,7 @@ bool arm(IDevice* dev, CoreCoord eth, std::uint32_t status_addr, bool on) {
 std::unique_ptr<E2HLeg> bind_e2h(
     const std::shared_ptr<MeshDevice>& mesh,
     IDevice* dev,
-    MeshCoordinate dev_coord,
+    const MeshCoordinate& dev_coord,
     CoreCoord eth_log,
     CoreCoord eth_noc0,
     const eb::BridgePlacement& p,
