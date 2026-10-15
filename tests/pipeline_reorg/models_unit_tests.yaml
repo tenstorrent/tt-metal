@@ -22,6 +22,7 @@
     # every tt_transformers e2e leg depends on. See #45400.
     pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
     pytest --timeout 60 models/tt_transformers/tests/test_decode_output_rows.py
+    pytest --timeout 60 models/tt_transformers/tests/test_batched_prefill_slots.py
     pytest --timeout 300 models/tt_transformers/tests/test_load_state_dict_layers.py
     pytest --timeout 300 models/tt_transformers/tests/test_traced_prefill_rope_slice.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
@@ -2334,5 +2335,21 @@
       timeout: 8
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
+  team: models
+  budget_type: unit
+
+# ESM-2 650M protein language model (facebook/esm2_t33_650M_UR50D).
+# 10 tests in ~66 s warm on bh_p150 (run 38277387590); the checkpoint
+# resolves from the shared HF cache. 5 min covers first-run JIT compilation.
+- name: esm2 unit tests
+  cmd: |
+    pytest models/experimental/esm2/tests --timeout=300
+  model: esm2-650m
+  model_family: ESM
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 3
+  owner_id: U09B1UE301K # Abror Shopulatov
   team: models
   budget_type: unit

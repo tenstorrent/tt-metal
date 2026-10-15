@@ -24,7 +24,6 @@ from .llk_params import (
     FastMode,
     FusedSort,
     GatedReduceScale,
-    ImpliedMathFormat,
     L1Accumulation,
     MathFidelity,
     MathOperation,
@@ -178,7 +177,7 @@ class SFPU_BINARY_OP(TemplateParameter):
 
     Emits ``constexpr ckernel::BinaryOp SFPU_BINARY_OP = ckernel::BinaryOp::<op>;``,
     consumed by ``sfpu_operations_quasar.h``. ``op`` is one of:
-    ADD, MUL, DIV, GT, LT, LE, GE, MAX, MIN, ATAN2, COPY_DEST (reusing the
+    ADD, MUL, DIV, GT, LT, LE, GE, MAX, MIN, ATAN2, COPY_DEST, GCD (reusing the
     LLK BinaryOp enum, like Blackhole — int vs float MUL is disambiguated
     by the math format in the cpp; COPY_DEST forwards the Dest encoding so
     the sfpmem mode matches).
@@ -845,14 +844,6 @@ class TILIZE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool tilize_en = {str(self.tilize.value).lower()};"
-
-
-@dataclass
-class IMPLIED_MATH_FORMAT(TemplateParameter):
-    implied_math_format: ImpliedMathFormat = ImpliedMathFormat.No
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool IMPLIED_MATH_FORMAT = {self.implied_math_format.value};"
 
 
 @dataclass
@@ -1607,7 +1598,7 @@ class MAX_POOL_CHUNK(RuntimeParameter):
 
 @dataclass
 class SIGN_MAGNITUDE_FORMAT(TemplateParameter):
-    """Quant-family SMAG32 datapath toggle; read only by the quant binary ops."""
+    """SMAG32 Dest datapath toggle; read by the quant binary ops, int ADD/MUL, signed comparisons and GCD."""
 
     sign_magnitude: bool = False
 
