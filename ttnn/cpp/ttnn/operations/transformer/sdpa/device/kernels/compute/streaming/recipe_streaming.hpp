@@ -588,11 +588,20 @@ SDPA_RECIPE_COLD void reduce_c_row_group(
     sdpa_stream_reconfig(in0_cb, scale_cb);
 #endif
     reduce_block_max_row_init_runtime(out_cb, reduce_cols, in0_cb, scale_cb, respect_trigger);
+#if defined(ARCH_WORMHOLE) && defined(SDPA_RECIPE_FP32)
+    // Wormhole truncates a SrcB datum to the SrcB format on the move path, so the reduce's MOVB2D transpose
+    // would keep only BF16 of the TF32 maxima (the scaler is BF16). A TF32 SrcB format keeps them TF32-exact.
+    MATH((cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcB_val_RMW>((uint32_t)DataFormat::Tf32)));
+    MATH((cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcB_override_RMW>(1)));
+#endif
     for (uint32_t i = 0; i < group_size; i++) {
         const uint32_t input_tile_start = (row_start + i) * row_stride;
         reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half);
     }
     reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger, overlap_first_half);
+#if defined(ARCH_WORMHOLE) && defined(SDPA_RECIPE_FP32)
+    MATH((cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcB_override_RMW>(0)));
+#endif
 #ifndef SDPA_RECIPE_FP32
     // The reference (m_ref) for row i in slot i + 2 (a row pair, or a single-row tail group), for the
     // conditional rescale below.
