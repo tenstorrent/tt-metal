@@ -140,12 +140,20 @@ def _align_down(x, unit):
 
 
 def compute_blocking(
-    *, core_cols_tiles, in_page_bytes, out_page_bytes, in_elem_bytes, low_l1, read_alignment, staging_col_bytes=0
+    *,
+    core_cols_tiles,
+    in_page_bytes,
+    out_page_bytes,
+    in_elem_bytes,
+    low_l1,
+    read_alignment,
+    staging_col_bytes=0,
+    in_depth_tile_rows=IN_DEPTH_TILE_ROWS,
 ):
     """Column blocking: (block_width_tiles, num_col_blocks, last_block_width_tiles).
 
     `staging_col_bytes`: extra reader-private bytes per column tile (retile staging ring / segment bounce)."""
-    per_col_tile_bytes = IN_DEPTH_TILE_ROWS * in_page_bytes + OUT_DEPTH_TILE_ROWS * out_page_bytes + staging_col_bytes
+    per_col_tile_bytes = in_depth_tile_rows * in_page_bytes + OUT_DEPTH_TILE_ROWS * out_page_bytes + staging_col_bytes
     if low_l1:
         max_bw = LOW_L1_BLOCK_WIDTH_TILES
     else:
@@ -405,6 +413,11 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
     else:
         in_tile_h = in_face_h = in_tile_page_bytes = 1
         unit_in_tile_rows = 1
+    # cb_rm_sticks window, in output tile-rows. A shrinking retile (in_tile_h > tile_h) turns one input
+    # tile-row into in_tile_h / tile_h short output tile-rows; a 2-row window made the de-facing reader
+    # wait on the compute per short row. Two input tile-rows' worth (same bytes as the normal double
+    # buffer) lets it run a whole unit ahead (32x32 -> 2x32 shard: reader stall 711 -> 0 cycles, BH).
+    in_depth_tile_rows = IN_DEPTH_TILE_ROWS * (max(1, in_tile_h // tile_h) if retile else 1)
 
     out_shape = list(padded_shape) if padded_shape is not None else list(in_shape)
     assert len(out_shape) >= 2 and len(out_shape) >= len(in_shape)
@@ -468,6 +481,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             low_l1=low_l1,
             read_alignment=read_alignment,
             staging_col_bytes=retile_staging_col_bytes + bounce_col_bytes + bfp4_round_col_bytes,
+            in_depth_tile_rows=in_depth_tile_rows,
         )
 
     # --- Regime selector (op_design.md "Selection function") ---------------------------------
@@ -569,7 +583,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             cbs.append(
                 _cb(
                     CB_RM_STICKS,
-                    IN_DEPTH_TILE_ROWS * block_width_tiles,
+                    in_depth_tile_rows * block_width_tiles,
                     in_page_bytes,
                     input_tensor.dtype,
                     group_cores,
@@ -671,7 +685,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             cbs.append(
                 _cb(
                     CB_RM_STICKS_TAIL,
-                    IN_DEPTH_TILE_ROWS * last_block_width_tiles,
+                    in_depth_tile_rows * last_block_width_tiles,
                     in_page_bytes,
                     input_tensor.dtype,
                     group_cores,

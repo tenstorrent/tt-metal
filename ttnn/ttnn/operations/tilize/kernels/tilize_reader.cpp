@@ -127,6 +127,14 @@ void kernel_main() {
         const uint32_t staging_base = in_resident ? 0 : get_write_ptr(cb_stick_staging);
         Noc noc;
         noc_async_write_one_packet_set_state(get_noc_addr(src_addr), half_bytes);
+        // De-face copies alternate between two write cmd bufs (both preset to this core / one face
+        // row), counters bumped once per tile-row — same scheme as the coalesced reorder below. A
+        // resident 32x32 -> 16x32 retile shard (BH, measured; see changelog).
+        constexpr bool raw_defacing = noc_mode == DM_DEDICATED_NOC;
+        if constexpr (raw_defacing) {
+            ncrisc_noc_write_set_state<false /* posted */, true /* one_packet */>(
+                noc_index, write_reg_cmd_buf, get_noc_addr(src_addr), half_bytes, NOC_UNICAST_WRITE_VC);
+        }
 
         for (uint32_t col_block = 0; col_block < num_col_blocks; ++col_block) {
             const bool is_tail = has_tail && (col_block == num_col_blocks - 1);
@@ -218,11 +226,22 @@ void kernel_main() {
                         uint32_t src = src_base + kk * src_row_stride + src_off;
                         uint32_t dst = l1_base + i * seg_bytes;
                         for (uint32_t c = 0; c < width_tiles; ++c) {
-                            noc_async_write_one_packet_with_state(src, dst);                            // left face row
-                            noc_async_write_one_packet_with_state(src + face_bytes, dst + half_bytes);  // right
+                            if constexpr (raw_defacing) {
+                                ncrisc_noc_write_with_state<noc_mode, false, false, true>(
+                                    noc_index, write_cmd_buf, src, dst);  // left face row
+                                ncrisc_noc_write_with_state<noc_mode, false, false, true>(
+                                    noc_index, write_reg_cmd_buf, src + face_bytes, dst + half_bytes);  // right
+                            } else {
+                                noc_async_write_one_packet_with_state(src, dst);  // left face row
+                                noc_async_write_one_packet_with_state(src + face_bytes, dst + half_bytes);  // right
+                            }
                             src += in_tile_page_bytes;
                             dst += tile_col_bytes;
                         }
+                    }
+                    if constexpr (raw_defacing) {
+                        noc_nonposted_writes_num_issued[noc_index] += 2 * valid * width_tiles;
+                        noc_nonposted_writes_acked[noc_index] += 2 * valid * width_tiles;
                     }
                     noc_async_write_barrier();
                     cb_push_back(cb_id, width_tiles);
