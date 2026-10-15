@@ -447,6 +447,13 @@ tasks:
     - q_a
     - kv
     layer: 0
+  frozen:
+    at: '2026-10-15T13:27:00'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_05_kv.py: 17fd60714f0f986f3729372219a1bcf4e801aa79d43b461027d5879982a78633
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.attention
   title: swa attention (attention) on device, layer 0
   step: implement
