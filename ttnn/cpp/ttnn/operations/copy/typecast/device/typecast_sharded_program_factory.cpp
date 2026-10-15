@@ -7,7 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -91,7 +91,7 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
     // Input DFB: built on the input shard's own L1 memory (borrowed), so the data is already resident.
     uint32_t buffering_factor = 1;  // data is already fully buffered in the DFBs since its sharded
     uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(input_tile_size, 32u);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
     const DataflowBufferSpec in_dfb{
@@ -104,7 +104,7 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
 
     // output sharded DFB: borrowed from the output shard buffer — the result is left resident there
     uint32_t aligned_output_tile_nbytes =
-        round_up_to_mul32(output_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(output_tile_size, 32u);  // will have issue if the page is not multiple of 32
     uint32_t out_cb_pagesize = aligned_output_tile_nbytes;
     uint32_t out_cb_npages = num_tile_per_core * buffering_factor;
     const DataflowBufferSpec out_dfb{

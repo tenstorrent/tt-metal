@@ -178,7 +178,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     }
     spec.dataflow_buffers.push_back(std::move(out_dfb));
 
-    uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
+    uint32_t index_page_size = tt::round_up(input_element_size_bytes, 32u);
     const bool index_as_scratchpad = device->arch() == tt::ARCH::QUASAR;
     Group<ScratchpadSpec> scratchpads;
     if (index_as_scratchpad) {
@@ -194,7 +194,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     }
 
     if (use_local_cache) {
-        uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
+        uint32_t cache_page_size = tt::round_up(weight_page_size, 32u);
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
         const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
         if (index_as_scratchpad) {
