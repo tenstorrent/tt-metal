@@ -537,6 +537,14 @@ tasks:
     kind: residual
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-10-15T15:40:11'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_residual.py: 7d51bea38e5aa47a89abb31359868ae76ea05be0297a490ddda3b7370f7de034
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.07
   title: 'swa block with steps 1-7 on device (last: attn_residual)'
   step: implement
