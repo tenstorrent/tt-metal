@@ -578,6 +578,35 @@ def test_exp2_allclose(device):
     assert_allclose(actual_result=result, expected_result=golden, atol=8.5e-39, rtol=0)
 
 
+def test_exp2_special_values(device):
+    """exp2 saturation and infinity handling, which the bfloat16 sweeps replace with 0 (see #44507).
+
+    | Input                    | Expected                                   |
+    |--------------------------|--------------------------------------------|
+    | -inf                     | 0                                          |
+    | -127                     | 0 (golden 2^-127 is subnormal; device FTZ) |
+    | -126                     | 2^-126, smallest normal (ULP ≤ 1)          |
+    | 0, ±1, ±10, 127          | ULP ≤ 1                                    |
+    | 128, +inf                | +inf                                       |
+
+    NaN is excluded: ttnn.bfloat16 host-side packing turns NaN into +inf before
+    the tensor reaches the device, so NaN propagation can't be tested at this dtype.
+    """
+    input_tensor = torch.tensor(
+        [0.0, 1.0, -1.0, 10.0, -10.0, 127.0, -126.0, float("inf"), -float("inf"), 128.0, -127.0],
+        dtype=torch.bfloat16,
+    )
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = flush_subnormal_values_to_zero(golden_function(input_tensor, device=device))
+
+    result = ttnn.to_torch(ttnn.exp2(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+
 @pytest.mark.parametrize(
     "low, high, expected_atol, expected_rtol",
     [
@@ -753,6 +782,63 @@ def test_atan_with_sqrt_in_sfpu_chain(device, generated_first):
         f"{int(mismatched.sum())} of {int(checked.sum())} lanes differ from the standalone second op, "
         f"first at its input {middle[mismatched][0].item()!r}"
     )
+
+
+def test_atan_bf16_several_tiles_per_core(device):
+    """Every core runs atan on dozens of tiles in turn; each call records the kernel's body into replay slots
+    and reloads LREG4-7 again, so every tile, not only a core's first, must match torch."""
+    if not ttnn.device.is_blackhole(device):
+        pytest.skip("ttnn.atan keeps its stock kernel off Blackhole")
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16).repeat(8, 8)
+    grid = device.compute_with_storage_grid_size()
+    assert input_tensor.numel() // 1024 >= 4 * grid.x * grid.y
+    golden = flush_to_zero(ttnn.get_golden_function(ttnn.atan)(input_tensor, device=device))
+    result = flush_to_zero(ttnn.to_torch(ttnn.atan(to_tt_tensor(input_tensor, device))))
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_atan_bf16_nonzero_dest_index(device):
+    """atan as the post-activation of a sharded FPU add, which runs it on DEST tiles 0-7 of each eight-tile
+    batch: seven calls in eight have a DEST index other than 0. Adding +0 leaves every input as it is."""
+    if not ttnn.device.is_blackhole(device):
+        pytest.skip("ttnn.atan keeps its stock kernel off Blackhole")
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16).reshape(1, 1, 256, 256)
+    memory = ttnn.create_sharded_memory_config(
+        input_tensor.shape, ttnn.CoreGrid(y=1, x=1), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR
+    )
+    tt_x, tt_zero = (
+        to_tt_tensor(tensor, device, memory_config=memory) for tensor in (input_tensor, torch.zeros_like(input_tensor))
+    )
+    output = ttnn.add(
+        tt_x,
+        tt_zero,
+        dtype=ttnn.bfloat16,
+        memory_config=memory,
+        fast_and_approximate_mode=True,  # the FPU add, eight tiles per DEST batch
+        activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.ATAN)],
+    )
+    golden = flush_to_zero(ttnn.get_golden_function(ttnn.atan)(input_tensor, device=device))
+    result = flush_to_zero(ttnn.to_torch(output))
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_atan_bf16_bfloat8_b(device):
+    """bfloat8_b in and out: the unpacker hands the SFPU BF16, so the generated kernel runs. Each output is
+    within two bfloat8_b steps of [1, 2) of torch's value on the input as stored: one for the output's
+    shared-exponent rounding, one for the kernel."""
+    if not ttnn.device.is_blackhole(device):
+        pytest.skip("ttnn.atan keeps its stock kernel off Blackhole")
+    torch.manual_seed(0)
+    input_tensor = torch.empty(1, 1, 256, 256).uniform_(-8, 8).to(torch.bfloat16)
+    tt_in = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    stored = ttnn.to_torch(tt_in).to(torch.float64)
+    output = ttnn.atan(tt_in)
+    assert output.dtype == ttnn.bfloat8_b
+    golden = ttnn.get_golden_function(ttnn.atan)(stored, device=device)
+    error = (ttnn.to_torch(output).to(torch.float64) - golden).abs()
+    assert (
+        error.max() <= 2.0**-5
+    ), f"max error {error.max().item()} at input {stored.flatten()[error.argmax()].item()}"
 
 
 def test_atan_bf16_unflushed_zero_and_subnormal_inputs(device):

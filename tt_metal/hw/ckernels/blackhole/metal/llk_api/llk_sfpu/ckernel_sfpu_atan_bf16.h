@@ -19,7 +19,7 @@ struct AtanBf16Config {
         __builtin_bit_cast(float, 0x3e1daa80u)};
 };
 }  // namespace ckernel::sfpu
-#include "sfpu/ckernel_sfpu_bf16_reciprocal_complement.h"
+#include "sfpu/ckernel_sfpu_atan_bf16_reciprocal_complement.h"
 
 namespace ckernel::sfpu {
 
