@@ -457,6 +457,28 @@ def test_moe_compute_expert_rows_top_k_over_max(mesh_device, mesh_shape, expect_
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize(
+    "act, limit, error",
+    [
+        (MoEActivationFunction.CLAMPED_SILU, None, "activation_limit is required for CLAMPED_SILU"),
+        (MoEActivationFunction.CLAMPED_SILU, float("nan"), "activation_limit must be finite and positive"),
+        (MoEActivationFunction.SILU, 10.0, "must be omitted for other activations"),
+    ],
+    ids=["missing", "nan", "silu-with-limit"],
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_expert_rows_rejects_activation_limit(mesh_device, mesh_shape, expect_error, act, limit, error):
+    """A forced expert rows call checks activation_limit before any kernel compiles."""
+    _skip_unless_blackhole(mesh_device)
+    case = _Case(mesh_device, 8, 32, 4, 1024, 2048, act=act, limit=limit, goldens=False)
+    before = mesh_device.num_program_cache_entries()
+    with _kernel("expert_rows"), expect_error(RuntimeError, error):
+        case.call()
+    after = mesh_device.num_program_cache_entries()
+    assert after == before, f"a rejected call changed the program cache: {before} -> {after} entries"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("tokens", [1, 2, 3, 6, 16, 32, 48, 63, 64, 128])
 @pytest.mark.parametrize("cfg", [(4, 4, 256, 512), (8, 4, 256, 320)], ids=["c4_h512", "c2_h320"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
