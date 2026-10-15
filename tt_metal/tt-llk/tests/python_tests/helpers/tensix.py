@@ -28,16 +28,14 @@ class TensixThread(IntEnum):
     PACK = 2
 
 
-# Must match GPRS_PER_THREAD, TENSIX_THREADS and gpr_dump (mailboxes_arr - GPR_DUMP_WORDS)
-# in tests/helpers/src/brisc.cpp.
+# 3 x 64 Tensix GPRs copied below the mailboxes, keep in sync with GPR_DUMP_WORDS in brisc.cpp.
 GPRS_PER_THREAD = 64
 TENSIX_THREADS = len(TensixThread)
 GPR_DUMP_WORDS = GPRS_PER_THREAD * TENSIX_THREADS
 GPR_BYTES = 4
 GPR_DUMP_BYTES = GPR_DUMP_WORDS * GPR_BYTES
 
-# GPRs ckernel_gpr_map.h designates as temporaries.
-# They hold path-dependent intermediates, not configuration state.
+# ckernel_gpr_map.h temporaries: path-dependent intermediates, not configuration state.
 SCRATCH_GPRS = {
     # TMP0, TMP1, TMP_LO, TMP_HI
     TensixThread.UNPACK: frozenset({12, 13, 18, 19}),
@@ -55,8 +53,7 @@ class TensixState:
         state = asdict(get_tensix_state(location, device_id=0))
         has_gprs = cls.has_gprs(state)
         if not has_gprs and TestConfig.TEST_TARGET.run_simulator:
-            # ttsim aborts BRISC's GPR copy on the first thread-1 word
-            # ("UndefinedBehavior: tensix_regfile_rd32: offset=0x100"), so its state has no GPRs.
+            # ttsim aborts BRISC's GPR copy, so its state has no GPRs.
             return state
         names = cls._gpr_names(location)
         if has_gprs:
@@ -107,7 +104,6 @@ class TensixState:
     @classmethod
     def _dump_gprs(cls, location: str) -> dict[tuple[int, int], int]:
         # ttexalens reads GPRs by halting BRISC, which hangs it; BRISC copies them to L1 instead.
-        # Only reached on silicon: fetch returns before this on the simulator.
         dump_address = device_module.Mailboxes.Unpacker.value - GPR_DUMP_BYTES
         device_print_end = (
             TestConfig.DEVICE_PRINT_BUFFER_BASE + TestConfig.DEVICE_PRINT_BUFFER_SIZE
