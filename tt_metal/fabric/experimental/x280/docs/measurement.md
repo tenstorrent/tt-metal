@@ -25,8 +25,8 @@ and all at B=1 and writers 1 at B=4 for (C, K) = (8, 16), (8, 32), (16, 32) and
 repeat `T4` and `T4.c8k16` with the consumer visiting 2 or 4 workers per pass
 and which no campaign has yet measured, `eth_credit.ethernet_hop`, the Ethernet hop alone
 over slot size and batch, `eth_credit.noc_hop` and `eth_credit.receive_side`, the NoC hop and
-the receive side alone at the throughput sweep's shapes, and `eth_credit.throughput`,
-eth_credit's slot, batch and P
+the receive side alone on the leg grid (slots 160 to 16480 B at P = 1, 2 and 4), and
+`eth_credit.throughput`, eth_credit's slot, batch and P
 sweep across the Ethernet link of cards 0 and 1 (`TT_VISIBLE_DEVICES` unset, so every card is
 visible), and
 the 18 `bw.tensix_to_x280` points that extend its transfer-size axis to 128, 320,

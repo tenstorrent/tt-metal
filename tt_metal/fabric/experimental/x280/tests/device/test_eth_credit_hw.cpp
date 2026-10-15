@@ -120,21 +120,26 @@ std::array<uint32_t, EC_MAX_P> each(uint32_t P, uint32_t n) {
 
 constexpr uint32_t Slot(uint32_t payload) { return EC_HEADER_BYTES + payload; }
 
-// The throughput sweep's shapes, at N_LINK = N_DELIVER = 8. The legs measured
-// alone repeat them, so the tabulator sets each leg beside the whole path.
-struct ThroughputPoint {
-    uint32_t P, slot, batch;
+// The end-to-end grid the legs measured alone run on: the throughput sweep's
+// slot sizes at P = 1, 2 and 4, BATCH 4 and N_LINK = N_DELIVER = 8, so the
+// tabulator sets each leg beside the whole path at the shapes both measured.
+struct LegPoint {
+    uint32_t P, slot;
 };
-constexpr ThroughputPoint kThroughputPoints[] = {
-    {1u, Slot(64u), 1u},
-    {1u, Slot(64u), 4u},
-    {1u, Slot(1024u), 1u},
-    {1u, Slot(1024u), 4u},
-    {1u, Slot(4096u), 1u},
-    {1u, Slot(4096u), 4u},
-    {1u, Slot(16384u), 4u},
-    {2u, Slot(4096u), 4u},
-    {4u, Slot(4096u), 4u}};
+constexpr uint32_t kLegBatch = 4u;
+constexpr LegPoint kLegGrid[] = {
+    {1u, Slot(64u)},
+    {1u, Slot(1024u)},
+    {1u, Slot(4096u)},
+    {1u, Slot(16384u)},
+    {2u, Slot(64u)},
+    {2u, Slot(1024u)},
+    {2u, Slot(4096u)},
+    {2u, Slot(16384u)},
+    {4u, Slot(64u)},
+    {4u, Slot(1024u)},
+    {4u, Slot(4096u)},
+    {4u, Slot(16384u)}};
 
 }  // namespace
 
@@ -547,7 +552,20 @@ TEST_P(EthCreditHw, EriscWallClockTicksAtProgrammedAiclk) {
 // of its window spent in W1 stores. A rate flat in slot size with W1
 // dominating the sender's window names the X280's W1 as the bound.
 TEST_P(EthCreditHw, ThroughputBySlotBatchAndP) {
-    for (const ThroughputPoint& pt : kThroughputPoints) {
+    struct Point {
+        uint32_t P, slot, batch;
+    };
+    const Point points[] = {
+        {1u, Slot(64u), 1u},
+        {1u, Slot(64u), 4u},
+        {1u, Slot(1024u), 1u},
+        {1u, Slot(1024u), 4u},
+        {1u, Slot(4096u), 1u},
+        {1u, Slot(4096u), 4u},
+        {1u, Slot(16384u), 4u},
+        {2u, Slot(4096u), 4u},
+        {4u, Slot(4096u), 4u}};
+    for (const Point& pt : points) {
         const suite::Case c{
             .name = "throughput_sweep",
             .shape = {pt.P, 8u, 8u, pt.slot, pt.batch},
@@ -598,12 +616,12 @@ TEST_P(EthCreditHw, EthernetHopBySlotAndBatch) {
 }
 
 // The NoC hop alone, the sending forwarder into E0 sinking locally (W1, W2,
-// R3): packet rate on the forwarder's clock at the throughput sweep's shapes.
-TEST_P(EthCreditHw, NocHopBySlotBatchAndP) {
-    for (const ThroughputPoint& pt : kThroughputPoints) {
+// R3): packet rate on the forwarder's clock on the leg grid.
+TEST_P(EthCreditHw, NocHopBySlotAndP) {
+    for (const LegPoint& pt : kLegGrid) {
         suite::Case c{
             .name = "noc_hop_sweep",
-            .shape = {pt.P, 8u, 8u, pt.slot, pt.batch},
+            .shape = {pt.P, 8u, 8u, pt.slot, kLegBatch},
             .direction = ec::Direction::AToB,
             .packets = each(pt.P, 20000u)};
         c.stage.e0_sink_local = true;
@@ -620,13 +638,12 @@ TEST_P(EthCreditHw, NocHopBySlotBatchAndP) {
 }
 
 // The receive side alone, E1 sourcing locally into the receiving forwarder
-// (W5, W6, R1): packet rate on the forwarder's clock at the throughput sweep's
-// shapes.
-TEST_P(EthCreditHw, ReceiveSideBySlotBatchAndP) {
-    for (const ThroughputPoint& pt : kThroughputPoints) {
+// (W5, W6, R1): packet rate on the forwarder's clock on the leg grid.
+TEST_P(EthCreditHw, ReceiveSideBySlotAndP) {
+    for (const LegPoint& pt : kLegGrid) {
         suite::Case c{
             .name = "receive_side_sweep",
-            .shape = {pt.P, 8u, 8u, pt.slot, pt.batch},
+            .shape = {pt.P, 8u, 8u, pt.slot, kLegBatch},
             .direction = ec::Direction::AToB,
             .packets = each(pt.P, 20000u)};
         c.stage.e1_source_self = true;

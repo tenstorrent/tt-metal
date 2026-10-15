@@ -3556,7 +3556,7 @@
       "member": "eth_credit/eth_credit",
       "argv": [
         "${HOST_BUILD}/x280_eth_credit",
-        "--gtest_filter=EthCredit/EthCreditHw.NocHopBySlotBatchAndP/0"
+        "--gtest_filter=EthCredit/EthCreditHw.NocHopBySlotAndP/0"
       ],
       "environment": {
         "TT_VISIBLE_DEVICES": null,
@@ -3568,7 +3568,7 @@
       "member": "eth_credit/eth_credit",
       "argv": [
         "${HOST_BUILD}/x280_eth_credit",
-        "--gtest_filter=EthCredit/EthCreditHw.ReceiveSideBySlotBatchAndP/0"
+        "--gtest_filter=EthCredit/EthCreditHw.ReceiveSideBySlotAndP/0"
       ],
       "environment": {
         "TT_VISIBLE_DEVICES": null,

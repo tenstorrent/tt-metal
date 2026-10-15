@@ -737,8 +737,8 @@ must fail:
 | `EriscWallClockTicksAtProgrammedAiclk` | the ERISC clock evidence over 100k packets |
 | `ThroughputBySlotBatchAndP` | the throughput sweep over slot size, `BATCH` and P |
 | `EthernetHopBySlotAndBatch` | the Ethernet hop alone (`EC_E0_SOURCE_SELF`, `EC_E1_SINK_LOCAL`) over payloads 64 B to 16 KiB and `BATCH` 1 to 8 at P = 1, `N_LINK` = 8: packet rate on E1's clock, against the 400G per-link rate the tabulator sets beside it |
-| `NocHopBySlotBatchAndP` | the NoC hop alone (`EC_E0_SINK_LOCAL`, W1, W2 and R3) at the throughput sweep's shapes: packet rate on the sending forwarder's clock |
-| `ReceiveSideBySlotBatchAndP` | the receive side alone (`EC_E1_SOURCE_SELF`, W5, W6 and R1) at the throughput sweep's shapes: packet rate on the receiving forwarder's clock |
+| `NocHopBySlotAndP` | the NoC hop alone (`EC_E0_SINK_LOCAL`, W1, W2 and R3) on the leg grid, the throughput sweep's slot sizes at P = 1, 2 and 4 and `BATCH` 4: packet rate on the sending forwarder's clock |
+| `ReceiveSideBySlotAndP` | the receive side alone (`EC_E1_SOURCE_SELF`, W5, W6 and R1) on the leg grid: packet rate on the receiving forwarder's clock |
 
 The E0/E1 kernels are built by the Metal JIT at launch. `x280_eth_credit_jit`
 (`tools/eth_credit_jit_check.sh`) compiles them without a device the way the JIT
@@ -896,7 +896,7 @@ ticks and, for a failed run, the attribution line and every chip's kernel
 results; rates come from the tabulator. The manifest's `eth_credit.throughput`,
 `eth_credit.ethernet_hop`, `eth_credit.noc_hop` and `eth_credit.receive_side`
 configurations run `ThroughputBySlotBatchAndP`, `EthernetHopBySlotAndBatch`,
-`NocHopBySlotBatchAndP` and `ReceiveSideBySlotBatchAndP` with every card visible
+`NocHopBySlotAndP` and `ReceiveSideBySlotAndP` with every card visible
 (`TT_VISIBLE_DEVICES` unset),
 for the reason below. The design is above.
 
