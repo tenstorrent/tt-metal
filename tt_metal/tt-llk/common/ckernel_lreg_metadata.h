@@ -134,10 +134,11 @@ constexpr unsigned write(unsigned x) {
 // itself wherever a disabled lane can keep the old value; older compilers need
 // it declared here.
 #if defined(__riscv_xtt_sfprawlreg_merge)
-constexpr unsigned inputs(unsigned x) { return read(x); }
+constexpr unsigned lane_inputs(unsigned reads, unsigned) { return reads; }
 #else
-constexpr unsigned inputs(unsigned x) { return read(x) | write(x); }
+constexpr unsigned lane_inputs(unsigned reads, unsigned writes) { return reads | writes; }
 #endif
+constexpr unsigned inputs(unsigned x) { return lane_inputs(read(x), write(x)); }
 // A template argument requires constant evaluation without introducing local
 // constexpr objects (whose initialization can emit stack stores at -O0).
 template <unsigned Mask> struct constant_mask { enum : unsigned { value = Mask }; };
@@ -159,4 +160,16 @@ template <unsigned Mask> struct constant_mask { enum : unsigned { value = Mask }
 // leaving it out keeps the masks constant when only the operand is runtime.
 #define TT_LLK_SFPU_ISSUE_TT_AS(word, effect_word) \
     do { ckernel::instrn_buffer[0] = word; TT_LLK_SFPU_EFFECT(effect_word); } while (0)
+// Issue an SFPLOADMACRO WORD whose configured template the caller knows: the
+// word does not carry the template, so it decodes as touching every LREG.
+// READS and WRITES are constant masks of the LREGs the loaded macro reads and
+// writes.
+#define TT_LLK_SFPU_ISSUE_TT_MACRO(word, reads, writes)                                         \
+    do {                                                                                        \
+        ckernel::instrn_buffer[0] = word;                                                       \
+        TT_LLK_SFPRAWLREG_EFFECT(                                                               \
+            (ckernel::raw_lreg_effect::constant_mask<                                           \
+                ckernel::raw_lreg_effect::lane_inputs((reads), (writes))>::value),              \
+            (ckernel::raw_lreg_effect::constant_mask<(writes)>::value));                        \
+    } while (0)
 #define TT_LLK_SFPU_ISSUE_TTI(word) do { INSTRUCTION_WORD(word); TT_LLK_SFPU_EFFECT(word); } while (0)
