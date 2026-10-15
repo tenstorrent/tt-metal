@@ -13,6 +13,7 @@
 #include "llk_math_common.h"
 #include "llk_operands.h"
 #include "llk_sync.h"
+#include "api/debug/waypoint.h"
 
 namespace llk_math_detail {
 template <auto...>
@@ -152,7 +153,11 @@ inline void llk_math_pack_sync_init() {
         // llk_unpack_hw_configure and raises UNPACK_INIT behind the seeds. Pass it here, before this thread's first
         // SEMWAIT on UNPACK_MATH, so no SEMINIT can land on a pending waiter. A RISC-side spin, see
         // _llk_sync_barrier_pass_; it costs nothing, math has nothing to do before the unpacker's first post anyway.
+        // Unbounded: a program whose unpack thread never calls llk_unpack_hw_configure stays here, so the spin is
+        // bracketed by waypoints for the watcher.
+        WAYPOINT("MHBW");
         _llk_sync_barrier_pass_(semaphore::UNPACK_INIT);
+        WAYPOINT("MHBD");
     }
 }
 

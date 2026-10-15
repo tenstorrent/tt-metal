@@ -161,10 +161,13 @@ inline void _llk_sync_advance_dest_section_()
  * first program after reset blocks the passing thread until this runs, and @ref _llk_sync_barrier_pass_ restores 0.
  *
  * @param sem_index Semaphore id in range [0, 7].
+ * @note Call once per program on the seeding thread, after the seeds, paired with exactly one
+ *       @ref _llk_sync_barrier_pass_ on the passing thread. Neither helper waits for the other's previous instruction
+ *       to retire, so a second pair with no DEST section between them races the first pass's SEMGET.
  */
 inline void _llk_sync_barrier_raise_(std::uint8_t sem_index)
 {
-    _llk_sync_init_(sem_index, 1, 0);
+    _llk_sync_init_(sem_index, 1 /*max*/, 0 /*init*/);
     _llk_sync_post_(sem_index);
 }
 
@@ -176,6 +179,8 @@ inline void _llk_sync_barrier_raise_(std::uint8_t sem_index)
  * semaphores is ordered behind their SEMINITs.
  *
  * @param sem_index Semaphore id in range [0, 7].
+ * @note Call once per program on the passing thread, before its first wait or post on the seeded semaphores, paired
+ *       with exactly one @ref _llk_sync_barrier_raise_ on the seeding thread.
  */
 inline void _llk_sync_barrier_pass_(std::uint8_t sem_index)
 {

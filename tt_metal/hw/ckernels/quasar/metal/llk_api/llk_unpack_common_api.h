@@ -59,6 +59,10 @@ inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
  *
  * @param operandA: The input0 operand circular buffer
  * @param operandB: The input1 operand circular buffer
+ * @note With UnpackToDestEn, call exactly once per program and pair it with exactly one @ref llk_math_pack_sync_init on
+ *       the math thread: math spins on the UNPACK_INIT barrier until the raise below lands, so a math-side call with no
+ *       unpack-side partner hangs the math thread (watcher waypoint MHBW), and a second unpack-side call re-seeds
+ *       UNPACK_MATH / UNPACK_PACK and raises again, racing the first pass (see @ref _llk_sync_barrier_raise_).
  */
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
