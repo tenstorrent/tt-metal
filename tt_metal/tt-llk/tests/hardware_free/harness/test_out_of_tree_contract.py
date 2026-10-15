@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-FIXTURE_DIR = Path(__file__).resolve().parents[1] / "out_of_tree"
+FIXTURE_DIR = Path(__file__).resolve().parents[2] / "out_of_tree"
 # Deliberately below the ambient pytest-timeout budget CI passes (--timeout=60
 # in setup-and-test.yml and collect-test-durations.yml): our own timeout has to
 # fire first, because ``_run_fixture`` turns it into a failure carrying the

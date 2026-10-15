@@ -180,6 +180,7 @@ jobs:
       llk-quasar-changed: ${{ steps.find-changes.outputs.llk-quasar-changed }}
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
+      llk-hardware-free-changed: ${{ steps.find-changes.outputs.llk-hardware-free-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
       ttsim-ci-changed: ${{ steps.find-changes.outputs.ttsim-ci-changed }}
     steps:
@@ -646,6 +647,55 @@ jobs:
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
 
+  # Host-only LLK tests (tests/hardware_free). Same change set as llk-smoke-tests,
+  # plus a hardware-free-only change and a Quasar change: the stall-wrapper probe
+  # used to run inside the Quasar compile job because it lived under python_tests/quasar.
+  llk-hardware-free-tests:
+    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-hardware-free-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-quasar-changed == 'true')
+      }}
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    timeout-minutes: 30
+    container:
+      image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        shell: bash
+        working-directory: tt_metal/tt-llk/tests
+        run: ./setup_testing_env.sh
+      - name: Run hardware-free tests
+        shell: bash
+        working-directory: tt_metal/tt-llk
+        run: ./tests/run_hardware_free.sh
+      - name: Upload JUnit report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: junit-report-llk-hardware-free
+          path: tt_metal/tt-llk/tests/python_tests/pytest-report-hardware-free-*.xml
+      - name: Publish Test Results
+        if: always()
+        uses: mikepenz/action-junit-report@v5
+        with:
+          report_paths: tt_metal/tt-llk/tests/python_tests/pytest-report-hardware-free-*.xml
+          annotate_only: true
+          include_passed: true
+          fail_on_failure: false
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -670,6 +720,7 @@ jobs:
       - build-docs
       - llk-smoke-tests
       - llk-quasar-tests
+      - llk-hardware-free-tests
       - verify-time-budgets
     runs-on: ubuntu-slim
     steps:
@@ -687,6 +738,6 @@ jobs:
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
-            llk-smoke-tests, llk-quasar-tests
+            llk-smoke-tests, llk-quasar-tests, llk-hardware-free-tests
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"

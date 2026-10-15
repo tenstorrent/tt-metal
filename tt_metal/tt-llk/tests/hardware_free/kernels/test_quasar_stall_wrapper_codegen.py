@@ -10,11 +10,11 @@ what a hand-written ``TTI_STALLWAIT`` with the same slots produces.
 
 Compile-only. It builds a probe translation unit against the Quasar headers with
 the sfpi compiler and reads the ``.ttinsn`` words back out of the assembly, so it
-needs no Quasar device -- the Quasar compile job is the one that runs it, which is
-also the job a change to the guarded header triggers. Every probe is paired
-with a reference function that hand-writes the expected stall, which keeps the
-expected encoding in the C++ where the constants live rather than duplicating
-opcode and field values here.
+needs no Quasar device. The hardware-free job runs it; ``pytest.mark.quasar``
+keeps a ``-m quasar`` selection on this file too. Every probe is paired with a
+reference function that hand-writes the expected stall, which keeps the expected
+encoding in the C++ where the constants live rather than duplicating opcode and
+field values here.
 """
 
 import re
@@ -24,8 +24,8 @@ from pathlib import Path
 import pytest
 from helpers.chip_architecture import quasar_variant
 
-# The Quasar compile job selects on this marker; without it the guard would not run
-# on a change to the header it guards.
+# Not a skip. A ``-m quasar`` run still selects this file; the hardware-free job
+# runs the directory without a marker filter.
 pytestmark = pytest.mark.quasar
 
 _TESTS_ROOT = Path(__file__).resolve().parents[2]
