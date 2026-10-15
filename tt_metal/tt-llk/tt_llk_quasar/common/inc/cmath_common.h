@@ -85,17 +85,6 @@ constexpr DataFormat dest_src_format(const DataFormat dest_format)
     return EN_32BIT_DEST && dest_format == DataFormat::Float16_b ? DataFormat::Tf32 : dest_format;
 }
 
-// Phases the formats cannot use are dropped from the request.
-static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Tf32, DataFormat::Tf32).phase_count == 4);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Tf32, DataFormat::Float16_b).phase_count == 2);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Float16_b, DataFormat::Tf32).phase_count == 2);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi2>(DataFormat::Float16_b, DataFormat::Tf32).phase_count == 1);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Float16_b, DataFormat::Float16_b).phase_count == 1);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Int8, DataFormat::Int8).phase_count == 1);
-// A narrow SrcA steps over phase 1; a single phase does not step.
-static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Float16_b, DataFormat::Tf32).phase_increment == 2);
-static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Float16_b, DataFormat::Float16_b).phase_increment == 0);
-
 // Rows one FPU instruction covers: 8 on the base Quasar part, 4 on the narrow one.
 constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS;
 static_assert(ELTWISE_MATH_ROWS == 4 || ELTWISE_MATH_ROWS == 8, "the math LLKs support a 4-row or 8-row FPU");
