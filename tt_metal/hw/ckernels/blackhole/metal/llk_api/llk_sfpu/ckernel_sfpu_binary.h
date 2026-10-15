@@ -8,6 +8,7 @@
 #include <limits>
 
 #include "ckernel.h"
+#include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
@@ -95,6 +96,12 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
     return result;
 }
 
+// nextafter reads these from vConstIntPrgm0 to 2, which sfpu_binary_init programs.
+constexpr std::int32_t nextafter_abs_mask = 0x7FFFFFFF;
+constexpr std::int32_t nextafter_inf_bits = 0x7F800000;
+template <BinaryOp BINOP>
+constexpr std::int32_t nextafter_ulp_step = (BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1;
+
 template <
     bool APPROXIMATION_MODE,
     BinaryOp BINOP,
@@ -106,16 +113,55 @@ inline void calculate_sfpu_binary(
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
     // XLOGY: the log body's two polynomial constants are bound here and held in LREGs across the
     // loop; as literals inside the loop they would be re-materialised on every row.
-    // Declared for every op but loaded only for XLOGY: sfpi does not drop an unused SFPLOADI.
-    // Unassigned for every other op, so do not read them outside the XLOGY branch.
+    // Assigned only for XLOGY so no other arm can read them. The gate is not needed for codegen:
+    // sfpi drops a pre-loop constant nothing reads (every non-XLOGY instantiation is
+    // instruction-identical with the assignment unconditional, sfpi 7.83.0 and 7.84.0).
     sfpi::vFloat log_c;
     sfpi::vFloat log_d;
     if constexpr (BINOP == BinaryOp::XLOGY) {
         log_c = LogPoly::C;
         log_d = LogPoly::D;
     }
+    // MUL and POW keep the dst_reg++ walk: no compute API entry point runs them here. Every other op stores through
+    // ADDR_MOD_6, which steps Dest instead; an op that reads ADDR_MOD_6 after this one runs its own init first.
+    constexpr bool store_steps_dest = BINOP != BinaryOp::MUL && BINOP != BinaryOp::POW;
+    if constexpr (store_steps_dest) {
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    }
+    // bf16 RNE addend, hoisted out of the row loop. Unconditional on purpose: the arms that do
+    // not round never read it, and the compiler emits no SFPLOADI for it there (see log_c above).
+    const sfpi::vUInt rne_bias = bf16_rne_bias();
+    if constexpr (
+        (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
+        dst_rounding_mode == DstRoundingMode::NearestEven && ITERATIONS % 2 == 0) {
+        // Two rows at a time, so the second row's add covers the first's latency before its rounding reads it.
+        auto op = [](const sfpi::vFloat a, const sfpi::vFloat b) __attribute__((always_inline)) {
+            if constexpr (BINOP == BinaryOp::ADD) {
+                return a + b;
+            } else if constexpr (BINOP == BinaryOp::SUB) {
+                return a - b;
+            } else {
+                return b - a;
+            }
+        };
+        constexpr std::uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 4
+        for (int d = 0; d < ITERATIONS; d += 2) {
+            const sfpi::vFloat a0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+            const sfpi::vFloat b0 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+            const sfpi::vFloat a1 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi + 1];
+            const sfpi::vFloat b1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi + 1];
+            sfpi::vFloat r0 = op(a0, b0);
+            sfpi::vFloat r1 = op(a1, b1);
+            r0 = float32_to_bf16_rne_for_store(r0, rne_bias);
+            r1 = float32_to_bf16_rne_for_store(r1, rne_bias);
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = r0;
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = r1;
+        }
+        return;
+    }
     // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++) {
+    auto row = [&]() __attribute__((always_inline)) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr std::uint32_t dst_tile_size_sfpi = 32;
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
@@ -148,7 +194,7 @@ inline void calculate_sfpu_binary(
             // there: that gives one ULP at in0's own magnitude, which a fixed epsilon cannot.
             // bfloat16 keeps its mantissa in the top 16 bits of the fp32 dest register, so one of
             // its ULPs is 0x10000 there.
-            constexpr int kUlpStep = (BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1;
+            constexpr int kUlpStep = nextafter_ulp_step<BINOP>;
             // Kept flat, with every value declared up front: the sfpi predication pass does not
             // survive a v_if nested inside a v_else here.
             sfpi::vInt bits = sfpi::as<sfpi::vInt>(in0);
@@ -173,10 +219,9 @@ inline void calculate_sfpu_binary(
             // the sign first is what brings -0.0 into the guard.
             sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
             sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
-            sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
-            v_if(mag_a == 0.0f && in1 > 0.0f) { result = tiny; }
+            v_if(mag_a == 0.0f && in1 > 0.0f) { result = sfpi::vConstFloatPrgm2; }
             v_endif;
-            v_if(mag_a == 0.0f && in1 < 0.0f) { result = -tiny; }
+            v_if(mag_a == 0.0f && in1 < 0.0f) { result = -sfpi::vFloat(sfpi::vConstFloatPrgm2); }
             v_endif;
             // Equal operands return the target, so two zeros return in1's zero, which is not
             // always in0's: nextafter(+0, -0) is -0. This runs after the two guards above because
@@ -191,22 +236,35 @@ inline void calculate_sfpu_binary(
             // reason ckernel_sfpu_isclose.h reads bit patterns for its own Inf/NaN lanes. A
             // widened bfloat16 NaN has that exponent and a non-zero mantissa too, so this serves
             // both entry points unchanged. Last, so it wins over the direction and zero arms.
-            constexpr int32_t kInfBits = 0x7F800000;
-            constexpr int32_t kAbsMask = 0x7FFFFFFF;
-            v_if((bits & kAbsMask) > kInfBits) { result = nan; }
+            v_if((bits & sfpi::vConstIntPrgm0) > sfpi::vConstIntPrgm1) { result = nan; }
             v_endif;
-            v_if((sfpi::as<sfpi::vInt>(in1) & kAbsMask) > kInfBits) { result = nan; }
+            v_if((sfpi::as<sfpi::vInt>(in1) & sfpi::vConstIntPrgm0) > sfpi::vConstIntPrgm1) { result = nan; }
             v_endif;
         }
 
         if constexpr (
             (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
             dst_rounding_mode == DstRoundingMode::NearestEven) {
-            result = float32_to_bf16_rne(result);
+            result = float32_to_bf16_rne_for_store(result, rne_bias);
         }
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
+        if constexpr (store_steps_dest) {
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = result;
+        } else {
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+            sfpi::dst_reg++;
+        }
+    };
+
+    if constexpr ((BINOP == BinaryOp::XLOGY && is_fp32_dest_acc_en) || BINOP == BinaryOp::POW) {
+        for (int d = 0; d < ITERATIONS; d++) {
+            row();
+        }
+    } else {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            row();
+        }
     }
 }
 
@@ -215,6 +273,31 @@ inline void calculate_sfpu_binary_mul(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    const sfpi::vUInt rne_bias = bf16_rne_bias();
+    // The store steps Dest; an op that reads ADDR_MOD_6 after this one runs its own init first.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS % 2 == 0) {
+        // Two rows at a time, so the second row's multiply covers the first's latency before its rounding reads it.
+#pragma GCC unroll 4
+        for (int d = 0; d < ITERATIONS; d += 2) {
+            const sfpi::vFloat a0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+            const sfpi::vFloat b0 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+            const sfpi::vFloat a1 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi + 1];
+            const sfpi::vFloat b1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi + 1];
+            const sfpi::vUInt bits0 = sfpi::as<sfpi::vUInt>(a0 * b0);
+            const sfpi::vUInt bits1 = sfpi::as<sfpi::vUInt>(a1 * b1);
+            sfpi::vUInt rounded0 = rne_bias;
+            v_if(a0 != 0 && b0 != 0) { rounded0 += bits0 + ((bits0 << 15) >> 31); }
+            v_endif;
+            sfpi::vUInt rounded1 = rne_bias;
+            v_if(a1 != 0 && b1 != 0) { rounded1 += bits1 + ((bits1 << 15) >> 31); }
+            v_endif;
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = sfpi::as<sfpi::vFloat>(rounded0);
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = sfpi::as<sfpi::vFloat>(rounded1);
+        }
+        return;
+    }
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
@@ -222,24 +305,128 @@ inline void calculate_sfpu_binary_mul(
         sfpi::vFloat result = in0 * in1;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // software RNE approach:
-            result = float32_to_bf16_rne(result);
-
-            // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
-            v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
+            // float32_to_bf16_rne_for_store's sum, where either input is +0 left at 0x7fff, whose stored high half is +0:
+            // the FPU's 0 * x = 0.
+            sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(result);
+            sfpi::vUInt lsb = (bits << 15) >> 31;
+            sfpi::vUInt rounded = rne_bias;
+            v_if(in0 != 0 && in1 != 0) { rounded += bits + lsb; }
             v_endif;
+            result = sfpi::as<sfpi::vFloat>(rounded);
         }
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = result;
+    }
+}
+
+// Ordered so that no instruction reads a multiply-add result on the next cycle.
+template <int ITERATIONS>
+inline void calculate_sfpu_binary_div_fp32_rows(
+    const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
+    // Macro 0 loads the out row into dead L4; template 0's ENCC follows, then the store of L0.
+    TTI_SFPENCC(3, 0, 12, 10);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, (0 << 3) | 4);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (0x80 | (1 << 3) | 3) << 8);
+    TTI_SFPCONFIG(0, 4, 0);
+    TTI_SFPCONFIG(0x010, 8, 1);
+    constexpr std::uint32_t row_len = 32;
+    load_replay_buf<Exec>(0, row_len, [in0, in1] {
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in1);
+        TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in0);
+        TTI_SFPSETEXP(127, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+        TTI_SFPARECIP(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG4, 1);
+        TTI_SFPSETEXP(127, p_sfpu::LREG2, p_sfpu::LREG5, 1);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG3, 2);
+        TTI_SFPEXEXP(0, p_sfpu::LREG2, p_sfpu::LREG6, 1);
+        TTI_SFPMUL(p_sfpu::LREG5, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG7, 0);
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG1, 1);
+        TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG5, 2);
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG3, 0);
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, 6);
+        TTI_SFPEXEXP(0, p_sfpu::LREG3, p_sfpu::LREG1, 1);
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG5, 4);
+        TTI_SFPSHFT(0xFFF, p_sfpu::LREG5, p_sfpu::LREG1, 5);
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG4, 2);
+        TTI_SFPSETEXP(0, p_sfpu::LREG3, p_sfpu::LREG4, 0);
+        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG1, 6);
+        TTI_SFPSETEXP(0, p_sfpu::LCONST_1, p_sfpu::LREG1, 0);
+        TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+        TTI_SFPSETSGN(0, p_sfpu::LREG0, p_sfpu::LREG5, 1);
+        TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPSETMAN(0, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+        TTI_SFPGT(0, p_sfpu::LREG13, p_sfpu::LREG5, 8);
+        TTI_SFPIADD(0xFFF, p_sfpu::LREG6, p_sfpu::LREG4, 9);
+        TTI_SFPIADD(0xF01, p_sfpu::LREG6, p_sfpu::LREG6, 1);
+        TTI_SFPIADD(0x07E, p_sfpu::LREG7, p_sfpu::LREG4, 9);
+        TTI_SFPIADD(0xF80, p_sfpu::LREG7, p_sfpu::LREG7, 1);
+        TTI_SFPCOMPC(0, 0, 0, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LREG0, 1);
+    });
+    TT_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG4 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, out | (p_sfpu::LREG4 >> 2));
+    TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 8
+    for (int d = 1; d < ITERATIONS; d++) {
+        lltt::replay(0, row_len);
+        TT_SFPLOADMACRO(
+            (0 << 2) | (p_sfpu::LREG4 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, out | (p_sfpu::LREG4 >> 2));
+        TTI_INCRWC(0, 2, 0, 0);
+    }
+}
+
+// Ordered so that no instruction reads a multiply-add result on the next cycle. It rounds to nearest even as
+// bits + 0x7fff + lsb with no mask, since the store to a Float16_b DEST keeps only the high half.
+template <int ITERATIONS>
+inline void calculate_sfpu_binary_div_bf16_rows(
+    const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
+    // Macro 0 loads the out row into dead L3; template 0 then writes the rounded sum to L16, which is stored.
+    constexpr std::uint32_t add_l3_l0 = TT_OP_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, 4);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, add_l3_l0 & 0xffff);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, add_l3_l0 >> 16);
+    TTI_SFPCONFIG(0, 0, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x40 | (3 << 3) | 4);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (0x40 | (4 << 3) | 3) << 8);
+    TTI_SFPCONFIG(0, 4, 0);
+    TTI_SFPCONFIG(0x110, 8, 1);
+    constexpr std::uint32_t row_len = 21;
+    load_replay_buf<Exec>(0, row_len, [in0, in1, out] {
+        TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in1);
+        TTI_SFPARECIP(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG4, 2);
+        TTI_SFPLOADI(p_sfpu::LREG6, 2, 0x7fff);
+        TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG3, 3);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG5, 1);
+        TTI_SFPGT(0, p_sfpu::LREG4, p_sfpu::LCONST_0, 1);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG0, 2);
+        TTI_SFPENCC(3, 0, 0, 10);
+        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG2, 0, 6);
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, 2);
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        TTI_SFPSETSGN(0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+        TTI_SFPENCC(3, 0, 0, 10);
+        TT_SFPLOADMACRO(
+            (0 << 2) | (p_sfpu::LREG3 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, out | (p_sfpu::LREG3 >> 2));
+        TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG3, 5);
+        TTI_SFPSHFT(0xFE1, p_sfpu::LREG3, p_sfpu::LREG3, 5);
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, 4);
+        TTI_INCRWC(0, 2, 0, 0);
+    });
+#pragma GCC unroll 8
+    for (int d = 1; d < ITERATIONS; d++) {
+        lltt::replay(0, row_len);
     }
 }
 
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_div(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+#ifdef DISABLE_SFPLOADMACRO
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    const sfpi::vUInt rne_bias = bf16_rne_bias();
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
@@ -297,21 +484,42 @@ inline void calculate_sfpu_binary_div(
 
         if constexpr (!is_fp32_dest_acc_en) {
             // software RNE approach:
-            result = float32_to_bf16_rne(result);
+            result = float32_to_bf16_rne_for_store(result, rne_bias);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
     }
+#else
+    // Each call programs load macro 0 and records its row into the replay buffer from slot 0, so an op that reads
+    // either after a division runs its own init first.
+    constexpr std::uint32_t dst_tile_rows = 64, dst_row_mask = 0x3ff;  // SFPLOAD and SFPSTORE take a 10-bit row
+    const std::uint32_t in0 = (dst_index_in0 * dst_tile_rows) & dst_row_mask;
+    const std::uint32_t in1 = (dst_index_in1 * dst_tile_rows) & dst_row_mask;
+    const std::uint32_t out = (dst_index_out * dst_tile_rows) & dst_row_mask;
+    if constexpr (is_fp32_dest_acc_en) {
+        calculate_sfpu_binary_div_fp32_rows<ITERATIONS>(in0, in1, out);
+    } else {
+        calculate_sfpu_binary_div_bf16_rows<ITERATIONS>(in0, in1, out);
+    }
+#endif
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
-    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW) {
-        // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
+    if constexpr (BINOP == BinaryOp::DIV) {
+        // The division rows read 2.0 for the Newton steps from Prgm0 and +inf from Prgm1.
+        sfpu_reciprocal_init<false>();
+        sfpi::vConstFloatPrgm1 = std::numeric_limits<float>::infinity();
+    } else if constexpr (BINOP == BinaryOp::POW) {
+        // Initialisation for use of sfpu_reciprocal_iter<2> in POW.
         sfpu_reciprocal_init<false>();
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
         _init_log_<APPROXIMATION_MODE>();
+    } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
+        sfpi::vConstIntPrgm0 = nextafter_abs_mask;
+        sfpi::vConstIntPrgm1 = nextafter_inf_bits;
+        sfpi::vConstIntPrgm2 = nextafter_ulp_step<BINOP>;
     }
 }
 

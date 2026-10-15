@@ -43,6 +43,17 @@ ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
         "Unsupported data format for left shift. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_left_shift,
+        (APPROX, 32 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::None)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -52,6 +63,7 @@ ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
         idst1,
         odst,
         VectorMode::RC)));
+#endif
 }
 
 // clang-format off
@@ -91,6 +103,17 @@ ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
     // UInt32 uses a logical shift and clamps counts >= 32 to 31, matching the
     // scalar right-shift contract. UInt16 and Int32 retain their existing paths.
     if constexpr (is_uint32_format(data_format)) {
+#ifdef ARCH_BLACKHOLE
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_clamped_logical_right_shift,
+            (APPROX, 32 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::None)));
+#else
         MATH((SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -100,7 +123,19 @@ ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
             idst1,
             odst,
             VectorMode::RC)));
+#endif
     } else {
+#ifdef ARCH_BLACKHOLE
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_right_shift,
+            (APPROX, 32 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::None)));
+#else
         MATH((SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -110,6 +145,7 @@ ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
             idst1,
             odst,
             VectorMode::RC)));
+#endif
     }
 }
 
@@ -145,6 +181,17 @@ ALWI void binary_logical_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32
         "Unsupported data format for logical right shift. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_logical_right_shift,
+        (APPROX, 32 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::None)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -154,6 +201,7 @@ ALWI void binary_logical_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32
         idst1,
         odst,
         VectorMode::RC)));
+#endif
 }
 
 /**

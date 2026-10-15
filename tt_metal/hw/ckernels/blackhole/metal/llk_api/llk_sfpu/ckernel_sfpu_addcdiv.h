@@ -26,6 +26,7 @@ inline void calculate_addcdiv(
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
     const sfpi::vFloat value_float = Converter::as_float(value);
+    const sfpi::vUInt rne_bias = bf16_rne_bias();
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -34,7 +35,7 @@ inline void calculate_addcdiv(
         sfpi::vFloat in2 = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];
         sfpi::vFloat result = in0 + (in1 * value_float * sfpu_reciprocal_iter<2>(in2));
         if constexpr (!is_fp32_dest_acc_en) {
-            result = float32_to_bf16_rne(result);
+            result = float32_to_bf16_rne_for_store(result, rne_bias);
         }
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
