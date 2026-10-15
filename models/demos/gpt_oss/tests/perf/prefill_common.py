@@ -86,6 +86,24 @@ def prompt_mode():
     return mode
 
 
+def trace_mode():
+    """PREFILL_TRACE=1: traced prefill, called exactly as the demo calls it (enable_trace=True,
+    warmup_prefill=False). Default 0: untraced, the frozen headline regime."""
+    value = os.getenv("PREFILL_TRACE", "0").strip()
+    assert value in ("0", "1"), f"PREFILL_TRACE={value!r}; expected 0 or 1"
+    return value == "1"
+
+
+def padded_prefill_len(model_args, length):
+    """The bucket the generator pads a length-`length` prompt to (the model's hook, else the shared rule)."""
+    from models.tt_transformers.tt.common import get_padded_prefill_len
+
+    if isinstance(model_args, (list, tuple)):  # prepare_gpt_oss_generator_args returns one args per data-parallel group
+        model_args = model_args[0]
+    pad = getattr(model_args, "get_padded_prefill_len", None)
+    return pad(length) if callable(pad) else get_padded_prefill_len(length)
+
+
 def env_snapshot():
     snap = {k: v for k, v in os.environ.items() if k.startswith(ENV_PREFIXES) or k in ENV_KEYS}
     for k in ENV_KEYS:

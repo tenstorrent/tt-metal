@@ -131,6 +131,14 @@ class ModelArgs:
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
             max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )
+        # calculate_prefill_warmup_seq_lens lists the shared buckets (128, 1024, 2048, ...). Add every bucket that
+        # self.get_padded_prefill_len can produce up to the cap (256 and 512), so those compile during warmup too.
+        bucket = 128
+        while bucket <= max_seq_len_to_warmup:
+            if bucket not in to_warmup_seq_lens:
+                to_warmup_seq_lens.append(bucket)
+            bucket = self.get_padded_prefill_len(bucket + 1)
+        to_warmup_seq_lens.sort()
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
 
@@ -154,6 +162,16 @@ class ModelArgs:
     @property
     def base_model_name(self):
         return get_base_model_name(self.model_name)
+
+    def get_padded_prefill_len(self, seq_len):
+        """Prefill bucket, read by the generator in place of common.get_padded_prefill_len (opt-in hook).
+
+        The next power of two, at least 128. It differs from the shared rule only for 129-512 tokens, which pad to
+        256 or 512 instead of 1024. Every bucket is a multiple of 64 and at least 128, as the routed MoE needs.
+        """
+        if seq_len <= 128:
+            return 128
+        return 1 << (int(seq_len) - 1).bit_length()
 
     def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
         """

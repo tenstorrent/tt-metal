@@ -49,6 +49,17 @@ MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 
 
+def _padded_prefill_len(model_args, seq_len):
+    """Prefill bucket for ``seq_len`` uncached tokens.
+
+    Opt-in hook: a model's args may define ``get_padded_prefill_len(seq_len)`` to use its own buckets
+    (GPT-OSS pads 129-512 to 256/512 instead of 1024). Every other model keeps the shared
+    ``common.get_padded_prefill_len``.
+    """
+    pad = getattr(model_args, "get_padded_prefill_len", None)
+    return pad(seq_len) if callable(pad) else get_padded_prefill_len(seq_len)
+
+
 @dataclass(frozen=True)
 class DeferredDecodeSampling:
     """One-shot decode logits and state captured before late device sampling.
@@ -391,7 +402,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     prefill_seq_len, num_cached, model_args.capped_warmup_seq_len
                 )
                 suffix = total_seq_len - num_cached
-                if suffix <= 0 or get_padded_prefill_len(suffix) != prefill_seq_len:
+                if suffix <= 0 or _padded_prefill_len(model_args, suffix) != prefill_seq_len:
                     logger.warning(
                         f"Skipping resumed prefill warmup for sequence length {prefill_seq_len}: "
                         f"offset {num_cached} leaves no suffix padding back to it within "
@@ -1281,7 +1292,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
             assert 0 <= num_cached < seq_len, f"user {i}: num_cached={num_cached} must be < seq_len={seq_len}"
         prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached)
+            _padded_prefill_len(self.model_args[0], seq_len - num_cached)
             for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
         ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
@@ -1863,7 +1874,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # get_attn_sdpa_prefill_program_config pins only 64 or 256 and two
             # passes always suffice.
             for _ in range(len(get_all_padded_prefill_lengths(int(seq_len))) + 1):
-                padded_suffix = get_padded_prefill_len(int(seq_len) - floored)
+                padded_suffix = _padded_prefill_len(self.model_args[0], int(seq_len) - floored)
                 alignment = self._resume_offset_alignment(padded_suffix, block_size)
                 self._assert_uniform_resume_alignment(padded_suffix, block_size, alignment)
                 settled = (int(num_cached) // alignment) * alignment
