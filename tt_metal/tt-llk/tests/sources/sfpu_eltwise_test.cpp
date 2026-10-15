@@ -87,6 +87,7 @@ struct Negate : llk::sfpu::SfpuUnary
     {
         void run() const
         {
+            SAN_HOOK(unsupported());
         }
     };
 
@@ -95,6 +96,7 @@ struct Negate : llk::sfpu::SfpuUnary
     {
         void run() const
         {
+            SAN_HOOK(unsupported());
             llk::sfpu::unary<PADDING>(
                 llk::sfpu::DestTensor<sfpi::vFloat, SHAPE>(this->output),
                 llk::sfpu::DestTensor<sfpi::vFloat, SHAPE>(this->input),
