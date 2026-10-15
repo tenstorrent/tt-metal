@@ -105,7 +105,7 @@ auto launch_mux_workers(
         mux_neigbor_core_maps.push_back(mux_neigbor_core_map);
     }
 
-    return std::make_tuple(std::move(mux_kernel), std::move(mux_kernel_config), std::move(mux_neigbor_core_maps));
+    return std::make_tuple(std::move(mux_kernel), mux_kernel_config, std::move(mux_neigbor_core_maps));
 }
 
 uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
@@ -593,7 +593,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_dispatch_metadata_program_descr
             workers_per_link,  // workers per link = clients per mux channel
             desc);
         mux_kernel = std::move(launched_mux_kernel);
-        mux_kernel_config = std::move(launched_mux_config);
+        mux_kernel_config = launched_mux_config;
         mux_neigbor_core_maps = std::move(launched_mux_neigbor_core_maps);
     }
 
