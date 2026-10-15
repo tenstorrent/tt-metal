@@ -119,7 +119,6 @@ def _run_sfpu_binary_llk_golden(
     format_variant=None,
     max_ulp=None,
     broadcast_type=BroadcastType.None_,
-    sign_magnitude=False,
 ):
     """Shared driver for the LLK-golden binary SFPU ops.
 
@@ -128,9 +127,6 @@ def _run_sfpu_binary_llk_golden(
     tiles ``src0_idx`` / ``src1_idx``. ``post_check(res_tensor)`` is an optional
     extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
     broadcasts the ``src1_idx`` tile in the golden.
-
-    ``sign_magnitude`` stages int32 operands as SMAG32 after the golden is computed,
-    so it only suits ops with a non-negative result (gcd).
     """
     src0_idx, src1_idx, dst_idx = tile_indices
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
@@ -170,9 +166,6 @@ def _run_sfpu_binary_llk_golden(
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
-    if sign_magnitude:
-        src_A = _int32_to_smag32(src_A)
-
     unpack_to_dest = (
         format_variant.unpack_to_dest if format_variant is not None else True
     )
@@ -188,7 +181,8 @@ def _run_sfpu_binary_llk_golden(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
-            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
+            # 2's-complement datapath (default); only the quant family reads this.
+            SIGN_MAGNITUDE_FORMAT(False),
             SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
@@ -417,38 +411,6 @@ def test_eltwise_binary_sfpu_int_quasar(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
-    )
-
-
-@pytest.mark.quasar
-@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
-def test_eltwise_binary_sfpu_gcd_sign_magnitude_quasar(
-    tile_indices,
-    *,
-    run_types=(PerfRunType.L1_TO_L1,),
-    loop_factor=1,
-    is_perf=False,
-    perf_report=None,
-):
-    """gcd with SMAG32-staged operands (SIGN_MAGNITUDE_FORMAT); the result is non-negative."""
-    formats = InputOutputFormat(
-        input_format=DataFormat.Int32, output_format=DataFormat.Int32
-    )
-    _run_sfpu_binary_llk_golden(
-        formats,
-        DestAccumulation.Yes,
-        ImpliedMathFormat.No,
-        tile_indices,
-        MathOperation.SfpuGcd,
-        "GCD",
-        prepare_stimuli=lambda f, dims, s0, s1, op: _prepare_int_stimuli(
-            f, dims, s0, s1, op, _INT31_MAX
-        ),
-        run_types=run_types,
-        loop_factor=loop_factor,
-        is_perf=is_perf,
-        perf_report=perf_report,
-        sign_magnitude=True,
     )
 
 
@@ -985,7 +947,7 @@ def _run_max_min(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
-            # 2's-complement datapath (default); only the quant family and GCD read this.
+            # 2's-complement datapath (default); max/min ignore it.
             SIGN_MAGNITUDE_FORMAT(False),
             SFPU_DST_ROUNDING_MODE(),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
