@@ -865,7 +865,7 @@ count and ticks, and failure detail. The console prints raw packet counts and
 ticks and, for a failed run, the attribution line and every chip's kernel
 results; rates come from the tabulator. The manifest's `eth_credit.throughput`
 configuration runs `ThroughputBySlotBatchAndP` with every card visible
-(`TT_VISIBLE_DEVICES` empty), for the reason below. The design is above.
+(`TT_VISIBLE_DEVICES` unset), for the reason below. The design is above.
 
 ```bash
 env -u TT_VISIBLE_DEVICES TT_METAL_RUNTIME_ROOT="$PWD" ./build/test/tt_metal/x280/x280_eth_credit

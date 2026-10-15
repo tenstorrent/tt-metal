@@ -2320,7 +2320,7 @@
         "--gtest_filter=EthCredit/EthCreditHw.ThroughputBySlotBatchAndP/0"
       ],
       "environment": {
-        "TT_VISIBLE_DEVICES": "",
+        "TT_VISIBLE_DEVICES": null,
         "X280_ETH_CREDIT_FW_IMAGE": "${FW_BUILD}/firmware-eth-credit-x280-fwd.bin"
       }
     }

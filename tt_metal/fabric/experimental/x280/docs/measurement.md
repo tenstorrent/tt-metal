@@ -22,7 +22,8 @@ change only C and K from `T4.s64` (C in {1, 2, 4, 8, 16} at K=16 and K in
 `packet.erisc_header.s<S>.c<C>k<K>.*` capacity points at S=32 and 64: writers 1
 and all at B=1 and writers 1 at B=4 for (C, K) = (8, 16), (8, 32), (16, 32) and
 (32, 32)), and `eth_credit.throughput`, eth_credit's slot, batch and P
-sweep across the Ethernet link of cards 0 and 1 (`TT_VISIBLE_DEVICES=0,1`), and
+sweep across the Ethernet link of cards 0 and 1 (`TT_VISIBLE_DEVICES` unset, so every card is
+visible), and
 the 18 `bw.tensix_to_x280` points that extend its transfer-size axis to 128, 320,
 384, 512, 1024, 2048, 4096, 8192 and 16384 B under both boundaries, which no
 campaign has yet measured. An ERISC point's record count comes from

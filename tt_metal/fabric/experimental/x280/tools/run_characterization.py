@@ -38,13 +38,20 @@ def write_attempt(path, record):
 
 
 def command_for(manifest, config, values):
-    """Resolve argv/environment as data and clear inherited suite selection knobs and dispatch mode."""
+    """Resolve argv/environment as data and clear inherited suite selection knobs and dispatch mode.
+
+    A null environment value unsets that variable for the run.
+    """
     prefixes = ("X280_", "PACKET_INJECTION_", "PIPELINE_STAGE_", "P2P_LATENCY_", "TRANSPORT_BW_")
     environment = {k: v for k, v in os.environ.items() if not k.startswith(prefixes)}
     environment.pop("TT_METAL_WATCHER", None)
     environment.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
     selected = dict(manifest["common_environment"], **config["environment"])
-    environment.update({k: Template(v).substitute(values) for k, v in selected.items()})
+    for key, value in selected.items():
+        if value is None:
+            environment.pop(key, None)
+        else:
+            environment[key] = Template(value).substitute(values)
     return [Template(a).substitute(values) for a in config["argv"]], environment
 
 
@@ -92,7 +99,9 @@ def run_one(manifest, config, values, campaign, engine, host_label=None):
         argv.append("--gtest_output=xml:" + str(attempt / "gtest.xml"))
         record.update(
             argv=argv,
-            environment={k: environment[k] for k in set(manifest["common_environment"]) | set(config["environment"])},
+            environment={
+                k: environment.get(k) for k in set(manifest["common_environment"]) | set(config["environment"])
+            },
         )
         record["producer_sha"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=engine, text=True).strip()
         record["binary_sha256"] = sha256(argv[0])
@@ -142,7 +151,6 @@ def main():
             parser.error("each configuration requires only id, member, argv and environment")
     engine = Path(__file__).resolve().parents[4]
     values = {
-        "ENGINE": str(engine),
         "HOST_BUILD": str(args.host_build.resolve()),
         "FW_BUILD": str(args.fw_build.resolve()),
         "METAL_SRC": str(args.metal_src.resolve()),
@@ -164,7 +172,8 @@ def main():
                         "configuration": config["id"],
                         "argv": argv,
                         "environment": {
-                            k: environment[k] for k in set(manifest["common_environment"]) | set(config["environment"])
+                            k: environment.get(k)
+                            for k in set(manifest["common_environment"]) | set(config["environment"])
                         },
                     },
                     indent=2,
@@ -178,7 +187,7 @@ def main():
     untracked = subprocess.check_output(
         ["git", "ls-files", "--others", "--exclude-standard", "tt_metal/fabric/x280"], cwd=engine, text=True
     )
-    if any(not path.startswith("tt_metal/fabric/x280/benchmarks/campaigns/") for path in untracked.splitlines()):
+    if untracked:
         parser.error("untracked X280 inputs must be committed before collection")
     campaign = args.campaign.resolve()
     campaign.mkdir(parents=True, exist_ok=True)

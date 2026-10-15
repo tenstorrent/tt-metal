@@ -524,6 +524,13 @@ class CampaignValidation(unittest.TestCase):
         self.assertNotIn("TT_METAL_WATCHER", environment)
         self.assertNotIn("TT_METAL_SLOW_DISPATCH_MODE", environment)
 
+    def test_a_null_environment_value_unsets_the_variable(self):
+        config = dict(self.config, argv=["binary"], environment={"TT_VISIBLE_DEVICES": None})
+        manifest = {"common_environment": {"TT_VISIBLE_DEVICES": "${DEVICE}"}}
+        with patch.dict(os.environ, {"TT_VISIBLE_DEVICES": "3"}):
+            _, environment = command_for(manifest, config, {"DEVICE": "0"})
+        self.assertNotIn("TT_VISIBLE_DEVICES", environment)
+
 
 class Reducers(unittest.TestCase):
     def test_percentiles_take_the_floor_index_of_the_sorted_raw_samples(self):
