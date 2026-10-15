@@ -85,7 +85,7 @@ def variants_for(scenario):
 
 _ZONE_MACRO = r"""
 #ifdef CF_MICROBENCH
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #define CF_PHASE(name) DeviceZoneScopedN(name)
 #else
 #define CF_PHASE(name)
