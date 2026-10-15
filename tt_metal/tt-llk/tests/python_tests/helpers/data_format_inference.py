@@ -263,7 +263,7 @@ def infer_unpack_out(
         The inferred output data format for unpacking to registers
     """
     if register_format_hint is not None:
-        if input_format != _2X_L1_FORMAT.get(register_format_hint):
+        if input_format not in _2X_L1_FORMAT.get(register_format_hint):
             raise ValueError(
                 f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
