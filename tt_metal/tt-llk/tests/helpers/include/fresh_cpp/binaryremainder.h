@@ -42,8 +42,8 @@ __attribute__((noinline)) void calculate_binary_remainder_fresh_cpp()
             v_endif;
             // Opposite operand signs fold the non-zero residue to the other
             // end of the divisor interval (floor vs trunc quotient).
-            const sfpi::vFloat sign_product = sfpi::copysgn(sfpi::vFloat(1.0f), a) * sfpi::copysgn(sfpi::vFloat(1.0f), b);
-            v_if (sign_product < 0.0f && r != 0.0f)
+            const sfpi::vInt sign_diff = sfpi::as<sfpi::vInt>(a) ^ sfpi::as<sfpi::vInt>(b);
+            v_if (sign_diff < 0 && r != 0.0f)
             {
                 r = ab - r;
             }
