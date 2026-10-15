@@ -12,14 +12,14 @@
 #include <stdint.h>
 
 /* One writer per this many bytes of LIM, taken to be one LIM ECC granule. The
- * granule is an owner assumption (item 9, docs/measurement.md
- * "Unconfirmed hardware assumptions"); a different granule would change this
+ * granule is an owner assumption (docs/measurement.md "Unconfirmed hardware
+ * assumptions", item 9); a different granule would change this
  * value. */
 #define UBENCH_LIM_GRANULE_BYTES 8u
 
 /* The X280 cache line. The host writes LIM in whole lines (write_available_lim
  * admits nothing else), which the tree takes to prime a line's ECC before a
- * peer's partial write (MEASUREMENT.md, item 9). */
+ * peer's partial write (docs/measurement.md, item 9). */
 #define UBENCH_LIM_LINE_BYTES 64u
 
 /* A length-carrying NoC write whose data comes from L1 lands only when its
@@ -29,7 +29,7 @@
  * NoC/MemoryMap.md links an Alignment.md that is absent, and Blackhole's
  * noc_parameters.h sets NOC_L1_{READ,WRITE}_ALIGNMENT_BYTES to 16. Whether an
  * X280 store through an L2CPU TLB window is data from another address is
- * MEASUREMENT.md item 19. */
+ * an open hardware question. */
 #define UBENCH_NOC_UNIT_BYTES 16u
 
 /** Whether an L1-sourced NoC write from `src` to `dst` meets the congruence rule. */

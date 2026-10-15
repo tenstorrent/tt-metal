@@ -11,7 +11,7 @@ and conversion assumptions.
 implementation uses core-sync for its phase boundary; measurement schema 2 owns
 the clock-evidence contract.
 
-**Scope:** Phase 0 feasibility benchmarks ID 10 and ID 11: characterization of
+**Scope:** feasibility benchmarks ID 10 and ID 11: characterization of
 dedicated single-producer single-consumer (SPSC) packet injection between
 Tensix workers (BRISC on NoC 0 and NCRISC on NoC 1) and an active X280 consumer
 over Blackhole NoC and LIM. Covers three compile-time measurement modes across
@@ -611,8 +611,8 @@ changes it only by switching image and gtest selector.
 
 ### Runtime parameters
 
-Read from the environment by `x280/tests/device/suites/packet_injection/tensix_to_x280.hpp`,
-defaulted by `Config` in `x280/tests/device/suites/packet_injection/regions.hpp`, and
+Read from the environment by `tests/device/suites/packet_injection/tensix_to_x280.hpp`,
+defaulted by `Config` in `tests/device/suites/packet_injection/regions.hpp`, and
 rejected rather than clamped at admission when out of range.
 
 | Environment variable | Symbol | Default | Admitted range | Meaning |
@@ -784,17 +784,21 @@ also registers `writers2`, `writers4` and `writers8` at B=1, B=4 and B=8 at
 at the same consumer settings as the one-producer cross-check.
 At S=32 and S=64, `packet.erisc_header.s<S>.c<C>k<K>.<writers>.b<B>` registers
 `writers1` and `writers_all` at B=1 and `writers1` at B=4 for (C, K) in
-{(8, 16), (8, 32), (16, 32), (32, 32)}; the 2026-10-14 whole-suite campaign measured them.
+{(8, 16), (8, 32), (16, 32), (32, 32)}; the 2026-10-14 whole-suite campaign
+measured them ([results.md](../results.md#packet_injection)).
 At the Tensix load knee T=4, `packet.throughput.{brisc,paired}.T4.<setting>`
 registers `c4k8` (C=4, K=8), `c8k16` (C=8, K=16), `s4`, `s8` and `s64` (S=4, 8
 and 64) and `b4` (B=4), each changing that one setting from its `T4` point at
-S=16, B=C=K=1; the 2026-10-14 whole-suite campaign measured them.
+S=16, B=C=K=1; the 2026-10-14 whole-suite campaign
+measured them ([results.md](../results.md#packet_injection)).
 To isolate the (C, K) gain, `packet.throughput.{brisc,paired}.T4.s64.c<C>k<K>`
 registers C in {1, 2, 4, 8, 16} at K=16 and K in {2, 4, 8} at C=1, each
-changing only C and K from its `T4.s64` point at S=64, B=C=K=1; the 2026-10-14 whole-suite campaign measured them.
+changing only C and K from its `T4.s64` point at S=64, B=C=K=1; the 2026-10-14 whole-suite campaign
+measured them ([results.md](../results.md#packet_injection)).
 Across the load sweep, `packet.throughput.paired.T1.c8k16` and
 `packet.throughput.{brisc,paired}.T{2,8}.c8k16` set C=8, K=16 on their `T<n>`
-point at S=16, B=1; the 2026-10-14 whole-suite campaign measured them.
+point at S=16, B=1; the 2026-10-14 whole-suite campaign
+measured them ([results.md](../results.md#packet_injection)).
 
 **Writers.** `select_ethernet_writers()` in `tests/device/suites/packet_injection/regions.hpp`
 sorts the inactive cores by logical (x, y) and takes a prefix, so the one-writer
@@ -881,13 +885,12 @@ env TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD" \
   --gtest_filter='Axes/PacketInjectionEriscToX280Header.Run/writers2_b1'
 ```
 
-**Silicon (2026-09-30).** Card 0 of a Blackhole p150b host, tile 0 at
+**Silicon (2026-09-30).** A Blackhole p150b, tile 0 at
 1750 MHz with 14 LIM ways, exposes 8 inactive IDLE_ETH cores, so `writers_all`
 is 8 there and `writers8` duplicates it. Every point passed at N=1024, S=16, C=1,
 K=1 with W calibrated, every resident slot and guard byte intact, and clean AICLK
 evidence at 1350 MHz on writer 0's ERISC wall clock. The records carry
-`source_dirty` true: they were collected from this member's tree
-applied to its parent before it was committed.
+`source_dirty` true: they were collected before the member was committed.
 
 | Point | B | P | W | Aggregate mtime ticks | M headers/s | Per-writer wall ticks | Stall episodes per writer | Empty visits | Resident slots / mismatches |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -1042,8 +1045,8 @@ Those measurements predate schema 3 and do not qualify the core-sync boundary.
 They remain the throughput, latency, and backpressure baseline; their five binaries
 were byte-identical to a clean build of the schema-2 commit that recorded them.
 
-On 2026-09-22, schema 3 was exercised on Blackhole device 0 against the tt-metal
-it was written for. Both BRISC and NCRISC compiled for all five variants.
+On 2026-09-22, schema 3 was exercised on Blackhole device 0 against the
+tt-metal of the time. Both BRISC and NCRISC compiled for all five variants.
 All five variants then completed on silicon. Focused synchronization runs covered
 one BRISC tile, one paired BRISC/NCRISC tile, a dense four-tile row released as
 one rectangle, two sparse tiles released as ordered singletons, and B=4/C=3/K=5

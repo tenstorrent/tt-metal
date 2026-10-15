@@ -321,7 +321,7 @@ inline void cleanup_x280(const targets::X280TileHandle& handle, const X280Launch
  * image owes on exit: a window still aimed at an address the allocator hands
  * out again is a standing path from this tile to that address's next owner.
  * `index` must be a slot the run programmed: a slot it never opened keeps what
- * it held, which after an ASIC reset is not zero (MEASUREMENT.md, item 18).
+ * it held, which after an ASIC reset is not zero (observed; no document states it).
  */
 inline void expect_window_cleared(const X280Tile& tile, uint32_t index) {
     const auto window = tile.read_noc_window(index);

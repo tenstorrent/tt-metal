@@ -3,7 +3,7 @@
 **Status:** Measured on silicon. The numbers and the placement sweep are in
 [`docs/results.md`](../results.md#p2p_latency); running it is below.
 
-**Scope:** Phase 0 feasibility benchmark ID 3 (priority P2): hart-to-hart
+**Scope:** feasibility benchmark ID 3 (priority P2): hart-to-hart
 signal latency where the two harts sit on different X280 complexes. This is
 the [`ubench design`](design.md)'s `p2p_latency`
 ID 3 — X280 tile to X280 tile, one chip — and is implemented as that row

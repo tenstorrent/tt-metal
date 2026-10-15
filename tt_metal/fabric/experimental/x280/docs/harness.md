@@ -395,7 +395,7 @@ come from the case-scoped LIM or L1 span.
 
 ## X280 NOC invariants
 
-`x280/include/noc.h` is the implementation authority for port bases, descriptor
+`include/noc.h` is the implementation authority for port bases, descriptor
 fields, aperture layout, and window programming. The harness and suites rely on
 the following cross-source conclusions:
 
@@ -457,8 +457,8 @@ the modes `RELAXED`, `STRICT`, `POSTED` and `POSTED_STRICT` — the last
 Blackhole-only and unicast-only (`umd/device/tt_kmd_lib/tt_kmd_lib.h`, with
 `blackhole_implementation.hpp` placing the field at bits 70 and 59).
 
-These invariants are supported by `x280/include/noc.h`,
-`x280/src/atomic_bench.c` and `x280/boot/entry.S`.
+These invariants are supported by `include/noc.h`,
+`src/atomic_bench.c` and `boot/entry.S`.
 
 ## Case model
 
@@ -490,8 +490,7 @@ implementations validate that the shared boundaries are honest.
 
 The harness is checked against the canonical participant matrix and
 implementation order in the ubench design's
-[`Participant rows`](benchmarks/design.md#participant-rows) and
-[`Readiness and implementation sequence`](benchmarks/design.md#readiness-and-implementation-sequence).
+[`Participant rows`](benchmarks/design.md#participant-rows).
 It supplies the reusable selection, region, execution, deadline, clock, and
 recording mechanisms those rows consume. Suite configuration, protocol,
 reduction, and extension rules remain in the ubench design. Current host and
@@ -517,7 +516,7 @@ in the ubench design. The harness only loads prepared artifacts and packs
 arguments according to the selected suite contract; it does not impose a
 frontend/backend split on other suites.
 
-X280 images reuse the bare-metal runtime primitives under `x280/include/rt/`
+X280 images reuse the bare-metal runtime primitives under `include/rt/`
 rather than copying them into each image. These headers own CPU timing and
 pause primitives, resident-idle return, and device-side PLL measurement.
 
@@ -677,8 +676,8 @@ record per-handle clock intent. No public `X280Hart` exists: per-hart protocol
 records are internal values of the stable tile until separately placed images
 demonstrate a caller-facing hart contract.
 
-The component is the `x280_device` target, built by `x280/CMakeLists.txt` inside
-the tt-metal build when `TT_METAL_BUILD_X280` is on, with public headers under `x280/include/x280/device/`.
+The component is the `x280_device` target, built by `CMakeLists.txt` inside
+the tt-metal build when `TT_METAL_BUILD_X280` is on, with public headers under `include/x280/device/`.
 
 The public runtime binds to a `MeshDevice` the caller already opened.
 `RuntimeImpl` holds the weak mesh-liveness reference and owns its `ChipImpl`
@@ -1443,7 +1442,7 @@ result.
   compiled by all three participants: host C++, the rv64 image, and the rv32
   Tensix kernel, which reaches it through
   `DataMovementConfig::compiler_include_paths`. Beside the case rather than in
-  `x280/include/`, because the layout is the case's contract and not the
+  `include/`, because the layout is the case's contract and not the
   framework's — the framework defines no wire format at all, and a shared
   directory is where one would accumulate by default. Layout only; addresses are
   resolved by the host at run time and told to each participant. A copy per
@@ -1495,30 +1494,6 @@ result.
   `x280_slow_dispatch` object library, which sets the variable during static
   initialisation. An all-zero ERISC result under fast dispatch is an invalid launch,
   not a protocol measurement.
-
-## Open questions
-
-- What public per-hart target API exposes launch selection and per-hart
-  outcomes, now that whole-tile active submission is landed on the runtime?
-- What public writable-window API and ownership transition replace or relax the
-  current 192–223 host block while preserving firmware reservations, the ARC
-  exclusion for entries 0–8, readback verification, and exception-safe
-  cleanup? This blocks all-L1 host-preprogrammed cases.
-- What supported session-level transition creates a raw-ERISC characterization
-  session and later re-establishes production `FabricConfig` without pretending
-  that one link can be released and restored independently? This blocks raw
-  ERISC participant rows.
-
-### Later-milestone questions
-
-- What is the smallest safe LIM window after subtracting resident idle, active
-  image, trap, stack, and protocol reservations?
-- How are separately loaded per-hart images, stacks, and traps placed without
-  overlap in the tile's shared LIM? Argument blocks are answered by D-032 for
-  the one-image case: every hart is told the same address. Per-hart blocks
-  remain open, and are the part that needs disjoint placement.
-- Can a session target a hart subset, and what tile-health result follows when
-  one selected hart fails to return?
 
 ## Running benchmarks
 
@@ -1578,35 +1553,35 @@ has none and an unbounded kernel wait hangs the host with no way back.
 
 ## Implementation references
 
-- `x280/include/x280/device/x280_runtime.hpp` and
-  `x280/include/x280/device/x280_tile.hpp` — landed public runtime ownership,
+- `include/x280/device/x280_runtime.hpp` and
+  `include/x280/device/x280_tile.hpp` — landed public runtime ownership,
   inventory, PLL, resident-idle, and LIM surface.
-- `x280/include/x280/device/x280_state.hpp` and
-  `x280/include/x280/device/x280_noc_window.hpp` — pure state classification,
+- `include/x280/device/x280_state.hpp` and
+  `include/x280/device/x280_noc_window.hpp` — pure state classification,
   LIM validation, and host-side NOC-window encoding.
-- `x280/src/device/x280_runtime.cpp`, `x280/src/device/x280_tile.cpp`, and
-  `x280/src/device/x280_metal_transport.cpp` — current initialization, boot,
+- `src/device/x280_runtime.cpp`, `src/device/x280_tile.cpp`, and
+  `src/device/x280_metal_transport.cpp` — current initialization, boot,
   private later-milestone window mechanisms, and Metal access adapter.
-- `x280/src/device/x280_active.cpp` — runtime submission, active observation,
+- `src/device/x280_active.cpp` — runtime submission, active observation,
   acknowledged return, and unhealthy restoration handling.
-- `x280/CMakeLists.txt` — the component build.
-- `x280/include/noc.h` — X280 ports, descriptors, apertures, and window
+- `CMakeLists.txt` — the component build.
+- `include/noc.h` — X280 ports, descriptors, apertures, and window
   installation.
-- `x280/src/atomic_bench.c` and `x280/boot/entry.S` — CPU-atomic behavior and
+- `src/atomic_bench.c` and `boot/entry.S` — CPU-atomic behavior and
   probe safety.
-- `x280/include/x280_address_map.h` — canonical LIM, DDR, CLINT, firmware
+- `include/x280_address_map.h` — canonical LIM, DDR, CLINT, firmware
   region, sentinel, ECC marker, and trap addresses shared by host, firmware,
   and preprocessed assembly.
-- `x280/include/x280_hart_protocol.h` — canonical per-hart commands, phases,
+- `include/x280_hart_protocol.h` — canonical per-hart commands, phases,
   heartbeats, record offsets, wire structs, and layout assertions.
-- `x280/include/socket_layout.h` — migration and socket mailbox placement and
-  values. `x280/include/x280.h` remains the characterization-firmware umbrella.
-- `x280/include/rt/x280_hw.h` and `x280/include/rt/x280_pll.h` — active-cycle
+- `include/socket_layout.h` — migration and socket mailbox placement and
+  values. `include/x280.h` remains the characterization-firmware umbrella.
+- `include/rt/x280_hw.h` and `include/rt/x280_pll.h` — active-cycle
   versus wall-clock primitives and device-side PLL measurement.
-- `x280/include/rt/x280_idle.h` — per-hart record accessors, the participant
+- `include/rt/x280_idle.h` — per-hart record accessors, the participant
   sequence every hart runs, and the acknowledged return to resident idle.
-- `x280/src/lim_idle.c` — resident-idle protocol and multi-hart handoff.
-- `x280/ld/x280-lim-idle.ld` and `x280/ld/x280.ld` — resident and active image
+- `src/lim_idle.c` — resident-idle protocol and multi-hart handoff.
+- `ld/x280-lim-idle.ld` and `ld/x280.ld` — resident and active image
   placement.
 - `tt_metal/llrt/tlb_config.cpp` — Blackhole L2CPU static TLB
   configuration over the LIM window.

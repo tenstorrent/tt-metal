@@ -5,9 +5,8 @@
 This document defines the current `pipeline_stage` contract for the routing
 and forwarding members on the host-booted SiFive X280 RISC-V cores. The lookup
 workload is the MEM-03/LK-03/SZ-01 design: one destination-to-next-hop operation
-over a fixed, suite-prepared input. It supersedes the route-construction and
-compressed-route lookup design summarized under
-[Historical design and measurement boundary](#historical-design-and-measurement-boundary).
+over a fixed, suite-prepared input. It supersedes an earlier route-construction and
+compressed-route lookup design, whose measurements no current code reproduces.
 
 Fixed-source silicon evidence for X280 is recorded in
 [`docs/results.md`](../results.md#pipeline_stage).
@@ -20,7 +19,7 @@ window cleanup are owned by
 [`docs/harness.md`](../harness.md). Exact operator
 commands are owned by [`README.md`](../../README.md). This document owns the pipeline
 subjects, fixed layouts, configuration matrix, validation, and result identity.
-How benchmarks are named — `ID <n>` from the Phase 0 table, and why that number
+How benchmarks are named — `ID <n>` from the feasibility table, and why that number
 stays out of paths and result records — is owned by
 [`docs/benchmarks/design.md`](design.md)
 § Benchmark naming.
@@ -445,53 +444,23 @@ A host build does NOT demonstrate:
 Silicon correctness and timing observations are recorded in
 [`docs/results.md`](../results.md#pipeline_stage).
 
-## Historical design and measurement boundary
-
-The original ID 6 design measured a different operation: a
-`compressed_route_2d_t` lookup derived from the route-construction path. It
-carried PACKED and ALIGNED access arms, LIM and cached-local table placements,
-destination windows 8 and 256, four packet tiers in the image, and geometry
-metadata for an emulated 2x4 mesh. Earlier construction planning also carried
-BYTEWISE, WIDENED, UNROLLED, VECTOR, and WARMED variants. None of those is a
-current lookup dimension. Those historical captures used pipeline schema 3;
-the current fixed next-hop contract carries no schema number.
-
-No silicon record of either profile is retained. The old lookup captures
-measured an instruction sequence and cache environment no current code
-reproduces, and the original ID 7 captures varied source placement and predate
-the fixed source and three-case registration set; neither predicts
-the current members, whose table representation, accesses, fixture, and cache
-policy differ. DECIDE survives from the ID 7
-design. Current fixed-source measurements are recorded in
-[`docs/results.md`](../results.md#pipeline_stage).
-
-The firmware-size/ECC incident (an image past the primed LIM window faulted on fetch) remains
-useful evidence about the platform. It does not restore a retired workload
-axis.
-
-The former design's detailed route construction, compressed-route geometry,
-placement rationale, frontend alternatives, and citation audit are superseded
-as current requirements. Their recorded outcomes remain recoverable in git
-history; carrying them as normative prose here would make removed behavior
-appear supported.
-
 ## Stable references
 
 - `tt-metal/tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h` owns
   `routing_l1_info_t` and packed direction-table layouts.
 - `tt-metal/tt_metal/fabric/hw/inc/tt_fabric_api.h` owns the production
   destination-to-next-hop selection semantics.
-- `x280/kernels/pipeline_stage/pipeline_stage_common.h` owns the fixed packet
+- `kernels/pipeline_stage/pipeline_stage_common.h` owns the fixed packet
   constants, state values, and
   `pipeline_stage_publish_batch_delta`, which publishes a checked batch delta.
-- `x280/kernels/pipeline_stage/route_compute_args.h` owns the shared lookup argument
+- `kernels/pipeline_stage/route_compute_args.h` owns the shared lookup argument
   section and composed block.
-- `x280/include/rt/x280_pinned_input.h` owns the prepared-region constants.
-- `x280/tests/device/suites/pipeline_stage/route_compute.hpp` and `route_forward.hpp`
+- `include/rt/x280_pinned_input.h` owns the prepared-region constants.
+- `tests/device/suites/pipeline_stage/route_compute.hpp` and `route_forward.hpp`
   own X280 host descriptors.
-- `x280/kernels/pipeline_stage/route_compute_subject.hpp` and `route_forward_subject.hpp`
-  own the subjects; `x280/kernels/pipeline_stage/pipeline_stage_frontend_cxx.hpp`
+- `kernels/pipeline_stage/route_compute_subject.hpp` and `route_forward_subject.hpp`
+  own the subjects; `kernels/pipeline_stage/pipeline_stage_frontend_cxx.hpp`
   owns measurement sequencing.
-- `x280/tests/device/suites/pipeline_stage/route_oracle.hpp` owns fixture
+- `tests/device/suites/pipeline_stage/route_oracle.hpp` owns fixture
   construction and the independent oracle; the two suite descriptors own host
   packing into the shared flat section types.

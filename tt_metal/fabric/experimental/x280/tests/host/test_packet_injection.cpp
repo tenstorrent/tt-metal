@@ -122,8 +122,8 @@ TEST(PacketInjectionAbiRecords, OnlyDoneIsAMeasurementAndEveryFailureIsTerminal)
 }
 
 // The consumer's cleared-window check covers exactly the slots the run opened:
-// after an ASIC reset an unopened slot reads {index, 0, 0, 0} (MEASUREMENT.md,
-// item 18), so a throughput or backpressure run, which never opens the timer
+// after an ASIC reset an unopened slot reads {index, 0, 0, 0} (observed; no
+// document states it), so a throughput or backpressure run, which never opens the timer
 // slot, must not check it. A tile count past the credit range would alias it.
 TEST(PacketInjectionWindows, OnlyTheSlotsTheRunOpensAreReadBackCleared) {
     constexpr uint32_t c0 = X280_TLB_PACKET_INJECTION_CREDIT_BASE;

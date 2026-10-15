@@ -38,7 +38,7 @@ Two design documents have distinct authority:
   structure.
 
 Raw X280 NOC encodings and helper behavior remain defined by
-[`x280/include/noc.h`](../../include/noc.h). The harness LLD summarizes the
+[`include/noc.h`](../../include/noc.h). The harness LLD summarizes the
 non-obvious consequences that span that header, atomic behavior, and L3/LIM
 visibility.
 
@@ -378,43 +378,10 @@ device/host/suite responsibility split. This document defines each suite
 payload, selects the applicable reference type, validates observations, and
 defines the meaning of derived values.
 
-## Readiness and implementation sequence
-
-The suites have different levels of maturity:
-
-1. **Peer-to-peer latency** has the first suite implementation contract.
-   Same-tile X280, X280-to-Tensix and cross-tile X280 are landed on the
-   active-image contract; cross-tile X280 boots its tiles through
-   `X280Runtime::boot_tiles`. These host mechanisms
-   are tracked by the harness
-   [`Current decision index`](../harness.md#current-decision-index)
-   (D-021, D-023, and D-026). The `erisc_peer_tile` member is a landed
-   mechanical smoke path to one inactive idle ERISC over same-chip NOC; it does
-   not use an Ethernet link. It requires `TT_METAL_SLOW_DISPATCH_MODE=1` before
-   `MeshDevice` construction because fast dispatch does not support `IDLE_ETH`
-   kernels. Its raw-tick output carries per-run host and CMFW AICLK evidence for
-   external time conversion. The
-   `drisc_peer_tile` member is also a landed mechanical smoke path: it uses
-   bank 0's free non-endpoint DRISC over NOC0, changes only NOC0 to stream
-   mode, and publishes raw counter ticks. Active ERISC and cross-chip rows
-   follow only when their target mechanisms are concrete; raw-link ERISC rows
-   also require the session-level fabric transition in D-027.
-2. **Transport bandwidth** has a common loop and measurement contract.
-   The addressable Tensix/X280 members are concrete; receiving-ERISC
-   packet-header ingress is a `packet_injection` member. DRISC and raw-link
-   ERISC members still require member-specific backend decisions.
-3. **Pipeline-stage cost** has a concrete lookup and forwarding contract in
-   `docs/benchmarks/pipeline_stage.md`, which IDs 6 and 7 supply in full.
-   The lookup is a fixed destination-to-next-hop operation; forwarding has one
-   DECIDE configuration.
-4. **Client handling and composed experiments** remain roadmap items.
-
-Later suites are not prerequisites for the initial harness surface.
-
 ## Benchmark naming
 
-A benchmark is named by its Phase 0 ID, written `ID <n>`, matching the table
-in § Phase 0 correspondence verbatim. That table is the source of truth, so a
+A benchmark is named by its feasibility ID, written `ID <n>`, matching the table
+in § Benchmark IDs verbatim. That table is the source of truth, so a
 document that invents its own handle for a benchmark forces every reader to
 translate. A document scoped to one benchmark says so in its opening
 `**Scope:**` line; prose and headings lead with the ID and use it alone
@@ -437,7 +404,7 @@ different things. The x280 side goes unnamed because every member of
 is `BACKEND_ID_<own side>_<member>`.
 
 **`Row <n>` is retired.** It is repo-internal, it does not appear in the
-Phase 0 table, and it collides with the IDs: "ID 3" and "ID 3" name the same
+feasibility table, and it collides with the IDs: "ID 3" and "ID 3" name the same
 member, and nothing but the correspondence table tells a reader so. It survives
 in no identifier, path, target, environment variable, record key or sentence —
 prose says `ID <n>`, code says the member token.
@@ -454,18 +421,18 @@ backend is shaped, which fences it issues or which ordering mode it selects is
 about the implementation, and there the member name is the accurate one.
 
 Where a numbered benchmark is compared against an unnumbered sibling, use the
-Phase 0 ID for the numbered benchmark and the member name for the sibling.
+feasibility ID for the numbered benchmark and the member name for the sibling.
 Cross-cluster signalling therefore compares ID 3 with `tensix_peer_tile`;
 neither side needs an editorial family number.
 
-## Phase 0 correspondence
+## Benchmark IDs
 
 The suites answer the Fabric 2.0 feasibility benchmark table (as read on 2026-09-02),
 which numbers 19 microbenchmarks and lists seven unnumbered
 X280 microbenchmarks beside them. The IDs below are cross-references to that
 table and nothing more: no API, path, selector, or result record carries one.
 
-| Phase 0 ID | Microbenchmark | Member |
+| Feasibility ID | Microbenchmark | Member |
 |---|---|---|
 | 2 | X280 pipeline signal latency/cycle count (same cluster) | `p2p_latency` `x280_same_tile`, landed and measured |
 | 3 | X280 pipeline signal latency/cycle count (different cluster) | `p2p_latency` `x280_peer_tile`, landed and measured |
@@ -616,8 +583,8 @@ X280 maps the idle ERISC mailbox through its checked paired-range TLB, while
 ERISC returns the token through Metal NOC operations. The member requires an
 inactive Ethernet core and publishes ERISC wall-clock deltas as raw ticks with
 the same per-run AICLK evidence. Entry 6 remains unspecified.
-Entries 1 and 2 answer Phase 0 IDs 2 and 3; entries 3–6
-answer no numbered ID, and § Phase 0 correspondence carries the whole mapping.
+Entries 1 and 2 answer feasibility IDs 2 and 3; entries 3–6
+answer no numbered ID, and § Benchmark IDs carries the whole mapping.
 
 ID 2 is the only member with a medium choice: coherent cached memory or
 uncached LIM. It consumes no X280 NOC window. Entry 6 is the only cross-chip
@@ -1595,21 +1562,6 @@ Production-fabric line rate, configured maximum-payload throughput, existing
 fabric round-trip latency, and production-router phase telemetry are reference
 measurements. The harness supplies recording discipline, but the production
 datapath is not reclassified as a ubench backend.
-
-## Open questions
-
-The current design leaves the following suite decisions to the implementation
-work that first needs them. Host API, argument-placement, and output-writer
-questions remain in the harness LLD rather than being reopened here:
-
-- optional X280 ordering and Memory Port mechanisms;
-- DRISC and active/raw-link ERISC latency backend primitives;
-- concrete transport-bandwidth member contracts;
-- client-handling and composed-experiment topology.
-
-An open question does not authorize an implementation to silently choose new
-measurement semantics. Any choice that changes a timing boundary, validity
-rule, participant topology, or result interpretation updates this document.
 
 ## Stable implementation references
 
