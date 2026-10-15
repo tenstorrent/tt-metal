@@ -233,6 +233,16 @@ def experimental_get_l1_occupied_ranges(mesh_device, device_coord, core=None):
     return ttnn._ttnn.device.ExperimentalGetL1OccupiedRanges(mesh_device, device_coord, core)
 
 
+def experimental_get_l1_free_ranges(mesh_device, device_coord, core):
+    """Return allocator-managed free L1 [start, end) ranges; requires HYBRID mode."""
+    return ttnn._ttnn.device.ExperimentalGetL1FreeRanges(mesh_device, device_coord, core)
+
+
+def experimental_get_l1_lockstep_occupied_ranges(mesh_device, device_coord):
+    """Return allocator-ID-0 L1 reservations, including range-lockstep; requires HYBRID mode."""
+    return ttnn._ttnn.device.ExperimentalGetL1LockstepOccupiedRanges(mesh_device, device_coord)
+
+
 SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceId = ttnn._ttnn.device.SubDeviceId
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId

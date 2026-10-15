@@ -9,6 +9,7 @@
 #include <optional>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -78,6 +79,17 @@ class MeshBuffer;
 
 // Forward declaration for experimental per-core allocation friend
 namespace tt::tt_metal::experimental::per_core_allocation {
+struct L1TensorExtent;
+struct L1TensorViewPlacement;
+std::vector<L1TensorExtent> get_l1_tensor_owner_extents(
+    const distributed::MeshBuffer&, const std::vector<distributed::MeshCoordinate>&);
+std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
+    distributed::MeshDevice&,
+    const distributed::MeshBufferConfig&,
+    const distributed::DeviceLocalBufferConfig&,
+    const std::vector<std::vector<L1TensorExtent>>&,
+    const std::vector<L1TensorViewPlacement>&,
+    std::shared_ptr<void>);
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
     const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
     const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
@@ -187,14 +199,30 @@ private:
     // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
     // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.
     // 2. Externally owned - the MeshBuffer was created as a view over an existing address.
-    // 3. Deallocated - the MeshBuffer is in the deallocated state.
+    // 3. Owner-pinned view - non-owning addresses with a retained storage owner.
+    // 4. Deallocated - the MeshBuffer is in the deallocated state.
     struct OwnedBufferState {
         std::shared_ptr<Buffer> backing_buffer;
     };
     struct ExternallyOwnedState {};
+    struct OwnerPinnedViewState {
+        std::shared_ptr<void> owner_pin;
+    };
     struct DeallocatedState {};
-    using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
+    using MeshBufferState =
+        std::variant<OwnedBufferState, ExternallyOwnedState, OwnerPinnedViewState, DeallocatedState>;
     MeshBufferState state_;
+
+    friend std::vector<experimental::per_core_allocation::L1TensorExtent>
+    experimental::per_core_allocation::get_l1_tensor_owner_extents(
+        const MeshBuffer&, const std::vector<MeshCoordinate>&);
+    friend std::shared_ptr<MeshBuffer> experimental::per_core_allocation::create_l1_tensor_view(
+        MeshDevice&,
+        const MeshBufferConfig&,
+        const DeviceLocalBufferConfig&,
+        const std::vector<std::vector<experimental::per_core_allocation::L1TensorExtent>>&,
+        const std::vector<experimental::per_core_allocation::L1TensorViewPlacement>&,
+        std::shared_ptr<void>);
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const tt::tt_metal::distributed::MeshBufferConfig&,
