@@ -24,6 +24,8 @@ namespace {
 constexpr uint32_t kMaxSlabBytes = 4096;
 // Most slabs gathered behind one read barrier.
 constexpr uint32_t kMaxSlabBatch = 8;
+// A CB's received and acked page counters are 16 bits, so program creation rejects a CB of more pages.
+constexpr uint64_t kMaxCbPages = std::numeric_limits<uint16_t>::max();
 
 // Program creation starts every CB at a DRAM-aligned address, so a CB takes its size rounded up to that alignment.
 uint64_t cb_footprint(uint64_t bytes) { return tt::round_up(bytes, tt::tt_metal::hal::get_dram_alignment()); }
@@ -189,11 +191,11 @@ std::optional<RmPlan> fit_rm(RmPlan plan, uint64_t l1_budget) {
     const uint64_t pages_per_split_stick = plan.split_by_old ? plan.ratio : 1;
     const uint64_t full_depth = static_cast<uint64_t>(max_sticks) * pages_per_split_stick * (plan.can_coalesce ? 1 : 2);
     const uint64_t scratch_footprint = plan.scratch_bytes == 0 ? 0 : cb_footprint(plan.scratch_bytes);
-    // Bytes the stick CB may take. Rounded down to the CB alignment, a ring that fits it also fits once aligned.
+    // Bytes the stick CB may take: live L1, and no more pages than the 16-bit CB page counters hold. Rounded down to
+    // the CB alignment, a ring that fits it also fits once aligned.
+    const uint64_t ring_l1 = l1_budget > scratch_footprint ? l1_budget - scratch_footprint : 0;
     const uint64_t ring_budget =
-        l1_budget > scratch_footprint
-            ? tt::round_down(l1_budget - scratch_footprint, tt::tt_metal::hal::get_dram_alignment())
-            : 0;
+        tt::round_down(std::min(ring_l1, kMaxCbPages * plan.cb_page), tt::tt_metal::hal::get_dram_alignment());
 
     uint64_t depth = full_depth;
     plan.push_sticks = 0;

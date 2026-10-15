@@ -328,6 +328,17 @@ def test_reshape_codegen_rm_routes_native_when_no_program_fits_l1(device, expect
     ttnn.deallocate(hog)
 
 
+def test_reshape_codegen_rm_ring_within_cb_page_limit(device):
+    # Splitting 4096 16 B sticks into 2 B ones on one core wants a 65,536-page ring of 16 B pages, one more than the
+    # 16-bit CB page counters hold, though 1 MiB fits L1; the plan must shrink the ring instead.
+    in_shape, out_shape, dtype = [4096, 8], [4096, 8, 1], ttnn.bfloat16
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+
+
 _OUT_OF_SCOPE = [
     ("bfloat8_b", [1, 1, 64, 128], [1, 1, 128, 64], ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
