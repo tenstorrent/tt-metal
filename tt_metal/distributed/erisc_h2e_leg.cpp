@@ -16,7 +16,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/distributed/erisc_bridge_doorbell.hpp"
 #include "tt_metal/distributed/erisc_bridge_packet.hpp"
 #include "tt_metal/distributed/erisc_bridge_placement.hpp"
