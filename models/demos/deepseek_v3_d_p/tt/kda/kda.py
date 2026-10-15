@@ -161,13 +161,19 @@ class ttKDA:
         self.qkv_convolution_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(
             channel_chunk_size=qkv_channel_chunk_size
         )
+        # The output projection takes no output dtype, so its partial sums keep the norm output's.
+        output_element_bytes = 4 if self.gated_rms_output_dtype == ttnn.float32 else 2
         self.norm_output_memory_config = l1_when_it_fits(
-            mesh_device, self.active_seq_len_local * self.config.v_dim * 2, KDA_NORM_OUTPUT_L1_BYTES_PER_CORE
+            mesh_device,
+            self.active_seq_len_local * self.config.v_dim * output_element_bytes,
+            KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
         )
         # The partial sums only feed the reduce-scatter; a single TP rank returns the projection itself.
         self.partial_output_memory_config = (
             l1_when_it_fits(
-                mesh_device, self.active_seq_len_local * config.hidden_size * 2, KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE
+                mesh_device,
+                self.active_seq_len_local * config.hidden_size * output_element_bytes,
+                KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE,
             )
             if self.tensor_parallel_size > 1
             else ttnn.DRAM_MEMORY_CONFIG

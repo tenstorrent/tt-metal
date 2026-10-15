@@ -63,8 +63,9 @@ struct ValueBlockDistribution {
 ValueBlockDistribution distribute_value_blocks(
     tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles);
 
-// The physical row segment a core's value-block multicast addresses, ordered for NoC 0: value block 0 (the
-// sender) gets its siblings' segment, every other block gets the sender. All zero when a head has one block.
+// The physical segment (one column, or one row) a core's value-block multicast addresses, ordered for NoC 0: value
+// block 0 (the sender) gets its siblings' segment, every other block gets the sender. All zero when a head has one
+// block.
 struct ValueBlockPeers {
     uint32_t x0 = 0;
     uint32_t y0 = 0;
