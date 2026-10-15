@@ -736,6 +736,7 @@ class TestTriage:
 
             check = results_by_risc[risc_name]
             assert check.result is not None, f"Expected non-None result for {risc_name}"
+            assert hasattr(check.result, "frame_locals"), f"{risc_name}: Expected a Locals column with --full-callstack"
 
             # Verify core is halted (stuck on ebreak)
             risc_debug = check.location.noc_block.get_risc_debug(risc_name, check.neo_id)

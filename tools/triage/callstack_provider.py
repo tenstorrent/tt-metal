@@ -39,10 +39,11 @@ from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.gdb.gdb_client import get_gdb_callstack
 from ttexalens.elf import ElfFile
-from ttexalens.elf import CallstackEntry
+from ttexalens.elf import CallstackEntry, CallstackEntryVariable, DwarfDieTag
 from ttexalens.tt_exalens_lib import top_callstack, callstack
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from utils import WARN
+from rich.markup import escape
 
 import socket
 import threading
@@ -131,6 +132,37 @@ def get_callstack(
         raise
     except Exception as e:
         return KernelCallstackWithMessage(callstack=[], message=str(e))
+
+
+def format_variable_value(var: CallstackEntryVariable) -> str:
+    """Text ExaLens prints for one variable, or "?" if the debugger returned no value for it or reading it failed."""
+    value, type_die = var.value, var.type
+    if value is None:
+        return "?"
+    try:
+        # ExaLens reads uint8_t*/int8_t* as text up to a zero byte, but they point at data, not text:
+        # show the address instead of reading up to 64 KiB of it
+        if type_die is not None and type_die.tag == DwarfDieTag.pointer_type:
+            pointee = type_die.get_dereference_type()
+            if pointee is not None and pointee.name in ("unsigned char", "signed char"):
+                return str(int.from_bytes(value.read_bytes(), "little"))
+        return str(value)
+    except Exception:
+        return "?"
+
+
+def serialize_variables(variables: list[CallstackEntryVariable], highlight: str = "") -> str:
+    """One "- name = value" line per variable ("?" if no value); names found in `highlight` are colored."""
+    result = ""
+    for var in variables:
+        var_name = var.name or "?"
+        var_value = format_variable_value(var)
+        if var_name in highlight:
+            serialized = f"- [info]{escape(var_name)}[/] = [command]{escape(var_value)}[/]\n"
+        else:
+            serialized = f"- {escape(var_name)} = {escape(var_value)}\n"
+        result += serialized
+    return result
 
 
 def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
