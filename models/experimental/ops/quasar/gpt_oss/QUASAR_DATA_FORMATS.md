@@ -164,6 +164,6 @@ My guess, not checked, is that the simulator needs traces off in any case: it ru
 
 | Problem | Approach | Same as | Code |
 |---|---|---|---|
-| `Bfp8_b` and `Bfp4_b` in many places | Patches in `conftest.py` that map them to bf16 | llama | [conftest.py:44-102](conftest.py#L44-L102) |
+| `Bfp8_b` and `Bfp4_b` in many places | Patches in `conftest.py` that map them to bf16 | llama | [conftest.py:44-103](conftest.py#L44-L103) |
 | `UInt32` token IDs, embedding output, DRAM used by the embedding table | Direct `if is_quasar():` edit: embedding on the host | llama's host embedding, done as a direct edit like resnet | [model.py:166-187](tt/model.py#L166-L187), [model.py:1066-1085](tt/model.py#L1066-L1085) |
 | Host embedding inside traced steps | Direct `if is_quasar():` edit in the demo: traces off | the demo's own logging case | [text_demo.py:486-491](demo/text_demo.py#L486-L491) |
