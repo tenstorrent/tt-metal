@@ -77,6 +77,14 @@ ttnn::Tensor fused_msda(
 // it is true, matching the pixel spacing of to_pixel(); a singleton axis has
 // scale 0. reference_points must be (B, Q, R, 2) normalized (x, y) in [0, 1];
 // the 4-D box form is rejected rather than reinterpreted.
+//
+// num_valid_queries, when given, holds one count per batch (each in [0, Q], at
+// least one nonzero): only queries [0, num_valid_queries[b]) of batch b are
+// computed. The output rows past it are left unwritten and hold undefined data,
+// possibly NaN or Inf, so a caller must drop them with a select such as
+// ttnn.where, not by multiplying with a 0/1 mask. Changing the counts between
+// calls reuses the cached program; because they are runtime args, a captured
+// trace replays the counts it was captured with.
 ttnn::Tensor fused_msda_from_offsets(
     const ttnn::Tensor& value,
     const ttnn::Tensor& reference_points,
@@ -85,6 +93,7 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     MSDAReferenceMode reference_mode = MSDAReferenceMode::Level,
     bool align_corners = false,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& num_valid_queries = std::nullopt);
 
 }  // namespace ttnn::experimental
