@@ -393,7 +393,9 @@ class V41PrefillBlock(LightweightModule):
     def _capture_attn_islands(self, h, chunk_tokens: int) -> None:
         self._attn_islands, self._a2_buckets = {}, {}
         attn = self.attn
-        if not getattr(attn, "traceable", lambda: False)():
+        # the CSA sources and their consumers only: V41SWA inherits TtHCA's traceable() (True by default) and its A2 builds
+        # V4-Flash's contract export ring -- layers 0 / 1 (~65 ms of a chunk, DS41F-0037 10-11 profile) stay eager for now
+        if not isinstance(attn, (V41CSA, V41CSAConsumer)) or not attn.traceable():
             return
         is_source = isinstance(attn, V41CSA)
         rate = attn.compressor.compress_rate
