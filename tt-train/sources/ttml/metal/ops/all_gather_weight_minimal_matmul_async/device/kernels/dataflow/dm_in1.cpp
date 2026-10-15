@@ -60,6 +60,15 @@ void kernel_main() {
     const auto in1_reader = TensorAccessor(in1_args, in1_addr);
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_tile_size);
+    constexpr auto pwb_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    const uint32_t pwb_addr = get_arg_val<uint32_t>(argidx++);
+    const auto pwb_reader = TensorAccessor(pwb_args, pwb_addr);
+    uint32_t stripe_sem_addrs[ring_size];
+    for (uint32_t i = 0; i < ring_size; i++) {
+        stripe_sem_addrs[i] = get_arg_val<uint32_t>(argidx++);
+    }
+    const uint32_t local_stripe = stripe_order[0];
+    uint32_t arrived[ring_size] = {};
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -103,15 +112,20 @@ void kernel_main() {
                 uint32_t in1_start_address = cb_in1.get_write_ptr();
                 if constexpr (is_injector_core) {
                     if (any_real) {
+                        wait_for_block_stripes(
+                            cols, width, local_stripe, stripe_tiles, stripe_sem_addrs, k_block + 1, arrived);
                         read_in1_block_columns<K_block_tiles, N_block_tiles, transpose_b>(
                             in1_reader,
+                            pwb_reader,
                             cb_in1_id,
                             in1_tile_size,
                             K_tiles,
                             N_tiles,
                             k_block * K_block_tiles,
                             cols,
-                            width);
+                            width,
+                            local_stripe,
+                            stripe_tiles);
                     }
                 } else {
                     in1_receiver_semaphore.set(INVALID);
@@ -154,6 +168,13 @@ void kernel_main() {
                 } else {
                     deferred.defer(m_tile, m_tile_end, cols, width);
                 }
+            }
+        }
+    }
+    if constexpr (is_injector_core) {
+        for (uint32_t s = 0; s < ring_size; s++) {
+            if (arrived[s] > 0) {
+                noc_semaphore_inc(get_noc_addr(stripe_sem_addrs[s]), -K_num_blocks);
             }
         }
     }

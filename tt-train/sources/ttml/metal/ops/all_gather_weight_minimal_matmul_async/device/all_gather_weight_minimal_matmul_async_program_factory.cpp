@@ -7,15 +7,22 @@
 #include <algorithm>
 #include <map>
 #include <string>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "stripe_layout.hpp"
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async {
 namespace {
@@ -60,6 +67,7 @@ ttnn::CoreCoord clamped_next(const std::vector<ttnn::CoreCoord>& order, uint32_t
 
 constexpr uint32_t kRtInputAddrIdx = 0;
 constexpr uint32_t kRtOutputAddrIdx = 1;
+constexpr uint32_t kRtSendAddrIdx = 0;
 }  // namespace
 
 AllGatherWeightMinimalMatmulAsyncProgramFactory::cached_mesh_workload_t
@@ -81,7 +89,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_mesh_workload(
 ttnn::device_operation::CachedProgram<AllGatherWeightMinimalMatmulAsyncProgramFactory::shared_variables_t>
 AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const AllGatherWeightMinimalMatmulAsyncParams& operation_attributes,
-    const ttnn::MeshCoordinate&,
+    const ttnn::MeshCoordinate& mesh_coordinate,
     const AllGatherWeightMinimalMatmulAsyncInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
     tt::tt_metal::Program program{};
@@ -91,8 +99,40 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const auto& config = operation_attributes.config;
     auto* device = input_tensor.device();
 
-    auto grid_size =
-        config.has_value() ? config.value().compute_with_storage_grid_size : device->compute_with_storage_grid_size();
+    const ttnn::ccl::Topology topology = operation_attributes.topology;
+    const auto& axis = operation_attributes.cluster_axis;
+    const uint32_t ring_index =
+        ttnn::ccl::get_linearized_index_from_physical_coord(input_tensor, mesh_coordinate, axis);
+    const std::optional<ttnn::MeshCoordinate> forward_coord =
+        ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, mesh_coordinate, 1, topology, axis);
+    const std::optional<ttnn::MeshCoordinate> backward_coord =
+        ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, mesh_coordinate, -1, topology, axis);
+
+    const auto device_grid = device->compute_with_storage_grid_size();
+    const uint32_t comm_cores_needed =
+        2 * operation_attributes.num_links * (1 + operation_attributes.num_workers_per_link);
+    const uint32_t comm_rows = tt::div_up(comm_cores_needed, device_grid.x);
+    auto grid_size = config.has_value() ? config.value().compute_with_storage_grid_size
+                                        : ttnn::CoreCoord{device_grid.x, device_grid.y - comm_rows};
+    const uint32_t first_comm_row = device_grid.y - comm_rows;
+    const auto comm_core = [&](uint32_t index) {
+        return ttnn::CoreCoord{index % device_grid.x, first_comm_row + (index / device_grid.x)};
+    };
+    TT_FATAL(
+        operation_attributes.num_workers_per_link >= 1,
+        "num_workers_per_link must be >= 1, got {}.",
+        operation_attributes.num_workers_per_link);
+    TT_FATAL(
+        grid_size.y <= first_comm_row,
+        "num_links={} with num_workers_per_link={} needs {} fabric cores, i.e. the last {} core row(s); the matmul "
+        "grid ({}x{}) must stay above row {}",
+        operation_attributes.num_links,
+        operation_attributes.num_workers_per_link,
+        comm_cores_needed,
+        comm_rows,
+        grid_size.x,
+        grid_size.y,
+        first_comm_row);
     auto core_grid = ttnn::CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto num_cores = core_grid.size();
 
@@ -110,7 +150,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const bool transpose_b = operation_attributes.transpose_b;
     const uint32_t K = input_tensor.padded_shape()[-1];
     const uint32_t M = input_tensor.physical_volume() / K;
-    const uint32_t N = weight_tensor.padded_shape()[transpose_b ? -2 : -1];
+    const uint32_t N = tensor_args.persistent_weight_buffer->padded_shape()[transpose_b ? -2 : -1];
     const uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
     const uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
     const uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
@@ -150,13 +190,9 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const uint32_t K_blocks = padded_K_tiles / K_block_tiles;
     const uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
 
+    const bool ring = topology == ttnn::ccl::Topology::Ring;
     const StripeLayout layout = make_stripe_layout(
-        N_tiles,
-        operation_attributes.ring_size,
-        operation_attributes.ring_index,
-        in1_parallel_axis_cores,
-        N_block_tiles,
-        operation_attributes.topology == ttnn::ccl::Topology::Ring);
+        N_tiles, operation_attributes.ring_size, ring_index, in1_parallel_axis_cores, N_block_tiles, ring);
     const uint32_t N_blocks_per_core = layout.n_blocks_per_core();
 
     const uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
@@ -214,7 +250,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                                uint32_t valid_sem,
                                bool is_output_writer,
                                bool is_injector,
-                               const ttnn::Tensor& own_input) {
+                               const ttnn::Tensor& own_input,
+                               const ttnn::Tensor* extra_input = nullptr) {
         std::vector<uint32_t> args = {
             M_tiles,
             padded_M_tiles,
@@ -241,11 +278,15 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         };
         tt::tt_metal::TensorAccessorArgs(*own_input.buffer()).append_to(args);
         tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
+        if (extra_input != nullptr) {
+            tt::tt_metal::TensorAccessorArgs(*extra_input->buffer()).append_to(args);
+        }
         return args;
     };
 
     const std::string in0_source = std::string(kKernelDir) + "dataflow/dm_in0.cpp";
     const std::string in1_source = std::string(kKernelDir) + "dataflow/dm_in1.cpp";
+    const ttnn::Tensor* pwb = &tensor_args.persistent_weight_buffer.value();
 
     auto make_dm_kernel = [&](const std::string& source,
                               const ttnn::CoreRange& cores,
@@ -297,7 +338,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
             in1_valid_semaphore_id,
             in1_is_output_writer,
             true,
-            weight_tensor));
+            weight_tensor,
+            pwb));
     auto in1_receiver_kernels_id = make_dm_kernel(
         in1_source,
         in1_receiver_cores,
@@ -310,7 +352,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
             in1_valid_semaphore_id,
             in1_is_output_writer,
             false,
-            weight_tensor));
+            weight_tensor,
+            pwb));
 
     std::map<std::string, std::string> compute_defines;
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
@@ -344,6 +387,11 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         tt::div_up(K_blocks, (transpose_core_grid ? in1_parallel_axis_cores : in0_parallel_axis_cores));
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
+    std::vector<uint32_t> stripe_sem_addrs;
+    for (const auto& sem : operation_attributes.semaphores) {
+        stripe_sem_addrs.push_back(static_cast<uint32_t>(sem.address()));
+    }
+    uint32_t in1_pwb_arg_idx = 0;
     for (const auto& core : cores) {
         const uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
         const uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
@@ -398,17 +446,180 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                 return args;
             };
 
+        std::vector<uint32_t> in1_args =
+            dm_runtime_args(weight_tensor.buffer()->address(), is_in1_sink, in1_next, in1_prev);
+        in1_pwb_arg_idx = static_cast<uint32_t>(in1_args.size());
+        in1_args.push_back(pwb->buffer()->address());
+        in1_args.insert(in1_args.end(), stripe_sem_addrs.begin(), stripe_sem_addrs.end());
+        std::vector<uint32_t> in0_args =
+            dm_runtime_args(input_tensor.buffer()->address(), is_in0_sink, in0_next, in0_prev);
+
         tt::tt_metal::SetRuntimeArgs(
-            program,
-            in1_idx == 0 ? in0_sender_kernels_id : in0_receiver_kernels_id,
-            core,
-            dm_runtime_args(input_tensor.buffer()->address(), is_in0_sink, in0_next, in0_prev));
+            program, in1_idx == 0 ? in0_sender_kernels_id : in0_receiver_kernels_id, core, in0_args);
         tt::tt_metal::SetRuntimeArgs(
-            program,
-            in0_idx == 0 ? in1_sender_kernels_id : in1_receiver_kernels_id,
-            core,
-            dm_runtime_args(weight_tensor.buffer()->address(), is_in1_sink, in1_next, in1_prev));
+            program, in0_idx == 0 ? in1_sender_kernels_id : in1_receiver_kernels_id, core, in1_args);
         tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {M_start_tile, M_end_tile});
+    }
+
+    std::vector<ttnn::CoreCoord> send_cores;
+    std::vector<tt::tt_metal::KernelHandle> send_reader_kernel_ids;
+    std::vector<tt::tt_metal::KernelHandle> send_writer_kernel_ids;
+    const uint32_t num_links = operation_attributes.num_links;
+    const uint32_t num_workers = operation_attributes.num_workers_per_link;
+    const RelayPlan plan = make_relay_plan(layout, ring_index, ring);
+    const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
+        mesh_coordinate, forward_coord, backward_coord, device);
+
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device);
+    const uint32_t tiles_per_packet = std::max<uint32_t>(1, std::min<uint32_t>(4, packet_size_bytes / in1_tile_size));
+    constexpr uint32_t kSendPacketsPerBatch = 8;
+    constexpr uint32_t kSendCbPackets = 2 * kSendPacketsPerBatch;
+    const uint32_t chunk_tiles = K_block_tiles;
+
+    const size_t mux_base_l1_address = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const size_t mux_l1_floor_address = ttnn::ccl::l1_small_floor_address(*device);
+    const auto src_node_id = device->get_fabric_node_id(mesh_coordinate);
+
+    for (uint32_t link = 0; link < num_links; ++link) {
+        for (uint32_t dir = 0; dir < 2; ++dir) {
+            const auto& neighbour = dir == 0 ? forward_coord : backward_coord;
+            if (!neighbour.has_value()) {
+                continue;
+            }
+            const auto& segments = dir == 0 ? plan.forward : plan.backward;
+            std::vector<std::vector<uint32_t>> schedules(num_workers);
+            for (uint32_t w = 0; w < num_workers; ++w) {
+                uint32_t num_segments = 0;
+                std::vector<uint32_t> body;
+                for (const auto& seg : segments) {
+                    std::vector<uint32_t> piece_args;
+                    uint32_t num_pieces = 0;
+                    for (const auto& p : seg.pieces) {
+                        if (p.chain % num_links != link || (p.chain / num_links) % num_workers != w) {
+                            continue;
+                        }
+                        const ttnn::CoreCoord injector = device->worker_core_from_logical_core(
+                            transpose_core_grid ? ttnn::CoreCoord{0, p.chain} : ttnn::CoreCoord{p.chain, 0});
+                        piece_args.insert(
+                            piece_args.end(),
+                            {layout.chain_offset(p.chain),
+                             layout.chain_width(p.chain),
+                             static_cast<uint32_t>(injector.x),
+                             static_cast<uint32_t>(injector.y),
+                             p.notify});
+                        ++num_pieces;
+                    }
+                    if (num_pieces == 0) {
+                        continue;
+                    }
+                    body.insert(body.end(), {seg.stripe, seg.distance, num_pieces});
+                    body.insert(body.end(), piece_args.begin(), piece_args.end());
+                    ++num_segments;
+                }
+                if (num_segments > 0) {
+                    schedules[w].push_back(num_segments);
+                    schedules[w].insert(schedules[w].end(), body.begin(), body.end());
+                }
+            }
+            std::vector<uint32_t> active_workers;
+            for (uint32_t w = 0; w < num_workers; ++w) {
+                if (!schedules[w].empty()) {
+                    active_workers.push_back(w);
+                }
+            }
+            if (active_workers.empty()) {
+                continue;
+            }
+
+            const uint32_t group_base = ((2 * link) + dir) * (1 + num_workers);
+            const ttnn::CoreCoord mux_core = comm_core(group_base);
+            const ttnn::CoreCoord mux_virtual_core = device->worker_core_from_logical_core(mux_core);
+
+            tt::tt_fabric::FabricMuxV2Config mux_config(
+                *device,
+                static_cast<uint8_t>(active_workers.size()),
+                static_cast<uint8_t>(operation_attributes.num_buffers_per_channel),
+                packet_size_bytes,
+                mux_base_l1_address,
+                mux_l1_floor_address);
+            tt::tt_fabric::add_fabric_mux_v2_to_program(
+                program,
+                mux_config,
+                mux_core,
+                src_node_id,
+                device->get_fabric_node_id(neighbour.value()),
+                link,
+                tt::tt_metal::NOC::RISCV_0_default);
+
+            for (uint32_t channel = 0; channel < active_workers.size(); ++channel) {
+                const uint32_t w = active_workers[channel];
+                const ttnn::CoreCoord send_core = comm_core(group_base + 1 + w);
+                const ttnn::CoreCoord send_virtual_core = device->worker_core_from_logical_core(send_core);
+
+                tt::tt_metal::create_cb(
+                    tt::CBIndex::c_0,
+                    program,
+                    ttnn::CoreRangeSet(ttnn::CoreRange(send_core)),
+                    in1_tile_size,
+                    tiles_per_packet * kSendCbPackets,
+                    in1_data_format);
+
+                std::vector<uint32_t> reader_ct = {
+                    static_cast<uint32_t>(tt::CBIndex::c_0),
+                    in1_tile_size,
+                    tiles_per_packet,
+                    K_tiles,
+                    chunk_tiles,
+                    kSendPacketsPerBatch,
+                    layout.stripe_tiles,
+                    layout.ring_size,
+                    static_cast<uint32_t>(transpose_b)};
+                tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(reader_ct);
+                tt::tt_metal::TensorAccessorArgs(*pwb->buffer()).append_to(reader_ct);
+                const auto reader_id = tt::tt_metal::CreateKernel(
+                    program,
+                    std::string(kKernelDir) + "dataflow/send_reader.cpp",
+                    send_core,
+                    tt::tt_metal::ReaderDataMovementConfig(reader_ct));
+                std::vector<uint32_t> reader_rt = {weight_tensor.buffer()->address(), pwb->buffer()->address()};
+                reader_rt.insert(reader_rt.end(), stripe_sem_addrs.begin(), stripe_sem_addrs.end());
+                reader_rt.insert(reader_rt.end(), schedules[w].begin(), schedules[w].end());
+                tt::tt_metal::SetRuntimeArgs(program, reader_id, send_core, reader_rt);
+
+                std::vector<uint32_t> writer_ct = {
+                    static_cast<uint32_t>(tt::CBIndex::c_0),
+                    in1_tile_size,
+                    tiles_per_packet,
+                    K_tiles,
+                    chunk_tiles,
+                    layout.stripe_tiles,
+                    layout.ring_size,
+                    static_cast<uint32_t>(transpose_b)};
+                const auto& route = dir == 0 ? forward_route : backward_route;
+                writer_ct.insert(writer_ct.end(), route.begin(), route.end());
+                tt::tt_metal::TensorAccessorArgs(*pwb->buffer()).append_to(writer_ct);
+                const auto writer_id = tt::tt_metal::CreateKernel(
+                    program,
+                    std::string(kKernelDir) + "dataflow/send_writer.cpp",
+                    send_core,
+                    tt::tt_metal::WriterDataMovementConfig(writer_ct));
+                std::vector<uint32_t> writer_rt = {pwb->buffer()->address()};
+                writer_rt.insert(writer_rt.end(), stripe_sem_addrs.begin(), stripe_sem_addrs.end());
+                writer_rt.insert(
+                    writer_rt.end(),
+                    {static_cast<uint32_t>(send_virtual_core.x), static_cast<uint32_t>(send_virtual_core.y)});
+                const uint32_t flow_control_sem_id = tt::tt_metal::CreateSemaphore(program, {send_core}, 0);
+                const uint32_t teardown_sem_id = tt::tt_metal::CreateSemaphore(program, {send_core}, 0);
+                mux_config.append_client_connection_rt_args(
+                    mux_virtual_core, static_cast<uint8_t>(channel), {flow_control_sem_id, teardown_sem_id}, writer_rt);
+                writer_rt.insert(writer_rt.end(), schedules[w].begin(), schedules[w].end());
+                tt::tt_metal::SetRuntimeArgs(program, writer_id, send_core, writer_rt);
+
+                send_cores.push_back(send_core);
+                send_reader_kernel_ids.push_back(reader_id);
+                send_writer_kernel_ids.push_back(writer_id);
+            }
+        }
     }
 
     return {
@@ -419,7 +630,11 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
             .in0_receiver_kernels_id = in0_receiver_kernels_id,
             .in1_sender_kernels_id = in1_sender_kernels_id,
             .in1_receiver_kernels_id = in1_receiver_kernels_id,
-            .transpose_core_grid = transpose_core_grid}};
+            .transpose_core_grid = transpose_core_grid,
+            .in1_pwb_arg_idx = in1_pwb_arg_idx,
+            .send_cores = std::move(send_cores),
+            .send_reader_kernel_ids = std::move(send_reader_kernel_ids),
+            .send_writer_kernel_ids = std::move(send_writer_kernel_ids)}};
 }
 
 void AllGatherWeightMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
@@ -430,6 +645,7 @@ void AllGatherWeightMinimalMatmulAsyncProgramFactory::override_runtime_arguments
     const uint32_t in0_addr = tensor_args.input_tensor.buffer()->address();
     const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();
     const uint32_t out_addr = tensor_return_value.buffer()->address();
+    const uint32_t pwb_addr = tensor_args.persistent_weight_buffer->buffer()->address();
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto vars_it = cached_workload.shared_variables.find(range);
@@ -451,6 +667,14 @@ void AllGatherWeightMinimalMatmulAsyncProgramFactory::override_runtime_arguments
             auto& in1_args = (in0_idx == 0 ? in1_sender_args : in1_receiver_args)[core.x][core.y];
             in1_args[kRtInputAddrIdx] = in1_addr;
             in1_args[kRtOutputAddrIdx] = out_addr;
+            in1_args[vars.in1_pwb_arg_idx] = pwb_addr;
+        }
+        for (size_t i = 0; i < vars.send_cores.size(); ++i) {
+            const auto& core = vars.send_cores[i];
+            auto& reader_args = GetRuntimeArgs(program, vars.send_reader_kernel_ids[i])[core.x][core.y];
+            reader_args[kRtSendAddrIdx] = in1_addr;
+            reader_args[kRtSendAddrIdx + 1] = pwb_addr;
+            GetRuntimeArgs(program, vars.send_writer_kernel_ids[i])[core.x][core.y][kRtSendAddrIdx] = pwb_addr;
         }
     }
 }

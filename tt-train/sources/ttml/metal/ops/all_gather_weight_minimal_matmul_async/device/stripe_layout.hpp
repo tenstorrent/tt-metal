@@ -27,4 +27,24 @@ std::vector<uint32_t> stripe_consumption_order(uint32_t ring_size, uint32_t ring
 
 StripeLayout make_stripe_layout(
     uint32_t N_tiles, uint32_t ring_size, uint32_t ring_index, uint32_t num_chains, uint32_t N_block_tiles, bool ring);
+
+struct RelayPiece {
+    uint32_t chain = 0;
+    uint32_t notify = 0;
+};
+
+struct RelaySegment {
+    uint32_t stripe = 0;
+    uint32_t distance = 0;
+    std::vector<RelayPiece> pieces;
+};
+
+struct RelayPlan {
+    std::vector<RelaySegment> forward;
+    std::vector<RelaySegment> backward;
+};
+
+uint32_t relay_range(const StripeLayout& layout, uint32_t origin, uint32_t c, int32_t dir, bool ring);
+
+RelayPlan make_relay_plan(const StripeLayout& layout, uint32_t ring_index, bool ring);
 }  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async

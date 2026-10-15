@@ -38,5 +38,11 @@ ttnn::Tensor ttml_all_gather_weight_minimal_matmul_async(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& persistent_weight_buffer,
+    const std::vector<ttnn::GlobalSemaphore>& multi_device_global_semaphore,
+    std::optional<uint32_t> cluster_axis,
+    uint32_t num_links,
+    uint32_t num_workers_per_link,
+    uint32_t num_buffers_per_channel,
     bool transpose_b);
 }

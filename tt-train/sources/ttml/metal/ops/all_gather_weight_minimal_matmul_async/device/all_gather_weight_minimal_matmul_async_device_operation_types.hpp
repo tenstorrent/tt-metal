@@ -6,7 +6,9 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
@@ -22,11 +24,17 @@ struct AllGatherWeightMinimalMatmulAsyncParams {
     uint32_t ring_size = 1;
     uint32_t ring_index = 0;
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
+    std::optional<uint32_t> cluster_axis;
+    uint32_t num_links = 1;
+    uint32_t num_workers_per_link = 3;
+    uint32_t num_buffers_per_channel = 8;
+    std::vector<ttnn::GlobalSemaphore> semaphores;
     bool transpose_b = true;
 };
 
 struct AllGatherWeightMinimalMatmulAsyncInputs {
     ttnn::Tensor input_tensor;
     ttnn::Tensor weight_tensor;
+    std::optional<ttnn::Tensor> persistent_weight_buffer;
 };
 }  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async

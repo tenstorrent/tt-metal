@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "device/all_gather_weight_minimal_matmul_async_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -21,5 +22,11 @@ ttnn::Tensor all_gather_weight_minimal_matmul_async(
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     std::optional<const ttnn::DataType> dtype = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& persistent_weight_buffer = std::nullopt,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& multi_device_global_semaphore = {},
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    uint32_t num_links = 1,
+    uint32_t num_workers_per_link = 3,
+    uint32_t num_buffers_per_channel = 8,
     bool transpose_b = true);
 }

@@ -18,6 +18,10 @@ struct AllGatherWeightMinimalMatmulAsyncProgramFactory {
         tt::tt_metal::KernelHandle in1_sender_kernels_id{};
         tt::tt_metal::KernelHandle in1_receiver_kernels_id{};
         bool transpose_core_grid{};
+        uint32_t in1_pwb_arg_idx{};
+        std::vector<ttnn::CoreCoord> send_cores;
+        std::vector<tt::tt_metal::KernelHandle> send_reader_kernel_ids;
+        std::vector<tt::tt_metal::KernelHandle> send_writer_kernel_ids;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 #include "api/core_local_mem.h"
@@ -37,19 +38,28 @@ inline bool block_columns(
     return any_real;
 }
 
-template <uint32_t K_block_tiles, uint32_t N_block_tiles, bool transpose_b, typename Accessor>
+template <
+    uint32_t K_block_tiles,
+    uint32_t N_block_tiles,
+    bool transpose_b,
+    typename ShardAccessor,
+    typename PwbAccessor>
 inline void read_in1_block_columns(
-    const Accessor& reader,
+    const ShardAccessor& shard,
+    const PwbAccessor& pwb,
     uint32_t cb_id,
     uint32_t tile_bytes,
     uint32_t K_tiles,
     uint32_t N_tiles,
     uint32_t k_start,
     const uint32_t* cols,
-    uint32_t width) {
+    uint32_t width,
+    uint32_t local_stripe,
+    uint32_t stripe_tiles) {
     Noc noc;
     CircularBuffer cb(cb_id);
     const uint32_t base = cb.get_write_ptr();
+    const uint32_t local_first = local_stripe * stripe_tiles;
     for (uint32_t i = 0; i < K_block_tiles; i++) {
         const uint32_t k = k_start + i;
         uint32_t ptr = base + (i * N_block_tiles * tile_bytes);
@@ -57,20 +67,48 @@ inline void read_in1_block_columns(
             if (cols[j] == kPaddingColumn) {
                 continue;
             }
-            if (k < K_tiles) {
+            if (k >= K_tiles) {
+                fill_zeros_async(noc, cb, tile_bytes, ptr - base);
+            } else if (cols[j] - local_first < stripe_tiles) {
                 noc.async_read(
-                    reader,
+                    shard,
+                    CoreLocalMem<uint32_t>(ptr),
+                    tile_bytes,
+                    {.page_id = weight_page<transpose_b>(cols[j] - local_first, k, K_tiles, stripe_tiles)},
+                    {});
+            } else {
+                noc.async_read(
+                    pwb,
                     CoreLocalMem<uint32_t>(ptr),
                     tile_bytes,
                     {.page_id = weight_page<transpose_b>(cols[j], k, K_tiles, N_tiles)},
                     {});
-            } else {
-                fill_zeros_async(noc, cb, tile_bytes, ptr - base);
             }
         }
     }
     noc.async_read_barrier();
     noc.write_zeros_l1_barrier();
+}
+
+inline void wait_for_block_stripes(
+    const uint32_t* cols,
+    uint32_t width,
+    uint32_t local_stripe,
+    uint32_t stripe_tiles,
+    const uint32_t* stripe_sem_addrs,
+    uint32_t chunks,
+    uint32_t* arrived) {
+    for (uint32_t j = 0; j < width; j++) {
+        if (cols[j] == kPaddingColumn) {
+            continue;
+        }
+        const uint32_t s = cols[j] / stripe_tiles;
+        if (s == local_stripe || arrived[s] >= chunks) {
+            continue;
+        }
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stripe_sem_addrs[s]), chunks);
+        arrived[s] = chunks;
+    }
 }
 
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, bool granular, typename Accessor>
@@ -144,3 +182,48 @@ struct DeferredBlockWrite {
         pending = false;
     }
 };
+
+struct SendSegment {
+    uint32_t stripe = 0;
+    uint32_t distance = 0;
+    uint32_t num_pieces = 0;
+};
+
+struct SendPieceArgs {
+    uint32_t row_offset = 0;
+    uint32_t width = 0;
+    uint32_t inj_noc_x = 0;
+    uint32_t inj_noc_y = 0;
+    uint32_t notify = 0;
+};
+
+template <typename OnBegin, typename OnPacket, typename OnDone>
+inline void for_each_send_packet(
+    uint32_t schedule_arg_idx,
+    uint32_t K_tiles,
+    uint32_t chunk_tiles,
+    uint32_t tiles_per_packet,
+    OnBegin on_begin,
+    OnPacket on_packet,
+    OnDone on_done) {
+    const tt_l1_ptr uint32_t* args = reinterpret_cast<const tt_l1_ptr uint32_t*>(get_arg_addr(schedule_arg_idx));
+    const uint32_t num_segments = *args++;
+    for (uint32_t s = 0; s < num_segments; ++s) {
+        const SendSegment& seg = *reinterpret_cast<const tt_l1_ptr SendSegment*>(args);
+        const tt_l1_ptr SendPieceArgs* pieces = reinterpret_cast<const tt_l1_ptr SendPieceArgs*>(&seg + 1);
+        args = reinterpret_cast<const tt_l1_ptr uint32_t*>(pieces + seg.num_pieces);
+        uint32_t chunk_idx = 0;
+        for (uint32_t k_start = 0; k_start < K_tiles; k_start += chunk_tiles, ++chunk_idx) {
+            const uint32_t chunk = std::min(chunk_tiles, K_tiles - k_start);
+            for (uint32_t p = 0; p < seg.num_pieces; ++p) {
+                const SendPieceArgs& piece = pieces[p];
+                on_begin(seg, piece, chunk_idx, p);
+                const uint32_t num_tiles = piece.width * chunk;
+                for (uint32_t t = 0; t < num_tiles; t += tiles_per_packet) {
+                    on_packet(seg, piece, t, std::min(tiles_per_packet, num_tiles - t), k_start, chunk);
+                }
+                on_done(seg, piece, chunk_idx, p);
+            }
+        }
+    }
+}
