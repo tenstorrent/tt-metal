@@ -347,6 +347,28 @@ struct InstanceCounter {
     ~InstanceCounter() { --live; }
 };
 
+// A target that points at itself sees a byte copy as a stale pointer, which counting constructions
+// and destructions cannot.
+struct SelfReferential {
+    SelfReferential() noexcept : self(this) {}
+    SelfReferential(SelfReferential&&) noexcept : self(this) {}
+    SelfReferential& operator=(SelfReferential&&) = delete;
+    bool operator()() const { return self == this; }
+    const SelfReferential* self;
+};
+
+TEST(MoveOnlyFunctionTest, CPU_NonTrivialInlineTargetIsMovedByItsConstructor) {
+    static_assert(sizeof(SelfReferential) <= detail::kMoveOnlyFunctionInlineSize);
+    static_assert(!std::is_trivially_move_constructible_v<SelfReferential>);
+    move_only_function<bool()> constructed{std::in_place_type<SelfReferential>};
+    EXPECT_TRUE(constructed());
+    move_only_function<bool()> moved{std::move(constructed)};
+    EXPECT_TRUE(moved());
+    move_only_function<bool()> assigned{[] { return false; }};
+    assigned = std::move(moved);
+    EXPECT_TRUE(assigned());
+}
+
 // Inline but not trivially movable: moves go through the per-type relocate, and each moved-out
 // copy must be destroyed exactly once.
 TEST(MoveOnlyFunctionTest, CPU_NonTrivialInlineTargetIsDestroyedOnce) {
