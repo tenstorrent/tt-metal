@@ -19,16 +19,16 @@ The prefill is *traced and pipelined* (:class:`~models.experimental.deepseek_v41
 V4's ``TracedPrefill``): the chunk step is compiled and captured once per stage (not timed), then replayed for every
 chunk with the stages running as a pipeline. A chunk's only host input is its packet (H2D on stage 0) and its Engram
 rows (H2D on the Engram layers' stages); the residual and any compressed KV a later stage reads go stage to stage
-over D2D sockets, and the last stage sends its output to the host over a D2H socket. Stages start only at index
-sources (:func:`~models.experimental.deepseek_v41_flash.tt.prefill.model.plan_prefill_placement`): KV-only runs on
-five stages (layers 0-1, 2-7, 8-13, 14-19, 20).
+over D2D sockets, and the last stage sends its output to the host over a D2H socket. The layers are split evenly into
+contiguous runs (V4's ``plan_layer_placement`` with a pipeline group size of 1): KV-only puts its 21 layers on eight
+stages of 3 or 2 layers (0-2, 3-5, 6-8, 9-11, 12-14, 15-16, 17-18, 19-20).
 
 The final collapse uses the last layer's FFN ``pre_mix`` (there is no ``hc_head``). Engram layers 1 and 14 read host
 n-gram tables (~101 GB each) when built, and the test is skipped when that RAM is not free.
 
-Prompt length: a layer may attend over at most ``candidate_topk_blocks * candidate_block_size`` = 16384
-compressed entries until the candidate pre-filter is ported, so a ratio-1 layer caps the prompt at 16384 tokens
-(the default).
+Prompt length: 16384 tokens by default. Past ``candidate_topk_blocks * candidate_block_size`` = 16384 compressed
+entries the selection is two-level, so longer prompts run too; attention stays dense, so each chunk costs more the
+further in it is.
 
 Run it (ttnn venv)::
 
@@ -43,7 +43,7 @@ Knobs (environment):
 * ``DEEPSEEK_V4_PREFILL_LAYERS``  -- build only the first N layers (default 21 when KV-only, else all 40; with KV-only
   it must be at least 21, so use ``DEEPSEEK_V4_PREFILL_KV_ONLY=0`` for a shorter bring-up),
 * ``DEEPSEEK_V4_PREFILL_STAGES``  -- at most this many ``1 x 4`` pipeline stages, 1 to 8 (default 8; fewer when there
-  are fewer index-source segments),
+  are fewer layers),
 * ``DEEPSEEK_V4_TRACE_REGION_SIZE`` -- bytes to reserve for the captured traces (unset keeps the ttnn default),
 * ``DEEPSEEK_V4_PREFILL_HEARTBEAT`` -- seconds between ``[heartbeat]`` lines saying what it is doing (default 30),
 * ``DEEPSEEK_V4_PREFILL_STALL_SECS`` -- warn when one step lasts longer than this (default 600),
@@ -51,7 +51,7 @@ Knobs (environment):
 * ``DEEPSEEK_V4_CACHE_DIR``       -- the converted-weight tile cache (shared with the decode demo's routed experts).
 
 A quick bring-up: ``DEEPSEEK_V4_PREFILL_KV_ONLY=0 DEEPSEEK_V4_PREFILL_LAYERS=3 DEEPSEEK_V4_PREFILL_LEN=1024`` (layers 0-2: a window layer, an Engram
-layer and a ratio-2 kv + index source, on two stages: 0-1 and 2).
+layer and a ratio-2 kv + index source, one per stage on three stages).
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     engram_table_nbytes,
     load_engram_table,
 )
-from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel, plan_prefill_placement
+from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import (
     _DEFAULT_PROMPT_FILE,
     _Progress,
@@ -88,6 +88,7 @@ from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill
     _env_int,
     _report,
 )
+from models.experimental.deepseek_v4_flash.tt.model import plan_layer_placement
 from models.experimental.deepseek_v4_flash.tt.prefill.attention import ALIGNMENT
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config, set_active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
@@ -185,8 +186,7 @@ def _run_demo(mesh_device, progress: _Progress, AutoTokenizer) -> None:
     num_stages = _env_int("DEEPSEEK_V4_PREFILL_STAGES", 8)
     if not 1 <= num_stages <= mesh_rows:
         raise ValueError(f"DEEPSEEK_V4_PREFILL_STAGES={num_stages} must be in [1, {mesh_rows}] (mesh rows)")
-    # Stages start at index sources, so a selection never crosses a stage edge.
-    placement = plan_prefill_placement(config, num_layers, num_stages)
+    placement = plan_layer_placement(num_layers, num_stages, 1)
     num_stages = placement[-1] + 1
     logger.info(f"opened a {mesh_rows} x {mesh_cols} mesh; {num_stages} stage(s) of 1 x {_TP_SIZE}")
     submeshes = []

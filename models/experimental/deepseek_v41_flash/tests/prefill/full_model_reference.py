@@ -18,9 +18,9 @@ is touched, so it can run ahead of the device test, alone::
 
     python -m models.experimental.deepseek_v41_flash.tests.prefill.full_model_reference --len 2048
 
-The device's prefill selects with the indexer as the reference does; the reference's candidate pre-filter keeps every
-block up to ``candidate_topk_blocks * candidate_block_size`` = 16384 compressed entries, so the two are the same
-computation for prompts up to 16384 tokens.
+The device's prefill selects as the reference does, two-level past ``candidate_topk_blocks * candidate_block_size``
+= 16384 compressed entries. The reference indexer materializes ``[T, index_n_heads, E]`` fp32 scores (~107 GB at
+20480 tokens), so references much past 16384 tokens need it run in query slices, which is not done here.
 """
 
 from __future__ import annotations
