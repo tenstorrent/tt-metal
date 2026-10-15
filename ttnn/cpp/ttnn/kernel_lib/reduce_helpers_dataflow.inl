@@ -202,19 +202,7 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
         }
     }
 
-    // Quasar DM cores have a write-back L1 D-cache (4KB, per-core) + L2 cache
-    // (128KB, shared between DM cores). RISC stores flow Core -> L1 D$ -> L2 -> TL1
-    // (Tensix L1, the SRAM that other RISCs read). The volatile fills above land
-    // in DM-private caches; without an explicit flush, TRISC-side unpack reads
-    // stale TL1 contents (zeros) even though the DM observes its own writes via
-    // L1 D$ hits. This is consistent with the runtime evidence:
-    //   DM:    PRS:after_fill @0xbb780 : 0x3f803f80 ...
-    //   UNPACK U:scaler sh@0xbb780     : 0x0 0x0 ...
-    // For NoC-written input tiles the NoC engine writes directly to TL1 and
-    // bypasses DM caches, which is why those are visible to TRISC.
-    // flush_l2_cache_range probes L1 D$ for dirty data and writes through to TL1,
-    // so TRISC sees the freshly-filled scaler tile once we signal push_back.
-    // On non-Quasar (or non-DM) builds this is a no-op.
+    // Quasar DM stores sit in write-back caches; flush them so TRISC unpack reads the filled tile, not stale L1.
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     {
         constexpr uint32_t tile_size_bytes = get_tile_size(dfb_id);
@@ -230,16 +218,7 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
 
 template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_elements_in_tile) {
-    // -------------------------------------------------------------------------
-    // 1. Compute scaler value
-    //
-    //    REDUCE_SCALAR applies scaler twice in LLK (row then col), so use 1/sqrt(N)
-    //    REDUCE_ROW/REDUCE_COL apply scaler once, so use 1/N
-    //
-    //    NOTE: sqrtf() with a runtime argument will link in the software sqrt
-    //    implementation. If device memory is tight (~2KB limit), consider
-    //    precomputing the scaler on the host instead.
-    // -------------------------------------------------------------------------
+    // REDUCE_SCALAR applies the scaler twice (row then column), so AVG uses 1/sqrt(N) there.
     float scaler_f;
     if constexpr (pool_type == PoolType::AVG) {
         if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
@@ -252,9 +231,6 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_
         scaler_f = 1.0f;
     }
 
-    // -------------------------------------------------------------------------
-    // 2. Fill the DFB with the computed scaler
-    // -------------------------------------------------------------------------
     prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(scaler_f, valid_reduce_dim_elements_in_tile);
 }
 

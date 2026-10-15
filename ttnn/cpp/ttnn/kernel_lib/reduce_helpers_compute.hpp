@@ -13,52 +13,12 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
 /**
  * @file reduce_helpers_compute.hpp
- * @brief Single unified reduce function with automatic dispatch
+ * @brief reduce(): REDUCE_ROW, REDUCE_COL and REDUCE_SCALAR over a block of tiles, managing DST, CB
+ * synchronization, init and packing.
  *
- * Provides ONE function that handles all reduce operations:
- * - Row reduction (REDUCE_ROW): Reduces W dimension, outputs Ht tiles per batch
- * - Column reduction (REDUCE_COL): Reduces H dimension, outputs Wt tiles per batch
- * - Scalar reduction (REDUCE_SCALAR): Reduces both H and W, outputs 1 tile per batch
- *
- * This library hides the complexity of:
- * - tile_regs_acquire/commit/wait/release DST register management
- * - reduce_init/reduce_uninit initialization
- * - DataflowBuffer manipulation (wait_front, pop_front, reserve_back, push_back)
- * - pack_tile for writing results to output DFB
- * - Multiple input policies (see ReduceInputPolicy enum)
- *
- * DEST register capacity is automatically detected via dest_helpers.hpp.
- *
- * IMPORTANT: Call compute_kernel_hw_startup() exactly once at the start of the kernel.
- * With input reconfiguration enabled (the default), reduce() configures every operand
- * its algorithm reads; their tile/face geometry must match the startup operands.
- * With it disabled, the caller configures the operands before reduce().
- *
- * IMPORTANT: The auxiliary (scaler) CB must contain the tiles the selected
- * algorithm reads BEFORE calling reduce().
- *
- * Basic Usage:
- *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
- *
- *   compute_kernel_hw_startup(dfb_in, dfb_scaler, dfb_out);
- *
- *   // Reduce each row (W dimension) - output has Ht tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
- *
- *   // Reduce each column (H dimension) - output has Wt tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
- *
- *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
- *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
- *
- * See reduce() function documentation for advanced usage examples including:
- * - Different input policies (BulkWaitBulkPop, NoWaitNoPop, WaitUpfrontNoPop)
- * - Post-reduce operations (e.g., recip_tile for softmax)
- * - Accumulation for block-wise reduction
- * - The ReduceAlgorithm::TileSum algorithm and partial (non-tile-aligned) reductions
+ * Call compute_kernel_hw_startup() exactly once at kernel start. With input reconfiguration enabled (the
+ * default), reduce() configures every operand it reads; their tile/face geometry must match the startup
+ * operands. The auxiliary CB must hold the tiles the selected algorithm reads before reduce() is called.
  */
 
 namespace compute_kernel_lib {
@@ -67,12 +27,7 @@ namespace compute_kernel_lib {
 // Configuration Types
 // =============================================================================
 
-/**
- * @brief Input memory layout specification for PRELOADED/PERSISTENT reduce modes
- *
- * Specifies how input tiles are arranged in memory, particularly for non-contiguous layouts
- * where rows have padding (row_stride > logical width).
- */
+/** Tile strides of a resident input; rows may be padded (row_stride > cols). */
 struct ReduceInputMemoryLayout {
     std::uint32_t row_stride = 0;    // 0 = auto-detect from Wt (contiguous row-major)
     std::uint32_t batch_stride = 0;  // 0 = rows * row_stride; resident inputs only
@@ -88,15 +43,7 @@ struct ReduceInputMemoryLayout {
     }
 };
 
-/**
- * @brief Input block shape specification for reduce operations (rows x cols x batches)
- *
- * Specifies the dimensions of the input tile block to be reduced.
- * The output size depends on the reduction dimension:
- * - REDUCE_ROW: output has (rows × batches) tiles
- * - REDUCE_COL: output has (cols × batches) tiles
- * - REDUCE_SCALAR: output has (batches) tiles
- */
+/** Input tile block. Outputs: rows x batches (ROW), cols x batches (COL), batches (SCALAR). */
 struct ReduceInputBlockShape {
     std::uint32_t rows;
     std::uint32_t cols;
@@ -110,41 +57,20 @@ struct ReduceInputBlockShape {
     static constexpr ReduceInputBlockShape col(std::uint32_t r, std::uint32_t b = 1) { return {r, 1, b}; }
 };
 
-/**
- * @brief Configuration for accumulation-style reductions
- *
- * Holds the static configuration for accumulation (CB and DST index).
- * Does not hold iteration state - that's provided via Accumulate wrapper.
- */
+/** Accumulator CB and DST index for cross-call accumulation. */
 struct AccumulationConfig {
-    // CB holding the running accumulator tile across reduce() iterations; see Accumulate below.
     std::uint32_t cb_accumulator = 0;
-    std::uint32_t dst_index = 0;  // DST register for accumulation (default: 0)
+    std::uint32_t dst_index = 0;
 
     static constexpr AccumulationConfig with_cb(std::uint32_t cb, std::uint32_t dst = 0) { return {cb, dst}; }
 };
 
 /**
- * @brief Accumulation wrapper that carries config + iteration index
+ * Accumulates across reduce() calls through cb_accumulator, one tile per output in output order.
+ * Iteration 0 starts fresh; later iterations reload the accumulator first. Only the call marked
+ * Accumulate::at_last runs post_reduce_op. A partial mode applies per call, so pass it only on the call
+ * holding the short tile. MAX + REDUCE_SCALAR, and MAX + REDUCE_ROW on Quasar, are rejected.
  *
- * This type enables type-based dispatch in reduce():
- * - When Accumulate is passed: accumulation code is compiled in
- * - When NoAccumulation (default): accumulation code is eliminated
- *
- * The iteration index determines reload behavior:
- * - iteration == 0: skip reload (first call, no accumulated value yet)
- * - iteration > 0: reload from the accumulator CB before reducing. The CB must expose one tile
- *   per output, in output order; REDUCE_COL reloads and pops a complete DEST chunk at a time.
- *
- * Unsupported combinations (rejected by static_assert in reduce()):
- * - MAX + REDUCE_SCALAR: the running max cannot be reproduced by the copy_tile reload.
- * - MAX + REDUCE_ROW on Quasar: the reload needs a within-16x16-face transpose that
- *   copy_init asserts against on Quasar.
- *
- * A partial mode applies to each call, so pass it only on the call holding the short tile.
- * post_reduce_op runs only on the call marked last (Accumulate::at_last).
- *
- * Usage:
  *   for (uint32_t i = 0; i < num_blocks; ++i) {
  *       const auto acc = i + 1 == num_blocks ? Accumulate::at_last(cb_accum, i) : Accumulate::at(cb_accum, i);
  *       reduce<SUM, REDUCE_ROW>(..., acc);
@@ -164,7 +90,6 @@ struct Accumulate {
     explicit constexpr Accumulate(std::uint32_t cb, std::uint32_t iter = 0, bool lst = false) :
         config{cb, 0}, iteration(iter), last(lst) {}
 
-    // Factory for concise call sites
     static constexpr Accumulate at(std::uint32_t cb, std::uint32_t iter, std::uint32_t dst = 0) {
         return Accumulate(AccumulationConfig{cb, dst}, iter);
     }
@@ -178,7 +103,6 @@ struct Accumulate {
         return a;
     }
 
-    // Convenience: check if this is first iteration (skip reload)
     constexpr bool is_first() const { return iteration == 0; }
     constexpr bool is_last() const { return last; }
 };
@@ -196,9 +120,6 @@ struct is_accumulate<Accumulate> : std::true_type {};
 template <typename T>
 inline constexpr bool is_accumulate_v = is_accumulate<T>::value;
 
-/**
- * @brief Type trait to detect valid accumulation types (NoAccumulation or Accumulate)
- */
 template <typename T>
 struct is_accumulation_type : std::false_type {};
 
@@ -211,9 +132,6 @@ struct is_accumulation_type<Accumulate> : std::true_type {};
 template <typename T>
 inline constexpr bool is_accumulation_type_v = is_accumulation_type<T>::value;
 
-/**
- * @brief Type trait to detect valid post-reduce operation (callable with uint32_t)
- */
 template <typename T, typename = void>
 struct is_post_reduce_op : std::false_type {};
 
@@ -229,137 +147,27 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
 // =============================================================================
 
 /**
- * @brief Unified reduce function handling all reduction patterns
+ * @brief Reduce a block of tiles along reduce_dim.
  *
- * This single function handles:
- * - Row reduction (REDUCE_ROW): Reduces W dimension, outputs Ht tiles per batch
- * - Column reduction (REDUCE_COL): Reduces H dimension, outputs Wt tiles per batch
- * - Scalar reduction (REDUCE_SCALAR): Reduces both H and W, outputs 1 tile per batch
- *
- * IMPORTANT - HARDWARE INITIALIZATION REQUIREMENT:
- * Before calling this function, you MUST initialize the compute kernel hardware by
- * calling compute_kernel_hw_startup() exactly once at the start of your kernel.
- *
- * IMPORTANT - SCALER CB REQUIREMENT:
- * The scaler CB (scaler_cb) must contain the scaling factor tile BEFORE calling
- * this function. The function will wait for it automatically.
- *
- * INPUT POLICIES: See ReduceInputPolicy enum for detailed mode descriptions.
- * - Use BulkWaitBulkPop for optimal performance when wait/pop are symmetric with ReduceInputBlockShape.
- * - Use NoWaitNoPop for asymmetric wait/pop (e.g., padding where you wait/pop more than ReduceInputBlockShape).
- * - Use WaitUpfrontNoPop for softmax patterns where tiles are reused in subsequent operations.
- *
- * POST-REDUCE OPERATIONS:
- * - post_reduce_op callback receives dst_idx parameter indicating which DEST register to operate on
- * - With Accumulate, it runs only on the call marked Accumulate::at_last
- * - REDUCE_ROW: Called once per row with dst_idx=0 (single output in DST[0])
- * - REDUCE_COL: Called once per column in current chunk with dst_idx in [0, current_chunk)
- * - REDUCE_SCALAR: Called once per batch with dst_idx pointing at the single accumulated DST register
- *
- * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
- * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
- * @tparam input_dfb_id Input DataflowBuffer ID containing tiles to reduce (compile-time CB id)
- * @tparam scaler_dfb_id Auxiliary DataflowBuffer ID containing the scaler, mask and zero tiles the selected
- *                       algorithm reads (compile-time CB id). REDUCE_NO_AUXILIARY_CB is valid only for the
- *                       SFPU paths, which read no auxiliary tile.
- * @tparam output_dfb_id Output DataflowBuffer ID for reduced tiles (compile-time CB id)
- *                       The input/output formats are deduced from these CB ids
- *                       (unpack_src_format / pack_dst_format), so Int32 and bf16 MIN are routed to the
- *                       SFPU path automatically (Int32 has no FPU support, the FPU has no MIN pool).
- *                       Other formats use FPU/GMPOOL unless Accurate fp32 is requested. SFPU covers
- *                       REDUCE_ROW/REDUCE_COL only; other fast-mode float MIN is dispatched via
- *                       reduce_{h,w}_neg.cpp.
- * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
- * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
- * @tparam fp32_mode Float32 precision mode (default: Fast). Accurate routes Float32 through the
- *                   SFPU at full fp32; see ReduceFp32Mode.
- * @tparam reduce_factor Number of elements in an AVG reduction (default: 1). A non-default value is valid only
- *                       for AVG. AVG requires a non-default value on ReduceAlgorithm::TileSum and SFPU paths; the
- *                       ordinary ReduceAlgorithm::Native path may keep 1 because it consumes its reader-provided
- * scaler. ReduceAlgorithm::TileSum evaluates the reciprocal at compile time and applies it after the within-tile
- * finalize and before the independent post_reduce_op.
- *
- * @param input_block_shape Tile grid dimensions (rows x cols x batches)
- *              Use ReduceInputBlockShape::of(r, c, b), ::row(c), ::col(r), or ::single()
- * @param input_memory_layout Tile memory layout specification for NoWaitNoPop/WaitUpfrontNoPop policies (default:
- * contiguous) Use ReduceInputMemoryLayout::with_row_stride(stride) for custom row spacing. Only used when input_policy
- * is NoWaitNoPop or WaitUpfrontNoPop.
- * @param accumulate Accumulation configuration (default: NoAccumulation)
- * @param post_reduce_op Callback after each reduction (default: NoOp)
- * @param partial_mode Handling for a non-tile-aligned reduce dimension
- *        (default: ReducePartialMode::None).
- *        Not supported for REDUCE_SCALAR or any SFPU reduce path, including accurate Float32 and bf16 MIN.
- * @param auxiliary_tile_offset Start of this call's recipe in an auxiliary CB
- *        (default: 0 for standalone calls). ReduceAlgorithm::TileSum
- *        requires a zero tile here, or immediately after the partial-axis mask.
+ * @tparam reduce_type SUM, AVG, MAX or MIN
+ * @tparam reduce_dim REDUCE_ROW (Ht outputs per batch), REDUCE_COL (Wt) or REDUCE_SCALAR (1)
+ * @tparam input_dfb_id, scaler_dfb_id, output_dfb_id CB ids. Formats are deduced from them: Int32, bf16 MIN and
+ *         Accurate fp32 use the SFPU path (ROW/COL only), where scaler_dfb_id may be REDUCE_NO_AUXILIARY_CB.
+ * @tparam input_policy, reconfig_mode, fp32_mode, algorithm, within_tile See their enums in reduce_types.hpp.
+ * @tparam reduce_factor Element count of an AVG. Required for AVG on TileSum and SFPU paths; Native may keep 1
+ *         because its scaler tile already carries 1/N.
+ * @param input_memory_layout Strides of a resident input (NoWaitNoPop / WaitUpfrontNoPop).
+ * @param accumulate NoAccumulation or Accumulate.
+ * @param post_reduce_op Called with each output's DST index before packing; with Accumulate, only on at_last.
+ * @param partial_mode Non-tile-aligned reduce edge; not for REDUCE_SCALAR or the SFPU paths.
+ * @param output_group REDUCE_COL only: output columns held in DEST together; 0 selects the DEST limit.
+ * @param auxiliary_tile_offset First auxiliary tile of this call.
  *
  * @example
- *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
- *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
- *
- * @example
- *   // Reduce each row (W dimension) - output has Ht tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
- *
- * @example
- *   // Reduce each column (H dimension) - output has Wt tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
- *
- * @example
- *   // Reduce type and dimension specified with explicit namespace
- *   compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::single());
- *
- * @example
- *   // NoWaitNoPop policy: caller manages wait/pop externally
- *   // Use cases: (1) custom stride between rows, (2) sharded DFB mapped to tensor with data reuse
- *   compute_kernel_lib::reduce<
- *       SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
- *       compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(input_stride));
- *
- * @example
- *   // WaitUpfrontNoPop policy: tiles persist for reuse (ideal for softmax pattern)
- *   // Library waits for tiles internally, but does NOT pop - tiles remain for subsequent ops
- *   compute_kernel_lib::reduce<
- *       MAX, REDUCE_ROW, dfb_values, dfb_scaler, dfb_max,
- *       compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt));
- *   // dfb_values tiles still available for sub_exp_block_bcast_cols_inplace()
- *
- * @example
- *   // BulkWaitBulkPop policy (bulk wait/pop - optimal for performance)
- *   // Library waits for all Wt tiles per row, processes them with indexed access, then pops all Wt tiles
- *   compute_kernel_lib::reduce<
- *       SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
- *
- * @example
- *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
- *   compute_kernel_lib::reduce<
- *       SUM, REDUCE_ROW, dfb_exps, dfb_scaler, dfb_out, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
- *       compute_kernel_lib::ReduceInputBlockShape::row(Wt),
- *       compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
- *       NoAccumulation{},
- *       [](uint32_t dst_idx) {
- *           recip_tile_init();
- *           recip_tile(dst_idx);
- *       });
- *
- * @example
- *   // REDUCE_COL with post_reduce_op: apply recip_tile to each column result
- *   // dst_idx indicates which DEST register contains the column result (0 to current_chunk-1)
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt),
- *       compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
- *       NoAccumulation{},
- *       [](uint32_t dst_idx) {
- *           recip_tile_init();
- *           recip_tile(dst_idx);
- *       });
+ *   // Softmax denominator: tiles stay resident, recip applied to each row sum.
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, dfb_exps, dfb_scaler, dfb_out, ReduceInputPolicy::NoWaitNoPop>(
+ *       ReduceInputBlockShape::row(Wt), ReduceInputMemoryLayout::contiguous(), NoAccumulation{},
+ *       [](uint32_t dst) { recip_tile_init(); recip_tile(dst); });
  */
 template <
     PoolType reduce_type,
@@ -371,7 +179,7 @@ template <
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
     ReduceAlgorithm algorithm = ReduceAlgorithm::Native,
-    // Precedes the deduced parameters so a caller passing a lambda post_reduce_op can still set it.
+    // Precedes the deduced parameters so callers passing a lambda can still set it.
     ReduceWithinTile within_tile = ReduceWithinTile::Collapse,
     std::uint32_t reduce_factor = 1,
     typename AccumulateT = NoAccumulation,
@@ -382,7 +190,6 @@ ALWI void reduce(
     AccumulateT accumulate = AccumulateT{},
     PostReduceOp post_reduce_op = PostReduceOp{},
     ReducePartialMode partial_mode = ReducePartialMode::None,
-    // REDUCE_COL only: independent output columns held in DEST together. 0 selects the DEST limit.
     std::uint32_t output_group = 0,
     std::uint32_t auxiliary_tile_offset = 0);
 

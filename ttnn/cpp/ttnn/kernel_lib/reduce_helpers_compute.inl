@@ -70,9 +70,7 @@ ALWI void sfpu_reduce_min_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     }
 }
 
-// SFPU cross-tile add. Int32 uses add_int_tile; Float32 uses add_binary_tile for
-// accurate fp32 accumulation. add_binary_tile is unavailable on Quasar, so guard
-// it with ARCH_QUASAR to avoid template lookup failures.
+// SFPU cross-tile add: add_int_tile for Int32, add_binary_tile for Float32 (not available on Quasar).
 template <DataFormat format>
 ALWI void sfpu_reduce_sum_fold_init() {
     if constexpr (format == DataFormat::Int32) {
@@ -99,8 +97,7 @@ ALWI void sfpu_reduce_sum_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     }
 }
 
-// Pool-type dispatched cross-tile fold init (MAX -> binary_max, MIN -> binary_min, SUM -> add).
-// Used by compute_kernel_lib::reduce() for the Int32 SFPU path and for accurate fp32 reduces.
+// Cross-tile fold init for the SFPU paths: MAX -> binary_max, MIN -> binary_min, SUM -> add.
 template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_fold_init() {
     if constexpr (pool_type == PoolType::SUM) {
@@ -112,8 +109,7 @@ ALWI void sfpu_reduce_fold_init() {
     }
 }
 
-// Copy one input tile into DST and fold into the running accumulator (first tile seeds dst_idx
-// directly). Fold op is selected by pool_type: MAX -> running max, MIN -> running min, SUM -> running sum.
+// Copy one input tile into DST and fold it into the accumulator; the first tile seeds dst_idx directly.
 template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_copy_and_fold(
     uint32_t input_cb_id, uint32_t tile_idx, uint32_t dst_idx, uint32_t work_dst, bool is_first_tile) {
@@ -140,8 +136,7 @@ ALWI bool sfpu_is_first_tile(uint32_t axis_index, const AccumulateT& accumulate)
     return axis_index == 0;
 }
 
-// Post-reduce scalar multiply. mul_unary_tile is fp32-only, so Int32 is bracketed with typecasts
-// (truncates toward zero on the way back); all other formats use plain mul_unary_tile.
+// mul_unary_tile is fp32-only, so Int32 is typecast around it (truncating toward zero).
 template <DataFormat reduce_format>
 ALWI void reduce_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
     if constexpr (reduce_format == DataFormat::Int32) {
@@ -157,10 +152,7 @@ ALWI void reduce_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
     }
 }
 
-// Does `dfb_id` unpack straight into DEST (bypassing SrcA/SrcB)? True only for a 32-bit CB tagged
-// UnpackToDestFp32, where the JIT keeps unpack_dst_format == unpack_src_format (Default downgrades to Tf32, bf16
-// is never 32-bit). FoldViaAdd reads the accumulator via SrcA/SrcB, so it is invalid for such a CB. UNPACK/MATH
-// only (PACK cannot see unpack_dst_format); mirrors tilize_helpers' has_unpack_to_dest_fp32.
+// True for a 32-bit CB tagged UnpackToDestFp32, which cannot be a SrcA/SrcB operand. UNPACK/MATH only.
 ALWI bool dfb_unpacks_to_dest(uint32_t dfb_id) {
 #if defined(UCK_CHLKC_PACK)
     (void)dfb_id;
@@ -172,41 +164,9 @@ ALWI bool dfb_unpacks_to_dest(uint32_t dfb_id) {
 #endif
 }
 
-// -----------------------------------------------------------------------------
-// ReduceAlgorithm::TileSum datapath.
-//
-// Each output tile is produced independently: sum its reduce-dim tiles into a DST slot with pairwise
-// add_tiles(acc_to_dest), pairing unpaired input tiles with the auxiliary zero tile, then finalize
-// within the tile on the SFPU (sfpu_reduce SUM reads DST in place). AVG multiplies by the compile-time
-// 1/reduce_factor once. One DST
-// register per active output tile; bulk COL input keeps a caller-selected set of those slots live together.
-// WaitAndPopPerTile consumes pairs and requires an even input capacity of at least two tiles.
-//
-// Restrictions (enforced by reduce()): float SUM or AVG. AVG's reduce_factor is caller-owned, so standalone,
-// partial, cross-chunk, sharded, and uneven means all use the same reduce<AVG> entry point.
-// WaitUpfrontNoPop / NoWaitNoPop index a resident block. WaitAndPopPerTile streams
-// pairs for one output at a time; COL input must arrive one complete column at a time.
-// Bulk COL input carries an explicit output-column group. should_pop policies (Bulk / WaitAndPop)
-// pop the input and pack per output; no-pop policies (WaitUpfront / NoWait) leave the input resident.
-// All policies reserve and publish one output tile at a time. Calls without a custom post-op load the
-// SFPU reduction macro once; custom post-ops may overwrite it between outputs.
-//
-// PARTIAL (non-tile-aligned) reduce dims — ROW/COL only, signalled by ReducePartialMode::Mask: the last tile
-// is folded in with a DEST-ACCUMULATING masked broadcast-mul via fold_partial_last(), so the padding
-// contributes 0. The bulk stays pure add_tiles (fidelity-flat, 2 tiles/op); only the one partial tile is a
-// (fidelity-affected) mul. The bcast shorthands overwrite DEST (clear_fp32_dst_acc=true), so the accumulating
-// variant is the LLK directly with acc_to_dest=1 at init and clear_fp32_dst_acc=false at the op.
-// Partial is supported for SUM/AVG standalone (any should_pop / no-pop policy), under ROW streaming, and folded
-// into cross-call Accumulate (ROW/COL). SCALAR partial is rejected (a 2-D corner mask a single row/col tile
-// can't encode).
-//
-// CROSS-CALL ACCUMULATE (AccumulateT == Accumulate) — the accumulator CB holds the RAW partial-sum tile per
-// output (NOT a reduced tile). On the first call we sum the new input (+ its masked partial, if any). Later
-// resident-input calls use the selected AccumulateReloadMode; streamed/grouped calls safely copy-seed DEST
-// from the accumulator before folding the arriving tiles.
-// The within-tile finalize (sfpu_reduce [+ 1/reduce_factor for AVG] + post_reduce_op) runs only when
-// accumulate.is_last(); non-last chunks pack the raw partial sum back to the output CB (which the caller points
-// at the accumulator).
+// ReduceAlgorithm::TileSum: add each output's reduce-dim tiles pairwise into one DST slot, then collapse within the
+// tile, apply AVG and post_reduce_op. With Accumulate the accumulator holds the raw sum; only the last call
+// finalizes, earlier calls pack the raw sum.
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
@@ -228,10 +188,7 @@ ALWI void reduce_tile_sum(
     uint32_t output_group,
     uint32_t auxiliary_tile_offset) {
     const uint32_t Ht = shape.rows, Wt = shape.cols, NC = shape.batches;
-    // row_pitch = tile distance between consecutive rows of the resident block (>= Wt). row_stride > Wt lets
-    // the reduce run over the first Wt columns of a WIDER resident tensor — the padding tiles [Wt, row_pitch)
-    // are simply never indexed. 0 => contiguous (row_pitch = Wt). Honored for ROW/COL under BulkWaitBulkPop;
-    // SCALAR / streaming / cross-call accumulate require contiguous (asserted in reduce()).
+    // Tile distance between resident rows; tiles in [Wt, row_pitch) are padding and never read.
     const uint32_t row_pitch = (input_memory_layout.row_stride > 0u) ? input_memory_layout.row_stride : Wt;
     const uint32_t batch_pitch =
         input_memory_layout.batch_stride > 0 ? input_memory_layout.batch_stride : Ht * row_pitch;
@@ -260,8 +217,7 @@ ALWI void reduce_tile_sum(
     const uint32_t stride = is_col ? row_pitch : 1u;  // COL steps down a column by the row pitch
     const uint32_t n_out = is_row ? (Ht * NC) : (is_col ? (Wt * NC) : NC);
 
-    // The pairwise accumulation and within-tile finalize produce a SUM. AVG applies the caller-owned
-    // compile-time 1/reduce_factor below; no divisor is inferred from this call's tile geometry.
+    // AVG scales by the caller's compile-time 1/reduce_factor, never by this call's tile count.
     ASSERT(partial_mode == ReducePartialMode::None || partial_mode == ReducePartialMode::Mask);
     const bool has_partial = partial_mode == ReducePartialMode::Mask;
     // Each additive auxiliary slice contains an optional mask, then a required zero.
@@ -277,20 +233,13 @@ ALWI void reduce_tile_sum(
         }
     }());
 
-    // Accumulate: reload the running accumulator on every chunk except the first; finalize only on the last.
-    // (do_finalize is always true when there is no cross-call accumulation.)
+    // With Accumulate, reload on every call but the first and finalize only on the last.
     bool do_finalize = true;
     if constexpr (has_accum) {
         do_finalize = accumulate.is_last();
     }
 
-    // Per-reduce()-call setup — LIGHT only. The heavy hw_configure (unpack/math/pack HW setup + pack_dest_init)
-    // is the once-per-kernel boot (compute_kernel_hw_startup, same as every reduce) and must NEVER run per
-    // reduce() call, so it is not done here. Per call we do only the light format reconfig (gated by
-    // reconfig_mode, to adapt SrcA/SrcB/packer formats when this reduce chains after a different-format op —
-    // the ReduceAlgorithm::TileSum analogue of the standard path's reconfig_data_format) plus the light SFPU-macro
-    // (re)load; the per-output add_tiles_init / copy_tile_init below re-arm the MOP. This mirrors how
-    // ReduceAlgorithm::Native relies on boot hw_configure + light reduce_init.
+    // Per-call setup is format reconfig and the SFPU macro load only; hw_configure runs once at kernel start.
     constexpr bool reconfig_in =
         (reconfig_mode == ReduceDataFormatReconfigMode::INPUT ||
          reconfig_mode == ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT);
@@ -307,16 +256,13 @@ ALWI void reduce_tile_sum(
     // Quasar binds the output descriptor at op init, even when buffer formats match.
     ckernel::pack_init(output_dfb_id);
 #endif
-    // Load the SFPU reduce macro only for calls that perform the within-tile collapse.
-    // The later AVG scale initializes its scalar op when needed, but a caller's SFPU post_reduce_op should
-    // still follow the normal contract and run its own <op>_tile_init.
+    // Load the SFPU reduce macro only when collapsing; an SFPU post_reduce_op still runs its own init.
     if constexpr (within_tile == ReduceWithinTile::Collapse && std::is_same_v<PostReduceOp, NoOp>) {
         if (do_finalize) {
             sfpu_reduce_init<PoolType::SUM, dst_fmt>();
         }
     }
-    // Basic validity the reduce() dispatch skips on this path (its compile-time restrictions are asserted
-    // there). Capacity self-asserts in each wait_front/reserve_back, except NoWaitNoPop which does neither.
+    // reduce() asserts the compile-time restrictions; wait_front/reserve_back assert capacity.
     ASSERT(input_dfb_id != output_dfb_id && Ht > 0 && Wt > 0 && NC > 0);
     if constexpr (input_policy == ReduceInputPolicy::WaitAndPopPerTile) {
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb_id) >= 2));
@@ -338,14 +284,11 @@ ALWI void reduce_tile_sum(
     const uint32_t zero_idx = auxiliary_tile_offset + (has_partial ? 1u : 0u);
     const uint32_t required_aux_tiles = zero_idx + 1u;
     if constexpr (has_accum) {
-        // Indexed input honors the selected accumulator reload. Streamed/grouped
-        // input copy-seeds the accumulator; all unpaired input tiles use zero.
-        // acc_cb (running RAW partial sum) is maybe_unused: only ASSERTs read it.
+        // Indexed input uses the selected reload mode; streamed and grouped input always copy-seed.
         [[maybe_unused]] const uint32_t acc_cb = accumulate.config.cb_accumulator;
         ASSERT(input_dfb_id != acc_cb);
         if constexpr (!streamed_input) {
-            // FoldViaAdd reads acc_cb via SrcA/SrcB — invalid for an UnpackToDestFp32 CB (see
-            // dfb_unpacks_to_dest).
+            // FoldViaAdd reads acc_cb via SrcB, which an UnpackToDestFp32 CB does not allow.
             UNPACK(ASSERT(accumulate.reload != AccumulateReloadMode::FoldViaAdd || !dfb_unpacks_to_dest(acc_cb)));
 #ifdef ARCH_QUASAR
             ASSERT(accumulate.reload != AccumulateReloadMode::CopySeedSfpuAdd);  // needs add_binary_tile (WH/BH only)
@@ -367,15 +310,10 @@ ALWI void reduce_tile_sum(
         reconfig_data_format_srcb(scaler_dfb_id, input_dfb_id);
     };
 
-    // Fold the masked partial LAST reduce-dim tile into DST, ACCUMULATING (acc_to_dest=1 at init,
-    // clear_fp32_dst_acc=false at the op — the bcast shorthands would overwrite). Shared by the standalone,
-    // cross-call-accumulate, and streaming paths so the partial fold lives in one place. `last_idx` is the
-    // input-CB index of that tile (absolute into the resident block, or front-relative 0 for streaming).
-    // Referenced from a runtime `if (has_partial)` in every instantiation, so it is never truly unused.
+    // Fold the masked last reduce-dim tile into DST. The bcast shorthands overwrite DST, so this calls the LLK
+    // with acc_to_dest=1 and clear_fp32_dst_acc=false.
     [[maybe_unused]] auto fold_partial_last = [&](uint32_t last_idx, uint32_t dst_idx = 0) {
-        // BF16/FP32 inputs already match their auxiliary tiles, but compressed
-        // inputs use a floating-point mask. Switch SrcB for the actual operand
-        // and restore it before the next output resumes input/input addition.
+        // Compressed inputs use a float mask: switch SrcB to it and restore it afterwards.
         reconfig_data_format_srcb(input_dfb_id, scaler_dfb_id);
         MATH((llk_math_eltwise_binary_init<ckernel::EltwiseBinaryType::ELWMUL, MASK_BCAST, MATH_FIDELITY>(
             input_dfb_id, scaler_dfb_id, 1)));
@@ -386,8 +324,7 @@ ALWI void reduce_tile_sum(
         reconfig_data_format_srcb(scaler_dfb_id, input_dfb_id);
     };
 
-    // Finalize a raw cross-tile sum only on the last cross-call accumulation step. Keeping this indexed by
-    // DST lets grouped COL chunks finalize every output column without duplicating the policy-independent tail.
+    // Indexed by DST so grouped COL can finalize every output column.
     auto finalize_output = [&](uint32_t dst_idx) {
         if (!do_finalize) {
             return;
@@ -512,10 +449,7 @@ ALWI void reduce_tile_sum(
         tile_regs_acquire();
 
         if constexpr (streaming) {
-            // Stream this output's reduce-dim tiles through DST, waiting/popping as they arrive
-            // (front-relative indices 0/1). Contiguous per output (row/scalar), so tiles arrive in reduce
-            // order. A later cross-call accumulation first copy-seeds DST from the accumulator CB; the first
-            // call starts from a fresh DST. Align only when pairing would cross the ring boundary.
+            // Stream the tiles in pairs from the CB front. Align first when a pair would cross the CB wrap.
             bool loaded_accumulator = false;
             if constexpr (has_accum) {
                 if (!accumulate.is_first()) {
@@ -570,8 +504,7 @@ ALWI void reduce_tile_sum(
                 input_dfb.pop_front(1);
             }
         } else {
-            // Indexed access into the resident block; `start` is output o's first reduce-dim tile. row_pitch
-            // is the per-row tile pitch (== Wt when contiguous), so padded rows are skipped automatically.
+            // `start` is output o's first reduce-dim tile in the resident block.
             uint32_t start;
             if constexpr (bulk_per_output) {
                 start = 0;
@@ -585,9 +518,7 @@ ALWI void reduce_tile_sum(
 
             if constexpr (has_accum) {
                 if (accumulate.is_first()) {
-                    // First chunk: no accumulator yet — sum this chunk's full_cnt tiles (aligned; accumulate
-                    // rejects partial). acc_to_dest=true throughout: a freshly-acquired DST reads 0 on its
-                    // first write, so the first add is the plain sum. An unpaired input tile is added with zero.
+                    // A fresh DST reads 0, so the first acc_to_dest add starts the sum.
                     uint32_t k = 0;
                     if (full_cnt & 1u) {
                         add_input_with_zero(start);
@@ -601,17 +532,11 @@ ALWI void reduce_tile_sum(
                         fold_partial_last(start + full_cnt * stride);
                     }
                 } else {
-                    // Later chunk: fold output o's running accumulator (raw partial sum, front of accum CB)
-                    // with this chunk's new tiles. Strategy = accumulate.reload (see AccumulateReloadMode):
-                    // FoldViaAdd reads the accumulator via SrcB (fast, Default-acc only); the CopySeed* modes
-                    // reload it into DST via copy_tile (the only access a UnpackToDestFp32 acc_cb allows).
+                    // Fold the accumulator with this call's tiles as accumulate.reload selects.
                     const uint32_t acc_cb = accumulate.config.cb_accumulator;
                     accum_dfb.wait_front(1);
                     if (accumulate.reload == AccumulateReloadMode::FoldViaAdd) {
-                        // Fold the accumulator as an add_tiles SRCB operand — no dest reload. Reads acc via
-                        // SrcB, so ONLY valid when acc_cb is UnpackToDestMode::Default. Parity of full_cnt
-                        // decides; add_tiles_init does NOT reconfig format, so reconfig SRCB around the acc-add
-                        // (acc may be fp32 while the input is bf16) and restore it after.
+                        // add_tiles_init does not reconfigure formats, so switch SrcB around the accumulator add.
                         if (full_cnt & 1u) {
                             if (full_cnt == 1u) {
                                 reconfig_data_format_srcb(input_dfb_id, acc_cb);
@@ -642,11 +567,7 @@ ALWI void reduce_tile_sum(
                             }
                         }
                     } else if (accumulate.reload == AccumulateReloadMode::CopySeedSfpuAdd && full_cnt > 0) {
-                        // Sum this chunk's new tiles into DST[0] with pure pairwise add_tiles (fresh DST reads
-                        // 0 -> full fp32 accumulation, no DEST-reuse TF32 truncation), reload the accumulator
-                        // into DST[1] via copy_tile (U2D-safe, lossless), then SFPU-add DST[0] += DST[1] (the
-                        // SFPU operates on DST in fp32). The accumulator is never an FPU SrcA/B operand. WH/BH
-                        // only (add_binary_tile is not on Quasar).
+                        // Sum the new tiles in DST[0], copy_tile the accumulator into DST[1], add them on the SFPU.
                         {
                             uint32_t k = 0;
                             if (full_cnt & 1u) {
@@ -667,20 +588,14 @@ ALWI void reduce_tile_sum(
                         add_binary_tile(0, 1, 0);  // DST[0] = DST[0] + DST[1] (fp32 SFPU add)
                         if constexpr (within_tile == ReduceWithinTile::Collapse) {
                             if (do_finalize && std::is_same_v<PostReduceOp, NoOp>) {
-                                sfpu_reduce_init<PoolType::SUM, dst_fmt>();  // restore the reduce macro to finalize
-                                                                             // with
+                                sfpu_reduce_init<PoolType::SUM, dst_fmt>();
                             }
                         }
 #else
                         ASSERT(false);  // CopySeedSfpuAdd needs add_binary_tile (WH/BH only)
 #endif
                     } else {
-                        // CopySeed*: reload the accumulator into DST via copy_tile — the ONLY access a
-                        // UnpackToDestFp32 acc_cb allows (the accumulator is never an FPU operand). copy_tile
-                        // uses SrcA (or unpack-direct-to-dest when tagged), so reconfig SRCA around it; SrcB is
-                        // left at input from the per-call reconfig; the zero/mask folds switch it as needed.
-                        // CopySeedSfpuAdd also uses this path when only a partial tile remains: there is no
-                        // new full-tile sum in DST[0] to add, so seed it directly before fold_partial_last.
+                        // CopySeedSfpuAdd also lands here when only a partial tile remains.
                         reconfig_data_format_srca(input_dfb_id, acc_cb);
                         copy_tile_init(acc_cb);
                         copy_tile(acc_cb, 0, 0);  // DST = accumulator
@@ -701,8 +616,7 @@ ALWI void reduce_tile_sum(
                     }
                 }
             } else {
-                // acc_to_dest=true throughout: a freshly-acquired DST reads 0 on its first write, so the first
-                // add is the plain sum — no separate overwrite-seed init. An unpaired input tile is added with zero.
+                // A fresh DST reads 0, so the first acc_to_dest add starts the sum.
                 uint32_t k = 0;
                 if (full_cnt & 1u) {
                     add_input_with_zero(start);
@@ -719,14 +633,11 @@ ALWI void reduce_tile_sum(
             }
         }
 
-        // Non-last cross-call accumulation steps leave the raw sum in DST; the last call performs the
-        // within-tile collapse, AVG normalization, and caller post-op.
         finalize_output(0);
 
         tile_regs_commit();
         tile_regs_wait();
-        // Output capacity is independent of the input policy. This also permits an in-place accumulator
-        // to replace each tile after consuming it, without reserving space in a full CB upfront.
+        // Reserve per tile so an in-place accumulator can replace each tile after consuming it.
         output_dfb.reserve_back(1);
         pack_tile(0, output_dfb_id);
         output_dfb.push_back(1);
@@ -763,10 +674,7 @@ constexpr bool no_wait(ReduceInputPolicy p) { return p == ReduceInputPolicy::NoW
 constexpr bool should_pop(ReduceInputPolicy p) {
     return p == ReduceInputPolicy::WaitAndPopPerTile || p == ReduceInputPolicy::BulkWaitBulkPop;
 }
-constexpr bool manages_cb(ReduceInputPolicy p) {
-    // Returns true if the reduce function manages CB wait/reserve/push (not preloaded)
-    return p != ReduceInputPolicy::NoWaitNoPop;
-}
+constexpr bool manages_cb(ReduceInputPolicy p) { return p != ReduceInputPolicy::NoWaitNoPop; }
 
 // =============================================================================
 // Helper Function Implementations
@@ -777,15 +685,12 @@ ALWI void reduce_init_short_with_dt(uint32_t old_dfb_id, uint32_t input_dfb_id, 
     constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, false>();
     const uint32_t srca_dfb_id = swap_operands ? scaler_dfb_id : input_dfb_id;
 
-    // Reconfigure SRCA data format from old_dfb_id to the correct SrcA format
     UNPACK(
         (llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_dfb_id, srca_dfb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_dfb_id, srca_dfb_id)));
 
-    // Reconfigure unpacker for reduce operation (SRCA and SRCB)
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id)));
 
-    // Reconfigure math for reduce operation
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(input_dfb_id, scaler_dfb_id)));
 
     // Skip packer reconfiguration - it remains valid from initial reduce_init call
@@ -808,20 +713,13 @@ ALWI void reload_accumulator_if_needed(
     const AccumulateT& accumulate,
     uint32_t dest_chunk_size = 1) {
     if constexpr (is_accumulate_v<AccumulateT>) {
-        if (!accumulate.is_first()) {  // Reload on all iterations except first
+        if (!accumulate.is_first()) {
             accum_dfb.wait_front(dest_chunk_size);
             constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, is_sfpu>();
             const uint32_t prev_srca_cb = swap_operands ? scaler_dfb_id : input_dfb_id;
 
-            // For MAX + REDUCE_ROW, GMPOOL's running accumulator lives at row 0 of face 0
-            // (max for rows 0-15) and row 0 of face 2 (max for rows 16-31); faces 1 and 3
-            // are never read. The LLK's reduce_row_perform_transpose then rotates those
-            // row-0 accumulators into col 0 of face 0 and col 0 of face 2 for packing.
-            // A vanilla copy_tile reload would leave the running max at col 0, but the
-            // next GMPOOL iteration only reads row 0 — so it would be silently dropped.
-            // Within-face-16x16-transpose on reload puts col 0 of each face back at row 0
-            // of that face, restoring the exact layout GMPOOL expects. The SFPU path never runs
-            // GMPOOL — its running max is a plain full-tile value — so it must not transpose.
+            // GMPOOL keeps the MAX + REDUCE_ROW accumulator in row 0 of each face, but the packed result sits in
+            // column 0. Transposing within each face on reload restores that layout; the SFPU path never uses GMPOOL.
             constexpr bool reload_within_face_transpose =
                 (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW && !is_sfpu);
 
@@ -835,9 +733,7 @@ ALWI void reload_accumulator_if_needed(
             }
             accum_dfb.pop_front(dest_chunk_size);
 
-            // CRITICAL: Re-init after copy_tile corrupts SRCA config
-            // Use short version since packer config is still valid from initial init
-            // Pass accumulator DFB as old_dfb_id to reconfigure data format from accumulator to input DFB
+            // copy_tile changed the SrcA config; restore it for the input.
             if constexpr (is_sfpu) {
                 // Point SrcA back at the input for the next fold; the caller does the fold init.
                 reconfig_data_format_srca(accumulate.config.cb_accumulator, input_dfb_id);
@@ -857,7 +753,7 @@ ALWI void assert_input_dfb_size(uint32_t input_dfb_id, uint32_t tiles_per_bulk, 
     } else if constexpr (waits_bulk(input_policy)) {
         ASSERT(get_dfb_num_pages(input_dfb_id) >= tiles_per_bulk);
         ASSERT(get_dfb_num_pages(input_dfb_id) % tiles_per_bulk == 0);
-    } else {  // waits_upfront or no_wait
+    } else {
         ASSERT(get_dfb_num_pages(input_dfb_id) >= total_tiles);
     }
 }
@@ -896,9 +792,7 @@ ALWI void reduce(
     // Int32, bf16 MIN and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     constexpr bool has_auxiliary = auxiliary_dfb_id != REDUCE_NO_AUXILIARY_CB;
-    // The unused native/mask branches are still instantiated on the additive
-    // path. Give those branches valid metadata without ever accessing a missing
-    // CB. Assertions below prohibit any tile read through this fallback ID.
+    // Fallback ID so unused branches compile without an auxiliary CB; assertions forbid reading through it.
     constexpr uint32_t scaler_dfb_id = has_auxiliary ? auxiliary_dfb_id : input_dfb_id;
     // =============================================================================
     // Static Assertions (compile-time validation)
@@ -931,10 +825,7 @@ ALWI void reduce(
         "keeps only DST(0,0), but GMPOOL needs that running max broadcast across face-0 row 4 "
         "on the reload pass, which the current copy_tile reload cannot reproduce.");
 #ifdef ARCH_QUASAR
-    // The MAX + REDUCE_ROW accumulator reload relies on a within-16x16-face transpose during
-    // copy_tile_to_dst_init_short (see reload_accumulator_if_needed). That transpose is rejected
-    // by copy_tile_to_dst_init_short on Quasar ("Transpose within face not supported on Quasar"),
-    // and there is no Quasar-compatible reload that restores the layout GMPOOL expects.
+    // The MAX + REDUCE_ROW reload needs a within-face transpose, which Quasar does not support.
     static_assert(
         !is_accumulate_v<AccumulateT> || !(reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW),
         "Accumulate with PoolType::MAX + REDUCE_ROW is not supported on Quasar: the accumulator "
@@ -961,29 +852,15 @@ ALWI void reduce(
         static_assert(
             reduce_format != DataFormat::Int32,
             "ReduceAlgorithm::TileSum: float only (add_tiles + sfpu_reduce). Int32 must use ReduceAlgorithm::Native.");
-        // ReduceWithinTile::Skip drops only the lane collapse. AVG remains well-defined because reduce_factor
-        // is caller-owned (for example, the number of contributors in a cross-core combine).
-        // Streaming COL input contains one complete column at a time; the host
-        // records an output group of one. Bulk COL retains grouped traversal.
-        // Streaming + partial is supported for ROW/COL: the masked last tile folds
-        // in as the final streamed op. Partial ROW/COL is also supported by the indexed policies. REDUCE_SCALAR
-        // can be partial in BOTH axes at once (a single row/col mask cannot express the corner), so it is
-        // rejected — use ReduceAlgorithm::Native.
+        // One row/column mask cannot express a 2-D partial corner, so REDUCE_SCALAR rejects partial.
         if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
             ASSERT(partial_mode == ReducePartialMode::None);
         }
-        // Skip + partial is a contradiction: use_partial requests a lane mask along an axis whose inputs are
-        // already collapsed. Reject it rather than pretend the mask did useful work.
+        // Skip inputs are already collapsed along the reduce axis, so a lane mask has nothing to mask.
         if constexpr (within_tile == ReduceWithinTile::Skip) {
             ASSERT(partial_mode == ReducePartialMode::None);
         }
-        // Cross-call Accumulate + partial is supported for ROW/COL (the masked last tile folds into each
-        // chunk's sum via fold_partial_last). SCALAR partial is rejected above (622-ish) regardless of accumulate.
-        // row_stride (a WIDER resident block, padded rows) is honored for ROW/COL indexed reduces — the
-        // per-output indexing steps by the row pitch and skips the padding tiles — under BulkWaitBulkPop,
-        // WaitUpfrontNoPop, NoWaitNoPop, AND cross-call Accumulate (the fold uses the same start/stride/pitch).
-        // SCALAR walks a 2-D block (a single linear reduce-dim stride cannot skip per-row padding) and streaming
-        // is a pure contiguous stream (no indexing) — both require a contiguous layout (row_stride 0 or == Wt).
+        // REDUCE_SCALAR and streamed input cannot skip padded rows, so they require a contiguous layout.
         if (input_memory_layout.row_stride != 0) {
             ASSERT(input_memory_layout.row_stride >= input_block_shape.cols);
             if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
@@ -1015,12 +892,7 @@ ALWI void reduce(
         return;
     }
 
-    // Past this point is the ReduceAlgorithm::Native datapath, where reduce_tile (matmul-with-ones) IS the within-tile
-    // collapse — there is no separate finalize pass to elide, so Skip has no meaning here.
-    // The condition MUST be predicated on algorithm: `if constexpr` discards only the statements
-    // INSIDE its branch, so everything after the ReduceAlgorithm::TileSum block (including this static_assert) is
-    // still instantiated for a ReduceAlgorithm::TileSum call. Asserting `within_tile == Collapse` bare here made
-    // ReduceWithinTile::Skip fail to compile on EVERY algorithm, including the one that implements it.
+    // Code after the TileSum branch is still instantiated for TileSum calls, so the check names the algorithm.
     static_assert(
         algorithm == ReduceAlgorithm::TileSum || within_tile == ReduceWithinTile::Collapse,
         "ReduceWithinTile::Skip is ReduceAlgorithm::TileSum-only: on the ReduceAlgorithm::Native datapath the "
@@ -1050,7 +922,6 @@ ALWI void reduce(
         ASSERT(input_memory_layout.row_stride >= input_block_shape.cols);
     }
 
-    // Compile-time flag: true when Accumulate type is passed, false otherwise
     constexpr bool enable_accumulation = is_accumulate_v<AccumulateT>;
     const bool run_post_op = [&]() {
         if constexpr (enable_accumulation) {
@@ -1059,7 +930,6 @@ ALWI void reduce(
             return true;
         }
     }();
-    // Extract block shape components
     const uint32_t Ht = input_block_shape.rows;
     const uint32_t Wt = input_block_shape.cols;
     const uint32_t num_batches = input_block_shape.batches;
@@ -1075,7 +945,6 @@ ALWI void reduce(
         }
     }());
 
-    // Apply reconfig based on mode
     constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, is_sfpu>();
     if constexpr (reconfig_input(reconfig_mode)) {
         if constexpr (swap_operands) {
@@ -1091,11 +960,8 @@ ALWI void reduce(
     // Format reconfiguration alone does not bind a different Quasar output buffer.
     ckernel::pack_init(output_dfb_id);
 #endif
-    // Initialization
     if constexpr (is_sfpu) {
-        // The datacopy path into DEST; the one compute_kernel_hw_startup in kernel_main plus the
-        // reconfig above already established the HW config, so this only re-points the unpacker
-        // (replaces the old init_sfpu + copy_tile_to_dst_init_short, which redid a full hw config).
+        // hw_startup and the reconfig above set the HW config; this only re-points the unpacker.
         copy_init(input_dfb_id);
     } else {
         reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, output_dfb_id);
@@ -1110,8 +976,7 @@ ALWI void reduce(
         ASSERT(partial_mode == ReducePartialMode::None);
     }
     const bool has_partial_scaler = partial_mode == ReducePartialMode::Scaler;
-    // The full scaler is first in this call's auxiliary slice and the
-    // optional partial scaler follows it.
+    // This call's auxiliary slice is [full scaler, optional partial scaler].
     const uint32_t scaler_tile_count = has_partial_scaler ? 2u : 1u;
     const uint32_t full_scaler_idx = auxiliary_tile_offset;
     const uint32_t partial_scaler_idx = auxiliary_tile_offset + (has_partial_scaler ? 1u : 0u);
@@ -1124,7 +989,6 @@ ALWI void reduce(
     }
     constexpr uint32_t onetile = 1;
 
-    // Pattern dispatch based on reduce_dim
     if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
         // =================================================================
         // REDUCE_SCALAR: HW reduction - all tiles -> 1 output tile per batch
@@ -1137,21 +1001,18 @@ ALWI void reduce(
         UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, tiles_per_bulk, total_input_tiles)));
         PACK((assert_output_dfb_size(output_dfb_id)));
 
-        // PersistentPolicy: wait for all tiles upfront
         if constexpr (waits_upfront(input_policy)) {
             input_dfb.wait_front(total_input_tiles);
         }
 
         uint32_t batch_offset = 0;
         for (uint32_t nc = 0; nc < num_batches; ++nc) {
-            // BulkWaitBulkPop: wait for all Ht×Wt tiles in bulk
             if constexpr (waits_bulk(input_policy)) {
                 input_dfb.wait_front(tiles_per_bulk);
             }
 
             tile_regs_acquire();
 
-            // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
             reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                 accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
@@ -1159,16 +1020,14 @@ ALWI void reduce(
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
                     if constexpr (waits_per_tile(input_policy)) {
-                        // One-at-a-time: wait/pop per tile
                         input_dfb.wait_front(onetile);
                         reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, 0, full_scaler_idx, dst_idx);
                         input_dfb.pop_front(onetile);
                     } else if constexpr (waits_bulk(input_policy)) {
-                        // BulkWaitBulkPop: use indexed access
                         uint32_t tile_idx = ht * stride + wt;
                         reduce_tile<reduce_type, reduce_dim>(
                             input_dfb_id, scaler_dfb_id, tile_idx, full_scaler_idx, dst_idx);
-                    } else {  // PreloadedPolicy or PersistentPolicy: indexed access
+                    } else {
                         uint32_t tile_idx = batch_offset + ht * stride + wt;
                         reduce_tile<reduce_type, reduce_dim>(
                             input_dfb_id, scaler_dfb_id, tile_idx, full_scaler_idx, dst_idx);
@@ -1187,12 +1046,10 @@ ALWI void reduce(
             tile_regs_release();
             output_dfb.push_back(onetile);
 
-            // BulkWaitBulkPop: pop all tiles after processing
             if constexpr (waits_bulk(input_policy)) {
                 input_dfb.pop_front(tiles_per_bulk);
             }
 
-            // PreloadedPolicy or PersistentPolicy: update batch offset
             if constexpr (!should_pop(input_policy)) {
                 batch_offset += batch_stride;
             }
@@ -1208,7 +1065,6 @@ ALWI void reduce(
         UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, Wt, total_input_tiles)));
         PACK((assert_output_dfb_size(output_dfb_id)));
 
-        // PersistentPolicy: wait for all tiles upfront
         if constexpr (waits_upfront(input_policy)) {
             input_dfb.wait_front(total_input_tiles);
         }
@@ -1216,14 +1072,12 @@ ALWI void reduce(
         uint32_t index_offset = 0;
         for (uint32_t nc = 0; nc < num_batches; ++nc) {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
-                // BulkWaitBulkPop: wait for entire row upfront
                 if constexpr (waits_bulk(input_policy)) {
                     input_dfb.wait_front(Wt);
                 }
 
                 tile_regs_acquire();
 
-                // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
                 reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
@@ -1254,21 +1108,18 @@ ALWI void reduce(
                         // Last W-tile picks up the partial scaler when one was prepared by the reader.
                         const uint32_t scaler_idx = (wt == Wt - 1) ? partial_scaler_idx : full_scaler_idx;
                         if constexpr (waits_per_tile(input_policy)) {
-                            // One-at-a-time: wait/pop per tile
                             input_dfb.wait_front(onetile);
                             reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, 0, scaler_idx, dst_idx);
                             input_dfb.pop_front(onetile);
                         } else if constexpr (waits_bulk(input_policy)) {
-                            // BulkWaitBulkPop: use indexed access
                             reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, wt, scaler_idx, dst_idx);
-                        } else {  // PreloadedPolicy or PersistentPolicy: indexed access
+                        } else {
                             reduce_tile<reduce_type, reduce_dim>(
                                 input_dfb_id, scaler_dfb_id, wt + index_offset, scaler_idx, dst_idx);
                         }
                     }
                 }
 
-                // SFPU intra-tile finalize
                 if constexpr (is_sfpu) {
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
@@ -1285,12 +1136,10 @@ ALWI void reduce(
                 tile_regs_release();
                 output_dfb.push_back(onetile);
 
-                // BulkWaitBulkPop: pop all tiles after processing
                 if constexpr (waits_bulk(input_policy)) {
                     input_dfb.pop_front(Wt);
                 }
 
-                // PreloadedPolicy or PersistentPolicy: update index offset
                 if constexpr (!should_pop(input_policy)) {
                     index_offset += stride;
                 }
@@ -1301,14 +1150,10 @@ ALWI void reduce(
         }
     } else {
         // =================================================================
-        // REDUCE_COL: H reduction - each column -> 1 output tile (Wt outputs per batch)
-        // Need chunking due to DEST register limits
-        // StreamingPolicy: Tiles arrive in N C W_skip H W_chunk order (chunked by chunk_size)
-        // PreloadedPolicy: Tiles in row-major order, indexed as batch_offset + ht*stride + wt
+        // REDUCE_COL: H reduction - each column -> 1 output tile (Wt outputs per batch), chunked by DEST capacity
         // =================================================================
 
-        // Auto-detect chunk size from DEST register capacity
-        // Both reader (dataflow) and compute kernels compute this identically via DEST_AUTO_LIMIT
+        // The reader must derive the same chunk size from DEST_AUTO_LIMIT.
         constexpr uint32_t default_chunk_size = is_sfpu ? (DEST_AUTO_LIMIT - 1) : DEST_AUTO_LIMIT;
         const uint32_t requested_chunk = output_group > 0 ? output_group : default_chunk_size;
         const uint32_t chunk_size = requested_chunk < default_chunk_size ? requested_chunk : default_chunk_size;
@@ -1320,7 +1165,6 @@ ALWI void reduce(
         UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, Ht * chunk_size, total_input_tiles)));
         PACK((assert_output_dfb_size(output_dfb_id)));
 
-        // PersistentPolicy: wait for all tiles upfront
         if constexpr (waits_upfront(input_policy)) {
             input_dfb.wait_front(total_input_tiles);
         }
@@ -1332,14 +1176,12 @@ ALWI void reduce(
                 uint32_t current_chunk = chunk_end - wt;
                 uint32_t tiles_in_chunk = Ht * current_chunk;
 
-                // BulkWaitBulkPop: wait for entire chunk upfront
                 if constexpr (waits_bulk(input_policy)) {
                     input_dfb.wait_front(tiles_in_chunk);
                 }
 
                 tile_regs_acquire();
 
-                // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
                 reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate, current_chunk);
                 if constexpr (is_sfpu) {
@@ -1350,7 +1192,6 @@ ALWI void reduce(
                 }
 
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
-                    // Base dst_index: from accumulation config or 0 for multi-column output
                     uint32_t dst_idx = get_dst_index(accumulate);
                     // Last H-tile picks up the partial scaler when one was prepared by the reader.
                     [[maybe_unused]] const uint32_t scaler_idx = (ht == Ht - 1) ? partial_scaler_idx : full_scaler_idx;
@@ -1373,16 +1214,14 @@ ALWI void reduce(
                                     input_dfb_id, tile_idx, dst_idx, sfpu_work_dst, is_first_tile);
                             }
                         } else if constexpr (waits_per_tile(input_policy)) {
-                            // One-at-a-time: wait/pop per tile
                             input_dfb.wait_front(onetile);
                             reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, 0, scaler_idx, dst_idx);
                             input_dfb.pop_front(onetile);
                         } else if constexpr (waits_bulk(input_policy)) {
-                            // BulkWaitBulkPop: use indexed access
                             uint32_t tile_idx = ht * current_chunk + (i - wt);
                             reduce_tile<reduce_type, reduce_dim>(
                                 input_dfb_id, scaler_dfb_id, tile_idx, scaler_idx, dst_idx);
-                        } else {  // PreloadedPolicy or PersistentPolicy: indexed access
+                        } else {
                             uint32_t tile_idx = batch_offset + ht * stride + i;
                             reduce_tile<reduce_type, reduce_dim>(
                                 input_dfb_id, scaler_dfb_id, tile_idx, scaler_idx, dst_idx);
@@ -1391,7 +1230,6 @@ ALWI void reduce(
                     }
                 }
 
-                // SFPU intra-tile finalize per output slot
                 if constexpr (is_sfpu) {
                     const uint32_t sfpu_base_dst = get_dst_index(accumulate);
                     sfpu_reduce_init<reduce_type, reduce_format>();
@@ -1417,24 +1255,20 @@ ALWI void reduce(
                 }
                 tile_regs_release();
 
-                // BulkWaitBulkPop: pop all tiles after processing
                 if constexpr (waits_bulk(input_policy)) {
                     input_dfb.pop_front(tiles_in_chunk);
                 }
             }
-            // Update batch_offset for indexed modes (PreloadedPolicy and PersistentPolicy)
             if constexpr (!should_pop(input_policy)) {
                 batch_offset += batch_stride;
             }
         }
     }
 
-    // Cleanup
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_clear()));
     } else {
-        // Quasar uses the input metadata to restore its MXFP4 source-format
-        // override. The actual input need not occupy the default buffer 0.
+        // Quasar restores its MXFP4 source-format override from the input metadata.
         reduce_uninit(input_dfb_id);
     }
 }

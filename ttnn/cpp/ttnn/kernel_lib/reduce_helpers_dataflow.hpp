@@ -18,101 +18,42 @@ using ckernel::ReduceDim;
 // Named constant for SUM and MAX where reduce_factor is unused.
 constexpr uint32_t SUM_AND_MAX_REDUCE_FACTOR = 1;
 
-// =============================================================================
-// Reduce scaler helpers API
-//
-// Both APIs below generate a scaler tile consumed by the reduce LLK.
-// They must ONLY be used for that purpose — not for arbitrary constant tiles.
-//
-// calculate_and_prepare_reduce_scaler (DEFAULT / PREFERRED):
-//   Computes the standard reduce scaler (1/N for AVG, 1.0 for SUM/MAX) from
-//   pool type, reduce dimension, and reduce factor, then writes it to a CB tile.
-//   Use this for all reduce operations that use a standard scaler.
-//
-// prepare_reduce_scaler:
-//   Writes a caller-provided float value into a CB tile for reduce.
-//   Use ONLY when the reduce scaler is non-standard — i.e., it is NOT the
-//   usual 1/N for AVG or 1.0 for SUM/MAX. For example:
-//     - Different cores reduce over different-sized partitions (sharded with
-//       uneven splits), so each core needs a different 1/N value.
-//     - The scaler combines reduction with another factor (e.g., 1/(N*M)).
-// =============================================================================
+// Scaler tiles for the reduce LLK only, not for arbitrary constant tiles. Prefer
+// calculate_and_prepare_reduce_scaler (1/N for AVG, 1.0 otherwise); use prepare_reduce_scaler only for a
+// non-standard value, e.g. per-core 1/N under uneven sharding.
 
 /**
- * @brief Prepares a DFB entry for reduce using a caller-provided float scaler
+ * @brief Push one scaler tile holding scaler_f, in the row-0 layout the reduce LLK reads.
  *
- * Converts the float scaler to the appropriate bit representation based on
- * the DataflowBuffer's data format, then fills the tile with the scaler in
- * the row-0 layout required by the reduce LLK.
- *
- * Data format and tile shape (half/full) are deduced from the DataflowBuffer.
- *
- * @tparam dfb_id DataflowBuffer ID to write the entry to (must be constexpr)
- * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
- * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
- * @param scaler_f Float scaler value to fill the entry with
- * @param valid_reduce_dim_elements_in_tile Number of valid elements along the reduce dimension
- *        in the tile (1-32, default 32 = full tile). When the last tile along the reduce
- *        dimension is partially filled, this specifies how many row or column elements contain
- *        valid data; the remaining positions are zeroed out so they do not affect the result.
+ * Format and tile shape are deduced from dfb_id. valid_reduce_dim_elements_in_tile (1-32) zeroes the
+ * positions past the valid elements of a partial last tile.
  */
 template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim>
 FORCE_INLINE void prepare_reduce_scaler(
     float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 /**
- * @brief Generate a reduce scaler tile with format and tile shape deduced from dfb_id
- *
- * Computes the appropriate scaler value based on pool type, reduce dimension,
- * and reduce factor. Supports both bfloat16 and float32 formats.
- * Data format and tile shape (half/full) are deduced from the DataflowBuffer.
- *
- * For AVG pooling with REDUCE_SCALAR, uses 1/sqrt(N) since the LLK applies the
- * scaler twice (row then col). For AVG with REDUCE_ROW/REDUCE_COL, uses 1/N.
- * For SUM/MAX, the reduce_factor is ignored and the scaler is 1.0.
- *
- * @tparam dfb_id DataflowBuffer ID to write the entry to (must be constexpr)
- * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
- * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
- * @tparam reduce_factor Number of elements being reduced (N). Must be set for AVG;
- *         use SUM_AND_MAX_REDUCE_FACTOR (default) for SUM and MAX.
- * @param valid_reduce_dim_elements_in_tile Number of valid elements along the reduce dimension
- *        in the tile (1-32, default 32 = full tile). When the last tile along the reduce
- *        dimension is partially filled, this specifies how many row or column elements contain
- *        valid data; the remaining positions are zeroed out so they do not affect the result.
+ * @brief Push the standard scaler tile: 1/N for AVG (1/sqrt(N) for REDUCE_SCALAR, which applies it twice),
+ * 1.0 for SUM/MAX. reduce_factor is N; valid_reduce_dim_elements_in_tile works as in prepare_reduce_scaler.
  */
 template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler(
     uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 /**
- * @brief Fill and push one auxiliary tile read by compute_kernel_lib::reduce()
+ * @brief Fill and push one auxiliary tile for compute_kernel_lib::reduce().
  *
- * Writes one tile of a physical pattern into the next free page of dfb_id. The
- * pattern carries no reduction semantics; the caller selects the tiles, and their
- * order, that the compute reduce() configuration expects:
- * - ReduceAlgorithm::Native: [full scaler] or, with ReducePartialMode::Scaler, [full scaler, partial scaler].
- *   A full scaler is FirstRow with valid_elements equal to the tile width. A partial
- *   REDUCE_ROW scaler is FirstRow and a partial REDUCE_COL scaler is FirstRowPerFaceRow,
- *   with valid_elements set to the valid elements of the last reduce-dim tile.
- * - ReduceAlgorithm::TileSum: [zero] or, with ReducePartialMode::Mask, [mask, zero]. The mask is
- *   FirstRow (REDUCE_ROW) or FirstColumn (REDUCE_COL) with value 1.0.
+ * The pattern carries no reduction semantics; the caller pushes the tiles the reduce() call reads:
+ * - ReduceAlgorithm::Native: [full scaler], or [full scaler, partial scaler] with ReducePartialMode::Scaler.
+ *   The full scaler is FirstRow over the whole width; a partial scaler is FirstRow (REDUCE_ROW) or
+ *   FirstRowPerFaceRow (REDUCE_COL) over the valid elements of the last reduce-dim tile.
+ * - ReduceAlgorithm::TileSum: [zero], or [mask, zero] with ReducePartialMode::Mask. The mask is FirstRow
+ *   (REDUCE_ROW) or FirstColumn (REDUCE_COL) holding 1.0.
  *
- * Patterns:
- * - FirstRow: row 0 of the tile holds the value in its first valid_elements columns.
- * - FirstColumn: column 0 of the tile holds the value in its first valid_elements rows.
- * - FirstRowPerFaceRow: row 0 of every face in face row r holds the value in its first
- *   min(16, valid_elements - 16 * r) columns.
- * - Zero: every element is zero.
- *
- * A full FirstRow scaler initializes only the face rows consumed by reduction; its other
- * lanes are unspecified. Every other pattern clears the tile before filling it.
- * Data format and tile shape are deduced from the DataflowBuffer (Float16_b or Float32).
- *
- * @tparam dfb_id DataflowBuffer ID to write the tile to (must be constexpr)
- * @tparam tile_type Physical pattern of the tile
- * @tparam valid_elements Number of filled elements along the pattern's axis (ignored for Zero)
- * @tparam value_bits IEEE-754 float32 bit pattern of the fill value (ignored for Zero)
+ * FirstRow fills row 0 and FirstColumn fills column 0 over valid_elements; FirstRowPerFaceRow fills row 0 of each
+ * face over the valid elements in that face row. A full FirstRow scaler writes only the rows reduction reads;
+ * every other pattern zeroes the rest of the tile. value_bits is the fill value as float32 bits. Float16_b and
+ * Float32 only.
  */
 template <
     uint32_t dfb_id,
