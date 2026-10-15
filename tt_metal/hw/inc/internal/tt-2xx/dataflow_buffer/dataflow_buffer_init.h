@@ -504,10 +504,6 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         const uint32_t t_isr_start = rdcycle();
         enable_dfb_tile_isr();
         hw_reg_write_cycles += rdcycle() - t_isr_start;
-    } else {
-        const uint32_t t_isr_start = rdcycle();
-        disable_dfb_tile_isr();
-        hw_reg_write_cycles += rdcycle() - t_isr_start;
     }
     const uint32_t end_isr_enable_time = rdcycle();
 
