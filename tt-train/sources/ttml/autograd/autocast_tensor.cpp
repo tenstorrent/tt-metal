@@ -88,18 +88,6 @@ void AutocastTensor::assign(const ttnn::Tensor &tensor) {
     set_tensor(cast ? ttnn::typecast(tensor, native.dtype()) : tensor);
 }
 
-bool AutocastTensor::has_half() const {
-    const auto &state = *m_state;
-    return (core::is_tensor_initialized(state.native) && state.native.dtype() == ttnn::DataType::BFLOAT16) ||
-           (core::is_tensor_initialized(state.derived) && state.derived.dtype() == ttnn::DataType::BFLOAT16);
-}
-
-bool AutocastTensor::has_full() const {
-    const auto &state = *m_state;
-    return (core::is_tensor_initialized(state.native) && state.native.dtype() != ttnn::DataType::BFLOAT16) ||
-           (core::is_tensor_initialized(state.derived) && state.derived.dtype() == ttnn::DataType::FLOAT32);
-}
-
 uint64_t AutocastTensor::native_version() const {
     return m_state->native_version;
 }
