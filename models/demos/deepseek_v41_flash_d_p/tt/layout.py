@@ -21,19 +21,20 @@ import ttnn
 HC = 4  # hc_mult: mHC residual streams
 
 
-def streams_cols_to_chip_major(t: torch.Tensor, hidden: int, tp: int) -> torch.Tensor:
-    """[..., HC * hidden] in stream order (j, h) -> [..., tp * HC * hidden/tp] in (c, j, k) order, so a plain split
-    of the last dim over the tp mesh columns hands chip column c its [HC x hidden/tp] block."""
+def streams_cols_to_chip_major(t: torch.Tensor, hidden: int, tp: int, n: int = HC) -> torch.Tensor:
+    """[..., n * hidden] in stream order (j, h) -> [..., tp * n * hidden/tp] in (c, j, k) order, so a plain split
+    of the last dim over the tp mesh columns hands chip column c its [n x hidden/tp] block (n = HC streams, or the
+    engram projection's 5 H-wide blocks)."""
     assert hidden % tp == 0, (hidden, tp)
     lead = t.shape[:-1]
-    return t.reshape(*lead, HC, tp, hidden // tp).transpose(-3, -2).reshape(*lead, HC * hidden)
+    return t.reshape(*lead, n, tp, hidden // tp).transpose(-3, -2).reshape(*lead, n * hidden)
 
 
-def chip_major_to_streams_cols(t: torch.Tensor, hidden: int, tp: int) -> torch.Tensor:
+def chip_major_to_streams_cols(t: torch.Tensor, hidden: int, tp: int, n: int = HC) -> torch.Tensor:
     """Inverse of streams_cols_to_chip_major."""
     assert hidden % tp == 0, (hidden, tp)
     lead = t.shape[:-1]
-    return t.reshape(*lead, tp, HC, hidden // tp).transpose(-3, -2).reshape(*lead, HC * hidden)
+    return t.reshape(*lead, tp, n, hidden // tp).transpose(-3, -2).reshape(*lead, n * hidden)
 
 
 def _mapper(mesh, dims):
@@ -66,6 +67,14 @@ def streams_to_host(mesh, t: ttnn.Tensor, hidden: int) -> torch.Tensor:
     full = ttnn.to_torch(t, mesh_composer=_composer(mesh))
     s = full.shape[-2]
     return chip_major_to_streams_cols(full.reshape(s, HC * hidden), hidden, mesh.shape[1])
+
+
+def blocks_to_host(mesh, t: ttnn.Tensor, hidden: int, n: int) -> torch.Tensor:
+    """Device [1, 1, S/SP, n x H/TP] per chip (chip column c holds its hidden slice of each of n H-wide blocks) ->
+    host [S, n H] in block order (the engram projection's [S, 5H] boundary)."""
+    full = ttnn.to_torch(t, mesh_composer=_composer(mesh))
+    s = full.shape[-2]
+    return chip_major_to_streams_cols(full.reshape(s, n * hidden), hidden, mesh.shape[1], n)
 
 
 def row_split_to_device(mesh, x: torch.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
