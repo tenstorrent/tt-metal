@@ -764,7 +764,11 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
         }
         if (!kept.empty()) {
-            const uint32_t per = (p.rem_cols + kept.size() - 1) / kept.size();
+            // at least 4 tile columns per down core: each writes its columns of every row-major y row, and 3 columns
+            // (192 B writes; a Galaxy-like 12 x 10 gives K3 38 down cores) cost the y writes far more than their bytes
+            // (K3 E56 us / expert, 38 -> 28 down cores, M 128 / 192 / 256: 47.8 / 52.0 / 57.0 -> 45.8 / 49.7 / 53.6;
+            // E12 49.3 / 55.1 / 60.4 -> 49.0 / 53.6 / 57.9; 23 / 19 down cores are slower: the down matmul)
+            const uint32_t per = std::max<uint32_t>(4u, (p.rem_cols + kept.size() - 1) / kept.size());
             kept.resize(std::min<size_t>(kept.size(), (p.rem_cols + per - 1) / per));
             p.down = kept;
             ND = p.down.size();
