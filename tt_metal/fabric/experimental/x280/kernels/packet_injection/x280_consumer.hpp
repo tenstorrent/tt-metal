@@ -594,10 +594,15 @@ private:
         }
     }
 
-    /** Fenced load of worker `worker_index`'s word in the per-worker LIM array at `base`. */
+    /** Load of worker `worker_index`'s word in the per-worker LIM array at `base`, with no fence. */
+    static uint32_t counter_load(uint64_t base, uint32_t worker_index, uint64_t stride) {
+        return *(const volatile uint32_t*)(uintptr_t)(base + (uint64_t)worker_index * stride);
+    }
+
+    /** counter_load() after a load fence. */
     static uint32_t ordered_counter_load(uint64_t base, uint32_t worker_index, uint64_t stride) {
         Transport::fence_load();
-        return *(const volatile uint32_t*)(uintptr_t)(base + (uint64_t)worker_index * stride);
+        return counter_load(base, worker_index, stride);
     }
 
     uint32_t ordered_produced_load(uint32_t worker_index) {
@@ -958,9 +963,7 @@ private:
 #pragma GCC unroll 4
                 for (uint32_t j = 0; j < D; ++j) {
                     if ((live >> j) & 1u) {
-                        snapshots[j] =
-                            *(const volatile uint32_t*)(uintptr_t)(produced_base +
-                                                                   (uint64_t)(w0 + j) * sizeof(pi_counter_slot_t));
+                        snapshots[j] = counter_load(produced_base, w0 + j, sizeof(pi_counter_slot_t));
                     }
                 }
 
