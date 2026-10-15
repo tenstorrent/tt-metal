@@ -6,7 +6,10 @@
 The dense prefill path (experts/prefill.py) runs every token through all experts at TP width. This path computes
 only the routed (token, expert) pairs, with local expert parallelism on the TP axis:
 
-  * each of the N devices holds num_experts / N whole experts (hidden x intermediate at full width);
+  * each of the N devices holds num_experts / N whole experts (hidden x intermediate at full width); on 1x4 the
+    expert -> device assignment is a per-layer calibrated permutation that balances the devices' token-pair load
+    (prefill_routed_placement.py, GPT_OSS_ROUTED_PREFILL_PLACEMENT): the weights are placed in that order and the
+    MLP's routed router emits slot ids (TopKRouter.with_expert_order), so every table below stays the identity;
   * the replicated input x and the router's top-k ids stay on every device; each device keeps only the pairs whose
     expert it holds and packs their tokens into tile-aligned per-expert regions (chip-local, no fabric traffic);
   * unified_routed_expert_moe runs the local experts on their regions (SwiGluOai with biases);
@@ -30,6 +33,7 @@ Only one sequence per call (batch 1, leading dims all 1); anything else runs the
 
 import math
 import os
+import types
 import weakref
 from pathlib import Path
 
@@ -37,13 +41,19 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert, routed_expert_weight_memory_config
 from models.demos.gpt_oss.config import Mode
+
+from .prefill_routed_placement import ROUTED_EXPERT_PLACEMENT, ROUTED_EXPERT_PLACEMENT_DEVICES
 
 ROUTED_PREFILL_ENV = "GPT_OSS_ROUTED_PREFILL"
 ROUTED_PREFILL_MIN_SEQ_ENV = "GPT_OSS_ROUTED_PREFILL_MIN_SEQ"
 ROUTED_PREFILL_CHUNK_ENV = "GPT_OSS_ROUTED_PREFILL_CHUNK"
 ROUTED_PREFILL_BF8_LAYERS_ENV = "GPT_OSS_ROUTED_PREFILL_BF8_LAYERS"
+# Expert -> device placement of the routed experts: "calibrated" (default) holds each layer's experts in the order of
+# ROUTED_EXPERT_PLACEMENT (prefill_routed_placement.py), "identity" keeps expert e on device e // (E / N).
+ROUTED_PREFILL_PLACEMENT_ENV = "GPT_OSS_ROUTED_PREFILL_PLACEMENT"
+ROUTED_PREFILL_PLACEMENT_DEFAULT = "calibrated"
 # The routed path is the default where the mesh supports it (Blackhole, one mesh row: routed_prefill_mesh_supported);
 # GPT_OSS_ROUTED_PREFILL=0 selects the dense all-expert prefill path instead.
 ROUTED_PREFILL_DEFAULT = "1"
@@ -104,6 +114,24 @@ def routed_weights_dtype(layer_idx):
         return ttnn.bfloat8_b
     layers = {int(v) for v in spec.split(",") if v.strip() != ""}
     return ttnn.bfloat8_b if layer_idx is not None and int(layer_idx) in layers else ROUTED_WEIGHTS_DTYPE
+
+
+def routed_expert_order(layer_idx, num_experts, num_devices):
+    """Expert order of one layer's routed experts, or None for the identity order.
+
+    order[v] is the expert held at virtual slot v: device v // (E / N), local slot v % (E / N). The calibrated orders
+    (prefill_routed_placement.py) balance the per-device token-pair load of a 1xN mesh with
+    N = ROUTED_EXPERT_PLACEMENT_DEVICES; any other N, an uncalibrated layer and GPT_OSS_ROUTED_PREFILL_PLACEMENT=identity
+    keep the identity order."""
+    mode = os.getenv(ROUTED_PREFILL_PLACEMENT_ENV, ROUTED_PREFILL_PLACEMENT_DEFAULT).strip().lower()
+    assert mode in ("calibrated", "identity"), f"{ROUTED_PREFILL_PLACEMENT_ENV}={mode!r}"
+    if mode == "identity" or layer_idx is None or num_devices != ROUTED_EXPERT_PLACEMENT_DEVICES:
+        return None
+    order = ROUTED_EXPERT_PLACEMENT.get(int(layer_idx))
+    if order is None or list(order) == list(range(num_experts)):
+        return None
+    assert sorted(order) == list(range(num_experts)), f"layer {layer_idx}: placement is not a permutation"
+    return list(order)
 
 
 def _l1_if_fits(nbytes):
@@ -202,6 +230,13 @@ class RoutedPrefillExperts:
         self.min_seq = routed_prefill_min_seq()
         self.num_links = 1
         self.weights_dtype = routed_weights_dtype(layer_idx)
+        # Slot v (device v // experts_per_chip, local slot v % experts_per_chip) holds expert expert_order[v]; None is
+        # the identity order. The ids this module receives are slot ids: the MLP routes with a router whose output
+        # column v is expert expert_order[v] (TopKRouter.with_expert_order), so the dispatch / global-index tables and
+        # the contiguous per-device regions of offset_cumsum stay the identity; only the weights follow the order
+        # (_load_weights_ordered). Mapping HF ids to slot ids on device instead (tables in HF ids) needs offset_cumsum
+        # regions over all E experts, 32*(E - E/N) more dispatch rows: measured +0.6 ms TTFT at 128, +1.5 ms at 512.
+        self.expert_order = routed_expert_order(layer_idx, self.num_experts, self.num_devices)
 
         # Device g's table row maps its own experts [g*E/N, (g+1)*E/N) to chip g and every other expert to -1: the
         # histogram mask of masked_bincount and the non-local skip of post_combine_reduce. Each pair is computed
@@ -323,20 +358,23 @@ class RoutedPrefillExperts:
             )
         # TtRoutedExpert only loads/places the weights here (DRAM ND-sharded on Blackhole); forward calls
         # unified_routed_expert_moe directly so the per-expert token bound follows the chunk length.
-        self.routed_expert = TtRoutedExpert(
-            mesh_device=mesh_device,
-            experts_per_chip=self.experts_per_chip,
-            global_expert_idx_table=self.global_expert_idx_table,
-            emb_dim=self.hidden_size,
-            hidden_dim=self.intermediate_size,
-            max_tokens=self.chunk_size,
-            torch_weights=torch_weights,
-            torch_biases=None,
-            weights_dtype=self.weights_dtype,
-            weight_cache_path=cache_dir,
-            cache_name_prefix=prefix if cache_dir is not None else None,
-            activation=ttnn.RoutedExpertActivation.SwiGluOai,
-        )
+        if self.expert_order is None:
+            self.routed_expert = TtRoutedExpert(
+                mesh_device=mesh_device,
+                experts_per_chip=self.experts_per_chip,
+                global_expert_idx_table=self.global_expert_idx_table,
+                emb_dim=self.hidden_size,
+                hidden_dim=self.intermediate_size,
+                max_tokens=self.chunk_size,
+                torch_weights=torch_weights,
+                torch_biases=None,
+                weights_dtype=self.weights_dtype,
+                weight_cache_path=cache_dir,
+                cache_name_prefix=prefix if cache_dir is not None else None,
+                activation=ttnn.RoutedExpertActivation.SwiGluOai,
+            )
+        else:
+            self.routed_expert = self._load_weights_ordered(torch_weights, prefix)
         del torch_weights
         self.gate_biases, self.up_biases, self.down_biases = self._load_biases(
             state_dict if has_weights else None, prefix
@@ -358,13 +396,93 @@ class RoutedPrefillExperts:
                     return False
         return True
 
+    def _place_ordered(self, host_slots, memory_config):
+        """Identity-order host tensors -> device tensors in self.expert_order.
+
+        host_slots[e]: multi-device host tensor of local slot e in the identity order (device d's shard is expert
+        d * epc + e, the cached layout). Device d's slot e of the result holds expert expert_order[d * epc + e]: its
+        shard is moved as stored (no dequantize / requantize), so the bytes are those of the identity cache."""
+        epc = self.experts_per_chip
+        shards = [ttnn.get_device_tensors(t) for t in host_slots]
+        out = []
+        for e in range(epc):
+            per_device = []
+            for d in range(self.num_devices):
+                o = self.expert_order[d * epc + e]
+                per_device.append(shards[o % epc][o // epc])
+            t = ttnn.from_host_shards(per_device, self.mesh_device.shape)
+            t = ttnn.squeeze(ttnn.squeeze(t, 0), 0)
+            mem = memory_config(t) if callable(memory_config) else memory_config
+            out.append(ttnn.to_device(t, self.mesh_device, memory_config=mem))
+        return out
+
+    def _load_weights_ordered(self, torch_weights, prefix):
+        """Routed expert weights in self.expert_order (gate_projs / up_projs / down_projs like TtRoutedExpert).
+
+        With a cache directory the identity-order cache files are the source (written from the HF weights first if
+        missing, exactly as TtRoutedExpert writes them) and their per-device shards are regrouped on host, so one
+        cache serves every placement. Without one, the HF weights are permuted and placed directly."""
+        rows, cols = self.mesh_device.shape
+        epc = self.experts_per_chip
+        if self.cache_dir is None:
+            assert torch_weights is not None, "routed weights need HF weights or a cache directory"
+            te = TtRoutedExpert(
+                mesh_device=self.mesh_device,
+                experts_per_chip=epc,
+                global_expert_idx_table=self.global_expert_idx_table,
+                emb_dim=self.hidden_size,
+                hidden_dim=self.intermediate_size,
+                max_tokens=self.chunk_size,
+                torch_weights=[torch_weights[o] for o in self.expert_order],
+                torch_biases=None,
+                weights_dtype=self.weights_dtype,
+                weight_cache_path=None,
+                cache_name_prefix=None,
+                activation=ttnn.RoutedExpertActivation.SwiGluOai,
+            )
+            return types.SimpleNamespace(gate_projs=te.gate_projs, up_projs=te.up_projs, down_projs=te.down_projs)
+        mapper = ExpertMapping.get_weights_mesh_mapper(self.mesh_device)
+        nd_sharded = ttnn.device.is_blackhole(self.mesh_device)  # TtRoutedExpert's default placement
+
+        def weight_mem(t):
+            return routed_expert_weight_memory_config(self.mesh_device, t.shape[-1], dram_nd_sharded=nd_sharded)
+
+        placed = {}
+        for proj in ("gate", "up", "down"):
+            host_slots = []
+            for e in range(epc):
+                stacked = None
+                if torch_weights is not None:
+                    g, u, d = ExpertMapping.gather_weights_for_mesh_distribution(torch_weights, e, rows, cols, epc)
+                    ws = {"gate": g, "up": u, "down": d}[proj]
+                    stacked = torch.stack([w.T.contiguous() for w in ws], dim=0)
+                    stacked = stacked.reshape(rows, cols, stacked.shape[1], stacked.shape[2])
+                host_slots.append(
+                    ttnn.as_tensor(
+                        stacked,
+                        mesh_mapper=mapper,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=self.weights_dtype,
+                        cache_file_name=str(self.cache_dir / f"{prefix}.local_{e}_{proj}"),
+                    )
+                )
+                del stacked
+            placed[proj] = self._place_ordered(host_slots, weight_mem)
+            del host_slots
+        return types.SimpleNamespace(gate_projs=placed["gate"], up_projs=placed["up"], down_projs=placed["down"])
+
     def _load_biases(self, state_dict, prefix):
-        """One (1, N) bf16 TILE bias per local expert and projection, placed like the routed weights (cached)."""
+        """One (1, N) bf16 TILE bias per local expert and projection, placed like the routed weights (cached in the
+        identity order; a non-identity expert_order regroups the cached shards, see _place_ordered)."""
         rows, cols = self.mesh_device.shape
         mapper = ExpertMapping.get_weights_mesh_mapper(self.mesh_device)
         biases = None
         if state_dict is not None:
             biases = _bias_dims(self.num_experts, self.hidden_size, self.intermediate_size, state_dict)
+        order = self.expert_order
+        # Ordered with a cache: identity host tensors first (the cache files), regrouped below.
+        regroup = order is not None and self.cache_dir is not None
+        host = {"gate": [], "up": [], "down": []}
         out = {"gate": [], "up": [], "down": []}
         for e in range(self.experts_per_chip):
             for proj in ("gate", "up", "down"):
@@ -381,6 +499,8 @@ class RoutedPrefillExperts:
                                 dispatch_group_size=rows,
                                 num_dispatch_groups=cols,
                             )
+                            if order is not None and not regroup:
+                                g = order[g]  # no cache: place the permuted biases directly
                             per_device.append(biases[proj][g].reshape(1, -1))
                     stacked = torch.stack(per_device, dim=0)
                     stacked = stacked.reshape(rows, cols, 1, stacked.shape[-1]).to(torch.bfloat16)
@@ -389,14 +509,20 @@ class RoutedPrefillExperts:
                     cache_name = str(self.cache_dir / f"{prefix}.local_{e}_{proj}_bias")
                 tt = ttnn.as_tensor(
                     stacked,
-                    device=self.mesh_device,
+                    device=None if regroup else self.mesh_device,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=mapper,
                     cache_file_name=cache_name,
                 )
-                out[proj].append(ttnn.squeeze(ttnn.squeeze(tt, 0), 0))
+                if regroup:
+                    host[proj].append(tt)
+                else:
+                    out[proj].append(ttnn.squeeze(ttnn.squeeze(tt, 0), 0))
+        if regroup:
+            for proj in ("gate", "up", "down"):
+                out[proj] = self._place_ordered(host[proj], ttnn.DRAM_MEMORY_CONFIG)
         return out["gate"], out["up"], out["down"]
 
     def supports(self, shape):
@@ -720,6 +846,8 @@ class RoutedPrefillExperts:
 
     def __call__(self, hidden_states, topk_indices, topk_weights):
         """hidden_states: [1, 1, S, H] replicated; topk_indices / topk_weights: [S, k] (router top-k path).
+        topk_indices are slot ids: id v is expert self.expert_order[v] (the HF id itself when expert_order is None),
+        as the MLP's routed router emits them (TopKRouter.with_expert_order).
 
         Returns the MoE output [1, 1, S, H] (bf8), all-reduced over the mesh row like the dense TP path."""
         seq_len = hidden_states.shape[-2]

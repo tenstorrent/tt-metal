@@ -188,6 +188,11 @@ class MLP:
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 layer_idx=layer_idx,
             )
+        # The routed experts may hold the experts in a per-layer calibrated order (device-load balance,
+        # experts/prefill_routed_placement.py); their router then emits slot ids (expert order[v] as id v).
+        self.routed_router = self.router
+        if self.routed_prefill is not None and self.routed_prefill.expert_order is not None:
+            self.routed_router = self.router.with_expert_order(self.routed_prefill.expert_order)
 
     def __call__(self, hidden_states, is_decode):
         """Forward pass: route -> experts
@@ -208,7 +213,7 @@ class MLP:
                 x, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=True
             )
         if not is_decode and self.routed_prefill is not None and self.routed_prefill.supports(hidden_states.shape):
-            expert_indices, expert_weights = self.router(hidden_states, True)
+            expert_indices, expert_weights = self.routed_router(hidden_states, True)
             expert_output = self.routed_prefill(hidden_states, expert_indices, expert_weights)
             ttnn.deallocate(expert_indices)
             ttnn.deallocate(expert_weights)

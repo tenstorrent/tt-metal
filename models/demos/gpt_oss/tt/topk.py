@@ -143,6 +143,39 @@ class TopKRouter:
                 cache_file_name=get_cache_file_name(self.tensor_cache_path, f"fused_bias_B{B}"),
             )
 
+    def with_expert_order(self, order):
+        """A router whose output column v is this router's expert order[v] (order: a permutation of the experts).
+
+        Shares everything but the [hidden, E] weight and [1, E] bias, which are column-permuted copies (bf16 in and
+        out, replicated like the originals), so top-k returns the same experts renumbered (expert order[v] as id v) up
+        to rounding: the prefill logits come out of the linear in the input's bfloat8_b (one exponent per 16 columns
+        of a row), so permuting the columns regroups the shared exponents and near-tied logits can round, and then
+        rank, the other way (measured on layer 12: ~10% of logits differ by one bf16 ulp; 4.5% of tokens change one
+        top-4 expert, the MoE output matches HF equally well). Used by the routed prefill experts, whose devices hold
+        the experts in that order (experts/prefill_routed.py)."""
+        import copy
+
+        perm = torch.as_tensor(order, dtype=torch.long)
+        assert sorted(perm.tolist()) == list(range(self.num_experts)), f"not a permutation of the experts: {order}"
+        out = copy.copy(self)
+        for name in ("weight", "bias"):
+            t = getattr(self, name)
+            host = ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+            host = host.reshape(-1, host.shape[-1])[:, perm]
+            setattr(
+                out,
+                name,
+                ttnn.from_torch(
+                    host.contiguous(),
+                    device=t.device(),
+                    dtype=t.dtype,
+                    layout=t.layout,
+                    memory_config=t.memory_config(),
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(t.device()),
+                ),
+            )
+        return out
+
     def __call__(self, hidden_states, use_throughput_experts):
         # Compute actual token count from the tensor volume before reshape,
         # since shape[0] after reshape returns the tile-padded dimension

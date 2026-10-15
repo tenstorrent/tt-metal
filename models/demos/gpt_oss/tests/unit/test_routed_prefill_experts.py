@@ -32,7 +32,12 @@ from safetensors import safe_open
 import ttnn
 from models.common.utility_functions import comp_pcc
 
-from ...tt.experts.prefill_routed import ROUTED_PREFILL_CHUNK_ENV, ROUTED_PREFILL_ENV, routed_prefill_mesh_supported
+from ...tt.experts.prefill_routed import (
+    ROUTED_PREFILL_CHUNK_ENV,
+    ROUTED_PREFILL_ENV,
+    ROUTED_PREFILL_PLACEMENT_ENV,
+    routed_prefill_mesh_supported,
+)
 from ...tt.mlp import MLP
 from ..test_factory import TestFactory, parametrize_mesh_with_fabric
 
@@ -401,3 +406,144 @@ def test_routed_pair_positions_exact(mesh_device, device_params, seq_len, routed
             assert all(ends[i] <= starts[i + 1] for i in range(epc - 1)), f"{name} device {d}: regions overlap"
             assert ends[-1] <= consts["spare"], f"{name} device {d}: last region runs into the spare tile"
         logger.info(f"S={seq_len} {name}: pair positions exact on {routed.num_devices} devices")
+
+
+@parametrize_mesh_with_fabric([(1, 4)])
+@pytest.mark.parametrize("seq_len", [1024, 8192], ids=["S1024", "S8192"])
+def test_routed_prefill_placement(mesh_device, device_params, seq_len, routed_env, monkeypatch, reset_seeds):
+    """Calibrated expert -> device placement (prefill_routed_placement.py) vs the identity placement, layer 12.
+
+    Same weights and inputs. The routed router emits slot ids (expert order[v] as id v): the same experts as the
+    identity router up to bf16 logit ties. Both MoE outputs match the HF MLP equally well; on HF routing (mapped to slot
+    ids) the experts match the HF experts, including the capacity worst case (every token to the k experts of
+    device 0), and the per-slot token counts are the slot-id histogram."""
+    if not routed_prefill_mesh_supported(mesh_device) or mesh_device.shape[1] != 4:
+        pytest.skip("the calibrated placement is for a 1x4 Blackhole mesh")
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    config = setup["config"]
+    thresholds = THRESHOLDS[setup["model_args"].model_name]["prefill"]
+    model_path = os.environ.get("HF_MODEL", setup["model_args"].model_path)
+    layer_idx = 12
+    E, k = config.num_local_experts, config.num_experts_per_tok
+    router_sd, experts_sd = _load_layer_moe(model_path, layer_idx)
+    reference = _reference_mlp(config, router_sd, experts_sd)
+    state_dict = {f"router.{name}": v for name, v in router_sd.items()}
+    state_dict.update({f"experts.{name}": v for name, v in experts_sd.items()})
+
+    def build(mode):
+        monkeypatch.setenv(ROUTED_PREFILL_PLACEMENT_ENV, mode)
+        return MLP(
+            mesh_device,
+            config,
+            state_dict,
+            setup["ccl_manager"],
+            dtype=ttnn.bfloat8_b,
+            tensor_cache_path=None,
+            mesh_config=setup["mesh_config"],
+            use_throughput_experts=False,
+            layer_idx=layer_idx,
+        )
+
+    mlp_id, mlp_cal = build("identity"), build("calibrated")
+    routed = mlp_cal.routed_prefill
+    assert mlp_id.routed_prefill.expert_order is None
+    order = routed.expert_order
+    assert order is not None and sorted(order) == list(range(E)) and order != sorted(order)
+    epc = routed.experts_per_chip
+
+    hidden = torch.randn(1, seq_len, config.hidden_size) * _load_norm_gamma(model_path, layer_idx)
+
+    def tt_hidden():
+        return _to_tt(hidden.unsqueeze(0), mesh_device, ttnn.bfloat8_b)
+
+    hidden_q = ttnn.to_torch(ttnn.get_device_tensors(tt_hidden())[0]).float().reshape(1, seq_len, -1)
+    out_id = _first_device(mlp_id(tt_hidden(), is_decode=False), mesh_device).reshape(seq_len, -1)
+    out_cal = _first_device(mlp_cal(tt_hidden(), is_decode=False), mesh_device).reshape(seq_len, -1)
+    out_cal2 = _first_device(mlp_cal(tt_hidden(), is_decode=False), mesh_device).reshape(seq_len, -1)
+    with torch.no_grad():
+        ref = reference(hidden_q)[0].reshape(seq_len, -1)
+    # Not bit-identical: the router logits are bfloat8_b (shared exponent per 16 columns), so the permuted columns
+    # round near-ties differently and ~4.5% of tokens swap one top-4 expert for a near-tied one (measured PCC 0.9939
+    # vs identity, the same PCC vs HF); each device also rounds its partial sum to bf8 over another expert grouping.
+    ok_ic, pcc_ic = _pcc(out_id, out_cal, ROUTED_VS_DENSE_PCC)
+    ok_ref, pcc_ref = _pcc(ref, out_cal, thresholds["mlp"])
+    _, pcc_ref_id = _pcc(ref, out_id, 0.0)
+
+    # Router ids: the routed router's top-k sets are the identity router's, renumbered, up to bf8 logit rounding.
+    idx_id, _ = mlp_id.router(tt_hidden(), True)
+    idx_cal, _ = mlp_cal.routed_router(tt_hidden(), True)
+    ids_id = ttnn.to_torch(ttnn.get_device_tensors(idx_id)[0]).to(torch.int64).reshape(seq_len, -1)
+    ids_cal = ttnn.to_torch(ttnn.get_device_tensors(idx_cal)[0]).to(torch.int64).reshape(seq_len, -1)
+    mapped = torch.as_tensor(order)[ids_cal]
+    same_sets = float((mapped.sort(-1).values == ids_id.sort(-1).values).all(-1).float().mean())
+    same_slots = float((mapped == ids_id).float().mean())
+    set_equal = (mapped.sort(-1).values == ids_id.sort(-1).values).all(-1)
+    # A token whose top-k set changed should have a tie between its k-th and (k+1)-th logit in the identity router's
+    # logits (the same linear call the router makes); the untied rest is bounded below.
+    lg = ttnn.linear(
+        ttnn.reshape(tt_hidden(), (-1, config.hidden_size)),
+        mlp_id.router.weight,
+        bias=mlp_id.router.bias,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    lg = ttnn.to_torch(ttnn.get_device_tensors(lg)[0]).float().reshape(seq_len, E)
+    top_sorted = lg.sort(-1, descending=True).values
+    boundary_tie = top_sorted[:, k - 1] == top_sorted[:, k]
+    untied_changes = int((~set_equal & ~boundary_tie).sum())
+    # Diagnosis of untied changes: which router's top-k set differs from the exact top-k of the same bf16 logits.
+    exact = lg.topk(k, dim=-1).indices.sort(-1).values
+    off_id = int((~(ids_id.sort(-1).values == exact).all(-1) & ~boundary_tie).sum())
+    off_cal = int((~(mapped.sort(-1).values == exact).all(-1) & ~boundary_tie).sum())
+    pos = torch.empty(E, dtype=torch.long)
+    pos[torch.as_tensor(order)] = torch.arange(E)  # HF expert id -> slot id
+
+    # HF routing (as slot ids) straight into the routed experts: per-slot counts and the experts of each device.
+    hq = hidden_q.reshape(seq_len, -1)
+    with torch.no_grad():
+        logits = torch.nn.functional.linear(hq, reference.router.weight, reference.router.bias)
+        top_vals, top_idx = torch.topk(logits, k, dim=-1, sorted=True)
+        top_w = torch.softmax(top_vals, dim=-1)
+        ref_experts = reference.experts(hq, router_indices=top_idx, routing_weights=top_w).reshape(seq_len, -1)
+    slot_idx = pos[top_idx]
+    tt_idx = _to_tt(slot_idx.to(torch.int32), mesh_device, ttnn.uint16)
+    out_experts = _first_device(
+        routed(tt_hidden(), tt_idx, _to_tt(top_w, mesh_device, ttnn.bfloat16)), mesh_device
+    ).reshape(seq_len, -1)
+    ok_e, pcc_e = _pcc(ref_experts, out_experts, thresholds["experts"])
+    _, counts, _ = routed._routing(tt_idx)
+    cnt = [ttnn.to_torch(t).reshape(-1)[:E].to(torch.int64) for t in ttnn.get_device_tensors(counts)]
+    hist = torch.bincount(slot_idx.reshape(-1), minlength=E)  # per slot
+    loads_id = torch.bincount(top_idx.reshape(-1), minlength=E).reshape(4, epc).sum(-1)
+    loads_cal = hist.reshape(4, epc).sum(-1)
+
+    # Capacity worst case: every token to the k experts held by device 0 under this placement (slot ids 0..k-1).
+    skew_idx = torch.as_tensor(order[:k]).repeat(seq_len, 1)
+    skew_w = torch.softmax(torch.randn(seq_len, k), dim=-1)
+    with torch.no_grad():
+        ref_skew = reference.experts(hq, router_indices=skew_idx, routing_weights=skew_w).reshape(seq_len, -1)
+    out_skew = _first_device(
+        routed(
+            tt_hidden(),
+            _to_tt(pos[skew_idx].to(torch.int32), mesh_device, ttnn.uint16),
+            _to_tt(skew_w, mesh_device, ttnn.bfloat16),
+        ),
+        mesh_device,
+    ).reshape(seq_len, -1)
+    ok_s, pcc_s = _pcc(ref_skew, out_skew, thresholds["experts"])
+    logger.info(
+        f"S={seq_len}: MoE calibrated-vs-identity {pcc_ic}, calibrated-vs-HF {pcc_ref}, identity-vs-HF {pcc_ref_id}; "
+        f"experts-vs-HF {pcc_e}, skew {pcc_s}; router top-k sets equal through the placement {same_sets:.4f} "
+        f"(slots {same_slots:.4f}; boundary ties {int(boundary_tie.sum())}, changed sets without a tie {untied_changes}, untied sets off the exact top-k: identity {off_id} calibrated {off_cal}); device loads identity {loads_id.tolist()} calibrated {loads_cal.tolist()}"
+    )
+    assert torch.equal(out_cal, out_cal2), "calibrated placement output differs between identical runs"
+    assert not torch.isnan(out_cal).any() and not torch.isnan(out_experts).any() and not torch.isnan(out_skew).any()
+    assert all(torch.equal(c, hist) for c in cnt), "device token counts differ from the routing histogram"
+    assert int((out_skew.abs().sum(dim=-1) == 0).sum()) == 0, "tokens dropped in the capacity worst case"
+    # A changed set without a tie in the identity logits comes from the permuted router's own bf8 rounding (its logits
+    # differ by up to one bf16 ulp; measured 1 of 1024 and 31 of 8192 tokens), so the bound is 1% of the tokens.
+    assert untied_changes <= seq_len // 100, f"{untied_changes} tokens changed their top-k experts without a tie"
+    assert abs(pcc_ref - pcc_ref_id) < 0.002, f"MoE vs HF PCC: calibrated {pcc_ref} vs identity {pcc_ref_id}"
+    assert ok_ic, f"calibrated vs identity placement MoE PCC {pcc_ic} < {ROUTED_VS_DENSE_PCC}"
+    assert ok_ref, f"calibrated placement MoE vs HF MLP PCC {pcc_ref} < {thresholds['mlp']}"
+    assert ok_e, f"calibrated placement experts vs HF experts PCC {pcc_e} < {thresholds['experts']}"
+    assert ok_s, f"calibrated placement skewed experts vs HF PCC {pcc_s} < {thresholds['experts']}"
