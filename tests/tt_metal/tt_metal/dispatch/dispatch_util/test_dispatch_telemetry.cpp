@@ -1608,7 +1608,7 @@ TEST_F(DispatchTelemetryHostL1WaitTest, DispatchCoreEfficiencyAndUtilization) {
         auto info = telemetry.read_info();
         ASSERT_TRUE(info.has_value());
         ASSERT_TRUE(info->device_core_efficiency_since_last_read.has_value());
-        // Dispatch tensix and ethernet tiles are excluded from the worker-core denominator, so a
+        // Dispatch tensix tiles are excluded from the worker-core denominator, so a
         // wait covering the full compute grid should report near-1.0 efficiency.
         EXPECT_GT(info->device_core_efficiency_since_last_read.value(), 0.9f);
         ASSERT_TRUE(info->info_cqs.front().utilization_since_last_read.has_value());

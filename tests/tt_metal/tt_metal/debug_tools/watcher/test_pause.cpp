@@ -234,6 +234,9 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherPause) {
 }
 
 TEST_F(MeshWatcherFixture, EthernetTestWatcherPause) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunEthTest, mesh_device);
     }
