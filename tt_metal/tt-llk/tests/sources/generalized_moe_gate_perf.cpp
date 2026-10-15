@@ -57,6 +57,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
+            // No id tile: the format and the AB program hold for every token, so set them once as the op's launch does.
+            if constexpr (GMG_IDENTITY_INDICES)
+            {
+                _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* skip_int8 */>(
+                    formats.unpack_A_src, formats.unpack_A_dst, TILE_SIZE_UNPACK_A);
+                _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, GATE_UNPACK_TRANSPOSE);
+            }
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 if constexpr (!GMG_IDENTITY_INDICES)
@@ -67,10 +74,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, ID_FORMAT, ID_FORMAT);
                     _llk_unpack_A_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
                         L1_ADDRESS(buffer_A[IDS_TILE]), ID_FORMAT, ID_FORMAT);
+                    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* skip_int8 */>(
+                        formats.unpack_A_src, formats.unpack_A_dst, TILE_SIZE_UNPACK_A);
+                    _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, GATE_UNPACK_TRANSPOSE);
                 }
-                _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* skip_int8 */>(
-                    formats.unpack_A_src, formats.unpack_A_dst, TILE_SIZE_UNPACK_A);
-                _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, GATE_UNPACK_TRANSPOSE);
                 _llk_unpack_AB_<BroadcastType::NONE>(L1_ADDRESS(buffer_A[SCORES_TILE]), L1_ADDRESS(buffer_B[0]));
                 _llk_unpack_set_srcb_dummy_valid_();
             }
@@ -180,23 +187,24 @@ static inline void token_math(RUNTIME_PARAMETERS params)
             PackMode::Default>(num_faces, ID_FORMAT);
         _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
             IDS_TILE, ID_FORMAT, ID_FORMAT);
+        _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* skip_int8 */>(formats.math);
     }
-    _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* skip_int8 */>(formats.math);
 
     if constexpr (GMG_SFPU_SORT)
     {
-        // The op's sfpu_sort route issues the bias add's words directly.
+        // The op's sfpu_sort route: every init ahead of the bias add, whose words it issues directly.
         _llk_math_generalized_moe_gate_eltwise_binary_direct_init_<BINARY_MODE>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_common_init_<false /* is_32bit */>();
+        SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX_MODE, is_fp32_dest_acc_en));
         _llk_math_generalized_moe_gate_eltwise_binary_direct_<BINARY_MODE>(SCORES_TILE);
     }
     else
     {
         _llk_math_generalized_moe_gate_eltwise_binary_init_<ELTWISE_BINARY_OP, BINARY_MODE, MATH_FIDELITY>(num_faces, ACC_TO_DEST);
         _llk_math_generalized_moe_gate_eltwise_binary_<ELTWISE_BINARY_OP, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>(num_faces, SCORES_TILE);
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_common_init_<false /* is_32bit */>();
+        SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX_MODE, is_fp32_dest_acc_en));
     }
-
-    _llk_math_generalized_moe_gate_transpose_dest_single_face_common_init_<false /* is_32bit */>();
-    SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX_MODE, is_fp32_dest_acc_en));
 
     if constexpr (PERF_STAGE >= 1)
     {
@@ -225,6 +233,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (GMG_IDENTITY_INDICES && PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+        {
+            _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* skip_int8 */>(formats.math);
+        }
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
