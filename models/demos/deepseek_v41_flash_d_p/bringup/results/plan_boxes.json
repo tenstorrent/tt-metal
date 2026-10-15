@@ -1,0 +1,341 @@
+{
+ "rows": [
+  {
+   "box": "galaxy_4x4",
+   "mesh": [
+    4,
+    4
+   ],
+   "chips": 16,
+   "deploy": true,
+   "run": false,
+   "scale": {
+    "sequence": 1.0,
+    "heads": 1.0,
+    "hidden": 1.0,
+    "experts": 1.0,
+    "kv_records": 1.0,
+    "vocab": 1.0
+   },
+   "context": {
+    "seq": 1048576,
+    "chunk": 8192,
+    "exact": true
+   },
+   "dtypes": {
+    "layers.*.attn.w*.weight": "bfp8",
+    "layers.*.ffn.shared_experts.*.weight": "bfp8",
+    "layers.*.engram.wkv.weight": "bfp8"
+   },
+   "full": {
+    "weights_gb": 23.098263,
+    "gb_at_deploy_seq": 26.910763,
+    "fits_deploy_seq": true,
+    "longest_seq": 1048576
+   },
+   "partial_scaled_gb": 9.92854,
+   "partial_real": {
+    "seq": 1048576,
+    "gb": 9.92854
+   },
+   "budget_gb": 27.2,
+   "conditions": [
+    {
+     "what": "query rows per chip after the head->seq reshard (sparse_sdpa; indexer TP sub-shard): tile rows",
+     "over": "kv_records",
+     "per_chip": 512.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "ratio-2 compressed rows per SP row per chunk (ring indexer block-cyclic chunk): tile rows",
+     "over": "sequence",
+     "per_chip": 1024.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "served-record sub-block per chip (W / TP tokens): whole 32-token records",
+     "over": "kv_records",
+     "per_chip": 512.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "routed experts per chip (dispatch regions, expert op): whole experts",
+     "over": "experts",
+     "per_chip": 24.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "wo_a output groups per chip (whole groups of 8 heads)",
+     "over": "heads",
+     "per_chip": 2.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    }
+   ]
+  },
+  {
+   "box": "galaxy_8x4",
+   "mesh": [
+    8,
+    4
+   ],
+   "chips": 32,
+   "deploy": false,
+   "run": false,
+   "scale": {
+    "sequence": 2.0,
+    "heads": 1.0,
+    "hidden": 1.0,
+    "experts": 2.0,
+    "kv_records": 2.0,
+    "vocab": 2.0
+   },
+   "context": {
+    "seq": 2097152,
+    "chunk": 16384,
+    "exact": true
+   },
+   "dtypes": {},
+   "full": {
+    "weights_gb": 16.138348,
+    "gb_at_deploy_seq": 18.544598,
+    "fits_deploy_seq": true,
+    "longest_seq": 1048576
+   },
+   "partial_scaled_gb": 10.280102,
+   "partial_real": {
+    "seq": 2097152,
+    "gb": 9.560666
+   },
+   "budget_gb": 27.2,
+   "conditions": [
+    {
+     "what": "query rows per chip after the head->seq reshard (sparse_sdpa; indexer TP sub-shard): tile rows",
+     "over": "kv_records",
+     "per_chip": 512.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "ratio-2 compressed rows per SP row per chunk (ring indexer block-cyclic chunk): tile rows",
+     "over": "sequence",
+     "per_chip": 1024.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "served-record sub-block per chip (W / TP tokens): whole 32-token records",
+     "over": "kv_records",
+     "per_chip": 512.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "routed experts per chip (dispatch regions, expert op): whole experts",
+     "over": "experts",
+     "per_chip": 12.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "wo_a output groups per chip (whole groups of 8 heads)",
+     "over": "heads",
+     "per_chip": 2.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    }
+   ]
+  },
+  {
+   "box": "loudbox_2x4",
+   "mesh": [
+    2,
+    4
+   ],
+   "chips": 8,
+   "deploy": false,
+   "run": false,
+   "scale": {
+    "sequence": 0.5,
+    "heads": 1.0,
+    "hidden": 1.0,
+    "experts": 0.5,
+    "kv_records": 0.5,
+    "vocab": 0.5
+   },
+   "context": {
+    "seq": 524288,
+    "chunk": 4096,
+    "exact": true
+   },
+   "dtypes": {},
+   "full": {
+    "weights_gb": 42.467557,
+    "gb_at_deploy_seq": 49.092557,
+    "fits_deploy_seq": false,
+    "longest_seq": 0
+   },
+   "partial_scaled_gb": 11.280102,
+   "partial_real": {
+    "seq": 524288,
+    "gb": 14.218976
+   },
+   "budget_gb": 27.2,
+   "conditions": [
+    {
+     "what": "query rows per chip after the head->seq reshard (sparse_sdpa; indexer TP sub-shard): tile rows",
+     "over": "kv_records",
+     "per_chip": 512.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "ratio-2 compressed rows per SP row per chunk (ring indexer block-cyclic chunk): tile rows",
+     "over": "sequence",
+     "per_chip": 1024.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "served-record sub-block per chip (W / TP tokens): whole 32-token records",
+     "over": "kv_records",
+     "per_chip": 512.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "routed experts per chip (dispatch regions, expert op): whole experts",
+     "over": "experts",
+     "per_chip": 48.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "wo_a output groups per chip (whole groups of 8 heads)",
+     "over": "heads",
+     "per_chip": 2.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    }
+   ]
+  },
+  {
+   "box": "quietbox_2x2",
+   "mesh": [
+    2,
+    2
+   ],
+   "chips": 4,
+   "deploy": false,
+   "run": true,
+   "scale": {
+    "sequence": 0.5,
+    "heads": 0.5,
+    "hidden": 0.5,
+    "experts": 0.25,
+    "kv_records": 0.25,
+    "vocab": 0.25
+   },
+   "context": {
+    "seq": 524288,
+    "chunk": 4096,
+    "exact": true
+   },
+   "dtypes": {},
+   "full": {
+    "weights_gb": 81.759675,
+    "gb_at_deploy_seq": 93.697175,
+    "fits_deploy_seq": false,
+    "longest_seq": 0
+   },
+   "partial_scaled_gb": 13.280102,
+   "partial_real": {
+    "seq": 56320,
+    "gb": 23.120541
+   },
+   "budget_gb": 27.2,
+   "conditions": [
+    {
+     "what": "query rows per chip after the head->seq reshard (sparse_sdpa; indexer TP sub-shard): tile rows",
+     "over": "kv_records",
+     "per_chip": 1280.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "ratio-2 compressed rows per SP row per chunk (ring indexer block-cyclic chunk): tile rows",
+     "over": "sequence",
+     "per_chip": 1280.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "served-record sub-block per chip (W / TP tokens): whole 32-token records",
+     "over": "kv_records",
+     "per_chip": 1280.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "routed experts per chip (dispatch regions, expert op): whole experts",
+     "over": "experts",
+     "per_chip": 96.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    },
+    {
+     "what": "wo_a output groups per chip (whole groups of 8 heads)",
+     "over": "heads",
+     "per_chip": 4.0,
+     "ok": true,
+     "path": "plan",
+     "hard": false,
+     "same_as_deploy": true
+    }
+   ]
+  }
+ ],
+ "errors": []
+}

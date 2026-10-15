@@ -1,0 +1,28 @@
+# The scaled run of deepseek_v41_flash_d_p on quietbox_2x2 (plan/scale.py, task SG.1): heads and experts cut so each
+# chip holds the deployment box's (galaxy_4x4) per-chip share: 16 query heads (2 wo_a groups) and 24 routed experts.
+# Factors from plan.yaml roles: heads (mesh axis 1) 2 / 4 = 0.5; experts (both axes) 4 / 16 = 0.25.
+# Not scaled (no config count follows the mesh, or cutting it would change a per-chip shape the deployment keeps):
+# hidden 5120 (the residual; its TP share per chip is 2x the deployment's), moe_intermediate_size (one routed expert's
+# shape, which EP keeps whole; the shared expert's TP share is 2x), the indexer's 32 heads (replicated: query rows are
+# split instead), engram, vocab, layers.
+# The reference reads inference/config.json (n_heads, n_routed_experts, o_groups), which scale.py does not copy
+# (top-level files only): SG.1 makes the reference and hooks read the scaled counts (plan.md "Scaled run").
+counts:
+  num_attention_heads: heads        # 64 -> 32
+  o_groups: heads                   # 8 -> 4 (groups of 8 heads stay whole: wo_a [groups x 1024, 8 x 512])
+  n_routed_experts: experts         # 384 -> 96 (top-6 routing unchanged)
+
+tensors:
+  # query heads: wq_b rows are head-major (64 x 512); its fp8 scale has 16 block rows per head
+  - {pattern: "layers.*.attn.wq_b.weight", count: num_attention_heads, dim: 0}
+  - {pattern: "layers.*.attn.wq_b.scale", count: num_attention_heads, dim: 0}
+  - {pattern: "layers.*.attn.attn_sink", count: num_attention_heads, dim: 0}
+  # output groups: wo_a [groups x o_lora_rank, heads per group x head_dim] keeps the first groups' rows; wo_b's input
+  # is the groups' concatenated o_lora outputs (scale blocks: 32 rows / columns per group)
+  - {pattern: "layers.*.attn.wo_a.weight", count: o_groups, dim: 0}
+  - {pattern: "layers.*.attn.wo_a.scale", count: o_groups, dim: 0}
+  - {pattern: "layers.*.attn.wo_b.weight", count: o_groups, dim: 1}
+  - {pattern: "layers.*.attn.wo_b.scale", count: o_groups, dim: 1}
+  # routed experts: keep experts 0-95 (every per-expert tensor, weight and scale); router rows and biases to match
+  - {pattern: "layers.*.ffn.experts.*", count: n_routed_experts, index: "experts\\.(\\d+)\\."}
+  - {pattern: "layers.*.ffn.gate.*", count: n_routed_experts, dim: 0}
