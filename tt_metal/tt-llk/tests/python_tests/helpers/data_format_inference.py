@@ -163,11 +163,13 @@ def effective_dest_acc(
     return DestAccumulation.Yes if arch != ChipArchitecture.QUASAR else dest_acc
 
 
-_2X_L1_FORMAT = {
-    DataFormat.MxFp4_2x_A: DataFormat.MxFp4,
-    DataFormat.MxFp4_2x_B: DataFormat.MxFp4,
-    DataFormat.Int8_2x: DataFormat.Int8,
-    DataFormat.UInt8_2x: DataFormat.UInt8,
+# The L1 input formats each 2x register format can be unpacked from. Int4 widens to Int8 in
+# the unpacker, so it can feed Int8_2x as well.
+_2X_L1_FORMATS = {
+    DataFormat.MxFp4_2x_A: (DataFormat.MxFp4,),
+    DataFormat.MxFp4_2x_B: (DataFormat.MxFp4,),
+    DataFormat.Int8_2x: (DataFormat.Int8, DataFormat.Int4),
+    DataFormat.UInt8_2x: (DataFormat.UInt8,),
 }
 
 _SRCS_PASSTHROUGH_FORMATS = [
@@ -205,7 +207,7 @@ def infer_unpack_out(
         The inferred output data format for unpacking to registers
     """
     if register_format_hint is not None:
-        if input_format != _2X_L1_FORMAT.get(register_format_hint):
+        if input_format not in _2X_L1_FORMATS.get(register_format_hint, ()):
             raise ValueError(
                 f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
