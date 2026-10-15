@@ -247,12 +247,12 @@ class TestCheckpointIndexContainment:
         ],
         ids=["load_hf_state_dict", "filtered", "for_layers", "check_checkpoint_index"],
     )
-    def test_escaping_shard_is_rejected(self, escaping_ckpt, load):
-        with pytest.raises(ValueError, match="outside the checkpoint directory"):
+    def test_escaping_shard_is_rejected(self, escaping_ckpt, load, expect_error):
+        with expect_error(ValueError, "outside the checkpoint directory"):
             load(escaping_ckpt)
 
     @pytest.mark.parametrize("method", ["load_state_dict", "reference_transformer", "reference_vision_transformer"])
-    def test_model_args_rejects_index_before_from_pretrained(self, escaping_ckpt, method):
+    def test_model_args_rejects_index_before_from_pretrained(self, escaping_ckpt, method, expect_error):
         # transformers' from_pretrained follows the escaping weight_map entry itself, and load_state_dict
         # swallows a ValueError from the per-layer read into a from_pretrained fallback. The index check has
         # to run first and propagate, so from_pretrained must never be reached here.
@@ -278,7 +278,7 @@ class TestCheckpointIndexContainment:
         args.force_text_only = False
         args.get_hf_model_cls = lambda: _FromPretrainedMustNotRun
 
-        with pytest.raises(ValueError, match="outside the checkpoint directory"):
+        with expect_error(ValueError, "outside the checkpoint directory"):
             getattr(args, method)()
 
     def test_hf_cache_snapshot_symlinks_still_load(self, tmp_path):
