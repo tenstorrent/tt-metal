@@ -120,6 +120,22 @@ std::array<uint32_t, EC_MAX_P> each(uint32_t P, uint32_t n) {
 
 constexpr uint32_t Slot(uint32_t payload) { return EC_HEADER_BYTES + payload; }
 
+// The throughput sweep's shapes, at N_LINK = N_DELIVER = 8. The legs measured
+// alone repeat them, so the tabulator sets each leg beside the whole path.
+struct ThroughputPoint {
+    uint32_t P, slot, batch;
+};
+constexpr ThroughputPoint kThroughputPoints[] = {
+    {1u, Slot(64u), 1u},
+    {1u, Slot(64u), 4u},
+    {1u, Slot(1024u), 1u},
+    {1u, Slot(1024u), 4u},
+    {1u, Slot(4096u), 1u},
+    {1u, Slot(4096u), 4u},
+    {1u, Slot(16384u), 4u},
+    {2u, Slot(4096u), 4u},
+    {4u, Slot(4096u), 4u}};
+
 }  // namespace
 
 // Steps 3 and 4: every participant of both chips' barriers, E0's packet mode
@@ -531,20 +547,7 @@ TEST_P(EthCreditHw, EriscWallClockTicksAtProgrammedAiclk) {
 // of its window spent in W1 stores. A rate flat in slot size with W1
 // dominating the sender's window names the X280's W1 as the bound.
 TEST_P(EthCreditHw, ThroughputBySlotBatchAndP) {
-    struct Point {
-        uint32_t P, slot, batch;
-    };
-    const Point points[] = {
-        {1u, Slot(64u), 1u},
-        {1u, Slot(64u), 4u},
-        {1u, Slot(1024u), 1u},
-        {1u, Slot(1024u), 4u},
-        {1u, Slot(4096u), 1u},
-        {1u, Slot(4096u), 4u},
-        {1u, Slot(16384u), 4u},
-        {2u, Slot(4096u), 4u},
-        {4u, Slot(4096u), 4u}};
-    for (const Point& pt : points) {
+    for (const ThroughputPoint& pt : kThroughputPoints) {
         const suite::Case c{
             .name = "throughput_sweep",
             .shape = {pt.P, 8u, 8u, pt.slot, pt.batch},
@@ -591,6 +594,28 @@ TEST_P(EthCreditHw, EthernetHopBySlotAndBatch) {
             EXPECT_EQ(r.chips[1].e1.block.packets_in[0], 20000u);
             suite::record_throughput(spec(), fixture(), c, r, 0u);
         }
+    }
+}
+
+// The NoC hop alone, the sending forwarder into E0 sinking locally (W1, W2,
+// R3): packet rate on the forwarder's clock at the throughput sweep's shapes.
+TEST_P(EthCreditHw, NocHopBySlotBatchAndP) {
+    for (const ThroughputPoint& pt : kThroughputPoints) {
+        suite::Case c{
+            .name = "noc_hop_sweep",
+            .shape = {pt.P, 8u, 8u, pt.slot, pt.batch},
+            .direction = ec::Direction::AToB,
+            .packets = each(pt.P, 20000u)};
+        c.stage.e0_sink_local = true;
+        c.stage.launch_e1 = false;
+        const auto r = run(c);
+        ASSERT_TRUE(r.launched);
+        suite::expect_all_done(r);
+        for (uint32_t p = 0; p < pt.P; ++p) {
+            EXPECT_EQ(r.chips[0].fwd[p].block.packets_out[p], 20000u) << "forwarder " << p;
+            EXPECT_EQ(r.chips[0].e0.block.packets_out[p], 20000u) << "E0 p " << p;
+        }
+        suite::record_throughput(spec(), fixture(), c, r, 0u);
     }
 }
 

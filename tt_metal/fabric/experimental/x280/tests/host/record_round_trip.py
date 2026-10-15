@@ -236,6 +236,31 @@ HEADS = {
         "useful GB/s",
         "slot GB/s",
     },
+    "eth_credit eth_credit_leg": {
+        "legs",
+        "case",
+        "P",
+        "N_LINK",
+        "N_DELIVER",
+        "slot B",
+        "payload B",
+        "BATCH",
+        "both",
+        "p",
+        "tx",
+        "rx",
+        "l2cpu",
+        "pll MHz",
+        "packets",
+        "k1",
+        "wall ticks",
+        "ns",
+        "window packets",
+        "ns/packet",
+        "Mpkt/s",
+        "useful GB/s",
+        "slot GB/s",
+    },
 }
 
 X280_PHASE = {
@@ -432,6 +457,14 @@ EXPECTED = {
         "payload GB/s": "27.310",
         "slot GB/s": "27.950",
         "400G Mpkt/s": "12.207",
+    },
+    # The same window at the sending forwarder, the NoC hop alone: k1 and the
+    # rates as above, the count from packets_out.
+    ("eth_credit eth_credit_leg", 0): {
+        "legs": "W1 W2 R3",
+        "k1": "4",
+        "window packets": "19996",
+        "ns/packet": "2999.600",
     },
     ("eth_credit eth_credit", 0): {
         "k1": "4",

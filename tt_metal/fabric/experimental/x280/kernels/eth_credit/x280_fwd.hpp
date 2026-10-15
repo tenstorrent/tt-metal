@@ -377,10 +377,12 @@ private:
         return EC_ERROR_NONE;
     }
 
-    __attribute__((always_inline)) static void stamp(Hot& h, uint64_t now) {
+    /* Stamps the window at `now`, after a batch of `batch_packets` sent or
+     * received; the first stamp keeps that count as first_batch_packets. */
+    __attribute__((always_inline)) static void stamp(Hot& h, uint64_t now, uint32_t batch_packets) {
         if (h.result->first_ts == 0u) {
             h.result->first_ts = now;
-            h.result->first_batch_packets = h.consumed;
+            h.result->first_batch_packets = batch_packets;
         }
         h.result->last_ts = now;
     }
@@ -430,7 +432,7 @@ private:
         x280_counter_store(h.e0_wr_sh, h.wr);
         h.sent += k;
         h.result->packets_out[h.p] = h.sent;
-        stamp(h, t1);
+        stamp(h, t1, k);
         *progressed = true;
         return EC_ERROR_NONE;
     }
@@ -485,7 +487,7 @@ private:
         publish_rd(h);
         h.consumed += k;
         h.result->packets_in[h.p] = h.consumed;
-        stamp(h, x280_mtime_fenced());
+        stamp(h, x280_mtime_fenced(), k);
         *progressed = true;
         return EC_ERROR_NONE;
     }

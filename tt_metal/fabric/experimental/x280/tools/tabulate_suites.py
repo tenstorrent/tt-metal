@@ -665,6 +665,10 @@ EC_HOP_TABLES = (
         ),
     ),
 )
+# One stretch of the path alone (`legs` names its writes), on the window of the
+# kernel that paces it: the sending forwarder for the NoC hop, counting what it
+# sent.
+EC_LEG_TABLES = (Table("", EC_TABLES[0].select, (ident("legs"),) + EC_TABLES[0].columns),)
 # Its diagnostic records: recognised, tabulated by no table.
 EC_DIAGNOSTIC = (Table("", {}),)
 
@@ -894,6 +898,7 @@ MEMBERS = {
     "core_sync x280_director_characterization": CS_TABLES,
     "eth_credit eth_credit": EC_TABLES,
     "eth_credit eth_credit_hop": EC_HOP_TABLES,
+    "eth_credit eth_credit_leg": EC_LEG_TABLES,
     "eth_credit eth_credit_kernel": EC_DIAGNOSTIC,
     "eth_credit eth_credit_attribution": EC_DIAGNOSTIC,
     "eth_credit eth_credit_link": EC_DIAGNOSTIC,
@@ -1416,10 +1421,10 @@ def validate_campaign_records(config, rows):
         if aggregates:
             validate_packet_aggregate(aggregates[0])
     elif family == "eth_credit":
-        windows = [r for r in rows if r["member"] in ("eth_credit", "eth_credit_hop")]
+        windows = [r for r in rows if r["member"] in ("eth_credit", "eth_credit_hop", "eth_credit_leg")]
         if not windows:
             raise ValueError(f"{config['id']}: no eth_credit throughput record")
-        # The receiver's first stamp follows a batch of 1..BATCH packets; zero
+        # The window's first stamp follows a batch of 1..BATCH packets; zero
         # means the field was never written, which would overstate the rate.
         for row in windows:
             if row["receive_window"]["interval_error"] is not None or not 1 <= row["first_batch_packets"] <= min(

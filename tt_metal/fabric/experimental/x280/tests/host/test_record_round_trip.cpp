@@ -508,6 +508,7 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
     {
         ec_result_t forwarder{};
         forwarder.packets_in[0] = 20000;
+        forwarder.packets_out[0] = 20000;
         forwarder.first_batch_packets = 4;
         forwarder.first_ts = 1000;
         forwarder.last_ts = 3000000;
@@ -537,10 +538,17 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
         // The same window at E1, the Ethernet hop alone, on its ERISC wall clock.
         auto hop = window;
         hop.case_name = "ethernet_hop_sweep";
-        hop.receiver = x280::suites::eth_credit::Receiver::E1;
+        hop.path = x280::suites::eth_credit::kEthernetHop;
         write(
             "eth_credit.ethernet_hop",
             x280::suites::eth_credit::throughput_record(hop, forwarder, erisc_clock, erisc_clock));
+        // At the sending forwarder, the NoC hop alone, which counts what it sent.
+        auto noc_hop = window;
+        noc_hop.case_name = "noc_hop_sweep";
+        noc_hop.path = x280::suites::eth_credit::kNocHop;
+        write(
+            "eth_credit.noc_hop",
+            x280::suites::eth_credit::throughput_record(noc_hop, forwarder, erisc_clock, erisc_clock));
         ec_result_t kernel{};
         kernel.magic = EC_RESULT_MAGIC;
         kernel.status.state = EC_STATE_DONE;
@@ -556,5 +564,5 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                  .erisc_clock = &erisc_clock}));
     }
 
-    validate(22);
+    validate(23);
 }

@@ -1005,15 +1005,28 @@ inline void expect_conserved(const Case& c, const RunResult& r, uint32_t s) {
     }
 }
 
+/** What `st` leaves of the path between the two forwarders. */
+inline Path measured_path(const Stage& st) {
+    if (st.e1_sink_local) {
+        return kEthernetHop;
+    }
+    if (st.e0_sink_local) {
+        return kNocHop;
+    }
+    return kFullPath;
+}
+
 /**
- * Writes one JSONL record for a completed direction: the receiving
- * forwarders' packet counts over their own mtime window, or with
- * `c.stage.e1_sink_local` E1's over its ERISC wall-clock window (P must be 1,
- * a fatal failure otherwise), both chips, both ERISC coordinates, the X280
- * tile, the shape, the X280 PLL, and both chips' ERISC clock evidence.
+ * Writes one JSONL record per p for a completed direction, of the path
+ * measured_path() names: the receiving forwarders' packet counts over their
+ * own mtime window, with `c.stage.e0_sink_local` the sending forwarders' sent
+ * counts over theirs, or with `c.stage.e1_sink_local` E1's over its ERISC
+ * wall-clock window (P must be 1, a fatal failure otherwise); both chips, both
+ * ERISC coordinates, the X280 tile, the shape, the X280 PLL, and both chips'
+ * ERISC clock evidence.
  *
  * The rate the tabulator derives is n - k1 packets over [first_ts, last_ts]:
- * the receiver stamps once per batch, after the batch completes, so the
+ * the window's kernel stamps once per batch, after the batch completes, so the
  * window covers the packets after a first batch of k1. The record carries
  * `packets`, n, `first_batch_packets`, k1, and the window; the tabulator
  * derives the n - k1. `slot_bytes_per_request` is what crossed the
@@ -1028,16 +1041,18 @@ inline void record_throughput(
     uint32_t s) {
     const ChipResult& tx = r.chips[s];
     const ChipResult& rx = r.chips[1u - s];
-    const bool at_e1 = c.stage.e1_sink_local;
+    const Path path = measured_path(c.stage);
+    const bool at_e1 = path.receiver == Receiver::E1;
+    const bool at_sender = path.receiver == Receiver::Sender;
     ASSERT_TRUE(!at_e1 || c.shape.P == 1u) << "E1's receive window covers every p, so it reports only P = 1";
     for (uint32_t p = 0; p < c.shape.P; ++p) {
-        const ec_result_t& b = at_e1 ? rx.e1.block : rx.fwd[p].block;
+        const ec_result_t& b = at_e1 ? rx.e1.block : at_sender ? tx.fwd[p].block : rx.fwd[p].block;
         const ReceiveWindow window{
             .case_name = c.name,
             .p = p,
             .tx_chip = tx.chip,
             .rx_chip = rx.chip,
-            .x280_hw_index = static_cast<uint32_t>(rx.tile.hw_index),
+            .x280_hw_index = static_cast<uint32_t>((at_sender ? tx : rx).tile.hw_index),
             .tx_erisc = erisc_placement(tx, static_cast<uint32_t>(kE0Noc)),
             .rx_erisc = erisc_placement(rx, static_cast<uint32_t>(kE1Noc)),
             .tx_x280 = x280_placement(tx),
@@ -1045,13 +1060,13 @@ inline void record_throughput(
             .x280_pll_mhz = f.pll_mhz,
             .shape = c.shape,
             .bidirectional = c.direction == ec::Direction::Both,
-            .receiver = at_e1 ? Receiver::E1 : Receiver::Forwarder,
+            .path = path,
         };
         hout::write_jsonl(spec.suite_label, hout::record(throughput_record(window, b, tx.erisc_clock, rx.erisc_clock)));
         std::printf(
             "  p %u: %u packets over %llu %s ticks\n",
             p,
-            b.packets_in[p],
+            at_sender ? b.packets_out[p] : b.packets_in[p],
             static_cast<unsigned long long>(b.last_ts - b.first_ts),
             at_e1 ? "E1 wall" : "mtime");
     }

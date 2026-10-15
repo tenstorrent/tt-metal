@@ -308,8 +308,8 @@ EC_STATIC_ASSERT(sizeof(ec_failure_detail_t) == 32u, "ec_failure_detail_t must b
 typedef struct {
     EC_ALIGNAS(16) uint32_t magic;
     uint32_t kernel_id;
-    /* The packets of the batch first_ts follows: a forwarder's or E1's
-     * received, E0's sent. */
+    /* The packets of the batch first_ts follows: received by a receiving
+     * forwarder or E1, sent by a sending forwarder or E0. */
     uint32_t first_batch_packets;
     uint32_t reserved0;
     ec_status_t status;

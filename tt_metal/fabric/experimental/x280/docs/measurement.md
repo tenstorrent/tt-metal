@@ -2,7 +2,7 @@
 
 The maintained P2P, transport-bandwidth, pipeline-stage, packet-injection,
 core-sync and eth_credit suites retain native measurements. Legacy experiments are excluded.
-`characterization_manifest.json` selects 239 configurations: 28 of the 40 of the
+`characterization_manifest.json` selects 240 configurations: 28 of the 40 of the
 2026-09-23 campaign (39 evidenced prior configurations and the explicitly
 authorized first fixed-4×4 core-sync run, less its ten DRISC and idle-ERISC
 `pipeline_stage` configurations and its two X280 `route_forward` COPY ones), the nine
@@ -24,7 +24,8 @@ and all at B=1 and writers 1 at B=4 for (C, K) = (8, 16), (8, 32), (16, 32) and
 (32, 32)), the four `packet.throughput.brisc.T4{,.c8k16}.inflight{2,4}` points, which
 repeat `T4` and `T4.c8k16` with the consumer visiting 2 or 4 workers per pass
 and which no campaign has yet measured, `eth_credit.ethernet_hop`, the Ethernet hop alone
-over slot size and batch, and `eth_credit.throughput`, eth_credit's slot, batch and P
+over slot size and batch, `eth_credit.noc_hop`, the NoC hop alone at the throughput sweep's
+shapes, and `eth_credit.throughput`, eth_credit's slot, batch and P
 sweep across the Ethernet link of cards 0 and 1 (`TT_VISIBLE_DEVICES` unset, so every card is
 visible), and
 the 18 `bw.tensix_to_x280` points that extend its transfer-size axis to 128, 320,
@@ -60,6 +61,7 @@ point and one of each Tensix cross-check.
 | Core-sync release | Raw per-worker timestamp diagnostic | Unavailable: spread has no local CPU duration |
 | Ethernet credit throughput | The receiving forwarder's X280 mtime from its stamp after its first batch to its last stamp; the window covers `packets` − `first_batch_packets` packets | Unavailable: the forwarder records no CPU interval |
 | Ethernet hop throughput | E1's ERISC wall clock, the same window as the forwarder's | Unavailable: E1 records no CPU interval |
+| Ethernet NoC hop throughput | The sending forwarder's X280 mtime from its stamp after its first sent batch to its last; the window covers `packets` (sent) − `first_batch_packets` packets | Unavailable: the forwarder records no CPU interval |
 
 Paired reads are ordered, not simultaneous. Every paired bracket reads wall then
 CPU, except the packet X280 aggregate, which nests them: mtime then rdcycle at
@@ -437,7 +439,7 @@ sets `TT_METAL_SLOW_DISPATCH_MODE=1` before `main`; `common_environment` does no
 set it, and the runner clears an inherited value, so every other executable runs
 fast dispatch. A frozen manifest whose `common_environment` sets the variable ran
 all its configurations under slow dispatch, so comparing one of these 132 of the
-239 configurations with such a campaign also compares dispatch modes:
+240 configurations with such a campaign also compares dispatch modes:
 `x280_same_tile.{A,B}InitiatesFirst`, `x280_peer_tile.{A,B}InitiatesFirst`,
 `tensix_peer_tile.{X280,Tensix}InitiatesFirst{,.departure}`,
 `bw.x280_to_tensix.{,sd.,vse32.}{64,256,4096,65536}.{retired,injection}`,
