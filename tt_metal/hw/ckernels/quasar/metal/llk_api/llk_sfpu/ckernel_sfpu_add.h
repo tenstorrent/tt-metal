@@ -5,9 +5,10 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
-#include "ckernel_trisc_common.h"
 #include "ckernel_sfpu_srcs.h"
+#include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_operand.h"
@@ -17,6 +18,7 @@ namespace sfpu {
 
 /** @brief Float ADD math policy, shared by Dest and SrcS. */
 struct AddFloatMath {
+    using value_type = sfpi::vFloat;
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat a, sfpi::vFloat b) { return a + b; }
 };
 
@@ -27,6 +29,7 @@ struct AddFloatMath {
  */
 template <bool SIGN_MAGNITUDE_FORMAT>
 struct AddIntMath {
+    using value_type = sfpi::vInt;
     sfpi_inline static sfpi::vInt apply(sfpi::vInt a, sfpi::vInt b) {
         if constexpr (SIGN_MAGNITUDE_FORMAT) {
             a = sfpi::convert<sfpi::vInt>(sfpi::as<sfpi::vSMag>(a));
@@ -69,16 +72,14 @@ inline void calculate_add_int(
         Operand{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});
 }
 
-/**
- * @brief SrcS Int32 ADD op type; Sfpi only.
- *
- * @tparam SIGN_MAGNITUDE_FORMAT: SrcS holds sign-magnitude Int32.
- */
-template <bool SIGN_MAGNITUDE_FORMAT = true, SfpuImpl IMPL = SfpuImpl::Sfpi>
-using AddIntSrcs = SrcsBinary<
-    AddIntMath<SIGN_MAGNITUDE_FORMAT>,
-    sfpi::DataLayout::I32,
-    resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
+// ADD math for a SrcS layout: float layouts add floats; I32 adds sign-magnitude Int32, which is how SrcS holds it.
+template <sfpi::DataLayout LAYOUT>
+using AddMath =
+    std::conditional_t<LAYOUT == sfpi::DataLayout::I32, AddIntMath<true /*SIGN_MAGNITUDE_FORMAT*/>, AddFloatMath>;
+
+/** @brief SrcS ADD op type (float or Int32 by LAYOUT); Sfpi only. */
+template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
+using AddSrcs = SrcsBinary<AddMath<LAYOUT>, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
 
 }  // namespace sfpu
 }  // namespace ckernel

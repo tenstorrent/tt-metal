@@ -288,10 +288,12 @@ sfpi_inline sfpi::vFloat _sfpu_exp_accurate_<true>(sfpi::vFloat val) {
 }
 
 struct ExpHwLut {
+    using value_type = sfpi::vFloat;
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return sfpi::approx_exp(x); }
 };
 
 struct ExpFp32Accurate {
+    using value_type = sfpi::vFloat;
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_(x); }
 };
 
@@ -355,8 +357,6 @@ inline void _exp_init_loadmacro_(
     const int num_sfpu_iterations,
     const std::uint32_t load_sfpmem,
     const std::uint32_t store_sfpmem) {
-    LLK_ASSERT(num_sfpu_iterations <= 4, "Replay cycles LREG0-3 (d & 3); >4 in-flight macros would reuse a live LREG");
-
     // The store format comes from MACRO_CTRL, not from the captured SFPSTORE.
     TT_SFPCONFIG(store_sfpmem, p_sfpconfig::MACRO_CTRL, 0x1);
     TTI_SFPNOP(0, 0, 0);  // SFPCONFIG hazard: no instr may issue the cycle after SFPCONFIG
@@ -426,7 +426,7 @@ struct SrcsUnary<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>
 
 #endif
 
-template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT>
+template <sfpi::DataLayout LAYOUT, bool APPROXIMATION_MODE>
 using ExpSrcsAlgo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
 
 /**
@@ -434,11 +434,11 @@ using ExpSrcsAlgo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>
  *
  * @tparam IMPL: Sfpi or LoadMacro; LoadMacro needs the LUT path (APPROXIMATION_MODE or a 16-bit layout).
  */
-template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
+template <sfpi::DataLayout LAYOUT, bool APPROXIMATION_MODE, SfpuImpl IMPL = SfpuImpl::Sfpi>
 using ExpSrcs = SrcsUnary<
-    ExpSrcsAlgo<APPROXIMATION_MODE, LAYOUT>,
+    ExpSrcsAlgo<LAYOUT, APPROXIMATION_MODE>,
     LAYOUT,
-    resolve_sfpu_impl<IMPL, std::is_same_v<ExpSrcsAlgo<APPROXIMATION_MODE, LAYOUT>, ExpHwLut>>()>;
+    resolve_sfpu_impl<IMPL, std::is_same_v<ExpSrcsAlgo<LAYOUT, APPROXIMATION_MODE>, ExpHwLut>>()>;
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -12,7 +12,6 @@
 #include "ckernel_sfpu_add.h"
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_recip.h"
-#include "ckernel_sfpu_srcs.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_operand.h"
 
@@ -105,10 +104,6 @@ inline void calculate_sfpu_binary(
         sfpi::dst_reg++;
     }
 }
-
-/** @brief SrcS float ADD op type; Sfpi only. */
-template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
-using AddSrcs = SrcsBinary<AddFloatMath, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
 
 /**
  * @brief Initialisation hook for binary SFPU kernels.

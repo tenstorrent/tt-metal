@@ -140,15 +140,71 @@ struct SrcsBinary<MATH, LAYOUT, SfpuImpl::Sfpi> : SfpuSrcsBinaryOp<SrcsBinary<MA
     }
 };
 
-/** @brief Map the SrcS register format (not the L1 format) to a SrcsLayout, once outside the tile loop. */
+namespace detail {
+
+// MATH of a SrcS op shape.
 template <typename Op>
-sfpi_inline void dispatch_sfpu_srcs_format(const DataFormat format, Op&& op) {
-    switch (format) {
-        case DataFormat::Float32: op(SrcsLayout<sfpi::DataLayout::F32>{}); break;
-        case DataFormat::Float16: op(SrcsLayout<sfpi::DataLayout::F16a>{}); break;
-        case DataFormat::Float16_b: op(SrcsLayout<sfpi::DataLayout::F16b>{}); break;
-        default: LLK_ASSERT(false, "Unsupported floating-point SrcS storage format"); break;
+struct srcs_op_math;
+template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
+struct srcs_op_math<SrcsUnary<MATH, LAYOUT, IMPL>> {
+    using type = MATH;
+};
+template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
+struct srcs_op_math<SrcsBinary<MATH, LAYOUT, IMPL>> {
+    using type = MATH;
+};
+
+// Vector type OP<LAYOUT>'s math computes on (MATH::value_type).
+template <template <sfpi::DataLayout> class OP, sfpi::DataLayout LAYOUT>
+using srcs_op_value_t = typename srcs_op_math<OP<LAYOUT>>::type::value_type;
+
+}  // namespace detail
+
+/**
+ * @brief True when OP<LAYOUT>'s math computes on the vector type LAYOUT loads into.
+ *
+ * Only names OP<LAYOUT>; its calculate() is never instantiated, so a float op may be queried for I32.
+ */
+template <template <sfpi::DataLayout> class OP, sfpi::DataLayout LAYOUT>
+constexpr bool srcs_op_supports =
+    std::is_same_v<detail::srcs_op_value_t<OP, LAYOUT>, typename SrcsLayout<LAYOUT>::value_type>;
+
+/**
+ * @brief Call fn(OP<LAYOUT>{}) for the LAYOUT matching the runtime SrcS format, once outside the tile loop.
+ *
+ * Only the layouts OP supports are compiled in (@ref srcs_op_supports). The SrcS register format is the
+ * unpack destination and the pack source; both are passed so a mismatch is caught here.
+ *
+ * @note Test-harness helper: formats are runtime values there. Kernels with compile-time formats use OP<LAYOUT>
+ * directly.
+ */
+template <template <sfpi::DataLayout> class OP, typename Fn>
+sfpi_inline void dispatch_sfpu_srcs_op(
+    const DataFormat unpack_S_dst_format, const DataFormat pack_S_src_format, Fn&& fn) {
+    LLK_ASSERT(
+        unpack_S_dst_format == pack_S_src_format,
+        "SrcS ops require matching unpack destination and pack source formats");
+    bool handled = false;
+    const auto try_layout = [&](auto op) {
+        using Op = decltype(op);
+        if (unpack_S_dst_format == Op::Layout::format) {
+            fn(op);
+            handled = true;
+        }
+    };
+    if constexpr (srcs_op_supports<OP, sfpi::DataLayout::F16a>) {
+        try_layout(OP<sfpi::DataLayout::F16a>{});
     }
+    if constexpr (srcs_op_supports<OP, sfpi::DataLayout::F16b>) {
+        try_layout(OP<sfpi::DataLayout::F16b>{});
+    }
+    if constexpr (srcs_op_supports<OP, sfpi::DataLayout::F32>) {
+        try_layout(OP<sfpi::DataLayout::F32>{});
+    }
+    if constexpr (srcs_op_supports<OP, sfpi::DataLayout::I32>) {
+        try_layout(OP<sfpi::DataLayout::I32>{});
+    }
+    LLK_ASSERT(handled, "SrcS format not supported by this op");
 }
 
 }  // namespace ckernel::sfpu

@@ -16,6 +16,7 @@ namespace sfpu {
 
 /** @brief Square math policy, shared by Dest and SrcS. */
 struct SquareMath {
+    using value_type = sfpi::vFloat;
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return x * x; }
 };
 
@@ -53,6 +54,9 @@ inline void calculate_square() {
 /** @brief SrcS square op type; Sfpi only. */
 template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
 using SquareSrcs = SrcsUnary<SquareMath, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
+
+// dispatch_sfpu_srcs_op relies on naming a float op for I32 without instantiating it; keep that true.
+static_assert(!srcs_op_supports<SquareSrcs, sfpi::DataLayout::I32>, "float SrcS ops must stay nameable for I32");
 
 }  // namespace sfpu
 }  // namespace ckernel

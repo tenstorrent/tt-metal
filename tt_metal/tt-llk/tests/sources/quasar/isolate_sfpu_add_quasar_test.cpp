@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Isolated SFPU add (binary): UNPACK2 (UNP_S) x2 -> SrcS -> SFPU -> PACK1 -> L1.
-// All logic runs in LLK_TRISC_ISOLATE_SFPU through the AddSrcs / AddIntSrcs op types; UNPACK, MATH, PACK are stubbed.
+// All logic runs in LLK_TRISC_ISOLATE_SFPU through the AddSrcs op type (float or Int32); UNPACK, MATH, PACK are stubbed.
 
 #include <cstdint>
 
@@ -34,7 +34,6 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 #ifdef LLK_TRISC_ISOLATE_SFPU
 
 #include "llk_sfpu/ckernel_sfpu_add.h"
-#include "llk_sfpu/ckernel_sfpu_binary.h"
 #include "llk_sfpu/ckernel_sfpu_srcs.h"
 #include "llk_sfpu_srcs_api.h"
 #include "params.h"
@@ -54,31 +53,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res    = params.buffer_Res;
 #endif
 
-    const DataFormat srcs_format = static_cast<DataFormat>(formats.unpack_S_dst);
-    LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS add requires matching unpack destination and pack source formats");
-
-    const auto run_add = [&](auto op)
-    {
-        using Op = decltype(op);
-        Op::init(
-            L1_ADDRESS(buffer_A[0]),
-            L1_ADDRESS(buffer_B[0]),
-            static_cast<DataFormat>(formats.unpack_S_src),
-            L1_ADDRESS(buffer_Res[0]),
-            static_cast<DataFormat>(formats.pack_S_dst),
-            IMPLIED_MATH_FORMAT);
-        Op::run(TILE_CNT);
-    };
-
     // The SrcS layout is known only at runtime; one dispatch picks the op type for init and run.
-    if (srcs_format == DataFormat::Int32)
-    {
-        run_add(AddIntSrcs<> {});
-    }
-    else
-    {
-        dispatch_sfpu_srcs_format(srcs_format, [&](auto layout) { run_add(AddSrcs<decltype(layout)::layout> {}); });
-    }
+    dispatch_sfpu_srcs_op<AddSrcs>(
+        static_cast<DataFormat>(formats.unpack_S_dst),
+        static_cast<DataFormat>(formats.pack_S_src),
+        [&](auto op)
+        {
+            using Op = decltype(op);
+            Op::init(
+                L1_ADDRESS(buffer_A[0]),
+                L1_ADDRESS(buffer_B[0]),
+                static_cast<DataFormat>(formats.unpack_S_src),
+                L1_ADDRESS(buffer_Res[0]),
+                static_cast<DataFormat>(formats.pack_S_dst),
+                IMPLIED_MATH_FORMAT);
+            Op::run(TILE_CNT);
+        });
 
     wait_sfpu_idle();
     wait_unpack_idle();

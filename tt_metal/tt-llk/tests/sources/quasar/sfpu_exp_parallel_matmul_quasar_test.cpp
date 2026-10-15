@@ -173,9 +173,8 @@ constexpr SfpuImpl EXP_IMPL = SFPU_IMPL_LOADMACRO ? SfpuImpl::LoadMacro : SfpuIm
 static_assert(!SFPU_IMPL_LOADMACRO, "SFPLOADMACRO is disabled; only the Sfpi variant can be built");
 #endif
 
-// The SrcS layout is known only at runtime, so init and the tile loop each dispatch once.
-template <typename Layout>
-using ExpOp = ExpSrcs<APPROX_MODE, Layout::layout, EXP_IMPL>;
+template <sfpi::DataLayout LAYOUT>
+using ExpOp = ExpSrcs<LAYOUT, APPROX_MODE, EXP_IMPL>;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -189,16 +188,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
     const std::uint32_t num_tiles = TILE_CNT;
-    const DataFormat srcs_format  = static_cast<DataFormat>(formats.unpack_S_dst);
+    const DataFormat unpack_S_dst = static_cast<DataFormat>(formats.unpack_S_dst);
+    const DataFormat pack_S_src   = static_cast<DataFormat>(formats.pack_S_src);
 
     {
         START_PERF_MEASURE("INIT")
-        LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS EXP requires matching unpack destination and pack source formats");
-        dispatch_sfpu_srcs_format(
-            srcs_format,
-            [&](auto layout)
+        // The SrcS layout is known only at runtime, so init and the tile loop each dispatch once.
+        dispatch_sfpu_srcs_op<ExpOp>(
+            unpack_S_dst,
+            pack_S_src,
+            [&](auto op)
             {
-                ExpOp<decltype(layout)>::init(
+                decltype(op)::init(
                     L1_ADDRESS(buffer_S[0]),
                     static_cast<DataFormat>(formats.unpack_S_src),
                     L1_ADDRESS(buffer_Res[0]),
@@ -212,13 +213,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
             // UNP_S -> SFPU exp -> PACK1; the op type decides Sfpi or LoadMacro and who clears the SrcS valids.
-            dispatch_sfpu_srcs_format(
-                srcs_format,
-                [&](auto layout)
+            dispatch_sfpu_srcs_op<ExpOp>(
+                unpack_S_dst,
+                pack_S_src,
+                [&](auto op)
                 {
                     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                     {
-                        ExpOp<decltype(layout)>::run(num_tiles);
+                        decltype(op)::run(num_tiles);
                     }
                 });
         }

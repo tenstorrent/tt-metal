@@ -53,14 +53,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res    = params.buffer_Res;
 #endif
 
-    const DataFormat srcs_format = static_cast<DataFormat>(formats.unpack_S_dst);
-    LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS square requires matching unpack destination and pack source formats");
     // The SrcS layout is known only at runtime; one dispatch picks the op type for init and run.
-    dispatch_sfpu_srcs_format(
-        srcs_format,
-        [&](auto layout)
+    dispatch_sfpu_srcs_op<SquareSrcs>(
+        static_cast<DataFormat>(formats.unpack_S_dst),
+        static_cast<DataFormat>(formats.pack_S_src),
+        [&](auto op)
         {
-            using Op = SquareSrcs<decltype(layout)::layout>;
+            using Op = decltype(op);
             Op::init(
                 L1_ADDRESS(buffer_A[0]),
                 static_cast<DataFormat>(formats.unpack_S_src),
