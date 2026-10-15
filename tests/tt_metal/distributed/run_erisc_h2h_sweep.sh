@@ -10,7 +10,7 @@
 # Examples (run from anywhere; build target erisc_h2h_benchmark first):
 #   MD=1 MIB=256 OUT=h2h_pr_table.md tests/tt_metal/distributed/run_erisc_h2h_sweep.sh
 #   MD=1 RAND=1 SEED=42 N=40 OUT=h2h_pr_random_42.md tests/tt_metal/distributed/run_erisc_h2h_sweep.sh
-set -u
+set -uo pipefail
 cd "$(dirname "$0")/../../.." || exit 2
 B=${B:-./build_Release/test/tt_metal/distributed/erisc_h2h_benchmark}
 MPIRUN=${MPIRUN:-tests/tt_metal/multihost/mpirun_wrapper.sh --oversubscribe -np 2 --mca btl_sm_eager_limit 32768}
