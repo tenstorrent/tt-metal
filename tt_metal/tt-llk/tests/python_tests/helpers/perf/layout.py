@@ -748,6 +748,20 @@ def _regs_read(w):
     return ()
 
 
+@functools.lru_cache(maxsize=1)
+def _fast_cost():
+    """layout_fast.cost (the compiled model, same results) when numba imports and LLK_LAYOUT_NUMPY is not set"""
+    if os.environ.get("LLK_LAYOUT_NUMPY"):
+        return None
+    try:
+        import numba  # noqa: F401
+    except ImportError:
+        return None
+    from . import layout_fast
+
+    return layout_fast.cost
+
+
 class Window:
     """The modelled window of one kernel thread and runtime configuration, to be costed for any pads."""
 
@@ -798,6 +812,9 @@ class Window:
     def cost(self, P, Z, nsets, actual=None):
         """(cost per window instruction, mispredicts, misses, hazards) per candidate (P[i], Z[i]); with actual (the
         shift of every non-fill instruction in a real link) for that one layout"""
+        fast = _fast_cost()
+        if fast is not None:
+            return fast(self, P, Z, nsets, actual)
         P = np.asarray(P, np.int64)
         Z = np.asarray(Z, np.int64)
         n = len(P)
