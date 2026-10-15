@@ -3,6 +3,8 @@
 Port plan for `transformer/gated_delta_attn` (`GatedDeltaAttnSeqDeviceOperation`), ported from the `ProgramDescriptor` API (direct `create_descriptor`) to Metal 2.0.
 Written during the inventory and planning steps; committed alongside the port for review.
 
+> **Revision 2026-10-15 (re-port).** The first attempt (2026-10-08) capitulated on the state buffer `S` (`c_8`): the reader seeded it and compute recycled into it. PR #60011 (`7c7fafc9758`, merged 2026-10-13) split the seed into a reader-only `c_7` / `S0`. The branch was rebased onto `origin/main` (2026-10-15) to pick it up. The inventory and plan below describe the **post-#60011** legacy op; the sections that changed are `CBs` (index 7, 8), `Planned Spec Shape`, `Applied Patterns` and `Deferred / Flagged`.
+
 ## Legacy Inventory
 
 ### Legacy factory shape
@@ -23,7 +25,7 @@ All three share `core_ranges = cores`, the set of single-core ranges `{(h / grid
 (`*` = `Buffer*` RTA, emitted through `emplace_runtime_args`.)
 
 ### CBs
-All CBs are Float32, `page_size = 4096`, `core_ranges = cores`, no `tile`, no buffer backing, no `address_offset`, one format descriptor each (no aliasing). `n` = tiles.
+(Post-#60011.) All CBs are Float32, `page_size = 4096`, `core_ranges = cores`, no `tile`, no buffer backing, no `address_offset`, one format descriptor each (no aliasing). `n` = tiles.
 
 | index | name (kernel) | total_size | role |
 |---|---|---|---|
@@ -34,8 +36,8 @@ All CBs are Float32, `page_size = 4096`, `core_ranges = cores`, no `tile`, no bu
 | 4 | q_decay | in_kv_tiles × 4096 | reader → compute |
 | 5 | k_dt | kdt_tiles × 4096 | reader → compute |
 | 6 | dl_exp | 1 × 4096 | reader → compute |
-| 7 | — | not allocated | — |
-| 8 | S | state_tiles × 4096 | reader seeds; compute consumes **and** re-pushes |
+| 7 | S0 | state_tiles × 4096 | reader seeds once (initial state or zeros) → compute consumes on chunk 0 |
+| 8 | S | state_tiles × 4096 | compute only: re-pushes the updated state on every non-last chunk, consumes it on chunks ≥ 1 |
 | 9, 10, 11 | nm_P_a, nm_P_b, nm_R_a | max(Vt,Kt) × 4096 | compute only |
 | 12, 13 | — | not allocated | — |
 | 14–17 | L_inv_0..3 | 1 × 4096 | reader → compute |
@@ -75,7 +77,7 @@ none. `grep -rl` for each kernel filename under `ttnn/cpp/ttnn/operations/` hits
 
 ### Flags
 - The legacy DM configs are **non-default NOC assignments** (reader on NOC_1, writer on NOC_0). The brief doesn't mention this. They are carried verbatim as custom Gen1 configs.
-- Pre-port: the legacy op **fails under Watcher** on this Wormhole (`Program size (72320) too large for kernel config buffer (70656)`). Not a port issue; see the report.
+- Pre-port: the legacy op **fails under full Watcher** on this Wormhole (`Program size (73424) too large for kernel config buffer (70656)`, rebased tree). It runs under a reduced Watcher (PAUSE, RING_BUFFER, WAYPOINT, STACK_USAGE disabled; NoC sanitize, asserts and CB sanitize kept), which is what verification used. Not a port issue; see the report.
 
 ## TTNN ProgramFactory
 
@@ -86,7 +88,7 @@ none. `grep -rl` for each kernel filename under `ttnn/cpp/ttnn/operations/` hits
 ## Planned Spec Shape
 
 - **KernelSpecs**: `reader`, `writer`, `compute`, same sources, in place, 1:1 with legacy.
-- **DataflowBufferSpecs**: 24, one per allocated legacy CB: `entry_size = 4096`, `num_entries = n_tiles × n_bufs`, `data_format_metadata = Float32`, no tile metadata (legacy didn't set one). Spec name = kernel accessor name = legacy kernel variable name without `cb_`. `S` sets `advanced_options.allow_instance_multi_binding = true`.
+- **DataflowBufferSpecs**: 25, one per allocated legacy CB: `entry_size = 4096`, `num_entries = n_tiles × n_bufs`, `data_format_metadata = Float32`, no tile metadata (legacy didn't set one). Spec name = kernel accessor name = legacy kernel variable name without `cb_`. No `advanced_options` on any DFB.
 - **SemaphoreSpecs**: none.
 - **TensorParameters**: 10 always (`L_unit`, `v_beta_sc`, `k_bd_sc`, `intra_attn`, `q_decay`, `k_decay_t`, `dl_exp`, `L_inv`, `output`, `final_state`), plus `initial_state` only when present.
 - **WorkUnitSpecs**: one, `{reader, writer, compute}` on `cores`.
@@ -108,19 +110,21 @@ none — no work-split multiplicity in legacy.
 | all kernels, CTAs 0–2 | positional `Ct, Kt, Vt` | named CTAs `Ct`, `Kt`, `Vt` |
 | reader/writer RTAs 0–1, compute RTA 0 | positional `h, NC` / `NC` | named RTAs `head_idx`, `num_chunks` |
 | kernel-side `tt::CBIndex::c_*` constants | magic CB indices | `dfb::<name>` tokens (no CTA carried CB ids) |
+| compute `cb_state = (c == 0) ? cb_S0 : cb_S` | runtime CB-id select | `dfb_state = (c == 0) ? dfb_S0 : dfb_S` (`uint32_t` via the `dfb::` conversion) |
 | reader `s0_addr != 0` runtime branch | address-as-presence flag | `#ifdef HAS_INITIAL_STATE` (presence is hashed via `tensor_args_t`) |
 
 ## Applied Patterns
 
 - [Conditional / optional resource bindings](port_patterns.md#pattern-conditional--optional-resource-bindings): `initial_state` `TensorParameter`/`TensorBinding` and `HAS_INITIAL_STATE` define, emitted together on the reader. The kernel `#ifdef`-gates the `s0` accessor and the read branch; the zero-fill stays as the `#else`.
-- [Self-loop DFB binding](port_patterns.md#pattern-self-loop-dfb-binding): 11 compute-only DFBs (`nm_P_a`, `nm_P_b`, `nm_R_a`, `v_cor`, `k_cum`, `v_prime`, `v_new`, `o_inter`, `intra_v`, `s_upd`, `S_tmp`). Each is real FIFO produce + consume inside compute, one toucher.
-- [Two-toucher → 1P+1C](port_patterns.md#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split): 11 reader→compute and 2 compute→writer DFBs, plain 1:1.
-- **Multi-binding** for `S`. Re-derived census on each node: the reader `reserve_back`/`push_back`s once (locked producer); compute `wait_front`/`pop_front`s (locked consumer) and `reserve_back`/`push_back`s via `dst_dfb` on non-last chunks (locked producer). That is two kernels locked to PRODUCER, so `allow_instance_multi_binding = true`. Reader binds PRODUCER, compute binds PRODUCER + CONSUMER. This agrees with the brief.
+- [Self-loop DFB binding](port_patterns.md#pattern-self-loop-dfb-binding): 12 compute-only DFBs (`S`, `nm_P_a`, `nm_P_b`, `nm_R_a`, `v_cor`, `k_cum`, `v_prime`, `v_new`, `o_inter`, `intra_v`, `s_upd`, `S_tmp`). Each is real FIFO produce + consume inside compute, one toucher.
+- [Two-toucher → 1P+1C](port_patterns.md#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split): 12 reader→compute (incl. `S0`) and 2 compute→writer DFBs, plain 1:1.
+- **`S0` / `S` census (re-derived after #60011).** `S0`: the reader `reserve_back`/`push_back`s it once (reader `:79,90`); compute `wait_front`s it before the loop and `pop_front`s it at the end of chunk 0 through `dfb_state` (compute `:233,418`). One producer, one consumer, so 1P+1C. `S`: only compute touches it. It `push_back`s the updated state via `dst_dfb` on non-last chunks (`:426-437`) and `pop_front`s it on chunks ≥ 1 through `dfb_state`, so it is a compute self-loop. No DFB needs `allow_instance_multi_binding`, and the brief's multi-binding item for `c_8` is superseded (see Deferred / Flagged).
 - [Pass DFB handles directly to LLKs and kernel-lib helpers](port_patterns.md#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers): compute passes `dfb_*` token aliases to LLKs and to its own `uint32_t`-taking helpers (`matmul_reconfig_and_init`, `fwd_sub_row`, `fwd_sub_4rows`). Those helpers keep constructing `DataflowBuffer(<uint32_t id>)` internally, as legacy did with `CircularBuffer(x)`.
-- `constexpr` metadata (whitelist §A): `constexpr uint32_t f32_tile = get_tile_size(dfb_S)` / `get_tile_size(dfb_out)` keeps the free-function token form.
+- `constexpr` metadata (whitelist §A): `constexpr uint32_t f32_tile = get_tile_size(dfb_S0)` / `get_tile_size(dfb_out)` keeps the free-function token form.
 - Hardware config: custom Gen1 DM configs copied verbatim. Compute is a Style B literal: `HiFi2`, `Precise`, `enable_32_bit_dest = true`, `double_buffer_dest` default `true` (= `!dst_full_sync_en`), plus explicit `UnpackToSrc` on every consumed Float32 DFB (legacy `Default`), as the validator requires. Compute `opt_level = O3`.
 
 ## Deferred / Flagged
 
 - New findings during planning: the custom DM NOC assignment above; the legacy op's Watcher failure; the model test's weak coverage (NC=1, no `initial_state`, self-comparison). Verification adds a scratch bit-exact harness against the legacy outputs (see report).
-- **Found at verification; the port capitulated on it:** the planned `S` binding (reader PRODUCER, compute PRODUCER + CONSUMER, `allow_instance_multi_binding`) is rejected by `ValidateProgramSpec`'s self-loop set-equality rule (`program_spec.cpp:2026-2045`). See the report's Handoff 1, `METAL2_HOST_FIX_SELF_LOOP_MULTIBINDING.md`, and `METAL2_OP_FIX_STATE_SEED.md`.
+- **First attempt (2026-10-08) capitulated** on `S`: the planned reader PRODUCER + compute PRODUCER/CONSUMER + `allow_instance_multi_binding` binding was rejected by `ValidateProgramSpec`'s self-loop set-equality rule (`program_spec.cpp:2026-2045`).
+- **Re-port (2026-10-15):** PR #60011 split the seed into `S0`, so the brief's `c_8` multi-binding item no longer applies. The audit predates #60011. #60011 changes `device/` and the kernels only in the `S0`/`S` split, and the user asked for the port to proceed on that code, so no re-audit was run. Its only other effect is +64 KiB L1 per core (tracked upstream in #60025).
