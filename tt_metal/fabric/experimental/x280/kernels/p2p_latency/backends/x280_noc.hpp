@@ -68,7 +68,12 @@ inline bool initialize(
 
     volatile void* window = nullptr;
     const noc_window_status_t opened = noc_open_window_2m(
-        backend.peer_tlb_index, backend.peer_noc, backend.peer_inbound_addr, P2P_LATENCY_X280_NOC_ORDERING, &window);
+        backend.peer_tlb_index,
+        backend.peer_noc,
+        backend.peer_inbound_addr,
+        P2P_LATENCY_X280_NOC_ORDERING,
+        NOC_VC_DYNAMIC,
+        &window);
     if (opened != NOC_WINDOW_OPEN) {
         /* An unverified window is cleared, not retained: the host assigned this
          * paired slot to this run alone. A refused initialisation has no

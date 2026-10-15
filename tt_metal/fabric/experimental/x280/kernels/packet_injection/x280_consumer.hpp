@@ -123,7 +123,8 @@ struct DeviceX280Transport {
     static inline int configure_credit_window(uint32_t index, uint32_t noc_x, uint32_t noc_y) {
 #if defined(__riscv)
         volatile void* ptr = nullptr;
-        return noc_open_window_2m(index, x280_noc_coord_t{noc_x, noc_y}, 0, NOC_ORDER_STRICT, &ptr) == NOC_WINDOW_OPEN
+        return noc_open_window_2m(index, x280_noc_coord_t{noc_x, noc_y}, 0, NOC_ORDER_STRICT, NOC_VC_DYNAMIC, &ptr) ==
+                       NOC_WINDOW_OPEN
                    ? 0
                    : -1;
 #else
@@ -138,8 +139,12 @@ struct DeviceX280Transport {
 #if defined(__riscv)
         volatile void* ptr = nullptr;
         return noc_open_window_2m(
-                   index, x280_noc_coord_t{noc_x, noc_y}, TENSIX_TIMER_NOC_PAGE_ADDR, NOC_ORDER_STRICT, &ptr) ==
-                       NOC_WINDOW_OPEN
+                   index,
+                   x280_noc_coord_t{noc_x, noc_y},
+                   TENSIX_TIMER_NOC_PAGE_ADDR,
+                   NOC_ORDER_STRICT,
+                   NOC_VC_DYNAMIC,
+                   &ptr) == NOC_WINDOW_OPEN
                    ? 0
                    : -1;
 #else

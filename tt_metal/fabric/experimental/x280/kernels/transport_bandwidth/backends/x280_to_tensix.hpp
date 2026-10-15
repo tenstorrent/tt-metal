@@ -222,8 +222,8 @@ inline bool initialize(state_t& state, const transport_bw_x280_to_tensix_section
      * a failed clear ends WINDOW_CLEANUP_FAILED: the host assigned this paired
      * slot to this run alone. */
     volatile void* w = nullptr;
-    const noc_window_status_t opened =
-        noc_open_window_2m(s.backend.peer_tlb_index, s.backend.peer_noc, s.backend.peer_dst_addr, NOC_ORDER_POSTED, &w);
+    const noc_window_status_t opened = noc_open_window_2m(
+        s.backend.peer_tlb_index, s.backend.peer_noc, s.backend.peer_dst_addr, NOC_ORDER_POSTED, NOC_VC_DYNAMIC, &w);
     state.window = reinterpret_cast<volatile uint32_t*>(w);
     if (opened != NOC_WINDOW_OPEN) {
         return false;

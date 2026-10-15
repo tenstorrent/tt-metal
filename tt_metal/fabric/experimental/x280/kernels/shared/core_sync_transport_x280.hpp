@@ -249,8 +249,8 @@ struct X280Transport {
             return true;
         }
         noc_tlb_2m_t programmed;
-        volatile void* window =
-            noc_configure_tlb_2m_checked(kTlbSlot, ep.noc.x, ep.noc.y, ep.addr, NOC_ORDER_POSTED, &programmed);
+        volatile void* window = noc_configure_tlb_2m_checked(
+            kTlbSlot, ep.noc.x, ep.noc.y, ep.addr, NOC_ORDER_POSTED, NOC_VC_DYNAMIC, &programmed);
         if (window == nullptr) {
             return false;
         }
@@ -294,6 +294,7 @@ struct X280Transport {
             NOC_ORDER_POSTED,
             /*multicast_en=*/1,
             /*num_destinations_override=*/0u,
+            NOC_VC_DYNAMIC,
             &programmed);
         if (window == nullptr) {
             return false;

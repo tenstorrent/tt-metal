@@ -194,7 +194,8 @@ private:
 
     bool configure_windows() {
         volatile void* base = nullptr;
-        const noc_window_status_t opened = noc_open_window_2m(a_.tlb_base, a_.eth, 0u, NOC_ORDER_STRICT, &base);
+        const noc_window_status_t opened =
+            noc_open_window_2m(a_.tlb_base, a_.eth, 0u, NOC_ORDER_STRICT, NOC_VC_DYNAMIC, &base);
         /* An unverified window is kept in window_ so finish() clears it: the
          * slot is this forwarder hart's own reservation (fwd_tlb_base), so a
          * mapping left in it is a standing path no other owner relies on. */

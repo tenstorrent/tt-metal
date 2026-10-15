@@ -164,7 +164,8 @@ that is the wrong one. Where the coordinate is not a constant the firmware chose
 `noc_configure_tlb_2m_checked`, which returns `NULL` and programs nothing rather
 than truncating. A benchmark image opens its window with `noc_open_window_2m`,
 which takes a `noc_ordering_t` (Default, Strict AXI or Posted Writes, never
-Counted Writes) and reads the entry back. It never clears a window whose
+Counted Writes) and a request VC (`NOC_VC_DYNAMIC`, or a static unicast VC 0-3)
+and reads the entry back. It never clears a window whose
 readback differs (`NOC_WINDOW_UNVERIFIED`): whether that mapping is the image's
 to release is the image's policy, stated where it opens the window.
 `noc_clear_tlb_2m` zeroes a window's configuration and
