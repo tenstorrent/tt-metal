@@ -16,7 +16,8 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
-// Returns {dispatched_buffer, metadata}, both per-device and ROW_MAJOR.
+// Returns {dispatched_buffer, metadata}, both per-device and ROW_MAJOR. The buffer is FP8_E4M3 with
+// fp8_output, else BFLOAT16.
 std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& indices_tensor,
@@ -35,7 +36,8 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    bool fp8_output = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d
 

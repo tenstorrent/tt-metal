@@ -8,6 +8,8 @@ No correctness check here; `op_unit_tests/test_dispatch_fabric2d.py` covers that
 
 Environment:
     TT_DS_INPUT_LAYOUT     row_major (default) or tile. The model passes tile.
+    TT_DS_OUTPUT_DTYPE     bf16 (default) or fp8: the dispatched buffer's dtype. A row_major input is then
+                           made FP8_E4M3 too, since the op copies it as is; a tile input stays bf16.
     TT_DS_CAPTURED_LAYER   an integer: use one recorded MoE layer's real routing instead of the
                            synthetic draw.
     TT_DS_CAPTURED_PATH    where that recording lives; defaults to the golden prefill cache.
@@ -25,6 +27,7 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_dispatch_fabric2d import (
+    _HALF_TOKEN_PAYLOAD_8X1,
     PRODUCTION_ROUTING,
     _draw_indices,
     _expert_dispatch_table,
@@ -44,8 +47,11 @@ NUM_EXPERTS_PER_TOK = 8
 # Launches after the warm-up one.
 ITERATIONS = 10
 
-_MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id == "fabric2d-torus-xy-8x4-2link"]
-assert len(_MESH_CONFIGS) == 1, "Galaxy TorusXY config missing from ALL_MESH_CONFIGS"
+# The production Galaxy row, then the 8x1 LoudBox proxy at a whole-token payload and at the model's half-token
+# one, where a bf16 token crosses each hop as two packets and an fp8 one as one.
+_MESH_IDS = ("fabric2d-torus-xy-8x4-2link", "fabric2d-torus-y-8x1-2link")
+_MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id in _MESH_IDS] + [_HALF_TOKEN_PAYLOAD_8X1]
+assert len(_MESH_CONFIGS) == len(_MESH_IDS) + 1, "dispatch_fabric2d perf mesh configs missing from ALL_MESH_CONFIGS"
 
 
 @pytest.mark.parametrize(
@@ -75,6 +81,9 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
     torch.manual_seed(42)
     table = _expert_dispatch_table(NUM_ROUTED_EXPERTS, H, G)
     in_group_share, hot_weight = PRODUCTION_ROUTING
+    if G == 1:
+        # One dispatch group has nowhere else to send a pick.
+        in_group_share = 1.0
     indices = _draw_indices(G, H, seq_len_per_chip, NUM_EXPERTS_PER_TOK, NUM_ROUTED_EXPERTS, in_group_share, hot_weight)
     routing = "synthetic"
     # Optionally, real routing from one recorded MoE layer: 5120 tokens split as 8 chips x 640. Every
@@ -121,7 +130,23 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
     x = torch.randn(H, G, seq_len_per_chip, EMB_DIM, dtype=torch.bfloat16)
     layout = os.environ.get("TT_DS_INPUT_LAYOUT", "row_major")
     assert layout in ("row_major", "tile"), f"TT_DS_INPUT_LAYOUT: expected row_major or tile, got {layout!r}"
-    tt_x = shard(x, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT if layout == "tile" else ttnn.ROW_MAJOR_LAYOUT)
+    output_dtype = os.environ.get("TT_DS_OUTPUT_DTYPE", "bf16")
+    assert output_dtype in ("bf16", "fp8"), f"TT_DS_OUTPUT_DTYPE: expected bf16 or fp8, got {output_dtype!r}"
+    fp8_output = output_dtype == "fp8"
+    if fp8_output and layout == "row_major":
+        # Host conversion to FP8_E4M3 takes a float32 source only; widening bf16 is exact.
+        tt_x = ttnn.to_device(
+            ttnn.from_torch(
+                x.to(torch.float32),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, 1)),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.fp8_e4m3,
+            ),
+            mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        tt_x = shard(x, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT if layout == "tile" else ttnn.ROW_MAJOR_LAYOUT)
     tt_idx = shard(indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
     tt_table = shard(table.unsqueeze(1), (None, 0), ttnn.int32)
     # Replicated: a relaying chip needs every source chip's row to know how much it forwards.
@@ -135,7 +160,7 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
         f"capacity={max_dispatch_buffer_token_size} links={num_links} iters={ITERATIONS}"
     )
     logger.info(f"routing {routing}: picks landing in this dispatch group {100 * realized:.1f}%")
-    logger.info(f"input layout: {layout}")
+    logger.info(f"input layout: {layout}, output dtype: {output_dtype}")
     if captured_layer is None:
         # The draw must hit its target share, or the measured traffic silently isn't what we think.
         assert abs(realized - in_group_share) < 0.02, (
@@ -161,6 +186,7 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
             num_links=num_links,
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            fp8_output=fp8_output,
         )
 
     fabric2d()  # warm-up, before the signpost
