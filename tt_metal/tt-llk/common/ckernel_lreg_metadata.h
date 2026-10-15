@@ -154,4 +154,9 @@ template <unsigned Mask> struct constant_mask { enum : unsigned { value = Mask }
                 ? ckernel::raw_lreg_effect::write(word) : 0xffu>::value));                       \
     } while (0)
 #define TT_LLK_SFPU_ISSUE_TT(word) do { ckernel::instrn_buffer[0] = word; TT_LLK_SFPU_EFFECT(word); } while (0)
+// Issue WORD but describe it by EFFECT_WORD, the same instruction with its
+// address or immediate operand zeroed. That operand never selects an LREG, and
+// leaving it out keeps the masks constant when only the operand is runtime.
+#define TT_LLK_SFPU_ISSUE_TT_AS(word, effect_word) \
+    do { ckernel::instrn_buffer[0] = word; TT_LLK_SFPU_EFFECT(effect_word); } while (0)
 #define TT_LLK_SFPU_ISSUE_TTI(word) do { INSTRUCTION_WORD(word); TT_LLK_SFPU_EFFECT(word); } while (0)
