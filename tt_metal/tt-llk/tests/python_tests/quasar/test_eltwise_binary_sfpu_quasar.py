@@ -413,7 +413,6 @@ def test_eltwise_binary_sfpu_lcm_sign_magnitude_quasar(
     _run_sfpu_binary_llk_golden(
         formats,
         DestAccumulation.Yes,
-        ImpliedMathFormat.No,
         tile_indices,
         MathOperation.SfpuLcm,
         "LCM",
