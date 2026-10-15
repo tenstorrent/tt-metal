@@ -174,8 +174,29 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         dyn_def.at("SE_MAX_E") == std::to_string(se_max_e) && dyn_def.at("SE_GU_NREG") == std::to_string(nreg_gu) &&
             dyn_def.at("SE_RPS") == std::to_string(MT * 32),
         "flat_routed_expert: schedule defines out of step");
+    // The schedule's inputs (counts, regions, expert ids: one DRAM page each, all in bank 0) read once per call: reader
+    // 0's BRISC (se_reader) reads them, compacts this chip's per-expert count / region into its CB 9 and sets its
+    // semaphore SE_DYN_LSEM (reset every launch); every other se_dyn_load polls that semaphore over the NoC and pulls the
+    // compact copy (instead of ~150 tiny DRAM reads of bank 0 behind the startup weight streams: 5-16 us each).
+    // Plans without reader down columns (the reader cells run only se_reader / se10_fwd, which use semaphores 0-3);
+    // MIMO_FL_DYN_PULL=0 reads DRAM everywhere.
+    const char* dp_env = std::getenv("MIMO_FL_DYN_PULL");
+    const bool dyn_pull = (dp_env == nullptr || std::atoi(dp_env) != 0) && !p.rdown && p.nsg == 1 && cfg.cmb_rt == 0;
+    if (dyn_pull) {
+        const CoreCoord lv = phys(p.readers[0]), l0 = flat_worker_noc0(device, p.readers[0]);
+        dyn_def["SE_DYN_PULL"] = "1";
+        dyn_def["SE_DYN_LX"] = std::to_string(lv.x);
+        dyn_def["SE_DYN_LY"] = std::to_string(lv.y);
+        dyn_def["SE_DYN_LPX"] = std::to_string(l0.x);
+        dyn_def["SE_DYN_LPY"] = std::to_string(l0.y);
+        dyn_def["SE_DYN_LSEM"] = "13";
+        dyn_def["SE_DYN_CB"] = "9";
+    }
     if (p.nsg > 1) {
         dyn_def["SE_SG"] = std::to_string(p.nsg);
+    }
+    if (std::getenv("MIMO_FL_DYN_ZONE")) {  // (perf probe: a profiler zone around se_dyn_load)
+        dyn_def["SE_DYN_ZONE"] = "1";
     }
     if (std::getenv("MIMO_FL_W_NOFWD")) {  // (perf probe: gate/up weight blocks signalled, not forwarded)
         dyn_def["SE_W_NOFWD"] = "1";
@@ -613,6 +634,12 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         Defines xrd_def = with(dyn_def, {{"SE_SBT", sbt}, {"XHELP_SMALL", "1"}});
         if (indexed) {
             xrd_def["XRD_INDEXED"] = "1";
+            // (probe MIMO_FL_XIDX_ALL=1: the whole call's token index read once into the relay's arena instead of one
+            // small read + barrier per sub-block; no gain measured: K3 E1 / E12 / E56 within 0.1%)
+            const char* xa = std::getenv("MIMO_FL_XIDX_ALL");
+            if (xa != nullptr && std::atoi(xa) != 0) {
+                xrd_def["XRD_IDX_ALL"] = "1";
+            }
         }
         // perf probes (read at program build; not in the program hash, so a process uses one setting):
         // MIMO_FL_XRD_SKIP=n: the relays read no x rows from DRAM (garbage tiles), MIMO_FL_XRD_BATCH: chunks per read
@@ -737,6 +764,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             }
             if (indexed) {
                 xr.a(AddrSrc::TokenIndex);
+                xr.a(AddrSrc::Arena, p.ti_off);  // (XRD_IDX_ALL: the call's token index, read once)
             }
             add_rt(kxr, rl, xr);
             SetRuntimeArgs(program, ktz, rl, std::vector<uint32_t>{rl_sb(idx)});
@@ -1046,6 +1074,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     }
     static_cb(6, meta_bytes, arena_cores, tt::DataFormat::UInt32, meta_bytes);
     static_cb(7, 4 * dyn_half, arena_cores, tt::DataFormat::UInt32, 4 * dyn_half);
+    if (dyn_pull) {  // the leader's compact schedule inputs (2 x SE_MAX_E words; the CB exists on every core)
+        static_cb(9, 1024, arena_cores, tt::DataFormat::UInt32, 1024);
+    }
 
     cached_program_t cached{std::move(program), std::move(sv)};
     override_runtime_arguments(cached, cfg, t, output);
