@@ -94,7 +94,7 @@ FORCE_INLINE bool pass_stage_gate(uint32_t metadata_addr) {
     volatile tt_l1_ptr uint32_t* md = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_addr);
     const uint32_t slot = md[stage_gate_slot_word];
     const auto mode = static_cast<GateMode>(md[stage_gate_mode_word]);
-    if (slot >= num_stage_gates || mode == GateMode::Bypass) {
+    if (slot >= num_stage_gates) {
         return true;
     }
     volatile tt_l1_ptr uint32_t* termination_semaphore =

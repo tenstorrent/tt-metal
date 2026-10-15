@@ -216,6 +216,7 @@ from ttnn._ttnn.d2d_stream_service import (
     D2DStageGateConfig,
     D2DStageGateDescriptor,
     D2DStageGateMode,
+    D2D_STAGE_GATE_UNGATED_SLOT,
 )
 
 from ttnn._ttnn.counter_channel import (

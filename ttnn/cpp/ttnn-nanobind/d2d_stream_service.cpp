@@ -75,8 +75,8 @@ void py_module_types(nb::module_& mod) {
         What a transfer does at its stage gate. Written into the transfer's metadata.
     )doc")
         .value("KeepOpen", ttnn::d2d_stream::GateMode::KeepOpen)
-        .value("CloseOnTransit", ttnn::d2d_stream::GateMode::CloseOnTransit)
-        .value("Bypass", ttnn::d2d_stream::GateMode::Bypass);
+        .value("CloseOnTransit", ttnn::d2d_stream::GateMode::CloseOnTransit);
+    mod.attr("D2D_STAGE_GATE_UNGATED_SLOT") = ttnn::d2d_stream::kUngatedSlot;
 
     nb::class_<D2DStageGateConfig>(mod, "D2DStageGateConfig", R"doc(
         Receiver stage gate: num_gates (enabled when > 0) and the metadata byte offsets of

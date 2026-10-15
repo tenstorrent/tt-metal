@@ -20,7 +20,9 @@ enum class GateState : uint32_t {
 enum class GateMode : uint32_t {
     KeepOpen = 0,        // wait for the gate, leave it open
     CloseOnTransit = 1,  // wait for the gate, close it once this transfer passes
-    Bypass = 2,          // don't wait
 };
+
+// Slot id for a transfer that skips the gate. Any slot id >= num_gates does the same.
+inline constexpr uint32_t kUngatedSlot = 0xFFFFFFFF;
 
 }  // namespace ttnn::d2d_stream

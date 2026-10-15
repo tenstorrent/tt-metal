@@ -480,15 +480,12 @@ void verify_stage_gate_semantics(
     EXPECT_TRUE(h.gate_closed_everywhere(1)) << "the burst's last transfer did not close gate 1";
     h.consume();
 
-    // Slot ids >= num_gates pass ungated.
-    h.send(/*slot=*/0xFFFFFFFFu, GateMode::KeepOpen);
-    ASSERT_TRUE(h.wait_released(4, kGateReleaseTimeout)) << "out-of-range slot id was gated";
+    // Slot ids >= num_gates pass ungated, whatever the mode.
+    h.send(ttnn::d2d_stream::kUngatedSlot, GateMode::CloseOnTransit);
+    ASSERT_TRUE(h.wait_released(4, kGateReleaseTimeout)) << "kUngatedSlot was gated";
     h.consume();
-
-    // Bypass passes a closed gate and leaves it closed.
-    h.send(/*slot=*/3, GateMode::Bypass);
-    ASSERT_TRUE(h.wait_released(5, kGateReleaseTimeout)) << "Bypass transfer was gated";
-    EXPECT_TRUE(h.gate_closed_everywhere(3));
+    h.send(/*slot=*/kGateNumGates, GateMode::KeepOpen);
+    ASSERT_TRUE(h.wait_released(5, kGateReleaseTimeout)) << "slot id num_gates was gated";
     h.consume();
 
     // Teardown must terminate a receiver held at a closed gate.
