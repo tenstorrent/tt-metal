@@ -48,8 +48,13 @@ inline void calculate_bitonic_topk_local_sort(
     std::uint32_t i_start_step,
     std::uint32_t tile0_sorted) {
     if (tile0_sorted != 0) {
-        _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true>(
-            idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
+        _bitonic_topk_phases_steps_tile0_sorted_<
+            APPROXIMATION_MODE,
+            is_fp32_dest_acc_en,
+            STABLE_SORT,
+            FUSED,
+            RANK_STAMPED,
+            TIE_ORDER>(idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
     } else {
         _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, false>(
             idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
