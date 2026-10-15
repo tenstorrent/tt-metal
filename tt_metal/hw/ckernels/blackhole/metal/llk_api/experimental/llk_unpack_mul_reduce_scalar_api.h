@@ -24,3 +24,8 @@ inline void llk_unpack_mul_reduce_scalar_two_face_banks_init() {
     SAN_HOOK(unsupported());
     _llk_unpack_mul_reduce_scalar_two_face_banks_init_();
 }
+
+inline void llk_unpack_mul_reduce_scalar_two_face_banks_uninit() {
+    SAN_HOOK(unsupported());
+    _llk_unpack_mul_reduce_scalar_two_face_banks_uninit_();
+}

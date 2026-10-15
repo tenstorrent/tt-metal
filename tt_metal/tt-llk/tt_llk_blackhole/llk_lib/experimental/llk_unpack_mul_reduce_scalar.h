@@ -60,3 +60,9 @@ inline void _llk_unpack_mul_reduce_scalar_two_face_banks_init_()
     ckernel_template tmp(1, 2, unpack_srca, unpack_srcb);
     tmp.program();
 }
+
+// One face per UNPACR again, as _llk_unpack_AB_init_ sets it for any mul_reduce_scalar tile.
+inline void _llk_unpack_mul_reduce_scalar_two_face_banks_uninit_()
+{
+    unpacker::config_unpacker_x_end<p_setadc::UNP_AB>(FACE_R_DIM);
+}
