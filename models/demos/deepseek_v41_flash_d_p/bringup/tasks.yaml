@@ -299,6 +299,14 @@ tasks:
     kind: norm
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-10-15T12:50:03'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_norm.py: 1920d5dcc35000a02aea90dd527459c035a74c027c44d2e2875bda502247d3ab
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.03
   title: 'swa block with steps 1-3 on device (last: attn_norm)'
   step: implement
