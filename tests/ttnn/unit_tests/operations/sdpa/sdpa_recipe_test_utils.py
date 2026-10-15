@@ -180,8 +180,9 @@ def check_joint(device, variant):
 
 
 # Largest scaled logit of the rows (natural-log units of the scaled scores) for check_large_logits. Past about 1.1e4,
-# FP32 scores against BF16 row maxima leave the score exp's range and zero whole rows of P.
-LOGIT_SCALES = {"moderate": 3e3, "large": 2e4}
+# FP32 scores against BF16 row maxima leave the score exp's range and zero whole rows of P. "negative" shifts every
+# logit by -2x that, so the row maxima sit between -7.5e3 and -5e3 (like an SDXL VAE attention's).
+LOGIT_SCALES = {"moderate": 3e3, "large": 2e4, "negative": 5e3}
 
 
 def aligned_inputs(b, nh, sq, sk, d, logit, seed):
@@ -195,11 +196,43 @@ def aligned_inputs(b, nh, sq, sk, d, logit, seed):
     return q.bfloat16(), k, v
 
 
+def offset_logits(q, k, offsets):
+    """Shift row i's scaled logits by offsets[..., i] through the last channel (keys 1, queries offset * sqrt(D))."""
+    q, k = q.clone(), k.clone()
+    k[..., -1] = 1
+    q[..., -1] = offsets * math.sqrt(q.shape[-1])
+    return q.bfloat16(), k
+
+
 def check_large_logits(device, variant, scale):
     b, nh, _, sq, sk, d, q_chunk, k_chunk = SHAPES["subtile_tails"]
     q, k, v = aligned_inputs(b, nh, sq, sk, d, LOGIT_SCALES[scale], seed=40)
+    if scale == "negative":
+        q, k = offset_logits(q, k, torch.full((b, nh, sq), -2 * LOGIT_SCALES[scale]))
     actual = ttnn.to_torch(sdpa(device, variant, q, k, v, q_chunk, k_chunk))
     assert l2_pct(actual, reference(q, k, v)) < L2_PCT_BOUND[variant]
+
+
+def check_offset_rows(device, variant):
+    """Every fourth row's top two logits are L and L - 0.5 (L in [128, 256) on a 1/8 grid, scale 1, the other keys
+    40 lower), all exact in TF32, like the few large-logit rows of BGE-M3's long-sequence layers. The row maxima must
+    keep their TF32 bits: a BF16 maximum is up to 7/8 below L, past the top of the score exp's grid, and shifts the
+    two keys' weights. Checks the worst row."""
+    b, nh, _, sq, sk, d, q_chunk, k_chunk = SHAPES["subtile_tails"]
+    generator = torch.Generator().manual_seed(53)
+    top = 128 + torch.randint(0, 1024, (b, nh, sq), generator=generator) / 8
+    top[..., torch.arange(sq) % 4 != 0] = 0
+    q, k = torch.zeros(b, nh, sq, d), torch.full((b, nh, sk, d), 0.0)
+    q[..., 0], q[..., 1] = 1, top.bfloat16().float()
+    q[..., 2] = top - q[..., 1]
+    k[..., 0], k[..., 1], k[..., 2] = -40, 1, 1
+    k[:, :, 3, 0], k[:, :, sk - 300, 0] = 0, -0.5
+    q, k, v = q.bfloat16(), k.bfloat16(), randn(b, nh, sk, d, seed=54)
+    actual = ttnn.to_torch(sdpa(device, variant, q, k, v, q_chunk, k_chunk, scale=1.0)).double()
+    expected = reference(q, k, v, scale=1.0)
+    assert torch.isfinite(actual).all()
+    row_pct = 100 * (actual - expected).norm(dim=-1) / expected.norm(dim=-1)
+    assert row_pct.max().item() < 1.5
 
 
 # b, nh, sq, sk, d, joint rows (0 = plain SDPA).
