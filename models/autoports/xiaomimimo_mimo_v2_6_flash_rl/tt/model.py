@@ -21,6 +21,7 @@ from loguru import logger
 import ttnn
 
 from ..reference.model import load_layer_weights
+from . import kv as kv_lib
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .rope import MiMoRotarySetup
@@ -100,7 +101,9 @@ class TtMiMoModel:
         self.layers = []
         for i in range(self.num_layers):
             t0 = time.time()
-            tag = f"layer{i}_tp{plan.tp}"
+            # Bump a layer's tag when its cached tensor set changes, so a warm cache from an older layout
+            # is rebuilt instead of loaded with tensors missing (global layers gained grouped decode weights).
+            tag = f"layer{i}_tp{plan.tp}" + ("" if cfg.is_swa(i) else "_kvsplit")
             weights = None if warm(tag) else load_layer_weights(ckpt, cfg, i)
             self.layers.append(
                 TtMiMoDecoderLayer(
@@ -130,39 +133,30 @@ class TtMiMoModel:
     def setup_kv_cache(self, num_users):
         """Allocate paged KV for ``num_users`` users in decode slots [0, num_users).
 
-        SWA layers get a ring of ``kv_tokens_per_user`` (512) tokens per user, global layers the full
-        ``max_seq_len``. Each layer type has its own page table; slots past ``num_users`` point at block 0
-        and are never written (their position is -1)."""
+        SWA layers get a 512-token ring per user, global layers the full ``max_seq_len``; on TP=8 a global
+        layer's chip pair splits the users (kv.py), so that page table differs per chip. Slots past
+        ``num_users`` are never written (their position is -1)."""
         assert num_users <= self.max_batch
         self.kv_caches, tables = [], {}
         for layer in self.layers:
             per_user = layer.attn.kv_tokens_per_user(self.max_seq_len)
             assert per_user % self.block_size == 0
-            blocks_per_user = per_user // self.block_size
-            self.kv_caches.append(
-                layer.attn.allocate_kv_cache(num_users * blocks_per_user, self.block_size, self.kv_dtype)
+            table, num_blocks = kv_lib.page_tables(
+                num_users, self.max_batch, per_user // self.block_size, self.plan.tp, layer.attn.rep
             )
-            if layer.is_swa not in tables:
-                table = torch.zeros(self.max_batch, blocks_per_user, dtype=torch.int32)
-                table[:num_users] = torch.arange(num_users * blocks_per_user, dtype=torch.int32).reshape(num_users, -1)
-                tables[layer.is_swa] = table
+            self.kv_caches.append(layer.attn.allocate_kv_cache(num_blocks, self.block_size, self.kv_dtype))
+            tables.setdefault(layer.is_swa, table)
         self.set_page_tables(tables)
 
     def set_page_tables(self, tables):
-        """tables: {is_swa: torch int32 [max_batch, blocks_per_user]} (slot -> physical blocks per layer type)."""
+        """tables: {is_swa: int32 [tp, max_batch, blocks_per_user]} (per chip slot -> physical block)."""
         if self.page_table_tt is not None:
             for t in self.page_table_tt.values():
                 t.deallocate(True)
-        self.page_table_tt = {}
-        for is_swa, table in tables.items():
-            assert table.shape[0] == self.max_batch
-            self.page_table_tt[is_swa] = ttnn.from_torch(
-                table.to(torch.int32),
-                device=self.mesh_device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=self.plan.replicate(),
-            )
+        self.page_table_tt = {
+            is_swa: kv_lib.per_chip(self.plan, table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            for is_swa, table in tables.items()
+        }
 
     def _to_device_tokens(self, tokens):
         return ttnn.from_torch(
@@ -228,9 +222,11 @@ class TtMiMoModel:
 
     # ------------------------------------------------------------------ decode
     def prepare_decode_inputs_host(self, tokens, positions):
-        """Host tensors for one step: tokens [1, B] u32, cur_pos [B] i32, RoPE idx [1, B] u32, MoE token mask."""
+        """Host tensors for one step: tokens [1, B] u32, cur_pos [B] i32, RoPE idx [1, B] u32, MoE token mask,
+        and the global layers' per-chip view: owned positions [B] i32 and owner mask [1, 1, B, 1]."""
         assert tokens.numel() == self.max_batch and positions.numel() == self.max_batch
         rep = self.plan.replicate()
+        tp, kv_rep = self.plan.tp, kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
 
         def host(t, dtype, layout):
             return ttnn.from_torch(t, dtype=dtype, layout=layout, mesh_mapper=rep)
@@ -240,9 +236,15 @@ class TtMiMoModel:
             host(positions.to(torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
             self.rope_setups["full"].get_rot_idxs(positions.clamp(min=0), on_host=True),
             host((positions >= 0).to(torch.bfloat16).reshape(1, 1, -1, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            kv_lib.per_chip(
+                self.plan, kv_lib.owned_positions(positions, tp, kv_rep), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, False
+            ),
+            kv_lib.per_chip(
+                self.plan, kv_lib.owner_mask(positions, tp, kv_rep), ttnn.bfloat16, ttnn.TILE_LAYOUT, False
+            ),
         )
 
-    def decode_forward_device(self, tokens_tt, cur_pos_tt, rot_idx_tt, mask_tt):
+    def decode_forward_device(self, tokens_tt, cur_pos_tt, rot_idx_tt, mask_tt, pos_owned_tt, owner_mask_tt):
         """One decode step from device-resident inputs only (trace-capturable). Returns [1, 1, B, vocab / tp]."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, self.max_batch, self.cfg.hidden_size))
@@ -251,8 +253,9 @@ class TtMiMoModel:
             True: self.rope_setups["swa"].get_rot_mats(rot_idx_tt),
             False: self.rope_setups["full"].get_rot_mats(rot_idx_tt),
         }
+        positions = {"pos": cur_pos_tt, "pos_owned": pos_owned_tt, "owner_mask": owner_mask_tt}
         for i, layer in enumerate(self.layers):
-            y = layer.forward_decode(x, rot_mats, cur_pos_tt, self.page_table_tt, self.kv_caches[i], mask_tt)
+            y = layer.forward_decode(x, rot_mats, positions, self.page_table_tt, self.kv_caches[i], mask_tt)
             x.deallocate(True)
             x = y
         logits = self._logits(x)
