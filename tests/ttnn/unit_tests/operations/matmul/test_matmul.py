@@ -4944,3 +4944,80 @@ def test_matmul_bcast_in0_reuse_outer_blocks(device, per_core_M, out_block_h, pe
             for b in range(in1_B):
                 assert_with_pcc(expected[0, b], output[0, b], 0.999)
     assert device.cache_entries_counter.total == 1
+
+
+# Pins compute_output_specs 1D mcast anchor against MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts.
+def test_matmul_1d_mcast_sharded_output_anchors_at_worker_bbox_start(device):
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 5:
+        pytest.skip("Needs an x>=5 compute grid to use (1,0)-(4,0)")
+    a_torch = torch.randn(1, 1, 32, 1024, dtype=torch.bfloat16)
+    b_torch = torch.randn(1024, 512, dtype=torch.bfloat16)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 0))})
+    a_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (32, 256), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    a_t = ttnn.from_torch(a_torch, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=a_mem)
+    b_t = ttnn.from_torch(
+        b_torch, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    out = ttnn.matmul(a_t, b_t, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+    out_torch = ttnn.to_torch(out).float().reshape(32, 512)
+    ref = (a_torch.float().reshape(32, 1024) @ b_torch.float()).reshape(32, 512)
+    out_grid = out.memory_config().shard_spec.grid
+    assert out_grid == shard_grid, f"output shard grid {out_grid} must equal input shard grid {shard_grid}"
+    assert_with_pcc(ref, out_torch, pcc=0.99)
+
+
+# Pins the sub-device override branch: factory anchors at `sub_device.worker_bbox.start`, not at `allowed_worker_cores` origin.
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize("mcast_in0", [True, False], ids=["mcast_in0", "mcast_in1"])
+def test_matmul_1d_mcast_sharded_output_anchors_at_subdevice_start(device, mcast_in0):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 5 or grid.y < 2:
+        pytest.skip("Needs grid >= 5x2 for sub-device at (1,1)-(4,1)")
+    sd_start, sd_end = ttnn.CoreCoord(1, 1), ttnn.CoreCoord(4, 1)
+    worker_crs = ttnn.CoreRangeSet({ttnn.CoreRange(sd_start, sd_end)})
+    worker_sub_device = ttnn.SubDevice([worker_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    mgr = device.create_sub_device_manager([worker_sub_device], 0)
+    device.load_sub_device_manager(mgr)
+    device.set_sub_device_stall_group([worker_sub_device_id])
+    try:
+        tile, num_cores = 32, 4
+        m_size, n_size = (tile, tile * num_cores) if mcast_in0 else (tile * num_cores, tile)
+        k_size = 1024
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(num_cores, 1),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=False,
+            mcast_in0=mcast_in0,
+            fused_activation=None,
+        )
+        torch.manual_seed(0)
+        ta = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
+        tb = torch.randn((1, 1, k_size, n_size), dtype=torch.bfloat16)
+        kw = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        a_t, b_t = ttnn.from_torch(ta, **kw), ttnn.from_torch(tb, **kw)
+        out = ttnn.matmul(
+            a_t,
+            b_t,
+            program_config=pc,
+            sub_device_id=worker_sub_device_id,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mcast_in0 else ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        )
+        expected = ttnn.CoreRangeSet({ttnn.CoreRange(sd_start, ttnn.CoreCoord(sd_start.x + num_cores - 1, sd_start.y))})
+        got = out.memory_config().shard_spec.grid
+        assert got == expected, f"output shard grid {got} must anchor at sub-device start, expected {expected}"
+        assert_with_pcc(ta @ tb, ttnn.to_torch(out), pcc=0.999)
+    finally:
+        device.reset_sub_device_stall_group()
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(mgr)
