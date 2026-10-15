@@ -102,10 +102,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    if constexpr (TWO_FACE_BANKS)
-    {
-        _llk_unpack_mul_reduce_scalar_two_face_banks_uninit_();
-    }
 }
 
 #endif

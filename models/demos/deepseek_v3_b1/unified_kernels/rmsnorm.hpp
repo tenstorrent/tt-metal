@@ -135,7 +135,7 @@ struct RMSNorm {
                 tile_regs_acquire();
                 mul_reduce_scalar_tile<PoolType::SUM, DST_ACCUM_MODE, false, num_tiles>(
                     CTArgs::input_cb, CTArgs::input_cb, CTArgs::output_cb, num_tiles, args.scalar);
-                mul_reduce_scalar_uninit<num_tiles>();
+                mul_reduce_scalar_uninit();
             }
             {
                 add_rsqrt_tile<CTArgs::rsqrt_fast_approx, VectorMode::RC_custom, 1>(0, args.epsilon);
