@@ -449,3 +449,36 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   under tests/ttnn/unit_tests/operations/ds41_experts was deleted (K-56).
 - OV-4: DS41-20 already states the F73 fix (done earlier); nothing left to change.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py`
+
+## C.swa.shared_expert test (attempt 1)
+- The rendered test (CHECKS="auto" only) failed the freeze sweep: noise1e-2 slipped (rel limit 0.015 = 2 x the bf16
+  precision model's 0.0075, which the fp8 q-dq of x and h sets; DS41-14 / DS41-22, K-36).
+- Added one structural check on every built-in input (golden, layer24, mixed, small, big): the output must lie in the
+  column space of layer 0's shared w2 [5120, 2304] (the step ends with the w2 GEMM). Metric ||out - P out|| / ||out||,
+  P from a float64 QR of w2, limit SPAN_REL 0.003 (DS41-25). Measured: fp32 reference 4e-8; bf16 inputs + output and
+  the bf16 precision model 0.00105 (golden) .. 0.00121 (layer24); the bf16 golden itself 0.00105; noise1e-2 0.00742
+  on every input; halfswap 0.75; sign 0.35-0.48. A device step that sums bf16 TP partials (instead of the planned
+  fp32 partials) would raise it; keep the partials fp32 (components.yaml shared_expert).
+- BRINGUP_IMPL=mutations runs the test's own sweep (built-in + span checks): every mistake caught, controls pass.
+  reference: PASS (pcc 0.999899, vs golden rel 0.0142 / limit 0.0292). stub: FAIL. Device gate: NotImplementedError
+  (no device module yet; the implement step writes it). The first "FAIL pcc ... 0.000000" block of each run is the
+  precompile collect pass (K-52).
+- OV-4: DS41-20 already states the F73 fix; nothing to change.
+- Re-run: `PYTHONPATH=$PWD BRINGUP_IMPL=mutations scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_shared_expert.py`
+
+## C.swa.shared_expert implement (attempt 1)
+- `tt/shared_expert.py:TtSharedExpert`: q(x) (tt/quant.fp8_qdq, bf16 exact) -> one ttnn.linear by the chip's
+  [W1^T_c | W3^T_c] [5120, 2 x I/TP] (bf16 weights, exact; HiFi4 + fp32 acc, fp32 out, K-25) -> slice g / u ->
+  min / clamp +-10, silu, multiply (fp32 SFPU) -> fp8_qdq(h) over the chip's I/TP columns (1152 on 2x2, 576 on 4x4 /
+  8x4 / 2x4: multiples of 32) -> ttnn.linear by W2^T_c [I/TP, 5120] fp32 partial -> sum over axis 1 + keep the chip's
+  hidden columns (setting EXPERTS_SUM, gather_add default: all_gather + SFPU add, K-30) -> [S/SP, H/TP] fp32.
+  TP read from mesh.shape; weights laid out once at load; no host work in the forward.
+- `partial(x, xq=None)` / `reduce(part)` split so the assembled model can add it to TtExperts.partial before the one
+  MoE exchange and reuse the experts' q(x) (plan.md). EXPERTS_SUM's description now names the shared expert (no new
+  switch: in the assembled model it is the same exchange).
+- hooks: `shared_expert` in DEVICE_STEPS["swa"]; `_rows_to_hidden_host_fn` (ffn_norm rows in, row-split +
+  TP-replicated; hidden-split out).
+- Gate: pcc 0.999899; vs CPU step rel 0.00152 (limit 0.015), worst row 0.0089; vs golden rel 0.0142 (limit 0.0292);
+  second inputs rel 0.0015-0.0035; span outside w2 0.00014-0.00023 (limit 0.003; DS41-25: fp32 partials keep it low);
+  determinism bit-identical. 14 s test body on 2x2.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_shared_expert.py`
