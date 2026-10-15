@@ -341,7 +341,6 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
         const auto run =
             [&](const x280::harness::regions::packet_injection::Config& cfg, const pi_layout_t& at, uint32_t workers) {
                 return pi::Run{
-                    .provenance = {"metal", false},
                     .run_value = run_value++,
                     .cfg = cfg,
                     .layout = at,

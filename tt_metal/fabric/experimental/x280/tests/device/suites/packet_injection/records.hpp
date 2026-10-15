@@ -45,19 +45,12 @@ struct LimSlotDump {
     bool ok() const { return error.empty() && !produced.empty(); }
 };
 
-// The tt-metal revision a packet_injection host was built from.
-struct Provenance {
-    const char* tt_metal_sha;
-    bool source_dirty;
-};
-
 /**
  * One run as its records report it. `successful` is the run's own outcome,
  * `report_successful` the one its run record states after the host's checks;
  * `cfg`, `layout` and `result` must outlive the record calls.
  */
 struct Run {
-    Provenance provenance;
     uint64_t run_value = 0;
     const x280::harness::regions::packet_injection::Config& cfg;
     const pi_layout_t& layout;
@@ -71,8 +64,8 @@ struct Run {
 
 namespace detail {
 
-// The identity head both members' records open with: provenance, the run
-// value, the configuration, the counts, the mtime rate and the run's outcome.
+// The identity head both members' records open with: the run value, the
+// configuration, the counts, the mtime rate and the run's outcome.
 // The campaign validator reads run_value, the knobs, worker_count and
 // successful from it.
 inline std::vector<x280::harness::output::Field> run_identity(
@@ -80,9 +73,6 @@ inline std::vector<x280::harness::output::Field> run_identity(
     const auto& cfg = run.cfg;
     const auto& r = run.result;
     return {
-        {"tt_metal_sha", run.provenance.tt_metal_sha},
-        {"source_dirty", run.provenance.source_dirty},
-        {"source_revision_basis", "build_time"},
         {"run_value", run.run_value},
         {"mode", cfg.mode},
         {"include_creation", cfg.include_creation},

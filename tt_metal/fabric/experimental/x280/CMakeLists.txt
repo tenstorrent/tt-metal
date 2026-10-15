@@ -726,11 +726,8 @@ _x280_device_test(x280_packet_injection_erisc_to_x280_header
     SLOW_DISPATCH
 )
 find_package(Threads REQUIRED)
-# The records name the revision from tt-metal's generated version header.
 foreach(_member tensix_to_x280 erisc_to_x280_header)
     target_link_libraries(x280_packet_injection_${_member} PRIVATE Threads::Threads)
-    target_include_directories(x280_packet_injection_${_member} PRIVATE ${PROJECT_BINARY_DIR}/generated)
-    add_dependencies(x280_packet_injection_${_member} tt_metal_version_header)
 endforeach()
 
 # ---------------------------------------------------------------------------

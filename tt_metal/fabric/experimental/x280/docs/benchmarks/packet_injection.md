@@ -346,15 +346,13 @@ aggregate record; the frozen tabulator (`docs/measurement.md` "Collection and re
 reads them, and the live campaign validator requires the aggregate record.
 
 Records include configuration, ordered tiles and selected prefix length, per-worker
-placement, memory budgets, cleanup status, and source revisions/dirty state captured
-at CMake configuration time. Both run records carry `released_group_dests` and
+placement, memory budgets and cleanup status. Both run records carry `released_group_dests` and
 `released_endpoints`, the release X280 executed (`pi_run_result_t`): the group's receiver
 count, zero for none, and the unicast endpoint count. The run record also carries
 `release_guards`, the guard words armed (zero for a unicast release), and
 `release_guards_overwritten`. Records written before 2026-10-01 carry
 `release_multicast_safe` instead, the flag the host passed: 1 released tiles that filled their
-bounding box by one multicast, 0 released one unicast per tile. A dirty source revision is not a reproducible commit.
-Reconfigure before rebuilding after changing revisions.
+bounding box by one multicast, 0 released one unicast per tile.
 
 The reported assumption mask covers inbound LIM visibility, scalar counter atomicity, mode-1 credit completion,
 nominal mtime frequency, local timer access ordering, and (for latency) pinned export
@@ -889,8 +887,7 @@ env TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD" \
 1750 MHz with 14 LIM ways, exposes 8 inactive IDLE_ETH cores, so `writers_all`
 is 8 there and `writers8` duplicates it. Every point passed at N=1024, S=16, C=1,
 K=1 with W calibrated, every resident slot and guard byte intact, and clean AICLK
-evidence at 1350 MHz on writer 0's ERISC wall clock. The records carry
-`source_dirty` true: they were collected before the member was committed.
+evidence at 1350 MHz on writer 0's ERISC wall clock.
 
 | Point | B | P | W | Aggregate mtime ticks | M headers/s | Per-writer wall ticks | Stall episodes per writer | Empty visits | Resident slots / mismatches |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -1024,8 +1021,9 @@ open the 14-way `LimLayout::PacketInjection` profile. The ERISC member links
 runs on the packet-injection throughput image, is in
 [§ ERISC Header-Ingress Member](#erisc-header-ingress-member), with the ID 14
 contract under [§ Measured operation](#measured-operation).
-Each record names the tt-metal revision the executable was built from
-(`tt_metal_sha`, `source_dirty`).
+Records name no source revision. What produced a run is established by the
+campaign runner's attempt record (`attempt.json`: the executable's and each
+firmware image's SHA-256), or by inspecting the build.
 
 The host executable build is not a Tensix kernel build. BRISC/NCRISC JIT
 compilation against Metal's device-generated configuration is verified by

@@ -461,7 +461,6 @@ inline uint64_t run_once(
         // A calibration pilot records nothing.
         if (warmup != nullptr) {
             const Run run{
-                .provenance = build_provenance(),
                 .run_value = run_value,
                 .cfg = cfg,
                 .layout = L,

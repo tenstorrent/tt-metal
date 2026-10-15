@@ -20,8 +20,6 @@
 #include "kernels/packet_injection/packet_injection_slot.hpp"
 #include "rt/x280_noc_map.h"
 
-#include <tt_metal/impl/version.hpp>
-
 #include <array>
 #include <chrono>
 #include <condition_variable>
@@ -39,9 +37,6 @@
 #include <vector>
 
 namespace x280::suites::packet_injection {
-
-/** The revision this executable was built from: tt-metal's generated version header, refreshed every build. */
-inline Provenance build_provenance() { return {tt::tt_metal::kGitSha.data(), tt::tt_metal::kGitDirty}; }
 
 inline uint64_t mint_run_value(uint32_t& run_nonce) {
     run_nonce = static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
