@@ -1,0 +1,83 @@
+{
+ "used": [
+  {
+   "id": "K-30",
+   "how": "q_a / kv partials summed with all_gather + SFPU ttnn.add (tp_sum), not reduce_scatter/all_reduce; fp32 values kept off the FPU in fp8_qdq",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-12",
+   "how": "q_norm composed (mhc_pre_xing_pack sum x^2 + rsqrt) via TtDistributedRmsNorm(split=False), not ttnn.rms_norm on fp32",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-25",
+   "how": "HiFi4 + fp32 accumulation, fp32 matmul output before the exchange and the norm",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-57",
+   "how": "probe run on the whole box (--mesh default), not a single card",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-68",
+   "how": "probe opened the full 2x2 mesh with FABRIC_2D, not a submesh",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "deleted the tt-probe directory under tests/ttnn/unit_tests/operations/ds41_quant before finishing",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "read the FAIL lines of the collect pass as stubbed (precompile), judged the real pass",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-1",
+   "how": "built fp8_qdq bit-exact (integer bit ops) so device GEMM operands equal the reference's",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "which ttnn ops are bit-exact on fp32 (ttnn.max reduce over the last dim, scalar multiply, ttnn.round half-to-even) - K-30 suggests reductions read fp32 at TF32, but the max reduce was exact; ttnn.bitcast supports only fp32<->uint32<->int32"
+ ],
+ "cited_only": [
+  "DS41-12",
+  "DS41-13",
+  "K-51"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.q_a",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T13:05:10",
+  "head": "f91a6019fdf",
+  "touched": [
+   "models/demos/common/bringup/knowledge/known_issues.md",
+   "models/demos/common/bringup/knowledge/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.q_a.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/quant.py"
+  ]
+ }
+}
