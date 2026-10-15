@@ -73,6 +73,11 @@ protected:
      * records and at E0; and records it. */
     void run_leg(const char* name, suite::Mode mode, uint32_t P, uint32_t payload);
 
+    /** run_leg() at every (P, payload) of the leg grid that fits the Ethernet
+     * tile (leg_fits), each point on its own: a fatal failure at one point does
+     * not skip the rest. */
+    void run_leg_grid(const char* name, suite::Mode mode);
+
     /** Runs `c` with every gtest failure from any thread captured instead of
      * reported, and returns the run's result; `failures` receives each
      * captured failure's message. */
@@ -631,43 +636,32 @@ void EthCreditHw::run_leg(const char* name, suite::Mode mode, uint32_t P, uint32
     suite::record_throughput(spec(), fixture(), c, r, 0u);
 }
 
+void EthCreditHw::run_leg_grid(const char* name, suite::Mode mode) {
+    for (const uint32_t P : kLegP) {
+        for (const uint32_t payload : kLegPayload) {
+            if (leg_fits(P, payload)) {
+                run_leg(name, mode, P, payload);
+            }
+        }
+    }
+}
+
 // The NoC hop alone (W1, W2, R3): the sending forwarder into E0 sinking
 // locally, on the leg grid.
 TEST_P(EthCreditHw, NocHopBySlotAndP) {
-    for (const uint32_t P : kLegP) {
-        for (const uint32_t payload : kLegPayload) {
-            if (!leg_fits(P, payload)) {
-                continue;
-            }
-            run_leg("noc_hop_sweep", suite::Mode::NocHop, P, payload);
-        }
-    }
+    run_leg_grid("noc_hop_sweep", suite::Mode::NocHop);
 }
 
 // The receive side alone (W5, W6, R1): E1 sourcing locally into the receiving
 // forwarder, on the leg grid.
 TEST_P(EthCreditHw, ReceiveSideBySlotAndP) {
-    for (const uint32_t P : kLegP) {
-        for (const uint32_t payload : kLegPayload) {
-            if (!leg_fits(P, payload)) {
-                continue;
-            }
-            run_leg("receive_side_sweep", suite::Mode::ReceiveSide, P, payload);
-        }
-    }
+    run_leg_grid("receive_side_sweep", suite::Mode::ReceiveSide);
 }
 
 // W1 alone: each sending forwarder writes one header into E0's tx_fifo[p] as
 // its send step does, back to back on the measurement image, on the leg grid.
 TEST_P(EthCreditHw, W1AloneBySlotAndP) {
-    for (const uint32_t P : kLegP) {
-        for (const uint32_t payload : kLegPayload) {
-            if (!leg_fits(P, payload)) {
-                continue;
-            }
-            run_leg("w1_alone", suite::Mode::W1Alone, P, payload);
-        }
-    }
+    run_leg_grid("w1_alone", suite::Mode::W1Alone);
 }
 
 // W2 alone and R1 alone: each sending forwarder repeats the build's pointer
@@ -692,7 +686,7 @@ TEST_P(EthCreditHw, R1AloneByP) {
 // consume loop (EC_E1_R2_AFTER_CONSUME) only after the receiving forwarder's
 // R1, so its round trip runs through the remote consume.
 TEST_P(EthCreditHw, RoundTripBySlot) {
-    for (const uint32_t payload : {64u, 1024u, 4096u, 16384u}) {
+    for (const uint32_t payload : kLegPayload) {
         for (const bool consume : {false, true}) {
             suite::Case c{
                 .name = consume ? "round_trip_consume" : "round_trip_hop",
