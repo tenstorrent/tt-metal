@@ -705,7 +705,7 @@ Noc::async_read(
             src_noc_addr, dst_addr, dst.get_entry_size(), noc_id_, NOC_UNICAST_WRITE_VC);
     };
     if constexpr (noc_addrgen_push_v<Src>) {
-        // The ordinary issue below always traces (noc_async_read<..., true>); so does the pushed one.
+        // The ordinary issue below always traces (noc_async_read_impl<..., true>); so does the pushed one.
         issue_read_maybe_pushed</*trace=*/true>(
             src, src_args, dst_addr, dst.get_entry_size(), NOC_UNICAST_WRITE_VC, issue);
     } else {
