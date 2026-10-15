@@ -474,6 +474,14 @@ tasks:
     kind: attention
     layer: 0
     stateful: true
+  frozen:
+    at: '2026-10-15T22:44:51'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py: 8b49446c2b9751dd27dd053a3e0b0810b02561eb50616c76ec224f9b77429687
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.swa.06
   title: 'swa block with steps 1-6 on device (last: attention)'
   step: implement
