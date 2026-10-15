@@ -8,13 +8,11 @@
 The top-k selection, the box decoding, the ``post_center_range`` and ``score_threshold`` tests
 and upstream ``BEVFormerHead.get_bboxes``' move of z to the box's bottom face run on device, on
 fixed ``(bs, max_num)`` tensors, with the tests as a validity mask. Only dropping the invalid boxes
-runs on host (:meth:`TtNMSFreeCoder.compact`): it leaves a data-dependent number of boxes, which no
-device tensor can hold, as ttnn shapes, and a trace's, are fixed. For BEVFormer-base, which sets no
-score threshold, it drops none: the head scales the centers into ``pc_range``, inside
+runs on host (:meth:`TtNMSFreeCoder.compact`): it leaves a data-dependent number
+of boxes, and ttnn and trace shapes are fixed. With BEVFormer's configs, which set no score
+threshold, it drops none: the head scales the centers into ``pc_range``, inside
 ``post_center_range``.
 """
-
-import torch
 
 import ttnn
 from models.experimental.bevformer.model_config import (
@@ -86,7 +84,10 @@ class TtNMSFreeCoder:
                     break
                 self._fallback.append(threshold)
         self._fallback.append(0.0)
-        self._fallback_tensors = {}
+        # Uploaded here, so a trace may capture the coder's first call.
+        self._fallback_tensor = ttnn.to_device(
+            ttnn.Tensor(self._fallback, [1, len(self._fallback)], ttnn.float32, ttnn.TILE_LAYOUT), device
+        )
         self.max_num = max_num
         self.num_classes = num_classes
         # The bisection's counts reach num_query * num_classes, which bfloat16 accumulation would
@@ -181,59 +182,6 @@ class TtNMSFreeCoder:
         return ttnn.logical_and(valid, passes)
 
     @staticmethod
-    def compact(scores, labels, boxes, valid):
-        """:meth:`topk`'s scores, labels and boxes and :meth:`valid`'s mask to one dict of host
-        boxes, scores and labels per sample, the valid ones, as
-        ``reference.nms_free_coder.NMSFreeCoder.decode`` returns them: the one step whose output
-        size depends on the data."""
-        scores, labels, boxes, valid = (ttnn.to_torch(t) for t in (scores, labels, boxes, valid))
-        return [
-            {"bboxes": b.float()[v.bool()], "scores": s.float()[v.bool()], "labels": lab.long()[v.bool()]}
-            for s, lab, b, v in zip(scores, labels, boxes, valid)
-        ]
-
-    def valid(self, scores, boxes):
-        """``(bs, max_num)`` validity of :meth:`topk`'s scores and boxes, 1.0 or 0.0: the box
-        center inside ``post_center_range`` and, when set, the score past ``score_threshold`` or,
-        when no score of the sample is, past the fallback threshold. On device; the fallback
-        thresholds are uploaded on the first call, which a trace capture must follow."""
-        valid = None
-        for axis in range(3):
-            center = boxes[..., BOX_CENTER.start + axis : BOX_CENTER.start + axis + 1]
-            in_range = ttnn.multiply(
-                ttnn.ge(center, self.post_center_range[axis]), ttnn.le(center, self.post_center_range[3 + axis])
-            )
-            valid = in_range if valid is None else ttnn.multiply(valid, in_range)
-        valid = ttnn.reshape(valid, tuple(valid.shape)[:-1])
-        if self.score_threshold is None:
-            return valid
-        # The scores are sorted, so the first is the one any threshold must let through.
-        top_score = scores[:, 0:1]
-        # The first fallback threshold the top score reaches: they decrease, so it is the largest
-        # one at or below it; 0.0, every score passing, when none above 0.01 is.
-        fallback = self._fallback_tensor(scores.device())
-        reached = ttnn.multiply(fallback, ttnn.le(fallback, top_score))
-        fallback_threshold = ttnn.max(reached, dim=-1, keepdim=True)
-        passes_threshold = ttnn.gt(top_score, self.score_threshold)
-        passes = ttnn.add(
-            ttnn.multiply(passes_threshold, ttnn.gt(scores, self.score_threshold)),
-            ttnn.multiply(ttnn.rsub(passes_threshold, 1.0), ttnn.ge(scores, fallback_threshold)),
-        )
-        return ttnn.multiply(valid, passes)
-
-    def _fallback_tensor(self, device):
-        """The fallback thresholds, ``(1, n)`` float32 on ``device``."""
-        key = id(device)
-        if key not in self._fallback_tensors:
-            self._fallback_tensors[key] = ttnn.from_torch(
-                torch.tensor([self._fallback], dtype=torch.float32),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
-        return self._fallback_tensors[key]
-
-    @staticmethod
     def bottom_center(boxes):
         """Boxes with z moved from the box's gravity center to its bottom face, as upstream
         ``BEVFormerHead.get_bboxes`` sets it. On device."""
@@ -249,20 +197,19 @@ class TtNMSFreeCoder:
 
     @staticmethod
     def compact(scores, labels, boxes, valid):
-        """:meth:`finalize`'s device tensors to one ``(boxes, scores, labels)`` per sample on the
-        host, the valid ones: the one step whose output size depends on the data."""
+        """:meth:`topk`'s scores and labels, :meth:`topk`'s or :meth:`finalize`'s boxes and
+        :meth:`valid`'s mask to one dict of host boxes, scores and labels per sample, the valid
+        ones, as
+        ``reference.nms_free_coder.NMSFreeCoder.decode`` returns them: the one step whose output
+        size depends on the data."""
         scores, labels, boxes, valid = (ttnn.to_torch(t) for t in (scores, labels, boxes, valid))
         return [
-            (b.float()[v.bool()], s.float()[v.bool()], lab.long()[v.bool()])
+            {"bboxes": b.float()[v.bool()], "scores": s.float()[v.bool()], "labels": lab.long()[v.bool()]}
             for s, lab, b, v in zip(scores, labels, boxes, valid)
         ]
 
     def decode(self, all_cls_scores, all_bbox_preds):
-        """The head's ``(L, bs, num_query, *)`` device outputs to one dict of host boxes, scores and
-        labels per sample, from the last decoder layer, as ``reference.nms_free_coder.NMSFreeCoder.decode``
-        returns them; all but dropping the invalid boxes on device."""
+        """The head's ``(L, bs, num_query, *)`` device outputs to :meth:`compact`'s per-sample dicts,
+        from the last decoder layer; all but dropping the invalid boxes on device."""
         scores, labels, _, boxes = self.topk(all_cls_scores[-1], all_bbox_preds[-1])
-        return [
-            {"bboxes": b, "scores": s, "labels": lab}
-            for b, s, lab in self.compact(scores, labels, boxes, self.valid(scores, boxes))
-        ]
+        return self.compact(scores, labels, boxes, self.valid(scores, boxes))

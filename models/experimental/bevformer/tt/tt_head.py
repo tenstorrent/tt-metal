@@ -20,7 +20,7 @@ import torch
 
 import ttnn
 from models.experimental.bevformer.model_config import (
-    CODE_COS,
+    CENTERS_FIRST,
     CODE_H,
     CODE_SIZE,
     CODE_WL,
@@ -31,12 +31,6 @@ from models.experimental.bevformer.model_config import (
 )
 from models.experimental.bevformer.tt.tt_common import layer_norm, signpost
 from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
-
-# The dtypes of the head's outputs. Class logits: in bfloat16 many of the num_query * num_classes
-# scores tie, and the coder's top-k order departs from the reference's. Box predictions: the
-# decoder's, as their centers are the refined reference points.
-SCORE_DTYPE = ttnn.float32
-BOX_DTYPE = GRID_DTYPE
 
 # __call__ turns the decoder's centers-first box codes into the box code layout by one concat:
 # cx cy | w l | cz | h onward, which needs this order on both sides.
@@ -78,7 +72,7 @@ class TtBEVFormerHead:
         """``bev_embed`` is ``(bs, bev_h * bev_w, embed_dims)``.
 
         Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)``
-        (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``GRID_DTYPE``):
+        (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``BOX_DTYPE``):
         ``model_config.py``'s box code layout with cx, cy and cz in metres.
         """
         signpost(header="TTNN Head Forward Start")
