@@ -14,7 +14,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from common import RUN_COMPLETE_FILE, auto_py_command, reset_hardware, run_settings, run_status, shell_join
+from common import (
+    DEFAULT_TRIM_MS,
+    RUN_COMPLETE_FILE,
+    auto_py_command,
+    exit_reason,
+    reset_hardware,
+    run_settings,
+    run_status,
+    shell_join,
+)
 
 
 @dataclass
@@ -136,8 +145,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--trim-ms",
         type=float,
-        default=6.0,
-        help="Trim applied to each interval side in ms. Default: 6.0",
+        default=DEFAULT_TRIM_MS,
+        help=f"Trim applied to each side of every interval, in ms. Default: {DEFAULT_TRIM_MS}",
     )
     ap.add_argument(
         "--tt-smi",
@@ -205,7 +214,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[RUN] {shell_join(cmd)}", flush=True)
         rc = subprocess.run(cmd).returncode
         if rc != 0:
-            print(f"ERROR: Run '{spec.subdir}' failed with return code {rc}. Aborting.", file=sys.stderr)
+            print(f"ERROR: Run '{spec.subdir}' failed with return code {exit_reason(rc)}. Aborting.", file=sys.stderr)
             return rc
 
     # --- Comparisons: cheap, so redo them whenever their whole group is complete ---

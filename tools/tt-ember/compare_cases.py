@@ -112,13 +112,14 @@ def grouped_bar_chart(
     ylabel: str,
     out_path: Path,
     dpi: int,
+    figsize: Optional[Tuple[float, float]] = None,
 ) -> None:
     n_cases = len(cases)
     n_grids = len(grid_order)
     x = np.arange(n_grids)
     width = 0.8 / max(n_cases, 1)
 
-    fig, ax = plt.subplots(figsize=(max(10, n_grids * 1.0), 6))
+    fig, ax = plt.subplots(figsize=figsize or (max(10, n_grids * 1.0), 6))
     for i, (name, label) in enumerate(cases):
         vals = [values_by_case[name].get(grid, float("nan")) for grid in grid_order]
         offset = (i - (n_cases - 1) / 2) * width

@@ -105,9 +105,11 @@ Results land in `./out/prefill_1024_2048_2048_160/` (see [Output Structure](#out
 
 Manages the full measurement lifecycle: starts the telemetry binary as a background subprocess, runs the application in the foreground while capturing its stdout to `summary.txt`, waits for a 10-second cool-down, and invokes `parser.py` on the captured data. All output is written to a structured directory under `--output-root`.
 
+It returns the app's or the parser's exit code when one of them fails, and its own codes otherwise: 20 (telemetry exited right after starting), 21 (no telemetry file), 22 (the app wrote no output), 23 (telemetry exited before the run ended). The sweeps print what each of these and the parser's 10 and 11 mean.
+
 ### `parser.py` — Analysis Engine
 
-Can be run standalone against a previously captured telemetry log. Parses raw voltage, current, and power samples, bins them into time slots, computes per-interval metrics, writes a 29-column CSV, and produces 13 matplotlib figures (with `--program-log`; without it, only `telemetry_overview.png`). It exits with code 10 when the outputs are written but a run is unusable (a grid with no telemetry samples, or no idle pause to measure the base current in), and refuses telemetry from several devices unless `--device-id` says which one to use.
+Can be run standalone against a previously captured telemetry log. Parses raw voltage, current, and power samples, bins them into time slots, computes per-interval metrics, writes a 29-column CSV, and produces 13 matplotlib figures (with `--program-log`; without it, only `telemetry_overview.png`). It exits with code 10 when the outputs are written but a run is unusable (a grid with no telemetry samples, or no idle pause to measure the base current in), and with code 11 for telemetry from several devices unless `--device-id` says which one to use.
 
 ```bash
 python3 parser.py \
@@ -224,7 +226,9 @@ Notes:
   pJ/FLOP charts are skipped, since the FLOP count then depends on the grid.
 - A run is skipped once it is complete: `auto.py` writes `run_complete.json` into the run
   directory only after the parser succeeded, recording the app arguments, the workload
-  environment variables and the telemetry settings. A run made with different settings stops
+  environment variables (including `TT_METAL_DEVICE_PROFILER`, `TT_METAL_WATCHER` and
+  `TT_METAL_DPRINT_CORES`) and the telemetry settings. The energy charts read only runs
+  recorded with this sweep's settings. A run made with different settings stops
   the sweep instead of being mixed in; use another `--output-root`, or `--force` to re-run.
 - Pass `--dry-run` to print every `tt-smi -r` / `auto.py` / `compare_cases.py` command that
   would run, without touching the hardware or writing anything — useful for checking the plan
@@ -294,9 +298,9 @@ The correlation between power measurements and program intervals relies entirely
 
 **Average current** (`avg_current_a`) is the arithmetic mean of all TDC samples in the window, representing the typical sustained load. **Peak current** (`peak_current_a`) is the maximum observed TDC value, relevant for power delivery dimensioning and protection circuitry ratings.
 
-**Dynamic average current** (`dynamic_avg_current_a`) and **dynamic peak current** (`dynamic_peak_current_a`) subtract the base current from their raw counterparts, isolating the current attributable exclusively to computation. A floor of zero is enforced against measurement noise.
+**Dynamic average current** (`dynamic_avg_current_a`) and **dynamic peak current** (`dynamic_peak_current_a`) subtract the base current from their raw counterparts, isolating the current attributable exclusively to computation. In the default `updated` mode the sign is kept, so a case that draws less than the idle baseline shows a negative value; `legacy` floors it at zero.
 
-**Total charge** (`charge_avg_mah`, `charge_peak_mah`) integrates average and peak current over the window duration, converted to milliampere-hours. These capture the full device consumption including baseline. **Dynamic charge** (`dynamic_charge_avg_mah`, `dynamic_charge_peak_mah`) applies the same integration to the baseline-subtracted currents, representing charge consumed purely by the computation. The figure `q_compute_vs_cores` plots dynamic peak charge across the grid sweep against an ideal linear scaling reference. The reference assumes work grows with the core count, so it only applies in fixed-per-core mode; there, deviation from it points to bandwidth saturation, interconnect contention, or thermal throttling.
+**Total charge** (`charge_avg_mah`, `charge_peak_mah`) integrates average and peak current over the window duration, converted to milliampere-hours. These capture the full device consumption including baseline. **Dynamic charge** (`dynamic_charge_avg_mah`, `dynamic_charge_peak_mah`) applies the same integration to the baseline-subtracted currents, representing charge consumed purely by the computation. The figure `q_compute_vs_cores` plots dynamic peak charge across the grid sweep against an ideal linear scaling reference. The reference assumes work grows with the core count, so it is drawn only in fixed-per-core mode (the app prints `Mode: FIXED`); there, deviation from it points to bandwidth saturation, interconnect contention, or thermal throttling.
 
 **Energy** is computed by two independent methods. TDP-based energy (`energy_j_tdp`, `energy_mwh_tdp`) uses the power value reported directly by the hardware sensor. V×I energy (`energy_j_vi`, `energy_mwh_vi`) computes instantaneous power from measured voltage and current per sample. The TDP signal is internally filtered and may be quantized by firmware; V×I is physically more precise but more susceptible to combined sensor noise. A consistent gap between the two across grid sizes can indicate a calibration offset in one of the sensors.
 

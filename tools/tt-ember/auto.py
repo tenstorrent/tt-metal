@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -17,14 +16,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from common import RUN_COMPLETE_FILE, run_settings, shell_join, write_run_complete
+from common import (
+    DEFAULT_TRIM_MS,
+    EXIT_SUMMARY_MISSING,
+    EXIT_TELEMETRY_DIED,
+    EXIT_TELEMETRY_FILE_MISSING,
+    EXIT_TELEMETRY_START,
+    LONG_MATMUL_APP,
+    RUN_COMPLETE_FILE,
+    long_matmul_args,
+    run_settings,
+    shell_join,
+    subdir_name,
+    write_run_complete,
+)
 
 # Idle time after the app finishes and before telemetry stops, so the last grid's tail and the
 # return to idle are captured.
 POST_RUN_IDLE_S = 10
 
-# A run directory name: parser.py accepts only these characters.
-SUBDIR_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+# How long telemetry gets to start before auto.py checks that it is still running.
+TELEMETRY_START_GRACE_S = 1.0
 
 
 @dataclass
@@ -225,7 +237,8 @@ def run_workflow(
 ) -> int:
     paths = build_run_paths(output_root, subdir)
     # A previous attempt's results must not survive into this one; RUN_COMPLETE_FILE is written
-    # again only if this run gets all the way through the parser.
+    # again only if this run gets all the way through the parser. The parser clears its own
+    # kernel outputs.
     for stale in (paths.run_dir / RUN_COMPLETE_FILE, paths.run_dir / "program_intervals.csv"):
         stale.unlink(missing_ok=True)
 
@@ -282,11 +295,11 @@ def run_workflow(
                 stderr=log_f,
             )
 
-            time.sleep(1.0)
+            time.sleep(TELEMETRY_START_GRACE_S)
 
             if telemetry_proc.poll() is not None:
                 log("ERROR: Telemetry exited immediately.")
-                return 10
+                return EXIT_TELEMETRY_START
 
             with paths.summary_file.open("w", encoding="utf-8") as summary_f:
                 if device_profiler_csv.exists():
@@ -324,18 +337,18 @@ def run_workflow(
 
             if telemetry_proc.poll() is not None:
                 log(f"ERROR: Telemetry exited during the run (return code {telemetry_proc.returncode}).")
-                return 13
+                return EXIT_TELEMETRY_DIED
 
             log("Stopping telemetry...")
             stop_processes([telemetry_proc])
 
-            if not wait_for_file_to_appear(paths.telemetry_file, timeout_s=5.0):
+            if not wait_for_file_to_appear(paths.telemetry_file):
                 log("ERROR: Telemetry output file was not created.")
-                return 11
+                return EXIT_TELEMETRY_FILE_MISSING
 
             if not paths.summary_file.exists() or paths.summary_file.stat().st_size == 0:
                 log("ERROR: Summary output file is missing or empty.")
-                return 12
+                return EXIT_SUMMARY_MISSING
 
             if device_profiler_csv.exists():
                 log(f"Device profiler csv found: {device_profiler_csv}")
@@ -380,12 +393,6 @@ def run_workflow(
 
         finally:
             stop_processes([app_proc, telemetry_proc])
-
-
-def subdir_name(text: str) -> str:
-    if not SUBDIR_PATTERN.match(text) or text in (".", ".."):
-        raise argparse.ArgumentTypeError(f"must be a single name of letters, digits, '_', '.' or '-', got {text!r}")
-    return text
 
 
 def positive_int(text: str) -> int:
@@ -485,8 +492,8 @@ def main() -> int:
     parser.add_argument(
         "--trim-ms",
         type=float,
-        default=6.0,
-        help="trim-ms passed to the parser. Default: 6.0",
+        default=DEFAULT_TRIM_MS,
+        help=f"Trim applied to each side of every interval, in ms. Default: {DEFAULT_TRIM_MS}",
     )
 
     parser.add_argument(
@@ -552,25 +559,26 @@ def main() -> int:
     telemetry_workdir = args.telemetry_workdir.expanduser().resolve() if args.telemetry_workdir else tt_metal_root
     app_workdir = args.app_workdir.expanduser().resolve() if args.app_workdir else tt_metal_root
 
-    profiler_dir = os.environ.get("TT_METAL_PROFILER_DIR")
-    device_profiler_csv = (
-        args.device_profiler_csv.expanduser().resolve()
-        if args.device_profiler_csv
-        else (Path(profiler_dir) if profiler_dir else tt_metal_root / "generated" / "profiler")
-        / ".logs"
-        / "profile_log_device.csv"
-    )
+    if args.device_profiler_csv:
+        device_profiler_csv = args.device_profiler_csv.expanduser().resolve()
+    else:
+        # tt-metal uses a relative TT_METAL_PROFILER_DIR as is, so it is relative to the app's cwd.
+        profiler_dir = os.environ.get("TT_METAL_PROFILER_DIR")
+        base = app_workdir / profiler_dir if profiler_dir else tt_metal_root / "generated" / "profiler"
+        device_profiler_csv = base / ".logs" / "profile_log_device.csv"
 
     app_args = list(args.app_args)
-    if args.app_exe.name == "metal_example_long_matmul":
+    if args.app_exe.name == LONG_MATMUL_APP:
         # Without M N K iterations long_matmul does a one-grid smoke run, which has no idle pause
         # to measure the base current in.
         if args.fixed_blocks_per_core is not None:
             if len(app_args) != 4:
                 parser.error("--fixed-blocks-per-core needs exactly 4 --app-args (M N K iterations)")
             app_args.append(str(args.fixed_blocks_per_core))
-        if len(app_args) not in (4, 5):
-            parser.error("long_matmul needs --app-args M N K iterations [fixed_blocks_per_core]")
+        try:
+            long_matmul_args(app_args)
+        except ValueError as e:
+            parser.error(str(e))
     elif args.fixed_blocks_per_core is not None:
         parser.error("--fixed-blocks-per-core only applies to long_matmul")
 

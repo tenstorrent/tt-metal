@@ -21,13 +21,20 @@ from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 
+from common import DEFAULT_TRIM_MS, EXIT_MULTIPLE_DEVICES, EXIT_RUN_INCOMPLETE, subdir_name
+
 RE_TS = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)")
 RE_DEV = re.compile(r"\b(?:Device|Chip)\s+ID\s+(?P<dev>\d+)\b")
-# Newer tt-umd telemetry reports TDP as "<value>/<limit> W" (e.g. "TDP 16/150 W"); the limit is
-# a static budget, not a measurement, so it is matched but discarded. TDC/VCORE remain bare values.
+# Newer tt-umd telemetry reports TDP as "<value>/<limit> W" (e.g. "TDP 16/150 W"), or
+# "<value>/N/A W" when the firmware does not report a limit. The limit is a static budget, not a
+# measurement, so it is matched but discarded. TDC/VCORE remain bare values.
 RE_METRIC = re.compile(
-    r"\b(?P<key>TDP|TDC|VCORE)\s+(?P<val>\d+(?:\.\d+)?)(?:\s*/\s*\d+(?:\.\d+)?)?\s*(?P<unit>W|A|mV)\b"
+    r"\b(?P<key>TDP|TDC|VCORE)\s+(?P<val>\d+(?:\.\d+)?)(?:\s*/\s*(?:\d+(?:\.\d+)?|N/A))?\s*(?P<unit>W|A|mV)\b"
 )
+
+# 1 mAh = 3.6 A*s and 1 mWh = 3.6 J (3600 s/h / 1000).
+AS_PER_MAH = 3.6
+J_PER_MWH = 3.6
 
 RE_PROGRAM_ROW = re.compile(
     r"^\s*"
@@ -53,10 +60,6 @@ RE_KERNEL_ZONE = re.compile(r"^(?P<kernel>READER|COMPUTE|WRITER)_KERNEL_(?P<edge
 # waiting on another kernel; TRANSFER/COMPUTE (grouped as "active" below) = actual NoC transfer
 # or math/pack work. There's no on-device OVERHEAD marker (see compute_kernel_utilization_rows
 # for why) -- it's derived on the host instead, as lifetime_s - wait_s - active_s.
-# 1 mAh = 3.6 A*s and 1 mWh = 3.6 J (3600 s/h / 1000).
-AS_PER_MAH = 3.6
-J_PER_MWH = 3.6
-
 RE_KERNEL_CYCLES = re.compile(r"^(?P<kernel>READER|COMPUTE|WRITER)_(?P<metric>WAIT|TRANSFER|COMPUTE)_CYCLES$")
 
 
@@ -93,24 +96,6 @@ class DeviceMarker:
     cycle: int
     zone_name: str
     data: int = 0
-
-
-def validate_subdir_name(subdir: str) -> str:
-    """
-    Validate output subdirectory name.
-
-    Only allow simple directory names made of letters, numbers, '_', '-', and '.'.
-    """
-    if not subdir:
-        raise argparse.ArgumentTypeError("Subdirectory name must not be empty.")
-
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+", subdir):
-        raise argparse.ArgumentTypeError("Invalid --subdir value. Allowed characters: letters, numbers, '_', '-', '.'.")
-
-    if subdir in {".", ".."}:
-        raise argparse.ArgumentTypeError("Invalid --subdir value.")
-
-    return subdir
 
 
 def parse_line(line: str) -> Optional[Sample]:
@@ -713,23 +698,22 @@ def save_kernel_utilization_csv(rows: List[Dict[str, object]], csv_path: Path) -
 _COMPUTE_RISC_LABELS = {"TRISC_0": "Unpack", "TRISC_1": "Math", "TRISC_2": "Pack"}
 
 
+def grids_in_order(rows: List[Dict[str, object]]) -> List[str]:
+    """The distinct grids of rows, in first-seen order."""
+    return list(dict.fromkeys(str(r["grid"]) for r in rows))
+
+
 def aggregate_kernel_utilization(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
     """
     Average wait_pct/active_pct across cores, per (grid, kernel, risc), preserving grid and
     series order. Grouping includes `risc` (not just kernel) because the compute kernel runs
     independently on TRISC0/1/2 (unpack/math/pack) -- these do fundamentally different work
     (only TRISC1/math actually calls matmul_tiles; TRISC0 mostly waits on input tiles; TRISC2
-    mostly waits on the FPU), so averaging all three together would blend three unrelated
+    waits for math to finish or for output CB space, i.e. mostly on the writer), so averaging all three together would blend three unrelated
     profiles into one number that represents none of them. Reader/writer only ever have one
     risc each, so this is a no-op change for those two.
     """
-    grid_order: List[str] = []
-    seen_grids = set()
-    for r in rows:
-        grid = str(r["grid"])
-        if grid not in seen_grids:
-            seen_grids.add(grid)
-            grid_order.append(grid)
+    grid_order = grids_in_order(rows)
 
     series_keys: List[Tuple[str, str]] = []
     seen_series = set()
@@ -782,13 +766,7 @@ def plot_kernel_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: in
         "WRITER": "output tile not ready",
     }
 
-    series_keys: List[Tuple[str, str]] = []
-    seen = set()
-    for r in agg:
-        key = (str(r["kernel"]), str(r["risc"]))
-        if key not in seen:
-            seen.add(key)
-            series_keys.append(key)
+    series_keys = list(dict.fromkeys((str(r["kernel"]), str(r["risc"])) for r in agg))
 
     for kernel, risc in series_keys:
         series_rows = [r for r in agg if r["kernel"] == kernel and r["risc"] == risc and r["core_count"] > 0]
@@ -851,17 +829,11 @@ _COMBINED_RESOURCES = [
 
 def aggregate_combined_utilization(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
     """
-    Average active_s/wait_s/active_pct/wait_pct across cores, per (grid, resource), for the
-    three pipeline stages that make up "where did the time go": Reader (NoC read), Compute
+    Average active/overhead/wait (seconds and %) and the kernel lifetime across cores, per
+    (grid, resource), for the three pipeline stages that make up "where did the time go": Reader (NoC read), Compute
     (TRISC1/math -- the only role that actually runs matmul_tiles), Writer (NoC write).
     """
-    grid_order: List[str] = []
-    seen_grids = set()
-    for r in rows:
-        grid = str(r["grid"])
-        if grid not in seen_grids:
-            seen_grids.add(grid)
-            grid_order.append(grid)
+    grid_order = grids_in_order(rows)
 
     agg: List[Dict[str, object]] = []
     for grid in grid_order:
@@ -899,8 +871,8 @@ def aggregate_combined_utilization(rows: List[Dict[str, object]]) -> List[Dict[s
 def plot_combined_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: int) -> List[Path]:
     """
     Two grouped+stacked bar charts (percentage and absolute seconds), each showing all three
-    pipeline stages (Reader / Compute[TRISC1-math] / Writer) side by side per grid, active vs
-    wait. "Wait" here means idle, blocked on the *neighboring* pipeline stage (reader waiting
+    pipeline stages (Reader / Compute[TRISC1-math] / Writer) side by side per grid, each a stack
+    of active + overhead + wait. "Wait" here means idle, blocked on the *neighboring* pipeline stage (reader waiting
     for compute to free up circular-buffer space, compute waiting on reader, writer waiting on
     compute) -- NOT wasted/lost time. A resource with high wait% just means it's faster than
     whichever stage is the real bottleneck for this workload; a resource with active% close to
@@ -909,13 +881,7 @@ def plot_combined_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: 
     fig_dir.mkdir(parents=True, exist_ok=True)
     out_files: List[Path] = []
 
-    grid_order: List[str] = []
-    seen_grids = set()
-    for r in agg:
-        grid = str(r["grid"])
-        if grid not in seen_grids:
-            seen_grids.add(grid)
-            grid_order.append(grid)
+    grid_order = grids_in_order(agg)
 
     resource_labels = [label for _, _, label in _COMBINED_RESOURCES]
     active_colors = {"Reader": "tab:blue", "Compute": "tab:green", "Writer": "tab:orange"}
@@ -945,11 +911,13 @@ def plot_combined_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: 
     ):
         # The seconds chart adds a 4th "Run duration" reference bar per grid (the actual
         # wall-clock length of that run) -- since reader/compute/writer run concurrently, none
-        # of their active+wait stacks should exceed it. The percentage chart doesn't need this:
+        # of their stacks should exceed it. The percentage chart doesn't need this:
         # each resource's own stack is already normalized to its own 100%.
         series_labels = resource_labels + (["Run duration"] if show_duration_ref else [])
         n_series = len(series_labels)
         bar_width = 0.8 / n_series
+        # Slightly narrower than the slot, so neighbouring bars don't touch; stacked segments share it.
+        drawn_width = bar_width * 0.95
 
         fig, ax = plt.subplots(figsize=(14, 7))
 
@@ -966,7 +934,7 @@ def plot_combined_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: 
                         if find_row(grid, r) and np.isfinite(find_row(grid, r)["avg_lifetime_s"])
                     ]
                     duration_vals.append(max(lifetimes) if lifetimes else 0.0)
-                ax.bar(xs, duration_vals, width=bar_width * 0.95, color=duration_color, label="Run duration")
+                ax.bar(xs, duration_vals, width=drawn_width, color=duration_color, label="Run duration")
                 continue
 
             active_vals = []
@@ -984,11 +952,11 @@ def plot_combined_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: 
             overhead_base = list(active_vals)
             wait_base = [a + o for a, o in zip(active_vals, overhead_vals)]
 
-            ax.bar(xs, active_vals, width=bar_width * 0.95, color=active_colors[label], label=f"{label} active")
+            ax.bar(xs, active_vals, width=drawn_width, color=active_colors[label], label=f"{label} active")
             ax.bar(
                 xs,
                 overhead_vals,
-                width=bar_width * 0.95,
+                width=drawn_width,
                 bottom=overhead_base,
                 color="tab:olive",
                 label=f"{label} overhead",
@@ -996,7 +964,7 @@ def plot_combined_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: 
             ax.bar(
                 xs,
                 wait_vals,
-                width=bar_width * 0.95,
+                width=drawn_width,
                 bottom=wait_base,
                 color=wait_color,
                 hatch="//",
@@ -1010,7 +978,7 @@ def plot_combined_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: 
         ax.set_ylabel(ylabel)
         if y_max is not None:
             ax.set_ylim(0, y_max)
-        ax.set_title("Reader / Compute (math) / Writer: active vs wait, per grid")
+        ax.set_title("Reader / Compute (math) / Writer: active + overhead + wait, per grid")
         ax.legend(loc="upper right", ncol=5 if show_duration_ref else 3, fontsize=8)
         ax.grid(True, axis="y")
 
@@ -1604,11 +1572,23 @@ def plot_compute_charge_vs_cores(
     plt.close(fig)
 
 
+# The app prints "Mode: FIXED ..." or "Mode: SPLIT ..." in its banner.
+RE_FIXED_MODE = re.compile(r"^\s*Mode:\s+FIXED\b", re.MULTILINE)
+
+
+def read_fixed_mode(program_log: Path) -> bool:
+    return bool(RE_FIXED_MODE.search(program_log.read_text(encoding="utf-8", errors="replace")))
+
+
 def plot_program_interval_figures(
     results: List[Dict[str, object]],
     fig_dir: Path,
     dpi: int,
+    fixed_mode: bool,
 ) -> List[Path]:
+    """fixed_mode: the app gave every core the same work (summary.txt says "Mode: FIXED"), so
+    total work grows with the core count and q_compute_vs_cores gets an ideal-scaling line. In
+    split mode the total work is the same on every grid, so that line would mean nothing."""
     out_files: List[Path] = []
 
     valid = [r for r in results if str(r["grid"]) != ""]
@@ -1737,6 +1717,7 @@ def plot_program_interval_figures(
                 title="Q_compute vs Grid Size",
                 out_path=p,
                 dpi=dpi,
+                show_ideal=fixed_mode,
             ),
         ),
         (
@@ -1816,7 +1797,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--subdir",
         required=True,
-        type=validate_subdir_name,
+        type=subdir_name,
         help="Name of the run subdirectory inside the output root.",
     )
     ap.add_argument("--dpi", type=int, default=150)
@@ -1841,8 +1822,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--trim-ms",
         type=float,
-        default=6.0,
-        help="Trim each interval by this many ms on both sides when --program-log is used (default 6.0)",
+        default=DEFAULT_TRIM_MS,
+        help=f"Trim each interval by this many ms on both sides when --program-log is used (default {DEFAULT_TRIM_MS})",
     )
     ap.add_argument(
         "--mode",
@@ -1919,6 +1900,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     fig_dir.mkdir(parents=True, exist_ok=True)
 
+    # The kernel outputs are written only when a profiler CSV is given, so an earlier run's would
+    # otherwise survive a re-run without one and sit next to this run's results.
+    # A re-parse may read its profiler CSV from the run directory itself, so that one is kept.
+    keep = args.device_profiler_csv.resolve() if args.device_profiler_csv else None
+    for stale in (
+        run_dir / "kernel_intervals.csv",
+        run_dir / "kernel_utilization.csv",
+        run_dir / "profile_log_device.csv",
+    ):
+        if stale.resolve() != keep:
+            stale.unlink(missing_ok=True)
+    shutil.rmtree(run_dir / KERNEL_FIGURES_DIR, ignore_errors=True)
+
     copied_input = copy_input_file(args.input, run_dir)
     copied_program_log: Optional[Path] = None
     if args.program_log is not None:
@@ -1949,7 +1943,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "the interval metrics use only the device the workload ran on.",
             file=sys.stderr,
         )
-        return 11
+        return EXIT_MULTIPLE_DEVICES
 
     t, dev_ids, v_v, i_a, p_w = build_timeseries(slots, devices)
     if t.size == 0:
@@ -2010,6 +2004,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             results=interval_results,
             fig_dir=fig_dir,
             dpi=args.dpi,
+            fixed_mode=read_fixed_mode(args.program_log),
         )
 
         for fig_path in figure_paths:
@@ -2066,7 +2061,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Outputs are written, but something the analysis needs was missing; a non-zero exit
         # stops auto.py from marking the run as complete.
         print("ERROR: the run is incomplete (see the warnings above).", file=sys.stderr)
-        return 10
+        return EXIT_RUN_INCOMPLETE
     return 0
 
 

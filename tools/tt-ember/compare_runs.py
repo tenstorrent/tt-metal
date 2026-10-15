@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Compare power/performance metrics across multiple simulation runs.
+"""Compare power/performance metrics across multiple measured runs.
 
 Usage:
     # All runs in out/
@@ -74,25 +74,12 @@ def grid_union(runs: dict[str, pd.DataFrame]) -> list[str]:
     return sorted(grids, key=lambda g: (cores(g), g))
 
 
-def plot_metric(runs: dict[str, pd.DataFrame], column: str, ylabel: str, title: str, out_path: Path, dpi: int) -> None:
-    """One PNG: all runs overlaid on the same axes, x = grid string."""
+def x_positions(df: pd.DataFrame, all_grids: list[str]) -> list[int]:
+    """Each row's position on the shared grid axis."""
+    return [all_grids.index(str(g)) for g in df["grid"]]
 
-    all_grids = grid_union(runs)
 
-    fig, ax = plt.subplots(figsize=(14, 6))
-
-    for run_name, df in runs.items():
-        df = df.copy()
-        df["grid"] = df["grid"].astype(str)
-
-        grids = df["grid"].tolist()
-        values = df[column].tolist()
-
-        # Map grid → position in the shared x-axis
-        x_pos = [all_grids.index(g) for g in grids]
-
-        ax.plot(x_pos, values, marker="o", label=run_name)
-
+def finish_and_save(fig, ax, all_grids: list[str], ylabel: str, title: str, out_path: Path, dpi: int) -> None:
     ax.set_xticks(range(len(all_grids)))
     ax.set_xticklabels(all_grids, rotation=45, ha="right")
     ax.set_xlabel("Grid size")
@@ -108,6 +95,19 @@ def plot_metric(runs: dict[str, pd.DataFrame], column: str, ylabel: str, title: 
     print(f"  Saved: {out_path}")
 
 
+def plot_metric(runs: dict[str, pd.DataFrame], column: str, ylabel: str, title: str, out_path: Path, dpi: int) -> None:
+    """One PNG: all runs overlaid on the same axes, x = grid string."""
+
+    all_grids = grid_union(runs)
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    for run_name, df in runs.items():
+        ax.plot(x_positions(df, all_grids), df[column].tolist(), marker="o", label=run_name)
+
+    finish_and_save(fig, ax, all_grids, ylabel, title, out_path, dpi)
+
+
 def plot_overcompute(runs: dict[str, pd.DataFrame], column: str, out_path: Path, dpi: int) -> None:
     """Plot (ideal - measured) for each run on one graph."""
 
@@ -118,9 +118,6 @@ def plot_overcompute(runs: dict[str, pd.DataFrame], column: str, out_path: Path,
     for run_name, df in runs.items():
         if column not in df.columns:
             continue
-
-        df = df.copy()
-        df["grid"] = df["grid"].astype(str)
 
         cores = df["cores"].to_numpy(dtype=float)
         values = df[column].to_numpy(dtype=float)
@@ -137,23 +134,18 @@ def plot_overcompute(runs: dict[str, pd.DataFrame], column: str, out_path: Path,
         ideal = y0 * (cores / c0)
         overcompute = ideal - values
 
-        x_pos = [all_grids.index(g) for g in df["grid"].tolist()]
-        ax.plot(x_pos, overcompute, marker="o", label=run_name)
+        ax.plot(x_positions(df, all_grids), overcompute, marker="o", label=run_name)
 
     ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
-    ax.set_xticks(range(len(all_grids)))
-    ax.set_xticklabels(all_grids, rotation=45, ha="right")
-    ax.set_xlabel("Grid size")
-    ax.set_ylabel("Ideal − Measured [mAh]")
-    ax.set_title("Overcompute (gap between ideal and measured Q_compute) vs Grid Size")
-    ax.grid(True)
-    ax.legend(loc="best")
-
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
-    print(f"  Saved: {out_path}")
+    finish_and_save(
+        fig,
+        ax,
+        all_grids,
+        "Ideal − Measured [mAh]",
+        "Overcompute (gap between ideal and measured Q_compute) vs Grid Size",
+        out_path,
+        dpi,
+    )
 
 
 def plot_overcompute_percentage(runs: dict[str, pd.DataFrame], column: str, out_path: Path, dpi: int) -> None:
@@ -166,9 +158,6 @@ def plot_overcompute_percentage(runs: dict[str, pd.DataFrame], column: str, out_
     for run_name, df in runs.items():
         if column not in df.columns:
             continue
-
-        df = df.copy()
-        df["grid"] = df["grid"].astype(str)
 
         cores = df["cores"].to_numpy(dtype=float)
         values = df[column].to_numpy(dtype=float)
@@ -185,23 +174,12 @@ def plot_overcompute_percentage(runs: dict[str, pd.DataFrame], column: str, out_
         ideal = y0 * (cores / c0)
         ratio = ideal / values
 
-        x_pos = [all_grids.index(g) for g in df["grid"].tolist()]
-        ax.plot(x_pos, ratio, marker="o", label=run_name)
+        ax.plot(x_positions(df, all_grids), ratio, marker="o", label=run_name)
 
     ax.axhline(1.0, color="black", linewidth=0.8, linestyle="--", label="Ideal (ratio = 1)")
-    ax.set_xticks(range(len(all_grids)))
-    ax.set_xticklabels(all_grids, rotation=45, ha="right")
-    ax.set_xlabel("Grid size")
-    ax.set_ylabel("Ideal / Measured")
-    ax.set_title("Overcompute Percentage (Ideal / Measured) vs Grid Size")
-    ax.grid(True)
-    ax.legend(loc="best")
-
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
-    print(f"  Saved: {out_path}")
+    finish_and_save(
+        fig, ax, all_grids, "Ideal / Measured", "Overcompute Percentage (Ideal / Measured) vs Grid Size", out_path, dpi
+    )
 
 
 def plot_percentage_change(
@@ -217,9 +195,6 @@ def plot_percentage_change(
         if column not in df.columns:
             continue
 
-        df = df.copy()
-        df["grid"] = df["grid"].astype(str)
-
         values = df[column].to_numpy(dtype=float)
 
         finite = np.where(np.isfinite(values) & (values != 0))[0]
@@ -229,23 +204,10 @@ def plot_percentage_change(
         y0 = values[int(finite[0])]
         pct = (values - y0) / y0 * 100.0
 
-        x_pos = [all_grids.index(g) for g in df["grid"].tolist()]
-        ax.plot(x_pos, pct, marker="o", label=run_name)
+        ax.plot(x_positions(df, all_grids), pct, marker="o", label=run_name)
 
     ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
-    ax.set_xticks(range(len(all_grids)))
-    ax.set_xticklabels(all_grids, rotation=45, ha="right")
-    ax.set_xlabel("Grid size")
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.grid(True)
-    ax.legend(loc="best")
-
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=dpi)
-    plt.close(fig)
-    print(f"  Saved: {out_path}")
+    finish_and_save(fig, ax, all_grids, ylabel, title, out_path, dpi)
 
 
 def main() -> int:
