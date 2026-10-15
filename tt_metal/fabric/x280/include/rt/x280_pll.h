@@ -55,38 +55,4 @@ static uint32_t __attribute__((unused)) x280_measure_pll_khz(void) {
     return (uint32_t)(((c1 - c0) * 50000ULL) / dtick);
 }
 
-/* ---------------------------------------------------------------------------
- * Host-supplied clock, with a fallback.
- * ---------------------------------------------------------------------------
- * A firmware that does not measure the clock reads it from a mailbox the host
- * writes before releasing reset, and echoes it into META[0] so the host can
- * check the round-trip.
- *
- * The fallback is a wart: if the mailbox looks wrong the firmware invents a
- * clock, and the host then trusts META[0], so a mis-set mailbox yields
- * plausible-but-wrong bandwidth numbers rather than an error. Prefer
- * x280_measure_pll_khz() in new code.
- * ------------------------------------------------------------------------- */
-#define X280_PLL_FALLBACK_MHZ 1750
-
-/* A statement expression, not a static inline function: an inlined function
- * here costs one extra branch in the caller's epilogue, and this helper needs
- * to be a pure textual substitution. */
-#define X280_PLL_FROM_MAILBOX_OR(mbox, fallback_mhz) \
-    __extension__({                                  \
-        uint64_t _x280_mhz = *(mbox);                \
-        if (_x280_mhz == 0 || _x280_mhz > 10000)     \
-            _x280_mhz = (fallback_mhz);              \
-        _x280_mhz;                                   \
-    })
-
-/* The common case: the driver writes the mailbox, so the fallback never fires.
- *
- * The fallback is per-firmware because it is NOT always dead. A firmware driven
- * by more than one host may have one driver that writes the mailbox and
- * another that does not, and the second silently depends on the fallback value
- * matching the clock it programmed. Spell it out at the call
- * site rather than assuming 1750. */
-#define X280_PLL_FROM_MAILBOX(mbox) X280_PLL_FROM_MAILBOX_OR(mbox, X280_PLL_FALLBACK_MHZ)
-
 #endif /* X280_RT_PLL_H */
