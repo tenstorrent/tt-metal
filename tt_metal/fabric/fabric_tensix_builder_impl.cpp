@@ -1089,7 +1089,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
 
     // Add bubble flow control flag, then upstream routers count and sync address
     // Order must match kernel expectations: bubble_flow_control, num_upstream_routers, sync_address
-    ct_args.push_back(fabric_context.is_bubble_flow_control_enabled(local_fabric_node_id_));
+    ct_args.push_back(fabric_context.is_bubble_flow_control_enabled());
     ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));
     ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);
 

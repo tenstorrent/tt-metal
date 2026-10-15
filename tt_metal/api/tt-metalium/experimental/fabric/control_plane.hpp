@@ -641,6 +641,12 @@ private:
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
 
+    // In the per-rank process model each rank owns a single mesh, so this process should build fabric for
+    // that mesh's resolved config, not the raw process-wide override. Adopts it into fabric_config_ once
+    // the local mesh binding is known. No-op when the rank owns multiple meshes or the MGD declares no
+    // explicit per-mesh config (resolves back to the process-wide override).
+    void adopt_local_mesh_fabric_config();
+
     // Top level function responsible for generating intermesh connectivity
     // based on the MGD and Physical State of the system.
     // This function will annotate physical connections between physical meshes (exit nodes)
