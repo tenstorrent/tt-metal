@@ -16,7 +16,6 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PerfRunType,
     Transpose,
     UnpackerEngine,
@@ -38,7 +37,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_TRANSPOSE_FACES,
     NUM_BLOCKS,
@@ -188,14 +186,6 @@ def generate_qsr_transpose_dest_combinations(
     return combinations
 
 
-def transpose_dest_implied_math_formats(*, is_perf=False):
-    return (
-        [ImpliedMathFormat.Yes]
-        if is_perf
-        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-    )
-
-
 TRANSPOSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -221,13 +211,11 @@ PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
     formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
         TRANSPOSE_DEST_FORMATS
     ),
-    implied_math_format=lambda: transpose_dest_implied_math_formats(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_transpose_dest_quasar(
     formats_dest_acc_sync_transpose_dims,
-    implied_math_format,
     run_types,
     loop_factor,
     *,
@@ -337,7 +325,6 @@ def test_transpose_dest_quasar(
         "test_name": "sources/quasar/transpose_dest_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(data_copy_type),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA

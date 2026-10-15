@@ -151,7 +151,7 @@ def run_model(
     engaged on the perf (non-PCC) path — a full-tensor PCC check would (correctly)
     mismatch on the skipped padded rows, and padded-row correctness is covered by the
     dedicated grouped_topk / routing_setup tests. HOST_ALL gates ignore padding entirely
-    (TtMoe falls back to padding_config=None for non-DEVICE_FP32 gates).
+    (TtMoe builds a padding_config only for DEVICE_FP32 and GPT_DEVICE gates).
 
     ``routed_activation`` selects the fused routed-expert kernel's activation and ``shared_activation``
     the shared expert's; each is mirrored onto the matching torch reference. They are separate knobs
@@ -182,7 +182,7 @@ def run_model(
         raise ValueError(f"unknown shared_activation {shared_activation!r}")
     assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
     if gate_fallback_mode in _HASH_GATE_MODES:
-        # TtMoe builds a padding config for DEVICE_FP32 only, and the hash gate's input_ids
+        # TtMoe builds a padding config for DEVICE_FP32 and GPT_DEVICE only, and the hash gate's input_ids
         # sharding assumes sequential SP placement.
         if padded_percent or is_balanced:
             raise ValueError(f"{gate_fallback_mode} needs padded_percent=0 and is_balanced=False")
