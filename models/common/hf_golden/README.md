@@ -120,6 +120,17 @@ tolerance on GPU. Run it first on any new machine.
     metadata.json                              revision, versions, dtypes, every stored tensor and what it is
 ```
 
+`trim_trace.py` copies a trace keeping the layer hidden states of only some layers (embed, final and every layer's
+cache stay complete), hard-linked when on the same filesystem, with metadata.json's inventory and a `hidden_layers`
+entry saying what was kept and why, and a fresh SHA256SUMS. At isl 56320 the 4-stream mHC hidden states dominate:
+DeepSeek-V4-Pro-0813 201 GB -> 79 GB keeping 19 of 61 layers, V4-Flash 83 GB -> 40 GB keeping 17 of 43. Keep each
+event layer with its input layer, so it can be run alone from golden input:
+
+```
+python trim_trace.py <root>/deepseek-ai/DeepSeek-V4-Flash/isl56320 <trimmed-root> \
+    --layers 0-5,7,8,25,26,28-30,39-42 --reason "..."
+```
+
 Naming:
 - Tensor names are the HF module path relative to the text backbone, plus `.output`, so a reader can find the
   producing module upstream.
