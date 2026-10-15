@@ -227,11 +227,11 @@ inline void run_axis(
         ASSERT_EQ(hr.wall_end - hr.wall_start, result.raw_batch_delta) << "mtime endpoints disagree with the delta";
     }
 
-    std::vector<uint32_t> l1_readback;
-    ttmd::EnqueueReadMeshBuffer(f.mesh->mesh_command_queue(), l1_readback, l1.buffer, /*blocking=*/true);
-    ASSERT_GE(l1_readback.size(), harts * TL.dst_bytes / sizeof(uint32_t));
+    // Only each hart's first transfer_size bytes are checked, so only those are read.
+    const tt_cxy_pair worker_at(f.mesh->get_device(0, 0)->id(), worker_virtual.x(), worker_virtual.y());
+    std::vector<uint32_t> range(transfer_size / sizeof(uint32_t));
     for (uint32_t h = 0; h < harts; ++h) {
-        const uint32_t* range = l1_readback.data() + h * TL.dst_bytes / sizeof(uint32_t);
+        x280::harness::cluster().read_core(range.data(), transfer_size, worker_at, dst_addr(h));
         uint32_t mismatches = 0;
         uint32_t first_mismatch = 0;
         for (uint32_t k = 0; k < transfer_size / sizeof(uint32_t); ++k) {
