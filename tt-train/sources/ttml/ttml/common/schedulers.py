@@ -225,6 +225,18 @@ class LinearScheduler(_ClosedFormScheduler):
         )
 
 
+def linear_warmup_lambda(warmup_steps: int):
+    """``step -> factor`` that ramps linearly to 1 over ``warmup_steps`` (``1 / warmup_steps`` at step 0), then stays
+    at 1. No warmup if ``warmup_steps <= 0``."""
+
+    def lr_lambda(step: int) -> float:
+        if warmup_steps <= 0:
+            return 1.0
+        return min(1.0, (step + 1) / warmup_steps)
+
+    return lr_lambda
+
+
 class LambdaScheduler(_ClosedFormScheduler):
     def __init__(self, optimizer, lr_lambda):
         super().__init__(optimizer)

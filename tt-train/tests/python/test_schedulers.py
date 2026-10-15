@@ -24,6 +24,7 @@ from ttml.common.schedulers import (
     LinearScheduler,
     SequentialScheduler,
     StepScheduler,
+    linear_warmup_lambda,
 )
 
 
@@ -1661,3 +1662,11 @@ def test_lambda_restore_applies_lr_from_restored_callable_state():
     dst.set_state_dict(state)
     assert dst_opt.get_group_lrs()[0] == pytest.approx(BASE_LR * 0.25, abs=1e-8)
     assert dst._lr_lambda.scale == 0.25
+
+
+@pytest.mark.parametrize("warmup_steps", [0, 1, 4])
+def test_linear_warmup_lambda(warmup_steps):
+    lr_lambda = linear_warmup_lambda(warmup_steps)
+    for step in range(8):
+        expected = 1.0 if warmup_steps == 0 else min(1.0, (step + 1) / warmup_steps)
+        assert lr_lambda(step) == pytest.approx(expected)

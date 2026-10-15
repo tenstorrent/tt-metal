@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 import ttml
 from ttml.common.profiler_utils import profiler_marker
+from ttml.common.schedulers import LambdaScheduler, linear_warmup_lambda
 from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
 from ttml.trainers.callback import TrainerCallback
@@ -197,7 +198,7 @@ class SFTTrainer:
         self._validate_clip_grad_norm()
 
         self._optimizer = self._build_optimizer(optimizer)
-        self._lr_lambda = lr_lambda if lr_lambda is not None else self._build_lr_lambda()
+        self._lr_lambda = lr_lambda if lr_lambda is not None else linear_warmup_lambda(config.warmup_steps)
         self._attention_mask = attention_mask
         self._loss_fn = self._build_loss_fn()
         self._callbacks = callbacks or []
@@ -239,12 +240,12 @@ class SFTTrainer:
         # Compilation finishes after the first iteration of THIS run; track the starting step so the
         # marker fires on resume too, not only when self.step happens to equal 1.
         start_step = self.step
+        # self.step (restored by load_checkpoint) is the step count of record, so the scheduler is not checkpointed:
+        # it is rebuilt here, offset to start at self.step. lr_lambda gets the 0-based step index.
+        scheduler = LambdaScheduler(self._optimizer, lambda step: self._lr_lambda(start_step + step))
         bar = tqdm(range(self.step, cfg.max_steps), desc="SFTTrainer", disable=cfg.disable_progress_bar)
         for _ in bar:
-            # self.step is 0-based so external lr_lambda callables receive the expected step index.
-            factor = self._lr_lambda(self.step)
-            self._optimizer.set_group_lrs([base_lr * factor for base_lr in self._optimizer.get_initial_group_lrs()])
-            lr = self._optimizer.get_group_lrs()[0]  # logged, like HF's ``lr_scheduler.get_last_lr()[0]``
+            lr = scheduler.get_last_lrs()[0]  # logged, like HF's ``lr_scheduler.get_last_lr()[0]``
             self._optimizer.zero_grad()
 
             micro_losses = []
@@ -279,6 +280,7 @@ class SFTTrainer:
             profiler_marker(None, "gradient_sync_done")
 
             self._optimizer.step()
+            scheduler.step()
             self.step += 1
 
             profiler_marker(None, "optimizer_step_done")
@@ -487,17 +489,6 @@ class SFTTrainer:
             {"type": "AdamW", "lr": self.config.learning_rate},
             self.model.parameters(),
         )
-
-    def _build_lr_lambda(self):
-        """Return a callable ``step -> factor`` implementing linear warmup then constant."""
-        warmup = max(0, self.config.warmup_steps)
-
-        def lr_lambda(step: int) -> float:
-            if warmup > 0 and step < warmup:
-                return (step + 1) / warmup
-            return 1.0
-
-        return lr_lambda
 
     def _build_loss_composer(self, loss_composer: Optional[Any] = None):
         """Create a mesh composer for aggregating loss across devices."""

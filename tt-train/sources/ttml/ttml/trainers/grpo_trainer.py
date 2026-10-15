@@ -23,6 +23,7 @@ import torch
 import ttml
 import ttnn
 from safetensors.numpy import save_file
+from ttml.common.schedulers import LambdaScheduler, linear_warmup_lambda
 from ttml.common.utils import create_optimizer, no_grad
 
 from .callback import TrainerCallback
@@ -957,7 +958,7 @@ class GRPOTrainer:
         self.model = tt_model
 
         optimizer = create_optimizer(tt_model, self.optimizer_dict)
-        base_lrs = optimizer.get_initial_group_lrs()
+        scheduler = LambdaScheduler(optimizer, linear_warmup_lambda(grpo_cfg.warmup_steps))
 
         # Device-parallelism state. The trainer currently only handles either
         # single-device or DDP; tensor parallelism is not supported here. We
@@ -1181,9 +1182,6 @@ class GRPOTrainer:
 
                     _deallocate_tensors([nlog_probs_new, mask_new, adv_ttml, loss])
 
-                warmup_factor = 1.0 if grpo_cfg.warmup_steps == 0 else min(1.0, (num_steps + 1) / grpo_cfg.warmup_steps)
-                optimizer.set_group_lrs([base_lr * warmup_factor for base_lr in base_lrs])
-
                 if fsdp_enabled:
                     ttml.sync_gradients(tt_model.parameters(), axis_names=fsdp_sync_axes)
                 elif ddp_context_enabled:
@@ -1212,6 +1210,8 @@ class GRPOTrainer:
                     self._time_callback(cb, "on_before_optimizer_step", self)
                 optimizer.step()
                 optimizer.zero_grad()
+                lr = scheduler.get_last_lrs()[0]  # this step's LR, logged like HF's lr_scheduler.get_last_lr()[0]
+                scheduler.step()
 
                 # Generation runs once per effective batch; attribute its cost to
                 # the first mini-epoch's step only.
@@ -1243,7 +1243,7 @@ class GRPOTrainer:
                     "mean_completion_len": mean_completion_len,
                     "min_completion_len": min_completion_len,
                     "max_completion_len": max_completion_len,
-                    "lr": optimizer.get_group_lrs()[0],  # like HF's lr_scheduler.get_last_lr()[0]
+                    "lr": lr,
                     "generation_time_s": generation_time_s_for_step,
                     **self._callback_times,
                     **self._reward_component_means,
