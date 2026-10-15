@@ -48,7 +48,7 @@ from .pipeline_wan_ti2v_5b import WanTI2V5BPipeline
 from .ti2v_5b_i2v_math import blend_condition, first_frame_mask, normalize_latents, pad_timesteps_for_sequence_parallel
 
 I2V_DEVICE_ENCODER_ENV = "WAN5B_I2V_DEVICE_ENCODER"
-"""Set to 1 to encode the conditioning image with the residual VAE encoder on the mesh (sprint 7, A10)."""
+"""Default on: the residual VAE encoder on the mesh encodes the seed image (sprint 7, A10); 0 = host torch encode."""
 
 
 class WanTI2V5BI2VPipeline(WanTI2V5BPipeline):
@@ -86,8 +86,8 @@ class WanTI2V5BI2VPipeline(WanTI2V5BPipeline):
         # `condition_buffer` is never allocated (see pipeline_wan.py:436-438, :756-759).
         super().__init__(device=device, config=config, scheduler=scheduler, run_warmup=False, lora_enabled=lora_enabled)
         # Sprint 7 (A10): the residual VAE encoder on device replaces the host torch encode of the
-        # seed frame (1.235 s at 1280x704). Opt-in while it is being gated: WAN5B_I2V_DEVICE_ENCODER=1.
-        if os.environ.get(I2V_DEVICE_ENCODER_ENV, "0") == "1":
+        # seed frame (1.235 s at 1280x704); I2V total -1.3 s at 720p. WAN5B_I2V_DEVICE_ENCODER=0 opts out.
+        if os.environ.get(I2V_DEVICE_ENCODER_ENV, "1") != "0":
             self._build_device_encoder()
         if run_warmup:
             logger.info("Pipeline allocation run (I2V)...")
