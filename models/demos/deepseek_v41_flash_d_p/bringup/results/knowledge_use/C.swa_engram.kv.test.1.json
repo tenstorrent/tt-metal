@@ -1,0 +1,43 @@
+{
+ "used": [
+  {
+   "id": "DS41-14",
+   "how": "carried test_c_swa_kv.py's fp8 grid + exact-match checks and its mutation sweep to layer 1 (same _window_kv step), which catches noise1e-2 that slipped the calibrated rel limits",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "read the first 'FAIL pcc 0.000000' block of each run as the precompile collect pass and judged the real pass",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "n/a",
+   "evidence": "DS41-20 in known_issues.md already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x (swap_step_calib) the step's own component error, no cap'; this task did not touch known_issues.md"
+  }
+ ],
+ "cited_only": [
+  "DS41-20"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa_engram.kv",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T20:26:16",
+  "head": "283f699851f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa_engram.kv.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_kv.py"
+  ]
+ }
+}
