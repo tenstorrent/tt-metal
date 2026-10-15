@@ -230,7 +230,7 @@ class SpecRunner:
                 users_per_row=Uc,
                 n=n,
                 max_pos=self.max_pos,
-                share_rope=win.t if win is not None and win.max_pos == self.max_pos else None,
+                share_rope=win if win is not None and win.max_pos == self.max_pos else None,
             )
             self.drafter = self.drafter_root = base if Uc == U else ChunkedDrafter(base, U // Uc)
             del stage_w

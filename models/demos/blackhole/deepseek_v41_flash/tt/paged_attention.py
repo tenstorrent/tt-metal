@@ -28,6 +28,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.attention import (
     DSV41Attention,
     DSV41CompressedAttention,
 )
+from models.demos.blackhole.deepseek_v41_flash.tt.rope_compact import CompactRope, compact_enabled
 
 TOPK_COMP = 512
 
@@ -269,9 +270,17 @@ class DSV41PagedStepState:
                 self.with_indexer,
             ), "shared rope tables of another layer kind / length"
             self.t = share_tables.t
+            self.rope = share_tables.rope
             return
         pos = torch.arange(Pn)
         c, s = attn._rope_inputs(pos)
+        if (
+            compact_enabled()
+        ):  # [P, 64] cos / sin of the rotated dims only (tt/rope_compact.py): 0.25 KiB per position instead of 2.5 KiB
+            self.rope = CompactRope(self.md, c, s)
+            self.t = {}
+            return
+        self.rope = None
         rep = ttnn.ReplicateTensorToMesh(self.md)
         up = lambda t: ttnn.from_torch(
             t.to(torch.bfloat16).contiguous(),
@@ -289,6 +298,8 @@ class DSV41PagedStepState:
             self.t["iS"] = up(torch.cat([torch.zeros(Pn, 64), s[:, HEAD_DIM - 64 :].float()], dim=-1))
 
     def _gather(self, name, idx, shape):
+        if self.rope is not None:
+            return self.rope.gather(name, idx, shape)
         return ttnn.to_layout(
             ttnn.reshape(ttnn.embedding(idx, self.t[name], layout=ttnn.ROW_MAJOR_LAYOUT), shape), ttnn.TILE_LAYOUT
         )
