@@ -71,3 +71,10 @@ Every intervention by the supervising session: time, task, trigger, classificati
   plan.md note (2); plan check passes on every box at 5120. SG.1's scaled golden (53248 / 4096) stopped mid-way.
   Intake and plan re-approved (delegated). Consequence noted for perf: ~1.6x more chunks per prefill, so the
   per-chunk sparse-table refill is paid more often.
+- 08:20 OWNER (correcting 08:00): serving chunk 4096 on the deployment (SP 4 -> 1024 tokens per row), never larger on a
+  bigger box; this 2x2 proxy runs 2048-token chunks (1024 per row) scaled and at real size; experts 384 / 16 = 24 per
+  chip -> 96 on the scaled 2x2 (as scaling.yaml). "Generate no goldens other than those this box runs; delete the
+  ones for other boxes." F67 reworked (chunk = deploy.chunk x min(1, sequence factor)); spec deploy 524,288 / 4096,
+  target 55,296 / 2048, ladder s4096 / last / s55296, scaled ladder 55,296 / 2048. Deleted goldens s16384_c8192,
+  s56320_c5120 and the partial scaled ones (s53248_c4096, s65536_c4096); kept s4096_c2048. tasks.yaml regenerated
+  (G.s56320 / L.s56320 -> G.s55296 / L.s55296); plan check passes on every box. Intake and plan re-approved.
