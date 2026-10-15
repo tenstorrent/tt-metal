@@ -66,8 +66,10 @@ void kernel_main() {
     // reused selector: the multiply reads whichever scale matches the datapath format.
     constexpr uint32_t cb_scale_mul_id = narrow_scales_to_bf16 ? cb_scale_bcast_bf16_id : cb_scale_bcast_fp32_id;
     constexpr uint32_t cb_loop_count_id = get_compile_time_arg_val(9);
-    constexpr uint32_t block_w = 128;                // BlockW
+    constexpr uint32_t chunk_scale_blocks = get_compile_time_arg_val(10);  // scales per 128-chunk row (1, 2 or 4)
+    constexpr uint32_t block_w = 128;                                      // BlockW: the I/O chunk
     constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
+    constexpr uint32_t scale_block_wt = block_wt / chunk_scale_blocks;  // tiles sharing one scale
     constexpr uint32_t block_ht = 1;                 // BlockHt
     constexpr uint32_t tiles_per_block = block_ht * block_wt;
 
@@ -96,16 +98,18 @@ void kernel_main() {
                 reconfig_data_format_srca(cb_scale_bcast_fp32_id);
                 pack_reconfig_data_format(cb_scale_bcast_bf16_id);
                 copy_init(cb_scale_bcast_fp32_id);
-                cb_scale_bcast_fp32.wait_front(block_ht);
-                cb_scale_bcast_bf16.reserve_back(block_ht);
-                tile_regs_acquire();
-                copy_tile(cb_scale_bcast_fp32_id, 0, IDST0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(IDST0, cb_scale_bcast_bf16_id);
-                tile_regs_release();
-                cb_scale_bcast_bf16.push_back(block_ht);
-                cb_scale_bcast_fp32.pop_front(block_ht);
+                cb_scale_bcast_fp32.wait_front(block_ht * chunk_scale_blocks);
+                cb_scale_bcast_bf16.reserve_back(block_ht * chunk_scale_blocks);
+                for (uint32_t sb = 0; sb < chunk_scale_blocks; ++sb) {
+                    tile_regs_acquire();
+                    copy_tile(cb_scale_bcast_fp32_id, sb, IDST0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(IDST0, cb_scale_bcast_bf16_id);
+                    tile_regs_release();
+                }
+                cb_scale_bcast_bf16.push_back(block_ht * chunk_scale_blocks);
+                cb_scale_bcast_fp32.pop_front(block_ht * chunk_scale_blocks);
             } else {
                 // ----- Phase 1: cast e4m3 -> fp32 -----
                 // tilize cannot cast e4m3 into a fp32 rm as done for bf16 datapath
@@ -140,14 +144,14 @@ void kernel_main() {
             pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_out_id);
             cb_in_tile.wait_front(tiles_per_block);
             if constexpr (narrow_scales_to_bf16) {
-                cb_scale_bcast_bf16.wait_front(block_ht);
+                cb_scale_bcast_bf16.wait_front(block_ht * chunk_scale_blocks);
             } else {
-                cb_scale_bcast_fp32.wait_front(block_ht);
+                cb_scale_bcast_fp32.wait_front(block_ht * chunk_scale_blocks);
             }
             cb_out.reserve_back(tiles_per_block);
             tile_regs_acquire();
             for (uint32_t k = 0; k < block_wt; ++k) {
-                mul_tiles_bcast_cols(cb_in_tile_id, cb_scale_mul_id, k, 0, k);
+                mul_tiles_bcast_cols(cb_in_tile_id, cb_scale_mul_id, k, k / scale_block_wt, k);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -156,9 +160,9 @@ void kernel_main() {
             cb_out.push_back(tiles_per_block);
             cb_in_tile.pop_front(tiles_per_block);
             if constexpr (narrow_scales_to_bf16) {
-                cb_scale_bcast_bf16.pop_front(block_ht);
+                cb_scale_bcast_bf16.pop_front(block_ht * chunk_scale_blocks);
             } else {
-                cb_scale_bcast_fp32.pop_front(block_ht);
+                cb_scale_bcast_fp32.pop_front(block_ht * chunk_scale_blocks);
             }
             pack_untilize_uninit(cb_out_id);
         }

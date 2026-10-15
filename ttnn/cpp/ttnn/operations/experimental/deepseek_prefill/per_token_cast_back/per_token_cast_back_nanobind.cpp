@@ -69,7 +69,11 @@ void bind_experimental_per_token_cast_back_operation(nb::module_& mod) {
         nb::arg("expert_token_counts") = nb::none(),
         nb::arg("global_expert_idx_table") = nb::none(),
         nb::arg("experts_per_chip") = 0,
-        nb::arg("metadata") = nb::none());
+        nb::arg("metadata") = nb::none(),
+        nb::arg("scale_block_w") = 128,
+        nb::arg("scales_in_row_tail") = false,
+        nb::arg("tile_output") = false,
+        nb::arg("row_segments") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_back::detail

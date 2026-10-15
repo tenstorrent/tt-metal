@@ -19,7 +19,9 @@ namespace fp8 = ttnn::operations::experimental::deepseek_prefill::per_token_cast
 namespace {
 
 bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& mem_config) {
-    return mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM &&
+    // DRAM or L1 interleaved: the kernels address pages through TensorAccessor.
+    return (mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM ||
+            mem_config.buffer_type() == tt::tt_metal::BufferType::L1) &&
            mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
 }
 
@@ -27,7 +29,7 @@ void validate_tensor_specs(const Tensor& tensor, const std::string& name) {
     TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR", name);
-    TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
+    TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM or L1 interleaved", name);
 }
 
 void validate_index_tensor(const Tensor& tensor, const std::string& name) {
@@ -58,7 +60,7 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     validate_tensor_specs(input_scale, "per_token_cast_back: input_scale");
     TT_FATAL(
         is_dram_interleaved(attrs.output_memory_config),
-        "per_token_cast_back: output memory config must be DRAM interleaved");
+        "per_token_cast_back: output memory config must be DRAM or L1 interleaved");
     TT_FATAL(
         input_e4m3.device() == input_scale.device(),
         "per_token_cast_back: input_e4m3 and input_scale must be on the same device");
@@ -113,8 +115,9 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
                 "per_token_cast_back: metadata scale source dtype must be FLOAT32/UINT32/INT32, got {}",
                 sdt);
         } else {
+            // Row-tail scales live in the fp8 input rows themselves.
             TT_FATAL(
-                input_scale.dtype() == tt::tt_metal::DataType::FLOAT32,
+                input_scale.dtype() == tt::tt_metal::DataType::FLOAT32 || attrs.scales_in_row_tail,
                 "per_token_cast_back: input_scale dtype must be FLOAT32, got {}",
                 input_scale.dtype());
         }
@@ -123,7 +126,7 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
             !attrs.scales_from_metadata,
             "per_token_cast_back: scales_from_metadata is only valid on the token_count_aware path");
         TT_FATAL(
-            input_scale.dtype() == tt::tt_metal::DataType::FLOAT32,
+            input_scale.dtype() == tt::tt_metal::DataType::FLOAT32 || attrs.scales_in_row_tail,
             "per_token_cast_back: input_scale dtype must be FLOAT32");
     }
 
@@ -143,9 +146,25 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
         tile_w);
     TT_FATAL(
         fp8::BLOCK_W % tile_w == 0, "per_token_cast_back: tile width {} must divide BLOCK_W={}", tile_w, fp8::BLOCK_W);
+    const uint32_t sbw = attrs.scale_block_w;
     TT_FATAL(
-        attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16 || attrs.output_dtype == tt::tt_metal::DataType::FLOAT32,
-        "per_token_cast_back: output_dtype must be BFLOAT16 or FLOAT32");
+        sbw == 32 || sbw == 64 || sbw == 128, "per_token_cast_back: scale_block_w must be 32, 64 or 128, got {}", sbw);
+    TT_FATAL(sbw % tile_w == 0, "per_token_cast_back: tile width {} must divide scale_block_w={}", tile_w, sbw);
+    if (attrs.tile_output) {
+        TT_FATAL(
+            token_count_aware && attrs.scales_in_row_tail && (sbw == 32 || attrs.row_segments == 1),
+            "per_token_cast_back: tile_output needs token_count_aware and scales_in_row_tail "
+            "(row_segments > 1 only with scale_block_w 32)");
+        TT_FATAL(
+            attrs.output_dtype == tt::tt_metal::DataType::BFLOAT8_B ||
+                attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16,
+            "per_token_cast_back: tile_output dtype must be BFLOAT8_B or BFLOAT16");
+    } else {
+        TT_FATAL(
+            attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16 ||
+                attrs.output_dtype == tt::tt_metal::DataType::FLOAT32,
+            "per_token_cast_back: output_dtype must be BFLOAT16 or FLOAT32");
+    }
 
     const auto& e4m3_shape = input_e4m3.logical_shape();
     const auto& scale_shape = input_scale.logical_shape();
@@ -166,9 +185,32 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
             scale_shape[i]);
     }
 
-    const uint32_t H = static_cast<uint32_t>(e4m3_shape[-1]);
+    const uint32_t H_in = static_cast<uint32_t>(e4m3_shape[-1]);
     const uint32_t H_scale = static_cast<uint32_t>(scale_shape[-1]);
-    if (token_count_aware && scales_from_metadata) {
+    const uint32_t H = attrs.row_segments > 1     ? attrs.row_segments * ((H_in / attrs.row_segments) / 36 * 32)
+                       : attrs.scales_in_row_tail ? H_in * sbw / (sbw + 4)
+                                                  : H_in;
+    if (attrs.row_segments > 1) {
+        const uint32_t seg_bytes = H_in / attrs.row_segments;
+        const uint32_t seg_tiles = seg_bytes / 36;
+        TT_FATAL(
+            attrs.tile_output && seg_bytes * attrs.row_segments == H_in && seg_bytes % 64 == 0 &&
+                seg_tiles * 36 + 64 > seg_bytes,
+            "per_token_cast_back: row_segments needs tile_output and {} equal 64-B aligned packed segments, row {}",
+            attrs.row_segments,
+            H_in);
+    }
+    if (attrs.scales_in_row_tail) {
+        TT_FATAL(
+            attrs.row_segments > 1 || (H * (sbw + 4) == H_in * sbw && H % fp8::BLOCK_W == 0),
+            "per_token_cast_back: packed row width {} must be H + 4*H/{} with H % {} == 0",
+            H_in,
+            sbw,
+            fp8::BLOCK_W);
+        TT_FATAL(
+            input_e4m3.buffer() == input_scale.buffer(),
+            "per_token_cast_back: scales_in_row_tail reads the scales from the input rows themselves");
+    } else if (token_count_aware && scales_from_metadata) {
         // Metadata row = [routing fields ...][H/BLOCK_W fp32 scales]. Require H % BLOCK_W == 0 and that the
         // row is wide enough to hold the H/BLOCK_W scale tail after the leading routing columns.
         TT_FATAL(
@@ -176,21 +218,23 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
             "per_token_cast_back: e4m3 last dim ({}) must be a multiple of BLOCK_W ({})",
             H,
             fp8::BLOCK_W);
-        const uint32_t blocks_per_row = H / fp8::BLOCK_W;
+        const uint32_t blocks_per_row = H / sbw;
         TT_FATAL(
             H_scale >= blocks_per_row,
-            "per_token_cast_back: metadata last dim ({}) must be >= H/BLOCK_W ({}) to hold the scale tail",
+            "per_token_cast_back: metadata last dim ({}) must be >= H/scale_block_w ({}) to hold the scale tail",
             H_scale,
             blocks_per_row);
     } else {
         // M and H are arbitrary (the kernels zero-pad the partial last tile-row / column-block). The
         // e4m3 width must equal scale_width * 128, which keeps H a multiple of the block width.
         TT_FATAL(
-            H == H_scale * fp8::BLOCK_W,
-            "per_token_cast_back: e4m3 last dim ({}) must equal scale last dim ({}) * BLOCK_W ({})",
+            H % fp8::BLOCK_W == 0 && H == H_scale * sbw,
+            "per_token_cast_back: e4m3 last dim ({}) must be a multiple of {} and equal scale last dim ({}) * "
+            "scale_block_w ({})",
             H,
+            fp8::BLOCK_W,
             H_scale,
-            fp8::BLOCK_W);
+            sbw);
     }
 
     uint64_t folded_M = 1;
@@ -215,10 +259,20 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_hit(
 
 PerTokenCastBackDeviceOperation::spec_return_value_t PerTokenCastBackDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    auto out_shape = tensor_args.input_e4m3.logical_shape();
+    if (attrs.row_segments > 1) {
+        const uint32_t W = static_cast<uint32_t>(out_shape[-1]);
+        out_shape[-1] = attrs.row_segments * ((W / attrs.row_segments) / 36 * 32);
+    } else if (attrs.scales_in_row_tail) {
+        const uint32_t W = static_cast<uint32_t>(out_shape[-1]);
+        out_shape[-1] = W * attrs.scale_block_w / (attrs.scale_block_w + 4);
+    }
     return tt::tt_metal::TensorSpec(
-        tensor_args.input_e4m3.logical_shape(),
+        out_shape,
         tt::tt_metal::TensorLayout(
-            attrs.output_dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), attrs.output_memory_config));
+            attrs.output_dtype,
+            tt::tt_metal::PageConfig(attrs.tile_output ? tt::tt_metal::Layout::TILE : tt::tt_metal::Layout::ROW_MAJOR),
+            attrs.output_memory_config));
 }
 
 PerTokenCastBackDeviceOperation::tensor_return_value_t PerTokenCastBackDeviceOperation::create_output_tensors(
@@ -258,7 +312,11 @@ ttnn::Tensor per_token_cast_back(
     const std::optional<Tensor>& expert_token_counts,
     const std::optional<Tensor>& global_expert_idx_table,
     uint32_t experts_per_chip,
-    bool scales_from_metadata) {
+    bool scales_from_metadata,
+    uint32_t scale_block_w,
+    bool scales_in_row_tail,
+    bool tile_output,
+    uint32_t row_segments) {
     using OperationType = ttnn::experimental::prim::per_token_cast_back::PerTokenCastBackDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_dtype = output_dtype,
@@ -266,7 +324,11 @@ ttnn::Tensor per_token_cast_back(
         .narrow_scales_to_bf16 = narrow_scales_to_bf16,
         .token_count_aware = token_count_aware,
         .experts_per_chip = experts_per_chip,
-        .scales_from_metadata = scales_from_metadata};
+        .scales_from_metadata = scales_from_metadata,
+        .scale_block_w = scale_block_w,
+        .scales_in_row_tail = scales_in_row_tail,
+        .tile_output = tile_output,
+        .row_segments = row_segments};
     auto tensor_args = OperationType::tensor_args_t{
         .input_e4m3 = input_e4m3,
         .input_scale = input_scale,

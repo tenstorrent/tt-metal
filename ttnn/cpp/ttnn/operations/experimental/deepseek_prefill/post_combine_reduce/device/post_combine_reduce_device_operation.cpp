@@ -83,7 +83,23 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
     const auto& expert_dispatch_table = tensor_args.expert_dispatch_table;
 
     TT_FATAL(combine_output.layout() == ttnn::Layout::ROW_MAJOR, "combine_output must be ROW_MAJOR");
-    TT_FATAL(combine_output.dtype() == DataType::BFLOAT16, "combine_output must be bfloat16");
+    // FP8_E4M3 = 1xB block-scaled fp8 combine rows [H e4m3 | H/B fp32 scales], dequantized inside this op
+    // (fused DQ2). Per-row scaled fp8 (fp8_scale_block_w = 0) is not supported.
+    TT_FATAL(
+        combine_output.dtype() == DataType::BFLOAT16 ||
+            (combine_output.dtype() == DataType::FP8_E4M3 && indices.has_value()),
+        "combine_output must be bfloat16, or packed block-scaled FP8_E4M3 rows (DeepSeek skip path only)");
+    TT_FATAL(
+        combine_output.dtype() != DataType::FP8_E4M3 || operation_attributes.fp8_scale_block_w != 0,
+        "FP8_E4M3 combine_output requires fp8_scale_block_w = 32 / 64 / 128 (1xB block scales); per-row scaled fp8 "
+        "(fp8_scale_block_w = 0) is not supported");
+    TT_FATAL(
+        operation_attributes.fp8_scale_block_w == 0 ||
+            ((operation_attributes.fp8_scale_block_w == 32 || operation_attributes.fp8_scale_block_w == 64 ||
+              operation_attributes.fp8_scale_block_w == 128) &&
+             combine_output.dtype() == DataType::FP8_E4M3),
+        "fp8_scale_block_w must be 0 (bfloat16 combine rows), or 32 / 64 / 128 with FP8_E4M3 combine rows; got {}",
+        operation_attributes.fp8_scale_block_w);
     TT_FATAL(weights.layout() == ttnn::Layout::ROW_MAJOR, "weights must be ROW_MAJOR");
     TT_FATAL(weights.dtype() == DataType::BFLOAT16, "weights must be bfloat16");
 
@@ -120,10 +136,19 @@ tt::tt_metal::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
     // Use TILE layout for hardware tilization output
+    const bool fp8_in = combine_output.dtype() == DataType::FP8_E4M3;
+    auto out_shape = output_shape;
+    if (fp8_in) {
+        // drop the H/B fp32 block scales (row = H + 4 * H / B)
+        out_shape[-1] =
+            output_shape[-1] * operation_attributes.fp8_scale_block_w / (operation_attributes.fp8_scale_block_w + 4);
+    }
     return tt::tt_metal::TensorSpec(
-        output_shape,
+        out_shape,
         tt::tt_metal::TensorLayout(
-            combine_output.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
+            fp8_in ? DataType::BFLOAT16 : combine_output.dtype(),
+            tt::tt_metal::PageConfig(Layout::TILE),
+            output_memory_config));
 }
 
 ttnn::Tensor PostCombineReduceDeviceOperation::create_output_tensors(
@@ -142,12 +167,13 @@ ttnn::Tensor post_combine_reduce(
     const std::optional<ttnn::Tensor>& indices,
     const std::optional<ttnn::Tensor>& expert_dispatch_table,
     uint32_t expert_dim,
-    const tt::tt_metal::MemoryConfig& output_memory_config) {
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    uint32_t fp8_scale_block_w) {
     namespace pcr = ttnn::operations::experimental::deepseek_prefill::post_combine_reduce;
     using OperationType = pcr::PostCombineReduceDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
-        pcr::PostCombineReduceParams{expert_dim, output_memory_config},
+        pcr::PostCombineReduceParams{expert_dim, output_memory_config, fp8_scale_block_w},
         pcr::PostCombineReduceInputs{combine_output, weights, indices, expert_dispatch_table});
 }
 

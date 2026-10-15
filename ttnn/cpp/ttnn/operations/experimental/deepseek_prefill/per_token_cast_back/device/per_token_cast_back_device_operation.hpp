@@ -49,5 +49,9 @@ ttnn::Tensor per_token_cast_back(
     const std::optional<Tensor>& expert_token_counts = std::nullopt,
     const std::optional<Tensor>& global_expert_idx_table = std::nullopt,
     uint32_t experts_per_chip = 0,
-    bool scales_from_metadata = false);
+    bool scales_from_metadata = false,
+    uint32_t scale_block_w = 128,
+    bool scales_in_row_tail = false,
+    bool tile_output = false,
+    uint32_t row_segments = 1);
 }  // namespace ttnn::prim
