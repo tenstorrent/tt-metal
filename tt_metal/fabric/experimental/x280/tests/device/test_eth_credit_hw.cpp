@@ -134,6 +134,12 @@ constexpr uint32_t kLegP[] = {1u, 2u, 4u};
 constexpr uint32_t kLegPayload[] = {64u, 1024u, 4096u, 16384u};
 constexpr uint32_t kLegBatch = 4u;
 
+// Whether P forwarders' tx_fifo and rx regions, N_LINK = 8 slots of `payload`
+// each, fit the Ethernet tile's unreserved L1: 16 KiB payloads fit at P = 1
+// only (P = 2 needs 528,512 bytes of a 366,368-byte window), as in the
+// whole-path sweep.
+constexpr bool leg_fits(uint32_t P, uint32_t payload) { return P == 1u || payload < 16384u; }
+
 }  // namespace
 
 // Steps 3 and 4: every participant of both chips' barriers, E0's packet mode
@@ -630,6 +636,9 @@ void EthCreditHw::run_leg(const char* name, suite::Mode mode, uint32_t P, uint32
 TEST_P(EthCreditHw, NocHopBySlotAndP) {
     for (const uint32_t P : kLegP) {
         for (const uint32_t payload : kLegPayload) {
+            if (!leg_fits(P, payload)) {
+                continue;
+            }
             run_leg("noc_hop_sweep", suite::Mode::NocHop, P, payload);
         }
     }
@@ -640,6 +649,9 @@ TEST_P(EthCreditHw, NocHopBySlotAndP) {
 TEST_P(EthCreditHw, ReceiveSideBySlotAndP) {
     for (const uint32_t P : kLegP) {
         for (const uint32_t payload : kLegPayload) {
+            if (!leg_fits(P, payload)) {
+                continue;
+            }
             run_leg("receive_side_sweep", suite::Mode::ReceiveSide, P, payload);
         }
     }
@@ -650,6 +662,9 @@ TEST_P(EthCreditHw, ReceiveSideBySlotAndP) {
 TEST_P(EthCreditHw, W1AloneBySlotAndP) {
     for (const uint32_t P : kLegP) {
         for (const uint32_t payload : kLegPayload) {
+            if (!leg_fits(P, payload)) {
+                continue;
+            }
             run_leg("w1_alone", suite::Mode::W1Alone, P, payload);
         }
     }

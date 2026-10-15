@@ -786,7 +786,7 @@ must fail:
 | `EriscWallClockTicksAtProgrammedAiclk` | the ERISC clock evidence over 100k packets |
 | `ThroughputBySlotBatchAndP` | the throughput sweep over slot size, `BATCH` and P |
 | `EthernetHopBySlotAndBatch` | the Ethernet hop alone (`EC_E0_SOURCE_SELF`, `EC_E1_SINK_LOCAL`) over payloads 64 B to 16 KiB and `BATCH` 1 to 8 at P = 1, `N_LINK` = 8: packet rate on E1's clock, against the 400G per-link rate the tabulator sets beside it |
-| `NocHopBySlotAndP` | the NoC hop alone (`EC_E0_SINK_LOCAL`, W1, W2 and R3) on the leg grid, the throughput sweep's slot sizes at P = 1, 2 and 4 and `BATCH` 4: packet rate on the sending forwarder's clock |
+| `NocHopBySlotAndP` | the NoC hop alone (`EC_E0_SINK_LOCAL`, W1, W2 and R3) on the leg grid, the throughput sweep's slot sizes at P = 1, 2 and 4 and `BATCH` 4, less 16 KiB payloads at P > 1, which do not fit the Ethernet tile's L1: packet rate on the sending forwarder's clock |
 | `ReceiveSideBySlotAndP` | the receive side alone (`EC_E1_SOURCE_SELF`, W5, W6 and R1) on the leg grid: packet rate on the receiving forwarder's clock |
 | `RoundTripBySlot` | the credit round trip at one packet in flight (P = 1, `N_LINK` 1, `BATCH` 1) over the leg grid's slot sizes, on the measurement image: the hop loop, and the loop through the remote consume (`EC_E1_R2_AFTER_CONSUME`) |
 | `ReceiveDepthByE0Source` | the receive depths with E0 sourcing over the link (`EC_E0_SOURCE_SELF`), where W1 does not bind, at 4 KiB payloads: `N_LINK` 1 to 16 at `N_DELIVER` 8 (`BATCH` 1 and 4, and `BATCH` 1 with R2 after the consume), then `N_DELIVER` 1 to 16 at `N_LINK` 8; packet rate on the receiving forwarder's clock |

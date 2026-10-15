@@ -25,11 +25,11 @@ and all at B=1 and writers 1 at B=4 for (C, K) = (8, 16), (8, 32), (16, 32) and
 repeat `T4` and `T4.c8k16` with the consumer visiting 2 or 4 workers per pass
 and which no campaign has yet measured, `eth_credit.ethernet_hop`, the Ethernet hop alone
 over slot size and batch, `eth_credit.noc_hop` and `eth_credit.receive_side`, the NoC hop and
-the receive side alone on the leg grid (slots 160 to 16480 B at P = 1, 2 and 4),
-`eth_credit.w1_alone`, `eth_credit.w2_alone` and `eth_credit.r1_alone`, the forwarder's W1, W2
-and R1 writes each alone, `eth_credit.round_trip`, the credit round trip of the hop loop and
-through the remote consume, `eth_credit.e0_source_depth`, the receive depths with E0 sourcing,
-and
+the receive side alone on the leg grid (slots 160 to 4192 B at P = 1, 2 and 4, and 16480 B at
+P = 1), `eth_credit.w1_alone`, `eth_credit.w2_alone` and `eth_credit.r1_alone`, the forwarder's
+W1, W2 and R1 writes each alone, `eth_credit.round_trip`, the credit round trip of the hop loop
+and through the remote consume, `eth_credit.e0_source_depth`, the receive depths with E0
+sourcing, and
 `eth_credit.throughput`, eth_credit's slot, batch and P
 sweep across the Ethernet link of cards 0 and 1 (`TT_VISIBLE_DEVICES` unset, so every card is
 visible), and
