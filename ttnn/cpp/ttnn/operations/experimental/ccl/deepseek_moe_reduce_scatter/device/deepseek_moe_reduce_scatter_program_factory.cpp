@@ -8,7 +8,9 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/math.hpp>
@@ -30,9 +32,12 @@ constexpr uint32_t kRingSize = 8;
 constexpr uint32_t kNumDirectionsPerLink = 2;
 constexpr uint32_t kTileGranularity = 2;
 // Push order of desc.kernels. Fabric define injection indexes the writer by this handle.
-constexpr KernelHandle kReaderKernelIdx = 0;
-constexpr KernelHandle kWriterKernelIdx = 1;
-constexpr KernelHandle kReduceKernelIdx = 2;
+constexpr KernelHandle kReaderKernelIdx =
+    ttnn::experimental::prim::DeepseekMoEReduceScatterMeshWorkloadFactory::kReaderKernelIdx;
+constexpr KernelHandle kWriterKernelIdx =
+    ttnn::experimental::prim::DeepseekMoEReduceScatterMeshWorkloadFactory::kWriterKernelIdx;
+constexpr KernelHandle kReduceKernelIdx =
+    ttnn::experimental::prim::DeepseekMoEReduceScatterMeshWorkloadFactory::kReduceKernelIdx;
 
 CoreCoord choose_additional_core(
     ttnn::MeshDevice* mesh_device, const std::vector<CoreCoord>& cores_already_selected, uint32_t clamped_num_links) {
@@ -424,7 +429,9 @@ tt::tt_metal::WorkloadDescriptor DeepseekMoEReduceScatterMeshWorkloadFactory::cr
                 operation_attributes.cluster_axis);
         TT_FATAL(
             forward_coordinate.has_value() && backward_coordinate.has_value(),
-            "DEBUG: forward_coord or backward_coord is null");
+            "deepseek_moe_reduce_scatter: missing ring neighbor for device {} on cluster axis {}",
+            coord,
+            operation_attributes.cluster_axis);
 
         uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
             tensor_args.input_tensors.at(0), coord, operation_attributes.cluster_axis);
@@ -446,6 +453,70 @@ tt::tt_metal::WorkloadDescriptor DeepseekMoEReduceScatterMeshWorkloadFactory::cr
     }
 
     return workload_descriptor;
+}
+
+void DeepseekMoEReduceScatterMeshWorkloadFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const DeepseekMoEReduceScatterParams&,
+    const DeepseekMoEReduceScatterInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>&) {
+    // Input slices may alias. resolve_bindings then returns nothing, and this workload has no rebuild.
+    TT_FATAL(
+        tensor_args.input_tensors.size() == kRingSize,
+        "deepseek_moe_reduce_scatter expects {} input slices",
+        kRingSize);
+    TT_FATAL(
+        tensor_return_value.size() == kRingSize + 1,
+        "deepseek_moe_reduce_scatter returns 8 intermediates and 1 output");
+
+    uint32_t updated_global_cbs = 0;
+    for (const auto& cb : program.circular_buffers()) {
+        if (!cb->globally_allocated()) {
+            continue;
+        }
+        const auto& indices = cb->buffer_indices();
+        Buffer* buffer = nullptr;
+        for (uint32_t slice = 0; slice < kRingSize; ++slice) {
+            if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_0 + slice))) {
+                buffer = tensor_args.input_tensors.at(slice).buffer();
+                break;
+            }
+            if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_8 + slice))) {
+                buffer = tensor_return_value.at(slice).buffer();
+                break;
+            }
+        }
+        TT_FATAL(buffer != nullptr, "deepseek_moe_reduce_scatter: unexpected globally allocated circular buffer");
+        UpdateDynamicCircularBufferAddress(program, cb->id(), *buffer);
+        ++updated_global_cbs;
+    }
+    TT_FATAL(
+        updated_global_cbs == kRingSize * 2,
+        "deepseek_moe_reduce_scatter: expected {} globally allocated circular buffers, updated {}",
+        kRingSize * 2,
+        updated_global_cbs);
+
+    auto& writer_runtime_args = GetRuntimeArgs(program, kWriterKernelIdx);
+    for (auto& column : writer_runtime_args) {
+        for (auto& args : column) {
+            if (args.size() <= kWriterOutputArg) {
+                continue;
+            }
+            for (uint32_t slice = 0; slice < kRingSize; ++slice) {
+                TT_FATAL(
+                    tensor_return_value.at(slice).buffer() != nullptr,
+                    "deepseek_moe_reduce_scatter intermediate slice {} must have a buffer",
+                    slice);
+                args[kWriterIntermediateArg0 + slice] =
+                    static_cast<uint32_t>(tensor_return_value.at(slice).buffer()->address());
+            }
+            TT_FATAL(
+                tensor_return_value.back().buffer() != nullptr,
+                "deepseek_moe_reduce_scatter output must have a buffer");
+            args[kWriterOutputArg] = static_cast<uint32_t>(tensor_return_value.back().buffer()->address());
+        }
+    }
 }
 
 }  // namespace ttnn::experimental::prim

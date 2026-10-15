@@ -1282,6 +1282,8 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
         tensor_args.intermediate_packet_buffer.buffer() != nullptr,
         "llama_reduce_scatter packet buffer must have a buffer");
 
+    constexpr uint32_t kExpectedGlobalCbs = 3;
+    uint32_t updated_global_cbs = 0;
     for (const auto& cb : program.circular_buffers()) {
         if (!cb->globally_allocated()) {
             continue;
@@ -1294,8 +1296,16 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
         } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_4))) {
             tt::tt_metal::UpdateDynamicCircularBufferAddress(
                 program, cb->id(), *tensor_args.intermediate_packet_buffer.buffer());
+        } else {
+            TT_FATAL(false, "llama_reduce_scatter: unexpected globally allocated circular buffer");
         }
+        ++updated_global_cbs;
     }
+    TT_FATAL(
+        updated_global_cbs == kExpectedGlobalCbs,
+        "llama_reduce_scatter: expected {} globally allocated circular buffers, updated {}",
+        kExpectedGlobalCbs,
+        updated_global_cbs);
 
     auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
