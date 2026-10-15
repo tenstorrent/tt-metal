@@ -958,13 +958,15 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   the runner smoke, which skips itself there.
 - Agent rule 5 (bringup-engineer.md) reworded to "no unnecessary host work": a host input (data the model keeps on the host, keyed only on token ids, e.g. the engram tables) is allowed in begin_chunk, placed `host` in the plan, tagged CPU, host part only; the skill's cheating list names that exception.
 
-## F67 (2026-10-15): one serving chunk on every box, every test at it
+## F67 (2026-10-15): the serving chunk never grows; a proxy box shrinks it; goldens only for this box
 
-- The chunk is the serving chunk (`deploy.chunk`), the same on every box: plan/boxes.py `context` scales only the
-  context (rounded down to whole chunks). Before, it scaled the chunk with the box's sequence factor (8192 on a 4x4
-  became 16384 on an 8x4, 4096 on a 2x2). Owner: "chunk size should be fixed; never above 4-5K".
+- The chunk is the serving chunk (`deploy.chunk`). plan/boxes.py `context`: chunk = deploy.chunk x min(1, sequence
+  factor), context = deploy.seq x factor. A bigger box keeps the chunk (its rows get fewer tokens); a smaller proxy box
+  shrinks it so each mesh row holds the deployment's tokens per row (owner: 4096 on a 4x4 = 1024 per row -> 2048 on a
+  2x2). Before, the chunk grew with the box (8192 on a 4x4 became 16384 on an 8x4). Owner: "16k is insanely large;
+  never above 4-5K".
 - `serving.max_chunk` (defaults.yaml, 5120): a spec with a deployment box fails validation when deploy.chunk,
   target.chunk or any ladder / scaled.ladder rung is above it. Specs without `deploy` are unchanged.
-- The /bringup intake asks for the serving chunk; the default ladder is three rungs at it (2 chunks with full dumps,
-  the last chunk after a golden prefix, the full target): no golden at a chunk the box never serves.
-- Selftests: the scaled context keeps the chunk; the max_chunk check.
+- The /bringup intake asks for the serving chunk and shows the per-row numbers; every ladder rung runs at this box's
+  chunk (default three rungs); goldens only for this box's rungs (another box's come from its own run).
+- Selftests: the proxy's context keeps the tokens per row, a bigger box keeps the chunk; the max_chunk check.
