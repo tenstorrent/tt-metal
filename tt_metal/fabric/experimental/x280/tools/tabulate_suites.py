@@ -1316,13 +1316,8 @@ def tabulate(member, rows):
 
 def render_all(rows, markdown=False):
     """all_tables(rows) as aligned text, or as Markdown whose rows lead with their label."""
-    return render_tables(all_tables(rows), markdown)
-
-
-def render_tables(tables, markdown=False):
-    """Tabulated `tables` as aligned text, or as Markdown whose rows lead with their label."""
     out = []
-    for table in tables:
+    for table in all_tables(rows):
         size = "%d row%s" % (len(table.rows), "" if len(table.rows) == 1 else "s")
         if markdown:
             summary = size + "." + (" Constant: %s." % ", ".join(table.constant) if table.constant else "")
@@ -1764,7 +1759,7 @@ def campaign_report(campaign, destination):
         master += [(key, path.parent.name, row, digests[row.path]) for row in rows]
     complete = all(entry["status"] == "passed" for entry in coverage.values())
     table_rows = [row for _, _, row, _ in master]
-    results = [render_all(table_rows, markdown=True)]
+    results = render_all(table_rows, markdown=True)
     wall_rows = [row for row in table_rows if "wall_counter" in row.record]
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "coverage.json").write_text(json.dumps(coverage, indent=2) + "\n")
@@ -1836,7 +1831,8 @@ def campaign_report(campaign, destination):
         "conversion, so their rows stay raw with the reason in the clock column; their ranges "
         "are cross-core diagnostics.",
     ]
-    lines += ["\n" + table for table in results if table]
+    if results:
+        lines.append("\n" + results)
     (destination / "MASTER_RESULTS.md").write_text("\n".join(lines) + "\n")
     return complete
 
