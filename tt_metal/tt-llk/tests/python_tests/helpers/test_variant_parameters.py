@@ -1386,6 +1386,21 @@ class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
         return "\n".join(lines)
 
 
+@dataclass
+class GATHER_COMPRESS_PARAMS(TemplateParameter):
+    """Gather / compress mode and FPU vector size (32 elements for a 16-bit format, 64 for an 8-bit one)."""
+
+    compress: bool = False
+    elem_cnt: int = 32
+
+    def convert_to_cpp(self) -> str:
+        mode = "COMPRESS" if self.compress else "GATHER"
+        return (
+            f"constexpr auto GATHER_COMPRESS_MODE = GatherCompressModeSelect::{mode};\n"
+            f"constexpr std::uint32_t GATHER_COMPRESS_ELEM_CNT = {self.elem_cnt};"
+        )
+
+
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
 
 
