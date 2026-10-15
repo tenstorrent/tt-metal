@@ -25,7 +25,7 @@ apply_workload_env(BATCH_SIZE, SEQ_LEN)
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 200_000_000, "num_command_queues": 1}],
+    [{"trace_region_size": 200_000_000, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
