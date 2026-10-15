@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -176,7 +177,11 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                     "x280_same_tile.AInitiatesFirst",
                     peer::phase_record(
                         "x280_same_tile",
-                        {{"participant", who}},
+                        {{"participant", who},
+                         {"chip_id", 0},
+                         {"x280_hw_index", 0},
+                         {"x280_noc_x", 8u},
+                         {"x280_noc_y", 3u}},
                         *r,
                         p,
                         common,
@@ -194,8 +199,14 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                     peer::phase_record(
                         "x280_peer_tile",
                         {{"participant", who},
+                         {"chip_id", 0},
                          {"hw_index", hw},
                          {"peer_hw_index", 1 - hw},
+                         {"x280_noc_x", 8u},
+                         {"x280_noc_y", hw == 0 ? 3u : 9u},
+                         {"peer_x280_noc_x", 8u},
+                         {"peer_x280_noc_y", hw == 0 ? 9u : 3u},
+                         {"x280_noc", hout::kX280Noc},
                          {"hops_a_to_b", 6u},
                          {"hops_b_to_a", 4u}},
                         *r,
@@ -210,28 +221,47 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
         }
         const auto x280 =
             p2p_result(P2P_LATENCY_BACKEND_ID_X280_METAL_PEER_TILE, P2P_LATENCY_PARTICIPANT_A, kP2pSamples);
-        for (const auto& [id, member, name, backend, counter, clock] :
+        for (const auto& [id, member, name, backend, counter, clock, prefix, noc0] :
              {std::tuple{
                   "tensix_peer_tile.X280InitiatesFirst",
                   "tensix_peer_tile",
                   "Tensix",
                   P2P_LATENCY_BACKEND_ID_TENSIX_TENSIX_PEER_TILE,
                   Counter::TensixLiveTimer,
-                  &tensix_clock},
+                  &tensix_clock,
+                  "tensix",
+                  std::array<uint32_t, 2>{1, 2}},
               std::tuple{
                   "erisc_peer_tile.X280InitiatesFirst",
                   "erisc_peer_tile",
                   "ERISC",
                   P2P_LATENCY_BACKEND_ID_ERISC_ERISC_PEER_TILE,
                   Counter::EriscWallClock,
-                  &erisc_clock},
+                  &erisc_clock,
+                  "erisc",
+                  std::array<uint32_t, 2>{10, 1}},
               std::tuple{
                   "drisc_peer_tile.X280InitiatesFirst",
                   "drisc_peer_tile",
                   "DRISC",
                   P2P_LATENCY_BACKEND_ID_DRISC_DRISC_PEER_TILE,
                   Counter::RiscDebugWallClock,
-                  &tensix_clock}}) {
+                  &tensix_clock,
+                  "drisc",
+                  std::array<uint32_t, 2>{0, 0}}}) {
+            // D1's card 0 placement: the X280 at NoC0 (8, 3), each peer at `noc0`, every leg on NoC 0.
+            std::vector<hout::Field> placement{
+                {"chip_id", 0},
+                {"x280_hw_index", 0},
+                {"x280_noc_x", 8u},
+                {"x280_noc_y", 3u},
+                {"x280_noc", hout::kX280Noc}};
+            hout::append_placement(placement, prefix, {.logical = noc0, .virt = noc0, .noc0 = noc0, .noc = 0u});
+            const auto identity = [&](const char* who) {
+                std::vector<hout::Field> fields{{"participant", who}};
+                fields.insert(fields.end(), placement.begin(), placement.end());
+                return fields;
+            };
             // Departure TURN samples are 100 ticks below completion's.
             auto departure = p2p_result(backend, P2P_LATENCY_PARTICIPANT_B, kP2pSamples);
             for (uint32_t i = 0; i < kP2pSamples; ++i) {
@@ -248,7 +278,7 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                         config,
                         peer::phase_record(
                             member,
-                            {{"participant", "X280"}},
+                            identity("X280"),
                             x280,
                             p,
                             common,
@@ -261,7 +291,7 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                         config,
                         peer::phase_record(
                             member,
-                            {{"participant", name}},
+                            identity(name),
                             metal,
                             p,
                             common,
@@ -380,7 +410,8 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                     .mtime_hz = 50000000,
                     .result = run_res,
                     .successful = true,
-                    .report_successful = true};
+                    .report_successful = true,
+                    .tile = {.chip_id = 0, .hw_index = 0, .noc_x = 8, .noc_y = 3}};
             };
         // One tensix_to_x280 configuration's run, aggregate and worker records,
         // worker w taking samples[w].
@@ -398,7 +429,14 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                             "tensix_to_x280",
                             identity,
                             "worker",
-                            pi::tensix_to_x280_worker(r, each, {1, 2 + w}, samples[w]),
+                            pi::tensix_to_x280_worker(
+                                r,
+                                each,
+                                {.logical = std::array<uint32_t, 2>{0, 0},
+                                 .virt = std::array<uint32_t, 2>{1, 2 + w},
+                                 .noc0 = std::array<uint32_t, 2>{1, 2 + w},
+                                 .noc = w},
+                                samples[w]),
                             Counter::TensixLiveTimer,
                             tensix_clock,
                             warmup));
@@ -437,7 +475,14 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                 "erisc_to_x280_header",
                 erisc_identity,
                 "worker",
-                pi::erisc_to_x280_header_worker(erisc, worker, {}),
+                pi::erisc_to_x280_header_worker(
+                    erisc,
+                    worker,
+                    {.logical = std::array<uint32_t, 2>{0, 11},
+                     .virt = std::array<uint32_t, 2>{31, 25},
+                     .noc0 = std::array<uint32_t, 2>{10, 1},
+                     .noc = 0u},
+                    {31, 25}),
                 Counter::EriscWallClock,
                 erisc_clock,
                 calibrated));
@@ -472,9 +517,19 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
             .p = 0,
             .tx_chip = 0,
             .rx_chip = 1,
-            .tx_erisc_logical = {0, 8},
-            .rx_erisc_logical = {0, 8},
             .x280_hw_index = 0,
+            .tx_erisc =
+                {.logical = std::array<uint32_t, 2>{0, 8},
+                 .virt = std::array<uint32_t, 2>{28, 25},
+                 .noc0 = std::array<uint32_t, 2>{6, 1},
+                 .noc = 0u},
+            .rx_erisc =
+                {.logical = std::array<uint32_t, 2>{0, 5},
+                 .virt = std::array<uint32_t, 2>{25, 25},
+                 .noc0 = std::array<uint32_t, 2>{14, 1},
+                 .noc = 1u},
+            .tx_x280 = {.noc0 = std::array<uint32_t, 2>{8, 3}, .noc = hout::kX280Noc},
+            .rx_x280 = {.noc0 = std::array<uint32_t, 2>{8, 3}, .noc = hout::kX280Noc},
             .x280_pll_mhz = 1750,
             .shape = {1u, 8u, 8u, 4192u, 4u}};
         const char* ec_id = "eth_credit.throughput";

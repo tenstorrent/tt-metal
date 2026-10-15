@@ -158,6 +158,24 @@ These are the only converted values the contract admits:
 | Test micro-kernels' PLL frequency | `x280_measure_pll_khz` (`include/rt/x280_pll.h`), called by `src/atomic_bench.c` | Standalone test micro-kernels outside the record path |
 | Device-side control budgets | For example the P2P Metal peers' `HANG_GUARD_TICKS` (`kernels/p2p_latency/metal_peer_target.hpp`), ERISC's from the nominal 1 GHz | Timeout budgets derived from nominal clocks; never recorded as results |
 
+### Placement
+
+Every p2p_latency, packet_injection and eth_credit record names where its cores
+ran, as the host resolved them: the logical and virtual (translated)
+coordinates it chose, the NoC0 coordinate from the chip's SoC descriptor
+(`noc0_at()` in `harness/execution/execution.hpp`, which throws for a
+coordinate the descriptor does not resolve), and the NoC each core issues its
+writes on. A core is named by `output::append_placement()` as
+`<prefix>_logical_x/y`, `<prefix>_virtual_x/y`, `<prefix>_noc0_x/y` and
+`<prefix>_noc`: a Metal p2p peer as `tensix`, `erisc` or `drisc`; a
+packet_injection worker unprefixed; the eth_credit throughput record's
+sending E0 and receiving E1 as `tx_erisc` and `rx_erisc` and each chip's X280
+as `tx_x280` and `rx_x280`; the eth_credit link record's Ethernet tile as
+`erisc`. The X280 tile of a p2p or packet_injection record is `chip_id`,
+`x280_hw_index`, `x280_noc_x/y` (NoC0) and `x280_noc`
+(`output::append_x280_placement()`); x280_peer_tile adds
+`peer_x280_noc_x/y`.
+
 ## Quantities that share a label
 
 Where one record label covers different quantities in different members, this

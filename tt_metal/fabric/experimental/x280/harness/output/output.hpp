@@ -15,8 +15,10 @@
 #define X280_HARNESS_OUTPUT_HPP
 
 #include "harness/measurement/measurement.hpp"
+#include "x280/device/x280_tile_state.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -317,6 +319,50 @@ Value::Value(T number) {
 }
 inline Value::Value(const char* text) : value_(std::string(text)) {}
 inline Value::Value(std::string text) : value_(std::move(text)) {}
+
+// The NoC every X280 window issues on: device images leave a TLB entry's
+// noc_sel at 0 (include/noc.h).
+inline constexpr uint32_t kX280Noc = 0;
+
+// One core's coordinates as a record names them. Each part is set only when
+// the host resolved it; `noc` is the NoC the core issues its writes on.
+struct CorePlacement {
+    std::optional<std::array<uint32_t, 2>> logical;
+    std::optional<std::array<uint32_t, 2>> virt;
+    std::optional<std::array<uint32_t, 2>> noc0;
+    std::optional<uint32_t> noc;
+};
+
+// Appends X280 tile `tile` as chip_id, x280_hw_index, x280_noc_x/y (its NoC0
+// coordinate) and x280_noc.
+inline void append_x280_placement(std::vector<Field>& fields, const x280::TileIdentity& tile) {
+    fields.insert(
+        fields.end(),
+        {{"chip_id", tile.chip_id},
+         {"x280_hw_index", tile.hw_index},
+         {"x280_noc_x", tile.noc_x},
+         {"x280_noc_y", tile.noc_y},
+         {"x280_noc", kX280Noc}});
+}
+
+// Appends `at`'s set parts as <prefix>_logical_x/y, <prefix>_virtual_x/y,
+// <prefix>_noc0_x/y and <prefix>_noc, or without the "<prefix>_" for an empty
+// prefix; an unset part writes no field.
+inline void append_placement(std::vector<Field>& fields, const std::string& prefix, const CorePlacement& at) {
+    const std::string head = prefix.empty() ? "" : prefix + "_";
+    const auto pair = [&](const char* name, const std::optional<std::array<uint32_t, 2>>& xy) {
+        if (xy) {
+            fields.push_back({head + name + "_x", (*xy)[0]});
+            fields.push_back({head + name + "_y", (*xy)[1]});
+        }
+    };
+    pair("logical", at.logical);
+    pair("virtual", at.virt);
+    pair("noc0", at.noc0);
+    if (at.noc) {
+        fields.push_back({head + "noc", *at.noc});
+    }
+}
 
 namespace detail {
 

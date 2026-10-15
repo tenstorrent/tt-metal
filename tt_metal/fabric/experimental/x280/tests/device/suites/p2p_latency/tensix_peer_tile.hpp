@@ -41,6 +41,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -67,6 +68,7 @@ constexpr uint32_t kPayloadSize = 4u;
 constexpr uint32_t kTlbIndex = X280_TLB_PAIRED_BASE;
 constexpr uint64_t kWarmupBudgetX280Cycles = 500u * 1000000ull;
 constexpr uint64_t kWarmupBudgetTensixTicks = 900u * 1000000ull;
+constexpr ttm::NOC kTensixNoc = ttm::NOC::RISCV_0_default;
 
 using Axis = bool;  // x280_initiates_first
 
@@ -98,10 +100,11 @@ inline uint64_t mint_run_value(uint32_t& run_nonce) {
     return (static_cast<uint64_t>(0xE11Cu) << 48) | (static_cast<uint64_t>(0xB3u) << 40) | run_nonce;
 }
 
-// One paired launch's arguments and results. clock is set only when the launch
-// assessed AICLK around the workload.
+// One paired launch's arguments, placement and results. clock is set only
+// when the launch assessed AICLK around the workload.
 struct Launch {
     p2p_latency_x280_noc_section_t block;
+    std::vector<x280::harness::output::Field> placement;
     p2p_latency_result_t result_x;
     p2p_latency_result_t result_t;
     uint64_t expected_aiclk_hz;
@@ -136,7 +139,19 @@ inline void launch(
     const auto* device = f.mesh->get_devices()[0];
     const auto worker_virtual =
         x280::X280Runtime::virtual_core_from_logical_core(*f.mesh, worker, tt::CoreType::TENSIX, ttm::NOC::NOC_0);
-    const auto l2cpu_translated = f.runtime->virtual_core_from_tile(f.tile_id, ttm::NOC::RISCV_0_default);
+    const auto l2cpu_translated = f.runtime->virtual_core_from_tile(f.tile_id, kTensixNoc);
+    out.placement.clear();
+    x280::harness::output::append_x280_placement(out.placement, f.tile_id);
+    x280::harness::output::append_placement(
+        out.placement,
+        "tensix",
+        {
+            .logical = std::array<uint32_t, 2>{static_cast<uint32_t>(worker.x), static_cast<uint32_t>(worker.y)},
+            .virt = std::array<uint32_t, 2>{worker_virtual.x(), worker_virtual.y()},
+            .noc0 = hexec::noc0_at(
+                x280::harness::cluster(), f.tile_id.chip_id, ttm::CoreCoord{worker_virtual.x(), worker_virtual.y()}),
+            .noc = static_cast<uint32_t>(kTensixNoc),
+        });
 
     const metal_peer::X280Regions XR = metal_peer::X280Regions::compute(*f.tile);
     hreg::zero_region(*f.tile, XR.mailbox);
@@ -188,7 +203,7 @@ inline void launch(
         worker_set,
         ttm::DataMovementConfig{
             .processor = ttm::DataMovementProcessor::RISCV_0,
-            .noc = ttm::NOC::RISCV_0_default,
+            .noc = kTensixNoc,
             .defines = {{"P2P_LATENCY_TARGET_TENSIX", "1"}, metal_peer::tx_mode_define(tx_mode)}});
     ttm::SetRuntimeArgs(program, kernel, worker_set, tensix_args);
 
@@ -283,9 +298,11 @@ inline void run_axis(
 
     auto report_phase = [&](const p2p_latency_result_t& r, const char* who, uint32_t p) {
         const bool tensix = r.backend_id == P2P_LATENCY_BACKEND_ID_TENSIX_TENSIX_PEER_TILE;
+        std::vector<x280::harness::output::Field> identity{{"participant", who}};
+        identity.insert(identity.end(), run.placement.begin(), run.placement.end());
         const auto body = x280::harness::output::record(metal_peer::phase_record(
             "tensix_peer_tile",
-            {{"participant", who}},
+            std::move(identity),
             r,
             p,
             block.common,

@@ -78,6 +78,8 @@ namespace hreg = x280::harness::regions;
 
 using namespace x280::harness::regions::packet_injection;
 
+constexpr ttm::NOC kWriterNoc = ttm::NOC::NOC_0;
+
 /** One registered point: `writers` ERISCs, zero meaning every available one
  * (capped at kMaxEthernetWriters), each publishing in batches of `B`. */
 struct SweepPoint {
@@ -103,7 +105,7 @@ struct WriterCoords {
     LogicalCoord logical;
     ttm::CoreCoord virt;
     tt::umd::CoreCoord translated{0, 0, tt::CoreType::ETH, tt::CoordSystem::TRANSLATED};
-    tt::umd::CoreCoord noc0{0, 0, tt::CoreType::ETH, tt::CoordSystem::NOC0};
+    std::array<uint32_t, 2> noc0{};
 };
 
 /**
@@ -299,7 +301,7 @@ inline uint64_t run_once(
                 std::to_string(coords[w].logical.y) + ") resolves to a non-Ethernet core at translated (" +
                 std::to_string(virt.x) + "," + std::to_string(virt.y) + ")");
         }
-        coords[w].noc0 = soc.translate_coord_to(coords[w].translated, tt::CoordSystem::NOC0);
+        coords[w].noc0 = hexec::noc0_at(x280::harness::cluster(), f.tile_id.chip_id, virt);
     }
 
     const auto l2cpu_translated = f.runtime->virtual_core_from_tile(f.tile_id, ttm::NOC::NOC_0);
@@ -349,7 +351,7 @@ inline uint64_t run_once(
         ttm::CoreRangeSet(ranges),
         ttm::EthernetConfig{
             .eth_mode = ttm::Eth::IDLE,
-            .noc = ttm::NOC::NOC_0,
+            .noc = kWriterNoc,
             .processor = ttm::DataMovementProcessor::RISCV_0,
             .defines =
                 {{"PACKET_INJECTION_MODE", std::to_string(cfg.mode)},
@@ -470,6 +472,7 @@ inline uint64_t run_once(
                 .result = run_res,
                 .successful = successful,
                 .report_successful = report_successful,
+                .tile = f.tile_id,
             };
             EriscRunState state{
                 .writers_requested = axis.writers,
@@ -490,12 +493,13 @@ inline uint64_t run_once(
             hout::write_jsonl(spec.suite_label, hout::record(aggregate_record(member, identity, run, *warmup)));
 
             for (uint32_t w = 0; w < P; ++w) {
-                const WriterPlacement at{
-                    .logical = {coords[w].logical.x, coords[w].logical.y},
-                    .virt = {static_cast<uint32_t>(coords[w].virt.x), static_cast<uint32_t>(coords[w].virt.y)},
-                    .translated =
-                        {static_cast<uint32_t>(coords[w].translated.x), static_cast<uint32_t>(coords[w].translated.y)},
-                    .noc0 = {static_cast<uint32_t>(coords[w].noc0.x), static_cast<uint32_t>(coords[w].noc0.y)},
+                const hout::CorePlacement at{
+                    .logical = std::array<uint32_t, 2>{coords[w].logical.x, coords[w].logical.y},
+                    .virt =
+                        std::array<uint32_t, 2>{
+                            static_cast<uint32_t>(coords[w].virt.x), static_cast<uint32_t>(coords[w].virt.y)},
+                    .noc0 = coords[w].noc0,
+                    .noc = static_cast<uint32_t>(kWriterNoc),
                 };
                 hout::write_jsonl(
                     spec.suite_label + "_workers",
@@ -506,7 +510,9 @@ inline uint64_t run_once(
                         erisc_to_x280_header_worker(
                             run,
                             {.index = w, .slot = consumer_slots[w], .lim_dump = lim_dump, .producer = producer_res[w]},
-                            at),
+                            at,
+                            {static_cast<uint32_t>(coords[w].translated.x),
+                             static_cast<uint32_t>(coords[w].translated.y)}),
                         hmeas::Counter::EriscWallClock,
                         clock,
                         *warmup)));

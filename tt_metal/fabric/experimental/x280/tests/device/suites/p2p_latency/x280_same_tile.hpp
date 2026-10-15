@@ -170,10 +170,15 @@ inline void run_axis(
     ASSERT_NO_FATAL_FAILURE(metal_peer::validate_phases(result_a, P2P_LATENCY_PARTICIPANT_A, first_direction, N));
     ASSERT_NO_FATAL_FAILURE(metal_peer::validate_phases(result_b, P2P_LATENCY_PARTICIPANT_B, first_direction, N));
 
+    const auto identity = [&](const char* who) {
+        std::vector<hout::Field> fields{{"participant", who}};
+        hout::append_x280_placement(fields, f.tile_id);
+        return fields;
+    };
     auto report_phase = [&](const p2p_latency_result_t& r, const char* who, uint32_t p) {
         const auto body = x280::harness::output::record(metal_peer::phase_record(
             "x280_same_tile",
-            {{"participant", who}},
+            identity(who),
             r,
             p,
             block.sections[0].common,

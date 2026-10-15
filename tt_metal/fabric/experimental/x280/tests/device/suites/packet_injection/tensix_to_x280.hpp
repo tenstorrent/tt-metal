@@ -67,6 +67,9 @@ namespace hmeas = x280::harness::measurement;
 namespace hout = x280::harness::output;
 namespace hreg = x280::harness::regions;
 
+// Each producer RISC's NoC, by its risc index: BRISC on NoC 0, NCRISC on NoC 1.
+constexpr std::array<ttm::NOC, 2> kRiscNoc = {ttm::NOC::NOC_0, ttm::NOC::NOC_1};
+
 using namespace x280::harness::regions::packet_injection;
 
 struct SweepPoint {
@@ -139,7 +142,7 @@ inline ProducerKernels create_producer_kernels(
         cores,
         ttm::DataMovementConfig{
             .processor = ttm::DataMovementProcessor::RISCV_0,
-            .noc = ttm::NOC::NOC_0,
+            .noc = kRiscNoc[0],
             .noc_mode = ttm::NOC_MODE::DM_DEDICATED_NOC,
             .defines = kernel_defines,
             .compiler_include_paths = compiler_includes});
@@ -151,7 +154,7 @@ inline ProducerKernels create_producer_kernels(
             cores,
             ttm::DataMovementConfig{
                 .processor = ttm::DataMovementProcessor::RISCV_1,
-                .noc = ttm::NOC::NOC_1,
+                .noc = kRiscNoc[1],
                 .noc_mode = ttm::NOC_MODE::DM_DEDICATED_NOC,
                 .defines = kernel_defines,
                 .compiler_include_paths = compiler_includes});
@@ -615,6 +618,7 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
             .result = run_res,
             .successful = successful,
             .report_successful = report_successful,
+            .tile = f.tile_id,
         };
         const auto identity = tensix_to_x280_identity(
             run,
@@ -653,7 +657,19 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
                     tensix_to_x280_worker(
                         run,
                         {.index = w, .slot = consumer_slots[w], .lim_dump = lim_dump, .producer = producer_res[w]},
-                        {plan.translated[tile_index].x(), plan.translated[tile_index].y()},
+                        {
+                            .logical =
+                                std::array<uint32_t, 2>{
+                                    cfg.ordered_tiles[tile_index].x, cfg.ordered_tiles[tile_index].y},
+                            .virt =
+                                std::array<uint32_t, 2>{
+                                    plan.translated[tile_index].x(), plan.translated[tile_index].y()},
+                            .noc0 = hexec::noc0_at(
+                                x280::harness::cluster(),
+                                f.tile_id.chip_id,
+                                ttm::CoreCoord{plan.translated[tile_index].x(), plan.translated[tile_index].y()}),
+                            .noc = static_cast<uint32_t>(kRiscNoc.at(pi_worker_risc_index(&L, w))),
+                        },
                         std::move(samples)),
                     hmeas::Counter::TensixLiveTimer,
                     clock,

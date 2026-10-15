@@ -16,6 +16,7 @@
 #include "kernels/packet_injection/packet_injection_abi.h"
 #include "kernels/packet_injection/packet_injection_slot.hpp"
 #include "x280/device/x280_state.hpp"
+#include "x280/device/x280_tile_state.hpp"
 
 #include <array>
 #include <cstdint>
@@ -48,7 +49,8 @@ struct LimSlotDump {
 /**
  * One run as its records report it. `successful` is the run's own outcome,
  * `report_successful` the one its run record states after the host's checks;
- * `cfg`, `layout` and `result` must outlive the record calls.
+ * `cfg`, `layout` and `result` must outlive the record calls. `tile` is the
+ * consumer X280 tile.
  */
 struct Run {
     uint64_t run_value = 0;
@@ -60,6 +62,7 @@ struct Run {
     const pi_run_result_t& result;
     bool successful = false;
     bool report_successful = false;
+    x280::TileIdentity tile{};
 };
 
 namespace detail {
@@ -72,7 +75,7 @@ inline std::vector<x280::harness::output::Field> run_identity(
     const Run& run, const char* family, pi_error_t expected_worker_failure) {
     const auto& cfg = run.cfg;
     const auto& r = run.result;
-    return {
+    std::vector<x280::harness::output::Field> fields{
         {"run_value", run.run_value},
         {"mode", cfg.mode},
         {"include_creation", cfg.include_creation},
@@ -101,6 +104,8 @@ inline std::vector<x280::harness::output::Field> run_identity(
         {"export_valid_bytes", r.export_valid_bytes},
         {"released_group_dests", r.released_group_dests},
         {"released_endpoints", r.released_endpoints}};
+    x280::harness::output::append_x280_placement(fields, run.tile);
+    return fields;
 }
 
 // The prepared L3 shape every run opens with: WayEnable (Caches.md,
@@ -314,30 +319,25 @@ struct TensixWorkerSamples {
 };
 
 /**
- * A tensix_to_x280 worker record's own fields: placement (`virtual_xy` from
- * the host's selection), progress, the mode's raw samples or throughput
- * interval, and its counter writes. Throws as append_worker_progress() does.
+ * A tensix_to_x280 worker record's own fields: placement (`at`, unprefixed),
+ * progress, the mode's raw samples or throughput interval, and its counter
+ * writes. Throws as append_worker_progress() does.
  */
 inline std::vector<x280::harness::output::Field> tensix_to_x280_worker(
-    const Run& run, const Worker& worker, std::array<uint32_t, 2> virtual_xy, TensixWorkerSamples samples) {
+    const Run& run, const Worker& worker, const x280::harness::output::CorePlacement& at, TensixWorkerSamples samples) {
     namespace hout = x280::harness::output;
     const auto& L = run.layout;
     const uint32_t w = worker.index;
     const uint32_t tile_index = pi_worker_tile_index(&L, w);
     const uint32_t risc = pi_worker_risc_index(&L, w);
-    const auto& tile = run.cfg.ordered_tiles.at(tile_index);
     const uint64_t sample_count = samples.latency.size();
     std::vector<hout::Field> fields{
         {"worker_index", w},
         {"tile_index", tile_index},
         {"risc", risc},
-        {"assigned_noc", risc},
-        {"logical_x", tile.x},
-        {"logical_y", tile.y},
-        {"virtual_x", virtual_xy[0]},
-        {"virtual_y", virtual_xy[1]},
-        {"l1_base", pi_worker_l1_base(&L, w)},
     };
+    hout::append_placement(fields, "", at);
+    fields.push_back({"l1_base", pi_worker_l1_base(&L, w)});
     detail::append_worker_progress(fields, w, worker.slot, worker.lim_dump, worker.producer, sample_count);
     if (run.cfg.mode == PI_MODE_LATENCY) {
         fields.insert(
@@ -364,36 +364,25 @@ inline std::vector<x280::harness::output::Field> tensix_to_x280_worker(
     return fields;
 }
 
-// An ERISC writer's coordinates in each system its record names.
-struct WriterPlacement {
-    std::array<uint32_t, 2> logical{};
-    std::array<uint32_t, 2> virt{};
-    std::array<uint32_t, 2> translated{};
-    std::array<uint32_t, 2> noc0{};
-};
-
 /**
- * An erisc_to_x280_header worker record's own fields: the writer's
- * coordinates, progress, its throughput interval and counter writes. Throws as
- * append_worker_progress() does.
+ * An erisc_to_x280_header worker record's own fields: the writer's placement
+ * (`at`, unprefixed) and UMD translated coordinate, progress, its throughput
+ * interval and counter writes. Throws as append_worker_progress() does.
  */
 inline std::vector<x280::harness::output::Field> erisc_to_x280_header_worker(
-    const Run& run, const Worker& worker, const WriterPlacement& at) {
+    const Run& run,
+    const Worker& worker,
+    const x280::harness::output::CorePlacement& at,
+    std::array<uint32_t, 2> translated) {
     namespace hout = x280::harness::output;
     const uint32_t w = worker.index;
-    std::vector<hout::Field> fields{
-        {"worker_index", w},
-        {"tile_index", w},
-        {"logical_x", at.logical[0]},
-        {"logical_y", at.logical[1]},
-        {"virtual_x", at.virt[0]},
-        {"virtual_y", at.virt[1]},
-        {"translated_x", at.translated[0]},
-        {"translated_y", at.translated[1]},
-        {"noc0_x", at.noc0[0]},
-        {"noc0_y", at.noc0[1]},
-        {"l1_base", pi_worker_l1_base(&run.layout, w)},
-    };
+    std::vector<hout::Field> fields{{"worker_index", w}, {"tile_index", w}};
+    hout::append_placement(fields, "", at);
+    fields.insert(
+        fields.end(),
+        {{"translated_x", translated[0]},
+         {"translated_y", translated[1]},
+         {"l1_base", pi_worker_l1_base(&run.layout, w)}});
     detail::append_worker_progress(fields, w, worker.slot, worker.lim_dump, worker.producer, 0);
     detail::append_throughput_worker(fields, worker.producer, run.cfg.N, run.successful);
     fields.push_back({"producer_counter_writes", worker.producer.measured_counter_writes});

@@ -101,6 +101,23 @@ inline std::optional<measurement::Counter> clock_reference_at(
     }
 }
 
+// The NoC0 coordinate of the core at translated (Metal virtual) `core` on
+// `chip`, from the chip's SoC descriptor. Throws std::runtime_error naming the
+// coordinate when the descriptor resolves it to no core.
+inline std::array<uint32_t, 2> noc0_at(const tt::Cluster& cluster, int chip, const tt::tt_metal::CoreCoord& core) {
+    const auto& soc = cluster.get_soc_desc(chip);
+    tt::umd::CoreCoord found;
+    try {
+        found = soc.get_coord_at(tt_xy_pair(core.x, core.y), tt::CoordSystem::TRANSLATED);
+    } catch (const std::exception& error) {
+        throw std::runtime_error(
+            "translated (" + std::to_string(core.x) + "," + std::to_string(core.y) + ") on chip " +
+            std::to_string(chip) + " resolves to no core: " + error.what());
+    }
+    const auto noc0 = soc.translate_coord_to(found, tt::CoordSystem::NOC0);
+    return {static_cast<uint32_t>(noc0.x), static_cast<uint32_t>(noc0.y)};
+}
+
 // The translated core AICLK evidence for a workload at translated `core`
 // samples, and its live timer: `core` itself when the host reads a live timer
 // there (a Tensix or Ethernet core), otherwise logical Tensix (0,0). A DRISC's

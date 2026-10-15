@@ -75,6 +75,10 @@ namespace ec = x280::harness::regions::eth_credit;
  * (Cluster::get_ethernet_connections, chip 0 channel 8 <-> chip 1 channel 5). */
 inline const std::vector<int> kChipPair = {0, 1};
 
+// The NoCs E0 and E1 issue on; the X280 forwarders use output::kX280Noc.
+constexpr ttm::NOC kE0Noc = ttm::NOC::NOC_0;
+constexpr ttm::NOC kE1Noc = ttm::NOC::NOC_1;
+
 /* Poll iterations, not ticks, that each E0/E1 barrier wait may take before
  * giving up (core_sync_transport_metal.hpp, iteration_cap). */
 constexpr uint64_t kBarrierPollCap = 1000000000ull;
@@ -145,6 +149,8 @@ struct ChipResult {
     int chip = -1;
     ttm::CoreCoord eth_logical{};
     ttm::CoreCoord eth_translated{};
+    /** The Ethernet tile's NoC0 coordinate. */
+    std::array<uint32_t, 2> eth_noc0{};
     x280::TileId tile{};
     KernelResult e0;
     KernelResult e1;
@@ -162,6 +168,24 @@ struct ChipResult {
      * aiclk_hz; conversion_hz is nonzero only when that rate held. */
     hmeas::AiclkRunEvidence erisc_clock{};
 };
+
+/** cr's Ethernet tile as its records place it, issuing on `noc` when given. */
+inline hout::CorePlacement erisc_placement(const ChipResult& cr, std::optional<uint32_t> noc) {
+    return {
+        .logical =
+            std::array<uint32_t, 2>{static_cast<uint32_t>(cr.eth_logical.x), static_cast<uint32_t>(cr.eth_logical.y)},
+        .virt =
+            std::array<uint32_t, 2>{
+                static_cast<uint32_t>(cr.eth_translated.x), static_cast<uint32_t>(cr.eth_translated.y)},
+        .noc0 = cr.eth_noc0,
+        .noc = noc,
+    };
+}
+
+/** cr's X280 tile as its records place it. */
+inline hout::CorePlacement x280_placement(const ChipResult& cr) {
+    return {.noc0 = std::array<uint32_t, 2>{cr.tile.noc_x, cr.tile.noc_y}, .noc = hout::kX280Noc};
+}
 
 /** The Metal call that threw during a run, if any. */
 enum class MetalFailure : uint32_t { None, Enqueue, Finish };
@@ -521,6 +545,7 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
         pl.eth = x280::X280Runtime::virtual_core_from_logical_core(
             *f.mesh, ttmd::MeshCoordinate(0, i), cr.eth_logical, tt::CoreType::ETH, ttm::NOC::NOC_0);
         cr.eth_translated = ttm::CoreCoord{pl.eth->x(), pl.eth->y()};
+        cr.eth_noc0 = hexec::noc0_at(x280::harness::cluster(), cr.chip, cr.eth_translated);
         cr.aiclk_hz = hexec::programmed_aiclk_hz(x280::harness::cluster(), *dev[i]);
         const x280::TileId* tile = f.tile_for_chip(cr.chip);
         if (tile == nullptr) {
@@ -640,7 +665,7 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
                 core,
                 ttm::EthernetConfig{
                     .eth_mode = ttm::Eth::SENDER,
-                    .noc = ttm::NOC::NOC_0,
+                    .noc = kE0Noc,
                     .processor = ttm::DataMovementProcessor::RISCV_0,
                     .defines = defines});
             ttm::SetRuntimeArgs(program, e0, core, ec::pack_runtime_args(args.chips[i].e0));
@@ -653,7 +678,7 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
                 core,
                 ttm::EthernetConfig{
                     .eth_mode = ttm::Eth::SENDER,
-                    .noc = ttm::NOC::NOC_1,
+                    .noc = kE1Noc,
                     .processor = ttm::DataMovementProcessor::RISCV_1,
                     .defines = defines});
             ttm::SetRuntimeArgs(program, e1, core, ec::pack_runtime_args(args.chips[i].e1));
@@ -778,9 +803,7 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
             hout::record(link_record({
                 .case_name = c.name,
                 .chip = cr.chip,
-                .erisc_logical = {static_cast<uint32_t>(cr.eth_logical.x), static_cast<uint32_t>(cr.eth_logical.y)},
-                .erisc_translated =
-                    {static_cast<uint32_t>(cr.eth_translated.x), static_cast<uint32_t>(cr.eth_translated.y)},
+                .erisc = erisc_placement(cr, std::nullopt),
                 .retrain_count_before = cr.retrain_before,
                 .retrain_count_after = cr.retrain_after,
                 .metal_failure = metal_failure_name(out.metal_failure),
@@ -1014,9 +1037,11 @@ inline void record_throughput(
             .p = p,
             .tx_chip = tx.chip,
             .rx_chip = rx.chip,
-            .tx_erisc_logical = {static_cast<uint32_t>(tx.eth_logical.x), static_cast<uint32_t>(tx.eth_logical.y)},
-            .rx_erisc_logical = {static_cast<uint32_t>(rx.eth_logical.x), static_cast<uint32_t>(rx.eth_logical.y)},
             .x280_hw_index = static_cast<uint32_t>(rx.tile.hw_index),
+            .tx_erisc = erisc_placement(tx, static_cast<uint32_t>(kE0Noc)),
+            .rx_erisc = erisc_placement(rx, static_cast<uint32_t>(kE1Noc)),
+            .tx_x280 = x280_placement(tx),
+            .rx_x280 = x280_placement(rx),
             .x280_pll_mhz = f.pll_mhz,
             .shape = c.shape,
             .bidirectional = c.direction == ec::Direction::Both,

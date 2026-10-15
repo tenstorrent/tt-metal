@@ -77,6 +77,7 @@ inline void run_axis(
         .warmup_env = "P2P_LATENCY_ERISC_PEER_TILE_W",
         .samples_env = "P2P_LATENCY_ERISC_PEER_TILE_N",
         .counter = x280::harness::measurement::Counter::EriscWallClock,
+        .noc = ttm::NOC::NOC_0,
     };
     metal_peer::run_axis(
         fixture,
@@ -94,7 +95,7 @@ inline void run_axis(
                 logical_core,
                 ttm::EthernetConfig{
                     .eth_mode = ttm::Eth::IDLE,
-                    .noc = ttm::NOC::NOC_0,
+                    .noc = target.noc,
                     .processor = ttm::DataMovementProcessor::RISCV_0,
                     .defines = {{"P2P_LATENCY_TARGET_IDLE_ERISC", "1"}, metal_peer::tx_mode_define(tx_mode)},
                     .opt_level = ttm::KernelBuildOptLevel::Os,

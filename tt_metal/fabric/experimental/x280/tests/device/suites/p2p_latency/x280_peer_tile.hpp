@@ -263,14 +263,22 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
     // Do not subtract values from separate rdcycle domains.
     auto report =
         [&](const p2p_latency_result_t& r, const char* who, int hw_index, const p2p_latency_x280_noc_section_t& block) {
+            const auto& self = hw_index == id_a.hw_index ? id_a : id_b;
+            const auto& other = hw_index == id_a.hw_index ? id_b : id_a;
             for (uint32_t p = 0; p < 2; ++p) {
                 hout::write_jsonl(
                     spec.suite_label,
                     hout::record(metal_peer::phase_record(
                         "x280_peer_tile",
                         {{"participant", who},
+                         {"chip_id", self.chip_id},
                          {"hw_index", hw_index},
-                         {"peer_hw_index", hw_index == id_a.hw_index ? id_b.hw_index : id_a.hw_index},
+                         {"peer_hw_index", other.hw_index},
+                         {"x280_noc_x", self.noc_x},
+                         {"x280_noc_y", self.noc_y},
+                         {"peer_x280_noc_x", other.noc_x},
+                         {"peer_x280_noc_y", other.noc_y},
+                         {"x280_noc", hout::kX280Noc},
                          {"hops_a_to_b", hops_ab},
                          {"hops_b_to_a", hops_ba}},
                         r,

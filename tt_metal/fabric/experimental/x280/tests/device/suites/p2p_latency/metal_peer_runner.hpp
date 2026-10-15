@@ -28,6 +28,7 @@
 #include "impl/dispatch/host_device_transfer.hpp"
 #include "llrt/tt_cluster.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -68,6 +69,8 @@ struct Target {
     const char* samples_env;
     // The peer's wall counter, as its records name it.
     hmeas::Counter counter;
+    // The NoC the peer kernel issues on; its records name it.
+    ttm::NOC noc;
 };
 
 // Produces a non-zero protocol nonce and the correlated X280 lifecycle value.
@@ -314,34 +317,31 @@ inline void run_axis(
     const auto& clock = *run.clock;
     const uint64_t expected_aiclk_hz = run.expected_aiclk_hz;
 
-    std::vector<hout::Field> placement{
-        {"chip_id", fixture.tile_id.chip_id},
-        {"x280_hw_index", fixture.tile_id.hw_index},
-        {"x280_noc_x", fixture.tile_id.noc_x},
-        {"x280_noc_y", fixture.tile_id.noc_y},
-    };
-    if (target.kind == x280::harness::ExecutionTarget::Drisc) {
+    std::vector<hout::Field> placement;
+    hout::append_x280_placement(placement, fixture.tile_id);
+    const bool drisc = target.kind == x280::harness::ExecutionTarget::Drisc;
+    hout::append_placement(
+        placement,
+        drisc ? "drisc" : "erisc",
+        {
+            .logical =
+                std::array<uint32_t, 2>{
+                    static_cast<uint32_t>(target.logical_core.x), static_cast<uint32_t>(target.logical_core.y)},
+            .virt = std::array<uint32_t, 2>{target.virtual_core.x(), target.virtual_core.y()},
+            .noc0 = hexec::noc0_at(
+                x280::harness::cluster(),
+                fixture.tile_id.chip_id,
+                ttm::CoreCoord{target.virtual_core.x(), target.virtual_core.y()}),
+            .noc = static_cast<uint32_t>(target.noc),
+        });
+    if (drisc) {
         placement.insert(
             placement.end(),
             {
-                {"drisc_logical_x", target.logical_core.x},
-                {"drisc_logical_y", target.logical_core.y},
-                {"drisc_virtual_x", target.virtual_core.x()},
-                {"drisc_virtual_y", target.virtual_core.y()},
                 {"dram_bank", 0u},
                 {"drisc_role", "free"},
-                {"drisc_noc", 0u},
                 {"mode_during_run", "stream"},
                 {"mode_restoration_contract", "admission_test"},
-            });
-    } else {
-        placement.insert(
-            placement.end(),
-            {
-                {"erisc_logical_x", target.logical_core.x},
-                {"erisc_logical_y", target.logical_core.y},
-                {"erisc_virtual_x", target.virtual_core.x()},
-                {"erisc_virtual_y", target.virtual_core.y()},
             });
     }
     const auto report = [&](const p2p_latency_result_t& result, const char* participant, uint32_t phase, bool is_x280) {

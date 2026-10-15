@@ -82,6 +82,7 @@ inline void run_axis(
         .warmup_env = "P2P_LATENCY_DRISC_PEER_TILE_W",
         .samples_env = "P2P_LATENCY_DRISC_PEER_TILE_N",
         .counter = x280::harness::measurement::Counter::RiscDebugWallClock,
+        .noc = ttm::NOC::NOC_0,
     };
     metal_peer::run_axis(
         fixture,
@@ -98,7 +99,7 @@ inline void run_axis(
                 source.string(),
                 logical_core,
                 ttm::DramConfig{
-                    .noc = ttm::NOC::NOC_0,
+                    .noc = target.noc,
                     .defines = {{"P2P_LATENCY_TARGET_DRISC", "1"}, metal_peer::tx_mode_define(tx_mode)},
                     .opt_level = ttm::KernelBuildOptLevel::O2,
                 });
