@@ -457,7 +457,6 @@ private:
     uint32_t neo_tile_counters_buffer_capacity_offset_{};
 
     bool has_remapper_{};
-    bool noc_att_enabled_{};
     uint32_t remapper_global_control_addr_{};
     uint32_t remapper_client_l_config_base_addr_{};
     uint32_t remapper_client_r_config_base_addr_{};
@@ -560,7 +559,6 @@ public:
     uint32_t get_neo_tile_counters_buffer_capacity_offset() const { return neo_tile_counters_buffer_capacity_offset_; }
 
     bool has_remapper() const { return has_remapper_; }
-    bool noc_att_enabled() const { return noc_att_enabled_; }
     uint32_t get_remapper_global_control_addr() const { return remapper_global_control_addr_; }
     uint32_t get_remapper_client_l_config_base_addr() const { return remapper_client_l_config_base_addr_; }
     uint32_t get_remapper_client_r_config_base_addr() const { return remapper_client_r_config_base_addr_; }

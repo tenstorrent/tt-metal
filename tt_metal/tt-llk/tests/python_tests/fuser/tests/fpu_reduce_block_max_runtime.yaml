@@ -1,21 +1,34 @@
 # Same as fpu_reduce_block_max but the unpacker is configured at runtime
 # instead of compile time.
 
-supported_archs: ["wormhole", "blackhole"]
+supported_archs: ["wormhole", "blackhole", "quasar"]
 
-dest_acc: true
+dest_acc: false
 
 operands:
   - name: "input_A"
     dims: [256, 256]
-    format: "Float32"
+    format: "Float16_b"
   - name: "input_B"
     dims: [256, 256]
-    format: "Float32"
+    format: "Float16_b"
     stimuli: 1.0
   - name: "reduce_block_max_runtime_out"
     dims: [256, 256]
-    format: "Float32"
+    format: "Float16_b"
+  - name: "tiny_input_A"
+    dims: [32, 256]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+  - name: "tiny_input_B"
+    dims: [32, 256]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+    stimuli: 1.0
+  - name: "reduce_block_max_runtime_tiny_out"
+    dims: [32, 256]
+    tile_dims: [16, 32]
+    format: "Float16_b"
 
 operations:
   - math:
@@ -29,4 +42,16 @@ operations:
     pack:
       - output: "reduce_block_max_runtime_out"
         block_size: [64, 64]
+        packer: "Packer"
+  - math:
+      - type: "Fpu"
+        block_size: [32, 64]
+        in0: "tiny_input_A"
+        in1: "tiny_input_B"
+        operation: "ReduceBlockMaxRuntime"
+        unpacker: "ReduceBlockMaxRuntimeUnpacker"
+        math_fidelity: "HiFi2"
+    pack:
+      - output: "reduce_block_max_runtime_tiny_out"
+        block_size: [32, 64]
         packer: "Packer"

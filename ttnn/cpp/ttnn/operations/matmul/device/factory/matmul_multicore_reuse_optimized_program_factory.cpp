@@ -278,6 +278,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     const DFBSpecName BIAS_DFB{"bias"};
     const DFBSpecName OUT_DFB{"out"};
     const DFBSpecName INTERMED0_DFB{"intermed0"};
+    const DFBSpecName INTERMED0_RELOAD_ALIAS_DFB{"intermed0_reload_alias"};
     const DFBSpecName IN0_TRANSPOSED_DFB{"in0_transposed"};
 
     const TensorParamName IN0{"in0"};
@@ -331,23 +332,61 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         .data_format_metadata = interm0_data_format,
         .tile_format_metadata = output_tile,
     };
+
+    // When accumulating in fp32 with the K reduction split across blocks, the partials buffer holds
+    // Float32 and is reloaded into DEST between blocks. Unless the reload's view is marked UnpackToDest,
+    // that reload goes through SrcA and is rounded to TF32 on every block boundary (same fix as the
+    // mcast_1d/2d factories). The fused bias add reads the partials buffer as an FPU operand (SrcA), so
+    // with bias the reload instead goes through intermed0_reload_alias, a second view of the same SRAM
+    // carrying UnpackToDest, selected in the compute kernel by MM_PARTIALS_RELOAD_ALIAS.
+    const bool reload_partials_to_dest = fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32;
+    const bool bias_reload_alias = reload_partials_to_dest && bias.has_value();
+    DataflowBufferSpec intermed0_reload_alias_dfb_spec{
+        .unique_id = INTERMED0_RELOAD_ALIAS_DFB,
+        .entry_size = interm0_single_tile_size,
+        .num_entries = out_DFB_tiles,
+        .data_format_metadata = interm0_data_format,
+        .tile_format_metadata = output_tile,
+    };
     if (output_is_sharded) {
         out_dfb_spec.borrowed_from = OUTPUT;
         if (share_out_interm_buffer) {
             intermed0_dfb_spec.borrowed_from = OUTPUT;
+            intermed0_reload_alias_dfb_spec.borrowed_from = OUTPUT;
         }
     }
-    if (share_out_interm_buffer) {
-        out_dfb_spec.advanced_options.alias_with = {INTERMED0_DFB};
-        intermed0_dfb_spec.advanced_options.alias_with = {OUT_DFB};
+    {
+        Group<DFBSpecName> out_aliases;
+        Group<DFBSpecName> intermed0_aliases;
+        Group<DFBSpecName> alias_aliases;
+        if (share_out_interm_buffer) {
+            out_aliases.push_back(INTERMED0_DFB);
+            intermed0_aliases.push_back(OUT_DFB);
+            if (bias_reload_alias) {
+                out_aliases.push_back(INTERMED0_RELOAD_ALIAS_DFB);
+                intermed0_aliases.push_back(INTERMED0_RELOAD_ALIAS_DFB);
+                alias_aliases.push_back(OUT_DFB);
+                alias_aliases.push_back(INTERMED0_DFB);
+            }
+        } else if (bias_reload_alias) {
+            intermed0_aliases.push_back(INTERMED0_RELOAD_ALIAS_DFB);
+            alias_aliases.push_back(INTERMED0_DFB);
+        }
+        out_dfb_spec.advanced_options.alias_with = std::move(out_aliases);
+        intermed0_dfb_spec.advanced_options.alias_with = std::move(intermed0_aliases);
+        intermed0_reload_alias_dfb_spec.advanced_options.alias_with = std::move(alias_aliases);
     }
 
     Group<DataflowBufferSpec> dataflow_buffers;
-    dataflow_buffers.reserve(4 + (bias.has_value() ? 1 : 0) + (in0_transpose_tile ? 1 : 0));
+    dataflow_buffers.reserve(
+        4 + (bias.has_value() ? 1 : 0) + (in0_transpose_tile ? 1 : 0) + (bias_reload_alias ? 1 : 0));
     dataflow_buffers.push_back(std::move(in0_dfb_spec));
     dataflow_buffers.push_back(std::move(in1_dfb_spec));
     dataflow_buffers.push_back(std::move(out_dfb_spec));
     dataflow_buffers.push_back(std::move(intermed0_dfb_spec));
+    if (bias_reload_alias) {
+        dataflow_buffers.push_back(std::move(intermed0_reload_alias_dfb_spec));
+    }
     if (bias.has_value()) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BIAS_DFB,
@@ -393,6 +432,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     }
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
     }
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
@@ -538,15 +580,19 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t blocks_per_core_group) {
         auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
 
-        // Legacy set no unpack_to_dest_mode at all, i.e. UnpackToDestMode::Default for every
-        // buffer, which is UnpackMode::UnpackToSrc here. Stated explicitly because Metal 2.0
-        // requires the choice for a Float32 buffer a compute kernel consumes under
-        // enable_32_bit_dest, which the intermediate hits whenever fp32_dest_acc_en is set.
+        // Inputs are read via SrcA/SrcB. The Float32 partials are reloaded into DEST with UnpackToDest
+        // (on the reload alias when bias also reads the partials buffer via SrcA), see above. Stated
+        // explicitly because Metal 2.0 requires the choice for a Float32 buffer a compute kernel
+        // consumes under enable_32_bit_dest.
         compute_hw.unpack_modes = {
             {IN0_DFB, UnpackMode::UnpackToSrc},
             {IN1_DFB, UnpackMode::UnpackToSrc},
-            {INTERMED0_DFB, UnpackMode::UnpackToSrc},
+            {INTERMED0_DFB,
+             (reload_partials_to_dest && !bias_reload_alias) ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc},
         };
+        if (bias_reload_alias) {
+            compute_hw.unpack_modes.insert({INTERMED0_RELOAD_ALIAS_DFB, UnpackMode::UnpackToDest});
+        }
         if (bias.has_value()) {
             compute_hw.unpack_modes.insert({BIAS_DFB, UnpackMode::UnpackToSrc});
         }
@@ -639,6 +685,20 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             compute.compile_time_args.insert({"bias_ntiles", in3_block_tiles});
             // Full-tile bias block, indexed by (M-tile-row, N-tile) rather than broadcast per row.
             compute.compile_time_args.insert({"row_broadcast_bias", 0u});
+        }
+        if (bias_reload_alias) {
+            // The reload view of the partials buffer: compute drives its read cursor and nothing else
+            // touches it, so it holds both endpoints.
+            compute.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = INTERMED0_RELOAD_ALIAS_DFB,
+                .accessor_name = "intermed0_reload_alias",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            compute.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = INTERMED0_RELOAD_ALIAS_DFB,
+                .accessor_name = "intermed0_reload_alias",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
         }
         return compute;
     };

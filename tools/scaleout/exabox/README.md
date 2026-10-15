@@ -6,9 +6,9 @@ Scripts for validating Blackhole Galaxy Exabox clusters before running workloads
 
 ## Quick Reference
 
-**Last Known-Good Docker Image:**
+**Docker Image:**
 ```
-ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20261006-45-g1d758e27faf
+ghcr.io/tenstorrent/tt-metal/exabox-tools:latest
 ```
 
 ## Full Hardware Qualification
@@ -77,14 +77,12 @@ This should print the Docker version on each machine. If any host fails, install
 
 For Galaxy clusters, use:
 ```
-ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:<tag>
+ghcr.io/tenstorrent/tt-metal/exabox-tools:<tag>
 ```
 
-Options for `<tag>`:
-- `latest` - most recent passing build from main (Note: Once quad systems are in CI, this will be consistently reliable. For now, use the known-good version below.)
-- **Last known-good version** - the tag in [Quick Reference](#quick-reference) at the top. `run_validation.sh` and `recover.sh` use it automatically when you omit `--image`; `run_fabric_tests.sh` and `run_dispatch_tests.sh` require it to be passed explicitly.
+`run_validation.sh` and `recover.sh` use `exabox-tools:latest` when you omit `--image`; `run_fabric_tests.sh` and `run_dispatch_tests.sh` require it to be passed explicitly. Tags and how to build one are described below.
 
-To build an image from a custom branch (your own branch or one requested from a Metal developer), run the [upstream-tests workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/upstream-tests.yaml). The workflow summary shows the image tag once complete.
+For `:latest` the scripts run docker with `--pull=always`, so a moved tag is picked up on the next run. Pinned tags run from the local cache.
 
 **`exabox-tools` image**
 
@@ -152,7 +150,7 @@ python3 tools/scaleout/exabox/report_cluster_health.py \
   --dry-run
 ```
 
-`--hosts` and `--analyzer-code` remain valid overrides. For physical, the reporter infers them (and optional `pass_pct`, the analyzer success rate 0–100) from `--artifact-dir` logs when omitted. Other test types still require `--hosts` and `--analyzer-code`. Stdout is always one compact JSON object. Pass `--store-root DIR` (or set `CLUSTER_HEALTH_STORE_ROOT`) if your site persists files; there is no default directory. Layout is `DIR/<YYYY-MM-DD>/<record_id>.json` (one compact JSON line per file). The date directory mode follows DIR: group-only roots get `03770` (setgid, sticky, owner/group write); when DIR is already other-writable the date dir is sticky `01777` so mixed UIDs (humans, automation, log shippers) can share it. An existing date dir that is already other-writable is never tightened back to group-only. Only that directory is chmod'd; DIR and its ancestors are left as they are. Record files themselves follow the caller's umask, so a restrictive umask (`0077`) writes records your log shipper cannot read. Writes use a dotted temp in that same directory then an exclusive (no-clobber) link onto the final name; if that name already exists with different content the file is left in place and stdout omits `record_id`. Scrapers should glob `*.json` and ignore `*.tmp`. Optional `--cabling` / `--deployment` / `--fsd` / `--gsd` / `--rankfile` / `--rank-bindings` fill portable `topology` from native artifacts. Optional `--label key=value` stores opaque site aliases under `labels`. Non-passing records automatically include a concise `labels.failure_reason` derived from the test type and analyzer code; an explicit `--label failure_reason=...` overrides it with caller-specific context.
+`--hosts` and `--analyzer-code` remain valid overrides. For physical, the reporter infers them (and optional `pass_pct`, the analyzer success rate 0–100) from `--artifact-dir` logs when omitted. Other test types still require `--hosts` and `--analyzer-code`. Stdout is always one compact JSON object. Pass `--store-root DIR` (or set `CLUSTER_HEALTH_STORE_ROOT`) if your site persists files; there is no default directory. Layout is `DIR/<YYYY-MM-DD>/<record_id>.json` (one compact JSON line per file). The date directory mode follows DIR: group-only roots get `03770` (setgid, sticky, owner/group write); when DIR is already other-writable the date dir is sticky `01777` so mixed UIDs (humans, automation, log shippers) can share it. An existing date dir that is already other-writable is never tightened back to group-only. Only that directory is chmod'd; DIR and its ancestors are left as they are. Record files are always `0644`, whatever the caller's umask, so other UIDs (exporters, log shippers) can read them. Writes use a dotted temp in that same directory then an exclusive (no-clobber) link onto the final name; if that name already exists with different content the file is left in place and stdout omits `record_id`. Scrapers should glob `*.json` and ignore `*.tmp`. Optional `--cabling` / `--deployment` / `--fsd` / `--gsd` / `--rankfile` / `--rank-bindings` fill portable `topology` from native artifacts. Optional `--label key=value` stores opaque site aliases under `labels`. Non-passing records automatically include a concise `labels.failure_reason` derived from the test type and analyzer code; an explicit `--label failure_reason=...` overrides it with caller-specific context.
 
 Replay leftover dumps without re-running validation:
 
