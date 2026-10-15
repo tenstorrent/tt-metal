@@ -66,9 +66,15 @@ class MuseGlimmerGenerator:
         t = float(sp.get("temperature", 0.0) or 0.0)
         if sampling is None or t <= 0:
             return format_sampling_params(SamplingParams(temperature=0.0, top_k=1, top_p=1.0), 32)
+        # len(temperature) sets the active lane count; a scalar would leave lanes 1..31 greedy.
         # top_k <= 0 means "no filter": the sampler clamps k to max_top_k (32).
         return format_sampling_params(
-            SamplingParams(temperature=t, top_k=int(sp.get("top_k", 32)) or 32, top_p=float(sp.get("top_p", 1.0))), 32
+            SamplingParams(
+                temperature=[t] * 32,
+                top_k=int(sp.get("top_k", 32)) or 32,
+                top_p=float(sp.get("top_p", 1.0)),
+            ),
+            32,
         )
 
     def decode_step(self, tokens: torch.Tensor, positions: torch.Tensor, sampling=None, sampling_params=None):
