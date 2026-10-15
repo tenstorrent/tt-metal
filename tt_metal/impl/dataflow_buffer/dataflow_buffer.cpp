@@ -1536,8 +1536,10 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
             // producer. Relay DFBs borrow a PrefetcherPipe / CrossNode ring whose producer h (pipe
             // credit lane h) owns entries h, h+P, ..., so interleave instead (stride P) to keep the
             // TC layout in step with the ring. TC counts are unaffected; consumers still round-robin
-            // one TC per producer and now see entries in ring order.
-            stride_in_entries = config.is_relay ? config.num_producers : 1;
+            // one TC per producer and now see entries in ring order. A BLOCKED relay producer already
+            // owns whole blocks h, h+P, ... (one block per pipe entry), so it keeps the block layout.
+            stride_in_entries =
+                (config.is_relay && config.pap != ::dfb::AccessPattern::BLOCKED) ? config.num_producers : 1;
             break;
         case ::dfb::AccessPattern::BLOCKED: {
             const uint32_t L = std::lcm(config.num_producers, config.num_consumers);
