@@ -222,13 +222,6 @@ private:
         return true;
     }
 
-    /* EC_E0_SOURCE_SELF: writes the fields E1's local sink checks. */
-    void fill_slot(uint32_t p, uint32_t slot_addr, uint32_t ordinal) {
-        auto* h = reinterpret_cast<volatile fs_hybrid_mesh_packet_header_t*>(slot_addr);
-        ec_header_set_seq(h, ordinal);
-        fs_set_src_ch_id(h, static_cast<uint8_t>(p));
-    }
-
     void stamp_marker(uint32_t p, uint32_t slot_addr, uint32_t ordinal) {
         uint32_t m[4];
         ec_tail_marker(p, ordinal, m);
@@ -293,7 +286,9 @@ private:
                 continue;
             }
             if constexpr (EC_E0_SOURCE_SELF) {
-                fill_slot(p, tx_base_ + off, ordinal);
+                /* The fields E1's local sink checks. */
+                ec_header_mark(
+                    reinterpret_cast<volatile fs_hybrid_mesh_packet_header_t*>(tx_base_ + off), p, ordinal);
             }
             if constexpr (EC_TAIL_MARKER) {
                 stamp_marker(p, tx_base_ + off, ordinal);

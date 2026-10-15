@@ -241,10 +241,9 @@ private:
                 return false;
             }
             if constexpr (EC_E1_SOURCE_SELF) {
-                /* The fields the forwarder checks, as E0's local source writes them. */
-                auto* h = reinterpret_cast<volatile fs_hybrid_mesh_packet_header_t*>(src);
-                ec_header_set_seq(h, received_[p] + j);
-                fs_set_src_ch_id(h, static_cast<uint8_t>(p));
+                /* The fields the forwarder checks. */
+                ec_header_mark(
+                    reinterpret_cast<volatile fs_hybrid_mesh_packet_header_t*>(src), p, received_[p] + j);
             }
             if constexpr (!EC_E1_SINK_LOCAL) {
                 noc_async_write(

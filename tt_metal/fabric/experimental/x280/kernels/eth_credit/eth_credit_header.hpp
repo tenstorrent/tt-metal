@@ -58,6 +58,13 @@ inline uint32_t ec_header_seq(const volatile fs_hybrid_mesh_packet_header_t* hea
            (static_cast<uint32_t>(bytes[EC_HEADER_SEQ_OFFSET + 3u]) << 24);
 }
 
+/** Writes what a receiver checks of packet `seq` from forwarder `p`: its
+ * sequence number and channel. */
+inline void ec_header_mark(volatile fs_hybrid_mesh_packet_header_t* header, uint32_t p, uint32_t seq) {
+    ec_header_set_seq(header, seq);
+    fs_set_src_ch_id(header, static_cast<uint8_t>(p));
+}
+
 /**
  * Seeds a complete header for forwarder `p`: fs_seed_unicast_header() rewrites
  * all 96 bytes, so src_ch_id, payload_size_bytes and seq are written after it.
