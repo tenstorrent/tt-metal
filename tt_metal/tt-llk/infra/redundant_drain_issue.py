@@ -31,10 +31,16 @@ TREES = ("tt_metal/tt-llk/tt_llk_blackhole/", "tt_metal/tt-llk/tt_llk_wormhole_b
 DRAIN = re.compile(r"\b(?:ckernel::)?(?:tensix_sync|mop_sync)\s*\(\s*\)")
 
 
-def run(args, check=True, input_text=None):
-    res = subprocess.run(args, capture_output=True, text=True, input=input_text)
+# The programs this script may start. A process is started only for a name in this table, with its
+# arguments as a list and no shell, so nothing here is ever parsed by a shell.
+PROGRAMS = {"git": "git", "gh": "gh", "python": sys.executable}
+
+
+def run(program, args, check=True):
+    argv = [PROGRAMS[program], *args]
+    res = subprocess.run(argv, capture_output=True, text=True)
     if check and res.returncode != 0:
-        sys.stderr.write(f"command failed: {' '.join(args)}\n{res.stderr}\n")
+        sys.stderr.write(f"command failed: {' '.join(argv)}\n{res.stderr}\n")
         sys.exit(1)
     return res.stdout
 
@@ -42,7 +48,7 @@ def run(args, check=True, input_text=None):
 def commit(ref):
     """The full SHA of `ref`, which must name a commit; an option-shaped value is rejected."""
     return run(
-        ["git", "rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"]
+        "git", ["rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"]
     ).strip()
 
 
@@ -51,13 +57,13 @@ def added_drain_lines(base, head):
     files = [
         f
         for f in run(
-            ["git", "diff", "--name-only", f"{base}..{head}", "--", *TREES]
+            "git", ["diff", "--name-only", f"{base}..{head}", "--", *TREES]
         ).split()
         if f.endswith((".h", ".hpp"))
     ]
     added = {}
     for f in files:
-        diff = run(["git", "diff", "-U0", f"{base}..{head}", "--", f], check=False)
+        diff = run("git", ["diff", "-U0", f"{base}..{head}", "--", f], check=False)
         line = 0
         for raw in diff.splitlines():
             m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
@@ -72,20 +78,21 @@ def added_drain_lines(base, head):
 
 
 def findings_on(files):
-    out = run([sys.executable, CHECKER, "--json", *files], check=False)
+    out = run("python", [CHECKER, "--json", *files], check=False)
     return [json.loads(l) for l in out.splitlines() if l.startswith("{")]
 
 
 def blame_commit(path, line, head):
     out = run(
-        ["git", "blame", "-L", f"{line},{line}", "--porcelain", head, "--", path],
+        "git",
+        ["blame", "-L", f"{line},{line}", "--porcelain", head, "--", path],
         check=False,
     )
     return out.split("\n", 1)[0].split(" ", 1)[0] if out else ""
 
 
 def pull_for(sha):
-    out = run(["gh", "api", f"repos/{REPO}/commits/{sha}/pulls"], check=False)
+    out = run("gh", ["api", f"repos/{REPO}/commits/{sha}/pulls"], check=False)
     try:
         prs = json.loads(out)
     except ValueError:
@@ -103,8 +110,8 @@ def pull_for(sha):
 
 def ensure_label(dry):
     exists = run(
+        "gh",
         [
-            "gh",
             "label",
             "list",
             "--repo",
@@ -121,8 +128,8 @@ def ensure_label(dry):
     if exists or dry:
         return
     run(
+        "gh",
         [
-            "gh",
             "label",
             "create",
             LABEL,
@@ -139,8 +146,8 @@ def ensure_label(dry):
 
 def open_issue_for(marker):
     out = run(
+        "gh",
         [
-            "gh",
             "issue",
             "list",
             "--repo",
@@ -251,8 +258,8 @@ def main():
                 continue
             if existing:
                 run(
+                    "gh",
                     [
-                        "gh",
                         "issue",
                         "edit",
                         str(existing),
@@ -260,12 +267,11 @@ def main():
                         REPO,
                         "--body",
                         body,
-                    ]
+                    ],
                 )
                 print(f"updated #{existing}: {title}")
             else:
                 cmd = [
-                    "gh",
                     "issue",
                     "create",
                     "--repo",
@@ -279,7 +285,7 @@ def main():
                 ]
                 if pr and pr.get("author"):
                     cmd += ["--assignee", pr["author"]]
-                print("created " + run(cmd, check=False).strip() + ": " + title)
+                print("created " + run("gh", cmd, check=False).strip() + ": " + title)
 
 
 if __name__ == "__main__":
