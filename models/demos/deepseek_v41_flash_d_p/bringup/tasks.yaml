@@ -239,6 +239,14 @@ tasks:
     kind: op
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-10-15T22:30:31'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_collapse.py: 1730c80c8c469ad82d74f63250d5900679e66eb4b73884e8651eff6e72fcafc0
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.swa.02
   title: 'swa block with steps 1-2 on device (last: attn_collapse)'
   step: implement
