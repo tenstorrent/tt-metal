@@ -49,6 +49,11 @@ from .llk_params import (
 from .matmul_sweep import validate_tile_dimensions
 from .sfpu_dispatch_constants import RELU_MAX_THRESHOLD
 
+
+def _fp32_bits(value: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
 # Base parameter classes
 
 
@@ -411,6 +416,28 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"#define SFPU_SHIFT_AMOUNT {self.shift_amount}u"
+
+
+@dataclass
+class SFPU_POLYGAMMA_ORDER(TemplateParameter):
+    """Order n for polygamma, emitted as the (n, scale) fp32 bit patterns ttnn passes.
+
+    ``scale`` is (-1)^(n+1) * n!, exact in fp32 for every supported order (1..11). Macros
+    rather than constexprs for the same reason as :class:`SFPU_SHIFT_AMOUNT`: sfpu_operations.h
+    selects on ``#ifdef``, and a test that does not set this keeps trigamma (n = 1).
+    """
+
+    polygamma_order: int = 1
+
+    def convert_to_cpp(self) -> str:
+        n = self.polygamma_order
+        if not 1 <= n <= 11:
+            raise ValueError(f"polygamma supports orders 1 to 11, got {n}")
+        scale = (-1) ** (n + 1) * math.factorial(n)
+        return (
+            f"#define SFPU_POLYGAMMA_N_BITS {_fp32_bits(n):#x}u\n"
+            f"#define SFPU_POLYGAMMA_SCALE_BITS {_fp32_bits(scale):#x}u"
+        )
 
 
 @dataclass
@@ -1362,6 +1389,25 @@ class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
 
 
+@dataclass
+class BLOCK_MAX8_PARAMS(RuntimeParameter):
+    """Pass the valid prefix and optional DST sign-bit probe to the driver."""
+
+    valid_scores: int
+    inject_negative_zero: int
+
+    def convert_to_cpp(self):
+        """Provide the equivalent constant for harness template mode."""
+        return (
+            f"constexpr unsigned VALID_SCORES = {self.valid_scores};"
+            f"constexpr unsigned INJECT_NEGATIVE_ZERO = {self.inject_negative_zero};"
+        )
+
+    def convert_to_struct_fields(self):
+        """Serialize the valid prefix and probe flag as unsigned runtime arguments."""
+        return "unsigned VALID_SCORES; unsigned INJECT_NEGATIVE_ZERO;", "II"
+
+
 def generate_input_dim(
     srcA: tuple[int],
     srcB: tuple[int],
@@ -2185,15 +2231,11 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
     scalar0: float = 1.0
     scalar1: float = 1.0
 
-    @staticmethod
-    def _fp32_bits(value: float) -> int:
-        return struct.unpack("<I", struct.pack("<f", value))[0]
-
     def convert_to_cpp(self) -> str:
         return (
             f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {self._fp32_bits(self.scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {self._fp32_bits(self.scalar1)}u;"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {_fp32_bits(self.scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {_fp32_bits(self.scalar1)}u;"
         )
 
 
