@@ -2636,11 +2636,12 @@ std::optional<tt::tt_fabric::FabricConfig> resolve_mesh_fabric_config(
     }
     std::optional<tt::tt_fabric::FabricConfig> resolved;
     try {
-        tt::tt_fabric::MeshGraph mesh_graph =
-            process_wide_override.has_value() ? tt::tt_fabric::MeshGraph(cluster, path.string(), *process_wide_override)
-                                              : tt::tt_fabric::MeshGraph(cluster, path.string());
+        // MeshGraph's ctor already takes std::optional<FabricConfig>, so pass the override through directly.
+        tt::tt_fabric::MeshGraph mesh_graph(cluster, path.string(), process_wide_override);
         resolved = mesh_graph.get_fabric_config(MeshId{mesh_id});
     } catch (const std::exception&) {
+        // Intentionally swallow: a rejected config (config-vs-topology or the 1D-multi-mesh guard) is the
+        // expected negative outcome here, reported to callers as nullopt.
     }
     std::filesystem::remove(path);
     return resolved;
