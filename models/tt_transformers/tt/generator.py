@@ -1362,6 +1362,39 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 logger.info("Batched prefill disabled: the model has no batched on-device sampling hooks")
                 use_batched_prefill = False
 
+        # Opt-in hook (GPT-OSS): a model's args may define ``batched_prefill_group_size(padded_len, batch_size)``
+        # to prefill the batch as consecutive groups of that many users, one batched forward per group (e.g. when
+        # all users together exceed the token budget). Each group places its users at local rows 0..g-1 of its
+        # own page-table slice, so only host logits are supported (no on-device sampling, no hidden states).
+        group_size_hook = getattr(self.model_args[0], "batched_prefill_group_size", None)
+        group = group_size_hook(prefill_seq_lens[0], batch_size) if callable(group_size_hook) else None
+        if (
+            use_batched_prefill
+            and group is not None
+            and 1 < group < batch_size
+            and not on_device_sampling_requested
+            and not return_hidden_states
+            and page_table is not None
+            and start_pos is None
+        ):
+            outputs = []
+            for g0 in range(0, batch_size, group):
+                g1 = min(g0 + group, batch_size)
+                outputs.append(
+                    self._prefill_forward_text_impl(
+                        tokens[g0:g1],
+                        page_table=page_table[g0:g1],
+                        kv_cache=kv_cache,
+                        prompt_lens=prompt_lens[g0:g1],
+                        empty_slots=list(range(g1 - g0)),
+                        enable_trace=enable_trace,
+                        model_id_warmup=model_id_warmup,
+                        warmup_prefill=False,
+                        **kwargs,
+                    )
+                )
+            return torch.cat(outputs, dim=0)
+
         if use_batched_prefill:
             padded_batch = batched_prefill_padded_batch(batch_size, empty_slots, self.model_args[0].max_batch_size)
             if padded_batch > self.model_args[0].max_batch_size:
