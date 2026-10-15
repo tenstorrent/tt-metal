@@ -292,6 +292,22 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                const ttnn::Shape& shape,
                DataType dtype,
                Layout layout,
+               const MemoryConfig& memory_config,
+               const std::optional<Tile>& tile) {
+                new (t) tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, PageConfig(layout, tile), memory_config));
+            },
+            nb::arg("shape"),
+            nb::arg("dtype"),
+            nb::arg("layout"),
+            nb::arg("memory_config"),
+            nb::arg("tile") = nb::none(),
+            R"doc(Create a tensor specification preserving the complete memory configuration, including per-core placement.)doc")
+        .def(
+            "__init__",
+            [](tt::tt_metal::TensorSpec* t,
+               const ttnn::Shape& shape,
+               DataType dtype,
+               Layout layout,
                BufferType buffer_type,
                const std::optional<Tile>& tile) {
                 new (t) tt::tt_metal::TensorSpec(
