@@ -528,6 +528,26 @@
       }
     },
     {
+      "id": "packet.throughput.paired.T1.c8k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "1",
+        "PACKET_INJECTION_TILES": "0,0",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
       "id": "packet.throughput.brisc.T2",
       "member": "packet_injection/tensix_to_x280",
       "argv": [
@@ -548,6 +568,26 @@
       }
     },
     {
+      "id": "packet.throughput.brisc.T2.c8k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "2",
+        "PACKET_INJECTION_TILES": "0,0;1,0",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
       "id": "packet.throughput.paired.T2",
       "member": "packet_injection/tensix_to_x280",
       "argv": [
@@ -563,6 +603,26 @@
         "PACKET_INJECTION_B": "1",
         "PACKET_INJECTION_C": "1",
         "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T2.c8k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "2",
+        "PACKET_INJECTION_TILES": "0,0;1,0",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
         "PACKET_INJECTION_W": "1000",
         "PACKET_INJECTION_N": "1000"
       }
@@ -1188,6 +1248,26 @@
       }
     },
     {
+      "id": "packet.throughput.brisc.T8.c8k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "8",
+        "PACKET_INJECTION_TILES": "0,0;1,0;2,0;3,0;0,1;1,1;2,1;3,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
       "id": "packet.throughput.paired.T8",
       "member": "packet_injection/tensix_to_x280",
       "argv": [
@@ -1203,6 +1283,26 @@
         "PACKET_INJECTION_B": "1",
         "PACKET_INJECTION_C": "1",
         "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000"
+      }
+    },
+    {
+      "id": "packet.throughput.paired.T8.c8k16",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "paired",
+        "PACKET_INJECTION_T": "8",
+        "PACKET_INJECTION_TILES": "0,0;1,0;2,0;3,0;0,1;1,1;2,1;3,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
         "PACKET_INJECTION_W": "1000",
         "PACKET_INJECTION_N": "1000"
       }

@@ -2,7 +2,7 @@
 
 The maintained P2P, transport-bandwidth, pipeline-stage, packet-injection,
 core-sync and eth_credit suites retain native measurements. Legacy experiments are excluded.
-`characterization_manifest.json` selects 135 configurations: 28 of the 40 of the
+`characterization_manifest.json` selects 140 configurations: 28 of the 40 of the
 2026-09-23 campaign (39 evidenced prior configurations and the explicitly
 authorized first fixed-4×4 core-sync run, less its ten DRISC and idle-ERISC
 `pipeline_stage` configurations and its two X280 `route_forward` COPY ones), the nine
@@ -11,13 +11,14 @@ and all at B=1; B=4 and B=8 at writers 1 and 4), twelve points of its
 consumer-settings sweep (writers 1 and all at B=1 for six further (C, K)
 settings), eight more at the selected C=8, K=16 (the rest of that writer curve
 and B set, and N=4096 at writers all), the Tensix `brisc.T1` throughput
-point at C=8, K=16, 58 sweep points no campaign has yet measured (the six
+point at C=8, K=16, 63 sweep points, all measured in the 2026-10-14 whole-suite campaign (the six
 `packet.throughput.{brisc,paired}.T{2,4,8}` load points, 12
 `packet.throughput.{brisc,paired}.T4.{c4k8,c8k16,s4,s8,s64,b4}` capacity points
 at the T=4 load knee, each changing one of C/K, S or B from its T4 point, 16
 `packet.throughput.{brisc,paired}.T4.s64.c<C>k<K>` C/K isolation points that
 change only C and K from `T4.s64` (C in {1, 2, 4, 8, 16} at K=16 and K in
-{2, 4, 8} at C=1), and 24
+{2, 4, 8} at C=1), five `packet.throughput.paired.T1.c8k16` and
+`packet.throughput.{brisc,paired}.T{2,8}.c8k16` load points at C=8, K=16, and 24
 `packet.erisc_header.s<S>.c<C>k<K>.*` capacity points at S=32 and 64: writers 1
 and all at B=1 and writers 1 at B=4 for (C, K) = (8, 16), (8, 32), (16, 32) and
 (32, 32)), and `eth_credit.throughput`, eth_credit's slot, batch and P
@@ -380,8 +381,8 @@ executables that launch on a core-local RISC link `x280_slow_dispatch`, which
 sets `TT_METAL_SLOW_DISPATCH_MODE=1` before `main`; `common_environment` does not
 set it, and the runner clears an inherited value, so every other executable runs
 fast dispatch. A frozen manifest whose `common_environment` sets the variable ran
-all its configurations under slow dispatch, so comparing one of these 77 of the
-135 configurations with such a campaign also compares dispatch modes:
+all its configurations under slow dispatch, so comparing one of these 82 of the
+140 configurations with such a campaign also compares dispatch modes:
 `x280_same_tile.{A,B}InitiatesFirst`, `x280_peer_tile.{A,B}InitiatesFirst`,
 `tensix_peer_tile.{X280,Tensix}InitiatesFirst`,
 `bw.x280_to_tensix.{64,256}.{retired,injection}`,
@@ -390,6 +391,7 @@ all its configurations under slow dispatch, so comparing one of these 77 of the
 `pipeline.x280.route_forward.decide_plain`,
 `packet.throughput.brisc.T1`, `packet.throughput.brisc.T1.c8k16`,
 `packet.throughput.paired.T1`, `packet.throughput.{brisc,paired}.T{2,4,8}`,
+`packet.throughput.paired.T1.c8k16`, `packet.throughput.{brisc,paired}.T{2,8}.c8k16`,
 `packet.throughput.{brisc,paired}.T4.{c4k8,c8k16,s4,s8,s64,b4}`,
 `packet.throughput.{brisc,paired}.T4.s64.{c1k16,c2k16,c4k16,c8k16,c16k16,c1k2,c1k4,c1k8}`,
 `packet.latency-{include,exclude}.brisc.T1`,
