@@ -38,6 +38,24 @@ namespace {
 
 constexpr uint64_t kParticipants = 1u;
 
+namespace backend = transport_bandwidth::backend_x280_to_tensix;
+
+/* Backend initialisation, then the shared frontend, for one store width.
+ * On an initialisation failure, publish ARG_LAYOUT_MISMATCH, or
+ * WINDOW_CLEANUP_FAILED when a window it programmed does not clear -- the
+ * result address is validated, so the host reads the terminal state rather
+ * than inferring it. */
+template <uint32_t StoreWidth>
+inline __attribute__((always_inline)) void run(
+    backend::state_t& state, const transport_bw_x280_to_tensix_section_t& section, transport_bw_result_t& r) {
+    using Backend = backend::Backend<StoreWidth>;
+    if (!backend::initialize(state, section, r)) {
+        ubench_finish<Backend>(state, TRANSPORT_BW_STATE_ARG_LAYOUT_MISMATCH, TRANSPORT_BW_STATE_WINDOW_CLEANUP_FAILED);
+        return;
+    }
+    transport_bandwidth::run_member<Backend>(state);
+}
+
 }  // namespace
 
 /* `hot` because run_member inlines the timed loops here, and GCC lays out
@@ -54,7 +72,7 @@ extern "C" __attribute__((hot)) int main(uint64_t hartid) {
      * struct we just copied, so a cookie-mismatched section leaves the
      * host observing DONE-not-set and inferring ARG_LAYOUT_MISMATCH from
      * that. */
-    if (!transport_bandwidth::backend_x280_to_tensix::sanity_check(store.section)) {
+    if (!backend::sanity_check(store.section)) {
         return 0;
     }
 
@@ -62,24 +80,18 @@ extern "C" __attribute__((hot)) int main(uint64_t hartid) {
         reinterpret_cast<volatile transport_bw_result_t*>(store.section.backend.own_result_addr);
     transport_bw_result_t& r = *const_cast<transport_bw_result_t*>(result_v);
 
-    /* Backend initialisation: programs the TLB,
-     * loads the staging vector. On failure, publish ARG_LAYOUT_MISMATCH, or
-     * WINDOW_CLEANUP_FAILED when a window it programmed does not clear --
-     * the result address is validated, so the host reads the
-     * terminal state rather than inferring it.
-     *
-     * The `state{}` initializer is omitted: state_t carries a 64-byte
+    /* The `state{}` initializer is omitted: state_t carries a 64-byte
      * staging array, and a zero-init would have GCC emit a `memset` call
      * that this freestanding image cannot resolve. `initialize()` writes
      * every scalar field before use and fills the staging array from LIM
-     * on the success path. */
-    transport_bandwidth::backend_x280_to_tensix::state_t state;
-    if (!transport_bandwidth::backend_x280_to_tensix::initialize(state, store.section, r)) {
-        ubench_finish<transport_bandwidth::backend_x280_to_tensix::Backend>(
-            state, TRANSPORT_BW_STATE_ARG_LAYOUT_MISMATCH, TRANSPORT_BW_STATE_WINDOW_CLEANUP_FAILED);
-        return 0;
+     * on the success path.
+     *
+     * sanity_check admitted only the listed widths. */
+    backend::state_t state;
+    switch (store.section.backend.store_width) {
+        case 4u: run<4u>(state, store.section, r); break;
+        case 8u: run<8u>(state, store.section, r); break;
+        case 64u: run<64u>(state, store.section, r); break;
     }
-
-    transport_bandwidth::run_member<transport_bandwidth::backend_x280_to_tensix::Backend>(state);
     return 0;
 }

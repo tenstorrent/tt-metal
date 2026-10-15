@@ -267,7 +267,9 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
         r.secondary_batch_delta = 350000;
         const x280::suites::transport_bandwidth::Point point{
             .transfer_size = 64, .boundary = TRANSPORT_BW_BOUNDARY_DRAINED, .warmup = 128, .samples = 16384};
-        write("bw.x280_to_tensix.64.retired", x280::suites::transport_bandwidth::x280_to_tensix_record(r, point));
+        write(
+            "bw.x280_to_tensix.64.retired",
+            x280::suites::transport_bandwidth::x280_to_tensix_record(r, point, /*store_width=*/4));
         write(
             "bw.tensix_to_x280.64.drained",
             x280::suites::transport_bandwidth::tensix_to_x280_record(r, point, calibrated, tensix_clock));

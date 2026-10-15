@@ -7,18 +7,18 @@
  * of the transport_bandwidth suite.
  *
  * X280 is the initiator. It programs one paired-range NOC TLB slot at the
- * Tensix worker's L1 destination, then issues bursts of individual u32
- * stores through the window. Tensix is a passive addressable target -- no
+ * Tensix worker's L1 destination, then issues bursts of individual stores
+ * through the window. Tensix is a passive addressable target -- no
  * Tensix kernel is submitted; L1 controllers accept NOC writes whether or
  * not the worker's harts are running application code.
  *
- * Every issue moves `transfer_size` bytes as `transfer_size / 4` back-to-
- * back u32 stores. BUG-4 forbids memcpy through a NOC window; the burst is
- * a straight sequence of `sw` instructions, the shape this member
- * measures. Every
+ * Every issue moves `transfer_size` bytes as `transfer_size / store_width`
+ * back-to-back stores of one width: `sw` (4 B), `sd` (8 B) or `vse32.v` at
+ * e32/m1 (64 B). BUG-4 forbids memcpy through a NOC window; the three
+ * widths land byte-exact through a posted window into Tensix L1. Every
  * store against the uncached window becomes its own NoC request
- * (TLBWindows.md), so `transfer_size` is a burst of 4-byte requests, not
- * one packet.
+ * (TLBWindows.md), so `transfer_size` is a burst of `store_width`-byte
+ * requests, not one packet.
  *
  * TLB mode is ordering mode 2, Posted Writes (`NOC_ORDER_POSTED`);
  * see BlackholeA0/L2CPUTile/TLBWindows.md. A fenced read is not a completion
@@ -66,7 +66,7 @@ typedef struct {
     uint64_t own_result_addr;  /* LIM: transport_bw_result_t destination */
     x280_noc_coord_t peer_noc; /* Tensix worker, virtual (UMD TRANSLATED) */
     uint32_t peer_tlb_index;   /* X280_TLB_PAIRED_BASE + n */
-    uint32_t reserved;
+    uint32_t store_width;      /* bytes per store: 4 (sw), 8 (sd) or 64 (vse32.v) */
 } transport_bw_x280_to_tensix_backend_args_t;
 
 typedef struct {
@@ -86,7 +86,7 @@ typedef transport_bw_x280_to_tensix_section_t transport_bw_x280_to_tensix_args_b
 
 /* The largest listed transfer_size. The host sizes the Tensix L1 destination
  * to it. */
-#define TB_X2T_DST_MAX_BYTES 256u
+#define TB_X2T_DST_MAX_BYTES 65536u
 
 /* --------------------------------------------------------------------------
  * Static assertions

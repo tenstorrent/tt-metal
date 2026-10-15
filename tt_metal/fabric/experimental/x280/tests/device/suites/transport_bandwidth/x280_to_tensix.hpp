@@ -4,8 +4,9 @@
 //
 // suites/transport_bandwidth/x280_to_tensix.hpp -- X280 -> Tensix member.
 //
-// X280 hart 0 stores N bursts of `transfer_size` bytes through one paired
-// NOC TLB slot at a passive Tensix L1 destination. The descriptor owns the
+// X280 hart 0 stores N bursts of `transfer_size` bytes, `store_width` bytes
+// per store, through one paired NOC TLB slot at a passive Tensix L1
+// destination. The descriptor owns the
 // LIM+L1 layouts, args pack, harvest, and records; the host test wires
 // the fixture and sweep.
 
@@ -55,6 +56,7 @@ constexpr uint32_t kDefaultTransferCount = 16384u;
 struct SweepPoint {
     uint32_t transfer_size;
     uint32_t boundary;
+    uint32_t store_width;  // bytes per store: 4 (sw), 8 (sd), 64 (vse32.v)
     const char* label;
 };
 using Axis = SweepPoint;
@@ -107,6 +109,7 @@ inline void run_axis(
     x280::harness::session::Fixture& f, const x280::harness::RunSpec& /*spec*/, const SweepPoint& point) {
     const uint32_t transfer_size = point.transfer_size;
     const uint32_t boundary = point.boundary;
+    const uint32_t store_width = point.store_width;
 
     const uint32_t W = hart_::env_u32("TRANSPORT_BW_W", kDefaultWarmupCount);
     const uint32_t N = hart_::env_u32("TRANSPORT_BW_N", kDefaultTransferCount);
@@ -156,7 +159,7 @@ inline void run_axis(
     block.backend.own_result_addr = XR.result.addr;
     block.backend.peer_noc = worker_virtual.noc();
     block.backend.peer_tlb_index = kTlbIndex;
-    block.backend.reserved = 0u;
+    block.backend.store_width = store_width;
     hreg::write_args(*f.tile, XR.args, block);
 
     hexec::X280Launch launch{
@@ -201,7 +204,7 @@ inline void run_axis(
     }
 
     const auto body = x280::harness::output::record(x280_to_tensix_record(
-        result, {.transfer_size = transfer_size, .boundary = boundary, .warmup = W, .samples = N}));
+        result, {.transfer_size = transfer_size, .boundary = boundary, .warmup = W, .samples = N}, store_width));
     x280::harness::output::write_jsonl("transport_bandwidth_x280_to_tensix", body);
     std::printf("%s\n", body.c_str());
 }

@@ -2,7 +2,7 @@
 
 The maintained P2P, transport-bandwidth, pipeline-stage, packet-injection,
 core-sync and eth_credit suites retain native measurements. Legacy experiments are excluded.
-`characterization_manifest.json` selects 140 configurations: 28 of the 40 of the
+`characterization_manifest.json` selects 160 configurations: 28 of the 40 of the
 2026-09-23 campaign (39 evidenced prior configurations and the explicitly
 authorized first fixed-4×4 core-sync run, less its ten DRISC and idle-ERISC
 `pipeline_stage` configurations and its two X280 `route_forward` COPY ones), the nine
@@ -26,7 +26,9 @@ sweep across the Ethernet link of cards 0 and 1 (`TT_VISIBLE_DEVICES` unset, so 
 visible), and
 the 18 `bw.tensix_to_x280` points that extend its transfer-size axis to 128, 320,
 384, 512, 1024, 2048, 4096, 8192 and 16384 B under both boundaries, which no
-campaign has yet measured. An ERISC point's record count comes from
+campaign has yet measured, and the 20 `bw.x280_to_tensix` points that add 4096
+and 65536 B transfers and the `sd` (8 B) and `vse32.v` (64 B) store widths
+under both boundaries, which no campaign has yet measured. An ERISC point's record count comes from
 its gtest filter, or for `writers_all` from its run record. An
 ERISC point the device cannot host -- more writers than inactive Ethernet cores,
 none at all, or `IDLE_ETH` not enabled -- is an availability skip, and like every
@@ -158,7 +160,7 @@ section names each one. The records carry no field that distinguishes them.
 | transport_bandwidth `DRAINED` | `tensix_to_x280` | The stop follows `noc_async_write_barrier()`: every write has been acknowledged, so the rate is a delivered rate. INJECTION points stop before the drain. Nothing reads back the LIM destination, so its content and address are not verified; the path check writes and reads back a separate verify word. |
 | transport_bandwidth `RETIRED` | `x280_to_tensix` | The stop follows the stores retiring and one fenced read through the window returning. Under the posted ordering mode the read is not ordered behind the writes, so the rate is injection-side and can end before the last posted writes land. The bias is bounded by the bytes in flight at the stop; it is judged insignificant and has not been measured. The host's L1 readback after the run confirms delivery. Older records label this boundary `DRAINED` and its ids `.drained`; they are stale and are not mapped onto `RETIRED`. |
 | transport_bandwidth `transfer_size` | `tensix_to_x280` | One NoC write of `transfer_size` bytes per issue. |
-| | `x280_to_tensix` | `transfer_size / 4` separate 4-byte NoC requests per issue: every store against the uncached window is its own request. |
+| | `x280_to_tensix` | `transfer_size / store_width` separate `store_width`-byte NoC requests per issue: every store against the uncached window is its own request. |
 | p2p_latency `TURN` (the responder's transmit) | `x280_same_tile` | Store issue: a LIM store and `fence ow, ow`, which waits for nothing remote. |
 | | `x280_peer_tile`, and the X280 side of `tensix_peer_tile`, `erisc_peer_tile` and `drisc_peer_tile` | Store to BRESP: the window is in ordering mode 1 (Strict AXI), which holds BRESP until the NoC write completes. |
 | | The Metal side of those three | `noc_async_write` to its write acknowledgement (`noc_async_write_barrier()`). |
@@ -387,11 +389,11 @@ executables that launch on a core-local RISC link `x280_slow_dispatch`, which
 sets `TT_METAL_SLOW_DISPATCH_MODE=1` before `main`; `common_environment` does not
 set it, and the runner clears an inherited value, so every other executable runs
 fast dispatch. A frozen manifest whose `common_environment` sets the variable ran
-all its configurations under slow dispatch, so comparing one of these 82 of the
-140 configurations with such a campaign also compares dispatch modes:
+all its configurations under slow dispatch, so comparing one of these 102 of the
+160 configurations with such a campaign also compares dispatch modes:
 `x280_same_tile.{A,B}InitiatesFirst`, `x280_peer_tile.{A,B}InitiatesFirst`,
 `tensix_peer_tile.{X280,Tensix}InitiatesFirst`,
-`bw.x280_to_tensix.{64,256}.{retired,injection}`,
+`bw.x280_to_tensix.{,sd.,vse32.}{64,256,4096,65536}.{retired,injection}`,
 `bw.tensix_to_x280.{64,128,256,320,384,512,1024,2048,4096,8192,16384}.{drained,injection}`,
 `pipeline.x280.route_compute.direction_table_{plain,instrumented}`,
 `pipeline.x280.route_forward.decide_plain`,

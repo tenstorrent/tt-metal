@@ -100,7 +100,8 @@ HEADS = {
     "p2p_latency tensix_peer_tile": P2P_HEADS,
     "p2p_latency erisc_peer_tile": P2P_HEADS,
     "p2p_latency drisc_peer_tile": P2P_HEADS,
-    "transport_bandwidth x280_to_tensix": BATCH_HEADS | {"size B", "boundary", "W", "N", "items", "logical B", "GB/s"},
+    "transport_bandwidth x280_to_tensix": BATCH_HEADS
+    | {"size B", "boundary", "W", "N", "items", "logical B", "store B", "GB/s"},
     "transport_bandwidth tensix_to_x280": BATCH_HEADS | {"size B", "boundary", "W", "N", "items", "logical B", "GB/s"},
     "pipeline_stage route_compute X280 per_sample": PS_COMPUTE_HEADS | PS_X280_HEADS,
     "pipeline_stage route_forward X280 decide off": PS_FORWARD_HEADS | PS_X280_POLICY_HEADS,
@@ -210,6 +211,7 @@ EXPECTED = {
         "cpu/item": "21.362",
         "GB/s": "0.262",
         "boundary": "RETIRED",
+        "store B": "4",
     },
     ("transport_bandwidth tensix_to_x280", 0): {
         "ns": "200000.000",

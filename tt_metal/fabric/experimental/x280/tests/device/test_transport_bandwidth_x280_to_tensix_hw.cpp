@@ -6,8 +6,8 @@
 //
 // The whole implementation lives under
 // suites/transport_bandwidth/x280_to_tensix.hpp. This file wires the
-// fixture, the parameterization axis (transfer size + boundary), and the
-// RunSpec (image env var + kernel dir).
+// fixture, the parameterization axis (transfer size + boundary + store
+// width), and the RunSpec (image env var + kernel dir).
 
 #include "harness/artifacts/artifacts.hpp"
 #include "harness/gtest_dispatch.hpp"
@@ -41,12 +41,37 @@ protected:
 
 TEST_P(TransportBandwidthX280ToTensix, RepeatedIssueMeasuresSustainedAndInjection) { X280_HARNESS_DISPATCH(suite); }
 
+// The sw (4 B) points keep their unprefixed labels; sd and vse32.v points are
+// prefixed by the store.
+constexpr suite::SweepPoint kSweep[] = {
+    {64, TRANSPORT_BW_BOUNDARY_DRAINED, 4, "size64_drained"},
+    {64, TRANSPORT_BW_BOUNDARY_INJECTION, 4, "size64_injection"},
+    {256, TRANSPORT_BW_BOUNDARY_DRAINED, 4, "size256_drained"},
+    {256, TRANSPORT_BW_BOUNDARY_INJECTION, 4, "size256_injection"},
+    {4096, TRANSPORT_BW_BOUNDARY_DRAINED, 4, "size4096_drained"},
+    {4096, TRANSPORT_BW_BOUNDARY_INJECTION, 4, "size4096_injection"},
+    {65536, TRANSPORT_BW_BOUNDARY_DRAINED, 4, "size65536_drained"},
+    {65536, TRANSPORT_BW_BOUNDARY_INJECTION, 4, "size65536_injection"},
+    {64, TRANSPORT_BW_BOUNDARY_DRAINED, 8, "sd_size64_drained"},
+    {64, TRANSPORT_BW_BOUNDARY_INJECTION, 8, "sd_size64_injection"},
+    {256, TRANSPORT_BW_BOUNDARY_DRAINED, 8, "sd_size256_drained"},
+    {256, TRANSPORT_BW_BOUNDARY_INJECTION, 8, "sd_size256_injection"},
+    {4096, TRANSPORT_BW_BOUNDARY_DRAINED, 8, "sd_size4096_drained"},
+    {4096, TRANSPORT_BW_BOUNDARY_INJECTION, 8, "sd_size4096_injection"},
+    {65536, TRANSPORT_BW_BOUNDARY_DRAINED, 8, "sd_size65536_drained"},
+    {65536, TRANSPORT_BW_BOUNDARY_INJECTION, 8, "sd_size65536_injection"},
+    {64, TRANSPORT_BW_BOUNDARY_DRAINED, 64, "vse32_size64_drained"},
+    {64, TRANSPORT_BW_BOUNDARY_INJECTION, 64, "vse32_size64_injection"},
+    {256, TRANSPORT_BW_BOUNDARY_DRAINED, 64, "vse32_size256_drained"},
+    {256, TRANSPORT_BW_BOUNDARY_INJECTION, 64, "vse32_size256_injection"},
+    {4096, TRANSPORT_BW_BOUNDARY_DRAINED, 64, "vse32_size4096_drained"},
+    {4096, TRANSPORT_BW_BOUNDARY_INJECTION, 64, "vse32_size4096_injection"},
+    {65536, TRANSPORT_BW_BOUNDARY_DRAINED, 64, "vse32_size65536_drained"},
+    {65536, TRANSPORT_BW_BOUNDARY_INJECTION, 64, "vse32_size65536_injection"},
+};
+
 INSTANTIATE_TEST_SUITE_P(
     Sweep,
     TransportBandwidthX280ToTensix,
-    ::testing::Values(
-        suite::SweepPoint{64, TRANSPORT_BW_BOUNDARY_DRAINED, "size64_drained"},
-        suite::SweepPoint{64, TRANSPORT_BW_BOUNDARY_INJECTION, "size64_injection"},
-        suite::SweepPoint{256, TRANSPORT_BW_BOUNDARY_DRAINED, "size256_drained"},
-        suite::SweepPoint{256, TRANSPORT_BW_BOUNDARY_INJECTION, "size256_injection"}),
+    ::testing::ValuesIn(kSweep),
     [](const ::testing::TestParamInfo<suite::SweepPoint>& info) { return std::string(info.param.label); });

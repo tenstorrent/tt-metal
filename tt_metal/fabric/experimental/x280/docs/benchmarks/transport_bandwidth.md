@@ -12,7 +12,7 @@ table) is [design.md § Transport bandwidth](design.md#transport-bandwidth); its
 | Executable | Member | Points |
 |---|---|---|
 | `x280_transport_bandwidth_tensix_to_x280` | a Tensix data-movement kernel issues `noc_async_write` into X280 LIM; the X280 is a passive target and runs no image | 64, 128, 256, 320, 384, 512, 1024, 2048, 4096, 8192 and 16384 B, each at the DRAINED and INJECTION boundaries |
-| `x280_transport_bandwidth_x280_to_tensix` | X280 hart 0 issues `SIZE/4` posted u32 stores through one paired-range NoC TLB window into a host-allocated Tensix L1 buffer; the Tensix is passive. Image `firmware-transport-bandwidth-x280-to-tensix.bin` | 64 and 256 B, each at the RETIRED and INJECTION boundaries |
+| `x280_transport_bandwidth_x280_to_tensix` | X280 hart 0 issues `SIZE/W` posted stores of `W` = 4 (`sw`), 8 (`sd`) or 64 B (`vse32.v`) from a register-held 64 B pattern through one paired-range NoC TLB window into a host-allocated Tensix L1 buffer; the Tensix is passive. Image `firmware-transport-bandwidth-x280-to-tensix.bin` | 64, 256, 4096 and 65536 B at each store width, each at the RETIRED and INJECTION boundaries |
 
 Each size is one NoC packet. RETIRED ends on one read through the window after the stores, which
 under the posted ordering mode does not wait for them, so it is an issue rate

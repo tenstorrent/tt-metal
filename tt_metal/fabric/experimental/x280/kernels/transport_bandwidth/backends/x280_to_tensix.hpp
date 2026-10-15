@@ -8,9 +8,9 @@
  *
  * X280 is the initiator. It programs one paired-range NOC TLB slot at the
  * Tensix worker's L1 destination in posted mode, then issues bursts of
- * `transfer_size / 4` back-to-back u32 stores through the window. BUG-4
- * forbids memcpy through the window; the burst is a straight sequence of
- * `sw` instructions, the shape this member measures.
+ * `transfer_size / StoreWidth` back-to-back stores through the window:
+ * `sw`, `sd`, or `vse32.v` at e32/m1. BUG-4 forbids memcpy through the
+ * window; every width is a straight sequence of one store instruction.
  *
  * The source of every store is a 64 B pattern held in registers across the
  * timed loop. The stack is in LIM, which is uncached, so a load per store
@@ -49,6 +49,7 @@
 #include "rt/measurement.h"
 #include "rt/x280_measurement.h"
 #include "rt/x280_noc_map.h"
+#include "rt/x280_vec_m1.h"
 
 namespace transport_bandwidth::backend_x280_to_tensix {
 
@@ -62,13 +63,17 @@ constexpr uint32_t kVerifyMagic = 0x9B7C1D3Eu;
  * round trip, outside the timed loop. */
 constexpr uint32_t kVerifyPollBound = 500000u;
 
-/* Admitted transfer sizes. Each `sw` through the uncached window is its own
- * 4 B NoC request, so a larger transfer_size does not grow a packet. */
-using sizes = size_list<64u, 256u>;
+/* Admitted transfer sizes. Each store through the uncached window is its own
+ * NoC request, so a larger transfer_size does not grow a packet. */
+using sizes = size_list<64u, 256u, 4096u, 65536u>;
 static_assert(sizes::max() == TB_X2T_DST_MAX_BYTES, "the host sizes the Tensix L1 destination to the largest transfer");
 
 /* Words in the source pattern. Every 64 B of a transfer repeats it. */
 constexpr uint32_t kPatternWords = TB_X2T_PATTERN_BYTES / sizeof(uint32_t);
+
+/* Admitted store widths, in bytes: sw, sd, vse32.v at e32/m1. */
+constexpr bool store_width_valid(uint32_t w) { return w == 4u || w == 8u || w == X280_VEC_M1_BYTES; }
+static_assert(TB_X2T_PATTERN_BYTES == X280_VEC_M1_BYTES, "one vse32.v stores the whole source pattern");
 
 /* --------------------------------------------------------------------------
  * Backend types
@@ -102,7 +107,10 @@ struct state_t {
     /* Source pattern, copied from LIM staging at INIT. issue() reads it and
      * s.window with nothing in the timed loop that could change them, so the
      * compiler holds both in registers across the loop. */
-    uint32_t staging[kPatternWords];
+    union {
+        uint32_t u32[kPatternWords];
+        uint64_t u64[kPatternWords / 2u];
+    } staging __attribute__((aligned(TB_X2T_PATTERN_BYTES)));
 
     /* Result region (writable, plain). The volatile-vs-plain cast is done
      * once at image entry. */
@@ -155,6 +163,9 @@ inline bool sanity_check(const transport_bw_x280_to_tensix_section_t& s) {
         return false;
     }
     if (s.backend.own_result_addr == 0u) {
+        return false;
+    }
+    if (!store_width_valid(s.backend.store_width)) {
         return false;
     }
     return x280_tlb_paired_slot(s.backend.peer_tlb_index);
@@ -221,9 +232,13 @@ inline bool initialize(state_t& state, const transport_bw_x280_to_tensix_section
 
     const volatile uint32_t* staging_lim = reinterpret_cast<volatile const uint32_t*>(s.backend.own_staging_addr);
     for (uint32_t k = 0u; k < kPatternWords; ++k) {
-        state.staging[k] = staging_lim[k];
+        state.staging.u32[k] = staging_lim[k];
     }
-    __asm__ volatile("" : : "r"(&state.staging[0]) : "memory");
+    __asm__ volatile("" : : "r"(&state.staging) : "memory");
+    if (s.backend.store_width == X280_VEC_M1_BYTES) {
+        x280_vec_setup_m1();
+        x280_vec_pattern_v1(&state.staging);
+    }
     return true;
 }
 
@@ -238,54 +253,81 @@ inline bool shutdown(state_t& state) {
     return noc_clear_tlb_2m(state.tlb_index) == 0;
 }
 
-/* Store the source pattern at `line`, 64 B, as 16 sw from registers.
+/* Store the source pattern at `line`, 64 B, as StoreWidth-byte stores from
+ * registers: 16 sw, 8 sd, or one vse32.v of v1, which initialize() loaded.
  *
  * No "memory" clobber, so the compiler may keep `line`'s base and the pattern
  * words in registers across calls: the image never reads the window through
  * C, and the timing reads are volatile asm, which the compiler does not
  * reorder this past. */
-inline __attribute__((always_inline)) void store_line(volatile uint32_t* line, const uint32_t* p) {
-    __asm__ volatile(
-        "sw %1, 0(%0)\n"
-        "sw %2, 4(%0)\n"
-        "sw %3, 8(%0)\n"
-        "sw %4, 12(%0)\n"
-        "sw %5, 16(%0)\n"
-        "sw %6, 20(%0)\n"
-        "sw %7, 24(%0)\n"
-        "sw %8, 28(%0)\n"
-        "sw %9, 32(%0)\n"
-        "sw %10, 36(%0)\n"
-        "sw %11, 40(%0)\n"
-        "sw %12, 44(%0)\n"
-        "sw %13, 48(%0)\n"
-        "sw %14, 52(%0)\n"
-        "sw %15, 56(%0)\n"
-        "sw %16, 60(%0)\n"
-        :
-        : "r"(line),
-          "r"(p[0]),
-          "r"(p[1]),
-          "r"(p[2]),
-          "r"(p[3]),
-          "r"(p[4]),
-          "r"(p[5]),
-          "r"(p[6]),
-          "r"(p[7]),
-          "r"(p[8]),
-          "r"(p[9]),
-          "r"(p[10]),
-          "r"(p[11]),
-          "r"(p[12]),
-          "r"(p[13]),
-          "r"(p[14]),
-          "r"(p[15]));
+template <uint32_t StoreWidth>
+inline __attribute__((always_inline)) void store_line(volatile uint32_t* line, const state_t& s) {
+    if constexpr (StoreWidth == 4u) {
+        const uint32_t* p = s.staging.u32;
+        __asm__ volatile(
+            "sw %1, 0(%0)\n"
+            "sw %2, 4(%0)\n"
+            "sw %3, 8(%0)\n"
+            "sw %4, 12(%0)\n"
+            "sw %5, 16(%0)\n"
+            "sw %6, 20(%0)\n"
+            "sw %7, 24(%0)\n"
+            "sw %8, 28(%0)\n"
+            "sw %9, 32(%0)\n"
+            "sw %10, 36(%0)\n"
+            "sw %11, 40(%0)\n"
+            "sw %12, 44(%0)\n"
+            "sw %13, 48(%0)\n"
+            "sw %14, 52(%0)\n"
+            "sw %15, 56(%0)\n"
+            "sw %16, 60(%0)\n"
+            :
+            : "r"(line),
+              "r"(p[0]),
+              "r"(p[1]),
+              "r"(p[2]),
+              "r"(p[3]),
+              "r"(p[4]),
+              "r"(p[5]),
+              "r"(p[6]),
+              "r"(p[7]),
+              "r"(p[8]),
+              "r"(p[9]),
+              "r"(p[10]),
+              "r"(p[11]),
+              "r"(p[12]),
+              "r"(p[13]),
+              "r"(p[14]),
+              "r"(p[15]));
+    } else if constexpr (StoreWidth == 8u) {
+        const uint64_t* p = s.staging.u64;
+        __asm__ volatile(
+            "sd %1, 0(%0)\n"
+            "sd %2, 8(%0)\n"
+            "sd %3, 16(%0)\n"
+            "sd %4, 24(%0)\n"
+            "sd %5, 32(%0)\n"
+            "sd %6, 40(%0)\n"
+            "sd %7, 48(%0)\n"
+            "sd %8, 56(%0)\n"
+            :
+            : "r"(line), "r"(p[0]), "r"(p[1]), "r"(p[2]), "r"(p[3]), "r"(p[4]), "r"(p[5]), "r"(p[6]), "r"(p[7]));
+    } else {
+        static_assert(StoreWidth == X280_VEC_M1_BYTES, "StoreWidth is not an admitted store width");
+        __asm__ volatile(X280_VEC_ASM("vse32.v v1, (%0)\n") : : "r"(line));
+    }
 }
 
 /* --------------------------------------------------------------------------
  * Frontend adapter
+ *
+ * StoreWidth is the bytes per store; the image picks the instantiation from
+ * the section's store_width before anything is timed.
  * -------------------------------------------------------------------------- */
+template <uint32_t StoreWidth>
 struct Backend {
+    static_assert(store_width_valid(StoreWidth), "StoreWidth is not an admitted store width");
+
     using state_t = ::transport_bandwidth::backend_x280_to_tensix::state_t;
     using timestamp_t = ::transport_bandwidth::backend_x280_to_tensix::timestamp_t;
     using counter_delta_t = ::transport_bandwidth::backend_x280_to_tensix::counter_delta_t;
@@ -320,7 +362,7 @@ struct Backend {
         return observed == sentinel;
     }
 
-    /* One issue: TransferSize/4 back-to-back u32 stores through the TLB
+    /* One issue: TransferSize/StoreWidth back-to-back stores through the TLB
      * window. Templated so the compiler unrolls each supported burst
      * length; `always_inline` because a call boundary here is exactly what
      * the measured loop is otherwise counting. */
@@ -331,7 +373,7 @@ struct Backend {
             TransferSize % TB_X2T_PATTERN_BYTES == 0u, "transfer_size must be a multiple of the source pattern");
 #pragma GCC unroll 16
         for (uint32_t line = 0u; line < TransferSize / TB_X2T_PATTERN_BYTES; ++line) {
-            store_line(s.window + line * kPatternWords, s.staging);
+            store_line<StoreWidth>(s.window + line * kPatternWords, s);
         }
     }
 

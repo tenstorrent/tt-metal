@@ -269,22 +269,23 @@ BATCH_VALUES = [
     Column("cpu/wall", ratio(field("cpu_cycles"), BATCH_WALL)),
 ]
 
-TB_TABLES = (
+TB_IDENTITY = [
+    ident("transfer_size", "size B"),
+    ident("boundary"),
+    ident("warmup", "W"),
+    ident("samples", "N"),
+    ident("items"),
+    ident("logical_bytes", "logical B"),
+]
+TB_VALUES = COUNTERS + BATCH_VALUES + [Column("GB/s", ratio(field("logical_bytes"), ns(BATCH_WALL)))]
+TB_TABLES = (Table("", {}, tuple(TB_IDENTITY + TB_VALUES)),)
+# Records written before the store-width axis carry no store_width; they stored with sw.
+TB_X280_TABLES = (
     Table(
         "",
         {},
         tuple(
-            [
-                ident("transfer_size", "size B"),
-                ident("boundary"),
-                ident("warmup", "W"),
-                ident("samples", "N"),
-                ident("items"),
-                ident("logical_bytes", "logical B"),
-            ]
-            + COUNTERS
-            + BATCH_VALUES
-            + [Column("GB/s", ratio(field("logical_bytes"), ns(BATCH_WALL)))]
+            TB_IDENTITY + [ident("store_width", "store B", lambda row: row.record.get("store_width", 4))] + TB_VALUES
         ),
     ),
 )
@@ -567,7 +568,7 @@ MEMBERS = {
     "p2p_latency tensix_peer_tile": P2P_TABLES,
     "p2p_latency erisc_peer_tile": P2P_TABLES,
     "p2p_latency drisc_peer_tile": P2P_TABLES,
-    "transport_bandwidth x280_to_tensix": TB_TABLES,
+    "transport_bandwidth x280_to_tensix": TB_X280_TABLES,
     "transport_bandwidth tensix_to_x280": TB_TABLES,
     "pipeline_stage route_compute": PS_COMPUTE_TABLES,
     "pipeline_stage route_forward": PS_FORWARD_TABLES,

@@ -11,6 +11,7 @@
 #include "kernels/transport_bandwidth/transport_bandwidth_common.h"
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace x280::suites::transport_bandwidth {
@@ -74,16 +75,19 @@ inline x280::harness::output::RecordSpec::Batch batch(const transport_bw_result_
 
 /**
  * The x280_to_tensix record of one point: the raw mtime and rdcycle batch over
- * `samples` transfers and their logical bytes, its explicit warm-up, on the
- * fixed mtime clock. Throws as record() does for an invalid batch.
+ * `samples` transfers of `store_width`-byte stores and their logical bytes, its
+ * explicit warm-up, on the fixed mtime clock. Throws as record() does for an
+ * invalid batch.
  */
 inline x280::harness::output::RecordSpec x280_to_tensix_record(
-    const transport_bw_result_t& result, const Point& point) {
+    const transport_bw_result_t& result, const Point& point, uint32_t store_width) {
     using x280::harness::measurement::Counter;
+    auto fields = detail::point_fields(point, "RETIRED");
+    fields.push_back({"store_width", store_width});
     return {
         .suite = "transport_bandwidth",
         .member = "x280_to_tensix",
-        .fields = detail::point_fields(point, "RETIRED"),
+        .fields = std::move(fields),
         .wall_counter = Counter::X280Mtime,
         .cpu_counter = Counter::X280Rdcycle,
         .batch = detail::batch(result, point),

@@ -1345,7 +1345,7 @@ documented `issue()` semantics on that component.
 | Member | Primitive | Readiness |
 |---|---|---|
 | Tensix write to X280 | asynchronous NOC write into X280 LIM; passive X280 target | landed (`tensix_to_x280`) |
-| X280 write to Tensix | X280 hart 0 issues `SIZE/4` 4-byte uncached stores through paired TLB slot 120 in ordering mode 2 (posted) into a Tensix L1 buffer; passive Tensix target. `DRAINED` ends on one read through the window, so it is an issue rate, not a delivered rate, and is recorded as `RETIRED` ([docs/measurement.md "Quantities that share a label"](../measurement.md#quantities-that-share-a-label)) | landed (`x280_to_tensix`) |
+| X280 write to Tensix | X280 hart 0 issues `SIZE/W` uncached stores of `W` = 4 (`sw`), 8 (`sd`) or 64 B (`vse32.v`) through paired TLB slot 120 in ordering mode 2 (posted) into a Tensix L1 buffer; passive Tensix target. `DRAINED` ends on one read through the window, so it is an issue rate, not a delivered rate, and is recorded as `RETIRED` ([docs/measurement.md "Quantities that share a label"](../measurement.md#quantities-that-share-a-label)) | landed (`x280_to_tensix`) |
 | ERISC raw transmit | raw Ethernet issue and completion | peer operation, completion, and byte accounting unresolved |
 | DRISC read from Tensix | repeated NOC read from host-seeded Tensix L1 | primitive, drain, and supported depth unresolved |
 | DRISC GDDR DMA | repeated DMA read or write | direction, buffer partition, and completion mapping unresolved |
