@@ -243,3 +243,27 @@ Build fixes after fork_op.py (no behaviour change):
   keeps ttnn.transformer.sparse_sdpa)
 - Files: `device/kernels/compute/compute_streaming.hpp`, `device/sparse_sdpa_device_operation.cpp`, `sparse_sdpa.hpp`,
   `sdpa_nanobind.cpp`, `tests/unit/test_sparse_sdpa_high_precision.py`
+
+### sparse_sdpa: fp32_output under high_precision
+- What: `ttnn.bringup.sparse_sdpa(..., high_precision=True, fp32_output=True)` returns the normalized output in
+  Float32 (default False: q's dtype, as before). With the option on: the output tensor is FLOAT32; cb_out_im (the
+  normalized output) is Float32 and unpacks straight to the fp32 DEST for the untilize (`UnpackToDestFp32`; via srcA
+  it would be TF32); cb_out_rm is Float32; and, behind a new `SPARSE_SDPA_FP32_OUTPUT` define, normalize_row_streaming
+  reconfigures the packer to the 1/sum scratch explicitly. That last one was the bug to avoid: high_precision leaves
+  the packer in the bf16 state before the normalize, and `sdpa_maybe_pack_reconfig_data_format<normalized_out_cb,
+  scratch_cb>` skips the change at compile time when both CBs are Float32, so 1/sum was packed as bf16 into a Float32
+  CB (output off by 1e2-1e38). Refused without high_precision. In the program hash.
+- Default unchanged: with the option off there is no new define, CB format or unpack mode, so the programs are the
+  previous ones. Unit suite 37 passed / 10 skipped (32 + 5 new); source-test check 216 tests, 0 regressions; model
+  cases 5 passed / 1 skipped, as recorded.
+- Why: DeepSeek-V4.1's window attention output goes through an fp8 q-dq; the bf16 rounding of the op's output turned
+  into whole e4m3 steps and the S.swa.06 swap check failed on its worst row (0.0522 > 0.05, rel 0.0230). With the fp32
+  output: rel 0.0189, worst row 0.0458 (gate PASS). Op level: rel vs float32 0.0022-0.0065 (bf16 output
+  0.0028-0.0068); the fp32 output is within 0.5 bf16 steps of the bf16 one (the bf16 output is its RNE rounding).
+- Needed by: deepseek_v41_flash_d_p S.swa.06 (`tt/attention.py:TtWindowAttention._sdpa`, setting
+  WINDOW_SDPA_OUT=fp32; bf16 keeps the previous output)
+- Files: `sparse_sdpa.{hpp,cpp}`, `sdpa_nanobind.cpp`, `device/sparse_sdpa_device_operation{.cpp,.hpp,_types.hpp}`,
+  `device/sparse_sdpa_program_factory.cpp`, `device/kernels/compute/compute_streaming.hpp`,
+  `tests/unit/test_sparse_sdpa_high_precision.py` (`test_fp32_output` x4: Float32 dtype, off the bf16 / TF32 grids,
+  <= 0.5 bf16 steps from the bf16 output, closer to float32; `test_fp32_output_program_and_refusal`). Without the
+  pack reconfig all 4 accuracy cases fail (seen during development).

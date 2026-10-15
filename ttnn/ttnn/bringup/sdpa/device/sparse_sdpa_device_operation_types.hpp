@@ -30,6 +30,9 @@ struct SparseSDPAParams {
     // Fork option: Float32 output / row-sum running-state CBs and exact softmax exp (compile-time; hashed).
     // Default = the source program.
     bool high_precision = false;
+    // Fork option (needs high_precision): the output in Float32 (default: q's dtype). The normalized output CB is
+    // Float32 and unpacks straight to the fp32 DEST for the untilize (exact). Compile-time; hashed.
+    bool fp32_output = false;
     bool has_scaled_kv() const { return kv_format == transformer::bringup::SparseKVFormat::SCALED_FP8; }
 };
 
