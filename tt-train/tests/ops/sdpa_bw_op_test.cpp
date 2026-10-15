@@ -742,6 +742,17 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         EXPECT_TRUE(xt::all(xt::isfinite(sdpa_bw_dG))) << "kernel_dG contains NaN or Inf values";
         EXPECT_TRUE(xt::allclose(sdpa_bw_dG, float_dG, rtol, atol))
             << "Kernel dG vs Float mismatch in " << config.test_name;
+
+        // |dG| <= |dY| / 4 and is mostly below 2e-2, so the gradient tolerance above would let a dG that is off by
+        // ~10% everywhere through. As the forward does for the gate, check dG against the kernel's own Y and the
+        // bf16 dY and gate the device sees: dG = dY * Y * (1 - s) = dY * Y * sigmoid(-G). That leaves the
+        // SFPU sigmoid and a few bf16 roundings.
+        constexpr float kGateGradAtol = 1e-4F;
+        constexpr float kGateGradRtol = 1e-2F;
+        const xt::xarray<float> device_dG =
+            core::to_xtensor(grad_output) * kernel_attn_output_cpu / (1.0F + xt::exp(core::to_xtensor(gate.value())));
+        EXPECT_TRUE(xt::allclose(sdpa_bw_dG, device_dG, kGateGradRtol, kGateGradAtol))
+            << "Kernel dG != dY * Y * sigmoid(-G) on the device's own bf16 values in " << config.test_name;
     } else {
         EXPECT_FALSE(kernel_dGate.has_value()) << "sdpa_bw must not return grad_gate without a gate";
     }
@@ -1261,6 +1272,46 @@ TEST_F(SDPABackwardTest, Validation_RejectsMalformedGate) {
         << "sdpa_bw should reject an FP32 gate";
 }
 
+TEST_F(SDPABackwardTest, Validation_RejectsMalformedPreallocatedGradGate) {
+    using namespace ttml;
+    const auto in = make_minimal_sdpa_bw_inputs();
+    auto* device = &autograd::ctx().get_device();
+
+    const std::array<std::size_t, 4> shape{1U, 1U, 32U, 32U};
+    const auto gate = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U), device);
+    const auto call_with_grad_gate = [&](const ttnn::Tensor& grad_gate) {
+        return metal::sdpa_bw(
+            in.grad_output,
+            in.attn_output,
+            in.query,
+            in.key,
+            in.value,
+            in.intermediates,
+            metal::AttentionMaskType::None,
+            std::nullopt,
+            0.0F,
+            gate,
+            grad_gate);
+    };
+
+    // The writer fills grad_gate with grad_output-shaped (B, H, S, vE) tiles; here vE is doubled.
+    const std::array<std::size_t, 4> wrong_shape{1U, 1U, 32U, 64U};
+    const auto wrong_shape_grad_gate =
+        core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(wrong_shape, -1.0F, 1.0F, 42U), device);
+    EXPECT_ANY_THROW(call_with_grad_gate(wrong_shape_grad_gate))
+        << "sdpa_bw should reject a preallocated_grad_gate whose shape differs from grad_output";
+
+    // The writer emits BFLOAT16 tiles, so an FP32 buffer would be misread.
+    const auto fp32_grad_gate = core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U), device);
+    EXPECT_ANY_THROW(call_with_grad_gate(fp32_grad_gate)) << "sdpa_bw should reject an FP32 preallocated_grad_gate";
+
+    const auto row_major_grad_gate = core::from_xtensor(
+        ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U), device, ttnn::Layout::ROW_MAJOR);
+    EXPECT_ANY_THROW(call_with_grad_gate(row_major_grad_gate))
+        << "sdpa_bw should reject a ROW_MAJOR preallocated_grad_gate";
+}
+
 TEST_F(SDPABackwardTest, Validation_RejectsRowMajorGate) {
     using namespace ttml;
     const auto in = make_minimal_sdpa_bw_inputs();
@@ -1360,7 +1411,9 @@ TEST_F(SDPABackwardTest, GateTest_ProgramCacheHitReadsNewGate) {
         << "Cache-hit dK does not match the second gate (stale gated-dO handoff buffer?)";
     EXPECT_TRUE(xt::allclose(dV_b_host, dV_ref_host, rtol, atol))
         << "Cache-hit dV does not match the second gate (stale gated-dO handoff buffer?)";
-    EXPECT_TRUE(xt::allclose(dG_b_host, dG_ref_host, 3e-2F, 3e-2F))
+    // dG_ref_host already uses the device's O, dY and gate, so only the relative tolerance needs slack: an atol
+    // of 3e-2 would exceed most of |dG|.
+    EXPECT_TRUE(xt::allclose(dG_b_host, dG_ref_host, 3e-2F, 1e-4F))
         << "Cache-hit grad_gate does not match the second gate (stale gate or grad_gate address?)";
 
     // And the second run must not have reproduced the first run's outputs.
@@ -1374,10 +1427,9 @@ TEST_F(SDPABackwardTest, GateTest_AutogradGateGradMatchesKernel) {
     // ops::scaled_dot_product_attention must route the gate through autograd: the backward node passes it to
     // sdpa_bw and adds grad_gate to gate->get_grad(). The second case leaves only the gate requiring grad, so the
     // node must not be pruned. The op runs the same kernels on the same inputs as the direct calls below, so the
-    // gradients must be bit-identical, even though the op writes grad_gate into the forward output's buffer and
-    // the gated dO into the output gradient's buffer. That second reuse overwrites the tensor passed to set_grad,
-    // so each case uploads its own copy of dY. Shapes match GateTest_ProgramCacheHitReadsNewGate, so the kernels
-    // are already built when both tests run.
+    // gradients must be bit-identical, even though the op writes grad_gate into the forward output's buffer. The
+    // gated dO gets its own buffer, so dY must come back unchanged. Shapes match
+    // GateTest_ProgramCacheHitReadsNewGate, so the kernels are already built when both tests run.
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
 
@@ -1397,8 +1449,6 @@ TEST_F(SDPABackwardTest, GateTest_AutogradGateGradMatchesKernel) {
     const auto gate =
         core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -4.0F, 4.0F, seed + 4U), device);
     const xt::xarray<float> dY_host = core::to_xtensor(dY);
-    const xt::xarray<float> gate_host = core::to_xtensor(gate);
-    const xt::xarray<float> dO_host = dY_host / (1.0F + xt::exp(-gate_host));
 
     // Direct kernel reference.
     const auto fw = metal::sdpa_fw(q, k, v, mask_type, std::nullopt, 0.0F, true, gate);
@@ -1419,7 +1469,7 @@ TEST_F(SDPABackwardTest, GateTest_AutogradGateGradMatchesKernel) {
 
         auto out = ops::scaled_dot_product_attention(q_t, k_t, v_t, std::nullopt, 0.0F, gate_t);
         ASSERT_TRUE(out->get_node().has_value()) << "the gate requires grad, so the backward node must not be pruned";
-        out->set_grad(core::from_xtensor(dY_host, device));
+        out->set_grad(dY);
         out->backward();
 
         ASSERT_TRUE(gate_t->is_grad_initialized()) << "backward did not populate gate->get_grad()";
@@ -1427,9 +1477,8 @@ TEST_F(SDPABackwardTest, GateTest_AutogradGateGradMatchesKernel) {
             << "gate->get_grad() differs from metal::sdpa_bw's grad_gate";
         EXPECT_EQ(gate_t->get_grad().buffer()->address(), out->get_value().buffer()->address())
             << "grad_gate should be written into the forward output's buffer";
-        // One SFPU sigmoid and one bf16 rounding away from the host dY * sigmoid(gate).
-        EXPECT_TRUE(xt::allclose(core::to_xtensor(out->get_grad()), dO_host, 8e-3F, 1e-4F))
-            << "the gated dO should be written into the output gradient's buffer";
+        EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(out->get_grad()), dY_host)))
+            << "the gated dO must not be written into the output gradient's buffer";
         if (qkv_requires_grad) {
             EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(q_t->get_grad()), dQ_ref_host)));
             EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(k_t->get_grad()), dK_ref_host)));
@@ -1450,7 +1499,7 @@ TEST_F(SDPABackwardTest, GateTest_AutogradGateGradMatchesKernel) {
         auto v_t = autograd::create_tensor(v, /*requires_grad=*/true);
         auto gate_t = autograd::create_tensor(gate, /*requires_grad=*/true);
         auto out = ops::scaled_dot_product_attention(q_t, k_t, v_t, std::nullopt, 0.0F, gate_t);
-        out->set_grad(core::from_xtensor(dY_host, device));
+        out->set_grad(dY);
         out->backward(/*retain_graph=*/true);
         EXPECT_THROW(out->backward(/*retain_graph=*/true), std::runtime_error);
         autograd::ctx().reset_graph();

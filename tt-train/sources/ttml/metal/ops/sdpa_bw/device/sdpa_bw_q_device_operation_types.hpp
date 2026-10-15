@@ -32,8 +32,6 @@ struct SDPABackwardQInputs {
     const std::optional<ttnn::Tensor>& gate;  // Optional gate tensor
     // Preallocated gate gradient tensor (optional)
     std::optional<ttnn::Tensor> preallocated_grad_gate;
-    // Preallocated gated gradient output tensor (optional)
-    std::optional<ttnn::Tensor> preallocated_gated_grad_output;
 };
 
 using operation_attributes_t = SDPABackwardQParams;

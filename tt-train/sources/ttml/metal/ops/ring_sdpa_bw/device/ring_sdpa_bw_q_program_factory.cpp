@@ -72,8 +72,7 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
             .preallocated_grad_query = grad_query,
             .preallocated_u_scaler = u_scaler,
             .gate = std::nullopt,
-            .preallocated_grad_gate = std::nullopt,
-            .preallocated_gated_grad_output = std::nullopt};
+            .preallocated_grad_gate = std::nullopt};
 
         sdpa_q::tensor_return_value_t sdpa_return_value{grad_query, u_scaler, std::nullopt, std::nullopt};
 
@@ -148,8 +147,7 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
             .preallocated_grad_query = grad_query,
             .preallocated_u_scaler = u_scaler,
             .gate = std::nullopt,
-            .preallocated_grad_gate = std::nullopt,
-            .preallocated_gated_grad_output = std::nullopt};
+            .preallocated_grad_gate = std::nullopt};
 
         sdpa_q::tensor_return_value_t sdpa_return_value{grad_query, u_scaler, std::nullopt, std::nullopt};
 
