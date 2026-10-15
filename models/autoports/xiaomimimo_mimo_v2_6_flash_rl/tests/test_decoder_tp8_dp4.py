@@ -162,5 +162,8 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
         worst["decode_delta"] = min(worst["decode_delta"], pd)
         logger.info(f"decode replica {r}: block-delta pcc over {len(got_d)} user-steps {pd:.5f}")
     logger.info(f"layer {layer_idx} worst PCC over 4 replicas x 4 users: {worst}")
-    assert worst["prefill"] > 0.999 and worst["decode"] > 0.999, worst
-    assert worst["prefill_delta"] > 0.98 and worst["decode_delta"] > 0.98, worst
+    # On these random inputs ~1-2% of MoE tokens flip one of their top-8 experts at a near-tie (the device
+    # router matmul is ~2^-12 relative off fp32). test_moe_tp8_dp4.py checks the expert math with the
+    # device's own routing (PCC > 0.9999); here the bound has to absorb the flips.
+    assert worst["prefill"] > 0.995 and worst["decode"] > 0.995, worst
+    assert worst["prefill_delta"] > 0.99 and worst["decode_delta"] > 0.99, worst
