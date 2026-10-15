@@ -418,3 +418,138 @@ def test_cumsum_bf16_accuracy(size, dim, sequence_type, reverse_order, device):
 
     assert output.dtype == torch.bfloat16
     assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("scan_length", [4, 8, 33])
+@pytest.mark.parametrize("dim", [0, -2])
+@pytest.mark.parametrize("disable_compensated_sum", [False, True])
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "inf",  # +inf input: +inf from step 1 on
+        "neg_inf",  # -inf input: -inf from step 1 on
+        "overflow",  # finite inputs that overflow to +inf at step 1
+        "neg_overflow",  # finite inputs that overflow to -inf at step 1
+        "inf_then_neg_max",  # +inf then -FLT_MAX: +inf from step 1 on
+        "neg_inf_then_pos_max",  # -inf then +FLT_MAX: -inf from step 1 on
+        "overflow_then_neg_max",  # overflow to +inf then -FLT_MAX: +inf from step 1 on in fp32
+        "neg_overflow_then_pos_max",  # overflow to -inf then +FLT_MAX: -inf from step 1 on in fp32
+        "inf_on_large_neg_total",  # +inf arriving on a total of -3e38: +inf from there on
+        "neg_inf_on_large_pos_total",  # -inf arriving on a total of 3e38: -inf from there on
+        "finite_with_overflowing_c",  # the total stays finite, but t - acc overflows
+        "inf_then_neg_inf",  # +inf then -inf: NaN from step 2 on, as in torch
+        "nan",  # NaN input: NaN from step 1 on
+        "inf_last",  # +inf at the last step only
+    ],
+)
+def test_cumsum_fp32_non_finite(pattern, scan_length, dim, disable_compensated_sum, device):
+    """Verify FP32 cumsum preserves IEEE/PyTorch behavior after +-inf, NaN, and overflow (#58986)."""
+    torch.manual_seed(0)
+    size = [scan_length, 1, 32, 64] if dim == 0 else [1, 1, scan_length, 64]
+    torch_input = torch.randn(size, dtype=torch.float32)
+    steps = torch_input.movedim(dim, 0)
+    fp32_max = torch.finfo(torch.float32).max
+    if pattern == "inf":
+        steps[1, ..., :5] = float("inf")
+    elif pattern == "neg_inf":
+        steps[1, ..., 7:12] = float("-inf")
+    elif pattern == "overflow":
+        steps[0, ..., 20:25] = 3e38
+        steps[1, ..., 20:25] = 3e38
+    elif pattern == "neg_overflow":
+        steps[0, ..., 50:55] = -3e38
+        steps[1, ..., 50:55] = -3e38
+    elif pattern == "inf_then_neg_max":
+        steps[1, ..., 34:38] = float("inf")
+        steps[2, ..., 34:38] = -fp32_max
+    elif pattern == "neg_inf_then_pos_max":
+        steps[1, ..., 44:48] = float("-inf")
+        steps[2, ..., 44:48] = fp32_max
+    elif pattern == "overflow_then_neg_max":
+        steps[:2, ..., 2:6] = 3e38
+        steps[2, ..., 2:6] = -fp32_max
+    elif pattern == "neg_overflow_then_pos_max":
+        steps[:2, ..., 8:12] = -3e38
+        steps[2, ..., 8:12] = fp32_max
+    elif pattern == "inf_on_large_neg_total":
+        steps[0, ..., 14:18] = -3e38
+        steps[1, ..., 14:18] = float("inf")
+    elif pattern == "neg_inf_on_large_pos_total":
+        steps[0, ..., 26:30] = 3e38
+        steps[1, ..., 26:30] = float("-inf")
+    elif pattern == "finite_with_overflowing_c":
+        steps[0, ..., 56:60] = -(2.0**126 + 3 * 2.0**103)
+        steps[1, ..., 56:60] = fp32_max
+    elif pattern == "inf_then_neg_inf":
+        steps[1, ..., 30:33] = float("inf")
+        steps[2, ..., 30:33] = float("-inf")
+    elif pattern == "nan":
+        steps[1, ..., 40:43] = float("nan")
+    else:
+        steps[-1, ..., 60:64] = float("inf")
+
+    expected = torch.cumsum(torch_input, dim=dim)
+    if pattern in ("overflow_then_neg_max", "neg_overflow_then_pos_max"):
+        expected_steps = expected.movedim(dim, 0)
+        total = torch.zeros_like(steps[0])
+        for i in range(scan_length):
+            total = total + steps[i]
+            expected_steps[i] = total
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim, disable_compensated_sum=disable_compensated_sum))
+
+    for name, kind in (("NaN", torch.isnan), ("+inf", torch.isposinf), ("-inf", torch.isneginf)):
+        assert torch.equal(
+            kind(output), kind(expected)
+        ), f"{name} in {kind(output).sum().item()} elements, the reference has {kind(expected).sum().item()}"
+    finite = torch.isfinite(expected)
+    assert_allclose(expected[finite], output[finite], rtol=1e-2, atol=1e-4)
+
+
+@pytest.mark.parametrize("dim", [0, -2])
+def test_cumsum_fp32_finite_near_max(dim, device):
+    """A finite running total in the top fp32 binade must keep the compensated accuracy."""
+    torch.manual_seed(0)
+    scan_length = 128
+    size = [scan_length, 1, 32, 64] if dim == 0 else [1, 1, scan_length, 64]
+    base = 2.0**127
+    torch_input = base * (0.001 + 0.019 * torch.rand(size, dtype=torch.float64))
+    torch_input *= torch.where(torch.rand(size) < 0.5, -1.0, 1.0)
+    steps = torch_input.movedim(dim, 0)
+    steps[0] = base * (1.2 + 0.25 * torch.rand(steps[0].shape, dtype=torch.float64))
+    steps[..., 32:] *= -1
+    torch_input = torch_input.to(torch.float32)
+    expected = torch.cumsum(torch_input.to(torch.float64), dim=dim)
+    assert expected.abs().max() < torch.finfo(torch.float32).max, "the reference scan must stay finite"
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim)).to(torch.float64)
+
+    assert torch.isfinite(output).all(), f"{(~torch.isfinite(output)).sum().item()} non-finite elements"
+    bound = 2 * torch.finfo(torch.float32).eps * expected.abs()
+    worst = ((output - expected).abs() / bound).max().item()
+    assert worst <= 1.0, f"max error is {worst:.1f}x the bound 2*eps*|exact|"
+
+
+@pytest.mark.parametrize("dim", [0, -2])
+def test_cumsum_fp32_finite_large_inputs(dim, device):
+    """A finite scan whose inputs are as large as its running total must keep the compensated accuracy."""
+    scan = [
+        float.fromhex(h)
+        for h in ("-0x1.c4dbcep+126", "0x1.f74fccp+127", "-0x1.f60404p+125", "0x1.40bc9ap+127", "-0x1.d43534p+127")
+    ]
+    size = [len(scan), 1, 32, 64] if dim == 0 else [1, 1, len(scan), 64]
+    torch_input = torch.empty(size, dtype=torch.float32)
+    steps = torch_input.movedim(dim, 0)
+    for i, value in enumerate(scan):
+        steps[i] = value
+    expected = torch.cumsum(torch_input.to(torch.float64), dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim)).to(torch.float64)
+
+    assert torch.isfinite(output).all(), f"{(~torch.isfinite(output)).sum().item()} non-finite elements"
+    bound = 2 * torch.finfo(torch.float32).eps * expected.abs()
+    worst = ((output - expected).abs() / bound).max().item()
+    assert worst <= 1.0, f"max error is {worst:.1f}x the bound 2*eps*|exact|"
