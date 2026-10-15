@@ -979,3 +979,31 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   primary tree's values to every shell, so DeepSeek-V4.1's run in tt-metal2 shared the primary tree's JIT kernel cache
   (entries recompile on a tree mismatch, but two trees write the same entries) and profiler paths.
 - Selftests: test_checkout_env.py.
+
+## F69 (2026-10-15): the overseer steers the agents with notes and aborts
+
+- `overseer.py`: notes in `<bringup_dir>/overseer.yaml` (`note --tasks GLOB --roles ROLE "text"`, `close`, `list`).
+  Every open note matching a step heads its brief ("Overseer notes"); the agent answers each in its knowledge-use
+  report (`overseer`: done / n/a / disagree + evidence); the orchestrator echoes `OVERSEER NOTE <id> DISAGREED` and
+  `unanswered`, which wake the watch. `abort --reason`: ends the agent at work (its own process group; AGENT.json in
+  the run dir), records the attempt ABORTED (no gate, not against the budget, at most 3 per task), and adds the reason
+  as a note for the next attempt. The orchestrator's SIGTERM now unwinds and takes its agent with it.
+- The path check ignores `overseer.yaml` and `supervision.md` (the overseer's files). The orchestrator re-exports the
+  dashboards after every gate (background; BRINGUP_DASHBOARD=0 off). watch.py `--quiet-passes`.
+- Why (DeepSeek-V4.1 run1): the overseer's interventions went through the live tree (a known_issues edit failed an
+  agent's attempt; a supervision.md line would have been charged to one), kills by hand (lost attempts, an orphan
+  agent) and hand-edited run state; the owner: "agents should see your feedback; the overseer should not intervene
+  directly". Agent rule 1 and the skill ("Steer the agents; do not do their work") say how.
+- Selftests: test_overseer.py.
+
+## F70 (2026-10-15): where a run's time went
+
+- `timing.py` (`python -m models.demos.common.bringup.timing --spec S [--run R]`): from the agents' transcripts (the
+  result's wall and API time; each tool call's time, a run_safe_pytest / tt-probe call counted as a device run),
+  every gate run's seconds (state history entries carry `s` now; older runs: the last duration only; device / CPU by
+  the task's `device` flag), the run's timeline (runs/<run>/timeline.jsonl: the orchestrator's start and exit with
+  its code; idle time between them named waiting for a person / stopped / paused / not running) and the device log
+  (runs/<run>/device_timing.jsonl: the safe runner's lock wait and run time; the orchestrator sets
+  TT_DEVICE_TIMING_LOG). Writes runs/<run>/timing.json. Dashboard: "Where the time went" (teletext page 112).
+- Owner asked for a breakdown of device time vs LLM API time vs other (DeepSeek-V4.1 run1). Selftests:
+  test_timing.py.

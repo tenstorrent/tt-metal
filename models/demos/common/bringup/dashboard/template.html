@@ -256,6 +256,12 @@ section[hidden]{display:none}
     <div class="tbl-wrap"><table id="box-conds"><thead></thead><tbody></tbody></table></div>
   </section>
 
+  <section aria-labelledby="s-runtime" id="runtime-sec" hidden>
+    <div class="sec-head"><h2 id="s-runtime">Where the time went</h2><p id="runtime-sub"></p></div>
+    <div class="tbl-wrap"><table id="runtime-tot"><thead><tr><th>Part</th><th class="num">Hours</th><th class="num">Share</th></tr></thead><tbody></tbody></table></div>
+    <div class="tbl-wrap"><table id="runtime-tasks"><thead><tr><th>Task</th><th class="num">Model</th><th class="num">Agent device runs</th><th class="num">Agent other tools</th><th class="num">Gates, device</th><th class="num">Gates, CPU</th><th class="num">Agent runs</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
   <section aria-labelledby="s-prof" id="prof-sec">
     <div class="sec-head"><h2 id="s-prof"></h2><span class="tl-total" id="p-total"></span></div>
     <p class="sub" id="p-note" style="margin:0;font-size:13px"></p>
@@ -775,6 +781,23 @@ function finalTests(){
   else lines.push(["Contract tests", NR]);
   $("#final-lines").innerHTML = lines.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
 }
+function runtime(){
+  const T = D.runtime;
+  $("#runtime-sec").hidden = !T || !!T.error;
+  if (!T || T.error) return;
+  const el = T.elapsed_h, d = T.device_log || {};
+  $("#runtime-sub").textContent = (el != null ? `${el.toFixed(1)} hours since the run started. ` : "") +
+    "From the agents' transcripts (model time, tool calls), every gate run, the run's timeline (why it was idle) and the device runs' log." +
+    (d.runs ? ` Device runs logged: ${d.runs}, ${(d.run / 3600).toFixed(2)} h running, ${(d.lock_wait / 3600).toFixed(2)} h waiting for the device lock.` : "");
+  const tot = Object.values(T.totals_h).reduce((a, b) => a + b, 0) || 1;
+  $("#runtime-tot tbody").innerHTML = Object.entries(T.totals_h).map(([k, v]) =>
+    `<tr><td>${esc(k)}</td><td class="num">${v.toFixed(2)}</td><td class="num">${(100 * v / tot).toFixed(0)}%</td></tr>`).join("");
+  const f = v => v ? v.toFixed(1) : "";
+  $("#runtime-tasks tbody").innerHTML = T.tasks_min.map(r => `<tr><td class="mono">${esc(r.task)}</td><td class="num">${f(r.model)}</td>` +
+    `<td class="num">${f(r["agent device"])}</td><td class="num">${f(r["agent tools"])}</td><td class="num">${f(r["gate device"])}</td>` +
+    `<td class="num">${f(r["gate CPU"])}</td><td class="num">${r["agent runs"] || ""}</td></tr>`).join("");
+}
+
 function boxes(){
   const B = D.boxes;
   $("#boxes-sec").hidden = !B;
@@ -804,7 +827,7 @@ function knowledge(){
     ["Missing topics", list(K.missing, ([m, n]) => `${n}× ${esc(m)}`)],
   ].map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
 }
-function render(){ header(); deferred(); profile(); prior(); ladder(); dag(); ops(); timing(); positionsChart(); sharding(); pccChart(); finalTests(); boxes(); knowledge();
+function render(){ header(); deferred(); profile(); prior(); ladder(); dag(); ops(); timing(); positionsChart(); sharding(); pccChart(); finalTests(); boxes(); runtime(); knowledge();
   $("#foot").textContent = `Generated from ${D.source} (tasks.yaml, state.json, results/, components.yaml, plan.yaml) by models/demos/common/bringup/dashboard/export.py.`; }
 if (D) render();
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => D && render());
