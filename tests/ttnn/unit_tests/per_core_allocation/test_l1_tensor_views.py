@@ -147,3 +147,15 @@ def test_view_preserves_selected_device_coverage(mesh_device):
     del owner
     gc.collect()
     torch.testing.assert_close(_read(view), torch.arange(256, dtype=torch.uint8).reshape(1, 256))
+    value = torch.full((1, 256), 41, dtype=torch.uint8)
+    mapper = ttnn.create_mesh_mapper(
+        mesh,
+        ttnn.MeshMapperConfig(
+            [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()],
+            mesh_shape_override=ttnn.MeshShape(1, 1),
+            mesh_offset_override=coord,
+        ),
+    )
+    selected_host = ttnn.distribute_tensor(ttnn.from_torch(value, dtype=ttnn.uint8), mapper)
+    ttnn.copy_host_to_device_tensor(selected_host, view)
+    torch.testing.assert_close(_read(view), value)
