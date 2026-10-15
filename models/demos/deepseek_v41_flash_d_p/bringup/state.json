@@ -23,6 +23,132 @@
   "started": "2026-10-14T23:01:38",
   "status": "PASS"
  },
+ "C.swa.attention": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "012a6038aee962f797c0bef7c6c2629cb77d9007",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "e6bea15f919500e0fea61577b8b06d765bec69e1",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "cc9b52d1721e12b4a3f71d7fc0eba1c2bcb58891",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "96114c6a-2ed5-41c7-bb27-4fe514936cb9"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/C.swa.attention.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "012a6038aee962f797c0bef7c6c2629cb77d9007",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "e6bea15f919500e0fea61577b8b06d765bec69e1",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "cc9b52d1721e12b4a3f71d7fc0eba1c2bcb58891",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [
+     "K-31"
+    ],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/C.swa.attention.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 2579.3,
+    "session_id": "96114c6a-2ed5-41c7-bb27-4fe514936cb9",
+    "t": "2026-10-15T14:31:46"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 216.6,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-10-15T13:48:46"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-10-15T14:35:26"
+   }
+  ],
+  "last_run": "2026-10-15T14:35:26",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.swa.attention.log",
+  "metrics": {
+   "auto_attention_L00_big_bias": -0.000683903694152832,
+   "auto_attention_L00_big_ratio_max": 1.0038118362426758,
+   "auto_attention_L00_big_ratio_min": 0.9951834678649902,
+   "auto_attention_L00_big_rel": 0.018589483574032784,
+   "auto_attention_L00_big_rel_limit": 0.03,
+   "auto_attention_L00_big_row": 0.02933403290808201,
+   "auto_attention_L00_chunk0_bias": -0.0009192228317260742,
+   "auto_attention_L00_chunk0_ratio_max": 1.0031065940856934,
+   "auto_attention_L00_chunk0_ratio_min": 0.9954530596733093,
+   "auto_attention_L00_chunk0_rel": 0.02098897285759449,
+   "auto_attention_L00_chunk0_rel_limit": 0.03,
+   "auto_attention_L00_chunk0_row": 0.0353805236518383,
+   "auto_attention_L00_layer24_bias": -0.0010944008827209473,
+   "auto_attention_L00_layer24_ratio_max": 1.0019432306289673,
+   "auto_attention_L00_layer24_ratio_min": 0.9941935539245605,
+   "auto_attention_L00_layer24_rel": 0.02144438400864601,
+   "auto_attention_L00_layer24_rel_limit": 0.03,
+   "auto_attention_L00_layer24_row": 0.030533310025930405,
+   "auto_attention_L00_mixed_bias": -0.001160264015197754,
+   "auto_attention_L00_mixed_ratio_max": 1.0015952587127686,
+   "auto_attention_L00_mixed_ratio_min": 0.9908225536346436,
+   "auto_attention_L00_mixed_rel": 0.022050781175494194,
+   "auto_attention_L00_mixed_rel_limit": 0.03,
+   "auto_attention_L00_mixed_row": 0.03387909382581711,
+   "auto_attention_L00_small_bias": -0.0004278421401977539,
+   "auto_attention_L00_small_ratio_max": 1.008479356765747,
+   "auto_attention_L00_small_ratio_min": 0.9851895570755005,
+   "auto_attention_L00_small_rel": 0.018455371260643005,
+   "auto_attention_L00_small_rel_limit": 0.03,
+   "auto_attention_L00_small_row": 0.0508560873568058,
+   "auto_attention_L00_vs_cpu_bias": -0.0009242892265319824,
+   "auto_attention_L00_vs_cpu_col": 0.03771861642599106,
+   "auto_attention_L00_vs_cpu_col_index": 3793,
+   "auto_attention_L00_vs_cpu_col_limit": 0.11667414009571075,
+   "auto_attention_L00_vs_cpu_ratio_max": 1.0027961730957031,
+   "auto_attention_L00_vs_cpu_ratio_min": 0.9949849247932434,
+   "auto_attention_L00_vs_cpu_rel": 0.021152528002858162,
+   "auto_attention_L00_vs_cpu_rel_limit": 0.029168535768985746,
+   "auto_attention_L00_vs_cpu_row": 0.035538896918296814,
+   "auto_attention_L00_vs_golden_bias": -0.00109022855758667,
+   "auto_attention_L00_vs_golden_col": 0.04026295617222786,
+   "auto_attention_L00_vs_golden_col_index": 3793,
+   "auto_attention_L00_vs_golden_col_limit": 0.1818983554840088,
+   "auto_attention_L00_vs_golden_ratio_max": 1.002377986907959,
+   "auto_attention_L00_vs_golden_ratio_min": 0.9949469566345215,
+   "auto_attention_L00_vs_golden_rel": 0.022282278165221214,
+   "auto_attention_L00_vs_golden_rel_limit": 0.045474589616060254,
+   "auto_attention_L00_vs_golden_row": 0.03639359399676323,
+   "det_attention_L00": 1.0,
+   "pcc_attention_L00": 0.9997519449668325
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-10-15T14:31:49",
+  "status": "PASS",
+  "waiting": null
+ },
  "C.swa.attn_collapse": {
   "agent": {
    "defs": {

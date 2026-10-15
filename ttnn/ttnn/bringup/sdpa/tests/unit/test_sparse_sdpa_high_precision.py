@@ -13,7 +13,11 @@ keeps 1/sum in Float32 and takes the exact exp. Covered here:
   and whole masked chunks): rel L2, per-row norm ratio and the output coefficient, each tighter than the source op;
 - option off: bit-identical to ttnn.transformer.sparse_sdpa (fp32 dest on and off, bf16 and fp8 kv);
 - the program cache: the option is in the key (two programs for the same inputs);
-- the refusals: fp32_dest_acc_en off, fp8 kv, an attention sink.
+- the refusals: fp32_dest_acc_en off, fp8 kv;
+- with an attention sink (one logit per head, added to the softmax denominator only; deepseek_v41_flash_d_p window
+  attention): accuracy vs float32 at DeepSeek-V4.1's geometry (H 64, K_DIM = v_dim 512, 128 window ids, scale 1 with
+  the softmax scale folded into q, and scale 512^-0.5) and over 4 chunks (the sink rides the SALAD-combined row-sum),
+  sinks small and dominant; the sink moves the output (it is not ignored).
 """
 
 import pytest
@@ -41,15 +45,21 @@ def _inputs(H, S, T, topk, k_dim, n_valid, q_scale, seed=0):
     return q, kv, idx
 
 
-def _golden(q, kv, idx, scale, v_dim):
-    """float32 on the bf16 inputs: [1, H, S, v_dim]."""
+def _golden(q, kv, idx, scale, v_dim, sink=None):
+    """float32 on the bf16 inputs: [1, H, S, v_dim]. sink [H] (the op's sink tensor values): exp(sink * scale) joins
+    each head's softmax denominator only."""
     qf, kvf = q.float()[0], kv.float()[0, 0]
     i = idx[0, 0]
     valid = i >= 0
     sel = kvf[i.clamp(min=0)]  # [S, W, K]
     sc = torch.einsum("hsk,swk->hsw", qf, sel) * scale
     sc = sc.masked_fill(~valid[None], float("-inf"))
-    return torch.einsum("hsw,swv->hsv", sc.softmax(-1), sel[..., :v_dim])[None]
+    if sink is None:
+        return torch.einsum("hsw,swv->hsv", sc.softmax(-1), sel[..., :v_dim])[None]
+    m = sc.amax(-1, keepdim=True)
+    p = torch.exp(sc - m)
+    den = p.sum(-1, keepdim=True) + torch.exp(sink.float().view(-1, 1, 1) * scale - m)
+    return (torch.einsum("hsw,swv->hsv", p, sel[..., :v_dim]) / den)[None]
 
 
 def _dev(t, device, dtype):
@@ -178,12 +188,63 @@ def test_refusals(device, expect_error):
             high_precision=True,
             **kw,
         )
-    sink = ttnn.from_torch(
-        torch.zeros(1, 1, 1, 32),
+
+
+def _sink(device, sink):
+    return ttnn.from_torch(
+        sink.reshape(1, 1, 1, -1).to(torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    with expect_error(RuntimeError, "attention_sink"):
-        _fork(device, q, kv, idx, 512, ckc=_ckc(True), high_precision=True, attention_sink=sink, **kw)
+
+
+# name -> (H, S, T, topk, k_dim, scale, k_chunk, n_valid(s), q scale, (sink spread, sink offset) in logit units),
+#         (max rel L2, per-row ratio); the op's sink values are logits / scale (the op multiplies them by scale).
+# deepseek_v41_flash_d_p window attention: 64 heads, K = V = 512, 128 window ids (a short row at the sequence start),
+# k_chunk 128; the model folds 512^-0.5 into q and passes scale 1 (exact) with the sink as is. Limits from the
+# measurement: rel 0.0028 / 0.0023 / 0.0042 / 0.0068, rows within [0.985, 1.012] (dominant sink: small outputs;
+# 4 chunks: sharper scores, std 1.5).
+SINK_CASES = {
+    "ds41_window_scale1": (
+        (64, 64, 2176, 128, 512, 1.0, 128, lambda s: [128, 128, 1, 37, 96][s % 5], 0.05, (0.2, 0.0)),
+        (0.004, (0.99, 1.01)),
+    ),
+    "ds41_window_scale_rsqrt512": (
+        (64, 64, 2176, 128, 512, 512**-0.5, 128, lambda s: [128, 64, 1][s % 3], 1.0, (0.2, 0.0)),
+        (0.004, (0.99, 1.01)),
+    ),
+    # the sink dominates the denominator of the short rows (9 keys)
+    "ds41_window_dominant_sink": (
+        (64, 64, 2176, 128, 512, 1.0, 128, lambda s: [128, 9][s % 2], 0.05, (4.0, 3.0)),
+        (0.006, (0.98, 1.015)),
+    ),
+    # 4 chunks: the sink joins the SALAD-combined Float32 row-sum. A power-of-two scale: with 576^-0.5 the sink's
+    # exp (like the scores') takes the scale as a bf16 immediate, +0.19 % here, which moves the output coefficient
+    # to 0.994 for sink logits of 6-10 (K-27; the model passes scale 1)
+    "ds_h32_k576_chunks": (
+        (32, 64, 2048, 512, 576, 1 / 16, 128, lambda s: [512, 300, 129, 128][s % 4], 1.0, (1.0, 6.0)),
+        (0.009, (0.98, 1.016)),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(SINK_CASES))
+def test_high_precision_sink(device, case):
+    (H, S, T, topk, k_dim, scale, kc, nv, qs, (spread, offset)), (max_rel, (lo, hi)) = SINK_CASES[case]
+    q, kv, idx = _inputs(H, S, T, topk, k_dim, nv, qs, seed=5)
+    g = torch.Generator().manual_seed(6)
+    logit = torch.randn(H, generator=g) * spread
+    logit = logit.abs() + offset if offset else logit
+    sink = (logit / scale).to(torch.bfloat16)
+    v_dim = 512
+    want = _golden(q, kv, idx, scale, v_dim, sink)
+    got = _fork(device, q, kv, idx, v_dim, scale, kc, _ckc(), high_precision=True, attention_sink=_sink(device, sink))
+    rel, rmin, rmax, coef = _stats(got, want)
+    no_sink = _stats(_golden(q, kv, idx, scale, v_dim), want)[0]
+    print(f"{case}: rel {rel:.5f} ratio [{rmin:.4f}, {rmax:.4f}] coef {coef:.5f} (no-sink golden off by {no_sink:.4f})")
+    assert torch.isfinite(got).all()
+    assert rel <= max_rel, f"rel L2 {rel:.5f} > {max_rel}"
+    assert lo <= rmin and rmax <= hi, f"per-row norm ratio [{rmin:.4f}, {rmax:.4f}] outside [{lo}, {hi}]"
+    assert no_sink > 3 * max_rel, f"the sink barely moves this case ({no_sink:.5f}): it would not catch a dropped sink"
