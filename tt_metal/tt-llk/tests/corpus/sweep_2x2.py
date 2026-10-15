@@ -282,6 +282,7 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-const-residency "
     "-mno-tt-tensix-optimize-counted-row-formation "
     "-mno-tt-tensix-optimize-crosscall-hoist "
+    "-mno-tt-tensix-optimize-crosscall-prgm "
     "-mno-tt-tensix-optimize-crossloop-hoist "
     "-mno-tt-tensix-optimize-init-hoist "
     "-mno-tt-tensix-optimize-dst-row-interleave"
@@ -569,7 +570,11 @@ ON_FLAGS = (
     "-mtt-tensix-optimize-int-abs "
     "-mtt-tensix-optimize-int-not "
     "-mtt-tensix-optimize-dst-autoincr-load-carrier "
-    "-mtt-tensix-optimize-crossrow-pairing-stall-words"
+    "-mtt-tensix-optimize-crossrow-pairing-stall-words "
+    # A noinline sem body reprograms its PRGM constants on every call, while
+    # the hand kernel programs them once in init.  Move that programming to
+    # the callers' loop entry so it happens once per kernel.
+    "-mtt-tensix-optimize-crosscall-prgm"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
