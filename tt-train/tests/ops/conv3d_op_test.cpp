@@ -62,10 +62,10 @@ struct Conv3dReference {
 
 Conv3dReference compute_reference(
     const Conv3dCase& c,
-    const std::vector<float>& input,
-    const std::vector<float>& weight,
-    const std::vector<float>& bias,
-    const std::vector<float>& grad_output) {
+    const xt::xarray<float>& input,
+    const xt::xarray<float>& weight,
+    const xt::xarray<float>& bias,
+    const xt::xarray<float>& grad_output) {
     const auto out = c.out_size();
     const auto [D, H, W] = c.in_size;
     const auto [kD, kH, kW] = c.kernel;
@@ -92,8 +92,8 @@ Conv3dReference compute_reference(
                 for (uint32_t ow = 0; ow < out[2]; ++ow) {
                     for (uint32_t co = 0; co < c.C_out; ++co) {
                         const size_t o_idx = output_index(n, od, oh, ow, co);
-                        const float dy = grad_output[o_idx];
-                        float acc = c.with_bias ? bias[co] : 0.F;
+                        const float dy = grad_output.flat(o_idx);
+                        float acc = c.with_bias ? bias.flat(co) : 0.F;
                         if (c.with_bias) {
                             ref.grad_bias[co] += dy;
                         }
@@ -123,9 +123,9 @@ Conv3dReference compute_reference(
                                             static_cast<uint32_t>(iw),
                                             ci);
                                         const size_t w_idx = weight_index(co, ci, kd, kh, kw);
-                                        acc += input[i_idx] * weight[w_idx];
-                                        ref.grad_input[i_idx] += dy * weight[w_idx];
-                                        ref.grad_weight[w_idx] += dy * input[i_idx];
+                                        acc += input.flat(i_idx) * weight.flat(w_idx);
+                                        ref.grad_input[i_idx] += dy * weight.flat(w_idx);
+                                        ref.grad_weight[w_idx] += dy * input.flat(i_idx);
                                     }
                                 }
                             }
@@ -141,14 +141,6 @@ Conv3dReference compute_reference(
 
 std::vector<size_t> xshape(const ttnn::Shape& shape) {
     return {shape.cbegin(), shape.cend()};
-}
-
-xt::xarray<float> uniform(const ttnn::Shape& shape, float low, float high, uint32_t seed) {
-    return ttml::test_utils::make_uniform_xarray<float>(xshape(shape), low, high, seed);
-}
-
-std::vector<float> as_vector(const xt::xarray<float>& x) {
-    return {x.begin(), x.end()};
 }
 
 class Conv3dOpTest : public ::testing::Test {
@@ -178,27 +170,32 @@ void run_case(const Conv3dCase& c) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     auto input = ttml::autograd::create_tensor(
-        ttml::core::from_xtensor(uniform(input_shape, -1.F, 1.F, /*seed=*/1), device, c.layout), c.input_requires_grad);
+        ttml::core::from_xtensor(
+            ttml::test_utils::make_uniform_xarray<float>(input_shape, -1.F, 1.F, /*seed=*/1), device, c.layout),
+        c.input_requires_grad);
     auto weight = ttml::autograd::create_tensor(
-        ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, /*seed=*/2), device, c.layout),
+        ttml::core::from_xtensor(
+            ttml::test_utils::make_uniform_xarray<float>(weight_shape, -0.5F, 0.5F, /*seed=*/2), device, c.layout),
         c.weight_requires_grad);
     ttml::autograd::TensorPtr bias;
     if (c.with_bias) {
         // A rank-1 bias cannot be tilized on its own; the op accepts it in ROW_MAJOR.
         const auto bias_layout = c.bias_rank1 ? ttnn::Layout::ROW_MAJOR : c.layout;
         bias = ttml::autograd::create_tensor(
-            ttml::core::from_xtensor(uniform(bias_shape, -1.F, 1.F, /*seed=*/3), device, bias_layout),
+            ttml::core::from_xtensor(
+                ttml::test_utils::make_uniform_xarray<float>(bias_shape, -1.F, 1.F, /*seed=*/3), device, bias_layout),
             c.bias_requires_grad);
     }
-    auto grad_output = ttml::core::from_xtensor(uniform(output_shape, -1.F, 1.F, /*seed=*/4), device, c.layout);
+    auto grad_output = ttml::core::from_xtensor(
+        ttml::test_utils::make_uniform_xarray<float>(output_shape, -1.F, 1.F, /*seed=*/4), device, c.layout);
 
     // Build the reference from the bf16-rounded values that actually live on device.
     const auto ref = compute_reference(
         c,
-        as_vector(ttml::core::to_xtensor(input->get_value())),
-        as_vector(ttml::core::to_xtensor(weight->get_value())),
-        c.with_bias ? as_vector(ttml::core::to_xtensor(bias->get_value())) : std::vector<float>{},
-        as_vector(ttml::core::to_xtensor(grad_output)));
+        ttml::core::to_xtensor(input->get_value()),
+        ttml::core::to_xtensor(weight->get_value()),
+        c.with_bias ? ttml::core::to_xtensor(bias->get_value()) : xt::xarray<float>{},
+        ttml::core::to_xtensor(grad_output));
 
     const auto expect_matches = [&](const ttnn::Tensor& actual,
                                     const std::vector<float>& reference,
@@ -491,13 +488,20 @@ TEST_F(Conv3dOpTest, ProgramCacheStableAcrossSteps) {
 
     auto step = [&](uint32_t seed) {
         auto input = ttml::autograd::create_tensor(
-            ttml::core::from_xtensor(uniform(input_shape, -1.F, 1.F, seed), device, c.layout), true);
+            ttml::core::from_xtensor(
+                ttml::test_utils::make_uniform_xarray<float>(input_shape, -1.F, 1.F, seed), device, c.layout),
+            true);
         auto weight = ttml::autograd::create_tensor(
-            ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, seed + 1), device, c.layout), true);
+            ttml::core::from_xtensor(
+                ttml::test_utils::make_uniform_xarray<float>(weight_shape, -0.5F, 0.5F, seed + 1), device, c.layout),
+            true);
         auto bias = ttml::autograd::create_tensor(
-            ttml::core::from_xtensor(uniform(bias_shape, -1.F, 1.F, seed + 2), device, c.layout), true);
+            ttml::core::from_xtensor(
+                ttml::test_utils::make_uniform_xarray<float>(bias_shape, -1.F, 1.F, seed + 2), device, c.layout),
+            true);
         auto result = ttml::ops::conv3d(input, weight, bias, c.stride, c.padding, c.dilation);
-        result->set_grad(ttml::core::from_xtensor(uniform(output_shape, -1.F, 1.F, seed + 3), device, c.layout));
+        result->set_grad(ttml::core::from_xtensor(
+            ttml::test_utils::make_uniform_xarray<float>(output_shape, -1.F, 1.F, seed + 3), device, c.layout));
         result->backward();
         ttml::autograd::ctx().reset_graph();
     };
@@ -521,9 +525,13 @@ TEST_F(Conv3dOpTest, GradientsAccumulateAcrossTwoUses) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     auto input = ttml::autograd::create_tensor(
-        ttml::core::from_xtensor(uniform(input_shape, -1.F, 1.F, 11), device, c.layout), /*requires_grad=*/true);
+        ttml::core::from_xtensor(
+            ttml::test_utils::make_uniform_xarray<float>(input_shape, -1.F, 1.F, 11), device, c.layout),
+        /*requires_grad=*/true);
     auto weight = ttml::autograd::create_tensor(
-        ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, 12), device, c.layout), /*requires_grad=*/true);
+        ttml::core::from_xtensor(
+            ttml::test_utils::make_uniform_xarray<float>(weight_shape, -0.5F, 0.5F, 12), device, c.layout),
+        /*requires_grad=*/true);
 
     auto single = ttml::ops::conv3d(input, weight);
     single->backward();
