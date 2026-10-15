@@ -74,7 +74,9 @@ def test_steps_catch_every_mutation_of_a_swapped_step(gspec, monkeypatch, kind, 
     assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
     m = got()
     assert m["swap_attn_norm_rel"] == 0, "only the named step is mutated"
-    assert m[f"swap_{step}_rel_limit"] == 0.005  # calibrated to the component error, never below the floor
+    # F73: 2 x the step's own noise floor (its component error, at least its output's bf16 resolution), no fixed floor
+    lim, err = m[f"swap_{step}_rel_limit"], m[f"swap_{step}_component_err"]
+    assert 2.0 * err <= lim + 1e-12 and lim <= 2.0 * max(err, 2.0**-8) + 1e-12
 
 
 def test_the_bf16_control_passes_and_limits_fall_back_without_a_component_result(gspec, monkeypatch):
