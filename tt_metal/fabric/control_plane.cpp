@@ -871,9 +871,22 @@ void ControlPlane::adopt_local_mesh_fabric_config() {
     // when the launch set a plain FABRIC_2D override. Skipped for the single-host multi-mesh testing path
     // (a rank owning several meshes has no single config), which keeps the process-wide override.
     if (this->mesh_graph_ == nullptr || this->local_mesh_binding_.mesh_ids.size() != 1) {
+        log_info(
+            tt::LogFabric,
+            "adopt_local_mesh_fabric_config: SKIP (has_mesh_graph={}, local_mesh_count={})",
+            this->mesh_graph_ != nullptr,
+            this->local_mesh_binding_.mesh_ids.size());
         return;
     }
-    this->fabric_config_ = this->mesh_graph_->get_fabric_config(this->local_mesh_binding_.mesh_ids.front());
+    const auto local_mesh = this->local_mesh_binding_.mesh_ids.front();
+    const auto adopted = this->mesh_graph_->get_fabric_config(local_mesh);
+    log_info(
+        tt::LogFabric,
+        "adopt_local_mesh_fabric_config: mesh {} process-override {} -> adopted {}",
+        *local_mesh,
+        enchantum::to_string(this->fabric_config_),
+        enchantum::to_string(adopted));
+    this->fabric_config_ = adopted;
 }
 
 void ControlPlane::validate_fabric_config_across_ranks() {
