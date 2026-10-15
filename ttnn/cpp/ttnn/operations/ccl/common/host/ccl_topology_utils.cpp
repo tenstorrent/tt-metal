@@ -646,8 +646,16 @@ std::optional<TensorTopology> mesh_partition_output_topology(
 
 std::optional<TensorTopology> mesh_partition_output_topology(
     const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t out_dim) {
-    return mesh_partition_output_topology(
-        input.tensor_topology(), cluster_axis, mesh_shape_of(input, "mesh_partition"), rank_of(input), out_dim);
+    // mesh_partition's program factory numbers a whole-mesh partition by the row-major linearised index of each
+    // device's own coordinate (get_linearized_index over the mesh view), which for a tensor stored on every device is
+    // its storage order: the same respelling as reduce_scatter's. With a cluster_axis the rank is the coordinate
+    // value along that axis and the label's coordinates, a block uncollapse_placements has checked, are kept.
+    return over_storage_ring_order(
+        mesh_partition_output_topology(
+            input.tensor_topology(), cluster_axis, mesh_shape_of(input, "mesh_partition"), rank_of(input), out_dim),
+        input,
+        cluster_axis,
+        "mesh_partition");
 }
 
 std::optional<TensorTopology> all_to_all_output_topology(

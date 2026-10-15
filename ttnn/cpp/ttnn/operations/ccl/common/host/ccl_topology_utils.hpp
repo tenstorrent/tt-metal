@@ -194,10 +194,13 @@ std::optional<tt::tt_metal::TensorTopology> over_storage_ring_order(
 // non-trivial axis, and a scatter along an axis that itself holds a Shard of another dim (each device would hold a
 // piece of two dims on one axis), are refusals (reduce_scatter consumes both). A stale Shard dim left by a
 // rank-changing op (#52331) matches nothing, which the gather and reduce rules treat as harmless, but counts as a
-// Shard of another dim here, so a partition refuses it. No op in this change calls these two. mesh_partition keeps
-// its own inline hook (#58915), so mesh_partition_output_topology has no caller yet: it is the helper-side spelling
-// of the partition rules, should that hook ever move here. all_to_all_output_topology is what the stacked
-// experimental-CCL change calls for all_to_all_async and its fused variants, which is why both live here.
+// Shard of another dim here, so a partition refuses it. mesh_partition's hook calls mesh_partition_output_topology:
+// the inline rule table #58915 landed with (rules 0-5) lives here now, with the per-axis coverage rule above as its
+// rule 0. all_to_all_output_topology is what the stacked experimental-CCL change calls for all_to_all_async and its
+// fused variants, which is why both live here. The mesh_partition Tensor overload spells a whole-mesh label over the
+// storage's coordinates like reduce_scatter's (the program factory numbers devices row-major over the mesh, the
+// storage order of a tensor stored on every device); the all_to_all one returns the pure result, since those ops'
+// hooks handle their own ring order.
 std::optional<tt::tt_metal::TensorTopology> mesh_partition_output_topology(
     const tt::tt_metal::TensorTopology& in,
     std::optional<uint32_t> cluster_axis,
