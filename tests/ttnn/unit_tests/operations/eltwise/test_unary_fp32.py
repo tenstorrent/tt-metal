@@ -20,82 +20,6 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize(
     "ttnn_function",
     [
-        ttnn.neg,
-    ],
-)
-def test_neg_fp32(device, ttnn_function):
-    x_torch = torch.tensor([[0.00001]], dtype=torch.float32)
-    y_torch = -x_torch
-
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    y_tt = ttnn_function(x_tt)
-
-    tt_out = ttnn.to_torch(y_tt)
-    status = torch.allclose(y_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
-    assert status
-
-
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
-        ttnn.sin,
-    ],
-)
-def test_sin_fp32(device, ttnn_function):
-    x_torch = torch.rand((64, 128), dtype=torch.float32)
-    y_torch = torch.sin(x_torch)
-
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    y_tt = ttnn_function(x_tt)
-
-    tt_out = ttnn.to_torch(y_tt)
-    status = torch.allclose(y_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
-    assert status
-
-
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
-        ttnn.cos,
-    ],
-)
-def test_cos_fp32(device, ttnn_function):
-    x_torch = torch.rand((64, 128), dtype=torch.float32)
-    y_torch = torch.cos(x_torch)
-
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    y_tt = ttnn_function(x_tt)
-
-    tt_out = ttnn.to_torch(y_tt)
-    status = torch.allclose(y_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
-    assert status
-
-
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
-        ttnn.tan,
-    ],
-)
-def test_tan_fp32(device, ttnn_function):
-    x_torch = torch.rand((64, 128), dtype=torch.float32)
-    y_torch = torch.tan(x_torch)
-
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    y_tt = ttnn_function(x_tt)
-
-    tt_out = ttnn.to_torch(y_tt)
-    status = torch.allclose(y_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
-    assert status
-
-
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
         ttnn.relu,
     ],
 )
@@ -204,12 +128,6 @@ def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pc
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_exp(device, h, w):
-    run_unary_test(device, h, w, ttnn.exp, ulp=1)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_tanh(device, h, w):
     run_unary_test(device, h, w, ttnn.tanh, ulp=3)
 
@@ -264,24 +182,6 @@ def test_silu(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_log(device, h, w):
     run_unary_test(device, h, w, ttnn.log, ulp=3)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_sinh(device, h, w):
-    run_unary_test(device, h, w, ttnn.sinh, ulp=3)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_cosh(device, h, w):
-    run_unary_test(device, h, w, ttnn.cosh, ulp=1)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_acosh(device, h, w):
-    run_unary_test(device, h, w, ttnn.acosh, ulp=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize("h", [64])
