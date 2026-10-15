@@ -281,6 +281,7 @@ inline void _llk_unpack_A_init_(
     const std::uint32_t unpack_src_format           = 0,
     const std::uint32_t unpack_dst_format           = 0)
 {
+    LLK_EXP_NOP_UNPACK_INIT_AT(); // experiment hook (init-opt2), ckernel.h
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_A_init_", tensor_shape);
     const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
     const std::uint8_t num_faces  = tensor_shape.total_num_faces();
@@ -353,6 +354,7 @@ template <
     bool unpack_to_dest                          = false>
 inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0)
 {
+    LLK_FID_POINT(); // fidelity experiment hook (ckernel.h), empty unless LLK_FID_T is defined
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
 
     // Clear z/w start counters
