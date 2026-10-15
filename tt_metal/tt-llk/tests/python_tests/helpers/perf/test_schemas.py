@@ -1092,7 +1092,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_unary_typecast_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "data_copy_type",
@@ -1108,7 +1108,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
-            "implied_math_format",
             "input_format",
             "loop_factor",
             "marker",

@@ -47,6 +47,7 @@ from helpers.sfpu_domains import (
     sfpu_unary_ops,
     specials_after_nan_sign_gate,
     specials_safe,
+    unpacks_to_dest,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -76,6 +77,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
     DestSync,
 )
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 from helpers.utils import passed_test
 
 SUPPORTED_FAST_MODE_OPS = [
@@ -1336,20 +1338,30 @@ def eltwise_unary_sfpu(
 ):
     """Shared unary SFPU runner for functional, perf, and accuracy.
 
+    Stimuli come from the op's own domain unless *src_A* / *src_B* (with their tile
+    counts) are given. *unpack_to_dest* defaults to ``unpacks_to_dest(input, dest_acc)``.
+
+    *is_perf* runs every *run_types* entry under *perf_report* and returns ``None``,
+    unless *collect_result* also reads the L1_TO_L1 result back.
+
+    *check_golden=False* returns the raw L1 result without a golden check.
+    *return_golden* returns ``(res_tensor, golden_tensor)`` instead, for callers that
+    want a stricter gate than the op's tolerance; it needs *check_golden*.
+
     *gate_on_step_budget* is for a caller whose hand-built stimulus the op's step
     budget was measured on (``MEASURED_ON_SWEEP`` in test_sfpu_accuracy_budget.py): it
     gates on the whole contract rather than only its tolerance arm.
 
     *custom_atol* / *custom_rtol* replace the contract's gate for a caller whose stimulus
     needs a tolerance the op's registry row does not describe (the polygamma order sweep).
-
-    *return_golden* returns ``(res_tensor, golden_tensor)`` instead of the raw L1 result,
-    for callers that want a stricter gate than the op's tolerance."""
+    """
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
+    if return_golden and not check_golden:
+        raise ValueError("return_golden needs check_golden=True")
 
     need_stimuli = src_A is not None or not is_perf or collect_result or check_golden
     if src_A is None and need_stimuli:
@@ -1374,7 +1386,10 @@ def eltwise_unary_sfpu(
         )
     elif src_A is not None:
         computed_A, computed_B, _ = calculate_tile_and_face_counts(
-            input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+            input_dimensions,
+            input_dimensions,
+            face_r_dim=MAX_FACE_R_DIM,
+            num_faces=MAX_NUM_FACES,
         )
         if tile_cnt_A is None:
             tile_cnt_A = computed_A
@@ -1384,7 +1399,10 @@ def eltwise_unary_sfpu(
             src_B = torch.zeros_like(src_A)
     else:
         tile_cnt_A, tile_cnt_B, _ = calculate_tile_and_face_counts(
-            input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+            input_dimensions,
+            input_dimensions,
+            face_r_dim=MAX_FACE_R_DIM,
+            num_faces=MAX_NUM_FACES,
         )
 
     golden_tensor = None
@@ -1462,16 +1480,8 @@ def eltwise_unary_sfpu(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # The op's declared *tolerance*, resolved for this exact variant. This is where
-    # CUSTOM_TOLERANCES used to be read in the test bodies; keeping it in the driver
-    # means all eight call sites pick it up at once, and a change is a registry edit.
-    #
-    # Tolerance only by default. A step budget measured over every value the format has
-    # -- which is what the exhaustive sweep measures -- is much wider than one measured
-    # over this driver's sampled domain, so enforcing it here would replace a gate that
-    # binds with one that does not. The budgets are enforced where they were measured:
-    # the signbit, isinf/isnan and threshold sweeps' predicates were measured on these
-    # very stimuli, so those three pass gate_on_step_budget.
+    # Gate on the op's tolerance only: its step budgets were measured over the whole
+    # format, so only callers whose stimuli they were measured on opt into them.
     contract = accuracy_contract(
         mathop,
         output_format=formats.output_format,
@@ -1535,12 +1545,13 @@ def build_eltwise_unary_sfpu_config(
     if run_types is None:
         run_types = ALL_PERF_RUN_TYPES if is_perf else [PerfRunType.L1_TO_L1]
     _, _, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+        input_dimensions,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
     )
     if unpack_to_dest is None:
-        unpack_to_dest = (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        )
+        unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     test_config_kwargs = {
         "test_name": test_name,
