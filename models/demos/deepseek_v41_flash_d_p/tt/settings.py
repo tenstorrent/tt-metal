@@ -26,6 +26,13 @@ TABLE = {
         "(spec rule 'Accuracy is judged against the noise floor', OV-3): fpu is the default and the max-precision "
         "value; exact stays selectable for comparison only",
     ),
+    "ENGRAM_KV_QDQ": Setting(
+        "qdq",
+        ("qdq", "skip"),
+        "the fp8 act quant of the engram rows before wkv (tt/engram_kv.py): qdq = tt/quant.fp8_qdq (bit-exact with the "
+        "reference for any input); skip = none, the identity on real table rows (e4m3 x 2^k: 0 values changed on the "
+        "layer-1 golden) except groups with amax < 1e-4 (a perf pick for the owner)",
+    ),
     # ---- attention (tt/attention.py)
     "WINDOW_SDPA": Setting(
         "high_precision",
@@ -93,6 +100,7 @@ MAX_PRECISION = {
     "MATMUL_FIDELITY": "HiFi4",
     "FP32_DEST_ACC": True,
     "HC_TP_SUM": "gather_add",
+    "ENGRAM_KV_QDQ": "qdq",
     "ATTN_IN_MM": "fpu",  # owner 2026-10-15 (OV-3): accuracy against the noise floor, not exactness
     "WINDOW_SDPA": "high_precision",  # owner 2026-10-15 (OV-3); "exact" only for comparison
     "WINDOW_PIECES": 3,
