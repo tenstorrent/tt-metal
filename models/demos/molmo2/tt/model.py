@@ -948,10 +948,19 @@ class TtMolmo2Model(LightweightModule):
                 ttnn.deallocate(gathered)
             vit_chunks.append(ttnn.reshape(rows, [real_n * n_patches, rows.shape[-1]]))
 
-        feat_tt = vit_chunks[0] if len(vit_chunks) == 1 else ttnn.concat(vit_chunks, dim=0)
-        if len(vit_chunks) > 1:
-            for c in vit_chunks:
-                ttnn.deallocate(c)
+        # Concatenate in small groups: a single concat over ~50 inputs (384 frames) hangs the device.
+        while len(vit_chunks) > 1:
+            merged = []
+            for i in range(0, len(vit_chunks), 4):
+                group = vit_chunks[i : i + 4]
+                if len(group) == 1:
+                    merged.append(group[0])
+                    continue
+                merged.append(ttnn.concat(group, dim=0))
+                for c in group:
+                    ttnn.deallocate(c)
+            vit_chunks = merged
+        feat_tt = vit_chunks[0]
 
         # TTNN chunked image pooling over the on-device feature table — avoids OOM by:
         #   (a) column-parallel TP=8 reduces per-device QKV output 8×

@@ -7,8 +7,10 @@ host round-trip path (ViT -> CPU -> upload -> pooling) used before, and report b
     MOLMO2_VERIF_DIR=<verification dir> pytest models/demos/molmo2/tests/test_vision_on_device.py -s
 """
 
+import os
 import time
 
+import pytest
 import torch
 from loguru import logger
 
@@ -56,10 +58,11 @@ def _reference(model, pv, pool_idx):
     return pooled[0][valid]
 
 
-def test_vision_matches_host_roundtrip(mesh_device, tt_model, processor):
-    model, _ = tt_model
-    vp, prompt = _load_first_video_test()
-    ids, pv, pool_idx, _ = build_inputs(processor, vp, prompt)
+def _check(mesh_device, model, processor, vp, prompt, min_crops=0):
+    import pathlib
+
+    ids, pv, pool_idx, _ = build_inputs(processor, pathlib.Path(vp), prompt)
+    assert pv.shape[1] >= min_crops, f"video decoded to {pv.shape[1]} crops"
     ref = _reference(model, pv, pool_idx)
     for _ in range(2):
         t = time.perf_counter()
@@ -81,3 +84,16 @@ def test_vision_matches_host_roundtrip(mesh_device, tt_model, processor):
     )
     assert feats.shape == ref_proj.shape
     assert pcc > 0.999
+
+
+def test_vision_matches_host_roundtrip(mesh_device, tt_model, processor):
+    model, _ = tt_model
+    vp, prompt = _load_first_video_test()
+    _check(mesh_device, model, processor, vp, prompt)
+
+
+@pytest.mark.skipif(not os.environ.get("MOLMO2_LONG_VIDEO"), reason="set MOLMO2_LONG_VIDEO to a >=192 s video")
+def test_vision_long_video(mesh_device, tt_model, processor):
+    """384-frame video: ~48 ViT chunks (a single concat over that many inputs hung the device)."""
+    model, _ = tt_model
+    _check(mesh_device, model, processor, os.environ["MOLMO2_LONG_VIDEO"], "Describe this video.", min_crops=300)

@@ -10,6 +10,19 @@ Like for like is therefore the local `file://` pass: **TT 1x8 slice 2.31 s mean 
 comparable to the GPU number. Caveats: short answers (max_tokens 16) so prefill dominates; decode is 19 tok/s vs ~35 on the March T3K reference;
 numbers were measured without TT_MM_THROTTLE_PERF=3 (about +12% on the DP=4 suite).
 
+## After the 2026-10-15 optimizations (same suite, local `file://` videos, one server, strictly sequential, throttle ON)
+
+| | mean | median | p90 | accuracy |
+|---|---|---|---|---|
+| GPU baseline (`test_results.jsonl`, local files) | 3.61 s | 3.11 s | 6.38 s | - |
+| TT before optimizations (throttle off) | 2.31 s | 1.76 s | 4.54 s | 97/100 |
+| **TT after** (throttle `TT_MM_THROTTLE_PERF=3` on) | **1.96 s** | **1.26 s** | 4.39 s | **98/100** |
+
+Mean 46% below the GPU baseline (1.84x). Decode step 52 -> 27 ms (19 -> 37 tok/s, above the March T3K reference of ~35 tok/s);
+30-frame video prefill 1.62 -> 1.07 s. 4 servers: suite 54 s wall (was 96 s); single DP=4 instance: 138 s (was 245 s with throttle).
+What changed: vocab-parallel lm_head, untilized (row-major) logits readback (9 ms -> 0.8 ms), multi-core decode RMSNorm,
+bf8 wqkv/wo, ViT features kept on device (no host round trip), 2560/3072 pooling buckets, finer eager prefill buckets.
+
 ## What the reference numbers are
 
 | Reference | Source | Hardware / stack | Notes |

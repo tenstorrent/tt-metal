@@ -14,6 +14,18 @@ URL, `file://` video inside the container); 105-suite 97/100, 0 errors, 393 s wa
 0 device timeouts. First heavy-mix run showed 6 failures: only the host `file://` path (not mounted in the container); rerun with the file copied in: 12/12.
 Wikimedia image URL gives 422 (HTTP 403 to vLLM's User-Agent), not a model bug. Open: decode ~19-20 tok/s vs ~35 on the March T3K reference (optimization not started); branches not pushed.
 
+## Session 15 — 2026-10-15 (performance)
+
+**Status**: decode 48.8 -> 26.5 ms/step (20.5 -> 37.8 tok/s); 30-frame video prefill 1.62 -> 1.07 s; 105-suite (local files, sequential) mean 2.31 -> 1.96 s
+with the di/dt throttle on, 98/100, 0 errors. 4 servers: suite 54 s; one DP=4 instance: 138 s; heavy requests (34k-token video 27-31 s, 20 images 17-21 s) all OK, 0 device timeouts.
+Decode profile (tracy, eager step = traced step ops): lm_head replicated matmul 7.6 ms, 1-core RMSNorm 82 us x2/layer, 5 matmuls/layer at ~110 GB/s, readback of a tile-padded 9.7 MB logits tensor 9 ms.
+Fixes: vocab-parallel lm_head (padded to 152064, sliced on device); logits row-major in the trace; decode RMSNorm sharded over 16 cores;
+wqkv/wo bf8_b (HF teacher-forced agreement unchanged, PCC tests pass); ViT features all-gathered on device and pooled from the on-device table
+(PCC 1.000000 vs host round trip; a single concat over 48 chunks hung the device, now grouped by 4); pooling chunk buckets (..2048, 2560, 3072, 4096);
+FINE_PREFILL_BUCKETS for the eager path (S=2701 pads to 3072, not 4096). Remaining decode time (23.5 ms kernel): matmuls 14 ms (DRAM-sharded matmuls would roughly
+halve it), CCL ~4.5 ms, SDPA 0.7 ms. Next: DRAM-sharded matmul programs, row-parallel wo, on-device sampling. Tests: tests/bench_decode.py, profile_decode_ops.py (tracy),
+profile_prefill_wall.py, profile_vision_stages.py, test_vision_on_device.py. The Docker image was built before these changes (rebuild with serve/Dockerfile.local).
+
 ## Session 14 — 2026-10-14 (context limits over HTTP)
 
 vllm-tt-plugin server on one 1x8 slice (max-model-len 36864, TT_MM_THROTTLE_PERF=3), raw token-id prompts via /v1/completions
