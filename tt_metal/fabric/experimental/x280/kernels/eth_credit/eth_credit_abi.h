@@ -153,6 +153,15 @@ static inline int ec_site_is_cost(uint32_t site) {
            site == EC_SITE_E1_NOC_BARRIER;
 }
 
+/* Whether `site` is a stall site: an ec_site_t other than EC_SITE_NONE, a cost
+ * site, or EC_SITE_FWD_ROUND_TRIP, which holds timed round trips, neither
+ * stalls nor time spent. The host's "stalls least" comparison sums these
+ * only. */
+static inline int ec_site_is_stall(uint32_t site) {
+    return site != EC_SITE_NONE && site <= EC_SITE_FWD_ROUND_TRIP && site != EC_SITE_FWD_ROUND_TRIP &&
+           !ec_site_is_cost(site);
+}
+
 /**
  * The site E0 charges a pass that sends nothing, given its link credit to the
  * peer. Credit is tested before input: the forwarder refills E0's tx_fifo

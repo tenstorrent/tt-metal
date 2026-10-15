@@ -68,7 +68,11 @@ inline x280::harness::output::RecordSpec kernel_record(
                 continue;
             }
             sites.push_back(hout::Value::object(
-                {{"site", st.site}, {"cost", ec_site_is_cost(st.site)}, {"count", st.count}, {"ticks", st.ticks}}));
+                {{"site", st.site},
+                 {"cost", ec_site_is_cost(st.site)},
+                 {"stall", ec_site_is_stall(st.site)},
+                 {"count", st.count},
+                 {"ticks", st.ticks}}));
         }
         fields.insert(
             fields.end(),

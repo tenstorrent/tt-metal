@@ -320,9 +320,10 @@ TEST(EthCreditAbi, KernelIdsRoundTripAndAreDistinctAcrossBothChips) {
 // Cost sites (eth_credit_abi.h, ec_site_is_cost contract): exactly
 // FWD_W1_STORE, E0_TXQ0_BUSY, E1_TXQ1_BUSY and E1_NOC_BARRIER run right after
 // their own issue, so their count is batches, not stalls, and the host leaves
-// them out of the "stalls least" comparison. Every enumerator is checked by
-// name so a site dropped from, or added to, the predicate fails here. A value
-// outside ec_site_t is not a cost site, including the first value past the enum
+// them out of the "stalls least" comparison. Stall sites (ec_site_is_stall)
+// are every other site but NONE and FWD_ROUND_TRIP. Every enumerator is checked
+// by name so a site dropped from, or added to, either predicate fails here. A
+// value outside ec_site_t is neither, including the first value past the enum
 // and the ends of the byte and word ranges.
 TEST(EthCreditSites, CostSitesAreExactlyTheFourPostIssueWaits) {
     const std::map<uint32_t, bool> expected{
@@ -341,17 +342,21 @@ TEST(EthCreditSites, CostSitesAreExactlyTheFourPostIssueWaits) {
         {EC_SITE_HANDSHAKE, false},
         {EC_SITE_DRAIN, false},
         {EC_SITE_E0_R3_SOURCE, false},
+        {EC_SITE_FWD_ROUND_TRIP, false},
     };
-    ASSERT_EQ(expected.size(), 15u) << "every ec_site_t enumerator, 0 through EC_SITE_E0_R3_SOURCE";
-    ASSERT_EQ(static_cast<uint32_t>(EC_SITE_E0_R3_SOURCE), 14u);
+    ASSERT_EQ(expected.size(), 16u) << "every ec_site_t enumerator, 0 through EC_SITE_FWD_ROUND_TRIP";
+    ASSERT_EQ(static_cast<uint32_t>(EC_SITE_FWD_ROUND_TRIP), 15u);
     uint32_t cost = 0;
     for (const auto& [site, is_cost] : expected) {
         EXPECT_EQ(ec_site_is_cost(site) != 0, is_cost) << "site " << site;
+        const bool is_stall = site != EC_SITE_NONE && site != EC_SITE_FWD_ROUND_TRIP && !is_cost;
+        EXPECT_EQ(ec_site_is_stall(site) != 0, is_stall) << "site " << site;
         cost += is_cost ? 1u : 0u;
     }
     EXPECT_EQ(cost, 4u);
-    for (const uint32_t site : {15u, 16u, 255u, 256u + EC_SITE_FWD_W1_STORE, 0x80000000u, 0xFFFFFFFFu}) {
+    for (const uint32_t site : {16u, 17u, 255u, 256u + EC_SITE_FWD_W1_STORE, 0x80000000u, 0xFFFFFFFFu}) {
         EXPECT_EQ(ec_site_is_cost(site), 0) << "site " << site;
+        EXPECT_EQ(ec_site_is_stall(site), 0) << "site " << site;
     }
 }
 

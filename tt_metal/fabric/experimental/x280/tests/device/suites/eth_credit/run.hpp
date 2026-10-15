@@ -950,12 +950,12 @@ inline const ec_stall_t* find_stall(const ec_result_t& r, uint32_t site) {
     return nullptr;
 }
 
-/** Ticks `r` spent at its stall sites, cost sites and timed round trips
- * excluded: the figure the "stalls least" comparison ranks kernels by. */
+/** Ticks `r` spent at its stall sites (ec_site_is_stall): the figure the
+ * "stalls least" comparison ranks kernels by. */
 inline uint64_t stall_ticks(const ec_result_t& r) {
     uint64_t total = 0;
     for (const auto& st : r.stalls) {
-        if (st.site != EC_SITE_NONE && st.site != EC_SITE_FWD_ROUND_TRIP && !ec_site_is_cost(st.site)) {
+        if (ec_site_is_stall(st.site)) {
             total += st.ticks;
         }
     }
@@ -982,8 +982,11 @@ inline std::string describe(const char* who, const KernelResult& k) {
     o << " stalls";
     for (const auto& st : r.stalls) {
         if (st.site != EC_SITE_NONE) {
-            o << " [" << (ec_site_is_cost(st.site) ? "cost" : "stall") << " site " << st.site << ": " << st.count
-              << " x, " << st.ticks << " ticks]";
+            o << " ["
+              << (ec_site_is_stall(st.site)  ? "stall"
+                  : ec_site_is_cost(st.site) ? "cost"
+                                             : "round trips")
+              << " site " << st.site << ": " << st.count << " x, " << st.ticks << " ticks]";
         }
     }
     o << " stall ticks " << stall_ticks(r);

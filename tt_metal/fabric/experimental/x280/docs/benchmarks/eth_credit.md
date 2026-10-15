@@ -446,10 +446,11 @@ aggregates only:
   `E1_TXQ1_BUSY` and `E1_NOC_BARRIER` are cost sites instead: each runs right
   after its own issue, so nearly every batch finds work outstanding (a strict
   store always completes). They count batches and the ticks spent.
-  `ec_site_is_cost()` in `eth_credit_abi.h` names them, and the host's
-  `stall_ticks()` sums stall sites only. On the measurement image a sending
-  forwarder's fourth entry, `FWD_ROUND_TRIP`, holds its timed round trips
-  instead (Instrumentation), which `stall_ticks()` leaves out too;
+  `ec_site_is_cost()` in `eth_credit_abi.h` names them. On the measurement
+  image a sending forwarder's fourth entry, `FWD_ROUND_TRIP`, holds its timed
+  round trips instead (Instrumentation), neither a stall nor time spent.
+  `ec_site_is_stall()` names the rest, the stall sites, which alone the host's
+  `stall_ticks()` sums;
 - first and last timestamps on the kernel's own clock, stamped per batch (after
   a batch completes), not per packet;
 - failure detail: for `BAD_SEQUENCE`, `p`, expected and seen; for timeouts, the
@@ -743,11 +744,11 @@ the `packet_injection` host does.
 - Per kernel, on its own clock: stall counts and stall time per stall site, and
   per-packet service time, written as one `eth_credit_kernel` JSONL record per
   launched kernel: case, chip, role, kernel id, state, code, detail, packets in
-  and out per `p`, each kept site as `{site, cost, count, ticks}`, `first_ts`,
-  `last_ts` and failure detail. The `cost` flag lets a reader apply the "stalls
-  least" rule from the record alone: the kernel that stalls least sits behind
-  the bottleneck, and cost sites are excluded from that comparison and read as
-  time spent.
+  and out per `p`, each kept site as `{site, cost, stall, count, ticks}`,
+  `first_ts`, `last_ts` and failure detail. The `stall` flag lets a reader apply
+  the "stalls least" rule from the record alone: the kernel that stalls least
+  sits behind the bottleneck, and only stall sites enter that comparison; cost
+  sites read as time spent.
 - E0 classifies a pass that sends nothing by credit before input
   (`ec_e0_idle_site`): with no link credit it is `LINK_CREDITS`, else
   `INPUTS_EMPTY`. Zero credit implies zero available input, since the forwarder
