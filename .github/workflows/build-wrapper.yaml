@@ -120,6 +120,13 @@ jobs:
                   setattr(ttnn, name, refuse_device)
 
           import models.demos.gpt_oss_120b_qb2.tt.generator_vllm
+          # Snapshot before plugin registration resolves the observer alias.
+          assert "observed_model" not in sys.modules
+          from models.demos.gpt_oss_120b_qb2.tt.model import Model
+          from models.demos.gpt_oss_120b_qb2.tt.decoder import DecodeRMSNorm
+          original_head=Model._apply_lm_head
+          original_norm=DecodeRMSNorm.__call__
+          norm_owned="__call__" in DecodeRMSNorm.__dict__
           import pytest
           import vllm
           from vllm_tt_plugin.entrypoints import register
@@ -150,12 +157,9 @@ jobs:
                   origins[name] = {'path': str(p), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
           assert not tt_fds()
           (out/'import-proof.json').write_text(json.dumps({'python':sys.version,'origins':origins,'tt_fds':tt_fds()},indent=2)+'\n')
-          from models.demos.gpt_oss_120b_qb2.tt.model import Model
-          from models.demos.gpt_oss_120b_qb2.tt.decoder import DecodeRMSNorm
-          original_head=Model._apply_lm_head
-          original_norm=DecodeRMSNorm.__call__
-          norm_owned="__call__" in DecodeRMSNorm.__dict__
           import observed_model
+          assert Model._apply_lm_head is not original_head
+          assert DecodeRMSNorm.__call__ is not original_norm
           assert observed_model.TTGptOssForCausalLM is TTGptOssForCausalLM
           assert observed_model.observer.calls == 0 and not observed_model.observer.armed()
           from vllm.engine.arg_utils import AsyncEngineArgs
