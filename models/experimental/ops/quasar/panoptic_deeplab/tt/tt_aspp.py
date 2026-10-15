@@ -9,6 +9,7 @@ from loguru import logger
 from models.tt_cnn.tt.builder import TtConv2d
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.ops.quasar.panoptic_deeplab.tt.common import reshape_flattened_conv_output
+from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype
 
 try:
     from tracy import signpost
@@ -227,7 +228,7 @@ class TtASPP(LightweightModule):
         res.append(pooled)
 
         # Ensure all tensors have the same dtype before concatenation
-        target_dtype = ttnn.bfloat8_b
+        target_dtype = block_float_dtype(self.device)
         for i in range(len(res)):
             if res[i].dtype != target_dtype:
                 res[i] = ttnn.typecast(res[i], target_dtype)
@@ -340,7 +341,7 @@ class TtASPP(LightweightModule):
         res.append(pooled)
 
         # Ensure all tensors have the same dtype before concatenation
-        target_dtype = ttnn.bfloat8_b
+        target_dtype = block_float_dtype(self.device)
         for i in range(len(res)):
             if res[i].dtype != target_dtype:
                 res[i] = ttnn.typecast(res[i], target_dtype)
