@@ -46,6 +46,10 @@ def migration_file_export_enabled() -> bool:
     return os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0") == "1"
 
 
+def migration_publish_enabled() -> bool:
+    return os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1"
+
+
 def migration_device_map_file_path() -> str:
     return os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", _DEFAULT_DEVICE_MAP_FILE)
 
@@ -491,3 +495,97 @@ def allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer
 
 def get_num_dram_banks(mesh_device):
     return mesh_device.dram_grid_size().x
+
+
+def setup_kv_chunk_table(
+    runtime, kv_caches, mesh_device, mesh_shape, *, rank: int, num_ranks: int, first_layer_idx: int, num_my_layers: int
+):
+    """Gather every rank's KV stage layouts, have rank 0 build the merged chunk table, and hand it on.
+
+    ``PREFILL_MIGRATION_EXPORT_TO_FILE=1`` writes the device-map file and leaves the table on disk;
+    otherwise ``PREFILL_ENABLE_MIGRATION=1`` delivers the device map and publishes the table to the
+    live worker, and ``0`` (mock migration) leaves it on disk for an offline reader. Returns the
+    migration client on the rank that published, else None.
+
+    A runtime may report no stage (GPT-OSS with a bounded sliding cache); that serves without a table,
+    and only single-rank in mock mode, since every rank must join the same stage all-gathers."""
+    file_export = migration_file_export_enabled()
+    publish = migration_publish_enabled() and not file_export
+
+    table_path = migration_table_path()
+    wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
+    device_map_json_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+
+    if num_ranks > 1 and is_per_host_storage(table_path):
+        if migration_table_path_is_explicit():
+            raise ValueError(
+                f"PREFILL_MIGRATION_TABLE_PATH={os.path.abspath(table_path)} is on per-host storage; "
+                f"with num_ranks={num_ranks} the table rank 0 writes is invisible to the other hosts' "
+                "readers. Point it at shared/NFS storage (e.g. /data/...)."
+            )
+        logger.warning(
+            f"[migration] KV chunk table defaults to per-host {table_path} at num_ranks={num_ranks}; "
+            "readers on other hosts cannot see it. Set PREFILL_MIGRATION_TABLE_PATH to shared storage "
+            "if one is expected."
+        )
+
+    if rank == 0 and os.path.exists(table_path):
+        logger.warning(f"[migration] removing stale KV chunk table {table_path} from a prior run")
+        os.remove(table_path)
+
+    if not file_export:
+        remove_stale_device_map_sidecars(device_map_json_path)
+
+    if not hasattr(runtime, "kv_migration_stages"):
+        raise RuntimeError(
+            f"runtime {type(runtime).__name__} does not implement kv_migration_stages, so its KV cache "
+            "layout cannot be described and no chunk table can be built (see docs/ADDING_A_PREFILL_MODEL.md §2)."
+        )
+    kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
+
+    if not kv_stages:
+        if num_ranks > 1 or publish or file_export:
+            raise RuntimeError(
+                f"[migration] rank {rank}: {type(runtime).__name__} reported no KV cache stage, so no chunk "
+                f"table can be built, but num_ranks={num_ranks}, PREFILL_ENABLE_MIGRATION="
+                f"{int(migration_publish_enabled())}, PREFILL_MIGRATION_EXPORT_TO_FILE={int(file_export)} "
+                "need one. Serve single-rank with both off, or give the cache a stage."
+            )
+        logger.warning(
+            f"[migration] {type(runtime).__name__} reported no KV cache stage (GPT-OSS does this for a "
+            "bounded sliding cache), so no chunk table is built and this cache cannot be migrated."
+        )
+        return None
+
+    if file_export:
+        stage_layouts = export_device_map_file_and_gather_stage_layouts(
+            mesh_device, kv_stages, mesh_shape, migration_device_map_file_path()
+        )
+        logger.info(f"[migration] rank {rank}: exported local device map -> {migration_device_map_file_path()}")
+    else:
+        if publish:
+            stage_layouts = deliver_device_map_and_gather_stage_layouts(mesh_device, kv_stages, mesh_shape, rank)
+        else:
+            stage_layouts = allgather_kv_stage_layouts(mesh_device, kv_stages, mesh_shape)
+        device_map_path = rank_scoped_device_map_path(device_map_json_path, rank, num_ranks)
+        serialize_device_map(mesh_device, device_map_path)
+        logger.info(f"[migration] rank {rank}: local device map -> {device_map_path}")
+
+    if rank != 0:
+        logger.info(
+            f"[migration] rank {rank}: contributed stage (first_layer={first_layer_idx}, "
+            f"count={num_my_layers}); rank 0 owns the merged table."
+        )
+        return None
+
+    table_path = runtime.build_kv_chunk_table(
+        kv_caches,
+        table_path,
+        first_layer_idx=first_layer_idx,
+        num_my_layers=num_my_layers,
+        stage_layouts=stage_layouts,
+    )
+    if not publish:
+        logger.info(f"[migration] merged KV chunk table -> {table_path} (no worker handshake)")
+        return None
+    return publish_serialized_table_and_wait_ready(table_path=table_path, wait_ready_timeout_ms=wait_ready_ms)

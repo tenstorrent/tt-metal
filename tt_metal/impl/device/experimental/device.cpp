@@ -6,6 +6,7 @@
 
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 #include "tt_metal/impl/device/device_impl.hpp"

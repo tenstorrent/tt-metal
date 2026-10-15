@@ -6,10 +6,9 @@
 
 // DataflowBuffer (DFB) port of kernels/compute/eltwise_utils.hpp (FPU preprocess).
 //
-// Mechanically identical to the CircularBuffer helper, with the CB->DFB swap: the LLK operand id
-// comes from DFBBindingToken's `operator uint32_t()` (a `dfb::<name>` token converts directly to the cb
-// id every LLK call takes), and FIFO sync goes through a DataflowBuffer instance. See the CB original
-// for the rationale on the pre -> activation -> post reconfigure dance.
+// Mechanically identical to the CircularBuffer helper, with the CB->DFB swap: the helper takes the kernel's
+// DataflowBuffer objects, reads each operand id with get_id(), and syncs through them. See the CB original for
+// the rationale on the pre -> activation -> post reconfigure dance.
 
 #include "api/compute/common.h"
 #include "api/compute/pack.h"
@@ -23,15 +22,17 @@
 // unpacker SrcA temporarily, then restores the physical-LHS format for the next pass.
 template <typename ActivationFn>
 ALWI void preprocess_fpu_impl_dfb(
-    uint32_t dfb_pre_id,
-    uint32_t dfb_post_id,
+    DataflowBuffer& dfb_pre,
+    DataflowBuffer& dfb_post,
     uint32_t dfb_out_id,
     uint32_t per_core_block_size,
     ActivationFn&& process_activations) {
     using namespace ckernel;
 
-    DataflowBuffer dfb_pre(dfb_pre_id);
-    DataflowBuffer dfb_post(dfb_post_id);
+    // dfb_pre and dfb_post are the kernel's own objects. An object built here would drain when it returns and
+    // wait for tiles that only this thread pops later.
+    const uint32_t dfb_pre_id = dfb_pre.get_id();
+    const uint32_t dfb_post_id = dfb_post.get_id();
 
     reconfig_data_format_srca(/*old*/ QSR_BINARY_SRCA_FORMAT_DFB, /*new*/ dfb_pre_id);
     pack_reconfig_data_format(/*old*/ dfb_out_id, /*new*/ dfb_post_id);
@@ -70,8 +71,8 @@ ALWI void preprocess_fpu_impl_dfb(
 }
 
 // Dispatcher: identical macro structure to the CB original. PREPROCESS(op, dfb_pre, dfb_post, dfb_out,
-// n) compiles to either the activation pass or nothing, based on HAS_ACTIVATIONS(op). The dfb args
-// are `dfb::<name>` accessor tokens (which convert to uint32_t ids).
+// n) compiles to either the activation pass or nothing, based on HAS_ACTIVATIONS(op). dfb_pre and
+// dfb_post are the kernel's DataflowBuffer objects, and dfb_out is an id.
 #define PREPROCESS(op, ...) P_CAT(PREPROCESS_, HAS_ACTIVATIONS(op))(op, __VA_ARGS__)
 
 #define PREPROCESS_0(...)
