@@ -28,7 +28,7 @@ namespace experimental {
 // the output. Format-free at the op level (formats set at compute_kernel_hw_startup); every LLK core here
 // consumes only geometry (data and output tile shapes) + the two runtime input addresses. Geometry
 // (for MATH + unpack init) comes from the DATA operand. Packing is separate (experimental::pack_tile); the
-// packer edge mask and fill mode are programmed here by reduce_init.
+// packer edge mask is programmed here by reduce_init.
 
 // clang-format off
 /**
@@ -57,8 +57,7 @@ ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<OF, OS> /*out*/) {
     static_assert(is_legal_tile_shape(OS), "reduce_init: illegal output tile shape.");
     UNPACK((llk_unpack_AB_reduce_init_impl<reduce_type, reduce_dim>(DS)));
     MATH((llk_math_reduce_init_impl<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(DS)));
-    PACK((llk_pack_reduce_mask_config_impl<reduce_type, reduce_dim, PackMode::Default>(
-        static_cast<std::uint32_t>(OF), OS)));
+    PACK((llk_pack_reduce_mask_config_impl<reduce_dim, PackMode::Default>(OS)));
 }
 
 // clang-format off
