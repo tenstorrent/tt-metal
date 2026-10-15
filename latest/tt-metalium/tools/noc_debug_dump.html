@@ -324,7 +324,7 @@
 </h2>
 <p>The host can collect NOC traces from the device to identify potential kernel programming issues such as missing NOC barriers.</p>
 <p>Each NOC transaction is instrumented to record metadata such as type, src/dst, NOC counters, and size. These packets are collected by the host and bucketed into events per core and RISC processor. As the host collects the trace, it compares it to previous traces as well as traces on other cores on the same device.</p>
-<p>When the program finishes, the device closes, or <code class="docutils literal notranslate"><span class="pre">tt::tt_metal::detail::ReadDeviceProfilerResults</span></code> is manually called, the host will analyze the trace and print out any issues found grouped by core.</p>
+<p>When the program finishes, the device closes, or <code class="docutils literal notranslate"><span class="pre">tt::tt_metal::ReadMeshDeviceProfilerResults</span></code> is manually called, the host will analyze the trace and print out any issues found grouped by core.</p>
 </section>
 <section id="enabling">
 <h2>Enabling<a class="headerlink" href="#enabling" title="Permalink to this heading"></a>

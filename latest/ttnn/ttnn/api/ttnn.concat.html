@@ -397,6 +397,12 @@
 <li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Sub-core grid to use for interleaved (L1 or DRAM) output tensors. If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to <cite>None</cite>.</span></p></li>
 </ul>
 </dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Block-sharded width concat (<cite>dim</cite> = -1) requires each input to start on an L1 alignment boundary: the sum of the widths before it, times the element size, must be a multiple of the NOC alignment (16 bytes on Wormhole and Blackhole). A ragged width that breaks this is rejected, since the concat boundary falls inside a shard where the NOC cannot write. Pad each width to a multiple of <cite>l1_alignment / element_size</cite> elements, or concat before sharding.</p>
+</div>
+<dl class="field-list simple">
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">

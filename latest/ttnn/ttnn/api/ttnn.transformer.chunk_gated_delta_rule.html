@@ -383,7 +383,7 @@
 <dd>
 <p>(use_qk_l2norm stays False); the op applies <cite>scale</cite> to q, casts q/k/v to bf16, permutes
 them head-major, expands H -&gt; HV for GQA and pads T to a multiple of chunk_size on the
-host. Any chunk_size that is a multiple of 32; every device path.</p>
+host. chunk_size 32 or 64; every device path.</p>
 </dd>
 <dt>Rank 3, flat token-major: q/k/v are the per-head concatenations a projection or the causal</dt>
 <dd>
@@ -409,8 +409,8 @@ the kernel (rank 3).</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>initial_state</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">[B, HV, K, V] fp32 TILE on device (the dtype is cast
 if not, the layout is not); zeros when omitted.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>output_final_state</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default False.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>chunk_size</strong> (<em>int</em>)</span><span class="tt-api-param-desc">default 64; 32 is what the models use and the only value the rank-3 path
-accepts.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>chunk_size</strong> (<em>int</em>)</span><span class="tt-api-param-desc">32 or 64, default 64; 32 is what the models use and the only value the
+rank-3 path accepts.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>use_qk_l2norm</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default False and currently the only accepted value: the rank-4 path
 expects host-normalized q/k, the rank-3 path always normalizes in the kernel.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>output_head_major</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default False. When True, o is returned head-major as

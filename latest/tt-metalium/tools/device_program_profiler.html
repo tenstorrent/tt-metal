@@ -344,7 +344,7 @@
 <p>To profile a section of your C++ kernel, you can use the <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN(zone_name)</span></code> macro. This works just like Tracy’s <code class="docutils literal notranslate"><span class="pre">ZoneScopedN</span></code>, creating a named zone that will be captured by the profiler.</p>
 <p>First, include the necessary header in your kernel file:</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tools/profiler/kernel_profiler.hpp&gt;</span>
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;api/debug/kernel_profiler.hpp&gt;</span>
 </pre></div>
 </div>
 <p>Then, wrap the code you want to measure with the macro:</p>
@@ -365,18 +365,19 @@
 </h2>
 <p>After instrumenting your kernels, the profiling data is automatically collected when closing the device.</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="c1">// Run the program</span>
-<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">EnqueueProgram</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
-<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">Finish</span><span class="p">(</span><span class="n">cq</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="c1">// Run the workload</span>
+<span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">mesh_command_queue</span><span class="p">();</span>
+<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">distributed</span><span class="o">::</span><span class="n">EnqueueMeshWorkload</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">workload</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">distributed</span><span class="o">::</span><span class="n">Finish</span><span class="p">(</span><span class="n">cq</span><span class="p">);</span>
 
-<span class="c1">// Also reads profiler results from the device</span>
-<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CloseDevice</span><span class="p">(</span><span class="n">device</span><span class="p">);</span>
+<span class="c1">// Also reads profiler results from all devices in the mesh</span>
+<span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">close</span><span class="p">();</span>
 </pre></div>
 </div>
-<p>If for any reason you need to manually trigger the reading of profiling results (for example, more then 1000 kernel runs before device close), you can call <code class="docutils literal notranslate"><span class="pre">ReadDeviceProfilerResults</span></code>:</p>
+<p>If for any reason you need to manually trigger the reading of profiling results (for example, more then 1000 kernel runs before device close), you can call <code class="docutils literal notranslate"><span class="pre">ReadMeshDeviceProfilerResults</span></code>:</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="c1">// Manually read profiler results from the device (if needed)</span>
-<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">detail</span><span class="o">::</span><span class="n">ReadDeviceProfilerResults</span><span class="p">(</span><span class="n">device</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="c1">// Manually read profiler results from all devices in the mesh (if needed)</span>
+<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">ReadMeshDeviceProfilerResults</span><span class="p">(</span><span class="o">*</span><span class="n">mesh_device</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>This call should be placed after you have finished running the program of interest. It signals the device to sync the profiling results, which can then be viewed in the Tracy client or analyzed from the generated CSV file.</p>
@@ -385,7 +386,7 @@
 <h2>Example Walkthrough: <code class="docutils literal notranslate"><span class="pre">test_full_buffer</span></code><a class="headerlink" href="#example-walkthrough-test-full-buffer" title="Permalink to this heading"></a>
 </h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">full_buffer</span></code> programming example, located in <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/profiler/test_full_buffer</span></code>, demonstrates how to use the device profiler and will be used throughout this guide to illustrate the concepts.</p>
-<p>The host code in <code class="docutils literal notranslate"><span class="pre">test_full_buffer.cpp</span></code> sets up and runs a simple kernel, defines compile-time arguments like <code class="docutils literal notranslate"><span class="pre">LOOP_COUNT</span></code>, and calls <code class="docutils literal notranslate"><span class="pre">ReadDeviceProfilerResults</span></code> to collect the data.</p>
+<p>The host code in <code class="docutils literal notranslate"><span class="pre">test_full_buffer.cpp</span></code> sets up and runs a simple kernel, defines compile-time arguments like <code class="docutils literal notranslate"><span class="pre">LOOP_COUNT</span></code>, and calls <code class="docutils literal notranslate"><span class="pre">ReadMeshDeviceProfilerResults</span></code> to collect the data.</p>
 <p>The kernel code in <code class="docutils literal notranslate"><span class="pre">kernels/full_buffer.cpp</span></code> uses <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN</span></code> to profile a loop of <code class="docutils literal notranslate"><span class="pre">nop</span></code> instructions:</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: 2023 Tenstorrent USA, Inc.</span>
@@ -393,7 +394,7 @@
 <span class="linenos"> 3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
 <span class="linenos"> 4</span>
 <span class="linenos"> 5</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;cstdint&gt;</span>
-<span class="linenos"> 6</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tools/profiler/kernel_profiler.hpp&gt;</span>
+<span class="linenos"> 6</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;api/debug/kernel_profiler.hpp&gt;</span>
 <span class="linenos"> 7</span>
 <span class="linenos"> 8</span><span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="linenos"> 9</span><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">LOOP_COUNT</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">++</span><span class="p">)</span>
