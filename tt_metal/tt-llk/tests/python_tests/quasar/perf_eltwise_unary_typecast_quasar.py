@@ -7,7 +7,6 @@ from helpers.llk_params import (
     PERF_RUN_TYPES_QUASAR,
     ApproximationMode,
     DestSync,
-    ImpliedMathFormat,
     MathOperation,
 )
 from helpers.param_config import parametrize
@@ -22,9 +21,11 @@ from quasar.test_eltwise_unary_sfpu_quasar import (
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
+    mathop=[MathOperation.Typecast],
     formats=typecast_formats(),
     dest_acc=_dest_acc_for_typecast_formats,
     approx_mode=[ApproximationMode.No],
+    dest_sync=[DestSync.Half],
     input_dimensions=PERF_INPUT_DIMENSIONS_UNARY,
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
@@ -32,9 +33,11 @@ from quasar.test_eltwise_unary_sfpu_quasar import (
 )
 def test_perf_eltwise_unary_typecast_quasar(
     perf_report,
+    mathop,
     formats,
     dest_acc,
     approx_mode,
+    dest_sync,
     input_dimensions,
     run_types,
     loop_factor,
@@ -43,11 +46,10 @@ def test_perf_eltwise_unary_typecast_quasar(
     run_eltwise_unary_sfpu_quasar(
         formats,
         dest_acc,
-        MathOperation.Typecast,
+        mathop,
         approx_mode,
         input_dimensions,
-        dest_sync=DestSync.Half,
-        implied_math_format=ImpliedMathFormat.No,
+        dest_sync,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
