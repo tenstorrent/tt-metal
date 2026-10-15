@@ -36,9 +36,13 @@ set(_x280_abi_headers
     x280_address_map.h
     x280_align.h
     x280_noc_coord.h
+    x280_noc_ordering.h
     x280_hart_protocol.h
     x280.h
+    noc.h
     socket_layout.h
+    rt/measurement.h
+    rt/x280_atomic.h
     rt/x280_hw.h
     rt/x280_idle.h
     rt/x280_measurement.h
