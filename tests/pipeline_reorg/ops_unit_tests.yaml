@@ -575,3 +575,32 @@
   team: models
   budget_type: e2e
   category: dp_op_unit_tests
+
+# Isolated campaign validation; original test bodies and assertions are unchanged.
+- name: Flash author Device2 blackhole comparison
+  cmd: 'FLASH_EXPERT_ROWS_CASES=blackhole PYTHONPATH="/work/tests/campaign_validation:$PYTHONPATH" pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_compute_expert_rows.py -p expert_rows_selection -vv -s --timeout=600 --junitxml=generated/flash-expert.xml'
+  skus:
+    bh_p150b_civ2:
+      timeout: 30
+  owner_id: U084B1CES7M
+  team: ttnn
+  budget_type: unit
+  category: flash_author_device2
+- name: Flash author Device2 n150 comparison
+  cmd: 'FLASH_EXPERT_ROWS_CASES=n150 PYTHONPATH="/work/tests/campaign_validation:$PYTHONPATH" pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_compute_expert_rows.py -p expert_rows_selection -vv -s --timeout=600 --junitxml=generated/flash-expert.xml'
+  skus:
+    wh_n150_civ2:
+      timeout: 30
+  owner_id: U084B1CES7M
+  team: ttnn
+  budget_type: unit
+  category: flash_author_device2
+- name: Flash author Device2 n300 comparison
+  cmd: 'FLASH_EXPERT_ROWS_CASES=n300 PYTHONPATH="/work/tests/campaign_validation:$PYTHONPATH" pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_compute_expert_rows.py -p expert_rows_selection -vv -s --timeout=600 --junitxml=generated/flash-expert.xml'
+  skus:
+    wh_n300_civ2:
+      timeout: 30
+  owner_id: U084B1CES7M
+  team: ttnn
+  budget_type: unit
+  category: flash_author_device2
