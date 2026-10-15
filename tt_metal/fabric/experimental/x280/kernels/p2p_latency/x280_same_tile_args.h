@@ -16,8 +16,8 @@
  * (participant B) each read their own section by fixed hartid-scaled offset.
  * See docs/benchmarks/design.md, §Roles and mailbox model.
  *
- * Compiled by the host case and by the X280 image; kept out of test-headers's
- * C-only checks because it is C++-only (uses `static_assert`). The host case's
+ * Compiled by the host case and by the X280 image; kept out of the
+ * x280_abi_headers C checks because it is C++-only (uses `static_assert`). The host case's
  * C++ compilation and the image's `.cpp` compilation are the guarantees this
  * header is well-formed.
  */

@@ -26,7 +26,8 @@
  * the mutable config members are file-scope objects rather than locals,
  * because the transport holds the roster by reference for the whole barrier.
  * They are zero-initialised and a per-hart image carries no .bss, so this
- * object is built with -fno-zero-initialized-in-bss; see x280/Makefile.
+ * object is built with -fno-zero-initialized-in-bss, as every image is (X280_CFLAGS
+ * in x280_image.cmake).
  */
 
 extern "C" {

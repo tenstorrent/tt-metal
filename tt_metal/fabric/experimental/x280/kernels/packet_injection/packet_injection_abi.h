@@ -1199,10 +1199,10 @@ PI_STATIC_ASSERT(
  * C11 has no equivalent: _Static_assert takes an integer constant expression,
  * which a call to this function is not. That excludes no actor. The five
  * firmware variants build from src/packet_injection_x280.cpp under
- * CXXFLAGS -std=c++17 (Makefile:27, :145), the Tensix JIT kernel is a .cpp,
+ * -std=c++17 (x280_image.cmake), the Tensix JIT kernel is a .cpp,
  * the host is C++, and no .c translation unit includes this header. The only
  * C11 compilation is the -std=c11 -fsyntax-only -x c portability check in
- * test-headers, which emits no binary, so the tripwire is absent from exactly
+ * the x280_abi_headers target, which emits no binary, so the tripwire is absent from exactly
  * the one compilation that is nobody's actor. */
 static PI_CONSTEXPR inline pi_layout_t pi_golden_layout(
     uint32_t P, uint32_t T, uint32_t S, uint32_t B, uint64_t N, uint32_t mode) {
