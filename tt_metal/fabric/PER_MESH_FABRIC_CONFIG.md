@@ -239,17 +239,35 @@ rather than new support; implement real per-mesh support only where the feature 
 | `38671263096` | #3 DA fix only (reverted to common sanity config) | **HANG** (15-min timeout) | `MeshNeighborExchange_num_links_1_ntype_unicast_write` on `topology: Mesh`: ranks `[1,0]`,`[1,2]` logged "Finished", ranks `[1,1]`,`[1,3]` never did → deadlock. CI tt-triage produced no artifact. |
 | `38674433232` | #3 DA fix + #5 tensix-mux bubble per-mesh | *pending* | — |
 
-**Diagnosis after run 2.** The DA fix (#3) enables the EDM-level VC0 bubble + first-level-ACK on
-M_X's ring, but the test still hung on the Mesh-topology `MeshNeighborExchange`. The passing envelope
-(run 1) differs from the DA-only build in more than DA: opening `topology: Torus` also set the global
-`bubble_flow_control_enabled_` true (→ tensix-mux bubble, #5) **and** set a Torus `routing_mode` /
-packet spec / VC config (#6). Run 3 adds #5. If run 3 still hangs, the remaining lever is **#6 — the
-global `topology_` → `routing_mode`/VC/packet-spec**, which only a per-mesh `FabricContext` (#8) fully
-addresses: M_X's routers are still built with Mesh routing mode / VC shape even though its ring links
-exist, so the torus wrap may not be routed with the dateline the ring needs. That is the Tier-2
-architectural change (per-mesh FabricContext or per-mesh router config); it should not be rushed. If it
-is not taken on now, the **TORUS_XY envelope (run 1) is the correct, passing interim** for the test —
-it is not "wrong", it simply provisions both axes globally rather than per-mesh.
+**Diagnosis after run 2 (precise).** I walked what the global `topology_` actually drives in the
+FabricContext constructor (`fabric_context.cpp:247-258`) and narrowed the Mesh-vs-TORUS_X delta to
+exactly three things — two of which are now fixed:
+
+* `is_2D_routing_enabled_` and `compute_packet_specifications` — **identical** for Mesh and TORUS_X
+  (both are 2D). *Not a factor.*
+* `bubble_flow_control_enabled_` → tensix-mux bubble — **fixed per-mesh (#5)**.
+* The EDM VC0 bubble + first-level-ACK — **fixed per-mesh (#3)**.
+* `compute_routing_mode()` → `routing_mode_`: `ROUTING_MODE_2D|ROUTING_MODE_MESH` under a Mesh-opened
+  fabric vs `ROUTING_MODE_2D|ROUTING_MODE_TORUS` in the envelope. **This is the one remaining
+  difference (#6).**
+
+`routing_mode_` has a single consumer: it is emitted as the **global kernel define `ROUTING_MODE`**
+(`fabric_context.cpp:365`, via `ControlPlane::get_fabric_kernel_defines()` applied to every fabric
+kernel in `tt_metal.cpp:640,677`). So under a Mesh-opened fabric every router — including M_X's — runs
+the kernel in `ROUTING_MODE_MESH`, which does not do the torus wrap/dateline handling M_X's genuine
+ring needs, even though the wrap links exist in the routing tables and now carry DA + bubble. Run 3
+tests whether DA (#3) + bubble (#5) alone suffice with the links present; if it still hangs, **#6 is
+confirmed as the completing fix.**
+
+**#6 is a kernel/host-interface change, not a quick patch, and must NOT be rushed blind.** Making
+`ROUTING_MODE` per-mesh means converting a single global compile define into a per-router value (per
+`local_fabric_node_id.mesh_id`), threaded through `get_fabric_kernel_defines` → per-router kernel
+args, and having the fabric kernels read it per-router instead of as one `#define`. That is the
+per-mesh-`FabricContext` work (#8). It needs hardware-in-the-loop iteration (tt-exalens/tt-triage),
+which a 45-min CI cycle and no local galaxy make slow — so it is scoped here rather than attempted
+overnight. **Interim:** the TORUS_XY envelope (run 1) is the correct, passing stand-in — it is not
+"wrong", it provisions a global torus routing mode while the per-mesh MGD connectivity already keeps
+each mesh to its own single wrap; it simply does globally what #6 would do per-mesh.
 
 **Why the DA fix + #5 are still correct and worth landing regardless:** both are genuine per-mesh
 correctness fixes (each mesh now gets deadlock avoidance + bubble on its own ring axis), both are
