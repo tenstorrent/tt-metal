@@ -1771,6 +1771,13 @@ tasks:
     - attn_residual
     - ffn_hc
     layer: 1
+  frozen:
+    at: '2026-10-15T21:03:33'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_11_ffn_hc.py: dd28e0b78548ca6b2d6d737a42c5de127e5fc342c13d7f214b96690a1eba8637
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.ffn_collapse
   title: swa_engram ffn_collapse (op) on device, layer 1
   step: implement
