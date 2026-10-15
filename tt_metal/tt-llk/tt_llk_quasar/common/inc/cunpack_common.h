@@ -54,7 +54,7 @@ constexpr static bool HAS_INT8_2X_SRC_FORMAT = MATH_ROWS == 4;
  * Rules follow the Quasar Unpacker Format Conversions table (gasket outside TDMA).
  */
 template <bool EN_32BIT_DEST>
-__attribute__((noinline, optimize("no-jump-tables"))) bool is_quasar_unpack_reconfig_pair_supported(
+__attribute__((noinline, optimize("no-jump-tables"))) constexpr bool is_quasar_unpack_reconfig_pair_supported(
     const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const bool unpack_to_dest)
 {
     const DataFormat src = static_cast<DataFormat>(unpack_src_format);
@@ -181,4 +181,27 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_quasar_unpack_reco
             return false;
     }
 }
+
+// Compile-time check of the integer rows, evaluated on every build of each variant (the table
+// is otherwise only read by the reconfig path's LLK_ASSERT). Holds for both dest modes.
+constexpr bool unpack_pair_supported_both_dest_modes_(const DataFormat src, const DataFormat dst, const bool unpack_to_dest)
+{
+    const bool fp16_dest = is_quasar_unpack_reconfig_pair_supported<false>(static_cast<std::uint32_t>(src), static_cast<std::uint32_t>(dst), unpack_to_dest);
+    const bool fp32_dest = is_quasar_unpack_reconfig_pair_supported<true>(static_cast<std::uint32_t>(src), static_cast<std::uint32_t>(dst), unpack_to_dest);
+    return fp16_dest && fp32_dest;
+}
+
+static_assert(unpack_pair_supported_both_dest_modes_(DataFormat::Int8, DataFormat::Int8, false));
+static_assert(unpack_pair_supported_both_dest_modes_(DataFormat::Int4, DataFormat::Int8, false));
+static_assert(unpack_pair_supported_both_dest_modes_(DataFormat::UInt4, DataFormat::Int8, false));
+static_assert(unpack_pair_supported_both_dest_modes_(DataFormat::UInt4, DataFormat::UInt8, false));
+static_assert(!unpack_pair_supported_both_dest_modes_(DataFormat::Int4, DataFormat::UInt8, false));
+// Int8_2x only on the 4-row variant, and never into Dest.
+static_assert(unpack_pair_supported_both_dest_modes_(DataFormat::Int8, DataFormat::Int8_2x, false) == HAS_INT8_2X_SRC_FORMAT);
+static_assert(unpack_pair_supported_both_dest_modes_(DataFormat::Int4, DataFormat::Int8_2x, false) == HAS_INT8_2X_SRC_FORMAT);
+static_assert(!unpack_pair_supported_both_dest_modes_(DataFormat::Int8, DataFormat::Int8_2x, true));
+static_assert(!unpack_pair_supported_both_dest_modes_(DataFormat::Int4, DataFormat::Int8_2x, true));
+// No unsigned 2x path yet.
+static_assert(!unpack_pair_supported_both_dest_modes_(DataFormat::UInt4, DataFormat::Int8_2x, false));
+static_assert(!unpack_pair_supported_both_dest_modes_(DataFormat::UInt4, DataFormat::UInt8_2x, false));
 } // namespace ckernel::unpack
