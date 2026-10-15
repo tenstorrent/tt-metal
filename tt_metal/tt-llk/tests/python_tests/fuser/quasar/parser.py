@@ -563,6 +563,7 @@ class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
         "SfpuElwLe",
         "SfpuElwGe",
         "SfpuGcd",
+        "SfpuLcm",
     }
 
 

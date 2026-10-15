@@ -1,7 +1,6 @@
-# Int32 lcm(a, b) within |a|, |b| <= 2**15 - 1, including the 14-step GCD pairs (3, 32765) and
-# (10923, 21845). a and b are the two tiles of one [32, 64] operand.
-# Non-negative only: the fuser stores Int32 in L1 as sign-magnitude and builds SIGN_MAGNITUDE_FORMAT
-# = false; negatives are covered by test_eltwise_binary_sfpu_quasar.py.
+# Int32 lcm(a, b) within |a|, |b| <= 2**15 - 1: small values, around +-2**14, near +-(2**15 - 1)
+# and the operands of the 14-step GCD pairs. The fuser stages Int32 as SMAG32, so the op runs with
+# sign_magnitude. sfpu_int32_lcm_pairs_*.yaml cover specific (a, b) pairs.
 
 dest_acc: true
 
@@ -11,10 +10,12 @@ operands:
     format: [Int32]
     stimuli:
       include:
-        - [0.0, 64.0]
+        - [-64.0, 64.0]
         - [1000.0, 1064.0]
         - [16352.0, 16416.0]
         - [32703.0, 32767.0]
+        - [-16416.0, -16352.0]
+        - [-32767.0, -32703.0]
         - 8192.0
         - 10923.0
         - 21845.0
@@ -22,6 +23,10 @@ operands:
         - 30030.0
         - 32760.0
         - 32765.0
+        - -10923.0
+        - -21845.0
+        - -32760.0
+        - -32765.0
   - name: "sfpu_out"
     dims: [32, 32]
     format: Int32
@@ -32,6 +37,7 @@ operations:
       - type: "BinarySfpu"
         operation: [SfpuLcm]
         approximation_mode: false
+        sign_magnitude: true
         iterations: 32
         block_size: [32, 32]
         indexes: {src0: 0, src1: 1, dest: 2}

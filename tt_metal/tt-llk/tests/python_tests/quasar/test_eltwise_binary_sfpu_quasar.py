@@ -116,7 +116,6 @@ def _run_sfpu_binary_llk_golden(
     format_variant=None,
     max_ulp=None,
     broadcast_type=BroadcastType.None_,
-    sign_magnitude=False,
 ):
     """Shared driver for the LLK-golden binary SFPU ops.
 
@@ -125,9 +124,6 @@ def _run_sfpu_binary_llk_golden(
     tiles ``src0_idx`` / ``src1_idx``. ``post_check(res_tensor)`` is an optional
     extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
     broadcasts the ``src1_idx`` tile in the golden.
-
-    ``sign_magnitude`` stages int32 operands as SMAG32; the golden stays 2's-complement,
-    so only non-negative-result ops (lcm) can use it.
     """
     src0_idx, src1_idx, dst_idx = tile_indices
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
@@ -167,9 +163,6 @@ def _run_sfpu_binary_llk_golden(
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
-    if sign_magnitude:
-        src_A = _int32_to_smag32(src_A)
-
     unpack_to_dest = (
         format_variant.unpack_to_dest if format_variant is not None else True
     )
@@ -184,8 +177,8 @@ def _run_sfpu_binary_llk_golden(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
-            # SMAG32 Dest datapath; read only by the quant family and LCM.
-            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
+            # 2's-complement datapath (default); only the quant family reads this.
+            SIGN_MAGNITUDE_FORMAT(False),
             SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
@@ -255,41 +248,9 @@ def _run_sfpu_binary_llk_golden(
 # lcm contract: |a|, |b| <= 2^15 - 1.
 _LCM_MAX_OPERAND = 32767
 
-_LCM_M = _LCM_MAX_OPERAND
 
-# Planted (a, b) pairs. The (32765, 3) / (10923, 21845) family needs all 14 GCD steps, so a
-# too-short replay count fails deterministically.
-_LCM_EDGE_PAIRS = [
-    (0, 0),
-    (0, 12345),
-    (-12345, 0),
-    (1, _LCM_M),
-    (_LCM_M, 1),
-    (_LCM_M, _LCM_M - 1),
-    (-_LCM_M, _LCM_M - 1),
-    (-_LCM_M, -_LCM_M),
-    (_LCM_M, _LCM_M),
-    (-1, -1),
-    (16384, 8192),
-    (16384, 16383),
-    (-12, 18),
-    (30030, 32760),
-    (27720, -32760),
-    (2, _LCM_M),
-    (32765, 3),
-    (3, 32765),
-    (-32765, 3),
-    (3, -32765),
-    (10923, 21845),
-    (21845, -10923),
-]
-
-# Coprime with 1024, so planted pairs spread across rows and faces.
-_LCM_EDGE_LANE_STRIDE = 67
-
-
-def _prepare_lcm_stimuli(input_dimensions, src0_idx, src1_idx):
-    """Uniform in-contract lcm operands plus the planted edge pairs."""
+def _prepare_lcm_stimuli(input_dimensions):
+    """Uniform in-contract lcm operands; sfpu_int32_lcm_pairs_*.yaml cover the edge pairs."""
     spec = StimuliSpec.uniform(
         low=float(-_LCM_MAX_OPERAND), high=float(_LCM_MAX_OPERAND)
     )
@@ -301,12 +262,7 @@ def _prepare_lcm_stimuli(input_dimensions, src0_idx, src1_idx):
         spec_A=spec,
         spec_B=spec,
     )
-    flat = src_A.flatten()
-    for i, (a, b) in enumerate(_LCM_EDGE_PAIRS):
-        lane = (i * _LCM_EDGE_LANE_STRIDE) % MAX_TILE_ELEMENTS
-        flat[src0_idx * MAX_TILE_ELEMENTS + lane] = a
-        flat[src1_idx * MAX_TILE_ELEMENTS + lane] = b
-    return flat.reshape(src_A.shape), tile_cnt_A, src_B
+    return src_A, tile_cnt_A, src_B
 
 
 def _prepare_int_stimuli(
@@ -315,7 +271,7 @@ def _prepare_int_stimuli(
     """Integer stimuli: uniform over the dtype range, optionally clamped (int MUL
     clamps to keep the product representable). Both operands live in src_A."""
     if mathop == MathOperation.SfpuLcm:
-        return _prepare_lcm_stimuli(input_dimensions, src0_idx, src1_idx)
+        return _prepare_lcm_stimuli(input_dimensions)
     data_format = formats.input_format
     iinfo = torch.iinfo(format_dict[data_format])
     spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
@@ -393,35 +349,6 @@ def test_eltwise_binary_sfpu_int_quasar(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
-    )
-
-
-@pytest.mark.quasar
-@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
-def test_eltwise_binary_sfpu_lcm_sign_magnitude_quasar(
-    tile_indices,
-    *,
-    run_types=(PerfRunType.L1_TO_L1,),
-    loop_factor=1,
-    is_perf=False,
-    perf_report=None,
-):
-    """lcm on the SIGN_MAGNITUDE_FORMAT datapath (SMAG32-staged operands)."""
-    formats = InputOutputFormat(
-        input_format=DataFormat.Int32, output_format=DataFormat.Int32
-    )
-    _run_sfpu_binary_llk_golden(
-        formats,
-        DestAccumulation.Yes,
-        tile_indices,
-        MathOperation.SfpuLcm,
-        "LCM",
-        prepare_stimuli=lambda f, dims, s0, s1, op: _prepare_lcm_stimuli(dims, s0, s1),
-        run_types=run_types,
-        loop_factor=loop_factor,
-        is_perf=is_perf,
-        perf_report=perf_report,
-        sign_magnitude=True,
     )
 
 
@@ -944,7 +871,7 @@ def _run_max_min(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
-            # 2's-complement datapath (default); only the quant family and LCM read this.
+            # 2's-complement datapath (default); only the quant family reads this.
             SIGN_MAGNITUDE_FORMAT(False),
             SFPU_DST_ROUNDING_MODE(),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
