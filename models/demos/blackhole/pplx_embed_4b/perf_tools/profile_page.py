@@ -171,7 +171,7 @@ BYTES = {"BFLOAT16": 2, "BFLOAT8_B": 1088 / 1024, "BFLOAT4_B": 576 / 1024, "FLOA
 # replaced by tile copies that keep every CB handshake (so the DM floor is an upper bound). A variant that is not
 # faster than the full op standalone is not a floor (the copy compute paced it) and is dropped.
 # key: (bs, label, first input's memory) -> floors.
-#   SDPA: sdpa_kernel_variants.py + bench_sdpa_floors.py --parse (NEGATIVE_RESULTS §65, e7f541d kernels)
+#   SDPA: sdpa_kernel_variants.py + bench_sdpa_floors.py --parse (NEGATIVE_RESULTS §65, pre-rebase e7f541d kernels)
 #   heads op: bench_heads_placement_ablate.py 8 8 / 16 16 / 8 32 (bs32: the quarter-batch chunk), add+RMSNorm:
 #   bench_add_norm_ablate.py (a in DRAM; AN_A_L1=1: in L1), all under the device profiler, device_kernel_us.py,
 #   2026-10-01. bs16's a-in-L1 add+RMSNorm does not fit standalone and takes the a-in-DRAM floors (at bs8 the two

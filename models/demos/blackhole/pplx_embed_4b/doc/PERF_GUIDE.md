@@ -2,7 +2,9 @@
 
 How to run the model, measure it the way the numbers in `POSITIVE_RESULTS.md` were measured, profile it,
 check accuracy, and where every tuning knob lives. Everything here is relative to the tt-metal checkout
-(branch `arg/pplx-embed-upstream`). Model directory: `models/demos/blackhole/pplx_embed_4b/` (`$M` below).
+(branch `amorrison/high-batch-optim`, rebased onto `amorrison/sdpa-gqa-kv-sharing` on 2026-10-15; the records up to
+2026-09-24 were taken on `arg/pplx-embed-upstream`). Model directory: `models/demos/blackhole/pplx_embed_4b/` (`$M`
+below).
 
 ## 1. Environment
 
@@ -115,7 +117,7 @@ TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPOR
 Raw profiles and reports are on the host under `/home/ttuser/ashai/pplx-embedding-models/perf_csv/`
 (not in the repo: 2–10 GB per folder):
 
-- `visualizer_reports/pplx4b_FINAL_bs{1,8,16,32}_isl512/` — the shipped defaults at commit f970e9199d5,
+- `visualizer_reports/pplx4b_FINAL_bs{1,8,16,32}_isl512/` — the shipped defaults at commit 0d35b1b8c40,
   regenerated 2026-09-24 (ops CSV + `profile_log_device.csv` + tracy file + `ttperfreport_*.txt`; each folder
   loads into ttnn-visualizer as a Performance report). The 2026-09-23 set is under `superseded_20260923/`,
   the pre-optimization set under `pplx4b_baseline_bs*`.

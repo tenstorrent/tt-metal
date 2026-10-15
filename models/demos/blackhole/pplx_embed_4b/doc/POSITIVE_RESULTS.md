@@ -35,23 +35,39 @@ sustained clock), at bs8 they hold −2.3% sustained, at bs16 ≈ −1.5%.
 
 ## Landings, in order (e2e ms bs1 / bs8 / bs16 / bs32 after each)
 
+Commit hashes are those of `amorrison/high-batch-optim` after its 2026-10-15 rebase onto
+`amorrison/sdpa-gqa-kv-sharing` (the pre-rebase history is kept as `amorrison/high-batch-optim-prerebase`; commits map by
+subject). The tt-metal side of several landings now comes from the base instead of this branch:
+
+| landing | tt-metal change on this branch before the rebase | now provided by |
+|---|---|---|
+| sdpa concat-out, bs1 op-count | `sdpa: output_heads_concat` (a7760425045) | `output_concat_heads` upstream (ad2792e70b0, #56922) |
+| bs1 SDPA GQA packing, bs1 packed SDPA on 88 cores | `sdpa: pack_gqa_heads` (70d92b5d6f3) and the SDPA part of da97564d181 | automatic GQA Q-head crossing when the q chunk does not divide S (4446f29fd99, `amorrison/sdpa-gqa-kv-sharing`) |
+| batched SDPA K/V reuse + q128 | `sdpa: reuse_kv` (63f7df86899) | automatic K/V retention with one K chunk (d04fc1510e9, same branch) |
+| fused SwiGLU on the pack thread, cheaper SwiGLU sigmoid, output writer deferral | 69e1e72c1bd, 14fda30cfd0, 616341723a3 | upstream `minimal_matmul` (d5461453b44, #59325) |
+| batched SDPA row sums on the math thread | 0458a990466 | still this branch (b6dba8e9187); the opt-in form for main is `math_thread_row_sums` on `amorrison/sdpa-math-thread-row-sums` |
+
+The model passes the new SDPA API (16e604ce1ba): `output_concat_heads=True`; `QWEN_SDPA_GQA_PACK*` and
+`QWEN_SDPA_REUSE_*` now only choose the program configs that turn crossing and retention on. Same-chip A/B against the
+pre-rebase tree, WIP_HANDOFF "Rebase onto amorrison/sdpa-gqa-kv-sharing".
+
 | commit | change | mechanism | after |
 |---|---|---|---|
-| 08fd9ea, fb45b51 | prefill config baseline (09-22) | `minimal_matmul` subblock 1×8 (bs8 −12%, bs16 −13%, bs32 −18%); `in0_block_w` cap 8 → 38 for the bs1 legacy matmuls (FF2 35% → 70% of roofline, −4.4 ms); block-sharded LayerNorm at bs1 (−1.9 ms); SDPA chunks 512/256 (−2…4% batched) | 25.9 / 156.4 / 290.9 / 557.8 |
-| e02bd99, 81691379 | head-split QKV / concat as model-local `generic_op`s | reader/writer kernels scatter the fused QKV activation straight into `[B, H, S, d]` heads (bs1 −2.7 ms, bs32 −8.8 ms) | (included above) |
-| d9cb8ee | time the extended trace | the timed loop had fallen back to the Generator path; pooling + I/O now inside one replay | 25.2 / 155.6 / 288.7 / 543.5 |
-| 355d90c | fused head-split + Q/K RMSNorm | one `generic_op` replaces create_heads + q_norm + k_norm (three DRAM passes → one) | 25.0 / 144.7 / 276.8 / 519.2 |
-| 36b3972 | RoPE fused into the same op | cos/sin/transform tiles applied per head inside the kernel; two `rotary_embedding_llama` ops gone | 23.9 / 143.4 / 263.5 / 495.0 |
-| 48269f7 | fused op emits Q and K/V in bfp8 | packer converts on the way out; the Typecast before SDPA is deleted, SDPA reads half the bytes | 23.7 / 135.3 / 250.4 / 474.3 |
-| b711bee | QKV projection writes bfp8 | the matmul output feeding the fused op is bfp8 too (26 MB less traffic per layer at bs8) | 23.7 / 127.5 / 240.9 / 456.7 |
-| 0502099 | merged core ranges, fewest-cores split | per-core `CoreRange`s cost ≈ 0.4 µs/core per launch; rectangles + the smallest core set with the same per-core max | 23.4 / 126.7 / 240.6 / 455.8 |
-| 755482c | batched SDPA 12×10, k-chunk 512 | all 120 workers, one K chunk (bs32 932 → 806 µs/call) | 23.3 / 126.2 / 239.6 / 450.6 |
-| 980976c | fused residual add + RMSNorm (bs16+) | one `generic_op` emits the sum (residual stream) and the normalised tensor: 4 DRAM passes → 2 | 23.3 / 126.2 / 234.8 / 443.5 |
-| e9b0500, 977850 | bs16 fused-SwiGLU blocks 4,20,8 / 1×4 | in-model block sweep of the packed-w13 `minimal_matmul` | 23.3 / 126.2 / 228.3 / 443.5 |
-| 308438e | bs8 blocks FF2 16,8,8 · QKV 8,4,8 · WO 16,8,8 | same sweep for the plain matmuls | 23.3 / 123.4 / 228.3 / 443.5 |
-| d5012e1 | `silu_mul` at bs32 | SwiGLU product as one `generic_op` (dest-reuse multiply after `silu_tile`), −14% on the op | 23.3 / 123.4 / 228.3 / 438.1 |
-| 213530d | bs1: 12×8 matmul grids, coalesced weight reads, SDPA q256 | see below | **17.7** / 123.4 / 228.3 / 438.1 |
-| 9441a6c | bs>1: row-split add+RMSNorm, SDPA 12×8 at bs8, interleaved weights at bs32 | see below | 17.7 / **118.5** / **216.7** / **428.1** |
+| 63092bb, 0e2cfcd | prefill config baseline (09-22) | `minimal_matmul` subblock 1×8 (bs8 −12%, bs16 −13%, bs32 −18%); `in0_block_w` cap 8 → 38 for the bs1 legacy matmuls (FF2 35% → 70% of roofline, −4.4 ms); block-sharded LayerNorm at bs1 (−1.9 ms); SDPA chunks 512/256 (−2…4% batched) | 25.9 / 156.4 / 290.9 / 557.8 |
+| 1640c41, b3c527b7 | head-split QKV / concat as model-local `generic_op`s | reader/writer kernels scatter the fused QKV activation straight into `[B, H, S, d]` heads (bs1 −2.7 ms, bs32 −8.8 ms) | (included above) |
+| c898e62 | time the extended trace | the timed loop had fallen back to the Generator path; pooling + I/O now inside one replay | 25.2 / 155.6 / 288.7 / 543.5 |
+| 3a3534e | fused head-split + Q/K RMSNorm | one `generic_op` replaces create_heads + q_norm + k_norm (three DRAM passes → one) | 25.0 / 144.7 / 276.8 / 519.2 |
+| 7041989 | RoPE fused into the same op | cos/sin/transform tiles applied per head inside the kernel; two `rotary_embedding_llama` ops gone | 23.9 / 143.4 / 263.5 / 495.0 |
+| e7ebc40 | fused op emits Q and K/V in bfp8 | packer converts on the way out; the Typecast before SDPA is deleted, SDPA reads half the bytes | 23.7 / 135.3 / 250.4 / 474.3 |
+| ad7e016 | QKV projection writes bfp8 | the matmul output feeding the fused op is bfp8 too (26 MB less traffic per layer at bs8) | 23.7 / 127.5 / 240.9 / 456.7 |
+| ea61c54 | merged core ranges, fewest-cores split | per-core `CoreRange`s cost ≈ 0.4 µs/core per launch; rectangles + the smallest core set with the same per-core max | 23.4 / 126.7 / 240.6 / 455.8 |
+| 0d57c53 | batched SDPA 12×10, k-chunk 512 | all 120 workers, one K chunk (bs32 932 → 806 µs/call) | 23.3 / 126.2 / 239.6 / 450.6 |
+| 5743a91 | fused residual add + RMSNorm (bs16+) | one `generic_op` emits the sum (residual stream) and the normalised tensor: 4 DRAM passes → 2 | 23.3 / 126.2 / 234.8 / 443.5 |
+| eaaf864, 0a8e5dd | bs16 fused-SwiGLU blocks 4,20,8 / 1×4 | in-model block sweep of the packed-w13 `minimal_matmul` | 23.3 / 126.2 / 228.3 / 443.5 |
+| a8ae7d5 | bs8 blocks FF2 16,8,8 · QKV 8,4,8 · WO 16,8,8 | same sweep for the plain matmuls | 23.3 / 123.4 / 228.3 / 443.5 |
+| 7212cf0 | `silu_mul` at bs32 | SwiGLU product as one `generic_op` (dest-reuse multiply after `silu_tile`), −14% on the op | 23.3 / 123.4 / 228.3 / 438.1 |
+| 31cfadc | bs1: 12×8 matmul grids, coalesced weight reads, SDPA q256 | see below | **17.7** / 123.4 / 228.3 / 438.1 |
+| 102fd6d | bs>1: row-split add+RMSNorm, SDPA 12×8 at bs8, interleaved weights at bs32 | see below | 17.7 / **118.5** / **216.7** / **428.1** |
 | sdpa concat-out | SDPA writes `[B, 1, S, H·d]` directly (`output_heads_concat`), concat pass gone at bs>1 | tile-id remap in the SDPA writer; bit-identical; SDPA +3–7% vs concat −68…−350 µs | 17.7 / **115.4** / **221.9** / **430.1** (same-chip A/B arms) |
 | bs1 op-count (09-24) | SDPA `output_heads_concat` at bs1 too (SDPA 57.3 → 54.1 µs standalone, the 4.6 µs model-local concat op gone) + the residual adds written in the norm's 10×8 block-shard layout (the 72 I2S ops become no-ops) | from Gio's B1 shard-layout idea; bit-identical; the residual item is neutral alone, −0.3 ms median together (NEGATIVE_RESULTS §50) | **17.5** / 115.3 / 221.0 / 425.5 |
 | bs1 resid-sharded on every layer (09-24) | the §50 residual-shard item only applied to even layers: `supported(x, x)` in `decoder_fusion.py` rejects the sharded input the previous layer handed over, so odd layers fell back to interleaved adds + a real I2S before each norm (36 of 72 left). Now every layer; I2S 36 → 1 | bit-identical, STS-B 0.8161; device replay 16.97 → 16.80 ms; e2e bs1 −0.07 ms (mean of 3 alternating 30-iteration A/B pairs, 17.285 → 17.218; 8× p150b host, chip 0); bs>1 untouched | bs1 −0.4% |

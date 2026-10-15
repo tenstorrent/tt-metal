@@ -22,18 +22,65 @@ From the e2e-vs-roofline analysis on the device-profile artifact (https://claude
    already the SFPLOADMACRO Schraudolph path at its rated speed. SDPA's remaining gap to its floors is each core's
    cold start on its first head's K / V (a next-head prefetch was negative).
 
-5. ~~Trid pipelining in the custom ops (§67).~~ Done (2026-09-30, commits 7d40ada / 9844602 / b9c2258). Heads op:
+5. ~~Trid pipelining in the custom ops (§67).~~ Done (2026-09-30, commits e01a624 / f439229 / 6c84d8b). Heads op:
    compute-bound at bs8 / 16 / 32 (full within 3-5 µs of compute-only; Q's DRAM write fully hidden), cos / sin
    double-buffered (−2.7% per call, bit-identical, default `QWEN_HEADS_ROT_DB=1`). Add+norm: data-movement-bound
    everywhere (90-92% of its DM floor: DRAM traffic at bs32, per-wave read / write latency at bs8 / 16); exchange on its
    own trid landed but neutral (`QWEN_ADD_NORM_PART_TRID=1`); two-wave CBs negative (bs8 +1.8%, bs16 / 32 do not fit).
    E2e after all of it: bs8 76.7 / 99, bs16 143.3 / 194, bs32 291 / 378 ms cold / sustained (chips 1 / 2 / 0).
 
-## Where we stopped (2026-10-02, project paused; HEAD a8ce76c on `amorrison/high-batch-optim`, not pushed)
+## Rebase onto amorrison/sdpa-gqa-kv-sharing (2026-10-15)
+
+`amorrison/high-batch-optim` now sits on `amorrison/sdpa-gqa-kv-sharing` (1080c9aaa8e: main of 2026-10-13 plus the GQA
+K/V-sharing SDPA work). The pre-rebase history is kept as `amorrison/high-batch-optim-prerebase` (ccd50dfe08a); commits
+map by subject, and the docs now cite the rebased hashes except where a number was measured on a pre-rebase commit.
+
+**Dropped, now provided by the base:** `sdpa: output_heads_concat` (a7760425045; upstream `output_concat_heads`,
+ad2792e70b0), `sdpa: pack_gqa_heads` (70d92b5d6f3; automatic Q-head crossing, 4446f29fd99), `sdpa: reuse_kv`
+(63f7df86899; automatic K/V retention, d04fc1510e9) and the three `minimal_matmul` SwiGLU / writer commits (69e1e72c1bd,
+14fda30cfd0, 616341723a3; upstream d5461453b44, #59325). a7760425045 and da97564d181 keep only their model side.
+
+**Kept and adapted:** the math-thread SDPA row sums (0458a990466 -> b6dba8e9187; not on the base; conflicts resolved
+onto the base's pipelined in-place-V drain, which is excluded from the row sums anyway, and the new `recip_tile` API).
+Later this should come from `amorrison/sdpa-math-thread-row-sums` (opt-in `math_thread_row_sums`) instead. The 1D matmul
+DRAM-sharded in1 (61fb987 -> 6d6710911c6) and the coalesced 2D in1 reads (213530ded2a -> 31cfadce71a): the base's 2D
+factory is the Metal 2.0 port, which builds `reader_bmm_tile_layout_in1_sender_writer_padding_metal2.cpp`, so the
+coalesced read went into that reader too (without it bs1 QKV / WO / FF2 ran 16-19% slower, +0.94 ms of device time).
+
+**New on top:** 16e604ce1ba (model on the new SDPA API: `output_concat_heads`; `QWEN_SDPA_GQA_PACK*` /
+`QWEN_SDPA_REUSE_*` now only choose the configs crossing / retention key on), eff1bbcf296 (custom kernels on the base's
+SFPU APIs: `calculate_rsqrt` without `legacy_compat`, `minimal_matmul_swiglu_tile<true>` in `silu_mul` mode 3),
+105ba5fcad1 (demos / perf tests drop `fabric_config`: the base rejects fabric on one local chip). The tools in
+`perf_tools/` that pass `math_thread_row_sums` (bench_row_sums / cycles / zones / denom) need the row-sums branch.
+
+**Same-chip A/B, pre-rebase tree vs rebased tree** (each built Release in its own checkout; `sustained_run.sh`, 30
+iterations, 3 alternating rounds per batch on chips 3 / 1 / 2 / 0 concurrently, bs1 4 rounds alone; cold = mean of the
+best-of-30, sustained = mean of the per-run medians; device = one profiled replay each, summed device kernel time):
+
+| batch | cold pre -> post (ms) | sustained pre -> post (ms) | device pre -> post (ms) |
+|---|---|---|---|
+| 1 | 14.1 -> 14.1 | 14.3 -> 14.2 | 13.955 -> 13.912 |
+| 8 | 76.7 -> 76.5 | 99.1 -> 99.8 | 75.987 -> 75.808 |
+| 16 | 143.1 -> 143.0 | 194.3 -> 193.8 | 142.032 -> 142.209 |
+| 32 | 291.3 -> 291.3 | 378.7 -> 378.7 | 279.000 -> 278.568 |
+
+Every op group is within ±1% device time (bs16 add+RMSNorm +1.2%, heads +1.0%, within one profile's spread for those
+data-movement-bound ops); SDPA is unchanged at every batch: with K / V in L1 or retained, the base's chains and
+retention reproduce what `pack_gqa_heads` / `reuse_kv` did. STS-B through the batched path (`eval_accuracy_batched.py --save / --compare`, fixed ISL 512, all 2758 texts):
+the rebased embeddings are bit-identical to the pre-rebase ones at bs1 / 8 / 16 / 32 (Spearman 0.8117 / 0.8120 /
+0.8174 / 0.8155 both). Unit tests on the rebased tree: SDPA kv_retention + gqa_crossing 66, kv_head_chains + prefill 83,
+windowed 186, matmul dram_sharded_multishard + custom_grids + program_cache 69 (all passed).
+
+**Build on another box:** the rebased tree needs a full `./build_metal.sh` (host C++ in the matmul factories, SDPA
+program factory and device-op selector) and the model's weight cache rebuilt (the cache written by the older code was
+moved aside to `model_cache.bak-20261015`; caches built by concurrent processes corrupt each other, so warm one batch
+size at a time). The pre-rebase build lives in the worktree `/home/amorrison/tt-metal-prerebase`.
+
+## Where we stopped (2026-10-02, project paused; HEAD a8ce76c on `amorrison/high-batch-optim`, before the 2026-10-15 rebase)
 
 The last two sessions built a roofline (an implementation-independent, asymptotic upper bound on performance) and split
-every op group's gap to it by cause. No model code changed since cdb9143 (bs8 / 16 / 32) and 3164ba1 (bs1), so the
-profiles and the e2e numbers below are current.
+every op group's gap to it by cause. No model code changed since cdb9143 (bs8 / 16 / 32) and 3164ba1 (bs1), pre-rebase
+(db6b6b9 / 0dbe148 now), and the rebase A/B above reproduces their numbers, so the profiles and e2e numbers below hold.
 
 **Numbers** (e2e from `sustained_run.sh`, cold / sustained ms; device = one profiled replay at 1.35 GHz; roofline =
 cold, SFPU hidden – SFPU serialized):
@@ -47,9 +94,9 @@ cold, SFPU hidden – SFPU serialized):
 
 Sustained is cold plus the power cap (AICLK settles at ~1.0 GHz at bs16 / 32); the roofline is a cold, 1.35 GHz bound.
 
-**Build.** The installed `_ttnncpp.so` / `_ttnn.so` include tt-metal 61fb987 (host C++ in the matmul 1D factory and the
-device-op factory selector), built with `ninja -C build ttnn/_ttnncpp.so ttnn/_ttnn.so` and copied over `build/lib/`
-and `ttnn/ttnn/_ttnn.so`. A fresh checkout or another box needs that rebuild, or bs1's FF1 / FF3 fail. After any
+**Build.** The branch carries host C++ (the matmul 1D factory and device-op selector, 6d6710911c6; the SDPA program
+factory's recip-scratch CB, b6dba8e9187), so a fresh checkout or another box needs `./build_metal.sh`, or bs1's FF1 /
+FF3 fail and the batched SDPA deadlocks. After any
 host-side C++ change: rebuild (PERF_GUIDE §4); a stale `.so` deadlocks in the first warmup prefill instead of erroring.
 
 ### The roofline (`perf_tools/profile_page.py`, `achievable` fields; the page calls it "roofline")
@@ -105,7 +152,7 @@ its analytic formulation slightly overstates, structure -0.17 ms at bs32); bs32 
    remove it), add+RMSNorm's a / sum in DRAM at bs32 (8.4 ms).
 5. **The power cap** (sustained = cold + 26-35%). Faster kernels have lowered the settled clock before (§59): measure
    J / pass, not only ms; tt-smi sampling is too sparse for J / inference today.
-6. Housekeeping: upstream 61fb987 as its own tt-metal PR (432 matmul unit tests passed); `lut2` sigmoid for bs1.
+6. Housekeeping: upstream 6d67109 as its own tt-metal PR (432 matmul unit tests passed); `lut2` sigmoid for bs1.
 
 ### How to resume
 

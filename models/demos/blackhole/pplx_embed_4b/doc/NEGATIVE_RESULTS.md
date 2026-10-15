@@ -1293,7 +1293,7 @@ batch, chip 0, cold / sustained ms: bs8 82.5 / 102.0 → 78.5 / 99.5, bs16 157.1
 
 §60's K_block 40 hides the pack-thread SwiGLU at bs8 / 16 / 32, so bs1 (`QWEN_FUSE_SWIGLU_BS1=1`; §58: 214.4 µs, 15.7 →
 16.0 ms e2e) was retried against the legacy FF1 + FF3 + mul it replaces (69.7 + 69.7 + 52.3 ≈ 192 µs per layer in the
-7dbf479 device profile). `bench_ff13_sweep.py 1` over M 1 / 2 / 4, K 20 / 40 / 80, N 2 / 4 / 6 / 8 / 16, 1×W subblocks
+ac1b2cf device profile). `bench_ff13_sweep.py 1` over M 1 / 2 / 4, K 20 / 40 / 80, N 2 / 4 / 6 / 8 / 16, 1×W subblocks
 (99 configs, LoFi without fp32 dest as bs1's FF1 / FF3): best per K block 4,20,8 1×2 214.6 µs, 2,40,6 1×2 228.8,
 4,80,6 1×6 238.9 (12 K_block-80 configs clash with L1). Nothing reaches 192.
 
@@ -1612,7 +1612,7 @@ the next wave's add waits for this wave's normalised writes to be acked: that se
 
 **The hang that preceded these runs.** Every e2e run (and the committed HEAD) hung in the first warmup prefill.
 tt-triage (`tools/tt-triage.py --run=dump_callstacks`) put all cores in SDPA's `normalize_row_streaming`, pack thread in
-`scratch_cb.reserve_back(sbh)`: the installed `_ttnncpp.so` (00:19) predated 0458a990466 (20:08), which sized that CB to
+`scratch_cb.reserve_back(sbh)`: the installed `_ttnncpp.so` (00:19) predated 0458a990466 (20:08; b6dba8e9187 after the 2026-10-15 rebase), which sized that CB to
 a row group in the program factory, so the JIT'd kernel reserved sbh tiles of a 1-tile CB. `./build_metal.sh` fixed it
 (STS-B bs8 0.8120 after). PERF_GUIDE §4 now says to rebuild after host-side changes.
 
@@ -1642,7 +1642,7 @@ runs the stages in order anyway; what is exposed is the per-wave latency of the 
 
 ## 68. bs1 SwiGLU product: the SiLU was the cost; the single-pass SwiGLU lands, sharding and a LUT sigmoid do not (2026-10-01)
 
-At cdb9143 the bs1 SwiGLU product (`ttnn.mul(a, b, input_tensor_a_activations=[SILU])` on FF1 / FF3's [512, 9728]
+At db6b6b9 the bs1 SwiGLU product (`ttnn.mul(a, b, input_tensor_a_activations=[SILU])` on FF1 / FF3's [512, 9728]
 bfp8 outputs, L1 interleaved) took 52.1 µs per call, 1.88 ms of the 15.27 ms replay, with no FPU work and every operand
 in L1. Standalone at the model's placement (chip 5, traced, device kernel µs from the device profiler via
 `perf_tools/device_kernel_us.py`; `perf_tools/bench_bs1_swiglu.py` for the FF1 + FF3 + product chain):
@@ -1728,7 +1728,7 @@ fills 96 cores) and WO / FF2 (80) gain nothing from 120 cores.
 
 ## 70. bs1 SDPA: compute-bound at one unit per core; more cores need ragged row groups and multi-row K / V delivery (diagnostic) (2026-10-01)
 
-The bs1 call (profile attributes at 3164ba1): Q [1, 32, 512, 128], K / V [1, 8, 512, 128] bfp8 in L1, `pack_gqa_heads`,
+The bs1 call (profile attributes at 0dbe148): Q [1, 32, 512, 128], K / V [1, 8, 512, 128] bfp8 in L1, `pack_gqa_heads`,
 `output_heads_concat`, q192 / k512 on 11×8 = 88 units of 6 Q row tiles, one per core, LoFi, exp approx; 27.1 µs
 in-model. `perf_tools/bench_sdpa_bs1_floors.py` with the `sdpa_kernel_variants.py` trees, device µs (chip 5):
 
