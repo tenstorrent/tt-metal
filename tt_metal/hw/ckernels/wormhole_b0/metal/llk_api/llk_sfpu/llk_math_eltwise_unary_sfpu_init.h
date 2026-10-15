@@ -243,14 +243,17 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     } else if constexpr (sfpu_op == SfpuType::exponential) {
         // SDPA and other direct LLK callers use this no-arg overload to get the generic unary SFPU
         // addrmod state (config reg + ADDR_MOD_7 + counter reset) without an op-specific init or a
-        // preceding compute_kernel_hw_startup, so route it to the full generic init.
-        _llk_math_eltwise_unary_sfpu_init_<SfpuType::exponential>();
+        // preceding compute_kernel_hw_startup. The once-init above already programmed the config reg
+        // and ADDR_MOD_7, so only the residual (counter reset) is left to run.
+        _llk_math_eltwise_unary_sfpu_init_residual_<SfpuType::exponential>();
     } else {
         // Generic fallback (pre-restructuring behavior): ops without a self-contained sfpu::<op>_init()
-        // get the full generic unary SFPU init (config reg + ADDR_MOD_7 + op-specific ADDR_MOD_6 via
-        // eltwise_unary_sfpu_configure_addrmod<OP>, which has a default valid for any SfpuType + counter
-        // reset). Keeps the bare no-arg delegate instantiable across the whole SfpuType set.
-        _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
+        // get the generic unary SFPU init. The once-init above already programmed the config reg and
+        // ADDR_MOD_7; the residual adds the op-specific ADDR_MOD_6 (via
+        // eltwise_unary_sfpu_configure_op_addrmod<OP>, a no-op for any SfpuType without one) and the
+        // counter reset. Keeps the bare no-arg delegate instantiable across the whole SfpuType set
+        // without programming SFPCONFIG and ADDR_MOD_7 twice per init.
+        _llk_math_eltwise_unary_sfpu_init_residual_<sfpu_op>();
     }
 }
 

@@ -82,17 +82,18 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
     LLK_ASSERT(num_rows >= 1 && num_rows <= MAX_ROWS, "num_rows must be between 1 and 64");
 
     // Number of datums per row in row-major layout (16 datums = 1 row of 16 elements)
-    constexpr std::uint32_t row_num_datums      = 16;
-    constexpr std::uint32_t y_pos_counter_limit = 1;
+    constexpr std::uint32_t row_num_datums = 16;
     _llk_pack_rows_configure_addrmod_();
     _llk_pack_rows_mop_config_(num_rows);
 
-    // To ensure that Y_POS counter gets reset to 0 after the operation is completed,
-    // we need to set pack_reads_per_xy_plane to 1. When Y_POS counter hits that value, it will reset.
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC1_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC2_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC3_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
+    // The Y_POS counter resets to 0 after each packed row only while pack_reads_per_xy_plane is 1. That is the
+    // value configure_pack establishes and every non-reduce op relies on; only the reduce pack mask moves it (to
+    // FACE_R_DIM), and _llk_pack_reduce_mask_clear_ must have restored it before any other pack op, which
+    // reconfig_packer_data_format asserts as well. Rely on that invariant instead of re-writing the counter of all
+    // four packers on every init.
+    LLK_ASSERT(
+        ckernel::packer::is_pack_reads_per_xy_plane(1),
+        "_llk_pack_rows_init_: pack_reads_per_xy_plane counter must be 1 (reduce mask should have been cleared via _llk_pack_reduce_mask_clear_)");
     // Set the packer X counter to pack the specified number of datums per row
     TTI_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
 
@@ -128,9 +129,10 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
 }
 
 /**
- * @brief Restore the packer X counter to its default full-face value.
+ * @brief No-op teardown after a pack-rows op.
  *
- * Resets the packer X counter to its default full-face value, undoing @ref _llk_pack_rows_init_.
+ * The packer X counter, ADDR_MODs and MOP that @ref _llk_pack_rows_init_ programs are transient and reprogrammed by
+ * each operation's init (see tt-llk#1036), so there is nothing to restore here.
  *
  * @note Call @ref _llk_pack_rows_init_ before this function.
  */
