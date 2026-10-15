@@ -34,6 +34,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import (
     _fp8_linear,
     _Shards,
 )
+from models.demos.blackhole.deepseek_v41_flash.tt.rope_compact import CompactRope, compact_enabled
 from models.demos.blackhole.deepseek_v41_flash.tt.router import ROUTED_GAIN
 from models.demos.blackhole.deepseek_v41_flash.tt.shared_expert_v2 import DSV41SharedExpertV2 as DSV41SharedExpert
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_attention import _PagedMixin
@@ -444,11 +445,19 @@ class DraftState:
             mesh_mapper=rep,
         )
         self.t = {"ring": up((pos % RING).reshape(P, 1) * torch.ones(1, 32))}
-        if share_rope is not None:
-            self.t["C"], self.t["S"] = share_rope["C"], share_rope["S"]
+        self.rope = None
+        if (
+            share_rope is not None and getattr(share_rope, "rope", None) is not None
+        ):  # compact tables of the decode model's window kind (tt/rope_compact.py)
+            self.rope = share_rope.rope
+        elif share_rope is not None:
+            self.t["C"], self.t["S"] = share_rope.t["C"], share_rope.t["S"]
         else:
             c, s = attn._rope_inputs(pos)
-            self.t["C"], self.t["S"] = up(c), up(s)
+            if compact_enabled():
+                self.rope = CompactRope(md, c, s)
+            else:
+                self.t["C"], self.t["S"] = up(c), up(s)
         mask = torch.full((P, L_D), -1e9)
         for f in range(P):
             for sl in range(RING):
@@ -477,6 +486,8 @@ class DraftState:
         return v
 
     def _rows(self, name, idx, shape):
+        if self.rope is not None and name in ("C", "S"):
+            return self.rope.gather(name, idx, shape)
         return ttnn.to_layout(
             ttnn.reshape(ttnn.embedding(idx, self.t[name], layout=ttnn.ROW_MAJOR_LAYOUT), shape), ttnn.TILE_LAYOUT
         )
@@ -632,11 +643,7 @@ class DSparkDrafter:
         ttnn.deallocate(main_x)
         st = self.state
         idx = ttnn.typecast(ttnn.reshape(pos, [M, 1]), ttnn.uint32)
-        tab = lambda name: ttnn.to_layout(
-            ttnn.reshape(ttnn.embedding(idx, st.t[name], layout=ttnn.ROW_MAJOR_LAYOUT), [1, 1, M, HEAD_DIM]),
-            ttnn.TILE_LAYOUT,
-        )
-        C, S = tab("C"), tab("S")
+        C, S = st._rows("C", idx, [1, 1, M, HEAD_DIM]), st._rows("S", idx, [1, 1, M, HEAD_DIM])
         for s, a in enumerate(self.attn):
             kv = ttnn.rms_norm(
                 ttnn.slice(kvc, [0, 0, 0, s * HEAD_DIM], [1, 1, M, (s + 1) * HEAD_DIM]), weight=a.kv_norm, epsilon=1e-20
