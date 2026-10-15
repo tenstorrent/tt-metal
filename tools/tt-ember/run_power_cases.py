@@ -15,11 +15,11 @@ FPU instruction the compute kernel runs, via LONG_MATMUL_OP -- see compute.cpp),
      environment, writing that case's results to <output-root>/<op>/<subdir>.
   3. After every requested case has completed for a given op, writes a cases file
      (`Case N: subdir : label`) describing the POWER_CASE -> subdir mapping for that op, and
-     calls compare_runs2.py against it to produce the comparison charts in
+     calls compare_cases.py against it to produce the comparison charts in
      <output-root>/<op>/compare_runs_out/.
   4. If more than one op was requested, also writes a cross-op cases file pairing every
      (op, case) combination -- e.g. "regular (matmul)" next to "regular (add)" -- and calls
-     compare_runs2.py once more to produce <output-root>/compare_runs_out/, so the two
+     compare_cases.py once more to produce <output-root>/compare_runs_out/, so the two
      operations can be read off the same chart, case by case. Any (op, case) pair whose
      program_intervals.csv is missing (failed or not yet run) is skipped with a note rather
      than failing the whole comparison.
@@ -30,7 +30,7 @@ This automates exactly the manual sequence, repeated once per op in --ops:
     python3 auto.py --telemetry-exe ... --app-exe ... --output-root <output-root>/<op> \\
         --subdir <name-for-that-case> --app-args ...
 run once per case, followed by:
-    python3 compare_runs2.py -i <output-root>/<op> -c <output-root>/<op>/power_cases.txt
+    python3 compare_cases.py -i <output-root>/<op> -c <output-root>/<op>/power_cases.txt
 
 Usage:
     python3 run_power_cases.py \\
@@ -48,21 +48,29 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import os
-import shlex
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib
 
+from common import (
+    RUN_COMPLETE_FILE,
+    auto_py_command,
+    environ_with,
+    reset_hardware,
+    run_settings,
+    run_status,
+    shell_join,
+)
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-RESET_COOLDOWN_S = 10
 
 # POWER_CASE -> (subdir name, legend label). See long_matmul's README for what each case does. Case 3 (reader AND compute
 # both idle) is not in the default sweep below -- it's a two-variable case, and the four
@@ -92,88 +100,22 @@ DEFAULT_POWER_CASES: List[int] = [5, 1, 2, 4]
 # Which per-tile instruction the compute kernel runs (LONG_MATMUL_OP, see long_matmul's
 # kernels/compute/compute.cpp). The full
 # POWER_CASE sweep runs once per entry here, into its own <output-root>/<op>/ subtree, so the
-# operations can be compared like-for-like. Each op/case directory is skipped individually if
-# it already exists (see the run loop below), so re-running after adding new ops only measures
-# the new ones. All seven run by default; pass --ops explicitly to run a subset instead (e.g.
+# operations can be compared like-for-like. Each op/case run is skipped individually once it is
+# complete with the same settings (see the run loop below), so re-running after adding new ops
+# only measures the new ones. All seven run by default; pass --ops explicitly to run a subset instead (e.g.
 # while iterating on one op).
 ALL_OPS: List[str] = ["matmul", "add", "silu", "exp", "sigmoid", "gelu", "recip"]
 DEFAULT_OPS: List[str] = ALL_OPS
 
 
-def shell_join(args: List[str]) -> str:
-    return " ".join(shlex.quote(a) for a in args)
-
-
-def reset_hardware(tt_smi_cmd: str, dry_run: bool) -> int:
-    print(f"\n[RESET] Running hardware reset: {tt_smi_cmd} -r", flush=True)
-    if dry_run:
-        print("[RESET] (dry-run) skipped", flush=True)
-        return 0
-    result = subprocess.run([tt_smi_cmd, "-r"])
-    if result.returncode != 0:
-        print(f"[RESET] ERROR: Hardware reset failed with return code {result.returncode}.", file=sys.stderr)
-        return result.returncode
-    print(f"[RESET] Hardware reset completed. Waiting {RESET_COOLDOWN_S}s for device to re-initialize...", flush=True)
-    for remaining in range(RESET_COOLDOWN_S, 0, -1):
-        print(f"[RESET] Resuming in {remaining}s...", flush=True)
-        time.sleep(1)
-    print("[RESET] Device ready.", flush=True)
-    return 0
-
-
 def run_case(
-    auto_script: Path,
-    telemetry_exe: Path,
-    telemetry_freq: int,
-    app_exe: Path,
-    app_args: List[str],
-    parser_script: Path,
-    tt_venv_activate: Path,
-    tt_metal_root: Path,
-    output_root: Path,
-    subdir: str,
-    slot_ms: int,
-    device_id: Optional[int],
-    trim_ms: float,
+    cmd: List[str],
     power_case: int,
     op: str,
     dry_run: bool,
 ) -> int:
-    cmd: List[str] = [
-        sys.executable,
-        str(auto_script),
-        "--telemetry-exe",
-        str(telemetry_exe),
-        "--telemetry-freq",
-        str(telemetry_freq),
-        "--app-exe",
-        str(app_exe),
-        "--parser-script",
-        str(parser_script),
-        "--tt-venv-activate",
-        str(tt_venv_activate),
-        "--tt-metal-root",
-        str(tt_metal_root),
-        "--output-root",
-        str(output_root),
-        "--subdir",
-        subdir,
-        "--slot-ms",
-        str(slot_ms),
-        "--trim-ms",
-        str(trim_ms),
-    ]
-    if device_id is not None:
-        cmd += ["--device-id", str(device_id)]
-    # --app-args must be last (argparse.REMAINDER in auto.py)
-    cmd += ["--app-args"] + app_args
-
-    env = dict(os.environ)
-    env["POWER_CASE"] = str(power_case)
-    env["LONG_MATMUL_OP"] = op
-
     print(f"\n{'=' * 60}", flush=True)
-    print(f" op={op} POWER_CASE={power_case} -> subdir={subdir}", flush=True)
+    print(f" op={op} POWER_CASE={power_case}", flush=True)
     print(f"{'=' * 60}", flush=True)
     print(f"[RUN] op={op} POWER_CASE={power_case} {shell_join(cmd)}", flush=True)
 
@@ -181,7 +123,7 @@ def run_case(
         print("[RUN] (dry-run) skipped", flush=True)
         return 0
 
-    result = subprocess.run(cmd, env=env)
+    result = subprocess.run(cmd, env=environ_with({"POWER_CASE": str(power_case), "LONG_MATMUL_OP": op}))
     return result.returncode
 
 
@@ -225,13 +167,11 @@ def write_cross_op_cases_file(
     return entries
 
 
-# Per-engine energy-per-FLOP ablation, adapted from docs/results/n300_power_cases/
-# make_pj_per_flop_by_engine.py: each engine's own contribution is isolated by subtracting its
+# Per-engine energy-per-FLOP ablation: each engine's own contribution is isolated by subtracting its
 # idle-case's dynamic *average* charge from the all-active case's, then converting charge ->
 # energy via V_core and dividing by the fixed per-interval FLOP count (split mode gives every
-# grid the same total work). Uses dynamic_charge_avg_as rather than the peak variant -- peak
-# charge is a single-sample-driven, noisier signal (see the compute_idle-vs-all-active
-# discussion this chart's negative values came from), and averaging over the whole interval is
+# grid the same total work). Uses dynamic_charge_avg_as rather than the peak variant: peak
+# charge is driven by a single sample and is noisier, and averaging over the whole interval is
 # less exposed to that. All three engines use a genuine idle case (real work vs none, with the
 # other two engines held identical on both sides of the subtraction) -- see the
 # POWER_CASE_SPECS comment above. "regular" (the pre-case-5 writer stand-in, marginal cost of
@@ -242,6 +182,29 @@ ENGINE_ABLATIONS: List[Tuple[str, str, str]] = [
     ("writer", "writer_idle", "Writer"),
     ("compute", "compute_idle", "Compute"),
 ]
+
+
+# LONG_MATMUL_MODE, the same switch long_matmul and parser.py read (see long_matmul's README).
+LEGACY_MODE = os.environ.get("LONG_MATMUL_MODE") == "legacy"
+
+
+def _whole_run_value(row: Dict[str, str], column: str) -> float:
+    """A charge or energy column of program_intervals.csv, for the whole run.
+
+    Those columns cover the trimmed telemetry window (window_s), while the FLOP count covers the
+    whole run (algo_time_s_reported). Updated mode scales the value up to the whole run so
+    pJ/FLOP is not biased low by the trim; legacy mode uses the window value, as the published
+    analysis did. Returns NaN if anything needed is missing or not finite.
+    """
+    try:
+        value = float(row[column])
+        if LEGACY_MODE:
+            return value
+        window_s = float(row["window_s"])
+        run_s = float(row["algo_time_s_reported"])
+    except (KeyError, ValueError):
+        return float("nan")
+    return value * run_s / window_s if window_s > 0 else float("nan")
 
 
 def _load_program_intervals(csv_path: Path) -> Optional[Dict[str, Dict[str, str]]]:
@@ -286,11 +249,15 @@ def compute_energy_by_engine(
                 continue
             try:
                 vcore = float(active_row["avg_vcore_v"])
-                active_as = float(active_row["dynamic_charge_avg_as"])
-                idle_as = float(idle[grid]["dynamic_charge_avg_as"])
             except (KeyError, ValueError):
+                vcore = float("nan")
+            active_as = _whole_run_value(active_row, "dynamic_charge_avg_as")
+            idle_as = _whole_run_value(idle[grid], "dynamic_charge_avg_as")
+            energy_j = (active_as - idle_as) * vcore
+            if not math.isfinite(energy_j):
+                print(f"{note_prefix} note: {engine} at {grid} has no finite value, skipping", flush=True)
                 continue
-            per_grid[grid] = (active_as - idle_as) * vcore
+            per_grid[grid] = energy_j
         if per_grid:
             per_engine[engine] = per_grid
 
@@ -370,12 +337,12 @@ def compute_energy_per_flop_per_core(
             continue
         per_grid: Dict[str, float] = {}
         for grid, row in rows.items():
+            energy_j = _whole_run_value(row, "energy_j_vi")
             try:
-                energy_j = float(row["energy_j_vi"])
                 cores = float(row["cores"])
             except (KeyError, ValueError):
                 continue
-            if cores <= 0:
+            if cores <= 0 or not math.isfinite(energy_j):
                 continue
             per_grid[grid] = energy_j / flops * 1e12 / cores
         if per_grid:
@@ -421,9 +388,10 @@ def plot_energy_by_engine_stacked(
     dpi: int,
 ) -> None:
     """One stacked bar per grid: reader/writer/compute dynamic energy [J] stacked to show each
-    engine's share of the total. Negative per-engine values (see the compute-vs-all-active
-    noise-floor discussion for the add op) are clipped to 0 for the stack -- a negative slice
-    has no "share of the whole" meaning -- and reported on stderr instead of silently dropped.
+    engine's share of the total. Negative per-engine values (an idle case measured slightly above
+    the all-active one, which happens for cheap ops like add, where the difference is within
+    noise) are clipped to 0 for the stack -- a negative slice has no "share of the whole"
+    meaning -- and reported on stderr instead of silently dropped.
     """
     grids = [g for g in grid_order if any(g in vals for vals in per_engine.values())]
     x = np.arange(len(grids))
@@ -485,9 +453,8 @@ def plot_energy_by_engine_stacked(
 
 
 # Hatch patterns distinguishing ops within a grid's cluster of stacked bars (color already
-# distinguishes engine within a bar). Cycles if more ops than patterns are given, though in
-# practice --ops only ever has matmul/add.
-OP_HATCHES = ["", "//", "xx", "\\\\", "oo"]
+# distinguishes engine within a bar); one per op in ALL_OPS.
+OP_HATCHES = ["", "//", "xx", "\\\\", "oo", "..", "++"]
 
 
 def _plot_cross_op_stacked_by_engine(
@@ -650,8 +617,7 @@ def plot_cross_op_energy_per_flop_by_engine_stacked(
     reader/writer/compute-per-op layout, but normalized by the fixed FLOP count instead of raw
     Joules. Reader/writer NoC traffic is identical regardless of which per-tile instruction
     runs, so as core count rises and the reader+writer share of the stack stops shrinking while
-    compute's share does, that's the NoC (not the FPU) becoming the bottleneck -- see the
-    per-op-latency discussion this chart is meant to make visible directly. Returns False (and
+    compute's share does, that's the NoC (not the FPU) becoming the bottleneck. Returns False (and
     prints a note) if no op has any per-engine data at all.
     """
     per_op_engine: Dict[str, Dict[str, Dict[str, float]]] = {}
@@ -726,8 +692,7 @@ def compute_total_energy_per_flop_by_op(
 ) -> Dict[str, Dict[str, float]]:
     """pJ/FLOP per op (not broken down by engine) for one profile/case: each op's total energy
     (energy_j_vi, including the idle floor) for that case, divided by the fixed FLOP count, per
-    grid. This is the same quantity make_pj_per_flop.py plots for a single board/case, just read
-    once per op here so the operations can be compared directly. Ops missing this case's CSV
+    grid, read once per op here so the operations can be compared directly. Ops missing this case's CSV
     are skipped with a note.
     """
     per_op: Dict[str, Dict[str, float]] = {}
@@ -742,9 +707,8 @@ def compute_total_energy_per_flop_by_op(
             continue
         per_grid: Dict[str, float] = {}
         for grid, row in rows.items():
-            try:
-                energy_j = float(row["energy_j_vi"])
-            except (KeyError, ValueError):
+            energy_j = _whole_run_value(row, "energy_j_vi")
+            if not math.isfinite(energy_j):
                 continue
             per_grid[grid] = energy_j / flops * 1e12
         if per_grid:
@@ -850,7 +814,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"sweep runs once per op, into <output-root>/<op>/. Default: {DEFAULT_OPS}",
     )
     ap.add_argument("--auto-script", type=Path, default=Path(__file__).parent / "auto.py")
-    ap.add_argument("--compare-script", type=Path, default=Path(__file__).parent / "compare_runs2.py")
+    ap.add_argument("--compare-script", type=Path, default=Path(__file__).parent / "compare_cases.py")
     ap.add_argument("--telemetry-exe", required=True, type=Path)
     ap.add_argument("--telemetry-freq", type=int, default=50)
     ap.add_argument("--app-exe", required=True, type=Path)
@@ -882,12 +846,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--force",
         action="store_true",
-        help="Re-run a case even if <output-root>/<subdir> already exists. Default: skip existing cases.",
+        help=(
+            "Re-run a case even if it is already complete, or was made with different settings. "
+            "Default: skip complete cases and stop at ones made with different settings."
+        ),
     )
     ap.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print every command that would run (reset, auto.py, compare_runs2.py) without executing it.",
+        help="Print every command that would run (reset, auto.py, compare_cases.py) without executing it.",
     )
     # --app-args must be last (argparse.REMAINDER)
     ap.add_argument(
@@ -902,6 +869,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     misplaced = [a for a in args.app_args if a.split("=", 1)[0] in ap._option_string_actions]
     if misplaced:
         ap.error(f"--app-args must come last; these options follow it: {' '.join(misplaced)}")
+    # Same check auto.py makes, done here so a bad sweep fails before the first reset.
+    if args.app_exe.name == "metal_example_long_matmul" and len(args.app_args) not in (4, 5):
+        ap.error("long_matmul needs --app-args M N K iterations [fixed_blocks_per_core]")
 
     output_root = args.output_root.expanduser().resolve()
     if not args.dry_run:
@@ -951,13 +921,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f" op={op} -> {op_output_root}", flush=True)
         print(f"{'#' * 60}", flush=True)
 
-        for power_case, (subdir, label) in zip(args.power_cases, cases_in_order):
+        for power_case, (subdir, _label) in zip(args.power_cases, cases_in_order):
             run_dir = op_output_root / subdir
-            # Only a run that got as far as program_intervals.csv counts as done; a run that failed
-            # part way leaves its directory behind and must be redone.
-            if (run_dir / "program_intervals.csv").is_file() and not args.force:
-                print(f"\n[SKIP] '{op}/{subdir}' already has results. Skipping (use --force to re-run).", flush=True)
+            # A run is done only if auto.py recorded it as complete with the same settings: a
+            # run that failed part way is redone, and one made with another shape or mode stops
+            # the sweep instead of being mixed in.
+            settings = run_settings(
+                list(args.app_args),
+                environ_with({"POWER_CASE": str(power_case), "LONG_MATMUL_OP": op}),
+                args.telemetry_freq,
+                args.trim_ms,
+                args.slot_ms,
+                args.device_id,
+            )
+            status = run_status(run_dir, settings)
+            if status == "done" and not args.force:
+                print(f"\n[SKIP] '{op}/{subdir}' is already complete. Skipping (use --force to re-run).", flush=True)
                 continue
+            if status == "different" and not args.force:
+                print(
+                    f"ERROR: '{op}/{subdir}' holds a run made with different settings (see its "
+                    f"{RUN_COMPLETE_FILE}). Use another --output-root, or --force to replace it.",
+                    file=sys.stderr,
+                )
+                return 1
 
             rc = reset_hardware(args.tt_smi, args.dry_run)
             if rc != 0:
@@ -967,7 +954,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
                 return rc
 
-            rc = run_case(
+            cmd = auto_py_command(
                 auto_script=args.auto_script,
                 telemetry_exe=args.telemetry_exe,
                 telemetry_freq=args.telemetry_freq,
@@ -981,10 +968,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 slot_ms=args.slot_ms,
                 device_id=args.device_id,
                 trim_ms=args.trim_ms,
-                power_case=power_case,
-                op=op,
-                dry_run=args.dry_run,
             )
+            rc = run_case(cmd, power_case, op, args.dry_run)
             if rc != 0:
                 print(
                     f"ERROR: op={op} POWER_CASE={power_case} ({subdir}) failed with return code {rc}. Aborting.",
@@ -998,7 +983,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         rc = run_compare(args.compare_script, op_output_root, cases_file, args.dpi, args.dry_run)
         if rc != 0:
-            print(f"ERROR: compare_runs2.py failed for op={op} with return code {rc}.", file=sys.stderr)
+            print(f"ERROR: compare_cases.py failed for op={op} with return code {rc}.", file=sys.stderr)
             return rc
 
         if not args.dry_run:
@@ -1051,7 +1036,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             rc = run_compare(args.compare_script, output_root, cross_cases_file, args.dpi, args.dry_run)
             if rc != 0:
                 print(
-                    f"ERROR: compare_runs2.py failed for the cross-op comparison with return code {rc}.",
+                    f"ERROR: compare_cases.py failed for the cross-op comparison with return code {rc}.",
                     file=sys.stderr,
                 )
                 return rc

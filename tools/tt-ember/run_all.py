@@ -7,14 +7,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-RESET_COOLDOWN_S = 10
+from common import RUN_COMPLETE_FILE, auto_py_command, reset_hardware, run_settings, run_status, shell_join
 
 
 @dataclass
@@ -36,47 +36,12 @@ FIXED_TPC_RUNS: List[RunSpec] = [
 ]
 
 
-def check_pending_runs(all_runs: List[RunSpec], output_root: Path) -> List[RunSpec]:
-    pending: List[RunSpec] = []
-    for spec in all_runs:
-        # Only a run that got as far as program_intervals.csv counts as done.
-        if (output_root / spec.subdir / "program_intervals.csv").is_file():
-            print(f"[SKIP] '{spec.subdir}' already has results. Skipping.", flush=True)
-        else:
-            pending.append(spec)
-    return pending
+def settings_for(spec: RunSpec, args: argparse.Namespace) -> dict:
+    return run_settings(spec.app_args, os.environ, args.telemetry_freq, args.trim_ms, args.slot_ms, args.device_id)
 
 
-def check_pending_comparisons(
-    prefill_runs: List[RunSpec],
-    fixed_runs: List[RunSpec],
-    output_root: Path,
-) -> List[tuple]:
-    pending = []
-
-    prefill_complete = all((output_root / s.subdir / "program_intervals.csv").is_file() for s in prefill_runs)
-    fixed_complete = all((output_root / s.subdir / "program_intervals.csv").is_file() for s in fixed_runs)
-
-    comp_prefill_dir = output_root / "comparison_prefill"
-    comp_fixed_dir = output_root / "comparison_fixed_tpc"
-
-    if prefill_complete and not comp_prefill_dir.exists():
-        pending.append(("prefill", comp_prefill_dir))
-        print(f"[COMPARE] Prefill runs complete, comparison missing — will run.", flush=True)
-    elif prefill_complete:
-        print(f"[SKIP] Prefill comparison already exists at {comp_prefill_dir}. Skipping.", flush=True)
-    else:
-        print(f"[SKIP] Prefill comparison skipped — not all prefill runs are complete yet.", flush=True)
-
-    if fixed_complete and not comp_fixed_dir.exists():
-        pending.append(("fixed_tpc", comp_fixed_dir))
-        print(f"[COMPARE] Fixed-tpc runs complete, comparison missing — will run.", flush=True)
-    elif fixed_complete:
-        print(f"[SKIP] Fixed-tpc comparison already exists at {comp_fixed_dir}. Skipping.", flush=True)
-    else:
-        print(f"[SKIP] Fixed-tpc comparison skipped — not all fixed-tpc runs are complete yet.", flush=True)
-
-    return pending
+def is_complete(spec: RunSpec, args: argparse.Namespace) -> bool:
+    return run_status(args.output_root / spec.subdir, settings_for(spec, args)) == "done"
 
 
 def run_compare(
@@ -85,6 +50,7 @@ def run_compare(
     output_dir: Path,
     filter_prefix: str,
     dpi: int,
+    overcompute: bool,
 ) -> int:
     cmd: List[str] = [
         sys.executable,
@@ -98,76 +64,10 @@ def run_compare(
         "--dpi",
         str(dpi),
     ]
-    print(f"\n[COMPARE] Running: {' '.join(cmd)}", flush=True)
-    result = subprocess.run(cmd)
-    return result.returncode
-
-
-def reset_hardware(tt_smi_cmd: str = "tt-smi") -> int:
-    print(f"\n[RESET] Running hardware reset: {tt_smi_cmd} -r", flush=True)
-    result = subprocess.run([tt_smi_cmd, "-r"])
-    if result.returncode != 0:
-        print(f"[RESET] ERROR: Hardware reset failed with return code {result.returncode}.", file=sys.stderr)
-        return result.returncode
-    print(f"[RESET] Hardware reset completed. Waiting {RESET_COOLDOWN_S}s for device to re-initialize...", flush=True)
-    for remaining in range(RESET_COOLDOWN_S, 0, -1):
-        print(f"[RESET] Resuming in {remaining}s...", flush=True)
-        time.sleep(1)
-    print("[RESET] Device ready.", flush=True)
-    return 0
-
-
-def run_single(
-    auto_script: Path,
-    telemetry_exe: Path,
-    telemetry_freq: int,
-    app_exe: Path,
-    parser_script: Path,
-    tt_venv_activate: Path,
-    tt_metal_root: Path,
-    output_root: Path,
-    slot_ms: int,
-    device_id: Optional[int],
-    trim_ms: float,
-    spec: RunSpec,
-) -> int:
-    cmd: List[str] = [
-        sys.executable,
-        str(auto_script),
-        "--telemetry-exe",
-        str(telemetry_exe),
-        "--telemetry-freq",
-        str(telemetry_freq),
-        "--app-exe",
-        str(app_exe),
-        "--parser-script",
-        str(parser_script),
-        "--tt-venv-activate",
-        str(tt_venv_activate),
-        "--tt-metal-root",
-        str(tt_metal_root),
-        "--output-root",
-        str(output_root),
-        "--subdir",
-        spec.subdir,
-        "--slot-ms",
-        str(slot_ms),
-        "--trim-ms",
-        str(trim_ms),
-    ]
-
-    if device_id is not None:
-        cmd += ["--device-id", str(device_id)]
-
-    # --app-args must be last (argparse.REMAINDER in auto.py)
-    cmd += ["--app-args"] + spec.app_args
-
-    print(f"\n{'=' * 60}", flush=True)
-    print(f" Starting: {spec.subdir}", flush=True)
-    print(f"{'=' * 60}", flush=True)
-
-    result = subprocess.run(cmd)
-    return result.returncode
+    if not overcompute:
+        cmd.append("--no-overcompute")
+    print(f"\n[COMPARE] Running: {shell_join(cmd)}", flush=True)
+    return subprocess.run(cmd).returncode
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -251,6 +151,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Path to compare_runs.py. Default: compare_runs.py next to this script.",
     )
     ap.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-run runs that are already complete, or were made with different settings.",
+    )
+    ap.add_argument(
         "--dpi",
         type=int,
         default=150,
@@ -258,85 +163,69 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     args = ap.parse_args(argv)
-
-    all_runs = PREFILL_RUNS + FIXED_TPC_RUNS
-
     print(f"Output root: {args.output_root}", flush=True)
-    print(f"\nChecking simulation runs...", flush=True)
-    pending_runs = check_pending_runs(all_runs, args.output_root)
 
-    print(f"\nChecking comparisons...", flush=True)
-    pending_comparisons = check_pending_comparisons(PREFILL_RUNS, FIXED_TPC_RUNS, args.output_root)
+    # --- Runs: a run is done only if auto.py recorded it as complete with the same settings ---
+    pending: List[RunSpec] = []
+    for spec in PREFILL_RUNS + FIXED_TPC_RUNS:
+        status = run_status(args.output_root / spec.subdir, settings_for(spec, args))
+        if status == "done" and not args.force:
+            print(f"[SKIP] '{spec.subdir}' is already complete.", flush=True)
+        elif status == "different" and not args.force:
+            print(
+                f"ERROR: '{spec.subdir}' holds a run made with different settings (see its {RUN_COMPLETE_FILE}). "
+                "Use another --output-root, or --force to replace it.",
+                file=sys.stderr,
+            )
+            return 1
+        else:
+            pending.append(spec)
 
-    if not pending_runs and not pending_comparisons:
-        print(
-            f"\nAll runs and comparisons already exist under {args.output_root}. Nothing to do.\n"
-            f"Delete the relevant subdirectories if you want to re-run them.",
-            flush=True,
+    for i, spec in enumerate(pending, start=1):
+        print(f"\n{'=' * 60}\n Run {i}/{len(pending)}: {spec.subdir}\n{'=' * 60}", flush=True)
+        rc = reset_hardware(args.tt_smi)
+        if rc != 0:
+            print(f"ERROR: Hardware reset failed before run '{spec.subdir}'. Aborting.", file=sys.stderr)
+            return rc
+        cmd = auto_py_command(
+            auto_script=args.auto_script,
+            telemetry_exe=args.telemetry_exe,
+            telemetry_freq=args.telemetry_freq,
+            app_exe=args.app_exe,
+            app_args=spec.app_args,
+            parser_script=args.parser_script,
+            tt_venv_activate=args.tt_venv_activate,
+            tt_metal_root=args.tt_metal_root,
+            output_root=args.output_root,
+            subdir=spec.subdir,
+            slot_ms=args.slot_ms,
+            device_id=args.device_id,
+            trim_ms=args.trim_ms,
         )
-        return 0
+        print(f"[RUN] {shell_join(cmd)}", flush=True)
+        rc = subprocess.run(cmd).returncode
+        if rc != 0:
+            print(f"ERROR: Run '{spec.subdir}' failed with return code {rc}. Aborting.", file=sys.stderr)
+            return rc
 
-    # --- Simulation runs ---
-    if pending_runs:
-        total = len(pending_runs)
-        print(f"\n{total} simulation run(s) pending.", flush=True)
+    # --- Comparisons: cheap, so redo them whenever their whole group is complete ---
+    for name, group, output_dir in (
+        ("prefill", PREFILL_RUNS, args.output_root / "comparison_prefill"),
+        ("fixed_tpc", FIXED_TPC_RUNS, args.output_root / "comparison_fixed_tpc"),
+    ):
+        if not all(is_complete(spec, args) for spec in group):
+            print(f"[SKIP] {name} comparison: not all {name} runs are complete yet.", flush=True)
+            continue
+        # The overcompute reference only applies when work grows with the core count (fixed mode).
+        rc = run_compare(
+            args.compare_script, args.output_root, output_dir, name, args.dpi, overcompute=name == "fixed_tpc"
+        )
+        if rc != 0:
+            print(f"ERROR: Comparison '{name}' failed with return code {rc}.", file=sys.stderr)
+            return rc
+        print(f"[COMPARE] Written to: {output_dir}", flush=True)
 
-        for i, spec in enumerate(pending_runs, start=1):
-            print(f"\n{'=' * 60}", flush=True)
-            print(f" Run {i}/{total}: {spec.subdir}", flush=True)
-            print(f"{'=' * 60}", flush=True)
-
-            rc = reset_hardware(args.tt_smi)
-            if rc != 0:
-                print(f"ERROR: Hardware reset failed before run '{spec.subdir}'. Aborting.", file=sys.stderr)
-                return rc
-
-            print(f"[RUN] Launching auto.py for: {spec.subdir}", flush=True)
-            rc = run_single(
-                auto_script=args.auto_script,
-                telemetry_exe=args.telemetry_exe,
-                telemetry_freq=args.telemetry_freq,
-                app_exe=args.app_exe,
-                parser_script=args.parser_script,
-                tt_venv_activate=args.tt_venv_activate,
-                tt_metal_root=args.tt_metal_root,
-                output_root=args.output_root,
-                slot_ms=args.slot_ms,
-                device_id=args.device_id,
-                trim_ms=args.trim_ms,
-                spec=spec,
-            )
-            if rc != 0:
-                print(f"ERROR: Run '{spec.subdir}' failed with return code {rc}. Aborting.", file=sys.stderr)
-                return rc
-
-            print(f"[RUN] Completed: {spec.subdir}", flush=True)
-
-        print(f"\n{'=' * 60}", flush=True)
-        print(f" All {total} pending simulation run(s) completed successfully.", flush=True)
-        print(f"{'=' * 60}", flush=True)
-
-    # --- Re-evaluate pending comparisons after new runs may have completed ---
-    pending_comparisons = check_pending_comparisons(PREFILL_RUNS, FIXED_TPC_RUNS, args.output_root)
-
-    if pending_comparisons:
-        print(f"\n[COMPARE] Running comparisons...", flush=True)
-        for filter_prefix, output_dir in pending_comparisons:
-            rc = run_compare(
-                compare_script=args.compare_script,
-                out_root=args.output_root,
-                output_dir=output_dir,
-                filter_prefix=filter_prefix,
-                dpi=args.dpi,
-            )
-            if rc != 0:
-                print(f"ERROR: Comparison '{filter_prefix}' failed with return code {rc}.", file=sys.stderr)
-                return rc
-            print(f"[COMPARE] Written to: {output_dir}", flush=True)
-
-    print(f"\n{'=' * 60}", flush=True)
-    print(f" Done. Results are under: {args.output_root}", flush=True)
-    print(f"{'=' * 60}", flush=True)
+    print(f"\n{'=' * 60}\n Done. Results are under: {args.output_root}\n{'=' * 60}", flush=True)
     return 0
 
 

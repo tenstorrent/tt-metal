@@ -8,14 +8,23 @@ from __future__ import annotations
 
 import argparse
 import os
-import shlex
+import re
 import signal
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
+
+from common import RUN_COMPLETE_FILE, run_settings, shell_join, write_run_complete
+
+# Idle time after the app finishes and before telemetry stops, so the last grid's tail and the
+# return to idle are captured.
+POST_RUN_IDLE_S = 10
+
+# A run directory name: parser.py accepts only these characters.
+SUBDIR_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 @dataclass
@@ -50,10 +59,6 @@ def build_run_paths(output_root: Path, subdir: str) -> RunPaths:
         summary_file=run_dir / "summary.txt",
         launcher_log_file=run_dir / "launcher.log",
     )
-
-
-def shell_join(args: List[str]) -> str:
-    return " ".join(shlex.quote(a) for a in args)
 
 
 def stop_processes(procs: List[Optional[subprocess.Popen]], timeout_s: float = 10.0) -> None:
@@ -93,9 +98,7 @@ def wait_for_file_to_appear(path: Path, timeout_s: float = 5.0) -> bool:
 # from the command line is ever parsed as shell code. The app resolves programming-example kernel
 # paths through TT_METAL_HOME, which the venv activation script does not set. exec keeps the
 # process group the one auto.py stops.
-BASH_WRAPPER = (
-    'source "$1" && ' 'export TT_METAL_RUNTIME_ROOT="$2" TT_METAL_HOME="$2" && ' 'cd "$3" && ' "shift 3 && " 'exec "$@"'
-)
+BASH_WRAPPER = 'source "$1" && export TT_METAL_RUNTIME_ROOT="$2" TT_METAL_HOME="$2" && cd "$3" && shift 3 && exec "$@"'
 
 
 def build_bash_command(
@@ -201,6 +204,7 @@ def run_parser(
 
 
 def run_workflow(
+    settings: Dict[str, object],
     telemetry_exe: Path,
     telemetry_freq_hz: int,
     app_exe: Path,
@@ -220,6 +224,10 @@ def run_workflow(
     device_profiler_csv: Path,
 ) -> int:
     paths = build_run_paths(output_root, subdir)
+    # A previous attempt's results must not survive into this one; RUN_COMPLETE_FILE is written
+    # again only if this run gets all the way through the parser.
+    for stale in (paths.run_dir / RUN_COMPLETE_FILE, paths.run_dir / "program_intervals.csv"):
+        stale.unlink(missing_ok=True)
 
     # tt-umd's telemetry tool takes -f as a polling PERIOD in microseconds, not a frequency in
     # Hz (see `telemetry --help`). --telemetry-freq is in Hz, so convert: 50 Hz -> 20000 us.
@@ -311,8 +319,12 @@ def run_workflow(
                     return app_rc
 
             log("Application finished successfully.")
-            log("Waiting 10 seconds before stopping telemetry...")
-            time.sleep(10.0)
+            log(f"Waiting {POST_RUN_IDLE_S} seconds before stopping telemetry...")
+            time.sleep(POST_RUN_IDLE_S)
+
+            if telemetry_proc.poll() is not None:
+                log(f"ERROR: Telemetry exited during the run (return code {telemetry_proc.returncode}).")
+                return 13
 
             log("Stopping telemetry...")
             stop_processes([telemetry_proc])
@@ -356,6 +368,7 @@ def run_workflow(
                 log("ERROR: Parser failed.")
                 return parser_rc
 
+            write_run_complete(paths.run_dir, settings)
             log("")
             log("Workflow completed successfully.")
             log(f"All results are under: {paths.run_dir}")
@@ -367,6 +380,12 @@ def run_workflow(
 
         finally:
             stop_processes([app_proc, telemetry_proc])
+
+
+def subdir_name(text: str) -> str:
+    if not SUBDIR_PATTERN.match(text) or text in (".", ".."):
+        raise argparse.ArgumentTypeError(f"must be a single name of letters, digits, '_', '.' or '-', got {text!r}")
+    return text
 
 
 def positive_int(text: str) -> int:
@@ -444,7 +463,8 @@ def main() -> int:
     parser.add_argument(
         "--subdir",
         required=True,
-        help="Subdirectory name for this run.",
+        type=subdir_name,
+        help="Subdirectory name for this run (letters, digits, '_', '.', '-').",
     )
 
     parser.add_argument(
@@ -542,10 +562,22 @@ def main() -> int:
     )
 
     app_args = list(args.app_args)
-    if args.fixed_blocks_per_core is not None:
-        app_args.append(str(args.fixed_blocks_per_core))
+    if args.app_exe.name == "metal_example_long_matmul":
+        # Without M N K iterations long_matmul does a one-grid smoke run, which has no idle pause
+        # to measure the base current in.
+        if args.fixed_blocks_per_core is not None:
+            if len(app_args) != 4:
+                parser.error("--fixed-blocks-per-core needs exactly 4 --app-args (M N K iterations)")
+            app_args.append(str(args.fixed_blocks_per_core))
+        if len(app_args) not in (4, 5):
+            parser.error("long_matmul needs --app-args M N K iterations [fixed_blocks_per_core]")
+    elif args.fixed_blocks_per_core is not None:
+        parser.error("--fixed-blocks-per-core only applies to long_matmul")
+
+    settings = run_settings(app_args, os.environ, args.telemetry_freq, args.trim_ms, args.slot_ms, args.device_id)
 
     return run_workflow(
+        settings=settings,
         telemetry_exe=args.telemetry_exe.expanduser().resolve(),
         telemetry_freq_hz=args.telemetry_freq,
         app_exe=args.app_exe.expanduser().resolve(),
