@@ -52,8 +52,16 @@ sfpi_inline sfpi::vFloat fresh_erf_core(const sfpi::vFloat x)
 
     const sfpi::vFloat xc = sfpi::min(sfpi::max(x, -FIT_LIMIT), FIT_LIMIT);
     const sfpi::vFloat u  = xc * xc;
+    // Outside the fit domain erf IS its limit to within 2.3e-5, so state the
+    // limit exactly instead of delivering the fit's edge value: u reaches 9
+    // only on the clamped tail (the largest float below 3 squares to below
+    // 9), and there the top Horner step gains 9 * 2^-20, which carries
+    // xc * P past +-1 so the result clamp returns the exact limit.
+    constexpr float TAIL_KNEE = 0x1.1ffffep3f; // 9 - 2^-20
+    const sfpi::vFloat tail   = sfpi::max(u - TAIL_KNEE, 0.0f);
     sfpi::vFloat p        = E7;
     p                     = p * u + E6;
+    p                     = tail * u + p;
     p                     = p * u + E5;
     p                     = p * u + E4;
     p                     = p * u + E3;
@@ -63,13 +71,6 @@ sfpi_inline sfpi::vFloat fresh_erf_core(const sfpi::vFloat x)
     sfpi::vFloat r        = xc * p;
     r                     = sfpi::min(r, 1.0f);
     r                     = sfpi::max(r, -1.0f);
-    // Outside the fit domain erf IS its limit to within 2.3e-5, so state the
-    // limit exactly instead of delivering the fit's edge value.
-    v_if (sfpi::abs(x) >= FIT_LIMIT)
-    {
-        r = sfpi::copysgn(sfpi::vFloat(1.0f), x);
-    }
-    v_endif;
     return r;
 }
 
