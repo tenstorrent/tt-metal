@@ -152,8 +152,8 @@ def apply_output_projection_allreduce_prefill(
     user's rows as this function does for that user alone.
     """
     out = apply_output_projection(tensor, weights, activation_dtype, unpadded=True, program_config=program_config)
+    links = batched_reduce_links(ccl_manager, mesh_config.tp_axis)  # 2 on BH 1x4, batch 1 too (bit-exact vs 1 link)
     if batch_size > 1:
-        links = batched_reduce_links(ccl_manager, mesh_config.tp_axis)
         reduced = per_user_reduce(out, batch_size, mesh_config.tp_axis, links, scatter=scatter)
         out.deallocate(True)
         return reduced
@@ -163,14 +163,14 @@ def apply_output_projection_allreduce_prefill(
             2,
             cluster_axis=mesh_config.tp_axis,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            num_links=ccl_manager.num_links,
+            num_links=links,
             topology=ccl_manager.topology,
         )
         out.deallocate(True)
         return reduced
     reduced = ttnn.all_reduce(
         out,
-        num_links=ccl_manager.num_links,
+        num_links=links,
         topology=ccl_manager.topology,
         cluster_axis=mesh_config.tp_axis,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,

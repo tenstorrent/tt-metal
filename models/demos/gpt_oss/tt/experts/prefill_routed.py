@@ -895,9 +895,9 @@ class RoutedPrefillExperts:
             out = ttnn.concat(outputs, dim=2)
             for t in outputs:
                 ttnn.deallocate(t)
+        axis = self.mesh_config.tp_axis
+        links = batched_reduce_links(self.ccl_manager, axis)  # 2 on BH 1x4, batch 1 too (bit-exact vs 1 link)
         if batch_size > 1:
-            axis = self.mesh_config.tp_axis
-            links = batched_reduce_links(self.ccl_manager, axis)
             reduced = per_user_reduce(out, batch_size, axis, links, scatter=scatter)
             ttnn.deallocate(out)
             return reduced
@@ -906,14 +906,14 @@ class RoutedPrefillExperts:
                 out,
                 2,
                 cluster_axis=self.mesh_config.tp_axis,
-                num_links=self.ccl_manager.num_links,
+                num_links=links,
                 topology=ttnn.Topology.Ring,
             )
             ttnn.deallocate(out)
             return reduced
         reduced = ttnn.all_reduce(
             out,
-            num_links=self.ccl_manager.num_links,
+            num_links=links,
             topology=ttnn.Topology.Ring,
             cluster_axis=self.mesh_config.tp_axis,
         )
