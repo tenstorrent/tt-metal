@@ -83,6 +83,7 @@ inline std::vector<x280::harness::output::Field> run_identity(
         {"B", cfg.B},
         {"C", cfg.C},
         {"K", cfg.K},
+        {"inflight", cfg.inflight},
         {"W", cfg.W},
         {"N", cfg.N},
         {"mtime_hz", run.mtime_hz},

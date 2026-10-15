@@ -79,6 +79,7 @@ struct Config {
     uint32_t B = 1;
     uint32_t C = 1;
     uint32_t K = 1;
+    uint32_t inflight = 1;  // workers one consumer pass visits together (pi_x280_args_t::inflight)
     uint64_t W = 1000;
     uint64_t N = 4096;
     std::vector<LogicalCoord> ordered_tiles;
@@ -274,6 +275,7 @@ inline pi_x280_args_t make_x280_args(
     xargs.B = cfg.B;
     xargs.C = cfg.C;
     xargs.K = cfg.K;
+    xargs.inflight = cfg.inflight;
     xargs.poll_cadence = cfg.poll_cadence;
     xargs.l1_tile_base = layout.l1_tile_base;
     xargs.W = cfg.W;
@@ -390,6 +392,7 @@ enum class AdmissionCheck : uint32_t {
     B,                   ///< value: B, bound: 1
     K,                   ///< value: K, bound: 1
     C,                   ///< value: C, bound: K
+    Inflight,            ///< value: inflight, bound: 4 (1, 2 or 4; 1 in latency mode)
     N,                   ///< value: N, bound: 1
     PollCadence,         ///< value: poll_cadence, bound: 2^20 (a power of 2 up to it)
     PhaseTimeout,        ///< value: phase_timeout_ms, bound: 600000
@@ -466,6 +469,7 @@ struct Admission {
             case AdmissionCheck::B: return "B must be >= " + b + ", got " + v;
             case AdmissionCheck::K: return "K must be >= " + b + ", got " + v;
             case AdmissionCheck::C: return "C must be in [1, K], got C=" + v + " K=" + b;
+            case AdmissionCheck::Inflight: return "inflight must be 1, 2 or 4, and 1 in latency mode, got " + v;
             case AdmissionCheck::N: return "N must be >= " + b + ", got " + v;
             case AdmissionCheck::PollCadence: return "poll_cadence must be a power of 2 in [1, " + b + "], got " + v;
             case AdmissionCheck::PhaseTimeout: return "phase_timeout_ms must be in [1, " + b + "], got " + v;
@@ -590,6 +594,11 @@ inline Admission validate_config(const Config& cfg, const Capacity& cap, uint32_
     // C check: 1 <= C <= K
     if (cfg.C == 0u || cfg.C > cfg.K) {
         return reject(PI_ERROR_BAD_ARGS, AdmissionCheck::C, cfg.C, cfg.K);
+    }
+
+    if ((cfg.inflight != 1u && cfg.inflight != 2u && cfg.inflight != 4u) ||
+        (cfg.mode == PI_MODE_LATENCY && cfg.inflight != 1u)) {
+        return reject(PI_ERROR_BAD_ARGS, AdmissionCheck::Inflight, cfg.inflight, 4u);
     }
 
     // N check: N must be > 0

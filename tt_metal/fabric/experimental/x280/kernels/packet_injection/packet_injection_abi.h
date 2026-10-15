@@ -276,6 +276,9 @@ static inline int pi_abi_tag_matches(uint32_t tag, uint32_t mode, uint32_t inclu
  * measured request counts per worker. `poll_cadence` is a power-of-two poll
  * divisor; `l1_tile_base` the byte offset of the worker slices within each
  * producer core's L1; `x280_timeout_ticks` a per-phase mtime budget.
+ * `inflight` is how many workers one consumer pass visits together, with
+ * every slot load of the pass issued before any is used: 1, 2 or 4, and 1 in
+ * latency mode, whose remote timer window follows one tile at a time.
  *
  * `release_num_dests` and `release_rect` are the release group the host's
  * release selector chose: nonzero `release_num_dests` releases the measured
@@ -304,6 +307,7 @@ typedef struct {
     uint32_t run_nonce;
     uint32_t release_num_dests; /* 0: one unicast write per tile */
     x280_noc_rect_t release_rect;
+    uint32_t inflight; /* workers one consumer pass visits together: 1, 2 or 4 */
 } pi_x280_args_t;
 
 PI_STATIC_ASSERT(sizeof(pi_x280_args_t) == 128u, "pi_x280_args_t must be 128 bytes");
@@ -323,6 +327,7 @@ PI_STATIC_ASSERT(offsetof(pi_x280_args_t, x280_timeout_ticks) == 48u, "offset x2
 PI_STATIC_ASSERT(offsetof(pi_x280_args_t, run_nonce) == 56u, "offset run_nonce");
 PI_STATIC_ASSERT(offsetof(pi_x280_args_t, release_num_dests) == 60u, "offset release_num_dests");
 PI_STATIC_ASSERT(offsetof(pi_x280_args_t, release_rect) == 64u, "offset release_rect");
+PI_STATIC_ASSERT(offsetof(pi_x280_args_t, inflight) == 80u, "offset inflight");
 
 /* Producer argument runtime words, PI_PRODUCER_ARG_WORDS * 4 == sizeof(pi_producer_args_t). */
 #define PI_PRODUCER_ARG_WORDS 18u

@@ -950,6 +950,90 @@
       }
     },
     {
+      "id": "packet.throughput.brisc.T4.inflight2",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000",
+        "PACKET_INJECTION_INFLIGHT": "2"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.inflight4",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "1",
+        "PACKET_INJECTION_K": "1",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000",
+        "PACKET_INJECTION_INFLIGHT": "4"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.c8k16.inflight2",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000",
+        "PACKET_INJECTION_INFLIGHT": "2"
+      }
+    },
+    {
+      "id": "packet.throughput.brisc.T4.c8k16.inflight4",
+      "member": "packet_injection/tensix_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_packet_injection_tensix_to_x280",
+        "--gtest_filter=Config/PacketInjectionTensixToX280.Run/Throughput"
+      ],
+      "environment": {
+        "X280_PACKET_INJECTION_FW_IMAGE": "${FW_BUILD}/firmware-packet-injection-throughput.bin",
+        "PACKET_INJECTION_FAMILY": "brisc",
+        "PACKET_INJECTION_T": "4",
+        "PACKET_INJECTION_TILES": "0,0;1,0;0,1;1,1",
+        "PACKET_INJECTION_S": "16",
+        "PACKET_INJECTION_B": "1",
+        "PACKET_INJECTION_C": "8",
+        "PACKET_INJECTION_K": "16",
+        "PACKET_INJECTION_W": "1000",
+        "PACKET_INJECTION_N": "1000",
+        "PACKET_INJECTION_INFLIGHT": "4"
+      }
+    },
+    {
       "id": "packet.throughput.brisc.T4.s4",
       "member": "packet_injection/tensix_to_x280",
       "argv": [

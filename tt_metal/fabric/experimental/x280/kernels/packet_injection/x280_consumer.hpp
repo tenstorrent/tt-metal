@@ -388,6 +388,10 @@ private:
             args_.x280_timeout_ticks >= (1ULL << 63) || (args_.l1_tile_base & 63u) != 0) {
             return PI_ERROR_BAD_ARGS;
         }
+        if ((args_.inflight != 1u && args_.inflight != 2u && args_.inflight != 4u) ||
+            (Mode == 1 && args_.inflight != 1u)) {
+            return PI_ERROR_BAD_ARGS;
+        }
 
         const pi_layout_check_t check = pi_compute_layout(P_, T_, S_, args_.B, N_, Mode, args_.l1_tile_base, &layout_);
         if (check.code != PI_LAYOUT_OK) {
@@ -662,6 +666,20 @@ private:
 
     template <bool Measured>
     pi_error_t consume_phase(uint64_t limit) {
+        if constexpr (Mode != 1) {
+            if (args_.inflight == 2u) {
+                return consume_phase_in_flight<Measured, 2>(limit);
+            }
+            if (args_.inflight == 4u) {
+                return consume_phase_in_flight<Measured, 4>(limit);
+            }
+        }
+        return consume_phase_serial<Measured>(limit);
+    }
+
+    /** One phase, visiting one worker at a time in index order (inflight 1). */
+    template <bool Measured>
+    pi_error_t consume_phase_serial(uint64_t limit) {
         phase_start_mtime_ = Transport::mtime();
 
         // The timed-loop rule (transport_bandwidth_frontend_cxx.hpp): the phase
@@ -826,6 +844,242 @@ private:
                     credited = consumed;
                 }
                 store_slot();
+            }
+        }
+        store_back();
+
+        for (uint32_t w = 0; w < P_; ++w) {
+            if (slots_[w].phase_done != limit) {
+                first_failed_worker_ = w;
+                return PI_ERROR_PHASE_OVERRUN;
+            }
+        }
+        return PI_ERROR_NONE;
+    }
+
+    /**
+     * One phase, visiting the workers D at a time in index order. A pass
+     * issues the D workers' produced loads together, then takes one header
+     * from every visit with headers left, issuing all their slot loads before
+     * using any, until each visit (at most K headers) ends. Credits, safety
+     * polls and error attribution are per worker, as in consume_phase_serial.
+     */
+    template <bool Measured, uint32_t D>
+    pi_error_t consume_phase_in_flight(uint64_t limit) {
+        static_assert(D > 1 && Mode != 1, "the latency timer window follows one tile at a time");
+        phase_start_mtime_ = Transport::mtime();
+
+        // The timed-loop rule (transport_bandwidth_frontend_cxx.hpp): the phase
+        // works on register copies of the consumer's state, which lives on the
+        // uncached LIM stack and arena, and stores them back before anything
+        // reads them through the object.
+        const uint32_t P = P_;
+        const uint32_t K = K_;
+        const uint32_t C = C_;
+        const uint32_t S = S_;
+        const uint32_t poll_cadence = args_.poll_cadence;
+        pi_consumer_slot_t* const slots = slots_;
+        const uint64_t produced_base = arena_base_ + layout_.produced_offset;
+        const uint64_t rings_base = arena_base_ + layout_.rings_offset;
+        const uint64_t ring_stride = layout_.ring_stride;
+        uint64_t remaining = remaining_total_;
+        uint64_t measured_done = total_measured_done_;
+        uint64_t empty_visits = empty_visits_;
+        uint32_t safety_work = 0u;
+        auto store_back = [&]() __attribute__((always_inline)) {
+            remaining_total_ = remaining;
+            total_measured_done_ = measured_done;
+            empty_visits_ = empty_visits;
+            safety_work_ = safety_work;
+        };
+        // amortized_safety_check() on the register counter.
+        auto poll = [&](uint32_t w) __attribute__((always_inline)) {
+            if (++safety_work < poll_cadence) {
+                return PI_ERROR_NONE;
+            }
+            safety_work = 0u;
+            return safety_check(true, w);
+        };
+
+        // Worker w0 + j's visit in this pass, on register copies of its slot.
+        // Every loop over j runs D times and is unrolled, so these stay in
+        // registers rather than in an array on the stack. The slot's
+        // phase_done is stored when the visit starts, already counting the
+        // visit's headers, and corrected on an error return.
+        struct Visit {
+            uint32_t consumed;
+            uint32_t end;  // `consumed` once the visit has taken its headers
+            uint32_t credited;
+            volatile uint32_t* credit_reg;
+        };
+        Visit visits[D] = {};
+        uint32_t w0 = 0u;
+        uint32_t taken = 0u;  // bit j: worker w0 + j's visit took headers
+        // At a visit's end only consumed and credited change; an error return
+        // also takes the untaken headers back out of phase_done.
+        auto store_visits = [&](bool error) __attribute__((always_inline)) {
+#pragma GCC unroll 4
+            for (uint32_t j = 0; j < D; ++j) {
+                if ((taken >> j) & 1u) {
+                    pi_consumer_slot_t& state = slots[w0 + j];
+                    state.consumed = visits[j].consumed;
+                    state.credited = visits[j].credited;
+                    if (error) {
+                        state.phase_done -= visits[j].end - visits[j].consumed;
+                    }
+                }
+            }
+        };
+
+        while (remaining != 0) {
+            for (w0 = 0u; w0 < P; w0 += D) {
+                uint32_t live = 0u;
+                uint64_t phases[D] = {};
+#pragma GCC unroll 4
+                for (uint32_t j = 0; j < D; ++j) {
+                    if (w0 + j < P) {
+                        pi_error_t err = poll(w0 + j);
+                        if (err != PI_ERROR_NONE) {
+                            store_back();
+                            return err;
+                        }
+                        phases[j] = slots[w0 + j].phase_done;
+                        if (phases[j] != limit) {
+                            live |= 1u << j;
+                        }
+                    }
+                }
+                if (live == 0u) {
+                    continue;
+                }
+
+                uint32_t snapshots[D] = {};
+                Transport::fence_load();
+#pragma GCC unroll 4
+                for (uint32_t j = 0; j < D; ++j) {
+                    if ((live >> j) & 1u) {
+                        snapshots[j] =
+                            *(const volatile uint32_t*)(uintptr_t)(produced_base +
+                                                                   (uint64_t)(w0 + j) * sizeof(pi_counter_slot_t));
+                    }
+                }
+
+                taken = 0u;
+#pragma GCC unroll 4
+                for (uint32_t j = 0; j < D; ++j) {
+                    if (((live >> j) & 1u) == 0u) {
+                        continue;
+                    }
+                    const uint32_t w = w0 + j;
+                    pi_consumer_slot_t& state = slots[w];
+                    const uint32_t consumed = state.consumed;
+                    const uint64_t phase_done = phases[j];
+                    uint32_t available;
+                    if (!credit_pair_ok(snapshots[j], consumed, UINT32_MAX, S, &available)) {
+                        store_visits(true);
+                        store_back();
+                        first_failed_worker_ = w;
+                        return PI_ERROR_COUNTER_DISTANCE;
+                    }
+                    if ((uint64_t)available > limit - phase_done) {
+                        store_visits(true);
+                        store_back();
+                        first_failed_worker_ = w;
+                        return PI_ERROR_PHASE_OVERRUN;
+                    }
+                    if (available == 0u) {
+                        if (Measured) {
+                            empty_visits += 1;
+                        }
+                        continue;
+                    }
+                    const uint32_t visit_count = available < K ? available : K;
+                    state.phase_done = phase_done + visit_count;
+                    visits[j] = Visit{
+                        consumed,
+                        (uint32_t)(consumed + visit_count),
+                        state.credited,
+                        credit_register(w, pi_worker_tile_index(&layout_, w))};
+                    taken |= 1u << j;
+                }
+                if (taken == 0u) {
+                    continue;
+                }
+
+                // The snapshots above are related to the slot loads below only
+                // by a control dependency, which RVWMO does not order, and a
+                // slot address derives from `consumed` rather than from the
+                // snapshot, so there is no address dependency either. One fence
+                // here orders the counter loads against every slot load of this
+                // pass; the producer has already settled arrival order.
+                Transport::fence_load();
+
+                const uint64_t pass_rings = rings_base + (uint64_t)w0 * ring_stride;
+                for (uint32_t active = taken; active != 0u;) {
+                    // Four volatile destination-ID byte loads at offsets 83, 84,
+                    // 85, 86 per header, every header's issued before any is used.
+                    uint32_t ids[D][4];
+#pragma GCC unroll 4
+                    for (uint32_t j = 0; j < D; ++j) {
+                        // No instruction: only marks the registers defined on
+                        // the path that loads nothing into them.
+                        __asm__("" : "=r"(ids[j][0]), "=r"(ids[j][1]), "=r"(ids[j][2]), "=r"(ids[j][3]));
+                        if ((active >> j) & 1u) {
+                            const volatile uint8_t* p =
+                                (const volatile uint8_t*)(uintptr_t)(pass_rings + (uint64_t)j * ring_stride +
+                                                                     (uint64_t)(visits[j].consumed & (S - 1u)) *
+                                                                         PI_SLOT_BYTES);
+                            ids[j][0] = p[83];
+                            ids[j][1] = p[84];
+                            ids[j][2] = p[85];
+                            ids[j][3] = p[86];
+                        }
+                    }
+#pragma GCC unroll 4
+                    for (uint32_t j = 0; j < D; ++j) {
+                        if (((active >> j) & 1u) == 0u) {
+                            continue;
+                        }
+                        Visit& v = visits[j];
+                        __asm__ volatile("" ::"r"(ids[j][0]), "r"(ids[j][1]), "r"(ids[j][2]), "r"(ids[j][3]));
+
+                        v.consumed = (uint32_t)(v.consumed + 1u);
+                        if (v.consumed == v.end) {
+                            active &= ~(1u << j);
+                        }
+                        remaining -= 1;
+                        if (Measured) {
+                            measured_done += 1;
+                        }
+
+                        // return_credit() on the register copies. Marked likely:
+                        // GCC otherwise treats the branch as cold and spills
+                        // credit_reg to the stack, one LIM load per credit.
+                        if (__builtin_expect(
+                                pi_counter_distance(v.consumed, v.credited) == C && v.credit_reg != nullptr, 1)) {
+                            Transport::counter_store(v.credit_reg, v.consumed);
+                            v.credited = v.consumed;
+                        }
+
+                        const pi_error_t err = poll(w0 + j);
+                        if (err != PI_ERROR_NONE) {
+                            store_visits(true);
+                            store_back();
+                            return err;
+                        }
+                    }
+                }
+#pragma GCC unroll 4
+                for (uint32_t j = 0; j < D; ++j) {
+                    // return_credit() on the register copies.
+                    Visit& v = visits[j];
+                    if (((taken >> j) & 1u) && v.consumed != v.credited && v.credit_reg != nullptr) {
+                        Transport::counter_store(v.credit_reg, v.consumed);
+                        v.credited = v.consumed;
+                    }
+                }
+                store_visits(false);
+                taken = 0u;
             }
         }
         store_back();

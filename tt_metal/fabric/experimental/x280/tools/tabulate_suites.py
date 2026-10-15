@@ -366,6 +366,13 @@ PI_LATENCY, PI_THROUGHPUT, PI_BACKPRESSURE = 1, 2, 3
 # producer's uint32_t produced counter (kernels/packet_injection/producer.hpp).
 PI_COUNTER_WRITE_BYTES = 4
 
+
+def pi_inflight(record):
+    """Workers one consumer pass visits together. A record without the field
+    predates the setting, when every pass visited one worker."""
+    return record.get("inflight", 1)
+
+
 PI_RUN = [
     ident("family"),
     ident("tile_count", "T"),
@@ -374,6 +381,7 @@ PI_RUN = [
     ident("B"),
     ident("C"),
     ident("K"),
+    ident("inflight", value=lambda row: pi_inflight(row.record)),
     ident("W"),
     ident("N"),
     ident("run_value", "run"),
@@ -1072,12 +1080,13 @@ def validate_campaign_records(config, rows):
             if row["N"] != int(config["environment"]["PACKET_INJECTION_N"]):
                 raise ValueError("packet configuration mismatch")
         # Configurations sharing a filter differ only in these knobs.
-        for knob in ("S", "C", "K", "W"):
-            if "PACKET_INJECTION_" + knob in environment and runs[0][knob] != int(
+        recorded = dict(runs[0], INFLIGHT=pi_inflight(runs[0]))
+        for knob in ("S", "C", "K", "W", "INFLIGHT"):
+            if "PACKET_INJECTION_" + knob in environment and recorded[knob] != int(
                 environment["PACKET_INJECTION_" + knob]
             ):
                 raise ValueError(
-                    f"{config['id']}: run record {knob}={runs[0][knob]} differs from "
+                    f"{config['id']}: run record {knob}={recorded[knob]} differs from "
                     f"the configured {environment['PACKET_INJECTION_' + knob]}"
                 )
         if aggregates:

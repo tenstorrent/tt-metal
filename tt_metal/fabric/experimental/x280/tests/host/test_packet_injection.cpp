@@ -2968,6 +2968,7 @@ struct ConsumerTestFixture {
         args.B = 1u;
         args.C = C;
         args.K = K;
+        args.inflight = 1u;
         args.poll_cadence = PI_DEFAULT_POLL_CADENCE;
         args.l1_tile_base = layout.l1_tile_base;
         args.W = 0u;
@@ -3141,6 +3142,48 @@ TEST(PacketInjectionConsumerStateModel, ProducedCounterBeyondTheRingIsRefused) {
         EXPECT_EQ(tf.run_res()->failure.worker_index, 0u) << "produced " << produced;
         EXPECT_EQ(tf.slot(0)->consumed, 0u) << "produced " << produced;
     }
+}
+
+// With inflight D, one pass visits D workers and takes one header from each in
+// turn, so their credits interleave; each worker still gets its own credits
+// in order. Three workers at D = 4 make a partial group.
+TEST(PacketInjectionConsumerStateModel, InflightPassesInterleaveTheirWorkersCredits) {
+    {
+        ConsumerTestFixture tf(2, 1, 16, 1, 2, 4);
+        tf.args.inflight = 2u;
+        tf.wire_auto_producer();
+        packet_injection::X280Consumer<PI_MODE_THROUGHPUT, 0, MockX280Transport, MockPacketSyncTransport> consumer(
+            0, tf.run_value, tf.args);
+        EXPECT_EQ(consumer.run(), PI_ERROR_NONE);
+        EXPECT_EQ(MockX280Transport::credit_history, (std::vector<uint32_t>{1, 1, 2, 2, 3, 3, 4, 4}));
+        EXPECT_EQ(tf.run_res()->measured_completed, 8u);
+    }
+    {
+        ConsumerTestFixture tf(3, 3, 16, 1, 1, 2);
+        tf.args.inflight = 4u;
+        tf.wire_auto_producer();
+        packet_injection::X280Consumer<PI_MODE_THROUGHPUT, 0, MockX280Transport, MockPacketSyncTransport> consumer(
+            0, tf.run_value, tf.args);
+        EXPECT_EQ(consumer.run(), PI_ERROR_NONE);
+        EXPECT_EQ(MockX280Transport::credit_history, (std::vector<uint32_t>{1, 1, 1, 2, 2, 2}));
+        for (uint32_t w = 0; w < 3u; ++w) {
+            EXPECT_EQ(tf.slot(w)->consumed, 2u) << "worker " << w;
+            EXPECT_EQ(tf.slot(w)->credited, 2u) << "worker " << w;
+            EXPECT_EQ(tf.slot(w)->phase_done, 2u) << "worker " << w;
+        }
+    }
+}
+
+// The latency timer window follows one tile at a time, so latency mode
+// admits only one worker per pass.
+TEST(PacketInjectionConsumerStateModel, LatencyModeRefusesMoreThanOneWorkerPerPass) {
+    ConsumerTestFixture tf(2, 1, 4, 1, 1, 1, PI_MODE_LATENCY);
+    tf.args.inflight = 2u;
+    tf.wire_auto_producer();
+    packet_injection::X280Consumer<PI_MODE_LATENCY, 0, MockX280Transport, MockPacketSyncTransport> consumer(
+        0, tf.run_value, tf.args);
+    EXPECT_EQ(consumer.run(), PI_ERROR_BAD_ARGS);
+    EXPECT_TRUE(MockX280Transport::credit_window_tiles.empty());
 }
 
 TEST(PacketInjectionConsumerStateModel, CreditThresholdC3WithK5Gives3Plus2) {
@@ -4001,6 +4044,7 @@ TEST(PacketInjectionConsumerStateModel, InvalidArgumentsAreRejectedBeforeTraffic
          },
          PI_ERROR_BAD_ARGS},
         {"zero N", [](ConsumerTestFixture& t) { t.args.N = 0u; }, PI_ERROR_BAD_ARGS},
+        {"inflight not 1, 2 or 4", [](ConsumerTestFixture& t) { t.args.inflight = 3u; }, PI_ERROR_BAD_ARGS},
         {"non-power-of-two poll cadence", [](ConsumerTestFixture& t) { t.args.poll_cadence = 3u; }, PI_ERROR_BAD_ARGS},
         {"zero timeout", [](ConsumerTestFixture& t) { t.args.x280_timeout_ticks = 0u; }, PI_ERROR_BAD_ARGS},
         {"misaligned l1_tile_base", [](ConsumerTestFixture& t) { t.args.l1_tile_base = 32u; }, PI_ERROR_BAD_ARGS},

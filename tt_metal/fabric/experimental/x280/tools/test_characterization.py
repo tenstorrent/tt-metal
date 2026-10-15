@@ -395,6 +395,34 @@ class CampaignValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_campaign_records(config, rows)
 
+    def test_packet_inflight_comes_from_the_run_and_defaults_to_one(self):
+        config = {
+            "id": "erisc",
+            "member": "packet_injection/erisc_to_x280_header",
+            "argv": ["bin", "--gtest_filter=Axes/PacketInjectionEriscToX280Header.Run/writers1_b1"],
+            "environment": {"PACKET_INJECTION_N": "3", "PACKET_INJECTION_INFLIGHT": "1"},
+        }
+        run = {
+            "record": "run",
+            "successful": True,
+            "run_value": 17,
+            "N": 3,
+            "worker_count": 1,
+            "B": 1,
+            "S": 16,
+            "C": 1,
+            "K": 1,
+            "W": 4096,
+            "warmup_source": "calibrated",
+        }
+        rows = [run, packet_aggregate(run), dict(run, record="worker", worker_index=0)]
+        validate_campaign_records(config, rows)
+        config["environment"]["PACKET_INJECTION_INFLIGHT"] = "4"
+        with self.assertRaises(ValueError):
+            validate_campaign_records(config, rows)
+        run["inflight"] = 4
+        validate_campaign_records(config, rows)
+
     def test_pipeline_filter_requires_its_sample_population(self):
         config = {
             "id": "pipeline",

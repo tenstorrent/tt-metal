@@ -78,7 +78,7 @@ PS_COMPUTE_HEADS = PS_HEADS | {"fixture", "headers", "input base", "input B"}
 PS_FORWARD_HEADS = PS_HEADS | {"source", "source base", "source B", "hops", "boundary"}
 PS_X280_POLICY_HEADS = {"wayenable", "pinned way", "mask bits"}
 PS_X280_HEADS = PS_X280_POLICY_HEADS | {"cpu sample mean cycles"} | quantiles("cpu sample", "cycles")
-PI_RUN_HEADS = {"family", "T", "P", "S", "B", "C", "K", "W", "N", "run"}
+PI_RUN_HEADS = {"family", "T", "P", "S", "B", "C", "K", "inflight", "W", "N", "run"}
 PI_AGGREGATE_HEADS = PI_RUN_HEADS | {"wall ticks", "cpu cycles", "ns", "headers", "ns/header"}
 PI_THROUGHPUT_HEADS = PI_RUN_HEADS | {
     "worker",

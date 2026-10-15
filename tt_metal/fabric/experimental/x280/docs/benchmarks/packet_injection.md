@@ -635,6 +635,7 @@ rejected rather than clamped at admission when out of range.
 | `PACKET_INJECTION_B` | B | 1 | ≥ 1 | Producer batch: requests issued between publications of `produced`. Staging depth is D = min(B, S). |
 | `PACKET_INJECTION_C` | C | 1 | [1, K] | Credit batch: the consumer returns credit once C requests are consumed since the last credit, or at visit end. |
 | `PACKET_INJECTION_K` | K | 1 | ≥ 1 | Per-visit cap: most requests the consumer takes from one worker per round-robin visit. |
+| `PACKET_INJECTION_INFLIGHT` | inflight | 1 | 1, 2 or 4; 1 in latency mode | Workers one consumer pass visits together, one header from each in flight at a time (§ Consumer). |
 | `PACKET_INJECTION_W` | W | 1000 | W + N and P·W fit in 64 bits | Warmup requests per worker, drained before the core-sync barrier and never sampled. |
 | `PACKET_INJECTION_N` | N | 100000 throughput, 4096 otherwise | ≥ 1, plus the capacity bounds below | Measured requests per worker. |
 | `PACKET_INJECTION_DST_CHIP` | dst_chip | 0 | < 256 | Destination chip ID written to header bytes 83..84. |
@@ -734,6 +735,17 @@ visit to `w`:
 A visit servicing `v` slots therefore issues `⌈v / C⌉` credit writes, and every
 visit ends with `credited == consumed`.
 
+With `inflight` = D above 1 the consumer visits D workers per pass, `w0 .. w0+D−1`
+for `w0` = 0, D, 2D, …: it polls and skips them as above, issues their `produced`
+loads together behind one fence, then, behind a second fence, takes one header
+from each visit that still has headers, issuing every one of those headers'
+destination-ID loads before it uses any, until each visit has serviced its
+`min(available, K)` slots. Credits, the visit-end credit and the safety polls
+stay per worker, so each worker sees the same protocol as at D = 1; only the
+order of the consumer's loads and stores across workers changes. Latency mode
+admits only D = 1: its remote timer window follows one tile at a time. D = 1 is
+the schedule above.
+
 ### How the parameters shape the protocol
 
 - **`S` (ring depth):** the maximum number of outstanding requests from a worker
@@ -751,6 +763,8 @@ visit ends with `credited == consumed`.
   consumer services them.
 - **`POLL_CADENCE`:** how often both sides check for a deadline or STOP; no effect
   on the protocol.
+- **`INFLIGHT` (workers per pass):** how many workers' counter and slot loads the
+  consumer keeps in flight together; no effect on the protocol each worker sees.
 
 Credit is visible to a producer only when its ring fills, so `C` and `K` shape
 producer behaviour only where the consumer falls behind — small `S`, or enough
