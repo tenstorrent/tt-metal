@@ -55,19 +55,19 @@ differing 2D configs across intermesh-linked meshes.
 
 | # | Item | File:line | Global / assumed-identical thing | Why it breaks per-mesh (root reason) | Fix | Status |
 |---|------|-----------|----------------------------------|--------------------------------------|-----|--------|
-| 1 | Max payload / packet size | `fabric_context.cpp:212-222,146-149` | `max_payload_size_bytes_`, `channel_buffer_size_bytes_` global | A packet from mesh A forwarded into mesh B's receiver L1 slot sized for a smaller payload overflows the slot into adjacent L1 → corruption; header-size assumptions must also match | **A (check)** | open → **check added** |
-| 2 | Allocator buffer-slot counts match | `fabric_static_sized_channels_allocator.cpp:484-497,553-560,737-749`; `erisc_datamover_builder.cpp:480` | slot-count table chosen by topology + buffer size + avail space; `num_buffers` emitted as CT args; remote mirror from same config | Credit/flow-control: sender tracks N remote slots, receiver must physically have N. Different table/size on the two ends → slot mismatch → credit under/overflow → stall or corruption | **A (check)** | open → **check added** |
+| 1 | Max payload / packet size | `fabric_context.cpp:212-222,146-149` | `max_payload_size_bytes_`, `channel_buffer_size_bytes_` global | A packet from mesh A forwarded into mesh B's receiver L1 slot sized for a smaller payload overflows the slot into adjacent L1 → corruption; header-size assumptions must also match | **A (check)** | open → **deferred to Tier 2** (see §4) |
+| 2 | Allocator buffer-slot counts match | `fabric_static_sized_channels_allocator.cpp:484-497,553-560,737-749`; `erisc_datamover_builder.cpp:480` | slot-count table chosen by topology + buffer size + avail space; `num_buffers` emitted as CT args; remote mirror from same config | Credit/flow-control: sender tracks N remote slots, receiver must physically have N. Different table/size on the two ends → slot mismatch → credit under/overflow → stall or corruption | **A (check)** | open → **deferred to Tier 2** (see §4) |
 | 3 | Deadlock-avoidance support (non-express) | `fabric_context.cpp:316-332`; caller `compute_mesh_router_builder.cpp:452-456`; EDM `erisc_datamover_builder.cpp:1076` | non-express branch uses global `topology_` + `get_fabric_type(fabric_config_,…)`, ignores `mesh_id` | mesh A=TORUS_Y vs B=TORUS_X: wrong DA/first-level-ACK axis for the mesh whose axis ≠ global; **Mesh global ⇒ no DA on any mesh's genuine ring** (the hang) | **B (per-mesh)** | open → **FIXED in this PR** |
 | 4 | Inter-mesh DA enable (#56515) | `erisc_datamover_builder.cpp:1076` (`!is_inter_mesh && …`) | both ends of an inter-mesh EDM must agree on DA polarity; far end may be plain Mesh | — | — | **already-fixed (#56515)** |
 | 5 | `bubble_flow_control_enabled_` | `fabric_context.cpp:252`; `fabric_tensix_builder_impl.cpp:1092` | global `is_ring_or_torus(topology_)` baked into tensix-mux CT arg | tensix mux decrements a specific router's credits; BFC enablement must follow that router's mesh | **B (per-mesh)** | open (see plan) |
 | 6 | `topology_` global | `fabric_context.cpp:247`; `compute_mesh_router_builder.cpp:179,267`; `fabric_builder.cpp:211`; `fabric_builder_context.cpp:86,240` | one `Topology` for all meshes; also collapses TORUS_X/Y/XY → `Torus` (loses axis) | router archetype/channel shape + connection pairs for a router in mesh X must use mesh X's topology | **B (per-mesh)** | open (see plan) |
 | 7 | EDM `enable_first_level_ack` | `erisc_datamover_builder.cpp:714-715` | `config.topology == Ring/Torus` (global topology) | first-level-ACK must agree with DA on the link | **B (per-mesh)** | open — subsumed by #3 (same flag path) |
 | 8 | Single FabricContext construction | `control_plane.cpp:950-953`, guard `:943-949` | one `FabricContext(… fabric_config_ …)` for whole system | a single context cannot represent two meshes with different topologies | **B (root)** | open (see plan) |
-| 9 | Cross-rank/cross-mesh config validation | `control_plane.cpp:828-857` (comment `:826`), `:883-894`, `:940` | validates only same-config-per-mesh-per-rank; observations stamped with global `fabric_config_` | no check that two intermesh-connected meshes are compatible; validation is structurally blind | **A (check)** | open → **check added** |
+| 9 | Cross-rank/cross-mesh config validation | `control_plane.cpp:828-857` (comment `:826`), `:883-894`, `:940` | validates only same-config-per-mesh-per-rank; observations stamped with global `fabric_config_` | no check that two intermesh-connected meshes are compatible; validation is structurally blind | **A (check)** | open → **deferred to Tier 2** (see §4) |
 | 10 | Peer channel-count shape | `compute_mesh_router_builder.cpp:174-206,506-509` | `compute_router_channel_counts` reads global topology while express is per-mesh | peer router may be in another mesh; its VC/channel counts derived with wrong topology | **B (per-mesh)** | open (see plan) |
 | 11 | `is_2D_routing_enabled()` gate | `compute_mesh_router_builder.cpp:523,671,704,877`; `fabric_builder.cpp:47,151,286`; `control_plane.cpp:2672,2973` | global 1D/2D flag | 1D-vs-2D is per-mesh once config is per-mesh; mixing emits wrong `FABRIC_2D*` kernel defines | **A (check)** — 1D already single-mesh-only | open → covered by existing 1D-multimesh rule + VC check |
 | 12 | `get_fabric_tensix_config()` | `compute_mesh_router_builder.cpp:286`; `fabric_tensix_builder_impl.cpp:116,624` | global tensix config | wrong per router if tensix extension varies per mesh; else must be validated uniform | **A (check)** | open (see plan) |
-| 13 | Intermesh VC config | `fabric_builder_context.cpp:342-392`; `compute_mesh_router_builder.cpp:192,339,889-912` | one system-wide `IntermeshVCConfig` | both ends of an inter-mesh link share the VC0→VC1 crossover wire contract | **A (check)** | open → **check added** |
+| 13 | Intermesh VC config | `fabric_builder_context.cpp:342-392`; `compute_mesh_router_builder.cpp:192,339,889-912` | one system-wide `IntermeshVCConfig` | both ends of an inter-mesh link share the VC0→VC1 crossover wire contract | **A (check)** | open → **deferred to Tier 2** (see §4) |
 | 14 | Uniform VC-count upper bound | `channel_trimming_import.hpp:24-30,80`; `.cpp:301-307` | `builder_config::MAX_NUM_VCS` assumed to cover every mesh | per-mesh config may yield different plane/VC counts | **A (check)** | open (see plan) |
 | 15 | `compute_max_channel_counts` | `fabric_builder_context.cpp:86` | router-family shapes from global topology | fabric-wide max channel counts computed with one topology | **B (per-mesh)** | open — subsumed by #6 |
 | 16 | Global config accessors | `control_plane.hpp:413,415,416` | `get_fabric_config()`/`get_fabric_tensix_config()`/`get_fabric_udm_mode()` take no `mesh_id` | callers apply one mesh's config to all meshes | **B (per-mesh)** | open (see plan) |
@@ -125,12 +125,20 @@ rather than new support; implement real per-mesh support only where the feature 
    `get_topology_from_config(...)` + `get_fabric_type(...)`. Zero regression for uniform runs
    (`get_fabric_config(mesh_id)` == global config there); flips M_X's genuine E/W ring to DA-on when
    opened under a Mesh/global config. *~15 lines, one function.*
-2. **#1 + #2 + #13 cross-mesh compatibility check.** New validation walking every inter-mesh
-   connection in `MeshGraph::get_inter_mesh_connectivity()` and asserting the two meshes'
-   resolved configs agree on the things that must be byte-identical: **max payload size, packet
-   header size, resulting channel-buffer size & buffer-slot count, and intermesh VC config**. Lives
-   next to `validate_fabric_configs` in `control_plane.cpp`. Errors out with a clear message instead
-   of hanging/corrupting. *New function; no new support.*
+2. **#1 + #2 + #13 cross-mesh compatibility check — investigated, DEFERRED to Tier 2 (see §4 for the
+   full reasoning).** A check was prototyped (MeshGraph, walking the requested inter-mesh links,
+   comparing each pair's resolved payload/slot-table *family*) and **reverted**: in today's
+   single-global-`FabricContext` architecture every channel's payload size and buffer-slot count are
+   derived from the one process-wide config, so they are **uniform across meshes by construction** —
+   there is no API (no per-mesh payload/buffer field in the MGD proto; `channels.count` is per-link,
+   not per-endpoint) by which two inter-mesh-linked meshes can disagree on them. The only per-mesh
+   difference that exists today is the torus **axis/family**, which the derived default itself varies
+   by `dim_types` (`[LINE,LINE]→FABRIC_2D`, `[RING,LINE]→TORUS_Y`, …). A family-equality check there
+   therefore **rejects currently-valid, currently-working mixed-shape multi-mesh MGDs** (it broke
+   `FabricConfigResolutionMultiMesh` and would break production galaxy splits) while guarding a
+   divergence that cannot occur until sizing is per-mesh. The correct home for this check is **inside
+   the Tier-2 change that first makes payload/slots per-mesh**, as a guard co-located with the new
+   per-mesh sizing — not a standalone config-family heuristic today.
 
 ### Tier 2 — follow-up for full generality (document; implement only if Tier 1 e2e still hangs)
 
@@ -163,15 +171,35 @@ rather than new support; implement real per-mesh support only where the feature 
 
 ## 4. What this PR implements
 
-*(updated as commits land; see `git log` on `ridvan/fabric-per-mesh-deadlock-avoidance`.)*
+*(see `git log` on `ridvan/fabric-per-mesh-deadlock-avoidance`.)*
 
+**Implemented:**
+
+* **#3 — per-mesh deadlock-avoidance** in `FabricContext::need_deadlock_avoidance_support`: the
+  non-express branch now keys topology + torus axis off
+  `control_plane.get_mesh_graph().get_fabric_config(fabric_node_id.mesh_id)` (the node's own resolved
+  per-mesh config) instead of the global `topology_`/`fabric_config_`. For a uniform single-config run
+  `get_fabric_config(mesh_id) == fabric_config_`, so behaviour is preserved; for a per-mesh MGD each
+  mesh gets DA (and the coupled first-level-ACK + VC0 bubble-flow-control, see
+  `erisc_datamover_builder.cpp:1076-1105`) on its own ring axis. This flips M_X's genuine E/W ring from
+  DA-off to DA-on under a Mesh-opened fabric — the direct fix for the hang. **#7 (first-level-ACK) is
+  fixed by the same flag.**
 * **Revert the TORUS_XY-envelope workaround** — `galaxy-fabric-per-mesh-torus-yx` points back at the
-  original `test_fabric_multi_mesh_sanity_common.yaml`; the bespoke
-  `test_fabric_per_mesh_torus_sanity.yaml` is removed.
-* **#3 — per-mesh deadlock-avoidance** in `FabricContext::need_deadlock_avoidance_support`.
-* **#1/#2/#13 — cross-mesh inter-mesh-link compatibility check** in `control_plane.cpp`.
-* **Regression tests** — unit coverage for per-mesh DA resolution + the new compatibility check,
-  plus the galaxy e2e (`galaxy-fabric-per-mesh-torus-yx`) now validating the real fix.
+  original `test_fabric_multi_mesh_sanity_common.yaml` (whose first cases open `topology: Mesh` — the
+  exact repro); the bespoke `test_fabric_per_mesh_torus_sanity.yaml` is removed.
+* **Regression test** — `MeshGraphDescriptorTests.InterMeshDifferentTorusAxesAreCompatible` (CPU-only)
+  builds a MeshGraph from a two-mesh MGD with different torus axes (TORUS_Y + TORUS_X), guarding the
+  per-mesh-config build path. The galaxy e2e (`galaxy-fabric-per-mesh-torus-yx`) validates the real fix
+  on hardware.
+
+**Investigated and deliberately NOT added (deferred to Tier 2):**
+
+* **#1/#2/#13 cross-mesh payload/slot/VC compatibility check.** Prototyped and reverted — see §3 Tier 1
+  item 2. In the single-global-`FabricContext` architecture these values are uniform by construction
+  (no per-mesh API can make them diverge), so a standalone check is either a tautology or, if it keys
+  off the config *family*, actively **rejects currently-valid mixed-shape multi-mesh MGDs**. It belongs
+  with the Tier-2 per-mesh-sizing change, not before it. The constraint and its placement are recorded
+  here so it is not lost.
 
 ---
 
