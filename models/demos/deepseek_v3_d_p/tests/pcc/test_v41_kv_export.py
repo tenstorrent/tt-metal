@@ -136,6 +136,15 @@ def _run_and_check(rt, exp, cfg, ids, S, mesh_device, tmp_path):
         return {k: torch.cat(v, 0) for k, v in out.items()}
 
     via = read_slot(0, S)
+    dump = os.environ.get("V41_TEST_DUMP")
+    if dump:
+        # DS41F-0068: the exported state as the ring would read it, for an A/B between two runs (e.g. path A3 vs eager path A
+        # over a prompt longer than any model.py golden: a trace dir with meta.json + prompt ids and no cache.pt)
+        torch.save({f"{g}:{L}": t for (g, L), t in via.items()}, dump)
+        logger.info(f"[v41 kv export] dumped {len(via)} (group, layer) blocks of slot 0 ({S} tokens) to {dump}")
+    if not os.path.exists(os.path.join(TRACE, "cache.pt")):
+        assert dump, f"{TRACE} has no model.py golden (cache.pt): set V41_TEST_DUMP for an A/B dump"
+        return
 
     gold = torch.load(os.path.join(TRACE, "cache.pt"))["layers"]
     want = _expected(gold, cfg, S)

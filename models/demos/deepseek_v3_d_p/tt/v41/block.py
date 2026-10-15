@@ -243,7 +243,10 @@ class V41PrefillBlock(LightweightModule):
         self._islands = None  # (A, B, S_in, pre_in, y_buf) once enable_trace_islands ran
 
     def alloc_state(self, max_seq_len: int, chunk_tokens: int, slot: int = 0):
-        self.states[slot] = self.attn.alloc_state(max_seq_len, chunk_tokens=chunk_tokens)
+        # DS41F-0068: a CSA state carries its slot -- TtCSA keys the shared score mask (path A3) by it, and slots hold
+        # different entry counts (the default slot 0 made every slot share one mask)
+        kw = dict(slot=slot) if isinstance(self.attn, (V41CSA, V41CSAConsumer)) else {}
+        self.states[slot] = self.attn.alloc_state(max_seq_len, chunk_tokens=chunk_tokens, **kw)
         if self.state is None:
             self.state = self.states[slot]
         return self.states[slot]
@@ -319,6 +322,7 @@ class V41PrefillBlock(LightweightModule):
 
         A = TraceIsland(self.mesh_device, island_a, S_in + [pre_in], name=f"v41.L{self.layer}.A")
         attn_pre, attn_post, attn_comb, h = A.capture()
+        self._capture_attn_islands(h, int(chunk_tokens))
         y_buf = ttnn.clone(h)  # the attention output has the stream shape (o-proj back to D_l)
 
         def island_b(*args):
@@ -361,15 +365,137 @@ class V41PrefillBlock(LightweightModule):
         if owned_pre:
             ttnn.deallocate(pre_row)
         _attn_pre, _post, _comb, h = A.replay()
-        y = self.attn(h, seq_len_actual=real_len, state=self.state)
-        if y.dtype != y_buf.dtype:
-            y2 = ttnn.typecast(y, y_buf.dtype)
+        traced = self._attn_islands_for(real_len)
+        if traced is not None:
+            y = self._attn_traced(h, real_len, *traced)  # A2's persistent output: copied, never freed
+            if y.dtype != y_buf.dtype:
+                y = ttnn.typecast(y, y_buf.dtype)
+                copy_into(y_buf, y)
+                ttnn.deallocate(y)
+            else:
+                copy_into(y_buf, y)
+        else:
+            y = self.attn(h, seq_len_actual=real_len, state=self.state)
+            if y.dtype != y_buf.dtype:
+                y2 = ttnn.typecast(y, y_buf.dtype)
+                ttnn.deallocate(y)
+                y = y2
+            copy_into(y_buf, y)
             ttnn.deallocate(y)
-            y = y2
-        copy_into(y_buf, y)
-        ttnn.deallocate(y)
         outs = B.replay()
         return list(outs[:HC]), outs[HC]
+
+    # ---- DS41F-0068: path A3, the CSA attention as two trace islands per slot (V4-Flash DS4F-0246 / 0300, tt/v4/block.py) ----
+    # A1 = stems + compressor / index keys (+ SP gather, carry, slab-ready copies), A2 = scorer + top-k (sources) + the sparse
+    # gather + o-proj, eager glue (cache / slab / score-mask writes) and epilogue (counters, carry) between and after. Sources
+    # get extra A2 islands per capacity bucket (the scorer over the first kv_b key columns, DS4F-0300). Every full path-A chunk
+    # (kv_actual >= window + top-k worth of entries) replays them; chunk 0 (path B) and a ragged final chunk stay eager.
+    def _capture_attn_islands(self, h, chunk_tokens: int) -> None:
+        self._attn_islands, self._a2_buckets = {}, {}
+        attn = self.attn
+        if not getattr(attn, "traceable", lambda: False)():
+            return
+        is_source = isinstance(attn, V41CSA)
+        rate = attn.compressor.compress_rate
+        S_l = int(h.shape[2])
+        if is_source:
+            attn._a3_states, attn._a3_out = {}, {}
+        for slot, state in self.states.items():
+            # warm + capture at a valid position just past chunk 0: the runtime captures after its warm-all, whose counters can
+            # sit at the capacity (an entries write past the cache). The request's reset puts the counters and the score mask back.
+            saved = (state.kv_actual, state.entry_count, getattr(state, "mask_zeroed_upto", None))
+            state.kv_actual, state.entry_count = int(chunk_tokens), int(chunk_tokens) // rate
+            if is_source:
+                state.mask_zeroed_upto = 0
+                kw = {}
+            else:
+                src_state, src_out = attn.source._a3_states[slot], attn.source._a3_out[slot]
+                kw = dict(src_idx=src_out[1], src_state=src_state)
+            glue_kw = {} if is_source else dict(src_state=kw["src_state"])
+            # eager warm (compiles every program, buckets included) BEFORE any capture of this phase
+            attn.prepare_chunk(state, chunk_tokens)
+            warm = attn.forward_pre(h, state, chunk_tokens)
+            attn.glue_chunk(state, warm, chunk_tokens, None, **glue_kw)
+            a2_warm = list(attn.forward_attn(h, warm, state, chunk_tokens, **kw))
+            buckets = attn.capacity_buckets(state, S_l) if is_source else []
+            for kv_b in buckets:
+                for dst, t in zip(a2_warm, attn.forward_attn(h, warm, state, chunk_tokens, kv_bucket=kv_b)):
+                    copy_into(dst, t)
+                    ttnn.deallocate(t)
+            for t in a2_warm + list(warm):
+                ttnn.deallocate(t)
+            attn.prepare_chunk(state, chunk_tokens)
+            A1 = TraceIsland(
+                self.mesh_device,
+                lambda hh, _st=state: attn.forward_pre(hh, _st, chunk_tokens),
+                [h],
+                name=f"v41.L{self.layer}.A1.slot{slot}",
+            )
+            outs = A1.capture()
+            attn.glue_chunk(state, outs, chunk_tokens, None, **glue_kw)
+            A2 = TraceIsland(
+                self.mesh_device,
+                lambda _o=outs, _st=state, _kw=kw: attn.forward_attn(h, _o, _st, chunk_tokens, **_kw),
+                [],
+                name=f"v41.L{self.layer}.A2.slot{slot}",
+            )
+            a2_out = A2.capture()
+            bucket_islands = []
+            for kv_b in buckets:
+                # a bucket island writes the FULL island's persistent outputs (one output set per layer and slot, whichever
+                # island ran; the consumers' A2c islands read the top-k there): its own results are capture intermediates
+
+                def _bucket_fn(_o=outs, _st=state, _b=kv_b, _dst=a2_out):
+                    for dst, t in zip(_dst, attn.forward_attn(h, _o, _st, chunk_tokens, kv_bucket=_b)):
+                        copy_into(dst, t)
+                        ttnn.deallocate(t)
+                    return _dst
+
+                isl = TraceIsland(self.mesh_device, _bucket_fn, [], name=f"v41.L{self.layer}.A2b{kv_b}.slot{slot}")
+                isl.capture()
+                bucket_islands.append((kv_b, isl))
+            self._a2_buckets[slot] = bucket_islands
+            self._attn_islands[slot] = (A1, A2, kw)
+            if is_source:
+                attn._a3_states[slot], attn._a3_out[slot] = state, a2_out
+            state.kv_actual, state.entry_count = saved[0], saved[1]
+            if saved[2] is not None:
+                state.mask_zeroed_upto = saved[2]
+        from loguru import logger
+
+        logger.info(
+            f"[v41 a3] layer {self.layer} ({type(attn).__name__}): attention islands A1 + A2 for slots "
+            f"{sorted(self._attn_islands)}"
+            + (f", A2 buckets {[b for b, _ in self._a2_buckets[0]]}" if is_source else "")
+        )
+
+    def _attn_islands_enabled(self) -> bool:
+        return bool(getattr(self, "_attn_islands", None))
+
+    def _attn_islands_for(self, real_len: int):
+        """(A1, A2, kwargs) when this chunk's attention replays its islands, else None (eager)."""
+        isl = getattr(self, "_attn_islands", None)
+        if not isl or int(real_len) != self._island_chunk or not self.attn.trace_ready(self.state):
+            return None
+        slot = int(getattr(self.state, "slot", 0))
+        A1, A2, kw = isl[slot]
+        for kv_b, b in self._a2_buckets.get(slot, ()):
+            # DS4F-0300: the smallest capacity bucket whose scorer width holds this chunk's live columns
+            if self.attn.bucket_need(self.state, self._island_chunk) <= kv_b:
+                A2 = b
+                break
+        return A1, A2, kw
+
+    def _attn_traced(self, h, real_len: int, A1, A2, kw):
+        attn, state = self.attn, self.state
+        attn.prepare_chunk(state, real_len)
+        outs = A1.replay()
+        attn.glue_chunk(
+            state, outs, real_len, None, **({} if isinstance(attn, V41CSA) else dict(src_state=kw["src_state"]))
+        )
+        a2 = A2.replay()
+        attn.epilogue_chunk(state, outs, a2, None, real_len)
+        return a2[0]
 
     def _padding_rows_host(self, real_len: int):
         """The host twin of TtMoEGatePrefill.build_padding_config (sequential layout, right padding), same tensor spec."""
@@ -383,6 +509,12 @@ class V41PrefillBlock(LightweightModule):
         )
 
     def release_islands(self) -> None:
+        for slot, (A1, A2, _kw) in (getattr(self, "_attn_islands", None) or {}).items():
+            A1.release()
+            A2.release()
+            for _, b in (getattr(self, "_a2_buckets", None) or {}).get(slot, ()):
+                b.release()
+        self._attn_islands, self._a2_buckets = {}, {}
         if self._islands is not None:
             self._islands[0].release()
             self._islands[1].release()

@@ -341,6 +341,10 @@ INDEX_FP4 = os.environ.get("V41_PREFILL_INDEX_FP4", "0") == "1"
 # stays on the dense path B) and their Reuse consumers gather with the source's top-k; 0 = path B everywhere (the default
 # until the e2e A/B lands). With islands the top-k goes into one persistent buffer (precreate_shared_masks).
 PATH_A = os.environ.get("PREFILL_V41_PATH_A", "0") == "1"
+# DS41F-0068: path A3 -- the CSA attention of every path-A chunk as two trace islands per layer and slot (V4-Flash DS4F-0246 /
+# 0300, TtCSA's prepare_chunk / forward_pre / glue_chunk / forward_attn / epilogue_chunk protocol), replayed by the block between
+# its mHC / MoE islands; chunk 0 (path B) and a ragged final chunk stay eager. Needs PATH_A and V41_PREFILL_ISLANDS.
+A3 = os.environ.get("PREFILL_V41_A3", "0") == "1"
 # e2m1 magnitudes 0, .5, 1, 1.5, 2, 3, 4, 6 as a sum of steps at the midpoints; ties go to the even code (0.25 -> 0,
 # 0.75 -> 1, 1.25 -> 1, 1.75 -> 2, 2.5 -> 2, 3.5 -> 4, 5 -> 4): "gt" at a tie that rounds down, "ge" at one that rounds up
 _FP4_STEPS = (
@@ -576,6 +580,67 @@ V41CSA.precreate_shared_masks = _precreate_shared_masks
 V41CSA.forward = _source_forward
 
 
+# ---- DS41F-0068: path A3 for the V4.1 sources ----------------------------------------------------------------------------------
+# TtCSA's forward_pre / glue_chunk run unchanged: the V4.1 compressor and index keys take TtCSA's compressor interface (empty
+# priors), the cut masks are rate-aware (DS41F-0067). What differs: the compressor's entry-rope base is its PER-CHIP
+# ``_entry_index`` (V4.1 pools each chip's rows, then gathers), A2 returns (y, top-k) -- the consumers' A2 islands read the
+# top-k from this island's persistent output -- and V4.1 exports from the states after the chunk (kv_export.py), so none of
+# V4-Flash's contract export prep runs in A2.
+def _source_traceable(self) -> bool:
+    return A3 and self.sparse_path and self.fused_indexer
+
+
+def _source_prepare_chunk(self, state, real_len: int) -> None:
+    """Eager, before A1 replays: this chunk's position scalars into the persistent buffers A1 reads (value-cached: no host
+    write lands inside a capture that follows a matching prepare)."""
+    self._push_scalar(self._slab_index[1], int(state.kv_actual))
+    self.compressor._push_scalar(self.compressor._entry_index[1], int(state.entry_count))  # == fwp // rate
+
+
+def _source_forward_attn(
+    self, hidden_states, outs, state, real_len: int, chunk0: bool = False, _t=None, kv_bucket=None
+):
+    """Island A2 (chunk-invariant): the static fused scorer + top-k over the key cache (or its first ``kv_bucket`` columns),
+    the sparse gather over the persistent slab, V's un-RoPE and the output projection -> (y, top-k)."""
+    assert not chunk0, "V4.1 runs chunk 0 eagerly (path B)"
+    q, q_latent, sliding_kv_g, _nc, entries, keys, cos, sin = outs[:8]
+    idx = self.indexer.select_indices_static(
+        q_latent, hidden_states, cos, sin, state.index_k, state.score_mask, kv_bucket=kv_bucket
+    )
+    attn = self._sparse_core(q, idx, cos, sin, state.slab_rm, seq_len=sliding_kv_g.shape[2])
+    return self._o_proj(attn), idx
+
+
+def _source_epilogue_chunk(self, state, outs, a2, export, real_len: int) -> None:
+    """Eager, after A2: the counters, the carry (A1's persistent next-carry copied into the state's buffer), and what this
+    chunk's consumers read (``shared``: the path, this slot's state, the entry count after the chunk)."""
+    assert export is None, "V4.1 exports from the states after the chunk (kv_export.py)"
+    state.entry_count += int(real_len) // self.compressor.compress_rate
+    state.kv_actual += int(real_len)
+    ttnn.copy(outs[3], state.sliding_carry)  # NOT _update_in_place: outs[3] is A1's persistent output
+    self.last_path = "A3"
+    self.shared = dict(path="A3", idx=a2[1], state=state, entry_count=state.entry_count)
+
+
+def _source_alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None, slot: int = 0):
+    state = TtCSA.alloc_state(self, max_seq_len, batch, chunk_tokens, slot)
+    if A3 and self.sparse_path:
+        # the FIRST traced chunk's glue opens every entry column before it at once (entry_count - mask_zeroed_upto: one chunk's
+        # entries per chunk after that) -- its zeros block must exist before any capture (DS4F-0262 class)
+        chunk, rate = int(chunk_tokens or max_seq_len), self.compressor.compress_rate
+        need = max(self.sliding_window, self.indexer.topk * rate)
+        self.indexer._zeros_block_tile(chunk // self.sp_factor, (-(-need // chunk) * chunk) // rate)
+    return state
+
+
+V41CSA.alloc_state = _source_alloc_state
+V41CSA.traceable = _source_traceable
+V41CSA.prepare_chunk = _source_prepare_chunk
+V41CSA.forward_attn = _source_forward_attn
+V41CSA.epilogue_chunk = _source_epilogue_chunk
+V41CSA.supports_chunk0_island = False
+
+
 class V41CSAConsumer(_V41QStem, TtCSA):
     """V4.1 ``Reuse`` layer (encoder: 3-7, 9-13, 15-19): its own q / window KV / sinks / o-proj, attending over [window |
     the SOURCE's top-512 of the source's entries] -- model.py's ``shared_attn.compress_kv`` + ``shared_attn.topk_idxs``.
@@ -647,6 +712,7 @@ class V41CSAConsumer(_V41QStem, TtCSA):
 
     def forward(self, hidden_states, seq_len_actual=None, *, state, export=None):
         sh = self.source.shared
+        assert sh.get("path") != "A3", "the source replayed its A3 islands this chunk: the consumer must too (block)"
         real_len = hidden_states.shape[2] * self.sp_factor if seq_len_actual is None else int(seq_len_actual)
         cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
         q = self._q_stem(hidden_states, cos, sin)
@@ -696,6 +762,73 @@ class V41CSAConsumer(_V41QStem, TtCSA):
         state.entry_count = sh["entry_count"]
         self._update_in_place(state.sliding_carry, next_carry)
         return self._o_proj(attn)
+
+    # ---- DS41F-0068: path A3 (a consumer's attention as two trace islands per slot) --------------------------------------
+    # A1c: rope gather, q / window-KV stems, the SP gather of the chunk's K rows, the next carry, and ROW_MAJOR copies of the K
+    # rows and of the previous carry; glue (eager): those two into the SOURCE's slab rows [0, S) and [S + cap, S + cap + 128)
+    # (exactly the eager path A's _slab_write pieces); A2c: the sparse gather with the source's A2 top-k (its persistent
+    # output, read in place) over the source's slab, V's un-RoPE, o-proj; epilogue (eager): counters + the carry.
+    supports_chunk0_island = False
+
+    def traceable(self) -> bool:
+        return A3 and PATH_A and self.source.traceable()
+
+    def trace_ready(self, state) -> bool:
+        rate = self.compressor.compress_rate
+        return int(state.kv_actual) >= max(self.sliding_window, self.indexer.topk * rate)
+
+    def capacity_buckets(self, state, seq_local: int) -> list:
+        return []  # no scorer: one A2c island
+
+    def precreate_constants(self, state, seq_local: int, real_len: int) -> None:
+        heads_local = self.num_heads // self.tp_factor
+        self._window_indices(seq_local)
+        self._sink_column(self.tp_factor > 1 and heads_local % ttnn.TILE_SIZE != 0)
+
+    def prepare_chunk(self, state, real_len: int) -> None:
+        self._push_scalar(self._slab_index[1], int(state.kv_actual))
+
+    def forward_pre(self, hidden_states, state, real_len: int, _t=None):
+        """-> (q, sliding_kv_gathered, next_carry, cos, sin, kv_rm, carry_rm), all persistent island outputs."""
+        cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
+        q = self._q_stem(hidden_states, cos, sin)
+        sliding_kv = self._kv_stem(hidden_states, cos, sin)
+        if self.sp_factor > 1:
+            sliding_kv = ttnn.experimental.all_gather_async(
+                sliding_kv,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.sp_axis,
+            )
+        seq_len = hidden_states.shape[2] * self.sp_factor
+        start, end = self._carry_index[self._carry_key(real_len)]
+        next_carry = ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=seq_len // self.sliding_window)
+        kv_rm = self._rm_pieces(sliding_kv, int(sliding_kv.shape[2]), ttnn.bfloat16)[0]
+        carry_rm = self._rm_pieces(state.sliding_carry, self.sliding_window, ttnn.bfloat16)[0]
+        return q, sliding_kv, next_carry, cos, sin, kv_rm, carry_rm
+
+    def glue_chunk(self, state, outs, real_len: int, export=None, src_state=None) -> None:
+        assert export is None and src_state is not None
+        _q, sliding_kv_g, _nc, _cos, _sin, kv_rm, carry_rm = outs
+        self._slab_write_rm(src_state, kv_rm, 0)
+        self._slab_write_rm(src_state, carry_rm, int(sliding_kv_g.shape[2]) + self._slab_cap)
+
+    def forward_attn(self, hidden_states, outs, state, real_len: int, src_idx=None, src_state=None, **_kw):
+        q, sliding_kv_g, _nc, cos, sin = outs[:5]
+        attn = self._sparse_core(q, src_idx, cos, sin, src_state.slab_rm, seq_len=sliding_kv_g.shape[2])
+        return (self._o_proj(attn),)
+
+    def epilogue_chunk(self, state, outs, a2, export, real_len: int) -> None:
+        assert export is None
+        sh = self.source.shared
+        assert sh.get("path") == "A3", "a traced consumer chunk needs its source's traced chunk first"
+        state.kv_actual += int(real_len)
+        state.entry_count = sh["entry_count"]
+        ttnn.copy(outs[2], state.sliding_carry)
 
 
 def _kv_only(self, hidden_states, seq_len_actual=None, *, state):

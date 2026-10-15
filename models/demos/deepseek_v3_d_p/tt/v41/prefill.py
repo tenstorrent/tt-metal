@@ -208,6 +208,14 @@ class V41Prefill:
         for st in states:
             st.kv_actual, st.entry_count = 0, 0
         self.kv_actual = 0
+        # DS41F-0068 path A3: the static scorer reads the slot's score mask (shared by the slot's sources), which each traced
+        # chunk's glue opens column by column -> every entry column back to -inf (a device copy), once per mask
+        seen = set()
+        for b in self.blocks:
+            m = getattr(b.state, "score_mask", None)
+            if m is not None and b._attn_islands_enabled() and id(m) not in seen:
+                seen.add(id(m))
+                b.attn.reset_score_mask(b.state)
 
     # ---- host-side inputs ---------------------------------------------------------------------------------------
     def _embedding(self) -> torch.Tensor:

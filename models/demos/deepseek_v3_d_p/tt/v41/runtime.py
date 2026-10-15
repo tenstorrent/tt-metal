@@ -293,6 +293,10 @@ class V41PrefillRuntime:
             self.pf.use_slot(0)
             self.pf.reset()
             self.pf._chunk([0] * self.chunk_size, 0, self.engram, None)
+            if any(b._attn_islands_enabled() for b in self.pf.blocks) and 2 * self.chunk_size <= self.max_seq_len:
+                # DS41F-0068: chunk 0 runs its attention eagerly; a second dummy chunk absorbs the attention islands' (A3)
+                # first replays too
+                self.pf._chunk([0] * self.chunk_size, self.chunk_size, self.engram, None)
             ttnn.synchronize_device(self.mesh_device)
             self.pf.reset()
             logger.info(f"[v41 runtime] islands warm replay at setup: {time.time() - t0:.2f} s")
