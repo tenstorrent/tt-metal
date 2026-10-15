@@ -328,7 +328,21 @@ def test_report_names_the_arch_and_folds_the_improvements(tmp_path):
     )
     assert text.startswith("# Perf compare — LLK perf — Wormhole")
     assert "**Wormhole: ✅ no regressions**" in text
-    assert "<summary>Top 1 improvement findings (faster on current)</summary>" in text
+    assert "<summary>All 1 improvement findings (faster on current)</summary>" in text
+
+
+def test_report_folds_the_regressions_too(tmp_path):
+    current, baseline = _sides(
+        tmp_path, (_INIT, _TILE_LOOP), (_INIT, _TILE_LOOP * 1.10)
+    )
+    text = render_report(
+        compare_runs(current, baseline),
+        threshold=DEFAULT_THRESHOLD,
+        test="LLK perf",
+        baseline_sha="a",
+        current_sha="b",
+    )
+    assert "<summary>All 1 regression findings (slower on current)</summary>" in text
 
 
 def test_defaults_are_the_measured_ones():

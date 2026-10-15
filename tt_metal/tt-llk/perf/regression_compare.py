@@ -372,18 +372,21 @@ def render_report(
         if not groups:
             continue
         shown = groups[:_TOP_N]
+        count = (
+            f"Top {_TOP_N} of {len(groups)}"
+            if len(groups) > _TOP_N
+            else f"All {len(groups)}"
+        )
         table = _delta_table(
             [p for g in shown for p in g],
-            caption=f"Top {len(shown)} {what} findings ({where} on current)",
+            caption=f"{count} {what} findings ({where} on current)",
             fixed=fixed,
         )
         if len(groups) > _TOP_N:
             table += ["", f"_… and {len(groups) - _TOP_N} more — see `{companion}`._"]
-        if what == "improvement":
-            summary = table[0].removeprefix("## ")
-            table = ["<details>", f"<summary>{summary}</summary>", ""] + table[2:]
-            table += ["", "</details>"]
-        lines += table + [""]
+        summary = table[0].removeprefix("## ")
+        lines += ["<details>", f"<summary>{summary}</summary>", ""]
+        lines += table[2:] + ["", "</details>", ""]
     if result["new_points"]:
         lines.append(
             f"## New points ({len(result['new_points'])}) — no baseline, not counted as regressions"
