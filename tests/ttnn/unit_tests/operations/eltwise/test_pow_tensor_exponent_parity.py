@@ -37,17 +37,20 @@ _INTEGER_EXPONENTS = [
 _NON_INTEGER_EXPONENTS = [32768.5, 4194304.5]
 
 
-def _tile(value):
-    return torch.full((1, 1, 32, 32), value, dtype=torch.float32)
+_TORCH_DTYPE = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16}
 
 
-def _to_device(device, value):
-    return ttnn.from_torch(_tile(value), layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32, device=device)
+def _tile(value, dtype):
+    return torch.full((1, 1, 32, 32), value, dtype=_TORCH_DTYPE[dtype])
 
 
-def _run(device, base, exponent):
-    base_tt = _to_device(device, base)
-    result = ttnn.pow(base_tt, _to_device(device, exponent))
+def _to_device(device, value, dtype):
+    return ttnn.from_torch(_tile(value, dtype), layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+
+
+def _run(device, base, exponent, dtype=ttnn.float32):
+    base_tt = _to_device(device, base, dtype)
+    result = ttnn.pow(base_tt, _to_device(device, exponent, dtype))
     return ttnn.to_torch(result).double().reshape(-1)
 
 
@@ -105,3 +108,33 @@ def test_pow_positive_base_is_unaffected(device, exponent):
     """1**y is 1 for every y; the sign logic must not reach a positive base."""
     result = _run(device, 1.0, exponent)
     assert (result == 1.0).all(), f"pow(1, {exponent:g}): expected 1, got {result[0].item()}"
+
+
+# bfloat16 takes its own kernel path. Its spacing is already 2 or more at 256 and above, so every
+# exponent here is an even integer; each one is exactly representable in bfloat16.
+_BFLOAT16_EVEN_EXPONENTS = [32768.0, 33024.0, 65536.0, -65536.0, 16777216.0]
+
+
+@pytest.mark.parametrize("exponent", _BFLOAT16_EVEN_EXPONENTS)
+def test_pow_negative_one_follows_the_exponent_parity_bfloat16(device, exponent):
+    """(-1)**y is exactly +1 for these even y on the bfloat16 path too."""
+    result = _run(device, -1.0, exponent, ttnn.bfloat16)
+    assert (result == 1.0).all(), f"pow(-1, {exponent:g}) in bfloat16: expected 1, got {result[0].item()}"
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("exponent", [0.0, -0.0])
+def test_pow_negative_base_zero_exponent_is_one(device, exponent, dtype):
+    """x**0 is 1 for every x, a negative base and a negative zero exponent included."""
+    result = _run(device, -2.0, exponent, dtype)
+    assert (result == 1.0).all(), f"pow(-2, {exponent:g}): expected 1, got {result[0].item()}"
+
+
+@pytest.mark.parametrize("exponent", [0.25, -0.25])
+def test_pow_negative_base_small_non_integer_exponent_is_nan(device, exponent):
+    """A non-integer exponent below 1 in magnitude still gives NaN for a negative base.
+
+    float32 only: the bfloat16 path returns inf where the result is NaN, on main as well.
+    """
+    result = _run(device, -2.0, exponent)
+    assert result.isnan().all(), f"pow(-2, {exponent:g}): expected nan, got {result[0].item()}"
