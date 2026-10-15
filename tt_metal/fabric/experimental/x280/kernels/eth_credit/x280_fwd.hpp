@@ -267,39 +267,112 @@ private:
         return code;
     }
 
+    /* What the loop reads and updates on every pass, built once by loop() and
+     * passed down by reference to always_inline steps, so it stays in
+     * registers under the timed-loop rule (transport_bandwidth_frontend_cxx.hpp):
+     * the Forwarder itself is on the uncached LIM stack. */
+    struct Hot {
+        uint32_t wr;
+        uint32_t rd;
+        uint32_t sent;
+        uint32_t consumed;
+        uint32_t safety_work;
+        uint64_t last_send;
+        uint64_t last_recv;
+
+        uint32_t send_count;
+        uint32_t recv_count;
+        uint32_t n_link;
+        uint32_t n_deliver;
+        uint32_t batch;
+        uint32_t slot_size;
+        uint32_t P;
+        uint32_t p;
+        uint32_t poll_cadence;
+        uint64_t stall_budget_ticks;
+        volatile ec_result_t* result;
+        const volatile uint32_t* rd_sh;
+        const volatile uint32_t* wr_sh;
+        volatile uint32_t* wr_src;
+        volatile uint32_t* rd_src;
+        volatile uint32_t* seq_expected;
+        volatile fs_hybrid_mesh_packet_header_t* staging;
+        uint64_t in_slots;
+        /* tx_fifo[p] and the two shadows, inside the window onto the Ethernet tile. */
+        volatile uint8_t* tx_fifo;
+        volatile uint32_t* e0_wr_sh;
+        volatile uint32_t* e1_out_rd_sh;
+    };
+
+    Hot hot() const {
+        return Hot{
+            .wr = 0u,
+            .rd = 0u,
+            .sent = 0u,
+            .consumed = 0u,
+            .safety_work = 0u,
+            .last_send = 0u,
+            .last_recv = 0u,
+            .send_count = a_.send_count,
+            .recv_count = a_.recv_count,
+            .n_link = s_.n_link,
+            .n_deliver = s_.n_deliver,
+            .batch = s_.batch,
+            .slot_size = s_.slot_size,
+            .P = s_.P,
+            .p = a_.p,
+            .poll_cadence = a_.poll_cadence,
+            .stall_budget_ticks = a_.stall_budget_ticks,
+            .result = result_,
+            .rd_sh = lim_word(lim_.rd_sh),
+            .wr_sh = lim_word(lim_.wr_sh),
+            .wr_src = lim_word(lim_.wr_src),
+            .rd_src = lim_word(lim_.rd_src),
+            .seq_expected = lim_word(lim_.seq_expected),
+            .staging = reinterpret_cast<volatile fs_hybrid_mesh_packet_header_t*>(
+                static_cast<uintptr_t>(area_ + lim_.staging)),
+            .in_slots = area_ + lim_.in_slots,
+            .tx_fifo = eth_window(eth_tx_base_ + a_.p * eth_.fifo_stride),
+            .e0_wr_sh =
+                reinterpret_cast<volatile uint32_t*>(eth_window(a_.eth_ctrl_base + eth_.e0_wr_sh + a_.p * kUnit)),
+            .e1_out_rd_sh =
+                reinterpret_cast<volatile uint32_t*>(eth_window(a_.eth_ctrl_base + eth_.e1_out_rd_sh + a_.p * kUnit)),
+        };
+    }
+
     /* Polled at the cadence: host STOP and the stall budget. A timeout, or a
      * host STOP, names the unfinished side that has gone longest without
      * progress. */
-    ec_error_t safety_check() {
-        if (++safety_work_ < a_.poll_cadence) {
+    __attribute__((always_inline)) ec_error_t safety_check(Hot& h) {
+        if (++h.safety_work < h.poll_cadence) {
             return EC_ERROR_NONE;
         }
-        safety_work_ = 0u;
-        const bool sending = sent_ < a_.send_count;
-        const bool receiving = consumed_ < a_.recv_count;
-        const bool send_oldest = sending && (!receiving || last_send_ <= last_recv_);
-        const uint64_t oldest = send_oldest ? last_send_ : last_recv_;
-        if (x280_hart_stop_requested(hartid_, run_value_) || x280_mtime_fenced() - oldest >= a_.stall_budget_ticks) {
+        h.safety_work = 0u;
+        const bool sending = h.sent < h.send_count;
+        const bool receiving = h.consumed < h.recv_count;
+        const bool send_oldest = sending && (!receiving || h.last_send <= h.last_recv);
+        const uint64_t oldest = send_oldest ? h.last_send : h.last_recv;
+        if (x280_hart_stop_requested(hartid_, run_value_) || x280_mtime_fenced() - oldest >= h.stall_budget_ticks) {
             const uint32_t site = send_oldest ? EC_SITE_FWD_OUT_FULL : EC_SITE_FWD_IN_EMPTY;
             result_->failure.site = site;
-            result_->failure.local_ptr = send_oldest ? wr_ : rd_;
+            result_->failure.local_ptr = send_oldest ? h.wr : h.rd;
             result_->failure.shadow_ptr = ordered_load(send_oldest ? lim_.rd_sh : lim_.wr_sh);
             return fail(EC_ERROR_STALL_TIMEOUT, site);
         }
         return EC_ERROR_NONE;
     }
 
-    void stamp(uint64_t now) {
-        if (result_->first_ts == 0u) {
-            result_->first_ts = now;
-            result_->first_batch_packets = consumed_;
+    __attribute__((always_inline)) static void stamp(Hot& h, uint64_t now) {
+        if (h.result->first_ts == 0u) {
+            h.result->first_ts = now;
+            h.result->first_batch_packets = h.consumed;
         }
-        result_->last_ts = now;
+        h.result->last_ts = now;
     }
 
-    void stall(uint32_t index, uint64_t start, uint64_t end) {
-        result_->stalls[index].count += 1u;
-        result_->stalls[index].ticks = ec_stall_add(result_->stalls[index].ticks, start, end);
+    __attribute__((always_inline)) static void stall(Hot& h, uint32_t index, uint64_t start, uint64_t end) {
+        h.result->stalls[index].count += 1u;
+        h.result->stalls[index].ticks = ec_stall_add(h.result->stalls[index].ticks, start, end);
     }
 
     ec_error_t distance_fail(uint32_t local, uint32_t shadow, uint32_t site) {
@@ -309,82 +382,80 @@ private:
         return fail(EC_ERROR_COUNTER_DISTANCE, site);
     }
 
-    /* W1 for `k` slots from wr_, then W2. Sets *progressed when it sends; with
+    /* W1 for `k` slots from h.wr, then W2. Sets *progressed when it sends; with
      * no credit it returns EC_ERROR_NONE and leaves *progressed unset. */
-    ec_error_t send_step(bool* progressed) {
-        const uint32_t rd = ordered_load(lim_.rd_sh);
-        if (!ec_ptr_distance_ok(wr_, rd, s_.n_link)) {
-            return distance_fail(wr_, rd, EC_SITE_FWD_OUT_FULL);
+    __attribute__((always_inline)) ec_error_t send_step(Hot& h, bool* progressed) {
+        x280_fence_ir();
+        const uint32_t rd = *h.rd_sh;
+        if (!ec_ptr_distance_ok(h.wr, rd, h.n_link)) {
+            return distance_fail(h.wr, rd, EC_SITE_FWD_OUT_FULL);
         }
-        uint32_t k = ec_ptr_credit(wr_, rd, s_.n_link);
-        k = k < s_.batch ? k : s_.batch;
-        k = k < a_.send_count - sent_ ? k : a_.send_count - sent_;
+        uint32_t k = ec_ptr_credit(h.wr, rd, h.n_link);
+        k = k < h.batch ? k : h.batch;
+        k = k < h.send_count - h.sent ? k : h.send_count - h.sent;
         if (k == 0u) {
             return EC_ERROR_NONE;
         }
         const uint64_t t0 = x280_mtime_fenced();
-        const volatile uint64_t* src =
-            reinterpret_cast<const volatile uint64_t*>(static_cast<uintptr_t>(area_ + lim_.staging));
-        volatile fs_hybrid_mesh_packet_header_t* staging =
-            reinterpret_cast<volatile fs_hybrid_mesh_packet_header_t*>(static_cast<uintptr_t>(area_ + lim_.staging));
+        const volatile uint64_t* src = reinterpret_cast<const volatile uint64_t*>(h.staging);
         for (uint32_t j = 0; j < k; ++j) {
-            const uint32_t slot = ec_ptr_slot(ec_ptr_advance(wr_, j, s_.n_link), s_.n_link);
-            ec_header_set_seq(staging, sent_ + j);
+            const uint32_t slot = ec_ptr_slot(ec_ptr_advance(h.wr, j, h.n_link), h.n_link);
+            ec_header_set_seq(h.staging, h.sent + j);
             x280_fence_iorw();
-            volatile uint64_t* dst = reinterpret_cast<volatile uint64_t*>(
-                eth_window(eth_tx_base_ + a_.p * eth_.fifo_stride + slot * s_.slot_size));
+            volatile uint64_t* dst = reinterpret_cast<volatile uint64_t*>(h.tx_fifo + slot * h.slot_size);
             for (uint32_t i = 0; i < kHeaderWords; ++i) {
                 dst[i] = src[i];
             }
         }
         x280_fence_iorw();
         const uint64_t t1 = x280_mtime_fenced();
-        stall(1u, t0, t1);
-        wr_ = ec_ptr_advance(wr_, k, s_.n_link);
-        *lim_word(lim_.wr_src) = wr_;
-        *reinterpret_cast<volatile uint32_t*>(eth_window(a_.eth_ctrl_base + eth_.e0_wr_sh + a_.p * kUnit)) = wr_;
+        stall(h, 1u, t0, t1);
+        h.wr = ec_ptr_advance(h.wr, k, h.n_link);
+        *h.wr_src = h.wr;
+        *h.e0_wr_sh = h.wr;
         x280_fence_iorw();
-        sent_ += k;
-        result_->packets_out[a_.p] = sent_;
-        stamp(t1);
+        h.sent += k;
+        h.result->packets_out[h.p] = h.sent;
+        stamp(h, t1);
         *progressed = true;
         return EC_ERROR_NONE;
     }
 
-    ec_error_t check_header(uint32_t slot) {
-        const volatile fs_hybrid_mesh_packet_header_t* h =
+    __attribute__((always_inline)) ec_error_t check_header(Hot& h, uint32_t slot) {
+        const volatile fs_hybrid_mesh_packet_header_t* hdr =
             reinterpret_cast<const volatile fs_hybrid_mesh_packet_header_t*>(
-                static_cast<uintptr_t>(area_ + lim_.in_slots + slot * EC_HEADER_BYTES));
-        const uint32_t ch = fs_src_ch_id(h);
-        const uint32_t seq = ec_header_seq(h);
-        const uint32_t expected = *lim_word(lim_.seq_expected);
+                static_cast<uintptr_t>(h.in_slots + slot * EC_HEADER_BYTES));
+        const uint32_t ch = fs_src_ch_id(hdr);
+        const uint32_t seq = ec_header_seq(hdr);
+        const uint32_t expected = *h.seq_expected;
         /* Each inbound FIFO has one source, so the channel is checked against
          * P before it names anything, and then against this forwarder. */
-        if (ch >= s_.P || ch != a_.p || seq != expected) {
+        if (ch >= h.P || ch != h.p || seq != expected) {
             result_->failure.p = ch;
             result_->failure.expected = expected;
             result_->failure.seen = seq;
             return fail(EC_ERROR_BAD_SEQUENCE, expected);
         }
-        *lim_word(lim_.seq_expected) = expected + 1u;
+        *h.seq_expected = expected + 1u;
         return EC_ERROR_NONE;
     }
 
-    void publish_rd() {
-        *lim_word(lim_.rd_src) = rd_;
-        *reinterpret_cast<volatile uint32_t*>(eth_window(a_.eth_ctrl_base + eth_.e1_out_rd_sh + a_.p * kUnit)) = rd_;
+    __attribute__((always_inline)) static void publish_rd(Hot& h) {
+        *h.rd_src = h.rd;
+        *h.e1_out_rd_sh = h.rd;
         x280_fence_iorw();
     }
 
     /* Consumes up to BATCH headers from in[p], then R1. */
-    ec_error_t receive_step(bool* progressed) {
-        const uint32_t w = ordered_load(lim_.wr_sh);
-        if (!ec_ptr_distance_ok(w, rd_, s_.n_deliver)) {
-            return distance_fail(rd_, w, EC_SITE_FWD_IN_EMPTY);
+    __attribute__((always_inline)) ec_error_t receive_step(Hot& h, bool* progressed) {
+        x280_fence_ir();
+        const uint32_t w = *h.wr_sh;
+        if (!ec_ptr_distance_ok(w, h.rd, h.n_deliver)) {
+            return distance_fail(h.rd, w, EC_SITE_FWD_IN_EMPTY);
         }
-        uint32_t k = ec_ptr_used(w, rd_, s_.n_deliver);
-        k = k < s_.batch ? k : s_.batch;
-        k = k < a_.recv_count - consumed_ ? k : a_.recv_count - consumed_;
+        uint32_t k = ec_ptr_used(w, h.rd, h.n_deliver);
+        k = k < h.batch ? k : h.batch;
+        k = k < h.recv_count - h.consumed ? k : h.recv_count - h.consumed;
         if (k == 0u) {
             return EC_ERROR_NONE;
         }
@@ -392,50 +463,51 @@ private:
          * control dependency, which RVWMO does not honour. */
         x280_fence_ir();
         for (uint32_t j = 0; j < k; ++j) {
-            const ec_error_t err = check_header(ec_ptr_slot(ec_ptr_advance(rd_, j, s_.n_deliver), s_.n_deliver));
+            const ec_error_t err = check_header(h, ec_ptr_slot(ec_ptr_advance(h.rd, j, h.n_deliver), h.n_deliver));
             if (err != EC_ERROR_NONE) {
                 return err;
             }
         }
-        rd_ = ec_ptr_advance(rd_, k, s_.n_deliver);
-        publish_rd();
-        consumed_ += k;
-        result_->packets_in[a_.p] = consumed_;
-        stamp(x280_mtime_fenced());
+        h.rd = ec_ptr_advance(h.rd, k, h.n_deliver);
+        publish_rd(h);
+        h.consumed += k;
+        h.result->packets_in[h.p] = h.consumed;
+        stamp(h, x280_mtime_fenced());
         *progressed = true;
         return EC_ERROR_NONE;
     }
 
     ec_error_t loop() {
-        last_send_ = x280_mtime_fenced();
-        last_recv_ = last_send_;
-        while (sent_ < a_.send_count || consumed_ < a_.recv_count) {
+        Hot h = hot();
+        h.last_send = x280_mtime_fenced();
+        h.last_recv = h.last_send;
+        while (h.sent < h.send_count || h.consumed < h.recv_count) {
             const uint64_t t0 = x280_mtime_fenced();
             bool sent_progress = false;
             bool recv_progress = false;
-            if (sent_ < a_.send_count) {
-                const ec_error_t err = send_step(&sent_progress);
+            if (h.sent < h.send_count) {
+                const ec_error_t err = send_step(h, &sent_progress);
                 if (err != EC_ERROR_NONE) {
                     return err;
                 }
                 if (sent_progress) {
-                    last_send_ = x280_mtime_fenced();
+                    h.last_send = x280_mtime_fenced();
                 } else {
-                    stall(0u, t0, x280_mtime_fenced());
+                    stall(h, 0u, t0, x280_mtime_fenced());
                 }
             }
-            if (consumed_ < a_.recv_count) {
-                const ec_error_t err = receive_step(&recv_progress);
+            if (h.consumed < h.recv_count) {
+                const ec_error_t err = receive_step(h, &recv_progress);
                 if (err != EC_ERROR_NONE) {
                     return err;
                 }
                 if (recv_progress) {
-                    last_recv_ = x280_mtime_fenced();
+                    h.last_recv = x280_mtime_fenced();
                 } else {
-                    stall(2u, t0, x280_mtime_fenced());
+                    stall(h, 2u, t0, x280_mtime_fenced());
                 }
             }
-            const ec_error_t err = safety_check();
+            const ec_error_t err = safety_check(h);
             if (err != EC_ERROR_NONE) {
                 return err;
             }
@@ -457,14 +529,6 @@ private:
     uint32_t eth_tx_base_ = 0u;
     /* The verified window onto the Ethernet tile, at its L1 address 0. */
     volatile uint8_t* window_ = nullptr;
-
-    uint32_t wr_ = 0u;
-    uint32_t rd_ = 0u;
-    uint32_t sent_ = 0u;
-    uint32_t consumed_ = 0u;
-    uint32_t safety_work_ = 0u;
-    uint64_t last_send_ = 0u;
-    uint64_t last_recv_ = 0u;
 };
 
 /**
