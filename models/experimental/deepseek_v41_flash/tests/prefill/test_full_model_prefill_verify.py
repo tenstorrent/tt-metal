@@ -4,7 +4,7 @@
 """Correctness check of the full V4.1 prefill: the real 40-layer checkpoint on the Galaxy against a CPU reference.
 
 It builds the model of ``test_full_model_prefill_demo.py`` with the whole stack and the head (8 x 4 Galaxy,
-``DEEPSEEK_V4_PREFILL_STAGES`` pipeline stages of ``1 x 4`` TP4 submeshes placed by ``plan_prefill_placement``, bf8
+``DEEPSEEK_V4_PREFILL_STAGES`` pipeline stages of ``1 x 4`` TP4 submeshes, the layers split evenly over them, bf8
 attention, bf4 routed experts, the Engram host lookup), runs the *same kind of prompt* through it chunk by chunk with
 the eager path, and compares with the fp32 reference of ``full_model_reference.py`` (the checkpoint's own
 ``inference/model.py``, one layer resident at a time; computed on the host beforehand and cached, so the device is not
@@ -23,7 +23,9 @@ Three views of the same run, all logged before anything is asserted:
    device), the fraction of tokens whose argmax matches, whether the reference's top-1 is in the device's top 5, and
    the top-5 tokens after the last position from both.
 
-Exact for prompts up to 16384 tokens (see ``full_model_reference.py``).
+Past ``candidate_topk_blocks * candidate_block_size`` (16384) tokens the selection is two-level on both sides (the
+reference's ``select_candidate_blocks``); generating such a reference needs the indexer run in query slices (see
+``full_model_reference.py``).
 
 Without a cached reference (and ``DEEPSEEK_V4_VERIFY_GENERATE`` unset) it only runs the model end to end and logs
 per-layer stream statistics and the top 5 after every chunk; nothing is compared or asserted.
@@ -80,7 +82,6 @@ from models.experimental.deepseek_v41_flash.tt.prefill.attention import PrefillS
 from models.experimental.deepseek_v41_flash.tt.prefill.model import (
     DeepSeekV41PrefillModel,
     _free_distinct,
-    plan_prefill_placement,
 )
 from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import (
     _DEFAULT_PROMPT_FILE,
@@ -93,6 +94,7 @@ from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill
     _env_float,
     _upload_streams,
 )
+from models.experimental.deepseek_v4_flash.tt.model import plan_layer_placement
 from models.experimental.deepseek_v4_flash.tt.prefill.attention import ALIGNMENT
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config, set_active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
@@ -147,8 +149,6 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer) -> None:
     assert len(prompt_ids) % ALIGNMENT == 0
     ids = torch.tensor(prompt_ids, dtype=torch.long).unsqueeze(0)
     total = ids.shape[1]
-    max_entries = config.candidate_topk_blocks * config.candidate_block_size
-    assert total <= max_entries, f"a {total}-token prompt exceeds the {max_entries} entries a ratio-1 layer may attend"
     num_chunks = math.ceil(total / chunk_size)
     logger.info(f"verifying {num_layers} layers on a {total}-token prompt in {num_chunks} chunk(s) of {chunk_size}")
 
@@ -189,7 +189,7 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer) -> None:
     assert mesh_cols >= _TP_SIZE
     num_stages = _env_int("DEEPSEEK_V4_PREFILL_STAGES", 8)
     assert 1 <= num_stages <= mesh_rows
-    placement = plan_prefill_placement(config, num_layers, num_stages)
+    placement = plan_layer_placement(num_layers, num_stages, 1)
     submeshes = [
         mesh_device.create_submesh(ttnn.MeshShape(1, _TP_SIZE), ttnn.MeshCoordinate(i, 0))
         for i in range(placement[-1] + 1)

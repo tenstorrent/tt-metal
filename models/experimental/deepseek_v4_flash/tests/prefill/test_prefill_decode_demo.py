@@ -285,7 +285,6 @@ def _longbench_prompt(entry: dict) -> str:
         f"(B) {entry['choice_B']}\n"
         f"(C) {entry['choice_C']}\n"
         f"(D) {entry['choice_D']}\n\n"
-        "Think and answer within 2000 tokens in total.\n"
         'Format your response as follows: "The correct answer is (insert answer here)".'
     )
 

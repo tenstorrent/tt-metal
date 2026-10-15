@@ -25,8 +25,8 @@ replaces the parts V4.1 changed.
 Prefill (:meth:`DeepSeekV41Model.build_prefill`) builds a
 :class:`~.prefill.model.DeepSeekV41PrefillModel` on the decode stages, sharing the routed experts,
 embedding, ``lm_head`` and Engram lookup, and :meth:`DeepSeekV41Model.commit_prefill_state` writes
-its per-layer state into the decode caches. Traced prefill needs its stages to start at index
-sources, so build the decode model with ``layer_submesh_ids=plan_prefill_placement(...)``.
+its per-layer state into the decode caches. The prefill stages are the decode stages, so give the
+decode model a contiguous ``layer_submesh_ids`` (e.g. ``plan_layer_placement(n, stages, 1)``).
 """
 
 from __future__ import annotations
