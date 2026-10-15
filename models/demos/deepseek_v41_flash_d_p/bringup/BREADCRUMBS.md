@@ -557,3 +557,17 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   <= 1e-7; determinism bit-identical. Not tuned (12 slices / sums per call; a fused [R, 4, w] reduce is a perf item).
 - OV-4: DS41-20 already states the F73 fix; unchanged.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_add.py`
+
+## C.swa_engram.kv test (attempt 1)
+- Attempt 0's built-in sweep let noise1e-2 slip (rel limits 0.0206 .. 0.0215 from the bf16 precision model's fp8
+  re-roundings). The step is the same `_window_kv` as swa layer 0, so the test now carries test_c_swa_kv.py's fp8
+  checks (DS41-14) with LAYER = 1: every value on the e4m3 x ue8m0 grid, <= 15 % of values != the CPU step, on all 5
+  inputs, plus the test's own `BRINGUP_IMPL=mutations` sweep with those checks added.
+- Layer 1 measured (CPU): bf16 precision model mismatch 0.040 .. 0.042, off-grid 0; noise1e-2 / scale +-2 % off-grid
+  1.0; halfswap 0.99, rowshift 0.98, quarterzero 0.25 mismatch. The golden differs from the CPU step on the golden
+  input in 0.20 of its values (bf16-stored upstream), so the mismatch check compares with the CPU step, not the golden.
+- reference: PASS; stub: FAIL (all checks); mutations: every mistake caught, reference / bf16 rows pass.
+- Gate (device, reused swa kv module): PASS, pcc 0.999835, vs CPU rel 0.0021, fp8 mismatch 0.0058 .. 0.0099.
+- OV-4: DS41-20 already states the F73 fix; known_issues.md not touched.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_kv.py`
+  (add `BRINGUP_IMPL=reference|stub|mutations` for the freeze checks).
