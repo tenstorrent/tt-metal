@@ -50,3 +50,8 @@ readback 4.19 -> 2.33 ms.
   (Spec acceptance varies 2.32-2.38 between identical-code runs, so acceptance cannot be used as an exactness check here.)
 Rejected in the same session: column-sharded Engram-row upload (DSV41_ROWS_SHARD wired into the spec path): upload 3.1 -> 7.96 ms, round slower (host-side column slicing is expensive).
 Remaining host items: Engram gather 2.7 ms (LUT dequant could save ~1.5), upload 2.3 ms, page setup 1.3 ms; moving the Engram hash + row gather onto the device (kernels exist: engram_hash.py, engram_table.py) would remove ~8 ms but is a large change.
+
+## Rejected: bit-exact LUT dequant of the Engram row gather (tt/engram.py _MappedTable.rows) - measured 2026-10-15
+fp8 value + e8m0 scale through two 256-entry bf16 tables and one bf16 multiply is bit-identical to the float path and 4.6x faster in a host microbenchmark (0.43 vs 1.97 ms for
+6144 rows). Exactness on the real table: DSV41_ENGRAM_LUT_CHECK=1 over a full 40-layer demo, every gather compared, 0 mismatches. But the round time did not improve:
+113.7 ms (LUT) vs 112.8 ms (float path), both with non-blocking readback -> the in-demo gather is bound by random access into the ~100 GB host table, not by the dequant math. Reverted.
