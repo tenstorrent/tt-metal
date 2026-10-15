@@ -51,7 +51,8 @@ def test_adapter_resident_decode_matches_reload():
             def seed_row():
                 return int(ttnn.to_torch(ttnn.get_device_tensors(adapter.generator.sampler._seeds)[0]).flatten()[0])
 
-            assert seed_row() == 13, seed_row()
+            # seed 12 (11 % 1e6 + 1) + absolute position 128 + 1 increment after the draw
+            assert seed_row() == 141, seed_row()
             for step in range(70):
                 ids = torch.tensor([seq[-1], 0, 0, 0]).reshape(4, 1)
                 pos = torch.tensor([129 + step, -1, -1, -1])
@@ -80,7 +81,8 @@ def test_adapter_resident_decode_matches_reload():
                     ttnn.event_synchronize(event)
                 seq.append(int(adapter.process_decode_output_host(host, is_tokens=True)[0, 0]))
                 if step == 0:
-                    assert seed_row() == 14, seed_row()
+                    # reset at the first decode: 12 + position 129 + 1
+                    assert seed_row() == 142, seed_row()
                 if step in (0, 31, 69):
                     logits_checks.append(adapter.generator.read_logits()[0, 0, 0].clone())
             sequences.append(seq)

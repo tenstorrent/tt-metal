@@ -28,9 +28,9 @@ catalog entry `kolibri_1_qb2` carries the full recipe; the essential settings ar
 `--block-size 32 --max-num-seqs 32 --max-model-len 262144 --max-num-batched-tokens 2048
 --enable-chunked-prefill --reasoning-parser kolibri1 --enable-auto-tool-choice
 --tool-call-parser kolibri1` and the TT config `sample_on_device_mode=all`,
-`fabric_config=FABRIC_1D`, `trace_mode=all`. The device sampler covers top_k 1..32;
-set `KOLIBRI_VLLM_HOST_COMPAT=1` to serve larger top_k (the model card's eval sampling
-uses 128) on the host sampler.
+`fabric_config=FABRIC_1D`, `trace_mode=all`. The device sampler covers top_k 1..32. Requests it cannot serve (top_k above 32, as in
+the model card's eval sampling, penalties, logprobs, structured outputs) sample on the
+host; `KOLIBRI_VLLM_HOST_COMPAT=0` refuses them instead.
 
 Batched decode uses the token-grouped expert path with expert-parallel weights by default
 (tt-agentic-bringup-qb2#75); `KOLIBRI_GROUPED_DECODE=0` and `KOLIBRI_EP_EXPERTS=0` restore

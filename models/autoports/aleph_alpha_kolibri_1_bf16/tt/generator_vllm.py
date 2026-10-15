@@ -33,8 +33,6 @@ class KolibriForCausalLM:
         "supports_async_decode": True,  # Direct adapter trace/deferred-read/stale-input probe passed.
         "supports_sample_on_device": True,
         "supports_chunked_prefill": True,
-        "supports_intermediate_prefill_output_mask": True,
-        "supports_prefill_sampling_origins": True,
         "supports_device_penalties": False,
         "max_device_top_k": 32,
     }
@@ -50,7 +48,10 @@ class KolibriForCausalLM:
         obj = cls()
         obj.mesh_device = mesh_device
         obj.batch_size, obj.capacity = max_batch_size, max_seq_len
-        obj.host_compat = os.environ.get("KOLIBRI_VLLM_HOST_COMPAT", "0") == "1"
+        # Requests the device sampler cannot serve (penalties, logprobs, top_k > 32,
+        # structured outputs, ...) arrive without device sampling params and
+        # sample on the host. KOLIBRI_VLLM_HOST_COMPAT=0 refuses them instead.
+        obj.host_compat = os.environ.get("KOLIBRI_VLLM_HOST_COMPAT", "1") == "1"
         indices = os.environ.get("KOLIBRI_VLLM_LAYERS")
         obj.model = KolibriModel(
             mesh_device,
@@ -172,14 +173,13 @@ class KolibriForCausalLM:
         return tables
 
     def _ensure_sampling_state(self):
-        if not hasattr(self, "_sampling_origins"):
-            self._sampling_origins = [None] * self.generator.batch_size
+        if not hasattr(self, "_sampling_seeds"):
             self._sampling_seeds = [None] * self.generator.batch_size
 
     def _sampling(self, params, slots=None, positions=None):
         if params is None:
             if not self.host_compat:
-                raise RuntimeError("Host sampling requires explicit KOLIBRI_VLLM_HOST_COMPAT=1")
+                raise RuntimeError("Host sampling is disabled by KOLIBRI_VLLM_HOST_COMPAT=0")
             self.event("explicit_host_compat")
             return False
         g = self.generator
@@ -204,13 +204,13 @@ class KolibriForCausalLM:
                     values[key][slot] = self._sampling_seeds[slot]
                 else:
                     values[key][slot] = raw[row]
+        # The random stream is keyed on seed + absolute position, so the k-th
+        # output token draws the same numbers whether or not the request was
+        # chunked, preempted or moved between slots.
         offsets = [0] * g.batch_size
         for slot, position in zip(slots, positions):
-            origin = self._sampling_origins[slot]
             if position is not None and position >= 0:
-                if origin is None:
-                    raise ValueError(f"Active sampling slot {slot} has no prefill origin at position {position}")
-                offsets[slot] = max(0, position - origin)
+                offsets[slot] = position
         g.set_sampling(**values, seed_offset=offsets)
         return True
 
@@ -225,8 +225,6 @@ class KolibriForCausalLM:
         sampling_params=None,
         start_pos=None,
         page_tables_per_layer=None,
-        prefill_output_mask=None,
-        original_prompt_lens=None,
         **kwargs,
     ):
         if kwargs:
@@ -234,16 +232,12 @@ class KolibriForCausalLM:
         g = self._prepare(kv_cache)
         slots = list(range(len(prompt_lens))) if empty_slots is None else empty_slots
         self._ensure_sampling_state()
-        output_mask = [True] * len(slots) if prefill_output_mask is None else prefill_output_mask
-        origins = prompt_lens if original_prompt_lens is None else original_prompt_lens
         for row, slot in enumerate(slots):
-            if output_mask[row]:
-                self._sampling_origins[slot] = int(origins[row]) - 1
+            if int(start_pos[row]) == 0:
+                # A request (re)starts at position 0: draw its seed afresh.
                 self._sampling_seeds[slot] = None
-        sampled = sampling_params is not None
-        if prefill_output_mask is None or any(prefill_output_mask):
-            positions = [int(prompt_lens[row]) - 1 if output_mask[row] else -1 for row in range(len(slots))]
-            sampled = self._sampling(sampling_params, slots, positions=positions)
+        positions = [int(prompt_lens[row]) - 1 for row in range(len(slots))]
+        sampled = self._sampling(sampling_params, slots, positions=positions)
         self.event(
             "prefill",
             lengths=prompt_lens.tolist(),
@@ -264,7 +258,6 @@ class KolibriForCausalLM:
             prompt_lens=lengths,
             start_pos=start_pos,
             slots=slots,
-            output_mask=prefill_output_mask,
             sample_on_device=sampled,
         )
         return result[slots].reshape(-1, 1) if sampled else result
@@ -296,7 +289,6 @@ class KolibriForCausalLM:
             remap = torch.as_tensor(slot_remap).flatten().tolist()
             if sorted(remap) != list(range(g.batch_size)):
                 raise ValueError(f"Invalid sampling slot permutation: {remap}")
-            self._sampling_origins = [self._sampling_origins[slot] for slot in remap]
             self._sampling_seeds = [self._sampling_seeds[slot] for slot in remap]
         sampled = sampling_params is not None
         if reload_sampling_params or reset_sampling_state or slot_remap is not None or not sampled:
