@@ -614,6 +614,11 @@ class TtCSAIndexer(_TtHCABase):
             q = self.q_act_quant(q)
         cap = int(keys.shape[2])
         blk = int(os.environ.get("PREFILL_INDEXER_SCORE_COLS", "65536"))
+        # only where memory needs it: blocking changes the matmul program config (N), hence the rounding (DS41F-0066 retraction,
+        # MEASURED: a near-tie flip at 32k with 4096-col blocks). `cap` is the LIVE key width; 768k (~395k live) ran unblocked,
+        # so every validated run (<= 768k) keeps the single matmul
+        if cap <= int(os.environ.get("PREFILL_INDEXER_SCORE_BLOCK_ABOVE", "400000")):
+            blk = 0
         if blk <= 0 or cap <= blk:
             scores = ttnn.relu(
                 ttnn.matmul(q, keys, transpose_b=True, memory_config=self.memory_config)
