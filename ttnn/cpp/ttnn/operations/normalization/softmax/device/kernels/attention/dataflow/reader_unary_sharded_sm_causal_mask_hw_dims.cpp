@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -32,7 +32,8 @@ void kernel_main() {
 
     constexpr auto dfb_fused_scale = dfb::fused_scale;
     const std::uint32_t pre_scale = get_arg(args::pre_scale);
-    generate_bcast_unary_scalar(CircularBuffer(dfb_fused_scale), pre_scale);
+    DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
+    generate_bcast_unary_scalar(dfb_fused_scale_obj, pre_scale);
 
     constexpr std::uint32_t block_ht = get_arg(args::block_ht);
     for (std::uint32_t h = 0; h < block_ht; h++) {

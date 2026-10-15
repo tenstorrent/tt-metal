@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -51,7 +51,8 @@ void kernel_main() {
     std::uint32_t mask_id = start_mask_id;
     bool read_mask = true;
     constexpr auto dfb_fused_scale = dfb::fused_scale;
-    generate_bcast_unary_scalar(CircularBuffer(dfb_fused_scale), pre_scale);
+    DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
+    generate_bcast_unary_scalar(dfb_fused_scale_obj, pre_scale);
 #endif
 
     const auto src_a = TensorAccessor(tensor::src);

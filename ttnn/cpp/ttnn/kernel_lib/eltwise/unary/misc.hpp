@@ -21,15 +21,13 @@ struct Identity;
 template <Dst Slot = Dst::D0>
 struct Negative;
 
-// abs_tile / sign_tile are Blackhole/Wormhole-only in compute_kernel_api.h (no Quasar SFPU impl),
-// so these ops are not available on Quasar.
-#ifndef ARCH_QUASAR
+// abs_tile / sign_tile are declared for every arch in compute_kernel_api.h; the Quasar SFPU LLKs
+// (ckernel_sfpu_abs.h / ckernel_sfpu_sign.h) landed with #58209.
 template <Dst Slot = Dst::D0>
 struct Abs;
 
 template <Dst Slot = Dst::D0>
 struct Sign;
-#endif
 
 template <Dst Slot = Dst::D0>
 struct Square;
@@ -46,14 +44,13 @@ struct CopyDest;
 template <uint32_t InDF, uint32_t OutDF, Dst Slot = Dst::D0>
 struct Typecast;
 
-// Mask / MaskPosInf. mask_tile LLK is BH/WH-only (ckernel_sfpu_mask.h not ported to Quasar).
-#ifndef ARCH_QUASAR
+// Mask / MaskPosInf. The mask_tile LLK is available on BH/WH and, since #58209, on Quasar
+// (ckernel_sfpu_mask.h in the Quasar llk_sfpu directory).
 template <DataFormat DF = DataFormat::Float16_b, Dst DataSlot = Dst::D0>
 struct Mask;
 
 template <Dst DataSlot = Dst::D0>
 struct MaskPosInf;
-#endif
 
 }  // namespace compute_kernel_lib
 
