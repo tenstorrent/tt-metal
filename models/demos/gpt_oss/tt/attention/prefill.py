@@ -59,7 +59,13 @@ def prefill_forward(
     total_seq_len = hidden_states.shape[-2]
     hidden_size = hidden_states.shape[-1]
     seq_len = total_seq_len // batch_size  # Per-user sequence length
-    if seq_len > 32 * 1024:
+    # On the unpadded o_proj + all_reduce path (Blackhole, weights.o_proj_prefill) the o_proj output / all-reduce
+    # payload is bf8 at every length (was bf16 up to 32K): the all-reduce moves half the bytes (measured [S, 2880]
+    # 1.36 -> 0.94 ms at S = 8192). Up to 32K the decoder layer adds it to the residual into a bf16 output
+    # (DecoderLayer.__call__); a bf8 post-attention residual fails the v4 per-prompt guard. Other paths keep bf16 up to
+    # 32K. Both 32K gates use the per-user length seq_len (DecoderLayer.__call__ also divides by batch_size), not the
+    # total token count.
+    if seq_len > 32 * 1024 or weights.o_proj_prefill is not None:
         activation_dtype = ttnn.bfloat8_b
     else:
         activation_dtype = ttnn.bfloat16
