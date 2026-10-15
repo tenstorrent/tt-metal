@@ -40,6 +40,10 @@ on:
         required: false
         type: boolean
         default: false
+      enable-llk-sanitizer:
+        required: false
+        type: boolean
+        default: false
       timeout-minutes-override:
         required: false
         type: number
@@ -170,6 +174,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-llk-sanitizer: ${{ inputs.enable-llk-sanitizer || false }}
           enable-kernel-ccache: true
           redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
 
