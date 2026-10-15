@@ -180,7 +180,7 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
 
- 
+
 # OpenMPI::MPI is what tt_metal/distributed/CMakeLists.txt exposes in both MPI branches, and it
 # does not exist at all when ENABLE_DISTRIBUTED is OFF -- so this target appears only when MPI does.
 if(TARGET OpenMPI::MPI)
