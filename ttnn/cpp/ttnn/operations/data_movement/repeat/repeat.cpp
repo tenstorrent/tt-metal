@@ -652,7 +652,7 @@ ttnn::Tensor repeat(
     const bool output_page_ok = !optional_output_tensor.has_value() ||
                                 repeat_codegen::output_matches_input_page(input_tensor, *optional_output_tensor);
     // Cheap demotion checks first; the support gate walks every leg's L1 budget.
-    if (output_page_ok &&
+    if (operations::data_movement::codegen_supported_on_arch(working_tensor) && output_page_ok &&
         !repeat_codegen::is_demoted(working_tensor, working_repetition_vector, codegen_output_mem_config) &&
         repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector, codegen_output_mem_config) &&
         repeat_codegen::row_major_cbs_fit_free_l1(
