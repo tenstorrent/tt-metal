@@ -133,10 +133,11 @@ __attribute__((noinline)) void calculate_acosh_fresh_cpp()
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat arg     = x - 1.0f;
+        const sfpi::vFloat xm1 = x - 1.0f;
+        sfpi::vFloat arg       = xm1;
         v_if (x < LOG1P_LARGE)
         {
-            arg = arg + fresh_sqrt_ge0<IS_FP32_DEST_ACC>((x + 1.0f) * (x - 1.0f));
+            arg = xm1 + fresh_sqrt_ge0<IS_FP32_DEST_ACC>((x + 1.0f) * xm1);
         }
         v_endif;
 
