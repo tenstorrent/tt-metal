@@ -48,7 +48,7 @@ So an op fails on Quasar as soon as it sets up a DFB in an unsupported format. I
 
 The demo uses the `Generator` class from `tt_transformers`, a shared library of model code in this repository. The model runs in two phases. *Prefill* processes the whole prompt in one pass. *Decode* then produces one new token per user in each step. Before prefill, the generator runs one decode step with dummy inputs, so that the decode programs are compiled in advance ([generator.py:646-668](../../../../tt_transformers/tt/generator.py#L646-L668), called from [generator.py:1237](../../../../tt_transformers/tt/generator.py#L1237-L1237)).
 
-That decode step runs `ttnn_decode_forward` in the gpt-oss model. On Wormhole and Blackhole, `ttnn_decode_forward` does this (on Quasar it uses the host embedding described in section 6.2) ([model.py:532-543](tt/model.py#L532-L543)):
+That decode step runs `ttnn_decode_forward` in the gpt-oss model. On Wormhole and Blackhole, `ttnn_decode_forward` does this (on Quasar it uses the host embedding described in section 6.2) ([model.py:536-547](tt/model.py#L536-L547)):
 
 ```python
 actual_batch = current_pos.shape[-1]
@@ -80,7 +80,7 @@ The embedding in section 2.1 asks for its output in `ttnn.bfloat8_b`. My guess i
 The model uses block float formats in many places, for example:
 
 - The expert weights, in `ttnn.bfloat4_b` ([experts/weights.py:35](tt/experts/weights.py#L35-L35)). gpt-oss has 32 small feed-forward networks per layer, called *experts*, and uses 4 of them for each token.
-- The `lm_head` weight, in `ttnn.bfloat8_b` ([model.py:230-238](tt/model.py#L230-L238)). `lm_head` is the last layer. It turns the model output into a score for each entry of the vocabulary.
+- The `lm_head` weight, in `ttnn.bfloat8_b` ([model.py:234-242](tt/model.py#L234-L242)). `lm_head` is the last layer. It turns the model output into a score for each entry of the vocabulary.
 - The attention weights and the KV cache, in `ttnn.bfloat8_b` ([attention/weights.py:33](tt/attention/weights.py#L33-L33), [attention/kv_cache.py:19](tt/attention/kv_cache.py#L19-L19)). The KV cache keeps the attention keys and values of earlier tokens.
 - Ops that convert their result to `ttnn.bfloat8_b`, for example [attention/operations.py:113](tt/attention/operations.py#L113-L113).
 
@@ -98,7 +98,7 @@ bf16 needs much more DRAM (section 1.2). The simulated device has 2 DRAM banks o
 | Embedding table (201088 x 2880) | 1.08 GiB (bf16) | 1.08 GiB |
 | **Total** | **2.66 GiB** | **5.45 GiB** |
 
-The `lm_head` has 262144 columns, not 201088: the code rounds the vocabulary size up to the next power of 2, because `ttnn.topk`, the op that picks the highest scores from the `lm_head` output, can then use more than one core ([model.py:21-31](tt/model.py#L21-L31)).
+The `lm_head` has 262144 columns, not 201088: the code rounds the vocabulary size up to the next power of 2, because `ttnn.topk`, the op that picks the highest scores from the `lm_head` output, can then use more than one core ([model.py:25-35](tt/model.py#L25-L35)).
 
 The table does not include the attention weights (about 0.05 GiB per layer), the KV cache, or the activations (the temporary results that pass between layers). In bf16 the weights alone use 5.45 GiB of 6 GiB, so with the rest added the model may not fit. Without the embedding table on the device, the weights need 4.37 GiB.
 
@@ -141,7 +141,7 @@ The model also keeps a cache of its converted weights on disk, one file per weig
 
 ### 6.2 Token IDs: an embedding on the host, as a direct edit
 
-The slice and the embedding are next to each other in `ttnn_decode_forward`, so one edit there removes both. Prefill calls `ttnn.embedding` in two more functions: `transform_and_embed_prefill_inputs_device` ([model.py:1083-1094](tt/model.py#L1083-L1094)) and `prepare_inputs_prefill` ([model.py:1143-1150](tt/model.py#L1143-L1150)). In llama the embedding is a separate class, so one patch could replace it. gpt-oss has no such class. Two smaller patches could still work: one that replaces `ttnn.slice` with a host slice for `UInt32` inputs, and one that replaces `ttnn.embedding` with a host lookup. But `ttnn.embedding` receives the table as a device tensor, so with these patches the table stays on the device, and the DRAM saving below is lost. Only a direct edit in the Quasar copy, as in resnet, keeps the table off the device. On Quasar:
+The slice and the embedding are next to each other in `ttnn_decode_forward`, so one edit there removes both. Prefill calls `ttnn.embedding` in two more functions: `transform_and_embed_prefill_inputs_device` ([model.py:1087-1098](tt/model.py#L1087-L1098)) and `prepare_inputs_prefill` ([model.py:1147-1154](tt/model.py#L1147-L1154)). In llama the embedding is a separate class, so one patch could replace it. gpt-oss has no such class. Two smaller patches could still work: one that replaces `ttnn.slice` with a host slice for `UInt32` inputs, and one that replaces `ttnn.embedding` with a host lookup. But `ttnn.embedding` receives the table as a device tensor, so with these patches the table stays on the device, and the DRAM saving below is lost. Only a direct edit in the Quasar copy, as in resnet, keeps the table off the device. On Quasar:
 
 - The model keeps the embedding table on the host and does not upload it.
 - At each embedding call site, the model copies the token IDs to the host. This copy runs no kernel, so no DFB is set up. In decode, the model keeps only the first `actual_batch` token IDs. It looks the IDs up in the table with torch, and uploads the result as bf16.
@@ -165,5 +165,5 @@ My guess, not checked, is that the simulator needs traces off in any case: it ru
 | Problem | Approach | Same as | Code |
 |---|---|---|---|
 | `Bfp8_b` and `Bfp4_b` in many places | Patches in `conftest.py` that map them to bf16 | llama | [conftest.py:44-100](conftest.py#L44-L100) |
-| `UInt32` token IDs, embedding output, DRAM used by the embedding table | Direct `if is_quasar():` edit: embedding on the host | llama's host embedding, done as a direct edit like resnet | [model.py:162-183](tt/model.py#L162-L183), [model.py:1062-1081](tt/model.py#L1062-L1081) |
+| `UInt32` token IDs, embedding output, DRAM used by the embedding table | Direct `if is_quasar():` edit: embedding on the host | llama's host embedding, done as a direct edit like resnet | [model.py:166-187](tt/model.py#L166-L187), [model.py:1066-1085](tt/model.py#L1066-L1085) |
 | Host embedding inside traced steps | Direct `if is_quasar():` edit in the demo: traces off | the demo's own logging case | [text_demo.py:486-491](demo/text_demo.py#L486-L491) |
