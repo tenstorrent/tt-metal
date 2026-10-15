@@ -148,6 +148,9 @@ class RecoverRetrainRoundsTest(unittest.TestCase):
             env["STUB_PASS_AFTER_RESETS"] = str(pass_after_resets)
             if retrain_summary:
                 env["STUB_EMIT_RETRAIN_SUMMARY"] = "1"
+            # The runner's own interface selection would change which path recover.sh takes.
+            env.pop("OMPI_MCA_btl_tcp_if_include", None)
+            env.pop("OMPI_MCA_btl_tcp_if_exclude", None)
             env.update(env_extra or {})
 
             command = [
