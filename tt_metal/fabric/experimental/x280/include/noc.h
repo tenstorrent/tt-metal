@@ -337,8 +337,9 @@ static inline volatile void* noc_configure_tlb_2m_ext(uint32_t index, noc_tlb_2m
  * (tt-isa-documentation, BlackholeA0/NoC/Coordinates.md:24). The fields are
  * written as given.
  *
- * `vc` is NOC_VC_DYNAMIC, which leaves `static_vc` clear, or a static request
- * VC written as class = vc >> 1 and buddy = vc & 1 with `static_vc` set
+ * `vc` is NOC_VC_DYNAMIC, which writes no VC field, so `static_vc` stays clear
+ * only if the caller zeroed `*tlb`; or a static request VC written as
+ * class = vc >> 1 and buddy = vc & 1 with `static_vc` set
  * (TLBWindows.md, "Configuration": unicast classes 0b00 and 0b01).
  *
  * Coordinates and `vc` are not bounded here -- each coordinate is a six-bit
