@@ -1267,6 +1267,24 @@ and Tensix readers above 96 tokens per expert for plans without reader down colu
 (MIMO_FL_DRISC_PURE=0/1 forces). Outputs bit-identical across dual / pure-DRISC / pure-Tensix paths (K3, K2.7 y at M
 128).
 
+**K3 fixed cost, x / y vs weights, down-core floor (12 x 10, 2026-10-15).** Call time is linear in local experts: M 32
+E 1 / 2 / 4 / 8 / 12 / 24 / 56 = 70 / 109 / 188 / 344 / 498 / 960 / 2201 us -> ~33 us per call + 38.7 us per expert
+(M 128: ~33 + 47.2). One-expert profile (M 32, us from kernel start): first x DRAM read only at 10.0 (the first
+sub-block's token-index read waits ~5 us behind the startup weight flood: DRISC gate/up + 38 down cores prefetching),
+first gate/up matmul ~14-16, gate/up matmuls ~32 us, last at 47-49; h complete on the down cores 56.7-64.3 (the h chain
+hand-off ~15 us), down matmul + y ~4.6 -> fill ~14 + h ~15 + drain ~5. x priority at the DRAM controller
+(MIMO_FL_DRISC_MPFE=0,0,3 / 0,0,7) hurts small M (E56 M 46 40.4 -> 43.1, E12 M 64 44.1 -> 48.8), neutral at 128 / 256.
+With the new DRISC default x alone costs ~its bytes (no x: E56 M 46 40.5 vs 40.4, M 128 / 256 -3.5 / -6.9 us). The y
+writes did not: each down core writes pcd * 64 B of every row-major y row, and 12 x 10 gave K3 38 down cores at 3
+columns (192 B writes). MIMO_FL_ND, E56 us / expert M 46 / 128 / 256 / 1024: 38 40.4 / 47.8 / 57.0 / 190.3, 28 40.1 /
+45.8 / 53.6 / 190.3, 23 40.4 / 51.6 / 60.8 / 202.4, 19 40.4 / 52.5 / 62.2 / 241.9; y as bfp8 tiles 40.1 / 44.5 / 51.9 /
+197.7. Default now >= 4 columns per down core in auto-shaped plans (galaxy-unified `c73eadd9998`, y bit-identical): E56
+M 32 / 64 / 96 / 192 / 384 / 2048 39.3 / 41.4 / 44.7 / 52.0 / 72.4 / 379.0 -> 39.1 / 41.0 / 44.4 / 49.7 / 72.3 / 379.0; E12
+M 32 / 64 / 128 / 192 / 256 41.5 / 44.1 / 49.3 / 55.1 / 60.4 -> 41.1 / 43.8 / 49.0 / 53.6 / 57.9 (GLM-Flash: not auto-shaped;
+ND 32 = its default within 1%). After it, E56 ms per call M 46 / 128: full 2.246 / 2.561, y onto itself 2.182 / 2.359,
+no x 2.239 / 2.405, neither 2.081 / 2.231 (weights alone 2.054 / 2.190): x and y together cost 165 / 330 us against
+108 / 300 us of their bytes at 512 GB/s.
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
