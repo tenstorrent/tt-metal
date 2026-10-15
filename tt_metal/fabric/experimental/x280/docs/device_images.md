@@ -214,8 +214,8 @@ Built by `ninja -C build x280_images` ([README](../README.md#2-build-boot-and-ru
 | `firmware-eth-credit-x280-fwd.bin` | `src/eth_credit_x280_fwd.cpp` | the X280 forwarders of eth_credit on both chips, run by `x280_eth_credit` |
 
 Every image compiles with `-mcpu=sifive-x280 -march=rv64gc -mabi=lp64d
--mcmodel=medany -O2 -Werror`, freestanding, and links with
-`X280_REQUIRE_NO_BSS` defined, so the linker scripts refuse a `.bss`.
+-mcmodel=medany -O2 -Werror -fno-zero-initialized-in-bss`, freestanding, and
+links with `X280_REQUIRE_NO_BSS` defined, so the linker scripts refuse a `.bss`.
 `x280_image_layout` checks resident idle's `.text` at `0x08000000` and the
 sentinel's at `0x08001000`. The `x280_abi_headers` build target compiles each
 ABI header alone as C, C++ and, for the two `entry.S` includes, assembly.

@@ -622,15 +622,13 @@ endforeach()
 
 # ---------------------------------------------------------------------------
 # core_sync: an X280 hart joins or directs core_sync_barrier over Tensix, ERISC and DRISC workers;
-# the release probe releases one or more X280 multicast groups. Both images keep their
-# zero-initialised statics in .data, since the per-hart entry zeroes no .bss.
+# the release probe releases one or more X280 multicast groups.
 # ---------------------------------------------------------------------------
 foreach(_member director release-probe)
     string(REPLACE "-" "_" _source "${_member}")
     x280_add_image(
         NAME firmware-core-sync-${_member}
         SOURCES src/core_sync_${_source}.cpp
-        COMPILE_OPTIONS -fno-zero-initialized-in-bss
         INCLUDES
             kernels/shared
             kernels/core_sync
@@ -684,7 +682,6 @@ foreach(
         NAME firmware-packet-injection-${_name}
         SOURCES src/packet_injection_x280.cpp
         ${_pinned_input}
-        COMPILE_OPTIONS -fno-zero-initialized-in-bss
         INCLUDES
             kernels
             kernels/shared
@@ -743,7 +740,6 @@ endforeach()
 x280_add_image(
     NAME firmware-eth-credit-x280-fwd
     SOURCES src/eth_credit_x280_fwd.cpp
-    COMPILE_OPTIONS -fno-zero-initialized-in-bss
     INCLUDES
         kernels
         kernels/shared
