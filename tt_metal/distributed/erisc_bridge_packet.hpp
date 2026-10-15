@@ -9,7 +9,7 @@
 #include <cstring>
 
 #include "llrt/hal.hpp"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "hostdevcommon/fabric_common.h"
 
 namespace tt::tt_fabric::erisc_bridge {
