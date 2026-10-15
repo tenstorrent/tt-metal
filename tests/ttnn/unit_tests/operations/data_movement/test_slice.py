@@ -2358,3 +2358,24 @@ def test_slice_nd_sharded_tensor_args_inherited_vs_explicit(device):
     explicit = ttnn.slice(tt_input, start, end, slice_dim=2, num_devices=2, memory_config=mem_config)
     assert list(explicit.memory_config().nd_shard_spec.shard_shape) == [1, 1, 64, 64]
     assert torch.equal(ttnn.to_torch(explicit), torch_expected)
+
+
+@pytest.mark.parametrize(
+    "shape, ends, dtype",
+    [
+        ([1, 80, 80, 80], [1, 80, 77, 80], torch.float32),
+        ([1, 80, 80, 160], [1, 80, 77, 160], torch.bfloat16),
+        ([2, 40, 80, 80], [2, 40, 77, 80], torch.float32),
+        ([1229, 6, 80], [1229, 5, 80], torch.float32),
+    ],
+)
+def test_slice_rm_uneven_core_split(device, shape, ends, dtype):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=dtype)
+    begins = [0] * len(shape)
+    expected = torch_input[tuple(slice(b, e) for b, e in zip(begins, ends))]
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.slice(ttnn_input, begins, ends))
+
+    assert_equal(expected, actual)
