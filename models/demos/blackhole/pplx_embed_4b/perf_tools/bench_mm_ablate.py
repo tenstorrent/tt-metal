@@ -6,7 +6,7 @@
 # Usage: bench_mm_ablate.py <preset> [batch]   presets: ff13 (bs8 / bs16 fused SwiGLU, bs32 plain FF1), ff13plain
 #        (the packed w13 shape without the SwiGLU epilogue), qkv, ff2, wo
 #        ABL_ONLY="full|no reads" picks variants; MM_BLOCKS=M,K,N,sh,sw overrides the preset's blocks; MM_IN0=L1|DRAM
-#        overrides the in0 placement.
+#        overrides the in0 placement, MM_OUT=L1|DRAM the output placement.
 import os
 import statistics
 import subprocess
@@ -82,6 +82,7 @@ def child(name, B, out_path):
 
     M, K, N, blocks, swiglu, wlayout, outp, *rest = preset(name, B)
     in0p = os.getenv("MM_IN0") or (rest[0] if rest else "L1")
+    outp = os.getenv("MM_OUT") or outp
     if os.getenv("MM_BLOCKS"):
         blocks = tuple(int(v) for v in os.getenv("MM_BLOCKS").split(","))
     torch.manual_seed(0)
