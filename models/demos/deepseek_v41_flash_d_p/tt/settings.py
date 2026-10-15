@@ -16,6 +16,14 @@ TABLE = {
         "owner rule: HiFi4 for every matmul (mHC projection, ...); lower only by an owner perf pick",
     ),
     "FP32_DEST_ACC": Setting(True, None, "owner rule: fp32 accumulation in every matmul / reduction"),
+    "ATTN_IN_MM": Setting(
+        "exact",
+        ("exact", "fpu"),
+        "the fp8 attention-input projection q(attn_norm) @ [wq_a | wkv] (tt/q_a.py:TtAttnInProj): exact = 32 masked "
+        "copies in one batched matmul + SFPU fp32 adds (tt/exact_mm.py; an fp32 sum of exact products like the "
+        "reference GEMM; ~8 ms vs 0.4 ms per layer at [1024, 2560] x [2560, 1792]); fpu = one ttnn.linear, whose "
+        "in-tile partial sums round to ~TF32 (rel 1.8e-4: ~0.8 % fp8 flips in the window KV, DS41-16)",
+    ),
     # ---- mHC (tt/mhc.py)
     "HC_TP_SUM": Setting(
         "gather_add",
@@ -30,6 +38,7 @@ MAX_PRECISION = {
     "MATMUL_FIDELITY": "HiFi4",
     "FP32_DEST_ACC": True,
     "HC_TP_SUM": "gather_add",
+    "ATTN_IN_MM": "exact",
 }
 
 settings = Settings("DS41_", TABLE, max_precision=MAX_PRECISION)

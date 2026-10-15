@@ -9,9 +9,11 @@ Per chip (r, c) the input is attn_norm's column split [1, 1, S/SP, H/TP] fp32 TI
 
     tt/quant.fp8_qdq            the reference fp8_linear's act_quant_dequant(x, 32), bit-exact: groups of 32 inside the
                                 chip's H/TP columns (H/TP % 32 == 0), bf16 out (exact)
-    ttnn.linear (TtAttnInProj)  q(x) @ the chip's K rows of [wq_a | wkv]^T [H/TP, 1280 + 512] (bf16: e4m3 x 2^k is
-                                bf16-exact), HiFi4 + fp32 accumulation, fp32 partial out: products of bf16 operands are
-                                exact, so only the summation order differs from the reference GEMM
+    TtAttnInProj                q(x) @ the chip's K rows of [wq_a | wkv]^T [H/TP, 1280 + 512] (bf16: e4m3 x 2^k is
+                                bf16-exact), HiFi4 + fp32 accumulation, fp32 partial out. The FPU rounds each in-tile
+                                partial dot to ~TF32 (DS41-16), so by default (settings ATTN_IN_MM = exact) the matmul
+                                runs as tt/exact_mm.py:ExactMatmul (one product per tile-dot, fp32 SFPU adds): only the
+                                summation order differs from the reference GEMM. ATTN_IN_MM = fpu: one ttnn.linear
     tt/common.py:tp_sum         all_gather over axis 1 + SFPU ttnn.add in mesh-column order (K-30: exact fp32 sum,
                                 bit-identical on every chip of the row; the FPU in reduce_scatter / all_reduce reads fp32
                                 at about TF32) -> [1, 1, S/SP, 1792] fp32, replicated over TP
@@ -30,8 +32,10 @@ import torch
 import ttnn
 
 from .common import DRAM, TP_AXIS, compute_config, tp_sum
+from .exact_mm import ExactMatmul
 from .norm import TtDistributedRmsNorm
 from .quant import fp8_qdq
+from .settings import settings
 
 
 class TtAttnInProj:
@@ -56,6 +60,10 @@ class TtAttnInProj:
         self.ckc = compute_config(mesh)
         w_t = torch.cat(blocks, dim=0).t().contiguous()  # [H, width]
         assert torch.equal(w_t.bfloat16().float(), w_t.float()), "fp8 weights must be bf16-exact"
+        self.exact = settings.get("ATTN_IN_MM") == "exact"
+        if self.exact:  # ExactMatmul needs products of <= 11 significant bits: e4m3 x 2^k (3 mantissa bits) both sides
+            assert not (w_t.float().contiguous().view(torch.int32) & 0xFFFFF).any(), "weights are not on the e4m3 grid"
+            self.mm = ExactMatmul(mesh, hidden // tp, self.ckc, groups=4)
         # K (dim 2) split over the TP axis: chip column c holds rows [c H/TP, (c+1) H/TP), its attn_norm columns;
         # replicated over the SP axis.
         dims = (None, 2) if TP_AXIS == 1 else (2, None)
@@ -69,7 +77,10 @@ class TtAttnInProj:
         )
 
     def __call__(self, xq: ttnn.Tensor) -> ttnn.Tensor:
-        part = ttnn.linear(xq, self.weight, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        if self.exact:
+            part = self.mm(xq, self.weight)
+        else:
+            part = ttnn.linear(xq, self.weight, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
         out = tp_sum(self.mesh, part)
         ttnn.deallocate(part)
         return out
