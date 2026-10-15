@@ -57,7 +57,7 @@ while read -r tag v ids rts mode; do
     echo "== bits $t ${#NODES[@]} entries $(date -u +%T)"
     env -u TT_LLK_DISABLE_ASSERTS RUNNER_TEMP=/tmp/llkbits_$v TMPDIR=/tmp/llkbits_$v TOPKBITS_OUT=$OUT/bits_$t.jsonl timeout 5400 python -m pytest -n ${NBITS:-8} -p topkbits "${SP[@]}" -p no:cacheprovider --override-ini=log_cli=false -o timeout_method=thread -q -rfE "${SA[@]}" > $OUT/run_$t.log 2>&1
     rc=$?; unset SEL_FILE; echo "== bits $t rc=$rc $(grep -E 'passed|failed|error' $OUT/run_$t.log | tail -1 | cut -c1-150) $(wc -l < $OUT/bits_$t.jsonl 2>/dev/null) reads $(date -u +%T)"
-    [[ $rc != 0 ]] && grep -a -E "(FAILED|ERROR) " $OUT/run_$t.log | head -10 | cut -c1-240
+    [[ $rc != 0 ]] && grep -a -E "(FAILED|ERROR) |⨯ |differs from" $OUT/run_$t.log | head -10 | cut -c1-300
     texthash /tmp/llkbits_$v > $OUT/elfs_$t.txt
     continue
   fi

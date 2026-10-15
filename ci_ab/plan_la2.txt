@@ -1,0 +1,33 @@
+# job 2 (#60291 head 36805d6f18e): A head; C = rotating survivor, K 512 two-chunk rows on the one-thread layout;
+# CD = C with PACK's nine steps per chunk slot straight-line (no per-step call, decode or jump table). C2/CD2 copies.
+# Counters A, C, CD and probes Cnc (swaps to non-SFPU NOPs: swap count), Cns/CDns (no swaps), Cnn/CDnn (no swaps, no transposes).
+r A ids/xls.txt -
+r C ids/xls.txt -
+r CD ids/xls.txt -
+r C2 ids/xls.txt -
+r CD2 ids/xls.txt -
+r CD2 ids/xls.txt -
+r C2 ids/xls.txt -
+r CD ids/xls.txt -
+r C ids/xls.txt -
+r A ids/xls.txt -
+r A ids/xls.txt -
+r C ids/xls.txt -
+r CD ids/xls.txt -
+r C2 ids/xls.txt -
+r CD2 ids/xls.txt -
+r CD2 ids/xls.txt -
+r C2 ids/xls.txt -
+r CD ids/xls.txt -
+r C ids/xls.txt -
+r A ids/xls.txt -
+c A_wc ids/xls.txt - wc
+c C_wc ids/xls.txt - wc
+c CD_wc ids/xls.txt - wc
+c Cnc_wc ids/xls.txt - wc
+c Cns_wc ids/xls.txt - wc
+c CDns_wc ids/xls.txt - wc
+c Cnn_wc ids/xls.txt - wc
+c CDnn_wc ids/xls.txt - wc
+b C ids/xlt.txt - bits
+b CD ids/xlt.txt - bits
