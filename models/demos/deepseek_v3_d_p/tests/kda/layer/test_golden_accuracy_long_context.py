@@ -8,8 +8,8 @@ test only loads it. Error is reported and gated as NRMSE against the golden: per
 window, per 1,024-token window (drift with context), per token (the golden-wide floor from its manifest), and
 for the final recurrent state per head (one drifting head is not averaged away).
 
-Needs ``KIMI_K3_CKPT`` (layers.0 and embedding shards), ``KDA_LONG_CONTEXT_GOLDEN`` (a prepared golden) and ``KDA_TRACE_DIR``
-(the vLLM trace whose token ids the golden used); skips without them.
+Needs ``KIMI_K3_CKPT`` (layers.0 and embedding shards), ``KDA_LONG_CONTEXT_GOLDEN`` (a prepared golden) and
+``KDA_TRACE_DIR`` (the vLLM trace whose token ids the golden used); skips without them.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_state_at_sp_rank,
     to_sp_input,
 )
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     TokenErrorAccumulator,
     assert_accurate,
@@ -43,7 +44,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     nrmse,
 )
 
-_CALL = 5120  # tokens per prefill call, a multiple of the golden's 1,024-token segments
+_CALL = PREFILL_CHUNK_TOKENS  # tokens per prefill call, as in production; a multiple of the golden's segments
 _WINDOW = 1024
 _PCC = 0.999
 # PCC is the structural sanity gate; NRMSE carries precision. The worst head's state drifts with context on
