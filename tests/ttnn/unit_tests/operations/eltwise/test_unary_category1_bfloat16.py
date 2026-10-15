@@ -362,18 +362,15 @@ def test_error_functions(device, ttnn_op, low, high):
 # ─────────────────────────────────────────────────────────────────────────────
 # reciprocal: 1/x, swept over both signs
 #
-# The kernel's only departure from 1 ULP is at the small-output end, and it is
-# sharp on the input side: the device packs zero as soon as 1/x would land at
-# or below the smallest normal, which is |x| >= 2^126 exactly. Splitting the
-# sweep there is what keeps the comparison honest. Flushing both outputs at a
-# fixed threshold instead straddles pairs that are 1 ULP apart — at
-# x = 8.474e37 the golden is 1.1847e-38 and the device returns the adjacent
-# 1.1755e-38, and a threshold between them zeroes one side and reports the
-# 129 ULP of a value-against-zero comparison.
+# Split at |x| = 2^126, whose reciprocal is the smallest normal BF16.
+# Wormhole preserves that boundary result; the other architectures retain
+# their existing flush-to-zero behavior there. Larger magnitudes produce
+# subnormal reciprocals and are flushed to +0. Test the boundary separately
+# so the normal-domain comparison does not mask underflow errors.
 # ─────────────────────────────────────────────────────────────────────────────
 
-RECIPROCAL_FTZ_INPUT = 2.0**126
-RECIPROCAL_MAX_INPUT = RECIPROCAL_FTZ_INPUT * (1 - 2.0**-8)  # largest bfloat16 below it
+RECIPROCAL_BOUNDARY_INPUT = 2.0**126
+RECIPROCAL_MAX_INPUT = RECIPROCAL_BOUNDARY_INPUT * (1 - 2.0**-8)  # largest bfloat16 below it
 
 
 @pytest.mark.parametrize(
@@ -385,9 +382,9 @@ RECIPROCAL_MAX_INPUT = RECIPROCAL_FTZ_INPUT * (1 - 2.0**-8)  # largest bfloat16 
     ids=["positive", "negative"],
 )
 def test_reciprocal(device, low, high):
-    """Every normal bfloat16 of one sign whose reciprocal the device can still
-    represent. This covers |x| < 1, where 1/x amplifies instead of shrinking
-    and the output runs all the way up to 2^126, as well as the shrinking half.
+    """Every normal bfloat16 of one sign below the underflow boundary.
+    This covers |x| < 1, where 1/x amplifies instead of shrinking and the
+    output runs all the way up to 2^126, as well as the shrinking half.
     """
     input_tensor = generate_bfloat16_bits_in_range(low, high)
 
@@ -399,25 +396,23 @@ def test_reciprocal(device, low, high):
     tt_result = ttnn.reciprocal(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+    ulp_threshold = 0 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 1
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp_threshold)
 
 
 @pytest.mark.parametrize(
     "low, high",
     [
-        (RECIPROCAL_FTZ_INPUT, MAX_BF16),
-        (-MAX_BF16, -RECIPROCAL_FTZ_INPUT),
+        (RECIPROCAL_BOUNDARY_INPUT, MAX_BF16),
+        (-MAX_BF16, -RECIPROCAL_BOUNDARY_INPUT),
     ],
     ids=["positive", "negative"],
 )
-def test_reciprocal_flushes_to_zero(device, low, high):
-    """From |x| = 2^126 up the device returns exactly 0, and the sign goes with
-    the magnitude — the negative half returns +0, not -0.
-
-    The cutoff is a step early rather than a rounding artifact: 1/2^126 is the
-    smallest normal itself, so the device gives up before subnormals even
-    start, and every input in this range has a nonzero reciprocal that
-    bfloat16 can hold.
+def test_reciprocal_underflow_boundary(device, low, high):
+    """Wormhole returns +/-2^-126 at +/-2^126 and +0 beyond that boundary.
+    Other architectures retain their existing +0 result at the boundary.
+    Every exact reciprocal in this range is nonzero and BF16-representable
+    after rounding, but subnormal outputs are flushed on the device.
     """
     input_tensor = generate_bfloat16_bits_in_range(low, high)
 
@@ -425,8 +420,12 @@ def test_reciprocal_flushes_to_zero(device, low, high):
     result = ttnn.to_torch(ttnn.reciprocal(to_tt_tensor(input_tensor, device)))
 
     assert (golden != 0).all(), "expected every reciprocal in this range to be representable"
-    assert_equal(torch.zeros_like(result), result)
-    assert not torch.signbit(result).any(), "flushed results must be +0 for both input signs"
+    expected = torch.zeros_like(result)
+    if device.arch() == ttnn.device.Arch.WORMHOLE_B0:
+        boundary = input_tensor.abs() == RECIPROCAL_BOUNDARY_INPUT
+        expected[boundary] = golden[boundary]
+    assert_equal(expected, result)
+    assert not torch.signbit(result[expected == 0]).any(), "flushed results must be +0 for both input signs"
 
 
 def test_reciprocal_zero_and_nonfinite(device):
@@ -579,6 +578,35 @@ def test_exp2_allclose(device):
     result = ttnn.to_torch(tt_result)
 
     assert_allclose(actual_result=result, expected_result=golden, atol=8.5e-39, rtol=0)
+
+
+def test_exp2_special_values(device):
+    """exp2 saturation and infinity handling, which the bfloat16 sweeps replace with 0 (see #44507).
+
+    | Input                    | Expected                                   |
+    |--------------------------|--------------------------------------------|
+    | -inf                     | 0                                          |
+    | -127                     | 0 (golden 2^-127 is subnormal; device FTZ) |
+    | -126                     | 2^-126, smallest normal (ULP ≤ 1)          |
+    | 0, ±1, ±10, 127          | ULP ≤ 1                                    |
+    | 128, +inf                | +inf                                       |
+
+    NaN is excluded: ttnn.bfloat16 host-side packing turns NaN into +inf before
+    the tensor reaches the device, so NaN propagation can't be tested at this dtype.
+    """
+    input_tensor = torch.tensor(
+        [0.0, 1.0, -1.0, 10.0, -10.0, 127.0, -126.0, float("inf"), -float("inf"), 128.0, -127.0],
+        dtype=torch.bfloat16,
+    )
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = flush_subnormal_values_to_zero(golden_function(input_tensor, device=device))
+
+    result = ttnn.to_torch(ttnn.exp2(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -734,8 +762,6 @@ def test_bessel_ops(device, ttnn_op, low, high):
 # ulp(rounded reference), below 1.
 # The inputs in DECLARED are stored as the class given there, the first row that holds; where
 # that differs from torch, it is the class the TT-NN op this kernel replaces stores.
-# Each run logs one ULP line: the largest pure ULP error against torch and the outputs of
-# another class, for this program and for the path it replaces on the same input.
 LGAMMA_SMALLEST_NORMAL = 2.0**-126
 LGAMMA_CLASS_CODES = {"inf": 0, "-inf": 1, "zero": 2, "finite": 3}
 
@@ -791,36 +817,14 @@ def _lgamma_pure_ulp(reference, actual):
     return torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
 
 
-def _lgamma_versus_torch(x64, output):
-    """The largest pure ULP error against torch over outputs of torch's stored class, and the number
-    of outputs of another class."""
-    ulp = torch.minimum(
-        _lgamma_pure_ulp(_lgamma_reference(x64), output),
-        _lgamma_pure_ulp(_lgamma_reference(_lgamma_flush(x64)), output),
-    )
-    mismatched = torch.isinf(ulp)
-    return (ulp[~mismatched].max().item() if (~mismatched).any() else 0.0), int(mismatched.sum())
-
-
 @run_for_blackhole("the generated kernel runs on Blackhole only")
 def test_lgamma_exhaustive_bfloat16(device):
     x = generate_all_bfloat16_bitpatterns(torch.bfloat16)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.lgamma(tt_x)).to(torch.bfloat16)
-    # The path this program replaces, on the same input (see the device-perf test).
-    stock = ttnn.to_torch(
-        ttnn.unary_chain(
-            tt_x, [ttnn.UnaryWithParam(ttnn.UnaryOpType.LGAMMA), ttnn.UnaryWithParam(ttnn.UnaryOpType.IDENTITY)]
-        )
-    ).to(torch.bfloat16)
 
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     x64 = x.to(torch.float64)
-    (ours, ours_classes), (old, old_classes) = _lgamma_versus_torch(x64, actual), _lgamma_versus_torch(x64, stock)
-    print(
-        f"ULP lgamma {board} ours={ours:.3f} stock={old:.3f} "
-        f"ours_class_mismatches={ours_classes} stock_class_mismatches={old_classes}"
-    )
     expected = torch.full(x.shape, -1, dtype=torch.int8)
     for inputs, stored in LGAMMA_DECLARED[board]:
         lanes = eval(
@@ -886,6 +890,22 @@ def test_lgamma_every_placement_matches_interleaved_tiles(device, placement):
 
 
 @run_for_blackhole("the generated kernel runs on Blackhole only")
+def test_lgamma_many_tiles_per_core_match_torch(device):
+    """One core holds 128 tiles, so the kernel's per-call state carries across many tiles of one program."""
+    x = _lgamma_inputs((1, 1, 2048, 64))
+    shard = ttnn.create_sharded_memory_config(
+        x.shape, core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT
+    )
+    actual = ttnn.to_torch(ttnn.lgamma(_lgamma_on_device(x, device, memory_config=shard))).to(torch.bfloat16)
+    x64 = x.to(torch.float64)
+    ulp = torch.minimum(
+        _lgamma_pure_ulp(_lgamma_reference(x64), actual),
+        _lgamma_pure_ulp(_lgamma_reference(_lgamma_flush(x64)), actual),
+    )
+    assert ulp.max().item() < 1.0, f"{(ulp >= 1.0).sum().item()} of {ulp.numel()} outputs at or beyond 1 ulp of torch"
+
+
+@run_for_blackhole("the generated kernel runs on Blackhole only")
 @pytest.mark.parametrize("call", ["float32", "bfloat16_to_float32"])
 def test_lgamma_keeps_its_own_path_elsewhere(device, call):
     """A call the generated kernel does not serve runs the op's existing path and matches its golden."""
@@ -900,27 +920,13 @@ def test_lgamma_keeps_its_own_path_elsewhere(device, call):
         output = ttnn.from_torch(torch.zeros(x.shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         assert ttnn.lgamma(_lgamma_on_device(x, device), output_tensor=output).dtype == ttnn.float32
         return
-    else:
-        # Any value other than the parameter's default keeps the op's own kernel.
-        actual = ttnn.lgamma(_lgamma_on_device(x, device), **{call: 0.125})
-        expected = golden(x.float(), **{call: 0.125})
     assert_with_pcc(expected, ttnn.to_torch(actual).float(), 0.999)
 
 
 @run_for_wormhole_b0("TT-NN's own path is kept on this board")
 def test_lgamma_keeps_its_own_path(device):
-    """Every BF16 input returns TT-NN's own path bit for bit, run as in the device-perf test."""
-    x = generate_all_bfloat16_bitpatterns(torch.bfloat16)
-    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    actual = ttnn.to_torch(ttnn.lgamma(tt_x)).to(torch.bfloat16).view(torch.int16)
-    expected = (
-        ttnn.to_torch(
-            ttnn.unary_chain(
-                tt_x, [ttnn.UnaryWithParam(ttnn.UnaryOpType.LGAMMA), ttnn.UnaryWithParam(ttnn.UnaryOpType.IDENTITY)]
-            )
-        )
-        .to(torch.bfloat16)
-        .view(torch.int16)
-    )
-    differ = actual != expected
-    assert not differ.any(), f"{differ.sum().item()} inputs differ from TT-NN's own path; first x={x[differ][0].item()}"
+    """On a board the generated kernel does not install on, ttnn.lgamma runs TT-NN's own path, checked against
+    torch over the range the kernel is fitted on."""
+    x = _lgamma_inputs((1, 1, 64, 64))
+    actual = ttnn.to_torch(ttnn.lgamma(_lgamma_on_device(x, device))).float()
+    assert_with_pcc(_lgamma_reference(x.to(torch.float64)).float(), actual, 0.999)

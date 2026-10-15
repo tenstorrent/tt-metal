@@ -136,6 +136,8 @@ ALWI void lgamma_adjusted_tile_init() { MATH(SFPU_TERNARY_INIT(lgamma)); }
  * BF16 data, with one pass of a generated SFPU kernel. The DEST register buffer must be in acquired
  * state via *acquire_dst* call. This call is blocking and is only available on the compute engine.
  *
+ * It computes ttnn.lgamma of the tile's own values in this one call. `lgamma_stirling_tile`, `lgamma_stirling_float_tile`, `lgamma_adjusted_tile`, above, are steps of TT-NN's own lgamma kernel, which take other operands and are unchanged.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |

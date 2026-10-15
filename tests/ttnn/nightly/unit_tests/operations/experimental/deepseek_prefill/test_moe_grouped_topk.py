@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_gate_output,
     build_padding_config,
@@ -29,12 +29,18 @@ TEST_PARAMS = [(1, 1, 1), (1, 1, 33), (1, 1, 128), (1, 1, PREFILL_CHUNK_TOKENS_P
 
 TEST_PARAM_IDS = ["minimal", "just_over_one_tile", "four_tiles", "realistic"]
 
-# (n_groups, total_experts, summed_experts_per_group, topk_groups, n_activated_experts, route_scale)
+# Blackhole only: open the device with 16 KiB less worker L1, which grows the kernel config buffer
+# from 70656 B to 87040 B. The grouped (n_groups > 1) program is 79776 B under watcher + LLK
+# asserts and does not fit the default buffer.
+BH_DEFAULT_WORKER_L1_SIZE = 1461120
+GROUPED_DEVICE_PARAMS = {"worker_l1_size": BH_DEFAULT_WORKER_L1_SIZE - 16 * 1024} if is_blackhole() else {}
+
+# (n_groups, total_experts, summed_experts_per_group, topk_groups, n_activated_experts, route_scale, device_params)
 ROUTING_CONFIGS = [
-    (8, 256, 2, 4, 8, 0.5),  # DeepSeek grouped routing
-    (1, 384, 1, 1, 8, 2.827),  # Kimi single expert group -> collapses to a plain top-k
-    (1, 256, 1, 1, 6, 1.5),  # DeepSeek-V4 Flash single-group top-k
-    (1, 384, 1, 1, 6, 2.5),  # DeepSeek-V4 Pro single-group top-k
+    (8, 256, 2, 4, 8, 0.5, GROUPED_DEVICE_PARAMS),  # DeepSeek grouped routing
+    (1, 384, 1, 1, 8, 2.827, {}),  # Kimi single expert group -> collapses to a plain top-k
+    (1, 256, 1, 1, 6, 1.5, {}),  # DeepSeek-V4 Flash single-group top-k
+    (1, 384, 1, 1, 6, 2.5, {}),  # DeepSeek-V4 Pro single-group top-k
 ]
 ROUTING_CONFIG_IDS = ["deepseek-8g256e", "kimi-1g384e", "dsv4flash-1g256e", "dsv4pro-1g384e"]
 
@@ -57,9 +63,10 @@ BIASED_PCC_THRESHOLD = 0.999
 @pytest.mark.parametrize("input_dtype", INPUT_DTYPES, ids=INPUT_DTYPE_IDS)
 @pytest.mark.parametrize("score_func", SCORE_FUNCS)
 @pytest.mark.parametrize(
-    "n_groups,total_experts,summed_experts_per_group,topk_groups,n_activated_experts,route_scale",
+    "n_groups,total_experts,summed_experts_per_group,topk_groups,n_activated_experts,route_scale,device_params",
     ROUTING_CONFIGS,
     ids=ROUTING_CONFIG_IDS,
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize("num_batches,batch_size,seq_len", TEST_PARAMS, ids=TEST_PARAM_IDS)
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")

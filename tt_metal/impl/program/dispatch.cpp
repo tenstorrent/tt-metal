@@ -666,7 +666,9 @@ uint32_t finalize_kernel_bins(
 }
 
 uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
-    return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    const uint32_t num_workers =
+        device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    return std::max<uint32_t>(num_workers, device->num_hw_cqs());
 }
 
 void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_command_sequence) {
@@ -949,7 +951,7 @@ void generate_runtime_args_cmds_large_unicast(
         std::vector<CQDispatchWritePackedLargeUnicastSubCmd> large_sub_cmds(num_in_chunk);
         // Per-core payload backing storage. Must outlive the add_dispatch call (memcpy'd into the command).
         std::vector<std::vector<uint8_t>> core_payloads(num_in_chunk);
-        std::vector<tt::stl::Span<const uint8_t>> data_collection(num_in_chunk);
+        std::vector<ttsl::Span<const uint8_t>> data_collection(num_in_chunk);
 
         for (uint32_t k = 0; k < num_in_chunk; ++k) {
             const uint32_t i = offset_idx + k;
@@ -971,7 +973,7 @@ void generate_runtime_args_cmds_large_unicast(
                 }
                 offset += std::get<2>(data);
             }
-            data_collection[k] = tt::stl::Span<const uint8_t>(buf.data(), buf.size());
+            data_collection[k] = ttsl::Span<const uint8_t>(buf.data(), buf.size());
         }
 
         DeviceCommandCalculator calculator(metal_ctx);
@@ -1072,8 +1074,9 @@ BatchedTransfers assemble_runtime_args_commands(
     for (uint32_t programmable_core_type_index = 0;
          programmable_core_type_index < hal.get_programmable_core_type_count();
          programmable_core_type_index++) {
-        if (hal.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::IDLE_ETH) {
-            // Fast dispatch not supported on IDLE_ETH yet
+        const auto core_type = hal.get_programmable_core_type(programmable_core_type_index);
+        if (core_type == HalProgrammableCoreType::IDLE_ETH || core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            // Fast dispatch not supported on IDLE_ETH, and no longer supported on ACTIVE_ETH
             continue;
         }
         for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
@@ -1100,12 +1103,14 @@ BatchedTransfers assemble_runtime_args_commands(
 
     uint32_t count_word_offset = is_watcher_assert_enabled(metal_ctx) ? 1 : 0;
 
-    // Ethernet only: unicast to each core
+    // Non-multicast cores (e.g. DRAM programmable cores): unicast common RTAs to each core.
+    // ACTIVE_ETH no longer uses fast dispatch; TENSIX common RTAs go through the multicast path below.
     for (uint32_t p_idx = 0; p_idx < hal.get_programmable_core_type_count(); p_idx++) {
         auto programmable_core_type = hal.get_programmable_core_type(p_idx);
         if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH ||
+            programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH ||
             programmable_core_type == HalProgrammableCoreType::TENSIX) {
-            // Fast dispatch not supported on IDLE_ETH yet
+            // IDLE_ETH/ACTIVE_ETH: not fast-dispatch targets. TENSIX: handled via multicast.
             continue;
         }
 
@@ -1172,9 +1177,11 @@ BatchedTransfers assemble_runtime_args_commands(
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         auto programmable_core_type = hal.get_programmable_core_type(index);
-        if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
-            // Fast dispatch not supported on IDLE_ETH yet
-            // TODO: can't just loop here as code below confuses ACTIVE/IDLE
+        if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH ||
+            programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            // Fast dispatch not supported on IDLE_ETH, and no longer supported on ACTIVE_ETH.
+            // Remaining targets: TENSIX (unique RTAs unicast, common RTAs multicast above) and any
+            // non-multicast programmable cores such as DRAM (both unique and common RTAs unicast below).
             continue;
         }
         CoreType core_type = hal.get_core_type(index);
@@ -1272,7 +1279,7 @@ BatchedTransfers assemble_runtime_args_commands(
 
         // Common RTAs
         // Set by the user based on the kernel ID. All cores running that kernel ID will get these RTAs
-        // Ethernet only: unicast to each core
+        // Non-multicast cores: unicast to each core.
         if (!metal_ctx.hal().get_supports_receiving_multicasts(index)) {
             for (auto& kg : program.get_kernel_groups(index)) {
                 for (size_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
@@ -1386,34 +1393,13 @@ BatchedTransfers assemble_runtime_args_commands(
 
 class SemphoreCommandGenerator {
 public:
-    // Generate batched_transfers (for multicast) and unicast_semaphore_cmds for the semaphores in the program.
+    // Generate batched_transfers (for multicast) for the semaphores in the program.
     void size_commands(
         const MetalContext& metal_ctx,
         ProgramImpl& program,
         IDevice* device,
-        DeviceCommandCalculator& calculator,
         const CommandConstants& constants,
         BatchedTransfers& batched_transfers) {
-        auto extract_dst_noc_unicast_info =
-            [&device](
-                const auto& ranges, const CoreType core_type) -> std::vector<std::pair<transfer_info_cores, uint32_t>> {
-            // This API extracts all the pairs of noc multicast encodings given a set of core ranges
-            std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
-            size_t num_cores = 0;
-            for (const CoreRange& core_range : ranges) {
-                num_cores += core_range.size();
-            }
-            dst_noc_unicast_info.reserve(num_cores);
-            for (const CoreRange& core_range : ranges) {
-                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                        CoreCoord virtual_coord = device->virtual_core_from_logical_core(CoreCoord({x, y}), core_type);
-                        dst_noc_unicast_info.push_back(std::make_pair(virtual_coord, /*num_mcast_dests=*/0));
-                    }
-                }
-            }
-            return dst_noc_unicast_info;
-        };
         // Prevent reallocation of semaphore_data to ensure pointers remain valid.
         semaphore_data.reserve(program.semaphores().size());
 
@@ -1447,81 +1433,14 @@ public:
                               .data = ttsl::Span<const uint8_t>(
                                   reinterpret_cast<const uint8_t*>(&semaphore_data.back()), sizeof(uint32_t))}}};
                 }
-            } else if (semaphore.core_type() == CoreType::ETH) {
-                unicast_semaphore_cmds.push_back({.dst = semaphore.offset(), .size = sizeof(uint32_t)});
-                auto& unicast_cmds = unicast_semaphore_cmds.back();
-                // TODO: we only fast dispatch to active eth...
-                std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
-                    extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
-                LOG_TRACE_LAZY(
-                    tt::LogDispatch,
-                    "Semaphore (UNICAST/ETH): num_cores={}, L1_offset=0x{:x}, initial_value={}",
-                    dst_noc_unicast_info.size(),
-                    semaphore.offset(),
-                    semaphore_data.back());
-                for (const auto& dst_noc_info : dst_noc_unicast_info) {
-                    const auto& virtual_core = std::get<CoreCoord>(dst_noc_info.first);
-                    auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_core);
-                    LOG_TRACE_LAZY(tt::LogDispatch, "  virtual_core={}, noc_xy=0x{:x}", virtual_core, noc_xy);
-                    unicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = noc_xy});
-                    unicast_cmds.data.emplace_back(&semaphore_data.back(), sizeof(uint32_t));
-                }
-                calculator.insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
-                    unicast_cmds.sub_cmds.size(),
-                    unicast_cmds.size,
-                    constants.max_prefetch_command_size,
-                    constants.packed_write_max_unicast_sub_cmds,
-                    unicast_cmds.payload);
             }
-        }
-    }
-
-    // Write unicast semaphore commands to the device command sequence.
-    void assemble_unicast_commands(
-        const MetalContext& metal_ctx,
-        HostMemDeviceCommand& device_command_sequence,
-        ProgramImpl& program,
-        const CommandConstants& constants) const {
-        // Unicast Semaphore Cmd
-        uint32_t index = metal_ctx.hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-        for (const auto& cmds : unicast_semaphore_cmds) {
-            uint32_t curr_sub_cmd_idx = 0;
-            for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : cmds.payload) {
-                uint32_t sem_addr = cmds.dst + program.get_program_config(index).sem_offset;
-                device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-                    CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS,
-                    num_sub_cmds_in_cmd,
-                    sem_addr,
-                    cmds.size,
-                    unicast_sem_payload_sizeB,
-                    cmds.sub_cmds,
-                    cmds.data,
-                    constants.packed_write_max_unicast_sub_cmds,
-                    curr_sub_cmd_idx,
-                    false,
-                    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
-                curr_sub_cmd_idx += num_sub_cmds_in_cmd;
-                for (const auto& data_and_size : cmds.data) {
-                    RecordDispatchData(
-                        program.get_context_id(), program.get_id(), DISPATCH_DATA_SEMAPHORE, data_and_size.second);
-                }
-            }
+            // Semaphores are only placed on multicast-capable (WORKER/TENSIX) cores under fast dispatch.
+            // The former ETH unicast-semaphore path was removed with eth fast dispatch.
         }
     }
 
 private:
-    struct UnicastSemaphoreData {
-        std::vector<CQDispatchWritePackedUnicastSubCmd> sub_cmds;
-        // 1 per sub_cmd.
-        std::vector<std::pair<const void*, uint32_t>> data;
-        // Regions of sub_cmds that each fit in a single command.
-        std::vector<std::pair<uint32_t, uint32_t>> payload;
-        uint32_t dst;
-        uint32_t size;
-    };
-
     std::vector<uint32_t> semaphore_data;
-    std::vector<UnicastSemaphoreData> unicast_semaphore_cmds;
 };
 
 class CircularBufferCommandGenerator {
@@ -2380,6 +2299,21 @@ public:
         for (uint32_t programmable_core_type_index = 0;
              programmable_core_type_index < hal.get_programmable_core_type_count();
              ++programmable_core_type_index) {
+            const auto core_type = hal.get_programmable_core_type(programmable_core_type_index);
+            if (core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+                // Fast dispatch no longer targets active ethernet. Reject a non-empty active-eth kernel group loudly
+                // rather than silently dropping its launch (which would let Enqueue/Finish report completion without
+                // the ethernet work running). Slow/host dispatch is unaffected -- it doesn't go through this path.
+                TT_FATAL(
+                    program.get_kernel_groups(programmable_core_type_index).empty(),
+                    "Fast dispatch to ACTIVE_ETH is unsupported; use slow/host dispatch instead");
+                continue;
+            }
+            if (core_type == HalProgrammableCoreType::IDLE_ETH) {
+                // Fast dispatch not supported on idle ethernet. Remaining launch-message targets are TENSIX
+                // (multicast) and any non-multicast programmable cores (unicast below).
+                continue;
+            }
             for (auto& kernel_group : program.get_kernel_groups(programmable_core_type_index)) {
                 auto kernel_config = kernel_group->launch_msg.view().kernel_config();
                 kernel_config.mode() = dev_msgs::DISPATCH_MODE_DEV;
@@ -2603,15 +2537,10 @@ public:
         MetalContext& metal_ctx,
         ProgramCommandSequence& program_command_sequence,
         HostMemDeviceCommand& device_command_sequence,
-        distributed::MeshDevice* mesh_device,
+        distributed::MeshDevice* /*mesh_device*/,
         SubDeviceId sub_device_id,
         const ProgramTransferInfo& program_transfer_info,
-        bool has_multicast_launch_cmds,
-        bool has_unicast_launch_cmds) {
-        const auto& noc_data_start_idx =
-            mesh_device->impl().noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
-        const auto& num_noc_unicast_txns =
-            has_unicast_launch_cmds ? mesh_device->impl().num_noc_unicast_txns(sub_device_id) : 0;
+        bool has_multicast_launch_cmds) {
         DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
         auto sub_device_index = *sub_device_id;
         if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -2641,18 +2570,13 @@ public:
                 metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index)),
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
             has_multicast_launch_cmds ? sub_device_index : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-            num_noc_unicast_txns,
-            noc_data_start_idx,
             dispatcher_for_go_signal);
 
         LOG_TRACE_LAZY(
             tt::LogDispatch,
-            "Go Signal (MCAST): dispatcher={}, sub_device_idx={}, num_unicast_txns={}, noc_data_start_idx={}, "
-            "stream_idx={}",
+            "Go Signal (MCAST): dispatcher={}, sub_device_idx={}, stream_idx={}",
             dispatcher_for_go_signal == DispatcherSelect::DISPATCH_MASTER ? "MASTER" : "SUBORDINATE",
             sub_device_index,
-            num_noc_unicast_txns,
-            noc_data_start_idx,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(sub_device_index));
 
         program_command_sequence.mcast_go_signal_cmd_ptr =
@@ -2693,8 +2617,7 @@ void assemble_device_commands(
     DeviceCommandCalculator program_config_buffer_calculator(metal_ctx);
 
     SemphoreCommandGenerator semaphore_command_generator;
-    semaphore_command_generator.size_commands(
-        metal_ctx, program, mesh_device, program_config_buffer_calculator, constants, batched_transfers);
+    semaphore_command_generator.size_commands(metal_ctx, program, mesh_device, constants, batched_transfers);
 
     CircularBufferCommandGenerator circular_buffer_command_generator;
     circular_buffer_command_generator.construct_commands(metal_ctx, mesh_device, constants, program, batched_transfers);
@@ -2759,8 +2682,6 @@ void assemble_device_commands(
         }
     }
 
-    semaphore_command_generator.assemble_unicast_commands(
-        metal_ctx, program_command_sequence.program_config_buffer_command_sequence, program, constants);
     // Ensure that we use the correct amount of space for each command sequence
     TT_ASSERT(
         program_command_sequence.program_config_buffer_command_sequence.size_bytes() ==
@@ -2835,8 +2756,7 @@ void assemble_device_commands(
         mesh_device,
         sub_device_id,
         program_transfer_info,
-        launch_message_generator.has_multicast_launch_cmds(),
-        launch_message_generator.has_unicast_launch_cmds());
+        launch_message_generator.has_multicast_launch_cmds());
     TT_ASSERT(
         program_command_sequence.go_msg_command_sequence.size_bytes() ==
         program_command_sequence.go_msg_command_sequence.write_offset_bytes());
@@ -3022,13 +2942,11 @@ void update_program_dispatch_commands(
     ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
-    uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update,
     uint8_t cq_id) {
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
@@ -3179,15 +3097,6 @@ void update_program_dispatch_commands(
     for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    if (!cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.empty()) {
-        uint32_t unicast_cores_launch_message_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH) +
-            (unicast_cores_launch_message_wptr *
-             hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH).size_of<dev_msgs::launch_msg_t>());
-        for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs) {
-            launch_msg_cmd_ptr->addr = unicast_cores_launch_message_addr;
-        }
-    }
     // Update go signal to reflect potentially modified dispatch core and new wait count
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(
         dev_msgs::RUN_MSG_GO,
@@ -3196,29 +3105,16 @@ void update_program_dispatch_commands(
         metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
             metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
-    // Update the number of unicast txns based on user provided parameter
-    // This is required when a MeshWorkload uses ethernet cores on a set of devices
-    // where the number of active eth cores is heterogeneous across devices.
-    // Update the number of unicast txns to eth cores to match the minimum number of cores
-    // across devices (specified by user)
-    if (unicast_go_signal_update.first) {
-        TT_FATAL(
-            unicast_go_signal_update.second > 0,
-            "Must specify a valid number of cores to unicast the go signal to when updating dispatch commands");
-        cached_program_command_sequence.mcast_go_signal_cmd_ptr->num_unicast_txns = unicast_go_signal_update.second;
-    }
 }
 
 void update_traced_program_dispatch_commands(
     const TraceNode& trace_node,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
-    uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update,
     uint8_t cq_id) {
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
@@ -3393,15 +3289,6 @@ void update_traced_program_dispatch_commands(
     for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    if (!cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.empty()) {
-        uint32_t unicast_cores_launch_message_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH) +
-            (unicast_cores_launch_message_wptr *
-             hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH).size_of<dev_msgs::launch_msg_t>());
-        for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs) {
-            launch_msg_cmd_ptr->addr = unicast_cores_launch_message_addr;
-        }
-    }
     // Update go signal to reflect potentially modified dispatch core and new wait count
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(
         dev_msgs::RUN_MSG_GO,
@@ -3410,17 +3297,6 @@ void update_traced_program_dispatch_commands(
         metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
             metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
-    // Update the number of unicast txns based on user provided parameter
-    // This is required when a MeshWorkload uses ethernet cores on a set of devices
-    // where the number of active eth cores is heterogeneous across devices.
-    // Update the number of unicast txns to eth cores to match the minimum number of cores
-    // across devices (specified by user)
-    if (unicast_go_signal_update.first) {
-        TT_FATAL(
-            unicast_go_signal_update.second > 0,
-            "Must specify a valid number of cores to unicast the go signal to when updating dispatch commands");
-        cached_program_command_sequence.mcast_go_signal_cmd_ptr->num_unicast_txns = unicast_go_signal_update.second;
-    }
 }
 
 namespace {
@@ -3786,8 +3662,6 @@ void reset_worker_dispatch_state_on_device(
                         metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id)),
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(i),
                 mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-                mesh_device->impl().num_noc_unicast_txns(sub_device_id),
-                mesh_device->impl().noc_data_start_index(sub_device_id),
                 dispatcher_for_go_signal);
         }
     }
@@ -3798,8 +3672,8 @@ void reset_worker_dispatch_state_on_device(
         SubDeviceId sub_device_id(static_cast<uint8_t>(i));
         uint32_t expected_num_workers = expected_num_workers_completed[i];
         if (reset_launch_msg_state) {
-            expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
-                                    mesh_device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+            // The reset go-signal is multicast to TENSIX workers; wait for their acknowledgements.
+            expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
         }
         if (metal_ctx.get_dispatch_query_manager().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
@@ -3860,21 +3734,6 @@ static HostMemDeviceCommand build_set_num_worker_sems_on_dispatch(
     return command_sequence;
 }
 
-static HostMemDeviceCommand build_set_go_signal_noc_data_on_dispatch(
-    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager) {
-    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
-    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
-    calculator.add_dispatch_set_go_signal_noc_data(go_signal_noc_data.size());
-    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-    HostMemDeviceCommand command_sequence(metal_ctx, cmd_sequence_sizeB);
-    DispatcherSelect dispatcher_for_go_signal = metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()
-                                                    ? DispatcherSelect::DISPATCH_SUBORDINATE
-                                                    : DispatcherSelect::DISPATCH_MASTER;
-    command_sequence.add_dispatch_set_go_signal_noc_data(go_signal_noc_data, dispatcher_for_go_signal);
-    TT_ASSERT(command_sequence.write_offset_bytes() == command_sequence.size_bytes());
-    return command_sequence;
-}
-
 static void submit_setup_commands(SystemMemoryManager& manager, uint8_t cq_id, const void* data, uint32_t size) {
     manager.issue_queue_reserve(size, cq_id);
     manager.cq_write(data, size, manager.get_issue_queue_write_ptr(cq_id));
@@ -3889,12 +3748,6 @@ void set_num_worker_sems_on_dispatch(
     uint32_t num_worker_sems,
     ttsl::Span<const uint32_t> workers_per_sub_device) {
     auto commands = build_set_num_worker_sems_on_dispatch(manager, num_worker_sems, workers_per_sub_device);
-    submit_setup_commands(manager, cq_id, commands.data(), commands.size_bytes());
-}
-
-void set_go_signal_noc_data_on_dispatch(
-    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id) {
-    auto commands = build_set_go_signal_noc_data_on_dispatch(go_signal_noc_data, manager);
     submit_setup_commands(manager, cq_id, commands.data(), commands.size_bytes());
 }
 
@@ -4058,7 +3911,6 @@ std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
     Device* device,
     uint8_t cq_id,
     ttsl::Span<const uint32_t> workers_per_sub_device,
-    const vector_aligned<uint32_t>& go_signal_noc_data,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     bool reset_launch_msg_state) {
     auto& manager = device->sysmem_manager();
@@ -4073,7 +3925,6 @@ std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
             max_size);
     };
     append(build_set_num_worker_sems_on_dispatch(manager, workers_per_sub_device.size(), workers_per_sub_device));
-    append(build_set_go_signal_noc_data_on_dispatch(go_signal_noc_data, manager));
     if (reset_launch_msg_state) {
         append(build_set_core_go_message_mapping_on_device(device, core_go_message_mapping, cq_id));
     }

@@ -63,7 +63,7 @@ struct LgammaBf16Config {
           0.0000000000000000e+00f}}};
 };
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_bf16_root_native_log.h"
+#include "ckernel_sfpu_lgamma_bf16_root_native_log.h"
 
 namespace ckernel::sfpu {
 
