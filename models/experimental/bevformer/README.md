@@ -59,7 +59,7 @@ and, per decoder layer, the classification branch.
 
 - The object queries, their positional embeddings and the initial reference points depend on
   the weights only, so `tt/model_preprocessing_head.py` computes them once. The parameters also
-  carry the head's BEV shape and `pc_range`, and are single use, like the decoder's.
+  carry the head's BEV shape and `pc_range`.
 - The box predictions are the decoder's box codes with cx, cy and cz replaced by its refined
   float32 points, scaled from [0, 1] to `pc_range` metres. The class logits are float32, the
   dtype the coder ranks.
@@ -67,14 +67,15 @@ and, per decoder layer, the classification branch.
   bus, previous BEV) is not part of the head.
 
 `tt/tt_nms_free_coder.py` ports `NMSFreeCoder`: the top 300 (query, class) pairs of the last
-layer by score, their box predictions decoded to `(cx, cy, cz, w, l, h, yaw, vx, vy)`, and a
-range filter.
+layer by score, their box predictions decoded to `(cx, cy, cz, w, l, h, yaw, vx, vy)`, and the
+range and score filters.
 
 - The top-k and the decoding run on device. A float32 top-k over all 9000 scores is slow, so the
   logits are ranked in bfloat16 against a pivot, the bfloat16 k-th logit, and the 512 candidates
   are re-ranked exactly in float32.
-- Only the final range filter runs on host: it keeps a data-dependent number of boxes and ends
-  the pipeline.
+- The range and score tests, upstream's lowering of the score threshold when no score passes it
+  included, run on device as a validity mask over the 300 boxes. Only dropping the invalid boxes
+  runs on host: it leaves a data-dependent number of boxes and ends the pipeline.
 - cz stays at the box's gravity center; upstream `get_bboxes` moves it to the bottom face after
   the coder.
 
@@ -188,7 +189,9 @@ Tests the box coder on head-shaped inputs.
   the pivot
 - The decoded boxes channel by channel, yaw through its sine and cosine, and the scores to a few
   float32 ulps
-- The range filter's kept boxes, and that a second call only hits the program cache
+- The kept boxes, with no score threshold, one some scores pass, and one none passes so the
+  threshold is lowered, and that a second call only hits the program cache
+- The top-k and the validity mask captured as a trace, which fails on any host operation
 
 **Usage:**
 ```bash

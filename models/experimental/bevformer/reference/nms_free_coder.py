@@ -64,7 +64,8 @@ def filter_boxes(scores, labels, boxes, post_center_range, score_threshold=None)
     centers = boxes[..., BOX_CENTER]
     mask = (centers >= post_center_range[:3]).all(1)
     mask &= (centers <= post_center_range[3:]).all(1)
-    if score_threshold is not None:
+    # Upstream tests the threshold for truth, so 0.0 applies none.
+    if score_threshold:
         thresh_mask = scores > score_threshold
         tmp_score = score_threshold
         while thresh_mask.sum() == 0:
