@@ -28,7 +28,8 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
                    tt/rope.rope_heads) -> x 512^-0.5 (the softmax scale folded into q: the op's scale is then 1, exact;
                    K-27) -> bf16 -> all_to_all head -> seq over axis 1 (sparse_sdpa needs H % 32 == 0: 16 heads per chip
                    on 4x4; done whenever TP > 1, one path everywhere) -> [1, 64, S/(SP TP), 512]
-    attention      settings WINDOW_SDPA = "exact" (default; DS41-19): tt/window_exact.ExactWindow on the chip's own heads
+    attention      settings WINDOW_SDPA = "high_precision" (default, owner 2026-10-15): the sparse_sdpa path below.
+                   "exact" (comparison only; DS41-19): tt/window_exact.ExactWindow on the chip's own heads
                    and rows (no reshard): q [1, H/TP, S/SP, 512] fp32 -> blocks of 32 queries x their 160 table rows,
                    q and the probabilities as bf16 pieces, lane-masked keys / values (exact products), fp32 SFPU
                    softmax with the fp32 sink, fp32 output. "high_precision" / "source": the bf16 q -> all_to_all ->

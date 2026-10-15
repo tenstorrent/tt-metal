@@ -55,7 +55,17 @@ def state_sources(spec, layer):
 # Device steps of the hybrid model, per block type: every step listed passed its component gate on the device.
 # Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "swa": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "kv", "attention", "attn_residual"},
+    "swa": {
+        "attn_hc",
+        "attn_collapse",
+        "attn_norm",
+        "q_a",
+        "kv",
+        "attention",
+        "attn_residual",
+        "ffn_hc",
+        "ffn_collapse",
+    },
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -105,6 +115,32 @@ def _collapse_host_fn(mesh, module, hidden):
         od = module(xd, pd)
         out = hidden_split_to_host(mesh, od).float()
         for t in (xd, pd, od):
+            ttnn.deallocate(t)
+        return out
+
+    fn.module = module
+    return fn
+
+
+def _ffn_collapse_host_fn(mesh, module, hidden):
+    """fn(ctx, h_mid_host [S, 4H], attn_mix_host [S, 24]) -> ffn_in host [S, H] fp32 (harness boundary: the streams
+    in, attn_hc's mixes row-split and TP-replicated (the module reads columns 0..3, the pre; DS41-3), the row- and
+    hidden-split output back)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import (
+        HC,
+        hidden_split_to_host,
+        row_split_to_device,
+        streams_to_device,
+    )
+
+    def fn(ctx, h, mix):
+        assert h.shape[-1] == HC * hidden and mix.shape[-1] >= HC, (h.shape, mix.shape)
+        hd = streams_to_device(mesh, h, hidden)
+        md = row_split_to_device(mesh, mix)
+        od = module(hd, md)
+        out = hidden_split_to_host(mesh, od).float()
+        for t in (hd, md, od):
             ttnn.deallocate(t)
         return out
 
@@ -279,6 +315,10 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         from models.demos.deepseek_v41_flash_d_p.tt.collapse import build_collapse
 
         return _collapse_host_fn(mesh, build_collapse(cfg), cfg.dim)
+    if step == "ffn_collapse":
+        from models.demos.deepseek_v41_flash_d_p.tt.collapse import build_collapse
+
+        return _ffn_collapse_host_fn(mesh, build_collapse(cfg), cfg.dim)
     if step in _HC_STEPS:
         from models.demos.deepseek_v41_flash_d_p.tt.mhc import build_hc
 

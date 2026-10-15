@@ -348,3 +348,22 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - OV-1: already done (DS41-12 is one line, 352 chars).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_residual.py`
   (DS41_RESIDUAL_MIX=addcmul for the op chain).
+
+## C.swa.ffn_collapse implement (attempt 1)
+- OV-3 first (owner 2026-10-15, accuracy against the noise floor): tt/settings.py defaults and MAX_PRECISION now
+  ATTN_IN_MM = fpu (one ttnn.linear, HiFi4 + fp32 acc) and WINDOW_SDPA = high_precision
+  (ttnn.bringup.sparse_sdpa(high_precision=True, attention_sink=...)); exact paths stay selectable (DS41_ATTN_IN_MM=exact,
+  DS41_WINDOW_SDPA=exact), the decision noted in each Setting's why. Docstrings of tt/q_a.py / tt/attention.py updated.
+  MAX_PRECISION had to change too: component / swap tests run at max precision (testing/model_precision.py), so with
+  "exact" there the swap tests would never see the fast defaults.
+- Re-runs with the fast defaults: S.swa.05 PASS (pcc_swap_out 0.999929; swap_kv_out rel 0.010850 <= limit 0.045857;
+  swap_q_a step rel 1.0e-4, swap_kv step rel 0.00236). S.swa.06 FAIL on one step check only: swap_attention vs CPU
+  rel 0.021227 > 0.02000 (fixed cap swap_step_rel; the component error is 0.02227); swap_attention_out rel 0.016893
+  <= limit 0.039237 (F72 tail), pcc_swap_out 0.999864. DS41-20. No exact kernel added (OV-3).
+- ffn_collapse: reuses tt/collapse.py:TtHcCollapse unchanged (slice + multiply + 3 x addcmul, fp32 SFPU, local per
+  chip, no CCL) with attn_hc's mixes as ``pre`` (DS41-3: the FFN collapses with this layer's attention pre).
+  hooks.py: `_ffn_collapse_host_fn` (streams_to_device(h_mid [S, 4H]), row_split_to_device(attn_mix [S, 24]) -> module
+  reads columns 0..3 -> hidden_split_to_host); `_device_step_fn` "ffn_collapse"; DEVICE_STEPS["swa"] += ffn_hc
+  (its C gate passed but it was never added), ffn_collapse.
+- Gate: PASS. pcc 0.999997; vs CPU rel 0 (bit-exact), vs golden 0.00254 (limit 0.0070); second inputs rel 0.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_collapse.py`
