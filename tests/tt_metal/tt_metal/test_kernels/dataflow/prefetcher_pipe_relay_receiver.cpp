@@ -6,7 +6,7 @@
 //
 // Bindings:
 //   pipe::in               — KernelAdvancedOptions::PrefetcherPipeBinding accessor (program slot id baked in)
-//   (relay DFB)            — bound as PRODUCER; reached through pipe.bind_relay(), no dfb:: token
+//   dfb::relay             — PRODUCER accessor of the relay DFB; built here and handed to pipe.bind_relay()
 // Args (named CTAs):
 //   args::total_entries    - pipe entries this core consumes over the run
 //   args::batch_size       - pipe entries per wait_front / pop_front
@@ -16,13 +16,14 @@
 // (P = num_threads = the pipe's credit lanes; P=1: all of them, dense; P>1: entries tid, tid+P,
 // ...) and consumes them batch_size at a time with wait_front(n) / pop_front(n).
 //
-// Relay publish is always one entry per push_back. The relay may fan this producer out over
-// several consumer TCs (cap=STRIDED with more consumers than producers); DFB push_back(n)
-// posts n entries on the *current* TC at the DFB stride and only then round-robins, so a
-// batched push would publish slots {0, C, ...} while the pipe delivered {0, 1, ...}: one
-// consumer reads an unfilled slot and pop_front then acks an entry nobody published.
-// Pushing one at a time lands relay entry k on TC k % C, which is the DFB's own layout; a pipe
-// entry is relay_pages_per_entry consecutive relay entries.
+// Relay publish is one producer share per push_back: one entry on a STRIDED producer, one block
+// (one pipe entry) on a BLOCKED one. The relay may fan this producer out over several consumer
+// TCs (cap=STRIDED with more consumers than producers); DFB push_back(n) posts n entries on the
+// *current* TC at the DFB stride and only then round-robins, so an over-sized push would publish
+// slots {0, C, ...} while the pipe delivered {0, 1, ...}: one consumer reads an unfilled slot and
+// pop_front then acks an entry nobody published. Pushing one share at a time lands relay entry k
+// on TC k % C, which is the DFB's own layout; a pipe entry is relay_pages_per_entry consecutive
+// relay entries.
 // Consequently batch_size here is the *pipe* batch: with C TCs per producer and a TRISC
 // batch of b, it must be b * C so every TC receives a full consumer batch before pop_front
 // waits for the consumers to catch up.
@@ -39,7 +40,9 @@ void kernel_main() {
 
     Noc noc;
     experimental::PrefetcherPipe pipe(pipe::in);
-    auto relay = pipe.bind_relay();
+    DataflowBuffer relay(dfb::relay);
+    pipe.bind_relay(relay);
+    const uint32_t share = relay.get_producer_share();
 
     const uint32_t tid = get_my_thread_id();
     const uint32_t num_threads = get_num_threads();
@@ -47,11 +50,12 @@ void kernel_main() {
     ASSERT(total_entries % num_threads == 0);
     ASSERT((total_entries / num_threads) % batch_size == 0);
     const uint32_t entries_this_thread = total_entries / num_threads;
+    ASSERT((batch_size * relay_pages_per_entry) % share == 0);
     for (uint32_t offset = 0; offset < entries_this_thread; offset += batch_size) {
         pipe.wait_front(batch_size);
-        for (uint32_t i = 0; i < batch_size * relay_pages_per_entry; ++i) {
-            relay.reserve_back(1);
-            relay.push_back(1);
+        for (uint32_t i = 0; i < batch_size * relay_pages_per_entry; i += share) {
+            relay.reserve_back(share);
+            relay.push_back(share);
         }
         pipe.pop_front(batch_size, noc);
     }
