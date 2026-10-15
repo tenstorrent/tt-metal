@@ -743,9 +743,10 @@ def test_strided_all_gather_async_nd_input_replicates_only_the_gathered_axis(mes
 @pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
 @pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
 def test_strided_all_gather_async_collapsed_shard_outer_axis_is_refused(mesh_device, strict_ccl_topology, expect_error):
-    """Rule (d), negative control: gathering dim 3 of {N}, [Shard(3)] along the rows interleaves pieces c and C+c;
-    the hook refuses before the op runs (so no ring is needed, nothing is skipped, and this runs on Blackhole too).
-    Before this change the output silently kept {N}, [Shard(3)]."""
+    """Negative control for all_gather's interleave refusal (require_contiguous_gather): gathering dim 3 of
+    {N}, [Shard(3)] along the rows interleaves pieces c and C+c; the hook refuses before the op runs (so no ring is
+    needed, nothing is skipped, and this runs on Blackhole too). Before this change the output silently kept
+    {N}, [Shard(3)]."""
     torch.manual_seed(22)
     _, _, num_devices = _mesh(mesh_device)
     tt_input = _from_torch(
@@ -809,11 +810,11 @@ def test_all_to_all_async_generic_nd_transposes_the_exchanged_axis(mesh_device, 
 @pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
 def test_all_to_all_async_generic_collapsed_shard_outer_axis_is_refused(mesh_device, strict_ccl_topology, expect_error):
     """Negative control: {N}, [Shard(2)] exchanged along the rows with in_dim=2 gathers row pieces c and C+c side by
-    side -- the all_gather half of the label refuses by rule (d), "would interleave" (gather family: a warning in
+    side -- the all_gather half of the label refuses as interleaving, "would interleave" (gather family: a warning in
     warn-only mode), before the op runs. Routing the input label through the reduce_scatter-shaped alias alone would
     have labelled this [Shard(3), Shard(2)], a permuted tensor. This is a different refusal from the nightly's
     cluster_axis=0 cases: those exchange an N-D [Shard(in), Shard(out)], whose gather half succeeds
-    ([Replicate, Shard(out)]) and whose scatter half rule (c) then refuses -- out_dim already sharded on the inner
+    ([Replicate, Shard(out)]) and whose scatter half then refuses -- out_dim already sharded on the inner
     axis while the new Shard axis is the outer one, "no TensorTopology can express" (scatter family: logged at error
     level) -- so the output keeps the union default there."""
     torch.manual_seed(25)
@@ -916,7 +917,8 @@ def test_reduce_scatter_minimal_direct_collapsed_replicate(mesh_device, strict_c
 @pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
 def test_reduce_scatter_minimal_direct_collapsed_shard_same_dim_inner_axis(mesh_device, strict_ccl_topology):
     """{N}, [Shard(3)] reduce-scattered on dim 3 along the innermost axis: each row sums its pieces and splits the sum
-    back across the row -- the collapsed label again (rule (c)), composing to the concatenated row sums."""
+    back across the row -- the collapsed label again (the helper's same-dim inner-axis collapse), composing to the
+    concatenated row sums."""
     torch.manual_seed(27)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * num_devices * cols])
@@ -963,8 +965,8 @@ def test_strided_reduce_scatter_async_collapsed_replicate(mesh_device, strict_cc
 @pytest.mark.parametrize("device_params", FABRIC_1D_RING, indirect=True)
 @pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
 def test_strided_reduce_scatter_async_collapsed_shard_same_dim_inner_axis(mesh_device, strict_ccl_topology):
-    """{N}, [Shard(3)] reduce-scattered on dim 3 along the innermost axis: the collapsed label again (rule (c)),
-    composing to the concatenated row sums."""
+    """{N}, [Shard(3)] reduce-scattered on dim 3 along the innermost axis: the collapsed label again (the helper's
+    same-dim inner-axis collapse), composing to the concatenated row sums."""
     torch.manual_seed(29)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 64, 64 * num_devices * cols])
