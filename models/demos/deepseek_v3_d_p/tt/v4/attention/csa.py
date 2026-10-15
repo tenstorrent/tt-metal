@@ -470,6 +470,8 @@ class TtCSAIndexer(_TtHCABase):
         rope = ttnn.slice(q, [0, 0, 0, nope_dim], [1, self.n_heads, S_l, self.head_dim])
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         q = ttnn.concat([nope, rope], dim=-1)  # [1, H, S_l, Dh], every head
+        if getattr(self, "q_act_quant", None) is not None:  # V4.1 (DS41F-0048): model.py fp4-quantises the index q
+            q = self.q_act_quant(q)
         # hidden_states is TP-sharded on the model dim: the gate weights stay input-sharded partials + one tiny
         # all-reduce ([1, 1, S_l, H]); only wq_b (which consumes the replicated q latent) is replicated
         w = self.compressor._tp_all_reduce(ttnn.linear(hidden_states, self.w_proj, memory_config=self.memory_config))
@@ -531,6 +533,8 @@ class TtCSAIndexer(_TtHCABase):
         rope = ttnn.slice(q, [0, 0, 0, nope_dim], [1, self.n_heads, S_l, self.head_dim])
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         q = ttnn.concat([nope, rope], dim=-1)
+        if getattr(self, "q_act_quant", None) is not None:  # V4.1 (DS41F-0048)
+            q = self.q_act_quant(q)
         w = self.compressor._tp_all_reduce(ttnn.linear(hidden_states, self.w_proj, memory_config=self.memory_config))
         w = ttnn.permute(ttnn.multiply(w, self.scale), (0, 3, 2, 1))
         cap = int(index_k.shape[2])
@@ -567,9 +571,10 @@ class TtCSAIndexer(_TtHCABase):
         dev = self._cut_masks.get(key)
         if dev is None:
             S = seq_local * self.sp_factor
+            rate = self.compressor.compress_rate  # V4 CSA: 4; V4.1 (DS41F-0067): 2
             rows = torch.arange(S).view(S, 1)
             cols = torch.arange(n_cols).view(1, n_cols)
-            m = torch.where(4 * cols + 3 <= rows, 0.0, float("-inf")).view(1, 1, S, n_cols)
+            m = torch.where(rate * cols + (rate - 1) <= rows, 0.0, float("-inf")).view(1, 1, S, n_cols)
             dev = self._from_torch(m, mesh_mapper=self._mesh_mapper(sp_dim=2), dtype=ttnn.bfloat16)
             if cache:
                 self._cut_masks[key] = dev
@@ -589,9 +594,10 @@ class TtCSAIndexer(_TtHCABase):
         dev = self._cut_masks.get(key)
         if dev is None:
             S = seq_local * self.sp_factor
+            rate = self.compressor.compress_rate  # V4 CSA: 4; V4.1 (DS41F-0067): 2
             rows = torch.arange(S).view(S, 1)
             cols = torch.arange(n_cols).view(1, n_cols)
-            m = torch.where(4 * cols + 3 <= rows, 0.0, float("-inf")).view(1, 1, S, n_cols)
+            m = torch.where(rate * cols + (rate - 1) <= rows, 0.0, float("-inf")).view(1, 1, S, n_cols)
             dev = self._cut_masks[key] = self._from_torch(
                 m, mesh_mapper=self._mesh_mapper(sp_dim=2), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
             )
@@ -888,6 +894,8 @@ class TtCSA(TtHCA):
             )
         if export is not None:
             self._export_csa(export, entries, keys, slab, state, real_len)
+        # DS41F-0067: what a V4.1 Reuse layer reads from its source this chunk (path A: the top-k into this state's slab)
+        self.published = dict(path=self.last_path, idx=idx if use_sparse else None, entry_count0=int(state.entry_count))
         state.entry_count += n_new
         state.kv_actual += real_len
         self._update_in_place(state.sliding_carry, next_carry)
@@ -1180,9 +1188,10 @@ class TtCSA(TtHCA):
         if dev is None:
             S = seq_local * self.sp_factor
             W, K = self.sliding_window, self.indexer.topk
+            rate = self.compressor.compress_rate
             perm = torch.arange(W + K, dtype=torch.int64).view(1, -1).repeat(S, 1)
-            for r in range(min(S, K * 4)):
-                w, k = min(W, r + 1), min(K, (r + 1) // 4)
+            for r in range(min(S, K * rate)):
+                w, k = min(W, r + 1), min(K, (r + 1) // rate)
                 row = list(range(W - w, W)) + list(range(W, W + k))
                 perm[r] = torch.tensor(row + [W + K] * (W + K - len(row)), dtype=torch.int64)
             dev = self._chunk0_consts[key] = self._from_torch(

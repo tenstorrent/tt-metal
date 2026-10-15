@@ -337,6 +337,11 @@ class V41Compressor(TtHCACompressor):
 # score GEMM; V41_PREFILL_INDEX_FP4=1 does the same on device (fake quant: the values are snapped to the fp4 grid and kept in
 # the tensor's dtype). Per 32-wide block: s = 2 ** ceil(log2(amax / 6)); x <- e2m1_rne(clamp(x / s, -6, 6)) * s.
 INDEX_FP4 = os.environ.get("V41_PREFILL_INDEX_FP4", "0") == "1"
+# DS41F-0067: the CSA sources run TtCSA's sparse path A once the context holds a window + top-k worth of entries (chunk 0
+# stays on the dense path B) and their Reuse consumers gather with the source's top-k; 0 = path B everywhere (the
+# validated default until path A is measured). Islands must be off with path A (the source's eager top-k must survive
+# the consumers' island replays, DS4F-0262 class -- not yet in a persistent buffer).
+PATH_A = os.environ.get("PREFILL_V41_PATH_A", "0") == "1"
 # e2m1 magnitudes 0, .5, 1, 1.5, 2, 3, 4, 6 as a sum of steps at the midpoints; ties go to the even code (0.25 -> 0,
 # 0.75 -> 1, 1.25 -> 1, 1.75 -> 2, 2.5 -> 2, 3.5 -> 4, 5 -> 4): "gt" at a tie that rounds down, "ge" at one that rounds up
 _FP4_STEPS = (
@@ -477,7 +482,7 @@ class V41CSA(_V41QStem, TtCSA):
         )
         if INDEX_FP4:
             indexer.q_act_quant = fp4_act_fake_quant
-        return cls(mesh_device, compressor=comp, indexer=indexer, sparse_path=False, **kw)
+        return cls(mesh_device, compressor=comp, indexer=indexer, sparse_path=PATH_A, **kw)
 
 
 def _live_width(attn, state, entries: int) -> int:
@@ -494,6 +499,13 @@ def _live_width(attn, state, entries: int) -> int:
 
 def _source_forward(self, hidden_states, seq_len_actual=None, *, state, export=None):
     out = TtCSA.forward(self, hidden_states, seq_len_actual, state=state, export=export)
+    pub = getattr(self, "published", None)
+    if pub is not None and pub["path"] == "A":
+        # DS41F-0067 path A: the consumers gather with this chunk's top-k from THIS state's slab (rows [S, S + cap) hold
+        # the entries; each consumer overwrites the chunk / carry rows with its own window KV -- the source is done with them)
+        assert getattr(self, "_shared_mask_bufs", None) is None, "path A needs V41_PREFILL_ISLANDS=0 (DS41F-0067)"
+        self.shared = dict(path="A", idx=pub["idx"], state=state, entry_count=state.entry_count)
+        return out
     # what this chunk's consumers read (DS41F-0037): the selection mask over the live entries and those entries
     w = _live_width(self, state, state.entry_count)
     bufs = getattr(self, "_shared_mask_bufs", None)
@@ -595,6 +607,8 @@ class V41CSAConsumer(_V41QStem, TtCSA):
         self._build_masks(chunk, capacity)
         self._slab_rope = self._build_rope_table(_rope_table_tokens(max_seq_len, chunk), 1)
         self._slab_index = self._rope_index_base(chunk // self.sp_factor)
+        # DS41F-0067 path A reads the SOURCE's slab [chunk | entries (capacity) | carry]: the same geometry
+        self._slab_chunk_tokens, self._slab_cap = int(chunk), int(capacity)
         state = TtHCAState(
             compressed_kv=None,
             sliding_carry=self._from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
@@ -610,6 +624,26 @@ class V41CSAConsumer(_V41QStem, TtCSA):
         cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
         q = self._q_stem(hidden_states, cos, sin)
         sliding_kv = self._kv_stem(hidden_states, cos, sin)
+        if sh.get("path") == "A":
+            # DS41F-0067: the source's top-k over the source's entries, this layer's own window: its chunk KV and carry go
+            # into the source's slab rows [0, S) / [S + cap, S + cap + 128) (the source already attended this chunk)
+            attn, next_carry, slab = self._attention_sparse(
+                q,
+                sliding_kv,
+                None,
+                sh["idx"],
+                cos,
+                sin,
+                carry=state.sliding_carry,
+                real_len=real_len,
+                state=sh["state"],
+            )
+            if export is not None:
+                self._export_ring(export, slab, state.sliding_carry, state.kv_actual, real_len)
+            state.kv_actual += real_len
+            state.entry_count = sh["entry_count"]
+            self._update_in_place(state.sliding_carry, next_carry)
+            return self._o_proj(attn)
         comp, own_comp = sh["compressed"], False
         if comp is None:  # islands: slice the source's persistent entries here (freed below, before the next replay)
             src = sh["state"].compressed_kv
