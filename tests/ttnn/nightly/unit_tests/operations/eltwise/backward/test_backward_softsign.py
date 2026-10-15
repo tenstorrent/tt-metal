@@ -94,6 +94,8 @@ def _softsign_bw_reference(grad, x, flush, board):
     x32 = x.to(torch.float32)
     result = torch.where((x32.abs() >= 8.507059173023462e37) | torch.isinf(x32), torch.zeros_like(result), result)
     g = _softsign_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
+    # On purpose, not torch's NaN: at a NaN x the kernel keeps the stock behaviour described above,
+    # since returning torch's NaN costs instructions on every tile.
     nan = {"blackhole": torch.zeros_like(g), "wormhole_b0": torch.zeros_like(g)}[board]
     result = torch.where(torch.isnan(x.to(torch.float64)), nan, result)
     return result
@@ -285,3 +287,38 @@ def test_softsign_bw_keeps_the_composite(device):
     )
     expected = torch.tensor([word for _, _, word, _ in SOFTSIGN_BW_KEPT[board]], dtype=torch.int32)
     assert torch.equal(actual, expected), f"expected the composite's {expected.tolist()}, got {actual.tolist()}"
+
+
+# Ops whose Blackhole kernels use the state the generated kernel programs: exp's replay buffer,
+# reciprocal's SFPLOADMACRO, matmul's FPU replays from slot 16.
+SOFTSIGN_BW_STATE_CALLS = {
+    "exp": lambda a: ttnn.exp(a),
+    "reciprocal": lambda a: ttnn.reciprocal(a),
+    "matmul": lambda a: ttnn.matmul(a, a),
+}
+
+
+def test_softsign_bw_leaves_no_state_for_later_programs(device):
+    """The fused program over 4,096 tiles (dozens per core, so each core's tiles share the state its first
+    tile programs) matches torch, and the programs after it compute as they did before it. No public op runs
+    this kernel beside another SFPU op in one program, so the next program is where a leak would show."""
+    if not ttnn.device.is_blackhole(device):
+        pytest.skip("the generated kernel's replay body runs on Blackhole only")
+    generator = torch.Generator().manual_seed(0)
+    shape = (1, 1, 2048, 2048)
+    x = (4 * torch.randn(shape, generator=generator)).to(torch.bfloat16)
+    g = torch.randn(shape, generator=generator).to(torch.bfloat16)
+    a = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64), generator=generator).to(torch.bfloat16) + 0.5,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    before = {name: ttnn.to_torch(call(a)) for name, call in SOFTSIGN_BW_STATE_CALLS.items()}
+    tt_g = ttnn.from_torch(g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.softsign_bw(tt_g, tt_x)[0]
+    assert_with_pcc(_softsign_bw_torch_gradient(g, x), ttnn.to_torch(result).float(), 0.999)
+    for name, call in SOFTSIGN_BW_STATE_CALLS.items():
+        after = ttnn.to_torch(call(a))
+        assert torch.equal(after.view(torch.int16), before[name].view(torch.int16)), f"{name} changed after softsign_bw"
