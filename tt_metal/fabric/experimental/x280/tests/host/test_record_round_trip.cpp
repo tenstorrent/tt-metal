@@ -586,7 +586,8 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
         ec_result_t kernel{};
         kernel.magic = EC_RESULT_MAGIC;
         kernel.status.state = EC_STATE_DONE;
-        write(ec_id, x280::suites::eth_credit::kernel_record("throughput_sweep", 0, "E0", window.tx_erisc, kernel));
+        write(
+            ec_id, x280::suites::eth_credit::kernel_record("throughput_sweep", 0, EC_ROLE_E0, window.tx_erisc, kernel));
         write(ec_id, x280::suites::eth_credit::attribution_record("throughput_sweep", {}, {}, {}));
         write(
             ec_id,

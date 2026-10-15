@@ -11,7 +11,6 @@
 #include "kernels/eth_credit/eth_credit_abi.h"
 
 #include <cstdint>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -41,20 +40,31 @@ struct Culprit {
 /** The placement-field prefix of a kernel of `role` (ec_role_t): its Ethernet tile or X280 tile. */
 inline const char* placement_prefix(uint32_t role) { return role == EC_ROLE_X280_FWD ? "x280" : "erisc"; }
 
+/** A kernel record's name for `role`: E0, E1 or FWD; "?" outside ec_role_t's kernels. */
+inline const char* role_name(ec_role_t role) {
+    switch (role) {
+        case EC_ROLE_E0: return "E0";
+        case EC_ROLE_E1: return "E1";
+        case EC_ROLE_X280_FWD: return "FWD";
+        case EC_ROLE_NONE: break;
+    }
+    return "?";
+}
+
 // One kernel's result block as its eth_credit_kernel record reports it, the
-// way the kernel wrote it: identity and where it ran (`at`, prefixed x280 for
-// role FWD, else erisc) always, and the status, packet counts, kept stall sites,
+// way the kernel wrote it: identity and where it ran (`at`, under its role's
+// placement_prefix()) always, and the status, packet counts, kept stall sites,
 // window and failure detail only when it wrote the magic.
 inline x280::harness::output::RecordSpec kernel_record(
     const char* case_name,
     int chip,
-    const char* role,
+    ec_role_t role,
     const x280::harness::output::CorePlacement& at,
     const ec_result_t& r) {
     namespace hout = x280::harness::output;
     std::vector<hout::Field> fields{
-        {"case", case_name}, {"chip", chip}, {"role", role}, {"magic", r.magic}, {"kernel_id", r.kernel_id}};
-    hout::append_placement(fields, std::string_view(role) == "FWD" ? "x280" : "erisc", at);
+        {"case", case_name}, {"chip", chip}, {"role", role_name(role)}, {"magic", r.magic}, {"kernel_id", r.kernel_id}};
+    hout::append_placement(fields, placement_prefix(role), at);
     if (r.magic == EC_RESULT_MAGIC) {
         std::vector<hout::Value> packets_in;
         std::vector<hout::Value> packets_out;
@@ -221,6 +231,40 @@ struct ReceiveWindow {
     Path path = kFullPath;
 };
 
+/**
+ * The fields every eth_credit throughput and round-trip record carries for
+ * `window`: identity (case, p, both chips, the X280 tile and PLL), the shape,
+ * whether the run went both ways, both chips' ERISC clock evidence, and where
+ * the run placed both Ethernet tiles and both X280s.
+ */
+inline std::vector<x280::harness::output::Field> window_fields(
+    const ReceiveWindow& window,
+    const x280::harness::measurement::AiclkRunEvidence& tx_erisc_clock,
+    const x280::harness::measurement::AiclkRunEvidence& rx_erisc_clock) {
+    namespace hout = x280::harness::output;
+    std::vector<hout::Field> fields{
+        {"case", window.case_name},
+        {"p", window.p},
+        {"tx_chip", window.tx_chip},
+        {"rx_chip", window.rx_chip},
+        {"x280_hw_index", window.x280_hw_index},
+        {"x280_pll_mhz", window.x280_pll_mhz},
+        {"P", window.shape.P},
+        {"N_LINK", window.shape.n_link},
+        {"N_DELIVER", window.shape.n_deliver},
+        {"SLOT_SIZE", window.shape.slot_size},
+        {"BATCH", window.shape.batch},
+        {"bidirectional", window.bidirectional},
+        {"tx_erisc_clock", hout::Value::clock(tx_erisc_clock)},
+        {"rx_erisc_clock", hout::Value::clock(rx_erisc_clock)},
+    };
+    hout::append_placement(fields, "tx_erisc", window.tx_erisc);
+    hout::append_placement(fields, "rx_erisc", window.rx_erisc);
+    hout::append_placement(fields, "tx_x280", window.tx_x280);
+    hout::append_placement(fields, "rx_x280", window.rx_x280);
+    return fields;
+}
+
 /** The bytes of one request `useful` names, for a slot of `shape`. */
 inline uint32_t useful_bytes(Useful useful, const ec_shape_t& shape) {
     switch (useful) {
@@ -255,38 +299,21 @@ inline x280::harness::output::RecordSpec throughput_record(
     const uint32_t packets = at == Receiver::Sender ? forwarder.packets_out[window.p] : forwarder.packets_in[window.p];
     const bool at_e1 = at == Receiver::E1;
     using Clock = decltype(x280::harness::output::RecordSpec::clock);
-    std::vector<hout::Field> fields{
-        {"case", window.case_name},
-        {"legs", window.path.legs},
-        {"p", window.p},
-        {"tx_chip", window.tx_chip},
-        {"rx_chip", window.rx_chip},
-        {"x280_hw_index", window.x280_hw_index},
-        {"x280_pll_mhz", window.x280_pll_mhz},
-        {"P", window.shape.P},
-        {"N_LINK", window.shape.n_link},
-        {"N_DELIVER", window.shape.n_deliver},
-        {"SLOT_SIZE", window.shape.slot_size},
-        {"BATCH", window.shape.batch},
-        {"bidirectional", window.bidirectional},
-        {"packets", packets},
-        {"first_batch_packets", forwarder.first_batch_packets},
-        {"payload_bytes_per_request", window.shape.slot_size - EC_HEADER_BYTES},
-        {"receive_window",
-         hout::Value::throughput({
-             .start_ticks = forwarder.first_ts,
-             .end_ticks = forwarder.last_ts,
-             .completed = forwarder.status.state == EC_STATE_DONE,
-             .useful_bytes_per_request = useful_bytes(window.path.useful, window.shape),
-             .slot_bytes_per_request = window.shape.slot_size,
-         })},
-        {"tx_erisc_clock", hout::Value::clock(tx_erisc_clock)},
-        {"rx_erisc_clock", hout::Value::clock(rx_erisc_clock)},
-    };
-    hout::append_placement(fields, "tx_erisc", window.tx_erisc);
-    hout::append_placement(fields, "rx_erisc", window.rx_erisc);
-    hout::append_placement(fields, "tx_x280", window.tx_x280);
-    hout::append_placement(fields, "rx_x280", window.rx_x280);
+    std::vector<hout::Field> fields = window_fields(window, tx_erisc_clock, rx_erisc_clock);
+    fields.insert(
+        fields.end(),
+        {{"legs", window.path.legs},
+         {"packets", packets},
+         {"first_batch_packets", forwarder.first_batch_packets},
+         {"payload_bytes_per_request", window.shape.slot_size - EC_HEADER_BYTES},
+         {"receive_window",
+          hout::Value::throughput({
+              .start_ticks = forwarder.first_ts,
+              .end_ticks = forwarder.last_ts,
+              .completed = forwarder.status.state == EC_STATE_DONE,
+              .useful_bytes_per_request = useful_bytes(window.path.useful, window.shape),
+              .slot_bytes_per_request = window.shape.slot_size,
+          })}});
     return {
         .suite = "eth_credit",
         .member = window.path.member,
@@ -313,28 +340,8 @@ inline x280::harness::output::RecordSpec round_trip_record(
     const x280::harness::measurement::AiclkRunEvidence& tx_erisc_clock,
     const x280::harness::measurement::AiclkRunEvidence& rx_erisc_clock) {
     namespace hout = x280::harness::output;
-    std::vector<hout::Field> fields{
-        {"case", window.case_name},
-        {"loop", loop},
-        {"p", window.p},
-        {"tx_chip", window.tx_chip},
-        {"rx_chip", window.rx_chip},
-        {"x280_hw_index", window.x280_hw_index},
-        {"x280_pll_mhz", window.x280_pll_mhz},
-        {"P", window.shape.P},
-        {"N_LINK", window.shape.n_link},
-        {"N_DELIVER", window.shape.n_deliver},
-        {"SLOT_SIZE", window.shape.slot_size},
-        {"BATCH", window.shape.batch},
-        {"round_trips", timed.count},
-        {"round_trip_ticks", timed.ticks},
-        {"tx_erisc_clock", hout::Value::clock(tx_erisc_clock)},
-        {"rx_erisc_clock", hout::Value::clock(rx_erisc_clock)},
-    };
-    hout::append_placement(fields, "tx_erisc", window.tx_erisc);
-    hout::append_placement(fields, "rx_erisc", window.rx_erisc);
-    hout::append_placement(fields, "tx_x280", window.tx_x280);
-    hout::append_placement(fields, "rx_x280", window.rx_x280);
+    std::vector<hout::Field> fields = window_fields(window, tx_erisc_clock, rx_erisc_clock);
+    fields.insert(fields.end(), {{"loop", loop}, {"round_trips", timed.count}, {"round_trip_ticks", timed.ticks}});
     return {
         .suite = "eth_credit",
         .member = "eth_credit_round_trip",

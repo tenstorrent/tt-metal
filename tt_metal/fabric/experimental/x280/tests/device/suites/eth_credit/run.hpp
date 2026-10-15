@@ -580,7 +580,7 @@ inline void write_kernel_jsonl(
     const x280::harness::RunSpec& spec,
     const Case& c,
     int chip,
-    const char* role,
+    ec_role_t role,
     const hout::CorePlacement& at,
     const KernelResult& k) {
     if (!k.launched) {
@@ -931,10 +931,10 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
                 .aiclk_hz = cr.aiclk_hz,
                 .erisc_clock = cr.e0.launched || cr.e1.launched ? &cr.erisc_clock : nullptr,
             })));
-        write_kernel_jsonl(spec, c, cr.chip, "E0", erisc_placement(cr, static_cast<uint32_t>(kE0Noc)), cr.e0);
-        write_kernel_jsonl(spec, c, cr.chip, "E1", erisc_placement(cr, static_cast<uint32_t>(kE1Noc)), cr.e1);
+        write_kernel_jsonl(spec, c, cr.chip, EC_ROLE_E0, erisc_placement(cr, static_cast<uint32_t>(kE0Noc)), cr.e0);
+        write_kernel_jsonl(spec, c, cr.chip, EC_ROLE_E1, erisc_placement(cr, static_cast<uint32_t>(kE1Noc)), cr.e1);
         for (uint32_t p = 0; p < c.shape.P; ++p) {
-            write_kernel_jsonl(spec, c, cr.chip, "FWD", x280_placement(cr), cr.fwd[p]);
+            write_kernel_jsonl(spec, c, cr.chip, EC_ROLE_X280_FWD, x280_placement(cr), cr.fwd[p]);
         }
     }
     return out;
@@ -1128,6 +1128,37 @@ inline void expect_conserved(const Case& c, const RunResult& r, uint32_t s) {
 }
 
 /**
+ * The ReceiveWindow of `c`'s forwarder `p` in run `r` from sender chip `s`:
+ * identity, both chips' placements, the shape and `c`'s Path. Its X280 tile is
+ * the sender's when `at_sender`, else the receiver's.
+ */
+inline ReceiveWindow window_of(
+    const x280::harness::session::Fixture& f,
+    const Case& c,
+    const RunResult& r,
+    uint32_t s,
+    uint32_t p,
+    bool at_sender) {
+    const ChipResult& tx = r.chips[s];
+    const ChipResult& rx = r.chips[1u - s];
+    return ReceiveWindow{
+        .case_name = c.name,
+        .p = p,
+        .tx_chip = tx.chip,
+        .rx_chip = rx.chip,
+        .x280_hw_index = static_cast<uint32_t>((at_sender ? tx : rx).tile.hw_index),
+        .tx_erisc = erisc_placement(tx, static_cast<uint32_t>(kE0Noc)),
+        .rx_erisc = erisc_placement(rx, static_cast<uint32_t>(kE1Noc)),
+        .tx_x280 = x280_placement(tx),
+        .rx_x280 = x280_placement(rx),
+        .x280_pll_mhz = f.pll_mhz,
+        .shape = c.shape,
+        .bidirectional = c.direction == ec::Direction::Both,
+        .path = mode_spec(c.stage.mode).path,
+    };
+}
+
+/**
  * Writes one JSONL record per p for a completed direction, of the Path its
  * mode names: the receiving forwarders' packet counts over their own mtime
  * window, a sending forwarder's sent counts over its own for a Receiver::Sender
@@ -1158,21 +1189,7 @@ inline void record_throughput(
     ASSERT_TRUE(!at_e1 || c.shape.P == 1u) << "E1's receive window covers every p, so it reports only P = 1";
     for (uint32_t p = 0; p < c.shape.P; ++p) {
         const ec_result_t& b = at_e1 ? rx.e1.block : at_sender ? tx.fwd[p].block : rx.fwd[p].block;
-        const ReceiveWindow window{
-            .case_name = c.name,
-            .p = p,
-            .tx_chip = tx.chip,
-            .rx_chip = rx.chip,
-            .x280_hw_index = static_cast<uint32_t>((at_sender ? tx : rx).tile.hw_index),
-            .tx_erisc = erisc_placement(tx, static_cast<uint32_t>(kE0Noc)),
-            .rx_erisc = erisc_placement(rx, static_cast<uint32_t>(kE1Noc)),
-            .tx_x280 = x280_placement(tx),
-            .rx_x280 = x280_placement(rx),
-            .x280_pll_mhz = f.pll_mhz,
-            .shape = c.shape,
-            .bidirectional = c.direction == ec::Direction::Both,
-            .path = path,
-        };
+        const ReceiveWindow window = window_of(f, c, r, s, p, at_sender);
         hout::write_jsonl(spec.suite_label, hout::record(throughput_record(window, b, tx.erisc_clock, rx.erisc_clock)));
         std::printf(
             "  p %u: %u packets over %llu %s ticks\n",
@@ -1202,20 +1219,7 @@ inline void record_round_trip(
     for (uint32_t p = 0; p < c.shape.P; ++p) {
         const ec_stall_t* timed = find_stall(tx.fwd[p].block, EC_SITE_FWD_ROUND_TRIP);
         ASSERT_TRUE(timed != nullptr && timed->count != 0u) << "sender p " << p << " timed no round trip";
-        const ReceiveWindow window{
-            .case_name = c.name,
-            .p = p,
-            .tx_chip = tx.chip,
-            .rx_chip = rx.chip,
-            .x280_hw_index = static_cast<uint32_t>(tx.tile.hw_index),
-            .tx_erisc = erisc_placement(tx, static_cast<uint32_t>(kE0Noc)),
-            .rx_erisc = erisc_placement(rx, static_cast<uint32_t>(kE1Noc)),
-            .tx_x280 = x280_placement(tx),
-            .rx_x280 = x280_placement(rx),
-            .x280_pll_mhz = f.pll_mhz,
-            .shape = c.shape,
-            .bidirectional = c.direction == ec::Direction::Both,
-        };
+        const ReceiveWindow window = window_of(f, c, r, s, p, true);
         hout::write_jsonl(
             spec.suite_label,
             hout::record(round_trip_record(
