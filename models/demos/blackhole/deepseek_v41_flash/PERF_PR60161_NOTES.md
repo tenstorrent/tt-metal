@@ -39,3 +39,14 @@ So the saving is hidden at full size (something else bounds the round there) and
 Side finding: the k=3 spec round of the 4-layer model takes ~38 ms, i.e. roughly a third of the 114 ms round is fixed cost independent of the layer count (head + sampling +
 accept/commit + drafter + host feed/readback, Engram prep); 4 -> 40 layers adds ~75 ms. That fixed part, not the layers, is the next thing to profile.
 Demo spec runs: dsv4-logs/base/perf_top2_{on,on2,off}.log, perf_t2L4_*.log; launcher dsv4-logs/base/perf_demo.sh <name> <spec k> "<extra env>".
+
+## KEPT: non-blocking per-round readback (tt/spec_model.py SpecRunner._readback, DSV41_READBACK_NB, default on) - measured 2026-10-15
+Host profile of a k=3, B=32 spec round at 40 layers (temporary timers, demo on .44): device wait 103.4 ms; host: readback 4.2-4.7, Engram row gather 2.7, upload 2.3, page
+setup 1.3, hash 0.8 (= ~11-12 ms, i.e. 10 % of the 114 ms round, device idle). The readback did one blocking ttnn.to_torch per mesh row; issuing the 4 row-leader
+reads with ttnn.from_device(blocking=False) and waiting once (microbench tests/test_readback_microbench.py: 0.93 -> 0.35 ms, identical data) cuts the in-round host
+readback 4.19 -> 2.33 ms.
+- Round time (demo, 40 layers, B=32, k=3, same code, flag on/off): 112.9 ms vs 114.4 ms; earlier pair 112.4 ms (on) vs 113.6 / 114.3 / 114.6 ms (off, three runs): ~ -1.5..-2 ms per round (~1.5 %).
+- Exactness: DSV41_READBACK_CHECK=1 reads every round's pack both ways and asserts equality: >= 100 rounds of the full 40-layer demo identical, no assertion; first token spec==plain 32/32 in all runs.
+  (Spec acceptance varies 2.32-2.38 between identical-code runs, so acceptance cannot be used as an exactness check here.)
+Rejected in the same session: column-sharded Engram-row upload (DSV41_ROWS_SHARD wired into the spec path): upload 3.1 -> 7.96 ms, round slower (host-side column slicing is expensive).
+Remaining host items: Engram gather 2.7 ms (LUT dequant could save ~1.5), upload 2.3 ms, page setup 1.3 ms; moving the Engram hash + row gather onto the device (kernels exist: engram_hash.py, engram_table.py) would remove ~8 ms but is a large change.

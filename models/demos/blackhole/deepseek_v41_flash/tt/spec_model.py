@@ -280,7 +280,25 @@ class SpecRunner:
         U, n, rows, cols = self.U, self.n, self.rows, self.cols
         # ``dec.pack`` is re-bound by every traced forward (a capture binds the NEW output tensor): a sampled runner keeps the output buffer of each of its traces
         pk = pack if pack is not None else (self.pack_mono if self.pack_mono is not None else self.dec.pack)
-        v = torch.cat([ttnn.to_torch(ttnn.get_device_tensors(pk)[r * cols]).reshape(1, -1) for r in range(rows)]).long()
+        if os.environ.get("DSV41_READBACK_NB", "1") == "1":
+            # issue the row-leader reads without blocking, then wait once: the host readback of a round drops from ~4.2 to ~2.3 ms at 40 layers (tests/test_readback_microbench.py)
+            hs = [ttnn.from_device(ttnn.get_device_tensors(pk)[r * cols], blocking=False) for r in range(rows)]
+            ttnn.synchronize_device(self.md)
+            v = torch.cat([ttnn.to_torch(h).reshape(1, -1) for h in hs]).long()
+            if (
+                os.environ.get("DSV41_READBACK_CHECK") == "1"
+            ):  # debug: every round's pack must equal the blocking per-row read
+                ref = torch.cat(
+                    [ttnn.to_torch(ttnn.get_device_tensors(pk)[r * cols]).reshape(1, -1) for r in range(rows)]
+                ).long()
+                assert torch.equal(v, ref), "non-blocking readback differs from the blocking read"
+                self._rb_checked = getattr(self, "_rb_checked", 0) + 1
+                if self._rb_checked % 50 == 0:
+                    print(f"READBACK_CHECK {self._rb_checked} rounds identical", flush=True)
+        else:
+            v = torch.cat(
+                [ttnn.to_torch(ttnn.get_device_tensors(pk)[r * cols]).reshape(1, -1) for r in range(rows)]
+            ).long()
         T_loc = U * n
         a = v[:, :T_loc].reshape(self.B, n)
         mm = v[:, T_loc : T_loc + U].reshape(self.B)
