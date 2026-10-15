@@ -524,12 +524,10 @@ __attribute__((noinline)) void calculate_eqz_fresh_cpp()
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat v = sfpi::dst_reg[d];
-        sfpi::dst_reg[d]     = sfpi::vConst0;
-        v_if (sfpi::abs(v) == 0.0f)
-        {
-            sfpi::dst_reg[d] = sfpi::vConst1;
-        }
-        v_endif;
+        // v is +-0 exactly when its magnitude bits are all clear, i.e. when
+        // they have 32 leading zeros: lz >> 5 is then 1, and 0 otherwise.
+        const sfpi::vMag is_zero = sfpi::lz(sfpi::as<sfpi::vUInt>(v), sfpi::LZMode::IgnoreSign) >> 5;
+        sfpi::dst_reg[d]         = sfpi::convert<sfpi::vFloat>(is_zero, sfpi::RoundMode::Nearest);
     }
 }
 
