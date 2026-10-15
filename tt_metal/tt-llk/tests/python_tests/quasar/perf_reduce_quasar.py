@@ -32,7 +32,7 @@ from quasar.test_reduce_quasar import (
 @parametrize(
     formats=REDUCE_FORMATS,
     tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=True),
-    dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
+    dest_acc=reduce_dest_acc_modes,
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=POOL_TYPES,
     math_fidelity=lambda formats, pool_type: reduce_math_fidelities(
@@ -91,7 +91,7 @@ def test_perf_reduce_quasar(
             register_format_hint=register_format_hint,
         ),
     ],
-    dest_acc=lambda: reduce_dest_acc_modes(is_perf=True),
+    dest_acc=reduce_dest_acc_modes,
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=lambda formats: get_valid_math_fidelities(formats),

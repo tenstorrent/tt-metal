@@ -76,7 +76,7 @@ def reduce_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
-def reduce_dest_acc_modes(*, is_perf=False):
+def reduce_dest_acc_modes():
     return [DestAccumulation.No, DestAccumulation.Yes]
 
 
@@ -120,7 +120,7 @@ def reduce_math_fidelities(formats, pool_type, *, is_perf=False):
     tile_dimensions=runtime(
         lambda formats: reduce_tile_dimensions(formats, is_perf=False)
     ),
-    dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
+    dest_acc=reduce_dest_acc_modes,
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=POOL_TYPES,
     math_fidelity=lambda formats, pool_type: reduce_math_fidelities(

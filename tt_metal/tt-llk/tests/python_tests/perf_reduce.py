@@ -9,10 +9,11 @@ from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_reduce import REDUCE_SWEEP, _run_reduce_test
 
 PERF_TILE_COUNT = 16
+PERF_LOOP_FACTOR = 64
 
 
 def perf_math_fidelities(pool_type):
-    # GMPOOL ignores fidelity; LoFi and HiFi4 bracket the GAPOOL phase count.
+    # GMPOOL ignores fidelity; LoFi and HiFi4 bracket the fidelity phase count.
     if pool_type == ReducePool.Max:
         return [MathFidelity.LoFi]
     return [MathFidelity.LoFi, MathFidelity.HiFi4]
@@ -42,7 +43,7 @@ REDUCE_PERF_SWEEP = {
 @parametrize(
     **REDUCE_PERF_SWEEP,
     run_types=[ALL_PERF_RUN_TYPES],
-    loop_factor=[64],
+    loop_factor=[PERF_LOOP_FACTOR],
     is_perf=[True],
 )
 def test_perf_reduce(
