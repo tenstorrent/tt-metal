@@ -215,8 +215,8 @@ void kernel_main() {
 
             // A RISC-V store can retire before it lands in L1 (FENCE is a no-op on Wormhole), so read both back
             // (load_blocking) to be sure the stores landed before signaling; the sender NoC-reads these addresses next
-            ckernel::load_blocking(p_global_means);
-            ckernel::load_blocking(p_global_vars);
+            (void)ckernel::load_blocking(p_global_means);
+            (void)ckernel::load_blocking(p_global_vars);
 
 #ifndef GN_DISTRIBUTED_AG
             // Signal to sender that our partial data is ready
