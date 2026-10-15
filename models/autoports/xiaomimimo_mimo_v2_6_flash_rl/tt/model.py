@@ -127,26 +127,42 @@ class TtMiMoModel:
         self.decode_trace = None
 
     # ------------------------------------------------------------------ setup
-    def allocate_kv_cache(self, num_blocks=None):
-        blocks_per_user = (self.max_seq_len + self.block_size - 1) // self.block_size
-        num_blocks = num_blocks or blocks_per_user * self.max_batch
-        self.kv_caches = [
-            layer.attn.allocate_kv_cache(num_blocks, self.block_size, self.kv_dtype) for layer in self.layers
-        ]
-        return num_blocks
+    def setup_kv_cache(self, num_users):
+        """Allocate paged KV for ``num_users`` users in decode slots [0, num_users).
 
-    def set_page_table(self, page_table):
-        """page_table: torch int32 [max_batch, blocks_per_user] (slot -> physical blocks)."""
-        assert page_table.shape[0] == self.max_batch
+        SWA layers get a ring of ``kv_tokens_per_user`` (512) tokens per user, global layers the full
+        ``max_seq_len``. Each layer type has its own page table; slots past ``num_users`` point at block 0
+        and are never written (their position is -1)."""
+        assert num_users <= self.max_batch
+        self.kv_caches, tables = [], {}
+        for layer in self.layers:
+            per_user = layer.attn.kv_tokens_per_user(self.max_seq_len)
+            assert per_user % self.block_size == 0
+            blocks_per_user = per_user // self.block_size
+            self.kv_caches.append(
+                layer.attn.allocate_kv_cache(num_users * blocks_per_user, self.block_size, self.kv_dtype)
+            )
+            if layer.is_swa not in tables:
+                table = torch.zeros(self.max_batch, blocks_per_user, dtype=torch.int32)
+                table[:num_users] = torch.arange(num_users * blocks_per_user, dtype=torch.int32).reshape(num_users, -1)
+                tables[layer.is_swa] = table
+        self.set_page_tables(tables)
+
+    def set_page_tables(self, tables):
+        """tables: {is_swa: torch int32 [max_batch, blocks_per_user]} (slot -> physical blocks per layer type)."""
         if self.page_table_tt is not None:
-            self.page_table_tt.deallocate(True)
-        self.page_table_tt = ttnn.from_torch(
-            page_table.to(torch.int32),
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=self.plan.replicate(),
-        )
+            for t in self.page_table_tt.values():
+                t.deallocate(True)
+        self.page_table_tt = {}
+        for is_swa, table in tables.items():
+            assert table.shape[0] == self.max_batch
+            self.page_table_tt[is_swa] = ttnn.from_torch(
+                table.to(torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.plan.replicate(),
+            )
 
     def _to_device_tokens(self, tokens):
         return ttnn.from_torch(
@@ -185,7 +201,7 @@ class TtMiMoModel:
         x = self._embed(toks)
         hidden = []
         for i, layer in enumerate(self.layers):
-            y = layer.forward_prefill(x, slot, self.page_table_tt, self.kv_caches[i])
+            y = layer.forward_prefill(x, slot, self.page_table_tt, self.kv_caches[i], real_len=seq_len)
             x.deallocate(True)
             x = y
             if return_hidden:

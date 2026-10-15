@@ -17,9 +17,9 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
-import ttnn
 from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tests.common import (
     DP,
+    GALAXY_DEVICE_PARAMS,
     cache_dir,
     load_config_and_ckpt,
     model_path,
@@ -27,7 +27,7 @@ from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tests.common import (
 )
 from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tt.generator import MiMoGalaxyGenerator
 
-TRACE_DEVICE_PARAMS = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 150_000_000}
+TRACE_DEVICE_PARAMS = {**GALAXY_DEVICE_PARAMS, "trace_region_size": 150_000_000}
 GREEDY = 12
 TIMED_STEPS = 10
 

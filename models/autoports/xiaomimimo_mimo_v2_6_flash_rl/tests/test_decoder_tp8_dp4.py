@@ -64,7 +64,6 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
     dims = cfg.attention_dims(layer_idx)
     logger.info(f"layer {layer_idx}: swa={dims.is_swa} moe={cfg.is_moe(layer_idx)} kv_heads={dims.num_kv_heads}")
 
-    blocks_per_user = MAX_SEQ // BLOCK
     replicas = []
     for r, sm in enumerate(dp_submeshes(mesh_device)):
         plan = MeshPlan(sm)
@@ -76,8 +75,10 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
         layer = TtMiMoDecoderLayer(
             plan, cfg, layer_idx, weights if r == 0 else None, ropes, cache_dir=cache_dir("layer_bfp8")
         )
-        kv = layer.attn.allocate_kv_cache(MAX_BATCH * blocks_per_user, BLOCK, KV_DTYPE)
-        page_table = block_page_table(MAX_BATCH, blocks_per_user, seed=r)
+        # SWA layers address a 512-token ring per user, global layers the whole context.
+        layer_blocks = layer.attn.kv_tokens_per_user(MAX_SEQ) // BLOCK
+        kv = layer.attn.allocate_kv_cache(MAX_BATCH * layer_blocks, BLOCK, KV_DTYPE)
+        page_table = block_page_table(MAX_BATCH, layer_blocks, seed=r)
         replicas.append(
             dict(
                 plan=plan,
@@ -88,11 +89,12 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
             )
         )
 
-    # Users: replica r, slot u; lengths 128/256/384 so SWA layers see the window and the sink.
+    # Users: replica r, slot u; lengths 128..640, so SWA layers see the window, the sink and (past 512)
+    # the ring buffer wrapping in both the prefill fill and decode.
     users = {}
     for r in range(DP):
         for u in range(USERS_PER_REPLICA):
-            seq_len = 128 * (1 + (u + r) % 3)
+            seq_len = 128 * (1 + (u + r) % 5)
             x = (torch.randn(seq_len, cfg.hidden_size) * HIDDEN_STD).bfloat16().float()
             hist = ref.KVHistory()
             with torch.no_grad():

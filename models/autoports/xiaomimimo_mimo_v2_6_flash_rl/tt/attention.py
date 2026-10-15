@@ -18,6 +18,11 @@ import ttnn
 from .common import TILE, as_weight, cache_name, compute_config
 from .rope import permute_heads_for_rope
 
+# SWA layers keep a per-user ring of this many tokens (``cache_position_modulo``) instead of the full context.
+# It must hold the 128-token window plus the prefill padding tail, which the fill writes into the ring
+# after the real tokens (prefill pads by up to 255 tokens), and be a multiple of the block size.
+SWA_RING_TOKENS = 512
+
 
 def kv_heads_for_chip(chip, tp, num_kv_heads):
     if tp >= num_kv_heads:
@@ -71,6 +76,7 @@ class TtMiMoAttention:
         self.head_dim = dims.head_dim
         self.scale = dims.scaling
         self.sliding_window = dims.sliding_window
+        self.cache_modulo = SWA_RING_TOKENS if dims.is_swa else None
         self.rope = rope_setup
         prefix = f"layer{layer_idx}_attn_tp{tp}"
 
@@ -101,6 +107,10 @@ class TtMiMoAttention:
         )
 
     # ---------------------------------------------------------------- KV cache
+    def kv_tokens_per_user(self, max_seq_len):
+        """Cache capacity per user: the SWA ring, or the whole context for global layers."""
+        return self.cache_modulo if self.cache_modulo is not None else max_seq_len
+
     def allocate_kv_cache(self, num_blocks, block_size, dtype=ttnn.bfloat8_b):
         shape = (num_blocks, self.nkv_local, block_size, self.head_dim)
         return [
@@ -125,10 +135,12 @@ class TtMiMoAttention:
             exp_approx_mode=False,
         )
 
-    def forward_prefill(self, x, user_id, page_table, kv_cache, start_pos=0):
-        """x [1, 1, S, hidden] (S a multiple of 32) for one user starting at position 0."""
+    def forward_prefill(self, x, user_id, page_table, kv_cache, start_pos=0, real_len=None):
+        """x [1, 1, S, hidden] (S a multiple of 32) for one user starting at position 0.
+        ``real_len``: prompt length before padding (defaults to S)."""
         assert start_pos == 0, "chunked prefill (start_pos > 0) is not implemented yet"
         seq_len = x.shape[-2]
+        real_len = seq_len if real_len is None else real_len
         xqkv = ttnn.linear(
             x,
             self.wqkv,
@@ -154,8 +166,11 @@ class TtMiMoAttention:
         k_cache, v_cache = kv_cache
         k_fill = ttnn.typecast(k_rot, k_cache.dtype)
         v_fill = ttnn.typecast(v, v_cache.dtype)
-        ttnn.experimental.paged_fill_cache(k_cache, k_fill, page_table, batch_idx=user_id)
-        ttnn.experimental.paged_fill_cache(v_cache, v_fill, page_table, batch_idx=user_id)
+        if self.cache_modulo is not None:
+            assert seq_len - real_len < self.cache_modulo - self.sliding_window, "padding would wrap over the window"
+        fill = dict(batch_idx=user_id, cache_position_modulo=self.cache_modulo)
+        ttnn.experimental.paged_fill_cache(k_cache, k_fill, page_table, **fill)
+        ttnn.experimental.paged_fill_cache(v_cache, v_fill, page_table, **fill)
         k_fill.deallocate(True)
         v_fill.deallocate(True)
 
@@ -210,8 +225,9 @@ class TtMiMoAttention:
         k.deallocate(True)
 
         k_cache, v_cache = kv_cache
-        ttnn.experimental.paged_update_cache(k_cache, k_rot, update_idxs_tensor=cur_pos, page_table=page_table)
-        ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=cur_pos, page_table=page_table)
+        update = dict(update_idxs_tensor=cur_pos, page_table=page_table, cache_position_modulo=self.cache_modulo)
+        ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
+        ttnn.experimental.paged_update_cache(v_cache, v, **update)
         k_rot.deallocate(True)
         v.deallocate(True)
 
@@ -224,6 +240,7 @@ class TtMiMoAttention:
             scale=self.scale,
             sliding_window_size=self.sliding_window,
             attention_sink=self.decode_sinks,
+            cache_position_modulo=self.cache_modulo,
             program_config=self.decode_sdpa_program,
             compute_kernel_config=self.sdpa_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

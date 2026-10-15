@@ -49,13 +49,6 @@ class MiMoGalaxyGenerator:
         self.users_per_replica = users_per_replica
         self.max_batch = max_batch
         self.submeshes = create_dp_submeshes(mesh_device, dp)
-        blocks_per_user = (max_seq_len + block_size - 1) // block_size
-        num_blocks = users_per_replica * blocks_per_user
-        # Slots that hold users get their own blocks; empty slots point at block 0 and are never written
-        # (their position is -1).
-        page_table = torch.zeros(max_batch, blocks_per_user, dtype=torch.int32)
-        page_table[:users_per_replica] = torch.arange(num_blocks, dtype=torch.int32).reshape(users_per_replica, -1)
-
         self.models = []
         for r, sm in enumerate(self.submeshes):
             t0 = time.time()
@@ -71,8 +64,7 @@ class MiMoGalaxyGenerator:
                 block_size=block_size,
                 **model_kwargs,
             )
-            model.allocate_kv_cache(num_blocks)
-            model.set_page_table(page_table)
+            model.setup_kv_cache(users_per_replica)
             self.models.append(model)
             logger.info(f"replica {r} (row {r} of the Galaxy) ready in {time.time() - t0:.0f}s")
 

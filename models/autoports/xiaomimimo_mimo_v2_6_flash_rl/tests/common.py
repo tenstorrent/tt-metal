@@ -10,7 +10,15 @@ import ttnn
 from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference.checkpoint import MiMoCheckpoint, default_model_path
 from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference.config import MiMoConfig
 
-GALAXY_DEVICE_PARAMS = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 0}
+# CCL ops keep their semaphores for the program's lifetime. Without an L1_SMALL region they go in the
+# main L1 pool, and after enough distinct prefill shapes they fragment it badly enough to clash with
+# later ops' static circular buffers. all_gather places them in L1_SMALL when one exists.
+L1_SMALL_SIZE = 65536
+GALAXY_DEVICE_PARAMS = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+    "trace_region_size": 0,
+    "l1_small_size": L1_SMALL_SIZE,
+}
 DP = 4
 TP = 8
 
