@@ -17,22 +17,26 @@ TABLE = {
     ),
     "FP32_DEST_ACC": Setting(True, None, "owner rule: fp32 accumulation in every matmul / reduction"),
     "ATTN_IN_MM": Setting(
-        "exact",
-        ("exact", "fpu"),
-        "the fp8 attention-input projection q(attn_norm) @ [wq_a | wkv] (tt/q_a.py:TtAttnInProj): exact = 32 masked "
-        "copies in one batched matmul + SFPU fp32 adds (tt/exact_mm.py; an fp32 sum of exact products like the "
-        "reference GEMM; ~8 ms vs 0.4 ms per layer at [1024, 2560] x [2560, 1792]); fpu = one ttnn.linear, whose "
-        "in-tile partial sums round to ~TF32 (rel 1.8e-4: ~0.8 % fp8 flips in the window KV, DS41-16)",
+        "fpu",
+        ("fpu", "exact"),
+        "the fp8 attention-input projection q(attn_norm) @ [wq_a | wkv] (tt/q_a.py:TtAttnInProj): fpu = one "
+        "ttnn.linear (HiFi4, fp32 accumulation), whose in-tile partial sums round to ~TF32 (rel 1.8e-4: ~0.8 % fp8 "
+        "flips in the window KV, DS41-16); exact = 32 masked copies in one batched matmul + SFPU fp32 adds "
+        "(tt/exact_mm.py; ~8 ms vs 0.4 ms per layer at [1024, 2560] x [2560, 1792]). Owner decision 2026-10-15 "
+        "(spec rule 'Accuracy is judged against the noise floor', OV-3): fpu is the default and the max-precision "
+        "value; exact stays selectable for comparison only",
     ),
     # ---- attention (tt/attention.py)
     "WINDOW_SDPA": Setting(
-        "exact",
-        ("exact", "high_precision", "source"),
-        "the window attention: exact = tt/window_exact.py (q and the probabilities as fp32 bf16-piece sums, every "
-        "in-tile dot one exact product by lane masks on the keys / values, fp32 SFPU softmax and sink, fp32 output; "
-        "32x the matmul work; DS41-19); high_precision = ttnn.bringup.sparse_sdpa(high_precision=True) (bf16 q, "
-        "scores, probabilities and output; rel 0.021 vs the CPU step, DS41-18); source = ttnn.transformer.sparse_sdpa "
-        "(bf16 running state, approximate exp), a perf pick",
+        "high_precision",
+        ("high_precision", "exact", "source"),
+        "the window attention: high_precision = ttnn.bringup.sparse_sdpa(high_precision=True, attention_sink=...) "
+        "(bf16 q, scores, probabilities and output; rel 0.021 vs the CPU step, DS41-18); exact = tt/window_exact.py "
+        "(q and the probabilities as fp32 bf16-piece sums, every in-tile dot one exact product by lane masks on the "
+        "keys / values, fp32 SFPU softmax and sink, fp32 output; 32x the matmul work, 64 ms per layer on 2x2; "
+        "DS41-19); source = ttnn.transformer.sparse_sdpa (bf16 running state, approximate exp), a perf pick. Owner "
+        "decision 2026-10-15 (spec rule 'Accuracy is judged against the noise floor', OV-3): high_precision is the "
+        "default and the max-precision value; exact stays selectable for comparison only",
     ),
     "WINDOW_PIECES": Setting(
         3,
@@ -66,8 +70,8 @@ MAX_PRECISION = {
     "MATMUL_FIDELITY": "HiFi4",
     "FP32_DEST_ACC": True,
     "HC_TP_SUM": "gather_add",
-    "ATTN_IN_MM": "exact",
-    "WINDOW_SDPA": "exact",
+    "ATTN_IN_MM": "fpu",  # owner 2026-10-15 (OV-3): accuracy against the noise floor, not exactness
+    "WINDOW_SDPA": "high_precision",  # owner 2026-10-15 (OV-3); "exact" only for comparison
     "WINDOW_PIECES": 3,
     "ATTN_O_SUM": "gather_add",
 }

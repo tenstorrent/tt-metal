@@ -8,7 +8,7 @@ SP x TP mesh, fp32:
 
 Single-pass mHC (DS41-3): the attention collapses with the PENDING pre (the previous layer's ffn_hc pre carried in the
 block boundary; layer 0: one-hot on stream 0), not attn_hc's. ffn_collapse uses the same module with attn_hc's
-columns 0..3 as ``pre``.
+columns 0..3 as ``pre`` (bringup/hooks.py:_ffn_collapse_host_fn passes all 24 mixes).
 
 Per chip (r, c): streams [1, 1, S/SP, 4 x H/TP] fp32 TILE (tt/layout.py, stream-major), pre [1, 1, S/SP, >= 4] fp32
 TILE (row-split, replicated over TP; only columns 0..3 are read) -> out [1, 1, S/SP, H/TP] fp32, the chip's rows and
