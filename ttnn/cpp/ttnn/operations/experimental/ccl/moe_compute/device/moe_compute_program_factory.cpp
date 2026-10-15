@@ -9,7 +9,6 @@
 
 #include <algorithm>
 #include <array>
-#include <bitset>
 #include <numeric>
 #include <optional>
 #include <string>
@@ -22,6 +21,7 @@
 #include <umd/device/types/arch.hpp>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/hal.hpp>
@@ -50,49 +50,6 @@ constexpr uint32_t kCombineKernelBase = 6;
 // Combine reader, then writer. Fabric Mux V2 kernels (FullCcl only) are appended after the writer.
 constexpr uint32_t kCombineWriterKernelIdx = kCombineKernelBase + 1;
 constexpr uint32_t kCombineWriterCrossDeviceSemaphoreArgIdx = 4;
-
-// Lowest id free on every core in the range; probe one core with find_available_semaphore_id.
-uint32_t allocate_worker_semaphore(
-    tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& core_ranges, uint32_t initial_value) {
-    const auto cores = tt::tt_metal::corerange_to_cores(core_ranges);
-    TT_FATAL(!cores.empty(), "Expecting a non-empty CoreRangeSet!");
-    const auto first_free = desc.find_available_semaphore_id(cores.front(), tt::CoreType::WORKER);
-    constexpr uint32_t kMaxSemaphores = 16;
-    auto used_on_core = [&](uint32_t sem_id, const tt::tt_metal::CoreCoord& core) {
-        for (const auto& sem : desc.semaphores) {
-            if (sem.core_type == tt::CoreType::WORKER && sem.id == sem_id && sem.core_ranges.contains(core)) {
-                return true;
-            }
-        }
-        return false;
-    };
-    std::optional<uint32_t> id;
-    for (uint32_t candidate = first_free.value_or(0); candidate < kMaxSemaphores; ++candidate) {
-        bool used = false;
-        for (const auto& core : cores) {
-            if (used_on_core(candidate, core)) {
-                used = true;
-                break;
-            }
-        }
-        if (!used) {
-            id = candidate;
-            break;
-        }
-    }
-    TT_FATAL(
-        id.has_value(),
-        "Unable to initialize semaphore on CoreRangeSet {}: all {} IDs are in use",
-        core_ranges.str(),
-        kMaxSemaphores);
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = *id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges,
-        .initial_value = initial_value,
-    });
-    return *id;
-}
 
 void push_cb(
     tt::tt_metal::ProgramDescriptor& desc,
@@ -252,7 +209,7 @@ tt::tt_metal::WorkloadDescriptor MoEComputeMeshWorkloadFactory::create_workload_
     const MoEComputeParams& args,
     const MoEComputeInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& mesh_coordinates) {
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     tt::tt_metal::WorkloadDescriptor workload;
 
     constexpr auto combine_core_range_set_return_index = 5;
@@ -300,7 +257,7 @@ tt::tt_metal::WorkloadDescriptor MoEComputeMeshWorkloadFactory::create_workload_
         tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
     }
 
-    for (const auto& coord : mesh_coordinates.coords()) {
+    for (const auto& coord : tensor_coords.coords()) {
         workload.programs.push_back(
             {ttnn::MeshCoordinateRange(coord),
              build_moe_compute_program_descriptor(
@@ -308,7 +265,7 @@ tt::tt_metal::WorkloadDescriptor MoEComputeMeshWorkloadFactory::create_workload_
                  coord,
                  tensor_args,
                  tensor_return_value,
-                 mesh_coordinates,
+                 tensor_coords,
                  init_barrier_semaphore,
                  final_barrier_semaphore)});
     }
@@ -534,19 +491,19 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     //-------------------------------------------------------------------------
 
     // Non-drain-sync cores signal to drain-sync core that partial metadata results are ready
-    auto tilize_partial_metadata_ready_semaphore_id = allocate_worker_semaphore(desc, tilize_core_range_set, INVALID);
+    auto tilize_partial_metadata_ready_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
 
     // Non-drain-sync cores signal to drain-sync core that partial chunk has been sent to the matmul cores.
     // Drain-sync core then signals to non-drain-sync core that they can begin sending the next chunk.
-    auto tilize_chunk_ready_semaphore_id = allocate_worker_semaphore(desc, tilize_core_range_set, INVALID);
+    auto tilize_chunk_ready_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
 
     // Since both reader and writer are using NoC1, we have the readers wait until all writers have sent their
     // chunk portion to the matmul cores before reading in another set of tokens to tilize. This frees up NoC1
     // to do the mcast, which is also a requirement for doing linked mcasts.
-    auto previous_chunk_sent_semaphore_id = allocate_worker_semaphore(desc, tilize_core_range_set, INVALID);
+    auto previous_chunk_sent_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
 
     // For the gather phase scheme used for the first chunk
-    auto initial_gather_semaphore_id = allocate_worker_semaphore(desc, tilize_core_range_set, INVALID);
+    auto initial_gather_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Matmul semaphores
@@ -555,7 +512,7 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     // Create semaphores for ring synchronization between cores
     // Each core will have a semaphore that its predecessor will signal
     // reuse the same semaphore location for signaling combine cores that per expert data is available
-    const uint32_t ring_semaphore_id = allocate_worker_semaphore(desc, matmul_core_range_set, INVALID);
+    const uint32_t ring_semaphore_id = desc.add_semaphore(matmul_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize and Matmul semaphores
@@ -563,14 +520,14 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
 
     // Tilize drain-sync core signals to tilize non-drain-sync cores that final metadata results are ready
     // Tilize drain-sync core signals to matmul cores that final metadata results are ready
-    auto metadata_ready_semaphore_id = allocate_worker_semaphore(desc, tilize_matmul_core_range_set, INVALID);
+    auto metadata_ready_semaphore_id = desc.add_semaphore(tilize_matmul_core_range_set, INVALID);
 
     // Matmul cores signal to tilize drain-sync-core that the input chunk is free to be written to
     // Tilize drain-sync-core propagates this to the tilize non-drain-sync cores
-    auto matmul_chunk_available_semaphore_id = allocate_worker_semaphore(desc, tilize_matmul_core_range_set, INVALID);
+    auto matmul_chunk_available_semaphore_id = desc.add_semaphore(tilize_matmul_core_range_set, INVALID);
 
     // Tilize drain-sync core signals to all matmul cores that a full chunk is ready
-    auto matmul_chunk_ready_semaphore_id = allocate_worker_semaphore(desc, tilize_matmul_core_range_set, INVALID);
+    auto matmul_chunk_ready_semaphore_id = desc.add_semaphore(tilize_matmul_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize/MatMul and Combine sync semaphore
@@ -585,15 +542,15 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     // the compute_only / local_output CT args, so the semaphore is unused by anyone -- but
     // tilize_reader still calls get_semaphore() on it (a local L1 address lookup), so we still need
     // it to be allocated on at least the matmul core range set.
-    const auto tilize_combine_sync_semaphore_id = allocate_worker_semaphore(
-        desc, combine_built ? CoreRangeSet(combine_core_range_set.bounding_box()) : matmul_core_range_set, INVALID);
+    const auto tilize_combine_sync_semaphore_id = desc.add_semaphore(
+        combine_built ? CoreRangeSet(combine_core_range_set.bounding_box()) : matmul_core_range_set, INVALID);
 
     // Matmul dm1 signals combine cores when data is written; combine writer waits on this semaphore.
     // For double buffering, combine cores will also use this semaphore to signal matmul when buffer segments are free.
     // Without combine kernels dm1 still calls get_semaphore() to look up the local L1 address, but the
     // wait/increment/set are all gated off via the compute_only / local_output CT args.
-    const auto matmul_combine_sync_semaphore_id = allocate_worker_semaphore(
-        desc, combine_built ? combine_matmul_core_range_set : matmul_core_range_set, INVALID);
+    const auto matmul_combine_sync_semaphore_id =
+        desc.add_semaphore(combine_built ? combine_matmul_core_range_set : matmul_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize work split
