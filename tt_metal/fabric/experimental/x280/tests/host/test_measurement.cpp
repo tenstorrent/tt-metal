@@ -323,8 +323,8 @@ TEST(MeasurementWarmup, BatchRequestConvertsPilotTicksAtTheWallRate) {
     EXPECT_THROW(measurement::batch_warmup_calibration_request(1, 1, 0, 128, 1), std::invalid_argument);
 }
 
-// Spec (Counter): each physical counter has one stable record spelling (owner
-// decision 41); an out-of-range value throws std::invalid_argument.
+// Spec (Counter): each physical counter has one stable record spelling; an
+// out-of-range value throws std::invalid_argument.
 TEST(MeasurementAiclk, CounterNameSpellsEachCounterAndRejectsOutOfRangeValue) {
     using measurement::Counter;
     for (const auto& [counter, spelling] :

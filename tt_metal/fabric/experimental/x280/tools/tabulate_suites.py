@@ -1168,8 +1168,8 @@ def conversion(record):
     """The rate a record's ticks convert at, why they stay raw, and why the rate is unvalidated.
 
     (conversion_hz, None, None) when the clock validates; (measured Hz, None,
-    the failed checks) when well-formed evidence fails them (owner decision
-    42); (None, the reason, None) for no schema-2 clock or malformed evidence.
+    the failed checks) when well-formed evidence fails them; (None, the reason,
+    None) for no schema-2 clock or malformed evidence.
     """
     if record.get("measurement_schema") != 2:
         return None, "measurement schema %r offers no conversion" % record.get("measurement_schema"), None

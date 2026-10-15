@@ -16,7 +16,7 @@ table. Table mode's output and the report must show the configured files'
 tables, with a value in every cell and the EXPECTED cells. A copy of a record
 whose well-formed clock fails a check must be covered and converted at the
 measured rate with a warning in both outputs, and one with malformed clock
-evidence must fail its attempt (owner decision 42). Exits nonzero naming every
+evidence must fail its attempt. Exits nonzero naming every
 failure, or when the directory does not hold FILES record files.
 """
 
@@ -407,7 +407,7 @@ def check_outputs(directory, paths):
 
 def check_clock_warning(directory, configs, paths):
     """Require a well-formed clock that fails its checks to be covered and converted at the measured
-    rate with a warning in both outputs (owner decision 42), and a malformed one to fail its attempt."""
+    rate with a warning in both outputs, and a malformed one to fail its attempt."""
     source = next(p for p in paths if p.stem == "bw.tensix_to_x280.64.drained")
     record = json.loads(source.read_text())
     record["clock"]["errors"] = ["current_frequency_mismatch"]

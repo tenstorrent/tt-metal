@@ -104,12 +104,11 @@ measured rate, marked as a warning, when well-formed evidence fails its checks
 ## Record contract
 
 Records carry raw values only: raw ticks or cycles, counts, byte counts, raw
-endpoints and clock evidence (owner decisions 28, 34). Every converted figure
+endpoints and clock evidence. Every converted figure
 (ns, rate, GB/s, per-item time) and every computed one (mean, per-item value,
 percentile, ratio, endpoint difference) comes from the tabulator,
 `tools/tabulate_suites.py`, and from nowhere else. The console prints raw
-values, status and failure diagnostics, and no computed value (owner decisions
-30, 35).
+values, status and failure diagnostics, and no computed value.
 
 Every suite writes its records through `record()` in
 `harness/output/output.hpp`, which builds a record from typed fields:
@@ -117,7 +116,7 @@ suite and member, the wall and CPU counters (`measurement::Counter`), a raw
 batch, sample populations, throughput intervals, the warm-up selection, clock
 evidence and the suite's own fields. No field type holds a floating-point
 number. No list of key names enforces the contract: the record functions are
-the only writers, and review covers what they write (owner decision 46).
+the only writers, and review covers what they write.
 `record()` throws `RecordKeyError`, naming the key, for a key that appears
 twice in one object at any depth.
 
@@ -144,11 +143,11 @@ test's inputs.
 
 These are the only converted values the contract admits:
 
-| Exception | Where | Why | Owner decision |
-|---|---|---|---|
-| Warm-up provenance | `warmup_target_device_ns`, `warmup_pilot_device_ns` on a calibrated record | Warm-up control values converted on the host to choose the warm-up count, not results | 29 |
-| Test micro-kernels' PLL frequency | `x280_measure_pll_khz` (`include/rt/x280_pll.h`), called by `src/atomic_bench.c` | Standalone test micro-kernels outside the record path | 31 |
-| Device-side control budgets | For example the P2P Metal peers' `HANG_GUARD_TICKS` (`kernels/p2p_latency/metal_peer_target.hpp`), ERISC's from the nominal 1 GHz | Timeout budgets derived from nominal clocks; never recorded as results | 32 |
+| Exception | Where | Why |
+|---|---|---|
+| Warm-up provenance | `warmup_target_device_ns`, `warmup_pilot_device_ns` on a calibrated record | Warm-up control values converted on the host to choose the warm-up count, not results |
+| Test micro-kernels' PLL frequency | `x280_measure_pll_khz` (`include/rt/x280_pll.h`), called by `src/atomic_bench.c` | Standalone test micro-kernels outside the record path |
+| Device-side control budgets | For example the P2P Metal peers' `HANG_GUARD_TICKS` (`kernels/p2p_latency/metal_peer_target.hpp`), ERISC's from the nominal 1 GHz | Timeout budgets derived from nominal clocks; never recorded as results |
 
 ## Quantities that share a label
 
@@ -445,7 +444,7 @@ pipeline_stage, packet_injection, core_sync and eth_credit members; eth_credit's
 kernel, attribution and link records are recognised and tabulated by no table.
 Both outputs come from one render path, the only place a value is computed:
 percentiles by the floor-index rule, and nanoseconds and rates at the record's
-`conversion_hz` once its clock evidence validates (owner decisions 33 and 42).
+`conversion_hz` once its clock evidence validates.
 Clock evidence that is well-formed but fails a measurement check -- the
 producer's own `errors`, AICLK telemetry or arbiter outside tolerance, a thermal
 trip, a rate outside the band, excessive uncertainty -- does not fail its
