@@ -77,6 +77,22 @@ def blocks_to_host(mesh, t: ttnn.Tensor, hidden: int, n: int) -> torch.Tensor:
     return chip_major_to_streams_cols(full.reshape(s, n * hidden), hidden, mesh.shape[1], n)
 
 
+def blocks_to_device(mesh, x: torch.Tensor, hidden: int, n: int, dtype=ttnn.float32) -> ttnn.Tensor:
+    """Host [S, n H] in block order -> device [1, 1, S/SP, n x H/TP] per chip (chip column c holds its hidden slice of
+    each of the n H-wide blocks; the inverse of blocks_to_host, e.g. the engram projection's [S, 5H])."""
+    s = x.shape[0]
+    assert x.shape[-1] == n * hidden and s % mesh.shape[0] == 0, (x.shape, n, hidden, tuple(mesh.shape))
+    host = streams_cols_to_chip_major(x.float(), hidden, mesh.shape[1], n).reshape(1, 1, s, n * hidden)
+    return ttnn.from_torch(
+        host.contiguous(),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=_mapper(mesh, (2, 3)),
+    )
+
+
 def row_split_to_device(mesh, x: torch.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
     """Host [S, W] -> device [1, 1, S/SP, W] per chip, split by rows over axis 0, replicated over axis 1."""
     s, w = x.shape

@@ -72,7 +72,7 @@ DEVICE_STEPS = {
         "moe_add",
         "ffn_residual",
     },
-    "swa_engram": {"engram_rows", "engram_kv"},
+    "swa_engram": {"engram_rows", "engram_kv", "engram_add"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -426,6 +426,36 @@ def _engram_kv_host_fn(mesh, module, hidden):
     return fn
 
 
+def _engram_add_host_fn(mesh, module, hidden):
+    """fn(ctx, x_host [S, 4H + 4], kv_host [S, 5H]) -> x host [S, 4H + 4] fp32 (harness boundary: the streams in, the
+    pending pre row-split and TP-replicated, engram_kv as each chip's hidden slice of its 5 blocks; back the new
+    streams and the module's pending pre, packed here only)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.engram_kv import BLOCKS
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import (
+        HC,
+        blocks_to_device,
+        row_split_to_device,
+        row_split_to_host,
+        streams_to_device,
+        streams_to_host,
+    )
+
+    def fn(ctx, x, kv):
+        assert x.shape[-1] == HC * hidden + HC and kv.shape[-1] == BLOCKS * hidden, (x.shape, kv.shape)
+        xd = streams_to_device(mesh, x, hidden)
+        pd = row_split_to_device(mesh, x[:, HC * hidden :])
+        kd = blocks_to_device(mesh, kv, hidden, BLOCKS)
+        od, po = module(xd, kd, pd)
+        out = torch.cat([streams_to_host(mesh, od, hidden).float(), row_split_to_host(mesh, po).float()], dim=-1)
+        for t in (xd, pd, kd, od):
+            ttnn.deallocate(t)
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _chunk(spec):
     """The serving chunk the window tables are built for (the run's target chunk; every ladder rung uses it)."""
     return int(spec.get("target.chunk"))
@@ -458,6 +488,10 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         from models.demos.deepseek_v41_flash_d_p.tt.engram_kv import build_engram_kv
 
         return _engram_kv_host_fn(mesh, build_engram_kv(mesh, ck, cfg, layer), cfg.dim)
+    if step == "engram_add":
+        from models.demos.deepseek_v41_flash_d_p.tt.engram_add import build_engram_add
+
+        return _engram_add_host_fn(mesh, build_engram_add(mesh, ck, cfg, layer), cfg.dim)
     if step == "attention":
         from models.demos.deepseek_v41_flash_d_p.tt.attention import build_attention
 
