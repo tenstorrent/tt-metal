@@ -1101,6 +1101,13 @@ tasks:
     - moe_add
     - ffn_residual
     layer: 0
+  frozen:
+    at: '2026-10-15T19:10:05'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_15_ffn_residual.py: 7433ca8af728e35d6d23f4b3e2a68dad3cf8d8be5edd57a86708d5fbcedf85eb
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.engram_rows
   title: swa_engram engram_rows (embedding) on device, layer 1
   step: implement
