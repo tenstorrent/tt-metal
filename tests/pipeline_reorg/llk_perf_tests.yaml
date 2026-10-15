@@ -8,7 +8,7 @@
 # {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
 # so every group below shares one identical cmd that calls a shared runner in
 # tt_metal/tt-llk/tests/: run_llk_perf_wormhole.sh and run_llk_perf_blackhole.sh
-# (both use pytest-split sharding).
+# (both shard with --perf-splits / --perf-group).
 
 - name: llk_perf_wormhole group 1/5
   split_group: 1
