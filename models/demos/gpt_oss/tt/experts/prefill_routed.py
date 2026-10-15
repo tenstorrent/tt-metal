@@ -59,8 +59,14 @@ ROUTED_PREFILL_PLACEMENT_DEFAULT = "calibrated"
 ROUTED_PREFILL_DEFAULT = "1"
 # Shortest prefill (tokens) that takes the routed path; shorter ones run dense.
 ROUTED_PREFILL_MIN_SEQ_DEFAULT = 128
-# Tokens per routed chunk: bounds the dispatch / expert-output buffers ([4C, H] bf16 per device).
-ROUTED_PREFILL_CHUNK_DEFAULT = 8192
+# Tokens per routed chunk: bounds the dispatch / expert-output buffers ([4C, H] bf16 per device). 16384 vs 8192
+# measured 16K 583.2 -> 565.2 ms, 32K 1288.2 -> 1277.4, 64K 3027.4 -> 3004.9, 128K 8085.9 -> 8047.6 (fewer per-chunk
+# fixed costs); DRAM at 128K: min free 19.4 -> 19.2 GiB per device (L10 lever c).
+ROUTED_PREFILL_CHUNK_DEFAULT = 16384
+# Chunks of at most this many tokens take their [C, C] prefix-sum operator from a shared [8192, 8192] constant, longer
+# ones from the [chunk, chunk] one, so an 8K prompt reads the 8192 operator in place instead of a per-layer slice copy
+# of the larger one (measured +6 ms TTFT at 8K with only the 16384 operator).
+ROUTED_PREFIX_TRI_SMALL = 8192
 # masked_bincount splits the token rows over a fixed 64-core grid.
 ROUTED_PREFILL_SEQ_MULTIPLE = 64
 # ttnn.scatter parallelizes over rows only, so the [1, k*C] row -> token scatter of _chunk runs on one core (1.5 ms per
@@ -73,9 +79,10 @@ ROUTED_SCATTER_GROUPS = 32
 # of a DRAM round trip; at C = 8192 this measured 2.39 -> 1.91 ms per layer for gather + reduce + bf8 cast (one device).
 ROUTED_COMBINE_BLOCK = 2048
 # Largest chunk-size-dependent transient this module places in L1 (per device, interleaved). Above it the tensor goes
-# to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1. The default chunk (8192) puts
-# the dispatch-gather input x_rm (C*H*2 = 47 MB) under it; the combine block is bounded by ROUTED_COMBINE_BLOCK
-# (2048 tokens: [Cs, k, H] bf16 = 47 MB, the reduced block 12 MB), which is also under it.
+# to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1. A chunk of 8192 puts the
+# dispatch-gather input x_rm (C*H*2 = 47 MB) under it (the default 16384 chunk keeps x_rm in DRAM); the combine block
+# is bounded by ROUTED_COMBINE_BLOCK (2048 tokens: [Cs, k, H] bf16 = 47 MB, the reduced block 12 MB), which is also
+# under it.
 ROUTED_L1_CAP_BYTES = 64 << 20
 # Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py).
 ROUTED_PREFILL_WEIGHTS_VERSION = 1
@@ -245,8 +252,10 @@ class RoutedPrefillExperts:
         for g in range(self.num_devices):
             dispatch_table[g, g * self.experts_per_chip : (g + 1) * self.experts_per_chip] = g
         self._consts = {}
-        # The [C, C] prefix-sum operator is shared across layers (one [chunk, chunk] constant per device).
+        # The [C, C] prefix-sum operators are shared across layers (per device: [chunk, chunk], plus [8192, 8192] for
+        # chunks of at most ROUTED_PREFIX_TRI_SMALL tokens). Each is built on first use.
         self._prefix_tri = _shared_prefix_tri(mesh_device, self.chunk_size)
+        self._prefix_tri_small = _shared_prefix_tri(mesh_device, min(self.chunk_size, ROUTED_PREFIX_TRI_SMALL))
         # fp32 dest + L1 packer accumulation keep the integer prefix sums of _pair_positions exact across K blocks.
         self._prefix_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -665,11 +674,12 @@ class RoutedPrefillExperts:
         )  # [C, E]: pairs of each expert per token (0/1)
         per_token = ttnn.mul(per_token, self.local_mask_f32, output_tensor=per_token)  # local experts only
         # Exclusive prefix over tokens (pairs of e from earlier tokens) as one multi-core matmul with the strictly
-        # lower-triangular [C, C] ones matrix. Operands are 0/1 (exact in bf4 / tf32) and the sums (< C <= 2^13)
-        # accumulate in the fp32 dest, so the result is exact.
-        # A chunk shorter than the shared [Cmax, Cmax] operator uses a transient copy of its top-left [C, C] block.
-        tri = self._prefix_tri.get()
-        tri_c = tri if C == self._prefix_tri.cmax else ttnn.slice(tri, (0, 0), (C, C))
+        # lower-triangular [C, C] ones matrix. Operands are 0/1 (exact in bf4 / tf32) and the sums (< C, 2^14 at the
+        # default chunk) accumulate in the fp32 dest, so the result is exact.
+        # A chunk shorter than its shared [Cmax, Cmax] operator uses a transient copy of the top-left [C, C] block.
+        holder = self._prefix_tri_small if C <= self._prefix_tri_small.cmax else self._prefix_tri
+        tri = holder.get()
+        tri_c = tri if C == holder.cmax else ttnn.slice(tri, (0, 0), (C, C))
         before = ttnn.matmul(
             tri_c,
             per_token,

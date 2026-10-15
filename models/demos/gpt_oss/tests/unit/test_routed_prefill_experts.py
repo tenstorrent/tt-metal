@@ -11,8 +11,10 @@ Checks, per sequence length and layer:
   * sum of per-expert token counts == k * S, no NaN, repeat runs identical;
   * capacity worst case: every token routed to experts 0..k-1 (one device holds all of them), nothing dropped;
   * multi-chunk: S=4096 with GPT_OSS_ROUTED_PREFILL_CHUNK=1024 (4 chunks), same checks and thresholds;
-  * non-multiple-of-1024 lengths: S=8256 (a full 8192 chunk plus a 64-token last chunk); pair positions exact at
-    S=1088 (one chunk shorter than the shared prefix operator; the dense path cannot run 1088, so no MoE case);
+  * a full chunk plus a 64-token last chunk: S=16448 at the default chunk (16384), S=8256 with
+    GPT_OSS_ROUTED_PREFILL_CHUNK=8192; S=8256 at the default chunk runs as one chunk shorter than the operator;
+  * pair positions exact at S=1088 (one chunk shorter than the shared prefix operator; the dense path cannot run
+    1088, so no MoE case), at the full default chunk (16384) and at a full chunk plus a 64-token chunk (16448);
   * combine token blocks: S=2112 (a full 2048-token combine block plus a 64-token last block), routed vs HF only
     (the dense path cannot run a 2112-token chunk);
   * supports(): batch > 1 and non-multiple-of-64 lengths run dense.
@@ -44,7 +46,7 @@ from ..test_factory import TestFactory, parametrize_mesh_with_fabric
 THRESHOLDS = json.loads((Path(__file__).resolve().parents[2] / "unit_test_thresholds.json").read_text())
 ROUTED_VS_DENSE_PCC = 0.99
 # Lengths of test_routed_prefill_experts that the dense prefill path can also run (the routed-vs-dense check).
-DENSE_REF_LENGTHS = (128, 1024, 4096, 8256)
+DENSE_REF_LENGTHS = (128, 1024, 4096, 8256, 16448)
 
 
 def _load_layer_moe(model_path, layer_idx):
@@ -148,8 +150,8 @@ def routed_env(monkeypatch):
 @parametrize_mesh_with_fabric([(1, 4)])
 @pytest.mark.parametrize(
     "seq_len, chunk",
-    [(128, None), (1024, None), (2112, None), (4096, None), (4096, 1024), (8256, None)],
-    ids=["S128", "S1024", "S2112", "S4096", "S4096-chunk1024", "S8256"],
+    [(128, None), (1024, None), (2112, None), (4096, None), (4096, 1024), (8256, None), (8256, 8192), (16448, None)],
+    ids=["S128", "S1024", "S2112", "S4096", "S4096-chunk1024", "S8256", "S8256-chunk8192", "S16448"],
 )
 @pytest.mark.parametrize("layer_idx", [0, 12], ids=["layer0", "layer12"])
 def test_routed_prefill_experts(
@@ -191,7 +193,10 @@ def test_routed_prefill_experts(
         (1, 2, seq_len, H)
     ), "batch > 1 must run dense"
     if chunk is not None:
-        assert routed.chunk_size == chunk and seq_len // chunk > 1, f"expected a multi-chunk run, chunk {chunk}"
+        assert routed.chunk_size == chunk and seq_len > chunk, f"expected a multi-chunk run, chunk {chunk}"
+    if seq_len == 16448:
+        # The default chunk: one full chunk on the [chunk, chunk] operator plus a 64-token chunk on the small one.
+        assert routed.chunk_size == 16384, f"S16448 expects the 16384 default chunk, got {routed.chunk_size}"
     if seq_len % routed.chunk_size != 0:
         # The last (or only) chunk is shorter than the shared prefix operator and uses its top-left block.
         assert seq_len % routed.chunk_size < routed._prefix_tri.cmax
@@ -344,11 +349,14 @@ def test_routed_prefill_layers_back_to_back(mesh_device, device_params, seq_len,
 
 
 @parametrize_mesh_with_fabric([(1, 4)])
-@pytest.mark.parametrize("seq_len", [128, 1024, 1088, 8192], ids=["S128", "S1024", "S1088", "S8192"])
+@pytest.mark.parametrize(
+    "seq_len", [128, 1024, 1088, 8192, 16384, 16448], ids=["S128", "S1024", "S1088", "S8192", "S16384", "S16448"]
+)
 def test_routed_pair_positions_exact(mesh_device, device_params, seq_len, routed_env, reset_seeds):
     """Dispatch-buffer row of every (token, slot) pair equals the integer reference on every device: region start of
     the pair's expert + its rank among that expert's pairs (token order) for local pairs, the spare tile otherwise.
-    Random routing and the worst case (every token -> experts 0..k-1, ranks up to S - 1)."""
+    Random routing and the worst case (every token -> experts 0..k-1, ranks up to C - 1). A sequence longer than the
+    routed chunk is split as RoutedPrefillExperts.__call__ splits it, and every chunk is checked on its own."""
     if not routed_prefill_mesh_supported(mesh_device):
         pytest.skip("routed prefill needs a single-row Blackhole mesh with > 1 device")
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
@@ -373,20 +381,24 @@ def test_routed_pair_positions_exact(mesh_device, device_params, seq_len, routed
         "random": torch.stack([torch.randperm(E)[:k] for _ in range(seq_len)]),
         "skew": torch.arange(k).repeat(seq_len, 1),
     }
-    for name, idx in patterns.items():
+    C_max = min(routed.chunk_size, seq_len)
+    chunks = [(s, min(s + C_max, seq_len)) for s in range(0, seq_len, C_max)]
+    for (name, idx_full), (start, end) in ((p, c) for p in patterns.items() for c in chunks):
+        idx = idx_full[start:end]
+        C = end - start
+        name = name if len(chunks) == 1 else f"{name} chunk [{start}, {end})"
         tt_idx = _to_tt(idx.to(torch.int32), mesh_device, ttnn.uint16)
         _, counts, region_offsets = routed._routing(tt_idx)
-        consts = routed._chunk_constants(seq_len)
+        consts = routed._chunk_constants(C)
         pos_tm, pos_sm = routed._pair_positions(tt_idx, region_offsets, consts)
         pos_d = [ttnn.to_torch(t).reshape(-1).to(torch.int64) for t in ttnn.get_device_tensors(pos_tm)]
-        # slot-major [1, k*S] -> token-major order
+        # slot-major [1, k*C] -> token-major order
         pos_sm_d = [
-            ttnn.to_torch(t).reshape(k, seq_len).t().reshape(-1).to(torch.int64)
-            for t in ttnn.get_device_tensors(pos_sm)
+            ttnn.to_torch(t).reshape(k, C).t().reshape(-1).to(torch.int64) for t in ttnn.get_device_tensors(pos_sm)
         ]
         reg_d = [ttnn.to_torch(t).reshape(-1)[:E].to(torch.int64) for t in ttnn.get_device_tensors(region_offsets)]
         cnt_d = [ttnn.to_torch(t).reshape(-1)[:E].to(torch.int64) for t in ttnn.get_device_tensors(counts)]
-        onehot = torch.nn.functional.one_hot(idx, E).sum(dim=1)  # [S, E]
+        onehot = torch.nn.functional.one_hot(idx, E).sum(dim=1)  # [C, E]
         rank = torch.cumsum(onehot, dim=0) - onehot  # pairs of e from earlier tokens
         for d in range(routed.num_devices):
             local = (idx >= d * epc) & (idx < (d + 1) * epc)
