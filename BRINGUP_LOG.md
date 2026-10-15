@@ -485,3 +485,22 @@ Three more fixes applied after initial Docker verification to eliminate ~22s tes
 - E2E latency improved from 10.4s to 5.7s avg after eliminating on-device concat JIT stalls
 - No JIT stalls during inference: all shapes pre-compiled at bringup
 - Remaining test-0 overhead (~6s vs ~2s for test-1 at same S) is vLLM first-call initialization, not JIT
+
+## Optimization plan (written 2026-10-15, after Session 15)
+
+Status: decode 48.8 -> 26.5 ms/step; suite mean 1.96 s vs GPU 3.61 s (local files, TT_MM_THROTTLE_PERF=3).
+Dominant bottleneck: decode = matmul DRAM bandwidth (~14 of 23.5 ms kernel time at ~110 GB/s, default interleaved
+configs); prefill = ViT + pooling first, then the text decoder.
+
+Done: vocab-parallel lm_head + row-major logits; 16-core decode RMSNorm; bf8 wqkv/wo; on-device ViT features and
+bucketed pooling; fine prefill buckets.
+
+Remaining, in order:
+1. DRAM-sharded decode matmuls (wqkv, wo, w1/w3/w2) - separate DRAM-sharded weight copies for decode, L1 width-sharded
+   activations, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig. Target 5-8 ms/step.
+2. Row-parallel wo (currently replicated 4096x4096 on every chip).
+3. CCL tuning (~4.5 ms/step) and on-device argmax/sampling for greedy decoding.
+4. Text prefill (~0.49 s left): on-device causal mask (~55 ms), drop embedding-injection copy (~42 ms).
+5. Chunked prefill and batch>1 paged KV (concurrency in the DP=4 server).
+Outstanding checklist items: Tracy profile of every sub-block, profile xlsx (run_block_profiles.sh), formal bottleneck write-up.
+Each step must keep PCC > 0.99, HF teacher-forced agreement, and the 105-suite at >= 98/100 with 0 timeouts.
