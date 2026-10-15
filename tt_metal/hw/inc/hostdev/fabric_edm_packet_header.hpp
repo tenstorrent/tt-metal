@@ -1290,14 +1290,22 @@ struct get_max_num_hops<HybridMeshPacketHeaderT<RouteBufferSize>> {
 using HybridMeshPacketHeader = HybridMeshPacketHeaderT<>;
 static_assert(sizeof(HybridMeshPacketHeader) <= 128, "Configured 2D packet header exceeds the 128B allocation");
 
-struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
+template <int RouteBufferSize = FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE>
+struct UDMHybridMeshPacketHeaderT : public HybridMeshPacketHeaderT<RouteBufferSize> {
     UDMControlFields udm_control;
 
-    // Override to return correct size for UDMHybridMeshPacketHeader
+    // Override to return correct size for UDMHybridMeshPacketHeaderT
     size_t get_payload_size_including_header() volatile const {
-        return get_payload_size_excluding_header() + sizeof(UDMHybridMeshPacketHeader);
+        return this->get_payload_size_excluding_header() + sizeof(UDMHybridMeshPacketHeaderT);
     }
 } __attribute__((packed, aligned(16)));
+
+// One per route buffer size FabricContext can choose. 144 B is PACKET_HEADER_MAX_SIZE.
+static_assert(sizeof(UDMHybridMeshPacketHeaderT<36>) == 112, "36B buffer must result in 112B UDM header");
+static_assert(sizeof(UDMHybridMeshPacketHeaderT<52>) == 128, "52B buffer must result in 128B UDM header");
+static_assert(sizeof(UDMHybridMeshPacketHeaderT<68>) == 144, "68B buffer must result in 144B UDM header");
+
+using UDMHybridMeshPacketHeader = UDMHybridMeshPacketHeaderT<>;
 static_assert(
     sizeof(UDMHybridMeshPacketHeader) == sizeof(HybridMeshPacketHeader) + sizeof(UDMControlFields),
     "UDMHybridMeshPacketHeader size must equal base + UDMControlFields");
@@ -1307,9 +1315,9 @@ static_assert(
 static_assert(sizeof(PacketHeader) == 64, "sizeof(PacketHeader) is not equal to 64B");
 
 // Used to get the maximum number of hops that this packet header can support
-template <>
-struct get_max_num_hops<UDMHybridMeshPacketHeader> {
-    static constexpr uint32_t value = get_max_num_hops<HybridMeshPacketHeader>::value;
+template <int RouteBufferSize>
+struct get_max_num_hops<UDMHybridMeshPacketHeaderT<RouteBufferSize>> {
+    static constexpr uint32_t value = get_max_num_hops<HybridMeshPacketHeaderT<RouteBufferSize>>::value;
 };
 
 #define STRINGIFY(x) #x
