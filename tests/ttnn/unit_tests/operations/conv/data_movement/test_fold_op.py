@@ -141,9 +141,9 @@ def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, paddin
         #
         # Scope: this parametrization runs on DRAM (input_memory_config above). The guarantee is
         # not general - an L1 height-sharded TILE input with padding goes through halo's untilize
-        # instead, which unpacks a Float32 input via SrcA as Tf32 and comes back with a relative
-        # error of 2^-11. That is intended: halo is a staging op whose consumers narrow to Tf32
-        # anyway. See #58402 item 14 and #60731.
+        # instead, which unpacks a Float32 input via SrcA as Tf32 and loses mantissa bits. That is
+        # intended: halo is a staging op whose consumers narrow to Tf32 anyway. See #60778,
+        # #58402 item 14 and #60731.
         assert torch.equal(
             torch_output_tensor, tt_output_tensor
         ), f"Expected: {torch_output_tensor}, Actual: {tt_output_tensor}"
