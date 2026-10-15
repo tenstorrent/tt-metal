@@ -25,7 +25,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_block_ops.hpp"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/kernel_lib/untilize_helpers.hpp"
 
