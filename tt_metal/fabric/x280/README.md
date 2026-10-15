@@ -381,8 +381,8 @@ the opt-in `x280_pll_test`; neither is part of the runtime API.
 
 `X280Runtime::enqueue(tile, request)` accepts only a healthy runtime-owned tile
 from that runtime. The C++ runtime uses four per-hart control, state, and trap
-records at migration-control `+0x1800..+0x1AFF`; the tile-global mailbox
-addresses remain reserved but are not part of this path. Each hart has one cache
+records at migration-control `+0x1800..+0x1AFF`; no tile-global mailbox
+addresses are reserved. Each hart has one cache
 line for each record. All four harts run the same image, entry, run value, and
 argument-block address and byte extent.
 
