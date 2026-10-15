@@ -12,7 +12,7 @@ load a prepared golden, so the CPU work never holds the device.
 which segments are complete and how long each took, and, once complete, the token floor for per-token NRMSE.
 Example (Kimi-K3 ``layers.0`` on the code tokens of a vLLM trace)::
 
-    nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kda.golden_run \\
+    nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kda.long_context_golden \\
         --checkpoint $KIMI_K3_CKPT --tokens /path/to/vllm/trace --count 1044480 --out /path/to/golden
 """
 
