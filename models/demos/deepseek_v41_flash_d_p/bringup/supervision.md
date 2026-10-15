@@ -104,3 +104,4 @@ Every intervention by the supervising session: time, task, trigger, classificati
   precision model's block-out error (no fixed floor or cap). Spec rule "Accuracy is judged against the noise floor"
   (intake re-approved). Note OV-3: fast paths back as defaults, exact paths as settings, re-run S.swa.05 / S.swa.06.
   OV-1 closed (both agents answered done; DS41-12 is 352 characters).
+- 16:10 OV-3 widened to every implement task (S.swa.07 / C.swa.ffn_hc passed without an agent, so no one read it). Owner: no work-order feature now, but the fast path must not wait until the end: check at each progress check; work orders (overseer task) are a pending framework item.
