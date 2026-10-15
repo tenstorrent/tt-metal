@@ -82,7 +82,7 @@ void LayerCompletionRouter::stop() {
 }
 
 template <typename Forward>
-void LayerCompletionRouter::fan_in(Forward&& forward) {
+void LayerCompletionRouter::fan_in(const Forward& forward) {
     std::vector<int> subs;
     if (cfg_.world_size > 1) {
         for (int r = 0; r < cfg_.world_size; ++r) {
@@ -188,7 +188,7 @@ void LayerCompletionRouter::run_master() {
 }
 
 void LayerCompletionRouter::run_subordinate() {
-    const mh::ContextPtr ctx = mh::DistributedContext::get_current_world();
+    const mh::ContextPtr& ctx = mh::DistributedContext::get_current_world();
     auto send_blocking = [&](const LayerCompletionMessage& msg) {
         std::array<std::byte, sizeof(msg)> buf{};
         std::memcpy(buf.data(), &msg, sizeof(msg));

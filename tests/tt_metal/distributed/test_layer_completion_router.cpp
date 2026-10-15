@@ -34,7 +34,7 @@ std::string fresh_name(const char* tag) {
 
 // Poll `f` until it holds or the deadline passes; the router runs on its own thread.
 template <typename F>
-bool wait_until(F&& f, int timeout_ms = 10'000) {
+bool wait_until(const F& f, int timeout_ms = 10'000) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
     while (std::chrono::steady_clock::now() < deadline) {
         if (f()) {

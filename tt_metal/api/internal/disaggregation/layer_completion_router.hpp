@@ -56,7 +56,7 @@ private:
     void run_master();
     // Master fan-in: local ring and subordinates into `forward`, then the sentinel-coordinated teardown.
     template <typename Forward>
-    void fan_in(Forward&& forward);
+    void fan_in(const Forward& forward);
     void run_subordinate();
     void join();
 
@@ -65,7 +65,7 @@ private:
     std::unique_ptr<LayerCompletionQueue> scheduler_;  // master only
     std::thread listener_;
     std::atomic<bool> stop_{false};
-    std::chrono::steady_clock::time_point stopped_at_{};
+    std::chrono::steady_clock::time_point stopped_at_;
     std::atomic<bool> stopped_{false};
     std::atomic<uint64_t> processed_{0};
     std::mutex error_mutex_;

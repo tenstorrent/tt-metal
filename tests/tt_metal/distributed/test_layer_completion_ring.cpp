@@ -112,6 +112,7 @@ TEST(LayerCompletionQueue, MpscProducersAllDelivered) {
     constexpr uint32_t kTotal = kProducers * kPerProducer;
 
     std::vector<std::thread> producers;
+    producers.reserve(kProducers);
     for (uint32_t p = 0; p < kProducers; ++p) {
         producers.emplace_back([&owner, p] {
             for (uint32_t i = 0; i < kPerProducer; ++i) {
