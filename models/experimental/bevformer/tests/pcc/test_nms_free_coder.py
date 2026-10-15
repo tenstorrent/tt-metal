@@ -7,11 +7,11 @@ import torch
 
 import ttnn
 from models.experimental.bevformer.model_config import (
+    BOX_DTYPE,
     CODE_SIZE,
     CODE_XY,
     CODE_Z,
     DECODER_NUM_LAYERS,
-    GRID_DTYPE,
     NUM_CLASSES,
     NUM_QUERY,
     POST_CENTER_RANGE,
@@ -94,7 +94,7 @@ def _head_outputs(logits, batch_size, generator):
 def test_nms_free_coder(device, reset_seeds, logits, batch_size, score_threshold):
     cls_scores, bbox_preds = _head_outputs(LOGITS[logits], batch_size, torch.Generator().manual_seed(0))
     reference = NMSFreeCoder(score_threshold=score_threshold)
-    tt_coder = TtNMSFreeCoder(score_threshold=score_threshold)
+    tt_coder = TtNMSFreeCoder(device, score_threshold=score_threshold)
     # The dtypes the head emits.
     tt_cls_scores = ttnn.from_torch(cls_scores, dtype=SCORE_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
     tt_bbox_preds = ttnn.from_torch(bbox_preds, dtype=BOX_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
@@ -133,15 +133,15 @@ def test_nms_free_coder_traced(device, reset_seeds, score_threshold):
     the validity mask, are upstream ``get_bboxes``' boxes."""
     cls_scores, bbox_preds = _head_outputs(LOGITS["background"], 2, torch.Generator().manual_seed(0))
     reference = NMSFreeCoder(score_threshold=score_threshold)
-    tt_coder = TtNMSFreeCoder(score_threshold=score_threshold)
+    tt_coder = TtNMSFreeCoder(device, score_threshold=score_threshold)
     tt_cls_scores = ttnn.from_torch(cls_scores, dtype=SCORE_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_bbox_preds = ttnn.from_torch(bbox_preds, dtype=GRID_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_bbox_preds = ttnn.from_torch(bbox_preds, dtype=BOX_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
 
     def run():
         scores, labels, _, boxes = tt_coder.topk(tt_cls_scores[-1], tt_bbox_preds[-1])
         return (scores, labels, *tt_coder.finalize(scores, boxes))
 
-    # Compiles the programs and uploads the fallback thresholds, both before the capture.
+    # Compiles the programs before the capture.
     run()
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     tt_outputs = run()
@@ -152,10 +152,8 @@ def test_nms_free_coder_traced(device, reset_seeds, score_threshold):
     finally:
         ttnn.release_trace(device, trace_id)
 
-    for i, (e, (boxes, scores, labels)) in enumerate(
-        zip(reference.decode(cls_scores, bbox_preds), actual, strict=True)
-    ):
+    for i, (e, a) in enumerate(zip(reference.decode(cls_scores, bbox_preds), actual, strict=True)):
         assert 0 < len(e["bboxes"]) < reference.max_num, "the filters must drop some boxes and keep some"
-        assert torch.equal(labels, e["labels"]), f"sample {i}: kept labels differ"
-        torch.testing.assert_close(scores, e["scores"], rtol=SCORE_RTOL, atol=0)
-        assert_boxes_close(bottom_center(e["bboxes"]), boxes)
+        assert torch.equal(a["labels"], e["labels"]), f"sample {i}: kept labels differ"
+        torch.testing.assert_close(a["scores"], e["scores"], rtol=SCORE_RTOL, atol=0)
+        assert_boxes_close(bottom_center(e["bboxes"]), a["bboxes"])

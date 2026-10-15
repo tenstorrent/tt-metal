@@ -125,6 +125,12 @@ CODE_SIN = slice(6, 7)
 CODE_COS = slice(7, 8)
 CODE_VELOCITY = slice(8, 10)
 
+_CENTERS = [*range(CODE_SIZE)][CODE_XY] + [*range(CODE_SIZE)][CODE_Z]
+# The TTNN port's channel order for box codes: the centers first, (cx, cy, cz, w, l, h, sin, cos,
+# vx, vy), so its decoder takes the center offsets in one slice. Its reg branches emit it, from
+# the last Linear's rows in this order.
+CENTERS_FIRST = _CENTERS + [channel for channel in range(CODE_SIZE) if channel not in _CENTERS]
+
 # The coder's decoded box: (cx, cy, cz, w, l, h, yaw, vx, vy), cz at the box's gravity center.
 BOX_CENTER = slice(0, 3)
 BOX_SIZE = slice(3, 6)
@@ -157,10 +163,11 @@ class DeformableAttentionConfig:
 # --- TTNN precision and memory ------------------------------------------------------------------
 
 # The ttnn dtypes, by name. The PyTorch reference imports this module and must not need ttnn, so
-# ``GRID_DTYPE`` and ``SCORE_DTYPE`` are looked up in ttnn on first access, by the module
-# ``__getattr__`` at the end of this file.
+# ``GRID_DTYPE``, ``SCORE_DTYPE`` and ``BOX_DTYPE`` are looked up in ttnn on first access, by the
+# module ``__getattr__`` at the end of this file.
 GRID_DTYPE: "ttnn.DataType"
 SCORE_DTYPE: "ttnn.DataType"
+BOX_DTYPE: "ttnn.DataType"
 _TTNN_DTYPES = {
     # The deformable attentions' reference points, in the encoder and the decoder, which the fused
     # MSDA op samples at: in bfloat16 a point in (0.5, 1) moves in steps of 2^-8, 0.8 px on the
@@ -169,6 +176,9 @@ _TTNN_DTYPES = {
     # The head's class logits, which the coder ranks: in bfloat16 many of the num_query *
     # num_classes scores tie, and the top-k order departs from the reference's.
     "SCORE_DTYPE": "float32",
+    # The head's box predictions: GRID_DTYPE's, as their centers are the decoder's refined
+    # reference points.
+    "BOX_DTYPE": "float32",
 }
 
 

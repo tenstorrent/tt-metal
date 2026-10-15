@@ -65,7 +65,7 @@ class TtBEVFormer:
         if self.batch_size > 1:
             bev_pos = ttnn.repeat(bev_pos, ttnn.Shape((self.batch_size, 1, 1)))
         self.bev_pos = bev_pos
-        self.coder = TtNMSFreeCoder()
+        self.coder = TtNMSFreeCoder(device)
 
     def prepare_frame(self, img_metas, frame=None, capacity=None):
         """See ``TtPerceptionTransformer.prepare_frame``."""
@@ -97,4 +97,7 @@ class TtBEVFormer:
     def get_bboxes(scores, labels, boxes, valid):
         """:meth:`detect`'s outputs to one ``(boxes, scores, labels)`` per sample on the host, the
         valid ones, as ``reference.bevformer.BEVFormer.get_bboxes`` returns them."""
-        return TtNMSFreeCoder.compact(scores, labels, boxes, valid)
+        return [
+            (sample["bboxes"], sample["scores"], sample["labels"])
+            for sample in TtNMSFreeCoder.compact(scores, labels, boxes, valid)
+        ]
