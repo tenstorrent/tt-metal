@@ -47,7 +47,11 @@ __attribute__((noinline)) void calculate_gelu_fresh_cpp()
         sfpi::vFloat r = x;
         v_if (x <= GELU_SAT)
         {
-            r = 0.0f;
+            // SFPU compares order NaNs by sign-magnitude, so a negative NaN
+            // lands here (a positive one fails every region and keeps r = x).
+            // SFPABS keeps a NaN's sign, so this min is +0 for every other
+            // lane and returns that NaN unchanged.
+            r = sfpi::min(sfpi::abs(x), 0.0f);
         }
         v_elseif (x < -3.125f)
         {
@@ -73,13 +77,6 @@ __attribute__((noinline)) void calculate_gelu_fresh_cpp()
             odd                   = odd * x2 + P3;
             odd                   = odd * x2 + P1;
             r                     = x * (P0 + x * odd);
-        }
-        v_endif;
-        // The region predicates order NaNs by their sign-magnitude encoding;
-        // restore IEEE propagation after the finite piecewise computation.
-        v_if (sfpi::is_nan(x))
-        {
-            r = x;
         }
         v_endif;
         sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
