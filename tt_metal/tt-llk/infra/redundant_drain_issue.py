@@ -39,6 +39,13 @@ def run(args, check=True, input_text=None):
     return res.stdout
 
 
+def commit(ref):
+    """The full SHA of `ref`, which must name a commit; an option-shaped value is rejected."""
+    return run(
+        ["git", "rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"]
+    ).strip()
+
+
 def added_drain_lines(base, head):
     """{file: {line}} of lines in head that this range added and that contain a drain call."""
     files = [
@@ -203,7 +210,8 @@ def main():
     ap.add_argument("--head", required=True, help="commit pushed")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    args.head = run(["git", "rev-parse", args.head]).strip()
+    args.base = commit(args.base)
+    args.head = commit(args.head)
 
     added = added_drain_lines(args.base, args.head)
     if not added:
