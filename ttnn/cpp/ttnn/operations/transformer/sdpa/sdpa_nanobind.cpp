@@ -469,6 +469,10 @@ void bind_sdpa(nb::module_& mod) {
                 physical block in-kernel (invP), so no host reorder is needed. sp is read from the mesh.
             block_cyclic_chunk_local (int, optional): per-shard chunk length (chunk_size_global / sp). Required
                 iff block_cyclic_sp_axis is set; cross-checked against q (must equal q_isl or tp*q_isl).
+            enable_kv_block_cache (bool): per-core L1 cache for the gathered K/V blocks: a block selected again by
+                a later query on the same core is read from L1 instead of DRAM; output is byte-identical either
+                way. The slot count is sized per call from the free L1 (an estimate, not a reservation) and baked
+                into the program, so a trace replays the count it captured unchecked. Default False.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
@@ -489,7 +493,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("chunk_start_idx") = nb::none(),
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("enable_kv_block_cache") = false);
 
     const auto* const chunked_doc =
         R"doc(
@@ -788,7 +793,7 @@ void bind_sdpa(nb::module_& mod) {
         than K and tile aligned. The KV tensor must have one shared KV head.
 
         Args:
-            input_tensor_q (ttnn.Tensor): Queries [b x nqh x N/num_devices x dh].
+            input_tensor_q (ttnn.Tensor): Queries [b x nqh x N/num_devices x dh] (N/S under split KV).
             input_tensor_kv (ttnn.Tensor): Shared KV tensor [b x nkv x N/num_devices x dh].
 
         Keyword args:
@@ -827,10 +832,23 @@ void bind_sdpa(nb::module_& mod) {
 
         Metadata path and cache fold: as ring_joint_scaled_dot_product_attention (see its docstring).
 
+        Split KV (cluster_axis=None only): Q is sequence-sharded over the S devices of mesh axis 0
+        only (heads may be split over axis 1) while KV is sequence-sharded over all R devices;
+        R/S must equal the size of mesh axis 1. Q and the output then hold N/S rows per device.
+        A Q slab of s tiles spans R/S KV regions of s*S/R tiles per global chunk of s*S tiles,
+        laid out block-cyclically: global region g lives on row-major device g % R at local
+        offset (g // R) * region. Attention covers the full causal prefix across all sources.
+        Supported for dense causal chunked prefill only (no balancing, joint tokens, sliding
+        window or circular cache) with fp32_dest_acc_en=False. The gathered KV buffer must hold
+        at least R times the local KV extent, and logical_n must not exceed R times the local
+        KV extent (not the gathered buffer size). Without
+        kv_actual_isl or kv_actual_isl_tensor, logical_n must be a nonzero whole number of
+        global chunks.
+
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
-              - Attention output [b x nqh x N/num_devices x head_dim_v].
-              - Streaming statistics scratch [b x nqh x 2*N/num_devices x 1].
+              - Attention output [b x nqh x N/num_devices x head_dim_v] (N/S rows under split KV).
+              - Streaming statistics scratch [b x nqh x 2*N/num_devices x 1] (2*N/S rows under split KV).
         )doc";
 
     ttnn::bind_function<"ring_mla", "ttnn.transformer.">(

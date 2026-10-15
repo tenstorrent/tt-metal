@@ -40,10 +40,7 @@ struct DispatchTelemetryDeviceInfo {
      *          executing work. Requires worker dispatch.
      * @note    core_efficiency = avg_worker_core_runtime / uptime, where the average is over the
      *          compute-with-storage tensix count published in the SMC dispatch telemetry control
-     *          block (dispatch tensix and ethernet tiles are excluded).
-     *          Sub-device worker counts still include ACTIVE_ETH, so ethernet cores can add
-     *          worker-cycles to the numerator and the raw ratio can exceed 1.0. Host clamps to
-     *          [0.0, 1.0].
+     *          block (dispatch tensix tiles are excluded).
      * @return  Normalized core efficiency since the last read, or std::nullopt if worker dispatch is
      *          disabled. 1.0 = 100%, 0.0 = 0%.
      */

@@ -18,7 +18,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
