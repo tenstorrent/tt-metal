@@ -36,9 +36,10 @@ N_STEPS = 60
 # ---------------------------------------------------------------------------
 
 
-def _make_opt(lr=BASE_LR):
-    params = ttml.NamedParameters()
-    return ttml.optimizers.create_optimizer({"type": "AdamW", "lr": lr}, params)
+def _make_opt(lr=BASE_LR, *group_lrs):
+    cfg = ttml.optimizers.AdamWConfig.make(lr=lr, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
+    groups = [{"params": [], "lr": group_lr} for group_lr in group_lrs]
+    return ttml.optimizers.AdamW(ttml.NamedParameters(), cfg, param_groups=groups)
 
 
 def _step(opt, sched):
@@ -46,9 +47,10 @@ def _step(opt, sched):
     assert opt.get_group_lrs()[0] == pytest.approx(sched.get_last_lrs()[0], abs=1e-8)
 
 
-def _make_torch_opt(lr=BASE_LR):
-    dummy = torch.nn.Parameter(torch.tensor(0.0))
-    return torch.optim.SGD([dummy], lr=lr), dummy
+def _make_torch_opt(lr=BASE_LR, *group_lrs):
+    lrs = [lr, *group_lrs]
+    params = [torch.nn.Parameter(torch.tensor(0.0)) for _ in lrs]
+    return torch.optim.SGD([{"params": [p], "lr": group_lr} for p, group_lr in zip(params, lrs)], lr=lr)
 
 
 def _roundtrip(make_sched_fn, n_steps=N_STEPS):
@@ -101,7 +103,7 @@ class TestCosineAnnealingMatchesPyTorch:
     def test_lr_trajectory(self):
         """Every step's LR must match PyTorch CosineAnnealingLR to within float32 precision."""
         opt, sched = _make_cosine()  # noqa: F841
-        torch_opt, _ = _make_torch_opt()
+        torch_opt = _make_torch_opt()
         torch_sched = torch.optim.lr_scheduler.CosineAnnealingLR(torch_opt, T_max=T_MAX, eta_min=ETA_MIN)
 
         # Step 0: construction-time LR must already match (torch performs an
@@ -242,7 +244,7 @@ class TestStepSchedulerMatchesPyTorch:
     def test_lr_trajectory(self):
         """Must match torch.optim.lr_scheduler.StepLR step-by-step."""
         opt, sched = _make_step()  # noqa: F841
-        torch_opt, _ = _make_torch_opt()
+        torch_opt = _make_torch_opt()
         torch_sched = torch.optim.lr_scheduler.StepLR(torch_opt, step_size=STEP_SIZE, gamma=GAMMA)
 
         # Step 0: construction-time LR must already match.
@@ -366,7 +368,7 @@ class TestLinearSchedulerMatchesPyTorch:
     def test_constructor_applies_start_factor(self):
         """The pre-first-step LR must equal base_lr * start_factor, matching torch."""
         opt, sched = _make_linear()  # noqa: F841
-        torch_opt, _ = _make_torch_opt()
+        torch_opt = _make_torch_opt()
         torch.optim.lr_scheduler.LinearLR(
             torch_opt, start_factor=START_FACTOR, end_factor=END_FACTOR, total_iters=TOTAL_STEPS
         )
@@ -386,7 +388,7 @@ class TestLinearSchedulerMatchesPyTorch:
     def test_lr_trajectory(self):
         """Must match torch.optim.lr_scheduler.LinearLR step-by-step."""
         opt, sched = _make_linear()  # noqa: F841
-        torch_opt, _ = _make_torch_opt()
+        torch_opt = _make_torch_opt()
         torch_sched = torch.optim.lr_scheduler.LinearLR(
             torch_opt, start_factor=START_FACTOR, end_factor=END_FACTOR, total_iters=TOTAL_STEPS
         )
@@ -530,7 +532,7 @@ class TestLambdaSchedulerMatchesPyTorch:
     def test_lr_trajectory(self):
         """Must match torch.optim.lr_scheduler.LambdaLR step-by-step."""
         opt, sched = _make_lambda()  # noqa: F841
-        torch_opt, _ = _make_torch_opt()
+        torch_opt = _make_torch_opt()
         torch_sched = torch.optim.lr_scheduler.LambdaLR(torch_opt, lr_lambda=_LAMBDA)
 
         # Step 0: construction-time LR must already be base_lr * lambda(0).
@@ -788,7 +790,7 @@ class TestSequentialSchedulerMatchesPyTorch:
 
     def test_warmup_then_linear_decay_matches_sequential_lr(self):
         opt, sched = _make_sequential()  # noqa: F841
-        torch_opt, _ = _make_torch_opt()
+        torch_opt = _make_torch_opt()
         torch_children = [
             torch.optim.lr_scheduler.LinearLR(
                 torch_opt, start_factor=WARMUP_START, end_factor=1.0, total_iters=CHILD0_STEPS
@@ -821,7 +823,7 @@ class TestSequentialSchedulerMatchesPyTorch:
         ]
         sched = SequentialScheduler(opt, children, milestones=[warmup_steps, decay_steps])
 
-        torch_opt, _ = _make_torch_opt()
+        torch_opt = _make_torch_opt()
         torch_children = [
             torch.optim.lr_scheduler.LinearLR(
                 torch_opt, start_factor=1.0 / warmup_steps, end_factor=1.0, total_iters=warmup_steps
@@ -1440,18 +1442,6 @@ if __name__ == "__main__":
 GROUP_LRS = [0.1, 0.01]
 
 
-def _make_grouped_opt(lrs=GROUP_LRS):
-    """Group 0 takes the default LR, so it carries lrs[0] and the listed groups the rest."""
-    cfg = ttml.optimizers.AdamWConfig.make(lr=lrs[0], beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
-    groups = [{"params": [], "lr": lr} for lr in lrs[1:]]
-    return ttml.optimizers.AdamW(ttml.NamedParameters(), cfg, param_groups=groups)
-
-
-def _make_grouped_torch_opt(lrs=GROUP_LRS):
-    params = [torch.nn.Parameter(torch.tensor(0.0)) for _ in lrs]
-    return torch.optim.SGD([{"params": [p], "lr": lr} for p, lr in zip(params, lrs)], lr=lrs[0])
-
-
 def _torch_group_lrs(torch_opt):
     return [group["lr"] for group in torch_opt.param_groups]
 
@@ -1481,9 +1471,9 @@ class TestParamGroupScheduling:
     @pytest.mark.parametrize("name", list(_GROUPED_CASES))
     def test_every_group_matches_pytorch(self, name):
         make_sched, make_torch_sched = _GROUPED_CASES[name]
-        opt = _make_grouped_opt()
+        opt = _make_opt(*GROUP_LRS)
         sched = make_sched(opt)
-        torch_opt = _make_grouped_torch_opt()
+        torch_opt = _make_torch_opt(*GROUP_LRS)
         torch_sched = make_torch_sched(torch_opt)
 
         assert opt.get_group_lrs() == pytest.approx(_torch_group_lrs(torch_opt), abs=1e-7), "step 0"
@@ -1497,14 +1487,14 @@ class TestParamGroupScheduling:
 
     def test_sequential_warmup_then_cosine_matches_pytorch(self):
         warmup_steps, decay_steps, eta_min = 4, 10, 1e-3
-        opt = _make_grouped_opt()
+        opt = _make_opt(*GROUP_LRS)
         children = [
             LinearScheduler(opt, start_factor=0.25, end_factor=1.0, total_steps=warmup_steps),
             CosineAnnealingScheduler(opt, T_max=decay_steps, eta_min=eta_min),
         ]
         sched = SequentialScheduler(opt, children, milestones=[warmup_steps, decay_steps])
 
-        torch_opt = _make_grouped_torch_opt()
+        torch_opt = _make_torch_opt(*GROUP_LRS)
         torch_children = [
             torch.optim.lr_scheduler.LinearLR(torch_opt, start_factor=0.25, end_factor=1.0, total_iters=warmup_steps),
             torch.optim.lr_scheduler.CosineAnnealingLR(torch_opt, T_max=decay_steps, eta_min=eta_min),
@@ -1519,7 +1509,7 @@ class TestParamGroupScheduling:
             assert opt.get_group_lrs() == pytest.approx(_torch_group_lrs(torch_opt), abs=1e-6), f"step {step}"
 
     def test_state_dict_restores_every_groups_base_and_live_lr(self):
-        src_opt = _make_grouped_opt()
+        src_opt = _make_opt(*GROUP_LRS)
         src = CosineAnnealingScheduler(src_opt, T_max=10, eta_min=1e-3)
         for _ in range(4):
             src.step()
@@ -1529,7 +1519,7 @@ class TestParamGroupScheduling:
 
         # Resume onto an optimizer whose LRs have already decayed: the saved bases are kept and the saved
         # live LRs are pushed back to the optimizer.
-        dst_opt = _make_grouped_opt(src_opt.get_group_lrs())
+        dst_opt = _make_opt(*src_opt.get_group_lrs())
         dst = CosineAnnealingScheduler(dst_opt, T_max=10, eta_min=1e-3)
         dst.set_state_dict(state)
         assert dst_opt.get_group_lrs() == pytest.approx(src_opt.get_group_lrs(), abs=1e-7)
@@ -1539,7 +1529,7 @@ class TestParamGroupScheduling:
             assert dst_opt.get_group_lrs() == pytest.approx(src_opt.get_group_lrs(), abs=1e-7), f"step {step}"
 
     def test_set_group_lrs_rejects_wrong_count(self, expect_error):
-        opt = _make_grouped_opt()
+        opt = _make_opt(*GROUP_LRS)
         with expect_error(ValueError, "has 2 param groups, but got 1 values for 'lr'"):
             opt.set_group_lrs([0.1])
 
@@ -1562,7 +1552,7 @@ def test_sequential_state_dict_with_out_of_range_index_rejected(expect_error):
 
 def test_rejected_scheduler_state_leaves_scheduler_unchanged(expect_error):
     # A checkpoint from an optimizer with 2 groups, loaded into a scheduler on a 1-group optimizer.
-    src = StepScheduler(_make_grouped_opt(), step_size=1, gamma=0.5)
+    src = StepScheduler(_make_opt(*GROUP_LRS), step_size=1, gamma=0.5)
     src.step()
     two_group_state = src.get_state_dict()
 

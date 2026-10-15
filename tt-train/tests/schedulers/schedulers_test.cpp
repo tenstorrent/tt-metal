@@ -15,50 +15,13 @@
 #include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
-// Optimizer with a single param group (and no params) that only carries an "lr".
+// Optimizer with no params and one param group per entry of `lrs`, each only carrying an "lr".
 class MockOptimizer : public OptimizerBase {
 public:
     [[nodiscard]] std::string get_name() const override {
         return "MockOptimizer";
     }
-    explicit MockOptimizer(float lr) : OptimizerBase(ttml::serialization::NamedParameters{}) {
-        init_param_groups({{"lr", lr}}, {});
-    }
-
-    void zero_grad() override {};
-
-    void step() override {};
-
-    [[nodiscard]] serialization::StateDict get_state_dict() const override {
-        serialization::StateDict dict;
-        save_param_groups(dict);
-        return dict;
-    }
-
-    void set_state_dict(const serialization::StateDict &dict) override {
-        restore_param_groups(dict);
-    }
-
-    [[nodiscard]] size_t get_steps() const override {
-        return {};
-    };
-    void set_steps(size_t steps) override {};
-
-    // The LR of the single group, for brevity in the tests.
-    [[nodiscard]] float lr() const {
-        return get_group_lrs().at(0);
-    }
-};
-
-// Optimizer with one param group per entry of `lrs` (and no params): each group only carries an "lr". The first LR is
-// the default, so it lands in the always-present group 0 and the rest follow in order.
-class GroupedMockOptimizer : public OptimizerBase {
-public:
-    [[nodiscard]] std::string get_name() const override {
-        return "GroupedMockOptimizer";
-    }
-    explicit GroupedMockOptimizer(const std::vector<float> &lrs) :
-        OptimizerBase(ttml::serialization::NamedParameters{}) {
+    explicit MockOptimizer(const std::vector<float> &lrs) : OptimizerBase(ttml::serialization::NamedParameters{}) {
         std::vector<ParamGroup> groups;
         groups.reserve(lrs.size() - 1);
         for (auto it = std::next(lrs.begin()); it != lrs.end(); ++it) {
@@ -67,6 +30,9 @@ public:
         init_param_groups({{"lr", lrs.front()}}, std::move(groups));
     }
 
+    explicit MockOptimizer(float lr) : MockOptimizer(std::vector<float>{lr}) {
+    }
+
     void zero_grad() override {};
 
     void step() override {};
@@ -85,6 +51,10 @@ public:
         return {};
     };
     void set_steps(size_t steps) override {};
+
+    [[nodiscard]] float lr() const {
+        return get_group_lrs().at(0);
+    }
 };
 }  // namespace ttml::optimizers
 
@@ -914,7 +884,7 @@ float cosine_lr(float base_lr, float eta_min, size_t step, size_t t_max) {
 TEST(ParamGroupSchedulingTest, CosineDecaysEveryGroupToEtaMin) {
     constexpr size_t kTMax = 10;
     constexpr float kEtaMin = 1e-3F;
-    ttml::optimizers::GroupedMockOptimizer optimizer(kGroupBaseLrs);
+    ttml::optimizers::MockOptimizer optimizer(kGroupBaseLrs);
     ttml::schedulers::CosineAnnealingScheduler scheduler(&optimizer, kTMax, kEtaMin);
     EXPECT_EQ(optimizer.get_group_lrs(), kGroupBaseLrs);
 
@@ -932,14 +902,14 @@ TEST(ParamGroupSchedulingTest, CosineDecaysEveryGroupToEtaMin) {
 }
 
 TEST(ParamGroupSchedulingTest, MultiplicativeSchedulersScaleEveryGroupsBase) {
-    auto expect_factor = [](const ttml::optimizers::GroupedMockOptimizer &optimizer, float factor, int step) {
+    auto expect_factor = [](const ttml::optimizers::MockOptimizer &optimizer, float factor, int step) {
         const auto lrs = optimizer.get_group_lrs();
         for (size_t g = 0; g < lrs.size(); ++g) {
             EXPECT_FLOAT_EQ(lrs[g], kGroupBaseLrs[g] * factor) << "group " << g << " step " << step;
         }
     };
     {
-        ttml::optimizers::GroupedMockOptimizer optimizer(kGroupBaseLrs);
+        ttml::optimizers::MockOptimizer optimizer(kGroupBaseLrs);
         ttml::schedulers::LinearScheduler scheduler(&optimizer, /*start_factor=*/0.5F, /*end_factor=*/1.0F, 4);
         expect_factor(optimizer, 0.5F, 0);
         for (int s = 1; s <= 5; ++s) {
@@ -948,7 +918,7 @@ TEST(ParamGroupSchedulingTest, MultiplicativeSchedulersScaleEveryGroupsBase) {
         }
     }
     {
-        ttml::optimizers::GroupedMockOptimizer optimizer(kGroupBaseLrs);
+        ttml::optimizers::MockOptimizer optimizer(kGroupBaseLrs);
         ttml::schedulers::StepScheduler scheduler(&optimizer, /*step_size=*/2, /*gamma=*/0.5F);
         for (int s = 1; s <= 5; ++s) {
             scheduler.step();
@@ -957,7 +927,7 @@ TEST(ParamGroupSchedulingTest, MultiplicativeSchedulersScaleEveryGroupsBase) {
         }
     }
     {
-        ttml::optimizers::GroupedMockOptimizer optimizer(kGroupBaseLrs);
+        ttml::optimizers::MockOptimizer optimizer(kGroupBaseLrs);
         ttml::schedulers::LambdaScheduler scheduler(&optimizer, [](int epoch) { return 1.0F / (epoch + 1); });
         for (int s = 1; s <= 5; ++s) {
             scheduler.step();
@@ -970,7 +940,7 @@ TEST(ParamGroupSchedulingTest, SequentialWarmupThenCosinePerGroup) {
     constexpr size_t kWarmup = 4;
     constexpr size_t kTMax = 6;
     constexpr float kEtaMin = 1e-3F;
-    ttml::optimizers::GroupedMockOptimizer optimizer(kGroupBaseLrs);
+    ttml::optimizers::MockOptimizer optimizer(kGroupBaseLrs);
     std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> children;
     children.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(&optimizer, 0.25F, 1.0F, kWarmup));
     children.push_back(std::make_unique<ttml::schedulers::CosineAnnealingScheduler>(&optimizer, kTMax, kEtaMin));
@@ -998,7 +968,7 @@ TEST(ParamGroupSchedulingTest, SequentialWarmupThenCosinePerGroup) {
 TEST(ParamGroupSchedulingTest, StateDictRestoresEveryGroupsBaseAndLiveLr) {
     constexpr size_t kTMax = 10;
     constexpr float kEtaMin = 1e-3F;
-    ttml::optimizers::GroupedMockOptimizer src_opt(kGroupBaseLrs);
+    ttml::optimizers::MockOptimizer src_opt(kGroupBaseLrs);
     ttml::schedulers::CosineAnnealingScheduler src(&src_opt, kTMax, kEtaMin);
     for (int i = 0; i < 4; ++i) {
         src.step();
@@ -1009,7 +979,7 @@ TEST(ParamGroupSchedulingTest, StateDictRestoresEveryGroupsBaseAndLiveLr) {
 
     // Resume onto an optimizer whose LRs have already decayed: the scheduler must keep the saved bases and
     // push the saved live LRs back to the optimizer.
-    ttml::optimizers::GroupedMockOptimizer dst_opt(src_opt.get_group_lrs());
+    ttml::optimizers::MockOptimizer dst_opt(src_opt.get_group_lrs());
     ttml::schedulers::CosineAnnealingScheduler dst(&dst_opt, kTMax, kEtaMin);
     dst.set_state_dict(state);
     EXPECT_EQ(dst_opt.get_group_lrs(), src_opt.get_group_lrs());
@@ -1023,7 +993,7 @@ TEST(ParamGroupSchedulingTest, StateDictRestoresEveryGroupsBaseAndLiveLr) {
 
 TEST(ParamGroupSchedulingTest, RejectedStateDictLeavesSchedulerUnchanged) {
     // A checkpoint from an optimizer with 2 groups, loaded into a scheduler on a 1-group optimizer.
-    ttml::optimizers::GroupedMockOptimizer two_groups(kGroupBaseLrs);
+    ttml::optimizers::MockOptimizer two_groups(kGroupBaseLrs);
     ttml::schedulers::StepScheduler src(&two_groups, /*step_size=*/1, /*gamma=*/0.5F);
     src.step();
     const auto two_group_state = src.get_state_dict();
@@ -1134,7 +1104,7 @@ TEST(SequentialSchedulerTest, RejectedChildStateRollsBack) {
 }
 
 TEST(ParamGroupSchedulingTest, SetGroupLrsRejectsWrongCount) {
-    ttml::optimizers::GroupedMockOptimizer grouped(kGroupBaseLrs);
+    ttml::optimizers::MockOptimizer grouped(kGroupBaseLrs);
     EXPECT_THROW(grouped.set_group_lrs({0.1F}), std::invalid_argument);
     ttml::optimizers::MockOptimizer single(0.1F);
     EXPECT_THROW(single.set_group_lrs({0.1F, 0.2F}), std::invalid_argument);
