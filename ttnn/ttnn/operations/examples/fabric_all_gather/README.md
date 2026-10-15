@@ -10,8 +10,9 @@ An all-gather over more than two chips moves other chips' shards through the chi
 receives a chunk and may forward it only once it has fully landed, so the receiving side must be told, cheaply, what
 has arrived; and a ring has two directions to keep busy. Both decisions change with size: a few tiles per chip is
 bound by the fixed cost of a call and by the number of serial hops, megabytes per chip by the busiest link. This
-example is a complete line / ring all-gather (any mesh axis or a snake over the mesh, one or more links, any fabric
-configuration), measured from 4 tiles to 16 MiB per chip.
+example is a complete line / ring all-gather (any mesh axis, a snake over the mesh, or two edge-disjoint
+Hamiltonian cycles over a 2D torus; one or more links; any fabric configuration), measured from 4 tiles to 16 MiB
+per chip.
 
 ## What this isolates — and how
 - **Concepts:** (1) relaying with arrival counters: a packet can carry an atomic increment of the receiving port's
@@ -42,7 +43,7 @@ buffer, 14,336 B router payload.
 | router payload 4,352 B *(baseline 14,336)* | Set once for the whole fabric, not per op | 3.3× more packets for the same bytes |
 
 ## CLI — measure your own shapes/params
-Needs 4 chips.
+Needs 4 chips; the `4x4_*` topologies need 16 (a Galaxy sub-torus), the `4x8_*` / `8x4_*` ones a 32-chip Galaxy.
 
 ```bash
 python -m ttnn.operations.examples.fabric_all_gather [options]
@@ -51,7 +52,7 @@ python -m ttnn.operations.examples.fabric_all_gather [options]
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
 | `--fabric` | comma list | `2d_torus_xy` | `1d`, `1d_ring`, `1d_neighbor_exchange`, `2d`, `2d_torus_x`, `2d_torus_y`, `2d_torus_xy` |
-| `--topology` | comma list | all 8 | `2x2_axis0_line`, `2x2_axis1_line`, `2x2_snake_line`, `2x2_snake_ring`, `4x1_line`, `4x1_ring`, `1x4_line`, `1x4_ring` |
+| `--topology` | comma list | the 8 four-chip ones | 4 chips: `2x2_axis0_line`, `2x2_axis1_line`, `2x2_snake_line`, `2x2_snake_ring`, `4x1_line`, `4x1_ring`, `1x4_line`, `1x4_ring`. Galaxy: `{4x4,4x8,8x4}_{axis0_ring,axis1_ring,snake_ring,dual_cycles}`. LoudBox: `2x4_axis0_line`, `2x4_axis1_line`, `2x4_axis1_ring`, `2x4_snake_ring` |
 | `--variant` | comma list | `base,b` | `base`, `b` = balanced ring |
 | `--links` | comma list | `1,2` | links per hop (up to what the fabric reports) |
 | `--shape` | `H,W` or `H,W;H,W;…` | `2048,4096` | per-chip shard (tile-aligned), one row per shape |
@@ -119,6 +120,28 @@ of `group` chunks in the buffer (which holds 2 × `group`), so a reservation nev
 On an even ring of G chips each chip receives G/2 shards over one direction and G/2 − 1 over the other. With
 `balance=True` the shard opposite each receiver is split by bank set: the forward port sends the first half of its
 banks, the backward port the second half, so both directions carry G/2 − ½ shards (1.5 instead of 2 on 4 chips).
+
+### Four neighbours per chip: two edge-disjoint Hamiltonian cycles
+A ring through every chip of a 2D torus (the snake) uses two of each chip's four neighbours. `scheme="dual_cycles"`
+splits the torus into two Hamiltonian cycles that share no link and together use every link, then runs the ring
+schedule on each. Ring j and link l own DRAM banks j·L + l, then every 2L-th bank, so each cycle carries half of
+every shard. Every chip then sends and receives over all four neighbours, and the busiest hop carries half as much
+as on the snake.
+
+- **Call:** `fabric_all_gather(t, cluster_axis=None, topology=ttnn.Topology.Ring, scheme="dual_cycles", ...)`.
+  Needs a torus with both sides ≥ 3 (`FABRIC_2D_TORUS_XY`). The output is the shards in row-major chip order, as for
+  every scheme.
+- **The cycles:** `_HAMILTONIAN_CYCLES` in the code holds them for 4 × 4 (a Galaxy sub-torus) and 4 × 8 (a full
+  Galaxy); [`report.md`](report.md#dual-cycles-on-a-2d-torus) lists them with each chip's position on each cycle.
+  Any other shape is searched in `plan()` by `hamiltonian_decomposition` (randomized, seeded, so repeatable).
+- **Busiest hop** (shards, from the plan; time ≥ busiest × shard bytes / (links × link rate)):
+
+| all-gather over | snake ring | dual cycles | dual cycles, `balance=True` |
+|---|---|---|---|
+| 4 × 4 (16 chips) | 8 | 4 | 3.75 |
+| 4 × 8 (32 chips) | 16 | 8 | 7.75 |
+
+Run it on a Galaxy with `--topology 4x8_snake_ring,4x8_dual_cycles` (or the `4x4_` pair on a 4 × 4 sub-torus).
 
 ### Reusing one output: preallocated, fenced, inside a sub-device
 `fabric_all_gather(..., output=out)` writes a preallocated output (gathered shape, TILE, DRAM interleaved) in place, so
