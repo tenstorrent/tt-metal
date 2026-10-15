@@ -7,8 +7,6 @@
 
 #include <tt_stl/small_vector.hpp>
 
-#include <tt-metalium/hal.hpp>
-
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache.hpp"
 
@@ -50,7 +48,7 @@ void PackScaledFp8KvCacheDeviceOperation::validate_on_program_cache_miss(
     validate_input(args.rope, "pack_scaled_fp8_kv_cache: rope", tt::tt_metal::DataType::BFLOAT16, packed::ROPE_WIDTH);
     TT_FATAL(
         is_dram_interleaved(attrs.output_memory_config), "pack_scaled_fp8_kv_cache: output must be DRAM interleaved");
-    TT_FATAL(tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE, "pack_scaled_fp8_kv_cache requires Blackhole");
+    TT_FATAL(args.latent.device()->arch() == tt::ARCH::BLACKHOLE, "pack_scaled_fp8_kv_cache requires Blackhole");
     TT_FATAL(
         args.latent.device() == args.scales.device() && args.latent.device() == args.rope.device(),
         "all inputs must be on the same device");

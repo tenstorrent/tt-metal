@@ -36,14 +36,16 @@ using namespace leg_bench;
 
 namespace {
 
-constexpr int kDeviceId = 0;
+// Overridden by TT_LEG_DEVICE_ID; see leg_device_id().
+const int kDeviceId = leg_device_id();
 
 // Both ranks build this identically, which is what keeps them on the same case list.
-const std::vector<int64_t> kPageSizes = {4096, 16384, 65536, 262144};
+// 14336 is the size the standard names; 16384 is the control it has always been measured at.
+const std::vector<int64_t> kPageSizes = {4096, 14336, 16384, 65536, 262144};
 const std::vector<int64_t> kCores = {1, 2, 4, 8, 16, 32, 64};
-// Was never an arg: the socket defaulted to kNumAliasRingSlots == 1, so a volume run paid a
-// full host-to-host credit round trip per frame. ring_pages x page must fit one arena.
-const std::vector<int64_t> kRingPages = {1, 4, 8};
+// Was never an arg: at one slot a volume run paid a credit round trip per frame, and a run
+// breaks at a ring wrap. 95 is the arena bound at 16 KiB (1536 KiB / 16448); 128 fits less.
+const std::vector<int64_t> kRingPages = {1, 4, 8, 16, 32, 64, 95, 128};
 const std::vector<int64_t> kVolumeMiB = {1024, 4096, 20480};
 const std::vector<int64_t> kPctSteady = {0, 10, 25};
 const std::vector<int64_t> kVerify = {0, 1};
@@ -60,6 +62,61 @@ void init_counters(benchmark::State& state) {
     state.counters["device_bytes_per_cycle"] = 0;
     state.counters["frames"] = 0;
     state.counters["bad_cores"] = 0;
+    // Cost per message, not dwell per message: a flush is amortized over the frames it
+    // covers, so these are what say whether coalescing is paying for itself.
+    state.counters["steady_secs"] = 0;
+    state.counters["amortized_us_per_msg"] = 0;
+    state.counters["wire_gbps"] = 0;
+    // Guard-only flushes excluded: they carry 8 B per frame, so counting them reports 0.5
+    // frames per flush where one payload flush actually carried one frame.
+    state.counters["frames_per_payload_flush"] = 0;
+    // Mean frames in flight, and the batching window a flush waited out. in_flight_avg is
+    // the denominator L = lambda*W needs; accum_avg_us is the wait that is not the wire.
+    state.counters["in_flight_avg"] = 0;
+    state.counters["accum_avg_us"] = 0;
+    // Each pairs with the mean above it, over the SAME series: the gap is the tail's pull,
+    // not two populations disagreeing. cycle_* is service time over one flush cycle.
+    state.counters["in_flight_median"] = 0;
+    state.counters["accum_median_us"] = 0;
+    state.counters["pending_median_kb"] = 0;
+    state.counters["cycle_us_per_frame_avg"] = 0;
+    state.counters["cycle_us_per_frame_median"] = 0;
+    state.counters["starved_pass_pct"] = 0;
+    state.counters["h2h_flush_pct"] = 0;
+    state.counters["d2h_poll_pct"] = 0;
+    state.counters["h2h_poll_pct"] = 0;
+    state.counters["h2d_drain_pct"] = 0;
+    state.counters["poll_calls"] = 0;
+    // What a flush actually covered, and why a pass had nothing to post. pending_max_kb
+    // bounds any batching threshold; the starved split says which end is the constraint.
+    state.counters["flushes"] = 0;
+    state.counters["pending_avg_kb"] = 0;
+    state.counters["pending_max_kb"] = 0;
+    state.counters["tiny_flush_pct"] = 0;
+    state.counters["held_pct"] = 0;
+    state.counters["starved_credit_pct"] = 0;
+    // The middle bucket: the window was full, which wants a sooner flush, not more batching.
+    state.counters["starved_window_pct"] = 0;
+    state.counters["starved_empty_pct"] = 0;
+    // h2h_poll_pct CONTAINS the retire and publish callbacks; this is the leg's own share.
+    state.counters["h2h_own_pct"] = 0;
+    state.counters["h2h_cb_pct"] = 0;
+    state.counters["puts_per_frame"] = 0;
+    state.counters["credit_puts_per_frame"] = 0;
+    state.counters["done_puts_per_frame"] = 0;
+    state.counters["msgs_per_frame"] = 0;
+    // device issue -> the peer's credit. A LOWER bound on e2e: the wait in tx_queue behind
+    // the credit gate is in neither term, and starved_credit_pct reports it as most of a pass.
+    state.counters["put_to_credit_rtt_median_us"] = 0;
+    state.counters["put_to_credit_rtt_avg_us"] = 0;
+    // The receiver's half. starved_credit_pct says the sender waits on it, so where ITS
+    // time goes is the other half of the chain and was previously invisible.
+    state.counters["rx_h2h_flush_pct"] = 0;
+    state.counters["rx_h2h_poll_pct"] = 0;
+    state.counters["rx_h2d_drain_pct"] = 0;
+    state.counters["rx_d2h_poll_pct"] = 0;
+    state.counters["rx_poll_calls"] = 0;
+    state.counters["rx_flushes"] = 0;
     for (const char* p : {"d2h_issue_", "d2h_stall_", "h2h_put_credit_", "h2d_publish_drained_"}) {
         set_latency_counters(state, LatencySummary{}, 0, p);
     }
@@ -78,6 +135,35 @@ struct RankReport {
     uint64_t h2d_samples = 0;
     uint64_t frames = 0;
     uint64_t bad_cores = 0;
+    double secs = 0.0;
+    // Phase 0 instrumentation: the sender owns these, so they ride the same all_gather.
+    double frames_per_payload_flush = 0.0;
+    double in_flight_avg = 0.0;
+    double accum_avg_us = 0.0;
+    double in_flight_median = 0.0;
+    double accum_median_us = 0.0;
+    double pending_median_kb = 0.0;
+    double cycle_us_per_frame_avg = 0.0;
+    double cycle_us_per_frame_median = 0.0;
+    double starved_pass_pct = 0.0;
+    double h2h_flush_pct = 0.0;
+    double d2h_poll_pct = 0.0;
+    double h2h_poll_pct = 0.0;
+    double h2d_drain_pct = 0.0;
+    uint64_t poll_calls = 0;
+    double flushes = 0.0;
+    double pending_avg_kb = 0.0;
+    double pending_max_kb = 0.0;
+    double tiny_flush_pct = 0.0;
+    double held_pct = 0.0;
+    double starved_credit_pct = 0.0;
+    double starved_window_pct = 0.0;
+    double starved_empty_pct = 0.0;
+    double h2h_own_pct = 0.0;
+    double h2h_cb_pct = 0.0;
+    double puts_per_frame = 0.0;
+    double credit_puts_per_frame = 0.0;
+    double done_puts_per_frame = 0.0;
 };
 
 class D2H2H2DFixture : public benchmark::Fixture {
@@ -269,6 +355,9 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
             const auto& p = sock_->counters();
             if (!timing && (sending_ ? p.retired : p.drained) >= warmup_msgs_) {
                 timing = true;
+                // Every leg, not just h2h: dividing a whole-run count by a steady-state
+                // duration is what made every amortized figure describe two populations.
+                sock_->reset_timing();
                 t0 = std::chrono::steady_clock::now();
             }
             const uint64_t moved = p.sent + p.retired + p.received + p.drained;
@@ -298,9 +387,81 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         RankReport local{};
         local.frames = msgs_;
         if (timing) {
+            const auto& ps = sock_->h2h().pass_stats();
+            const auto& tm = sock_->timing();
+            if (ps.passes != 0) {
+                local.starved_pass_pct = 100.0 * static_cast<double>(ps.starved) / static_cast<double>(ps.passes);
+            }
+            if (tm.h2h_poll_ns != 0) {
+                local.h2h_flush_pct = 100.0 * static_cast<double>(ps.flush_ns) / static_cast<double>(tm.h2h_poll_ns);
+            }
+            // Shares of time inside poll(), not of wall time: the caller also waits outside it.
+            const double legs = static_cast<double>(tm.d2h_poll_ns + tm.h2h_poll_ns + tm.h2d_drain_ns);
+            if (legs > 0.0) {
+                local.d2h_poll_pct = 100.0 * static_cast<double>(tm.d2h_poll_ns) / legs;
+                local.h2h_poll_pct = 100.0 * static_cast<double>(tm.h2h_poll_ns) / legs;
+                local.h2d_drain_pct = 100.0 * static_cast<double>(tm.h2d_drain_ns) / legs;
+                // h2h_poll_ns contains the retire and publish callbacks, so it overstates the
+                // h2h leg and the other two are understated by whatever it absorbed.
+                const double cb = static_cast<double>(tm.h2h_cb_ns);
+                local.h2h_cb_pct = 100.0 * cb / legs;
+                local.h2h_own_pct = 100.0 * (static_cast<double>(tm.h2h_poll_ns) - cb) / legs;
+            }
+            local.poll_calls = tm.poll_calls;
+
+            local.flushes = static_cast<double>(ps.flushes);
+            local.pending_max_kb = static_cast<double>(ps.pending_max) / 1024.0;
+            if (ps.passes != 0) {
+                local.in_flight_avg = static_cast<double>(ps.in_flight_sum) / static_cast<double>(ps.passes);
+            }
+            if (ps.accum_flushes != 0) {
+                local.accum_avg_us = static_cast<double>(ps.accum_ns_sum) / static_cast<double>(ps.accum_flushes) / 1e3;
+            }
+            // Medians over the same series the means above are summed from, so the pair is
+            // matched. Empty unless collect_timing, and then zero rather than fabricated.
+            const auto& sr = sock_->h2h().series();
+            local.in_flight_median = median_of(sr.in_flight);
+            local.accum_median_us = median_of(sr.accum_ns) / 1e3;
+            local.pending_median_kb = median_of(sr.covered_bytes) / 1024.0;
+            local.cycle_us_per_frame_avg = mean_of(sr.us_per_frame);
+            local.cycle_us_per_frame_median = median_of(sr.us_per_frame);
+            // Payload-bearing flushes only. A guard flush covers count*8 bytes, which is
+            // what flushes_tiny counts, and it carries no frames of its own.
+            if (const uint64_t pf = ps.flushes - ps.flushes_tiny; pf != 0) {
+                local.frames_per_payload_flush = static_cast<double>(ps.posts) / static_cast<double>(pf);
+            }
+            if (ps.flushes != 0) {
+                local.pending_avg_kb =
+                    static_cast<double>(ps.pending_sum) / static_cast<double>(ps.flushes) / 1024.0;
+                local.tiny_flush_pct =
+                    100.0 * static_cast<double>(ps.flushes_tiny) / static_cast<double>(ps.flushes);
+                local.held_pct = 100.0 * static_cast<double>(ps.flushes_held) /
+                                 static_cast<double>(ps.flushes + ps.flushes_held);
+            }
+            if (ps.starved != 0) {
+                local.starved_credit_pct =
+                    100.0 * static_cast<double>(ps.starved_credit) / static_cast<double>(ps.starved);
+                local.starved_window_pct =
+                    100.0 * static_cast<double>(ps.starved_window) / static_cast<double>(ps.starved);
+                local.starved_empty_pct =
+                    100.0 * static_cast<double>(ps.starved_empty) / static_cast<double>(ps.starved);
+            }
+            // Steady frames, not msgs_: reset_stats() rebased the numerators at the warmup
+            // boundary, so a whole-run denominator understates these by the ramp's share.
+            if (const uint64_t steady = msgs_ - warmup_msgs_; steady != 0) {
+                // Operations, not frames: ps.posts counts frames, so a coalesced run of K
+                // is one payload_put. This is the number the message-rate work targets.
+                local.puts_per_frame =
+                    static_cast<double>(ps.payload_puts + ps.trailer_puts) / static_cast<double>(steady);
+                local.credit_puts_per_frame = static_cast<double>(ps.credit_puts) / static_cast<double>(steady);
+                local.done_puts_per_frame = static_cast<double>(ps.done_puts) / static_cast<double>(steady);
+            }
+        }
+        if (timing) {
             const double secs = std::chrono::duration<double>(t1 - t0).count();
             const double gb = static_cast<double>(msgs_ - warmup_msgs_) * payload_bytes_ / 1e9;
             local.gbps = secs > 0.0 ? gb / secs : 0.0;
+            local.secs = secs;
         }
 
         // The sending kernel stamps its loop window into L1, backpressure included.
@@ -367,6 +528,49 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         state.counters["device_bytes_per_cycle"] = tx.device_bytes_per_cycle;
         state.counters["frames"] = static_cast<double>(tx.frames);
         state.counters["bad_cores"] = static_cast<double>(rx.bad_cores);
+        // rx, to match throughput_gbps above: both describe frames that crossed the chain.
+        set_work_counters(state, rx.secs, msgs_ - warmup_msgs_, tt_uva_frame_page_size(payload_bytes_));
+        // tx: only the sending rank runs the posting loop these describe.
+        state.counters["frames_per_payload_flush"] = tx.frames_per_payload_flush;
+        state.counters["in_flight_avg"] = tx.in_flight_avg;
+        state.counters["accum_avg_us"] = tx.accum_avg_us;
+        state.counters["in_flight_median"] = tx.in_flight_median;
+        state.counters["accum_median_us"] = tx.accum_median_us;
+        state.counters["pending_median_kb"] = tx.pending_median_kb;
+        state.counters["cycle_us_per_frame_avg"] = tx.cycle_us_per_frame_avg;
+        state.counters["cycle_us_per_frame_median"] = tx.cycle_us_per_frame_median;
+        state.counters["starved_pass_pct"] = tx.starved_pass_pct;
+        state.counters["h2h_flush_pct"] = tx.h2h_flush_pct;
+        state.counters["d2h_poll_pct"] = tx.d2h_poll_pct;
+        state.counters["h2h_poll_pct"] = tx.h2h_poll_pct;
+        state.counters["h2d_drain_pct"] = tx.h2d_drain_pct;
+        state.counters["poll_calls"] = static_cast<double>(tx.poll_calls);
+        state.counters["flushes"] = tx.flushes;
+        state.counters["pending_avg_kb"] = tx.pending_avg_kb;
+        state.counters["pending_max_kb"] = tx.pending_max_kb;
+        state.counters["tiny_flush_pct"] = tx.tiny_flush_pct;
+        state.counters["held_pct"] = tx.held_pct;
+        state.counters["starved_credit_pct"] = tx.starved_credit_pct;
+        state.counters["starved_window_pct"] = tx.starved_window_pct;
+        state.counters["starved_empty_pct"] = tx.starved_empty_pct;
+        state.counters["h2h_own_pct"] = tx.h2h_own_pct;
+        state.counters["h2h_cb_pct"] = tx.h2h_cb_pct;
+        state.counters["puts_per_frame"] = tx.puts_per_frame;
+        // Credits flow the other way, so they are the RECEIVER's puts on the same wire.
+        state.counters["credit_puts_per_frame"] = rx.credit_puts_per_frame;
+        state.counters["done_puts_per_frame"] = rx.done_puts_per_frame;
+        state.counters["msgs_per_frame"] =
+            tx.puts_per_frame + rx.credit_puts_per_frame + rx.done_puts_per_frame;
+        // h2d_publish_drained is NOT added: consumed() runs from the H2D drain loop, so the
+        // drain is already inside put_to_credit. A LOWER bound: the tx_queue wait is in neither.
+        state.counters["put_to_credit_rtt_median_us"] = tx.d2h_issue.median_us + tx.h2h_put_credit.median_us;
+        state.counters["put_to_credit_rtt_avg_us"] = tx.d2h_issue.avg_us + tx.h2h_put_credit.avg_us;
+        state.counters["rx_h2h_flush_pct"] = rx.h2h_flush_pct;
+        state.counters["rx_h2h_poll_pct"] = rx.h2h_poll_pct;
+        state.counters["rx_h2d_drain_pct"] = rx.h2d_drain_pct;
+        state.counters["rx_d2h_poll_pct"] = rx.d2h_poll_pct;
+        state.counters["rx_poll_calls"] = static_cast<double>(rx.poll_calls);
+        state.counters["rx_flushes"] = rx.flushes;
         set_latency_counters(state, tx.d2h_issue, tx.d2h_samples, "d2h_issue_");
         set_latency_counters(state, tx.d2h_stall, tx.d2h_samples, "d2h_stall_");
         set_latency_counters(state, tx.h2h_put_credit, tx.h2h_samples, "h2h_put_credit_");
