@@ -10,6 +10,7 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ReduceGolden, TilizeGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -22,6 +23,7 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_variant_parameters import (
+    DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -40,6 +42,7 @@ UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = [
     InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
 ]
 UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES = [ReducePool.Max, ReducePool.Average]
+UNPACK_REDUCE_COL_TILIZEA_STRIDED_DEST_SYNC = [DestSync.Half, DestSync.Full]
 UNPACK_REDUCE_COL_TILIZEA_STRIDED_NUM_FACES = [2, 4]
 # num_faces=4 is a full 32-row tile. [16, 32] is one face-row, so partial heights stay on num_faces=2.
 UNPACK_REDUCE_COL_TILIZEA_STRIDED_PARTIAL_FACE_R_DIMS = [8, 4]
@@ -76,6 +79,7 @@ def _math_fidelity(pool_type):
     num_faces=UNPACK_REDUCE_COL_TILIZEA_STRIDED_NUM_FACES,
     face_r_dim=unpack_reduce_col_tilizeA_strided_face_r_dim,
     pool_type=UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES,
+    dest_sync=UNPACK_REDUCE_COL_TILIZEA_STRIDED_DEST_SYNC,
 )
 def test_unpack_reduce_col_tilizeA_strided(
     formats,
@@ -84,6 +88,7 @@ def test_unpack_reduce_col_tilizeA_strided(
     num_faces,
     pool_type,
     face_r_dim,
+    dest_sync,
     *,
     is_perf=False,
     perf_report=None,
@@ -131,6 +136,7 @@ def test_unpack_reduce_col_tilizeA_strided(
     templates = [
         MATH_OP(mathop=MathOperation.ReduceColumn, pool_type=pool_type),
         MATH_FIDELITY(_math_fidelity(pool_type)),
+        DEST_SYNC(dest_sync),
     ]
     runtimes = [
         TILE_COUNT(tile_cnt_A),

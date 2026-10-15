@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import DestSync
 from helpers.param_config import parametrize
+from helpers.perf.core import ALL_PERF_RUN_TYPES
 from helpers.tile_constants import MAX_FACE_R_DIM
 from test_unpack_reduce_col_tilizeA_strided import (
     UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS,
@@ -18,14 +19,6 @@ from test_unpack_reduce_col_tilizeA_strided import (
     unpack_reduce_col_tilizeA_strided_max_tiles_per_iter,
 )
 
-# #60571 removes PerfRunType::L1_CONGESTION. This kernel does not name it.
-TILIZE_REDUCE_PERF_RUN_TYPES = [
-    PerfRunType.L1_TO_L1,
-    PerfRunType.UNPACK_ISOLATE,
-    PerfRunType.MATH_ISOLATE,
-    PerfRunType.PACK_ISOLATE,
-]
-
 
 @pytest.mark.perf
 @parametrize(
@@ -34,7 +27,8 @@ TILIZE_REDUCE_PERF_RUN_TYPES = [
     max_tiles_per_iter=unpack_reduce_col_tilizeA_strided_max_tiles_per_iter,
     num_faces=UNPACK_REDUCE_COL_TILIZEA_STRIDED_NUM_FACES,
     pool_type=UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES,
-    run_types=[TILIZE_REDUCE_PERF_RUN_TYPES],
+    dest_sync=[DestSync.Half],
+    run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[32],
 )
 def test_perf_unpack_reduce_col_tilizeA_strided(
@@ -44,6 +38,7 @@ def test_perf_unpack_reduce_col_tilizeA_strided(
     max_tiles_per_iter,
     num_faces,
     pool_type,
+    dest_sync,
     run_types,
     loop_factor,
 ):
@@ -54,6 +49,7 @@ def test_perf_unpack_reduce_col_tilizeA_strided(
         num_faces,
         pool_type,
         MAX_FACE_R_DIM,
+        dest_sync,
         is_perf=True,
         perf_report=perf_report,
         run_types=run_types,

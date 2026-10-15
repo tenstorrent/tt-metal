@@ -21,20 +21,6 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
-
-// SPEED_OF_LIGHT must keep the shape constexpr: a const packed TensorShape is not folded and the loops slow down.
-#ifdef SPEED_OF_LIGHT
-#define TILIZE_REDUCE_TENSOR_SHAPE_QUALIFIER constexpr
-#else
-#define TILIZE_REDUCE_TENSOR_SHAPE_QUALIFIER const
-#endif
-
-constexpr ckernel::TensorShape make_tilize_reduce_tensor_shape(std::uint32_t face_r_dim, int num_faces_r_dim, int num_faces_c_dim)
-{
-    return {static_cast<std::uint8_t>(face_r_dim), FACE_C_DIM, static_cast<std::uint8_t>(num_faces_r_dim), static_cast<std::uint8_t>(num_faces_c_dim)};
-}
-
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_lib_unpack_wrappers.h"
@@ -62,8 +48,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A                = params.buffer_A;
     const Operand& buffer_B                = params.buffer_B;
 #endif
-    TILIZE_REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
-        make_tilize_reduce_tensor_shape(TEST_FACE_R_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+    LLK_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
+        ckernel::make_tensor_shape(TEST_FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
 
     {
@@ -128,13 +114,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_faces_r_dim_A         = params.num_faces_r_dim_A;
     const int num_faces_c_dim_A         = params.num_faces_c_dim_A;
 #endif
-    TILIZE_REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
-        make_tilize_reduce_tensor_shape(TEST_FACE_R_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+    LLK_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
+        ckernel::make_tensor_shape(TEST_FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
 
     {
         START_PERF_MEASURE("INIT")
-        _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(tensor_shape);
         PROFILER_SYNC();
@@ -144,7 +130,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT * num_faces);
         }
@@ -155,16 +141,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (sync_with_pack)
                 {
-                    _llk_math_wait_for_dest_available_<DST_SYNC>();
+                    _llk_math_wait_for_dest_available_<dest_sync>();
                 }
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-                    LLK_ASSERT((tile < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "tile exceeds max dest tiles");
+                    LLK_ASSERT((tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "tile exceeds max dest tiles");
                     _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, false /* is_int_fpu_en */>(tile, tensor_shape);
                 }
                 if constexpr (sync_with_pack)
                 {
-                    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -192,8 +178,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_faces_c_dim_A         = params.num_faces_c_dim_A;
     const Operand& buffer_Res           = params.buffer_Res;
 #endif
-    TILIZE_REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
-        make_tilize_reduce_tensor_shape(TEST_FACE_R_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+    LLK_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
+        ckernel::make_tensor_shape(TEST_FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
 
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
@@ -207,7 +193,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
             formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
         _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape.face_r_dim);
-        _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
+        _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
         PROFILER_SYNC();
     }
     {
@@ -217,7 +203,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE;
+            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 if constexpr (sync_with_math)
@@ -226,12 +212,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-                    LLK_ASSERT((tile < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "tile exceeds max dest tiles");
-                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
+                    LLK_ASSERT((tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "tile exceeds max dest tiles");
+                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
                 }
                 if constexpr (sync_with_math)
                 {
-                    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }

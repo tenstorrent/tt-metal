@@ -783,9 +783,10 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_unpack_reduce_col_tilizeA_strided": {
-        "version": 2,
+        "version": 1,
         "columns": [
             "dest_acc",
+            "dest_sync",
             "face_c_dim",
             "face_r_dim",
             "formats.input_A",
