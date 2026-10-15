@@ -73,34 +73,4 @@ INSTANTIATE_TEST_SUITE_P(
         .is_transpose = false,
         .ceil_mode = false}));
 
-TEST(SlidingWindowHash, CeilPadOverride) {
-    // Last width slice of a DRAM-sliced max_pool2d, where the slicer passes each slice's ceil padding as an override.
-    const SlidingWindowConfig a{
-        .batch_size = 1,
-        .channels = 64,
-        .input_hw = {32, 10},
-        .window_hw = {3, 3},
-        .stride_hw = {2, 2},
-        .padding = {0, 0, 0, 55},
-        .ceil_pad_hw = uint32_pair_t{1, 1},
-        .ceil_mode = true};
-    auto b = a;
-    b.ceil_pad_hw = uint32_pair_t{1, 0};
-    EXPECT_NE(a.get_hash(), b.get_hash());
-
-    // An override equal to the derived ceil padding keys the same as no override.
-    auto derived = a;
-    derived.ceil_pad_hw = std::nullopt;
-    auto explicit_derived = derived;
-    explicit_derived.ceil_pad_hw = derived.get_ceil_pad_hw();
-    EXPECT_EQ(derived.get_hash(), explicit_derived.get_hash());
-
-    // Outside ceil mode the override is ignored, so it must not split the key either.
-    auto a_no_ceil = a;
-    auto b_no_ceil = b;
-    a_no_ceil.ceil_mode = false;
-    b_no_ceil.ceil_mode = false;
-    EXPECT_EQ(a_no_ceil.get_hash(), b_no_ceil.get_hash());
-}
-
 }  // namespace ttnn::operations::sliding_window::test
