@@ -341,7 +341,7 @@ jobs:
           path: docker-job
 
       - name: ⬇️ Setup Job
-        if: ${{ !matrix.leg.gate_packages }}
+        if: ${{ !matrix.leg.gate_packages && !matrix.leg.gate_llk_image }}
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
