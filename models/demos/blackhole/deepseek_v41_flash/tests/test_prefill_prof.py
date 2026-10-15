@@ -163,7 +163,20 @@ def test_prefill_prof(mesh_device):
         if MODE == "both":
             ttnn.synchronize_device(md)
 
-    if MODE in ("trace", "both"):
+    NCH = int(os.environ.get("PROF_NCH", "0"))
+    if (
+        MODE == "trace" and NCH
+    ):  # PROF_NCH=n: capture the chunk trace at the full S (S_pad_max) but replay only n chunks (the per-chunk cost of a long context without a full-prompt run)
+        for rep in range(REPS):
+            lg = model.run_traced_chunks(
+                tokens[:, : NCH * C], C, hashes=torch.zeros(B, NCH * C, 1, dtype=torch.long), S_pad_max=S
+            )
+            tm = model.timing
+            log(
+                f"PROF NCH run {rep}: U={U} C={C} S_pad={S} layers={LAYERS} chunks={NCH}: replay loop {tm.get('total_replay_loop', 0) / NCH * 1e3:.1f} ms/chunk, "
+                f"replay_per_chunk {tm.get('replay_per_chunk', 0) / NCH * 1e3:.1f} ms, host_per_chunk {tm.get('host_per_chunk', 0) / NCH * 1e3:.1f} ms"
+            )
+    elif MODE in ("trace", "both"):
         for rep in range(REPS):
             t1 = time.perf_counter()
             lg = model.run_traced_chunks(tokens, C, hashes=torch.zeros(B, S, 1, dtype=torch.long))
