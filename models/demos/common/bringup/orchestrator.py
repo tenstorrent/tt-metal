@@ -129,7 +129,7 @@ ROLE_OF_STEP = {
     "scale": "scale",
 }
 IGNORED = (
-    r"/dashboard/[^/]+\.html$",
+    r"/dashboard/[^/]+\.(html|yaml)$",  # the dashboards and their links (F71)
     r"(^|/)bringup/(overseer\.yaml|supervision\.md)$",  # the overseer's own files (F69), never an agent's
     r"(^|/)__pycache__/",
     r"\.pyc$",
