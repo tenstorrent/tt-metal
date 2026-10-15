@@ -286,13 +286,16 @@ repos:
       # llk-redundant-drain workflow, which files an issue against the merge that added it.
       verbose: true
       args: ["--baseline", "tt_metal/tt-llk/infra/redundant_drain_baseline.txt"]
-      # Blackhole and Wormhole only; Quasar's drains are a different mechanism and are skipped.
+      # The whole repository: LLK trees, ckernels, compute API, firmware and every compute
+      # kernel. The script reads only files that call a drain. Quasar's drains are a different
+      # mechanism and are skipped; vendored code is not ours.
       files: |
         (?x)^(
-          tt_metal/tt-llk/tt_llk_(blackhole|wormhole_b0)/.*\.(h|hpp)|
+          .*\.(h|hpp|cpp|cc)|
           tt_metal/tt-llk/infra/check_redundant_drain\.py|
           tt_metal/tt-llk/infra/redundant_drain_baseline\.txt
         )$
+      exclude: ^tt_metal/third_party/
     - id: llk-fix-cstdint
       name: "llk: fix std::uint*_t and add cstdint include"
       entry: python3 tt_metal/tt-llk/infra/fix_cstdint.py

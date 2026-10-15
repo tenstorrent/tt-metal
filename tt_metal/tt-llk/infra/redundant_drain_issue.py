@@ -2,13 +2,13 @@
 """Open a tt-metal issue for a drain that a merge just added and the checker flags.
 
 Runs after a push to main. For the pushed range it collects the lines that added a
-`tensix_sync()` or `mop_sync()` call under the Blackhole or Wormhole LLK trees, runs
-check_redundant_drain.py on the touched headers at the new head, and keeps the findings that sit
-on an added line. Each such finding is a drain somebody put in with this merge that orders
-nothing where it was placed: typically a workaround for a non-deterministic failure elsewhere.
-One issue is opened per merged pull request, listing its sites, assigned to the author of the
-pull request, so the workaround is tracked and removed (or replaced by the wait the real hazard
-needs) rather than left in place.
+`tensix_sync()` or `mop_sync()` call anywhere in the repository (Quasar and vendored code
+excepted), runs check_redundant_drain.py on the touched files at the new head, and keeps the
+findings that sit on an added line. Each such finding is a drain somebody put in with this merge
+that orders nothing where it was placed: typically a workaround for a non-deterministic failure
+elsewhere. One issue is opened per merged pull request, listing its sites, assigned to the author
+of the pull request, so the workaround is tracked and removed (or replaced by the wait the real
+hazard needs) rather than left in place.
 
 An issue is created once per site: a marker in the body names the file, function and head commit,
 and an open issue carrying the same file and function is updated instead of duplicated.
@@ -23,11 +23,13 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from check_redundant_drain import EXTS, is_quasar, is_skipped_silently  # noqa: E402
+
 CHECKER = os.path.join(HERE, "check_redundant_drain.py")
 REPO = os.environ.get("GITHUB_REPOSITORY", "tenstorrent/tt-metal")
 LABEL = "llk-redundant-drain"
 MARKER = "<!-- llk-redundant-drain:{file}:{function} -->"
-TREES = ("tt_metal/tt-llk/tt_llk_blackhole/", "tt_metal/tt-llk/tt_llk_wormhole_b0/")
 DRAIN = re.compile(r"\b(?:ckernel::)?(?:tensix_sync|mop_sync)\s*\(\s*\)")
 
 
@@ -56,10 +58,8 @@ def added_drain_lines(base, head):
     """{file: {line}} of lines in head that this range added and that contain a drain call."""
     files = [
         f
-        for f in run(
-            "git", ["diff", "--name-only", f"{base}..{head}", "--", *TREES]
-        ).split()
-        if f.endswith((".h", ".hpp"))
+        for f in run("git", ["diff", "--name-only", f"{base}..{head}"]).split()
+        if f.endswith(EXTS) and not is_quasar(f) and not is_skipped_silently(f)
     ]
     added = {}
     for f in files:

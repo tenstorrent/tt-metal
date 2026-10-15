@@ -328,3 +328,478 @@ def test_real_tree_runs_clean_of_errors():
     )
     assert r.returncode == 0
     assert "Traceback" not in r.stderr
+
+
+# ---------------------------------------------------------------------------------------------
+# The repository outside the LLK trees: compute kernels, the compute API, thread-scoped code.
+
+
+def repo(tmp_path):
+    """A fake repository: both LLK trees, the compute API directory and a kernel directory."""
+    r = tmp_path / "repo"
+    for a in ("tt_llk_blackhole", "tt_llk_wormhole_b0"):
+        (r / "tt_metal" / "tt-llk" / a / "llk_lib").mkdir(parents=True)
+    (r / "tt_metal" / "hw" / "inc" / "api" / "compute").mkdir(parents=True)
+    (r / "ttnn" / "op" / "kernels" / "compute").mkdir(parents=True)
+    return r
+
+
+def write(r, rel, body):
+    p = r / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(textwrap.dedent(body))
+    return p
+
+
+def llk_helpers(r, body, name="llk_helpers.h"):
+    """The same helper bodies in both architecture trees (a kernel is compiled for both)."""
+    for a in ("tt_llk_blackhole", "tt_llk_wormhole_b0"):
+        write(r, f"tt_metal/tt-llk/{a}/llk_lib/{name}", body)
+
+
+KERNEL_HELPERS = """
+    inline void llk_pop_tiles(std::uint32_t cb, std::uint32_t n)
+    {
+        cb_interface[cb].tiles_acked += n;
+    }
+    inline void llk_pack_store(std::uint32_t *p)
+    {
+        *p = 1;
+    }
+    inline void llk_math_push()
+    {
+        TTI_NOP;
+    }
+    """
+
+
+def test_kernel_drain_on_one_thread_sees_only_that_thread(tmp_path):
+    r = repo(tmp_path)
+    llk_helpers(r, KERNEL_HELPERS)
+    k = write(
+        r,
+        "ttnn/op/kernels/compute/k.cpp",
+        """
+        namespace NAMESPACE {
+        void MAIN {
+            UNPACK(tensix_sync());
+            PACK((llk_pack_store(out)));
+            MATH((llk_math_push()));
+        }
+        }
+        """,
+    )
+    out = run("--repo", r, k).stdout
+    assert (
+        "k.cpp:4: ADVISORY" in out
+    )  # the pack-thread store is not on the unpack thread
+    k2 = write(
+        r,
+        "ttnn/op/kernels/compute/k2.cpp",
+        """
+        namespace NAMESPACE {
+        void MAIN {
+            UNPACK(tensix_sync());
+            UNPACK((llk_pop_tiles(0, 1)));
+        }
+        }
+        """,
+    )
+    assert run("--repo", r, k2).stdout == ""
+
+
+def test_compile_for_trisc_drain_runs_on_every_thread(tmp_path):
+    r = repo(tmp_path)
+    llk_helpers(r, KERNEL_HELPERS)
+    h = write(
+        r,
+        "ttnn/op/kernels/compute/sync.hpp",
+        """
+        FORCE_INLINE void sync_enter(volatile std::uint32_t *sem)
+        {
+        #if defined(COMPILE_FOR_TRISC)
+            tensix_sync();
+        #endif
+            __atomic_fetch_add(&sem[0], 1, __ATOMIC_RELEASE);
+        }
+        FORCE_INLINE void sync_bare()
+        {
+        #if defined(COMPILE_FOR_TRISC)
+            tensix_sync();
+        #endif
+            TTI_NOP;
+        }
+        """,
+    )
+    out = run("--repo", r, h).stdout
+    assert "sync.hpp:5:" not in out
+    assert "sync.hpp:12: ADVISORY" in out
+
+
+def test_thread_regions_by_directive(tmp_path):
+    r = repo(tmp_path)
+    llk_helpers(r, KERNEL_HELPERS)
+    h = write(
+        r,
+        "ttnn/op/kernels/compute/regions.hpp",
+        """
+        inline void a(std::uint32_t *p)
+        {
+        #ifdef UCK_CHLKC_UNPACK
+            tensix_sync();
+        #endif
+        #ifdef UCK_CHLKC_PACK
+            *p = 1;
+        #endif
+            TTI_NOP;
+        }
+        inline void b(std::uint32_t *p)
+        {
+        #ifdef UCK_CHLKC_UNPACK
+            tensix_sync();
+        #endif
+        #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+            *p = 1;
+        #endif
+        }
+        inline void c(std::uint32_t *p)
+        {
+        #if defined(LLK_TRISC_MATH)
+            tensix_sync();
+        #endif
+        #if !defined(LLK_TRISC_PACK)
+            *p = 1;
+        #endif
+        }
+        """,
+    )
+    out = run("--repo", r, h).stdout
+    assert "regions.hpp:5: ADVISORY" in out
+    assert "regions.hpp:14:" not in out
+    assert "regions.hpp:23:" not in out
+
+
+def test_undecidable_condition_enumerates_both_paths(tmp_path):
+    r = repo(tmp_path)
+    h = write(
+        r,
+        "ttnn/op/kernels/compute/paths.hpp",
+        """
+        inline void f(std::uint32_t *p)
+        {
+            tensix_sync();
+        #if FOO
+            tensix_sync();
+        #else
+            *p = 1;
+        #endif
+        }
+        inline void g(std::uint32_t *p)
+        {
+            tensix_sync();
+        #if defined(FOO) && BAR
+            TTI_NOP;
+        #elif !defined(FOO)
+            TTI_NOP;
+        #else
+            TTI_NOP;
+        #endif
+        }
+        """,
+    )
+    out = run("--repo", r, h).stdout
+    assert "paths.hpp:4:" not in out  # on the !FOO path the store needs the drain
+    assert "paths.hpp:6: ADVISORY" in out  # on its own path nothing follows
+    assert "paths.hpp:13: ADVISORY" in out  # every path pushes only
+
+
+def test_too_many_undecidable_conditions_is_unknown(tmp_path):
+    r = repo(tmp_path)
+    body = ["inline void f()", "{", "    tensix_sync();"]
+    for i in range(5):
+        body += [f"#if A{i}", "    TTI_NOP;", "#endif"]
+    body += ["}"]
+    h = write(r, "ttnn/op/kernels/compute/many.hpp", "\n".join(body) + "\n")
+    assert run("--repo", r, h).stdout == ""
+
+
+def test_loop_replays_the_body_before_the_drain(tmp_path):
+    r = repo(tmp_path)
+    h = write(
+        r,
+        "ttnn/op/kernels/compute/loops.hpp",
+        """
+        inline void f(volatile std::uint32_t *p)
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                p[0] = i;
+                tensix_sync();
+            }
+        }
+        inline void g()
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                TTI_NOP;
+                tensix_sync();
+            }
+        }
+        inline void h(std::uint32_t *p)
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                tensix_sync();
+                TTI_NOP;
+            }
+            *p = 1;
+        }
+        inline void k()
+        {
+            while (true)
+            {
+                tensix_sync();
+                TTI_NOP;
+                tensix_sync();
+            }
+        }
+        """,
+    )
+    out = run("--repo", r, h).stdout
+    assert "loops.hpp:7:" not in out  # the next iteration stores through p
+    assert "loops.hpp:15: ADVISORY" in out
+    assert "loops.hpp:22:" not in out  # the last iteration is followed by the store
+    assert "loops.hpp:31: REDUNDANT" in out
+    assert "loops.hpp:33: ADVISORY" in out  # followed by its own next iteration only
+
+
+def test_conditional_drain_covers_nothing(tmp_path):
+    r = repo(tmp_path)
+    h = write(
+        r,
+        "ttnn/op/kernels/compute/cond.hpp",
+        """
+        inline void f(bool x, std::uint32_t *p)
+        {
+            tensix_sync();
+            if (x)
+            {
+                tensix_sync();
+            }
+            *p = 1;
+        }
+        inline void g(bool x)
+        {
+            tensix_sync();
+            if (x)
+            {
+                tensix_sync();
+            }
+            tensix_sync();
+            TTI_NOP;
+        }
+        inline void h(bool x, std::uint32_t *p)
+        {
+            if (x)
+            {
+                tensix_sync();
+                return;
+            }
+            *p = 1;
+        }
+        """,
+    )
+    out = run("--repo", r, h).stdout
+    assert "cond.hpp:4:" not in out and "cond.hpp:7:" not in out
+    assert (
+        "cond.hpp:13: REDUNDANT" in out
+    )  # the unconditional drain after the block covers
+    assert "cond.hpp:16: REDUNDANT" in out
+    assert "cond.hpp:18: ADVISORY" in out
+    assert "cond.hpp:25: ADVISORY" in out  # the store is on the other path
+
+
+def test_conditional_break_poisons_coverage(tmp_path):
+    r = repo(tmp_path)
+    h = write(
+        r,
+        "ttnn/op/kernels/compute/brk.hpp",
+        """
+        inline void f(bool x, std::uint32_t *p)
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                tensix_sync();
+                if (x)
+                    break;
+                tensix_sync();
+            }
+            *p = 1;
+        }
+        inline void g(std::uint32_t *p)
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                tensix_sync();
+                break;
+            }
+            *p = 1;
+        }
+        """,
+    )
+    assert run("--repo", r, h).stdout == ""
+
+
+def test_wrapper_function_is_a_drain_for_its_callers(tmp_path):
+    r = repo(tmp_path)
+    h = write(
+        r,
+        "ttnn/op/kernels/compute/wrap.hpp",
+        """
+        inline void settle() { ckernel::tensix_sync(); }
+        inline void twice()
+        {
+            tensix_sync();
+            settle();
+        }
+        """,
+    )
+    out = run("--repo", r, h).stdout
+    assert "wrap.hpp:2:" not in out
+    assert "wrap.hpp:5: REDUNDANT" in out
+    assert out.count("wrap.hpp:") == 1
+
+
+def test_architectures_must_agree(tmp_path):
+    r = repo(tmp_path)
+    write(
+        r,
+        "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_helpers.h",
+        "inline void helper() { tensix_sync(); }\n",
+    )
+    write(
+        r,
+        "tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_helpers.h",
+        "inline void helper() { TTI_NOP; }\n",
+    )
+    k = write(
+        r,
+        "ttnn/op/kernels/compute/k.cpp",
+        """
+        void MAIN {
+            tensix_sync();
+            helper();
+            TTI_NOP;
+        }
+        """,
+    )
+    assert (
+        "k.cpp:3: ADVISORY" in run("--repo", r, k).stdout
+    )  # both agree it orders nothing
+    write(
+        r,
+        "tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_helpers.h",
+        "inline void helper() { *done = 1; }\n",
+    )
+    assert run("--repo", r, k).stdout == ""  # Wormhole's helper needs the drain
+
+
+def test_local_construction_is_the_type_s_constructor(tmp_path):
+    r = repo(tmp_path)
+    write(
+        r,
+        "tt_metal/hw/inc/api/compute/cb.h",
+        """
+        class CircularBuffer {
+        public:
+            CircularBuffer(std::uint32_t id) : id_(id) {}
+            std::uint32_t id_;
+        };
+        """,
+    )
+    k = write(
+        r,
+        "ttnn/op/kernels/compute/k.cpp",
+        """
+        void MAIN {
+            tensix_sync();
+            CircularBuffer cb(3);
+            std::uint32_t n{4};
+            TTI_NOP;
+        }
+        """,
+    )
+    assert "k.cpp:3: ADVISORY" in run("--repo", r, k).stdout
+
+
+def test_a_returned_or_else_call_is_classified(tmp_path):
+    r = repo(tmp_path)
+    write(
+        r,
+        "tt_metal/hw/inc/api/compute/common.h",
+        """
+        FORCE_INLINE std::uint32_t get_arg_val(int i)
+        {
+            return *((tt_l1_ptr std::uint32_t*)(get_arg_addr(i)));
+        }
+        """,
+    )
+    k = write(
+        r,
+        "ttnn/op/kernels/compute/k.cpp",
+        """
+        std::uint32_t f()
+        {
+            tensix_sync();
+            return get_arg_val(0);
+        }
+        void g(bool x)
+        {
+            tensix_sync();
+            if (x)
+                TTI_NOP;
+            else
+                get_arg_val(0);
+        }
+        """,
+    )
+    assert run("--repo", r, k).stdout == ""
+
+
+def test_quasar_directories_and_third_party_are_skipped(tmp_path):
+    r = repo(tmp_path)
+    q = write(
+        r,
+        "tt_metal/hw/ckernels/quasar/metal/x.h",
+        "inline void q() { mop_sync(); tensix_sync(); }\n",
+    )
+    out = run("--repo", r, q).stdout
+    assert "REDUNDANT" not in out and "Quasar" in out
+    t = write(
+        r,
+        "tt_metal/third_party/lib/x.h",
+        "inline void q() { mop_sync(); tensix_sync(); }\n",
+    )
+    assert run("--repo", r, t).stdout == ""
+
+
+def test_all_scans_the_repository_and_skips_files_without_a_drain(tmp_path):
+    r = repo(tmp_path)
+    write(
+        r,
+        "ttnn/op/kernels/compute/k.cpp",
+        "void MAIN {\n    tensix_sync();\n    TTI_NOP;\n}\n",
+    )
+    write(
+        r, "ttnn/op/kernels/compute/broken.cpp", "void f( {{{{ not parsed, no drain\n"
+    )
+    out = run("--repo", r, "--all")
+    assert "k.cpp:2: ADVISORY" in out.stdout
+    assert "Traceback" not in out.stderr
+
+
+def test_real_repository_runs_clean_of_errors():
+    """Every drain site in the repository is parsed; what is found is advisory, not asserted."""
+    r = run("--all")
+    assert r.returncode == 0
+    assert "Traceback" not in r.stderr

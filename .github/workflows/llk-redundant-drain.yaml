@@ -1,16 +1,19 @@
 name: "LLK: drain added that orders nothing"
 
-# After a push to main that touches the Blackhole or Wormhole LLK trees, find any
-# `tensix_sync()` / `mop_sync()` the push added that the redundant-drain checker flags,
-# and open an issue per merged pull request so the drain is removed or replaced by the
-# wait the real hazard needs. The pre-commit hook `llk-redundant-drain` already warns
-# the author at commit time; this is the follow-up for what still lands.
+# After a push to main that touches a C++ source file anywhere in the repository, find any
+# `tensix_sync()` / `mop_sync()` the push added that the redundant-drain checker flags, and
+# open an issue per merged pull request so the drain is removed or replaced by the wait the
+# real hazard needs. The pre-commit hook `llk-redundant-drain` already warns the author at
+# commit time; this is the follow-up for what still lands.
 on:
   push:
     branches: [main]
     paths:
-      - "tt_metal/tt-llk/tt_llk_blackhole/**"
-      - "tt_metal/tt-llk/tt_llk_wormhole_b0/**"
+      - "**/*.h"
+      - "**/*.hpp"
+      - "**/*.cpp"
+      - "**/*.cc"
+      - "!tt_metal/third_party/**"
   workflow_dispatch:
     inputs:
       base:
