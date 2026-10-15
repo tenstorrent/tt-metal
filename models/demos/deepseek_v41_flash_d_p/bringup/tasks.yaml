@@ -1575,6 +1575,13 @@ tasks:
     - q_a
     - kv
     layer: 1
+  frozen:
+    at: '2026-10-15T20:27:42'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_08_kv.py: 5dcce461dcb3ffaabff49c9ec915096e699327c922458ce071dcb8fc1a54448c
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.attention
   title: swa_engram attention (attention) on device, layer 1
   step: implement
