@@ -19,7 +19,6 @@
 
 #include <gtest/gtest.h>
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -42,7 +41,6 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming_types.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -51,6 +49,7 @@
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/channel_trimming_io.hpp"
 
+#include "channel_trimming_test_utils.hpp"
 #include "fabric_fixture.hpp"
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
@@ -205,271 +204,6 @@ void verify_capture_roundtrip(const std::vector<EthCoreCaptureResult>& pre_expor
             << "Roundtrip mismatch for chip=" << cap.physical_chip_id
             << " eth_chan=" << static_cast<int>(cap.channel_id);
     }
-}
-
-// ============================================================================
-// Helper: Result of running unicast traffic
-// ============================================================================
-struct UnicastTrafficResult {
-    ChipId src_physical_device_id;
-    ChipId dst_physical_device_id;
-    FabricNodeId src_fabric_node_id;
-    FabricNodeId dst_fabric_node_id;
-    chan_id_t edm_port;
-    bool skipped;
-};
-
-// ============================================================================
-// Helper: Run unicast traffic between two fabric nodes using the connection API
-// Follows the run_unicast_test_bw_chips pattern from test_basic_1d_fabric.cpp
-// ============================================================================
-UnicastTrafficResult run_unicast_traffic_bw_nodes(
-    FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, uint32_t num_hops, uint32_t num_packets = 10) {
-    tt::tt_metal::CoreCoord sender_logical_core = {0, 0};
-    tt::tt_metal::CoreCoord receiver_logical_core = {1, 0};
-
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    ChipId src_physical = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-    ChipId dst_physical = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
-
-    // For multi-hop in 1D mode, append_fabric_connection_rt_args only works for direct
-    // neighbors. Determine the first-hop neighbor and use it for the connection setup.
-    // The sender kernel uses num_hops/dst_chip_id runtime args to forward further.
-    auto forwarding_dir_opt = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-    if (!forwarding_dir_opt.has_value()) {
-        return UnicastTrafficResult{{}, {}, FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 0), 0, true};
-    }
-
-    // The connection destination is the first-hop neighbor (which equals dst for 1-hop)
-    FabricNodeId connection_dst = dst_fabric_node_id;
-    if (num_hops > 1) {
-        auto first_hop_neighbors =
-            control_plane.get_intra_chip_neighbors(src_fabric_node_id, *forwarding_dir_opt);
-        if (first_hop_neighbors.empty()) {
-            return UnicastTrafficResult{{}, {}, FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 0), 0, true};
-        }
-        connection_dst = FabricNodeId(src_fabric_node_id.mesh_id, first_hop_neighbors[0]);
-    }
-
-    const auto& available_links = get_forwarding_link_indices(src_fabric_node_id, connection_dst);
-    if (available_links.empty()) {
-        return UnicastTrafficResult{{}, {}, FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 0), 0, true};
-    }
-    uint32_t link_idx = available_links[0];
-
-    auto dir_eth_chans =
-        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, *forwarding_dir_opt);
-    chan_id_t edm_port = dir_eth_chans[link_idx];
-
-    const auto& sender_device = BaseFabricFixture::devices_map_.at(src_physical);
-    const auto& receiver_device = BaseFabricFixture::devices_map_.at(dst_physical);
-    tt::tt_metal::CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
-
-    const auto topology = control_plane.get_fabric_context().get_fabric_topology();
-    uint32_t is_2d_fabric = topology == Topology::Mesh;
-
-    auto worker_mem_map = BaseFabricFixture::generate_worker_mem_map(sender_device, topology);
-    uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
-
-    std::vector<uint32_t> compile_time_args = {
-        worker_mem_map.test_results_address,
-        worker_mem_map.test_results_size_bytes,
-        worker_mem_map.target_address,
-        0 /* use_dram_dst */,
-        is_2d_fabric,
-        0 /* is_chip_multicast */,
-        0 /* additional_dir */};
-
-    std::map<std::string, std::string> defines = {};
-    if (is_2d_fabric) {
-        defines["FABRIC_2D"] = "";
-    }
-
-    // Create sender program
-    auto sender_program = tt_metal::CreateProgram();
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp",
-        {sender_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args,
-            .defines = defines});
-
-    std::vector<uint32_t> sender_runtime_args = {
-        worker_mem_map.source_l1_buffer_address,
-        worker_mem_map.packet_payload_size_bytes,
-        num_packets,
-        time_seed,
-        receiver_virtual_core.x,
-        receiver_virtual_core.y,
-        num_hops,
-        1 /* fwd_range */,
-        dst_fabric_node_id.chip_id,
-        *dst_fabric_node_id.mesh_id};
-
-    // Use connection API to append EDM connection args (to first-hop neighbor)
-    append_fabric_connection_rt_args(
-        src_fabric_node_id,
-        connection_dst,
-        link_idx,
-        sender_program,
-        sender_logical_core,
-        sender_runtime_args);
-
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
-
-    // Create receiver program
-    std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
-
-    auto receiver_program = tt_metal::CreateProgram();
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
-
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
-
-    // Launch and wait. The receiver workload must outlive the Finish below; fast dispatch may still
-    // prefetch its kernel binaries after LaunchProgramAsync returns.
-    auto receiver_workload = tt_metal::LaunchProgramAsync(*receiver_device, std::move(receiver_program));
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
-    tt::tt_metal::distributed::Finish(receiver_device->mesh_command_queue());
-
-    // Validate sender/receiver status
-    std::vector<uint32_t> sender_status;
-    std::vector<uint32_t> receiver_status;
-
-    tt_metal::slow_dispatch::ReadFromL1(
-        *sender_device,
-        sender_logical_core,
-        worker_mem_map.test_results_address,
-        worker_mem_map.test_results_size_bytes,
-        sender_status,
-        CoreType::WORKER);
-
-    tt_metal::slow_dispatch::ReadFromL1(
-        *receiver_device,
-        receiver_logical_core,
-        worker_mem_map.test_results_address,
-        worker_mem_map.test_results_size_bytes,
-        receiver_status,
-        CoreType::WORKER);
-
-    EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
-    EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
-
-    return UnicastTrafficResult{
-        src_physical, dst_physical, src_fabric_node_id, dst_fabric_node_id, edm_port, false};
-}
-
-// ============================================================================
-// Helper: Walk the mesh to find a neighbor pair with the specified hop count.
-// Scans all mesh positions and all directions (E/W/N/S) to find a source with
-// at least `num_hops` neighbors. Returns the chain of nodes along the path.
-// ============================================================================
-struct MeshPathResult {
-    FabricNodeId src_node;
-    FabricNodeId dst_node;
-    std::vector<FabricNodeId> path;  // src, hop1, hop2, ..., dst
-    RoutingDirection direction;
-    bool found;
-};
-
-MeshPathResult find_1d_path_with_hops(uint32_t num_hops) {
-    // Walk the 1D chain from chip 0 using get_forwarding_direction to determine
-    // the actual forward direction at each hop. In 1D mode, get_forwarding_link_indices
-    // returns links for ANY destination (all traffic goes "forward"), so we can't use
-    // it to distinguish neighbors. Instead, we ask for the forwarding direction towards
-    // an unvisited chip, then get the neighbor in that direction.
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto mesh_shape = control_plane.get_physical_mesh_shape(MeshId{0});
-    uint32_t num_chips = mesh_shape.mesh_size();
-
-    FabricNodeId current(MeshId{0}, 0);
-    std::vector<FabricNodeId> path = {current};
-
-    for (uint32_t hop = 0; hop < num_hops; hop++) {
-        // Find the furthest unvisited chip to use as a forwarding target.
-        // Using the LAST unvisited chip avoids picking a direct neighbor, which would
-        // cause get_forwarding_direction to return the 2D shortest-path direction
-        // instead of the 1D chain forward direction.
-        FabricNodeId target(MeshId{0}, 0);
-        bool found_target = false;
-        for (int i = num_chips - 1; i >= 0; i--) {
-            bool visited = std::any_of(path.begin(), path.end(), [&](const FabricNodeId& n) {
-                return n.chip_id == static_cast<uint32_t>(i);
-            });
-            if (!visited) {
-                target = FabricNodeId(MeshId{0}, static_cast<uint32_t>(i));
-                found_target = true;
-                break;
-            }
-        }
-        if (!found_target) {
-            log_warning(tt::LogTest, "find_1d_path_with_hops: no unvisited chip at hop {}", hop);
-            return MeshPathResult{current, current, {}, RoutingDirection::E, false};
-        }
-
-        // Get the forward direction from current towards the target
-        auto fwd_dir = control_plane.get_forwarding_direction(current, target);
-        if (!fwd_dir.has_value()) {
-            log_warning(
-                tt::LogTest,
-                "find_1d_path_with_hops: no forwarding direction from chip_id={} to chip_id={} at hop {}",
-                current.chip_id,
-                target.chip_id,
-                hop);
-            return MeshPathResult{current, current, {}, RoutingDirection::E, false};
-        }
-
-        // Get the actual neighbor in the forward direction
-        auto neighbors = control_plane.get_intra_chip_neighbors(current, *fwd_dir);
-        if (neighbors.empty()) {
-            log_warning(
-                tt::LogTest,
-                "find_1d_path_with_hops: no neighbor in direction {} from chip_id={} at hop {}",
-                static_cast<int>(*fwd_dir),
-                current.chip_id,
-                hop);
-            return MeshPathResult{current, current, {}, RoutingDirection::E, false};
-        }
-
-        FabricNodeId next(current.mesh_id, neighbors[0]);
-        path.push_back(next);
-        current = next;
-    }
-
-    return MeshPathResult{path.front(), path.back(), path, RoutingDirection::E, true};
-}
-
-MeshPathResult find_2d_path_with_transit() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto mesh_shape = control_plane.get_physical_mesh_shape(MeshId{0});
-    uint32_t num_chips = mesh_shape.mesh_size();
-
-    for (uint32_t src = 0; src < num_chips; ++src) {
-        for (uint32_t dst = 0; dst < num_chips; ++dst) {
-            if (src == dst) {
-                continue;
-            }
-            FabricNodeId src_node(MeshId{0}, src);
-            FabricNodeId dst_node(MeshId{0}, dst);
-            auto route = control_plane.get_canonical_intramesh_route(src_node, dst_node);
-            auto direction = control_plane.get_forwarding_direction(src_node, dst_node);
-            if (route.size() >= 3 && direction.has_value()) {
-                return MeshPathResult{src_node, dst_node, std::move(route), *direction, true};
-            }
-        }
-    }
-
-    return MeshPathResult{FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 0), {}, RoutingDirection::E, false};
 }
 
 // ============================================================================
@@ -1176,10 +910,38 @@ TEST_F(Fabric2DChannelTrimmingFixture, DirectionalChannelForwardedTo) {
 }
 
 // ============================================================================
-// Fixture: capture a real multi-hop 2D route, then rebuild fabric from that profile.
+// Fixture: capture a real multi-hop route, then rebuild fabric from that profile.
+//
+// The capture carries flows over the last hop of a src -> ... -> transit -> dst route, with the transit
+// chip's own traffic to dst, and src's traffic forwarded through the transit chip. The transit
+// router's sender toward dst therefore uses its worker channel and a forwarded channel, while dst's
+// router only receives. Replay must keep the two ends of that link in agreement, and each variant
+// targets one way they can disagree. Replays send enough packets such that a sender channel must receive
+// credits from a receiver channel, or else stall.
+//
+// - REVERSE_FLOW adds dst -> transit, so dst's router sends worker traffic only and delivers what it
+//   receives locally. This Judged from its own row it goes speedy, and a speedy receiver returns credits
+//   for sender channel 0 only, so the transit router's forwarded channel stalls.
+// - REQUIRE_DEADLOCK_AVOIDANCE_LAST_HOP picks a last hop on a torus ring axis. dst's router, judged
+//   from its own row, is terminal and drops deadlock avoidance and first-level ack, while the
+//   forwarding transit router keeps them and waits for acks that never come.
 // ============================================================================
-class Fabric2DChannelTrimmingCaptureReplayFixture : public BaseFabricFixture {
+template <tt::tt_fabric::FabricConfig FABRIC_CONFIG, bool REQUIRE_DEADLOCK_AVOIDANCE_LAST_HOP, bool REVERSE_FLOW>
+class ChannelTrimmingCaptureReplayFixtureT : public BaseFabricFixture {
 protected:
+    static constexpr uint32_t kCapturePackets = 10;
+    static constexpr uint32_t kReplayPackets = 256;
+
+    // Every captured flow, in capture order.
+    static void run_captured_flows(uint32_t num_packets, bool& skipped) {
+        skipped = false;
+        skipped |= run_unicast_traffic_bw_nodes(transit_node_, dst_node_, 1, num_packets).skipped;
+        if constexpr (REVERSE_FLOW) {
+            skipped |= run_unicast_traffic_bw_nodes(dst_node_, transit_node_, 1, num_packets).skipped;
+        }
+        skipped |= run_unicast_traffic_bw_nodes(src_node_, dst_node_, 1, num_packets).skipped;
+    }
+
     static void SetUpTestSuite() {
         if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE ||
             tt::tt_metal::GetNumAvailableDevices() < 4) {
@@ -1194,7 +956,7 @@ protected:
         rtoptions.set_enable_channel_trimming_capture(true);
         rtoptions.set_fabric_trimming_profile_path("");
         rtoptions.set_fabric_trimming_override_path("");
-        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        BaseFabricFixture::DoSetUpTestSuite(FABRIC_CONFIG);
 
         const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         if (control_plane.express_routing_enabled(MeshId{0})) {
@@ -1204,7 +966,7 @@ protected:
             return;
         }
 
-        auto path_result = find_2d_path_with_transit();
+        auto path_result = find_2d_path_with_transit(REQUIRE_DEADLOCK_AVOIDANCE_LAST_HOP);
         if (!path_result.found) {
             should_skip_ = true;
             BaseFabricFixture::DoTearDownTestSuite();
@@ -1213,9 +975,11 @@ protected:
         }
         src_node_ = path_result.src_node;
         dst_node_ = path_result.dst_node;
+        transit_node_ = path_result.path[path_result.path.size() - 2];
 
-        auto capture_result = run_unicast_traffic_bw_nodes(src_node_, dst_node_, 1, /*num_packets=*/10);
-        if (capture_result.skipped) {
+        bool capture_skipped = false;
+        run_captured_flows(kCapturePackets, capture_skipped);
+        if (capture_skipped) {
             should_skip_ = true;
             BaseFabricFixture::DoTearDownTestSuite();
             rtoptions.set_enable_channel_trimming_capture(false);
@@ -1231,7 +995,7 @@ protected:
         }
 
         rtoptions.set_fabric_trimming_profile_path(capture_yaml_path_.string());
-        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        BaseFabricFixture::DoSetUpTestSuite(FABRIC_CONFIG);
     }
 
     static void TearDownTestSuite() {
@@ -1246,20 +1010,62 @@ protected:
 
     void SetUp() override {
         if (should_skip_) {
-            GTEST_SKIP() << "2D channel trimming replay requires a non-express Blackhole mesh with a multi-hop route";
+            GTEST_SKIP() << "Channel trimming replay requires a non-express Blackhole mesh with a multi-hop route"
+                         << (REQUIRE_DEADLOCK_AVOIDANCE_LAST_HOP ? " whose last hop keeps deadlock avoidance" : "");
         }
         BaseFabricFixture::SetUp();
     }
 
+    // The replayed fabric must actually be trimmed: an empty profile would pass the traffic tests on a
+    // full fabric.
+    static void expect_captured_profile_loaded() {
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
+        const auto& trimming_overrides = builder_ctx.get_channel_trimming_overrides();
+        ASSERT_TRUE(trimming_overrides.has_value());
+        EXPECT_GT(trimming_overrides->size(), 0u) << "Replay loaded an empty profile from " << capture_yaml_path_;
+    }
+
     inline static bool should_skip_ = false;
     inline static FabricNodeId src_node_{MeshId{0}, 0};
+    inline static FabricNodeId transit_node_{MeshId{0}, 0};
     inline static FabricNodeId dst_node_{MeshId{0}, 0};
     inline static std::filesystem::path capture_yaml_path_;
 };
 
+// Mesh: no axis keeps deadlock avoidance, so the reverse flow is what sets up the disagreement.
+class Fabric2DChannelTrimmingCaptureReplayFixture
+    : public ChannelTrimmingCaptureReplayFixtureT<tt::tt_fabric::FabricConfig::FABRIC_2D, false, true> {};
+
+// Torus X: E/W routers keep deadlock avoidance; no reverse flow, so only the deadlock-avoidance and
+// first-level-ack disagreement is exercised.
+class Fabric2DTorusXChannelTrimmingCaptureReplayFixture
+    : public ChannelTrimmingCaptureReplayFixtureT<tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X, true, false> {};
+
+TEST_F(Fabric2DChannelTrimmingCaptureReplayFixture, ReplayLoadsCapturedProfile) { expect_captured_profile_loaded(); }
+
 TEST_F(Fabric2DChannelTrimmingCaptureReplayFixture, MultiHopUnicastSurvivesReplay) {
-    auto result = run_unicast_traffic_bw_nodes(src_node_, dst_node_, 1, /*num_packets=*/10);
-    EXPECT_FALSE(result.skipped);
+    EXPECT_FALSE(run_unicast_traffic_bw_nodes(src_node_, dst_node_, 1, kReplayPackets).skipped);
+}
+
+TEST_F(Fabric2DChannelTrimmingCaptureReplayFixture, AllCapturedFlowsSurviveReplay) {
+    bool skipped = false;
+    run_captured_flows(kReplayPackets, skipped);
+    EXPECT_FALSE(skipped);
+}
+
+TEST_F(Fabric2DTorusXChannelTrimmingCaptureReplayFixture, ReplayLoadsCapturedProfile) {
+    expect_captured_profile_loaded();
+}
+
+TEST_F(Fabric2DTorusXChannelTrimmingCaptureReplayFixture, MultiHopUnicastSurvivesReplay) {
+    EXPECT_FALSE(run_unicast_traffic_bw_nodes(src_node_, dst_node_, 1, kReplayPackets).skipped);
+}
+
+TEST_F(Fabric2DTorusXChannelTrimmingCaptureReplayFixture, AllCapturedFlowsSurviveReplay) {
+    bool skipped = false;
+    run_captured_flows(kReplayPackets, skipped);
+    EXPECT_FALSE(skipped);
 }
 
 // ============================================================================

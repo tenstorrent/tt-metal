@@ -6,6 +6,7 @@ set(UNIT_TESTS_FABRIC_SRC
     common/mock_psd_builder.cpp
     common/fabric_worker_kernel_helpers.cpp
     common/fabric_command_interface.cpp
+    common/channel_trimming_test_utils.cpp
     fabric_router/test_routing_tables.cpp
     fabric_router/test_pipeline_builder.cpp
     fabric_router/test_mesh_graph_descriptor.cpp
