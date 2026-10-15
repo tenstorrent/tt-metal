@@ -313,22 +313,15 @@ bool FabricContext::need_deadlock_avoidance_support(
             fabric_node_id.mesh_id, control_plane.eth_direction_to_routing_direction(direction));
     }
 
-    // Decide per-mesh from this node's OWN resolved FabricConfig rather than the single process-wide
-    // fabric_config_/topology_. Meshes in one system may run different torus axes (e.g. a TORUS_Y mesh
-    // linked to a TORUS_X mesh), and each needs deadlock avoidance on its own ring axis. The global
-    // topology_ dropped the bubble on any mesh whose axis differed from -- or whose genuine ring was
-    // opened under -- the process-wide config (a Mesh-opened multi-mesh fabric left a TORUS_X mesh's
-    // E/W ring without first-level ACK, deadlocking it). get_fabric_config(mesh_id) returns the
-    // effective per-mesh config (MGD field > process override > dim_types default), so for a uniform
-    // single-config run it equals fabric_config_ and this is behaviour-preserving.
-    const auto mesh_fabric_config = control_plane.get_mesh_graph().get_fabric_config(fabric_node_id.mesh_id);
-    const auto mesh_topology = FabricContext::get_topology_from_config(mesh_fabric_config);
-
-    if (mesh_topology == Topology::Ring) {
+    // Each rank/process owns a single mesh and builds its FabricContext with that mesh's resolved config
+    // (see ControlPlane::adopt_local_mesh_fabric_config), so topology_/fabric_config_ already reflect
+    // THIS rank's mesh -- a TORUS_X mesh's process has topology_ == Torus even when the launch set a plain
+    // Mesh override. No per-mesh lookup is needed here.
+    if (topology_ == Topology::Ring) {
         return true;
     }
-    if (mesh_topology == Topology::Torus) {
-        const auto fabric_type = get_fabric_type(mesh_fabric_config, is_ubb_galaxy_);
+    if (topology_ == Topology::Torus) {
+        const auto fabric_type = get_fabric_type(fabric_config_, is_ubb_galaxy_);
         // if we are not torused along a dimension, we dont need deadlock avoidance for that direction
         const bool is_north_south =
             (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH);
@@ -341,16 +334,6 @@ bool FabricContext::need_deadlock_avoidance_support(
     }
 
     return false;
-}
-
-bool FabricContext::is_bubble_flow_control_enabled(const FabricNodeId& fabric_node_id) const {
-    // Mirror the per-mesh decision in need_deadlock_avoidance_support: a mesh running a ring/torus needs
-    // the tensix-mux bubble even when the fabric was opened under a Mesh/global config. Key it off the
-    // node's own resolved per-mesh config instead of the global bubble_flow_control_enabled_. For a
-    // uniform single-config run get_fabric_config(mesh_id) == fabric_config_, so this equals the global
-    // value and behaviour is preserved.
-    const auto mesh_fabric_config = control_plane_.get_mesh_graph().get_fabric_config(fabric_node_id.mesh_id);
-    return is_ring_or_torus(FabricContext::get_topology_from_config(mesh_fabric_config));
 }
 
 std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(const ControlPlane& control_plane) const {

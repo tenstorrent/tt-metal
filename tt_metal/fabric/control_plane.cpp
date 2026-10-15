@@ -480,6 +480,7 @@ void ControlPlane::init_control_plane(
         *driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+    this->adopt_local_mesh_fabric_config();
 
     // Before the mapper: when a factory descriptor is configured, that is what the mesh is placed on.
     this->ingest_factory_system_descriptor();
@@ -638,6 +639,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     this->validate_system_health_against_mesh_graph_policy();
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+    this->adopt_local_mesh_fabric_config();
 
     auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
     if (topology_mapping_timeout.count() <= 0.0f) {
@@ -857,6 +859,22 @@ void validate_fabric_configs(
 }
 
 }  // namespace
+
+void ControlPlane::adopt_local_mesh_fabric_config() {
+    // Each rank/process (tt-run launches one MPI rank per mesh, each with its own TT_MESH_ID) owns a
+    // single mesh, so the fabric this process builds should use that mesh's resolved config, not the raw
+    // process-wide override. MeshGraph::get_fabric_config() applies the precedence MGD-declared per-mesh
+    // config > process-wide override > dim_types default; when the MGD declares no explicit per-mesh
+    // config this returns the override, so single-config runs are unchanged. This is what makes
+    // heterogeneous per-mesh configs work: the rank owning a TORUS_X mesh builds its whole FabricContext
+    // (routing mode, VC config, deadlock avoidance, bubble flow control, packet specs) for TORUS_X even
+    // when the launch set a plain FABRIC_2D override. Skipped for the single-host multi-mesh testing path
+    // (a rank owning several meshes has no single config), which keeps the process-wide override.
+    if (this->mesh_graph_ == nullptr || this->local_mesh_binding_.mesh_ids.size() != 1) {
+        return;
+    }
+    this->fabric_config_ = this->mesh_graph_->get_fabric_config(this->local_mesh_binding_.mesh_ids.front());
+}
 
 void ControlPlane::validate_fabric_config_across_ranks() {
     using tt::tt_metal::distributed::multihost::ReduceOp;
