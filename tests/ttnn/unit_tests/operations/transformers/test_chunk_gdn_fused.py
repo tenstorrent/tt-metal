@@ -45,6 +45,10 @@ _no_watcher = pytest.mark.skipif(
     bool(os.environ.get("TT_METAL_WATCHER")),
     reason="chunk-64 prep binaries exceed the kernel-config buffer under the watcher",
 )
+# Trace capture is a fast-dispatch feature; the simulator SKUs run with TT_METAL_SLOW_DISPATCH_MODE set.
+_fast_dispatch_only = pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_SLOW_DISPATCH_MODE")), reason="trace capture needs fast dispatch"
+)
 REPEATS = 0 if _SIM else 8  # extra fused runs against the first result, to give a timing race a chance to show
 
 
@@ -1344,6 +1348,7 @@ def test_fused_waves_cache_identity(device):
     assert torch.equal(o4, o4b) and torch.equal(fs4, fs4b), "waved run is not deterministic"
 
 
+@_fast_dispatch_only
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 8 * 1024 * 1024}], indirect=True)
 def test_fused_waves_trace(device):
     """A waved call captured in a trace and replayed: each wave's program is re-enqueued with its own
