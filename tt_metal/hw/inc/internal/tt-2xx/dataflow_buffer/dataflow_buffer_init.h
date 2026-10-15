@@ -348,11 +348,8 @@ FORCE_INLINE void dfb_publish_producer_ready(
 
 #ifndef COMPILE_FOR_TRISC
 
-// Disarm every implicit-sync transaction id a prior launch may have left armed: the DFB halves of the per-id interrupt
-// enables (the read buffer's upper word, the write buffer's lower word). A per-id pending bit is a latch that only a
-// write of 0 to it, clearing its enable, or reset drops; clearing the id's tiles-to-process count does not. An id that
-// a prior launch armed and whose count reached its threshold stays pending, so without this, an id this launch arms
-// again fires the moment the ISR is enabled and posts or acks the prior launch's tile count to this launch's counters.
+// Clear the DFB halves of the per-id interrupt enables (read buffer upper word, write buffer lower word), dropping
+// any pending bit a prior launch latched (zeroing a count doesn't); otherwise a re-armed id fires on stale state.
 FORCE_INLINE void disarm_dfb_implicit_sync() {
     disable_dfb_tile_isr();
     uint64_t reg_val = __builtin_riscv_ttrocc_cmdbuf_rd_reg(
