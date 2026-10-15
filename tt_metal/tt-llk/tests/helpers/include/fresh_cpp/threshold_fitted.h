@@ -42,6 +42,7 @@
 // lane GC.
 
 #include <cstdint>
+#include <limits>
 
 #include "fresh_cpp/helpers.h"
 
@@ -57,15 +58,14 @@ __attribute__((noinline)) void calculate_threshold_fitted_cpp()
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat p       = VALUE;
-        v_if (x > THRESHOLD)
+        // Strict x > threshold keeps x (torch semantics); stated as its
+        // complement so the sign-magnitude compare order keeps NaNs of both
+        // signs: a positive NaN fails x <= threshold and only a negative NaN
+        // sorts below -inf.
+        sfpi::vFloat p = x;
+        v_if (-std::numeric_limits<float>::infinity() <= x && x <= THRESHOLD)
         {
-            p = x; // segment 1: exact identity (strict >, torch semantics)
-        }
-        v_endif;
-        v_if (sfpi::is_nan(x))
-        {
-            p = x;
+            p = VALUE;
         }
         v_endif;
         sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(p, sfpi::RoundMode::Nearest);
