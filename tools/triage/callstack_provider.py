@@ -21,6 +21,7 @@ Owner:
 
 from dataclasses import dataclass
 import io
+import re
 
 from triage import (
     ScriptConfig,
@@ -39,7 +40,7 @@ from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.gdb.gdb_client import get_gdb_callstack
 from ttexalens.elf import ElfFile
-from ttexalens.elf import CallstackEntry, CallstackEntryVariable, DwarfDieTag
+from ttexalens.elf import CallstackEntry, CallstackEntryVariable, DwarfAttributeTag, DwarfDieTag
 from ttexalens.tt_exalens_lib import top_callstack, callstack
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from utils import WARN
@@ -147,20 +148,42 @@ def format_variable_value(var: CallstackEntryVariable) -> str:
             if pointee is not None and pointee.name in ("unsigned char", "signed char"):
                 return str(int.from_bytes(value.read_bytes(), "little"))
         return str(value)
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception:
         return "?"
 
 
+def _declared_type(var: CallstackEntryVariable) -> str | None:
+    """The variable's type as written in the source (e.g. "uint32_t volatile*"), or None if it can't be named."""
+    try:
+        # Variables in inlined code keep their type on the original declaration
+        origin = var.die.get_die_from_attribute(DwarfAttributeTag.abstract_origin) or var.die
+        type_die = origin.get_die_from_attribute(DwarfAttributeTag.type)
+        type_name = type_die.get_path() if type_die is not None else None
+    except Exception:
+        return None
+    # ExaLens can't name some types yet (e.g. arrays) and returns "tag (...) at offset ..." for them
+    if not type_name or type_name.startswith("tag ("):
+        return None
+    # Template arguments can be hundreds of characters long; the value still shows the full type
+    return re.sub(r"<.*>", "<...>", type_name)
+
+
 def serialize_variables(variables: list[CallstackEntryVariable], highlight: str = "") -> str:
-    """One "- name = value" line per variable ("?" if no value); names found in `highlight` are colored."""
+    """One "- type name = value" line per named variable ("?" if no value); names found in `highlight` are colored."""
     result = ""
     for var in variables:
-        var_name = var.name or "?"
+        var_name = var.name
+        if not var_name:
+            continue
+        var_type = _declared_type(var)
+        type_prefix = f"{escape(var_type)} " if var_type else ""
         var_value = format_variable_value(var)
         if var_name in highlight:
-            serialized = f"- [info]{escape(var_name)}[/] = [command]{escape(var_value)}[/]\n"
+            serialized = f"- {type_prefix}[info]{escape(var_name)}[/] = [command]{escape(var_value)}[/]\n"
         else:
-            serialized = f"- {escape(var_name)} = {escape(var_value)}\n"
+            serialized = f"- {type_prefix}{escape(var_name)} = {escape(var_value)}\n"
         result += serialized
     return result
 
