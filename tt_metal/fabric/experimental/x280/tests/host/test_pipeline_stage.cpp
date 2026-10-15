@@ -120,9 +120,9 @@ ForwardWords forward_words() {
         0u,
         0u,
         0u,
-        static_cast<uint32_t>(PIPELINE_STAGE_PREPARED_LIM_BEGIN),
-        static_cast<uint32_t>(PIPELINE_STAGE_PREPARED_LIM_BEGIN >> 32u),
-        0x0006C000u,
+        static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_BEGIN),
+        static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_BEGIN >> 32u),
+        static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_END - PIPELINE_STAGE_FIXTURE_LIM_BEGIN),
         0u,
         static_cast<uint32_t>(X280_PINNED_INPUT_FIRST_HEADER_BASE),
         static_cast<uint32_t>(X280_PINNED_INPUT_FIRST_HEADER_BASE >> 32u),
@@ -140,8 +140,8 @@ TEST(PipelineStageRouteForwardLoad, AcceptsWireOrderAndRetainsValues) {
     EXPECT_EQ(state.args.section.hop_count, PIPELINE_STAGE_DIR_COUNT);
     EXPECT_EQ(state.args.section.backend.result_base, UINT64_C(0x1122334455667780));
     EXPECT_EQ(state.args.section.backend.sample_region_base, UINT64_C(0x2233445566778880));
-    EXPECT_EQ(state.args.layout.window.addr, PIPELINE_STAGE_PREPARED_LIM_BEGIN);
-    EXPECT_EQ(state.args.layout.window.bytes, 0x0006C000u);
+    EXPECT_EQ(state.args.layout.window.addr, PIPELINE_STAGE_FIXTURE_LIM_BEGIN);
+    EXPECT_EQ(state.args.layout.window.bytes, PIPELINE_STAGE_FIXTURE_LIM_END - PIPELINE_STAGE_FIXTURE_LIM_BEGIN);
     EXPECT_EQ(state.args.layout.source_base, X280_PINNED_INPUT_FIRST_HEADER_BASE);
 }
 
@@ -171,26 +171,26 @@ TEST(PipelineStageRouteForwardSanity, RejectsUnsafeConfigurations) {
     pipeline_stage::backend_route_forward::state_t valid{};
     ASSERT_TRUE(load_section<pipeline_stage_route_forward_args_block_t>(words.data(), sizeof(words), valid.as_uint32));
 
-    valid.args.section.backend.result_base = PIPELINE_STAGE_PREPARED_LIM_BEGIN + 64u;
+    valid.args.section.backend.result_base = PIPELINE_STAGE_FIXTURE_LIM_BEGIN + 64u;
     valid.args.section.backend.sample_region_base = 0u;
     EXPECT_TRUE(pipeline_stage::backend_route_forward::sanity_check(valid));
 
     auto invalid = valid;
     invalid.args.section.common.instrumentation = PIPELINE_STAGE_INSTRUMENTATION_PER_SAMPLE;
-    invalid.args.section.backend.sample_region_base = PIPELINE_STAGE_PREPARED_LIM_BEGIN + 128u;
+    invalid.args.section.backend.sample_region_base = PIPELINE_STAGE_FIXTURE_LIM_BEGIN + 128u;
     EXPECT_FALSE(pipeline_stage::backend_route_forward::sanity_check(invalid)) << "per-sample instrumentation";
 
     invalid = valid;
-    invalid.args.section.backend.sample_region_base = PIPELINE_STAGE_PREPARED_LIM_BEGIN + 128u;
+    invalid.args.section.backend.sample_region_base = PIPELINE_STAGE_FIXTURE_LIM_BEGIN + 128u;
     EXPECT_FALSE(pipeline_stage::backend_route_forward::sanity_check(invalid))
         << "a sample region without per-sample instrumentation";
 
     invalid = valid;
-    invalid.args.section.backend.result_base = PIPELINE_STAGE_PREPARED_LIM_END;
+    invalid.args.section.backend.result_base = PIPELINE_STAGE_FIXTURE_LIM_END;
     EXPECT_FALSE(pipeline_stage::backend_route_forward::sanity_check(invalid));
 
     invalid = valid;
-    invalid.args.section.backend.result_base = PIPELINE_STAGE_PREPARED_LIM_BEGIN + 65u;
+    invalid.args.section.backend.result_base = PIPELINE_STAGE_FIXTURE_LIM_BEGIN + 65u;
     EXPECT_FALSE(pipeline_stage::backend_route_forward::sanity_check(invalid));
 }
 
@@ -389,13 +389,13 @@ TEST(PipelineStageDirections, FixtureDirectionsDecodeAndWrongTablesDiffer) {
 }
 
 constexpr host_device_layout_t kLimLayout{
-    {PIPELINE_STAGE_PREPARED_LIM_BEGIN, PIPELINE_STAGE_PREPARED_LIM_END - PIPELINE_STAGE_PREPARED_LIM_BEGIN},
+    {PIPELINE_STAGE_FIXTURE_LIM_BEGIN, PIPELINE_STAGE_FIXTURE_LIM_END - PIPELINE_STAGE_FIXTURE_LIM_BEGIN},
     X280_PINNED_INPUT_FIRST_HEADER_BASE,
 };
 
-TEST(PipelineStageLimSanity, PreparedLimBoundsRetainBuildTimeSanity) {
-    EXPECT_EQ(PIPELINE_STAGE_PREPARED_LIM_BEGIN, UINT64_C(0x08154000));
-    EXPECT_EQ(PIPELINE_STAGE_PREPARED_LIM_END, UINT64_C(0x081C0000));
+TEST(PipelineStageLimSanity, FixtureLimBoundsRetainBuildTimeSanity) {
+    EXPECT_EQ(PIPELINE_STAGE_FIXTURE_LIM_BEGIN, UINT64_C(0x08131B00));
+    EXPECT_EQ(PIPELINE_STAGE_FIXTURE_LIM_END, UINT64_C(0x081C0000));
     EXPECT_EQ(PIPELINE_STAGE_SAMPLES_REGION_BYTES, 32832u);
     EXPECT_EQ(sizeof(host_device_layout_t), 24u);
     EXPECT_EQ(offsetof(host_device_layout_t, window.addr), 0u);
@@ -405,10 +405,10 @@ TEST(PipelineStageLimSanity, PreparedLimBoundsRetainBuildTimeSanity) {
 
 TEST(PipelineStageLocalSpans, AcceptsCompleteAlignedHalfOpenRanges) {
     const std::array<std::pair<uint64_t, uint64_t>, 4> valid = {{
-        {PIPELINE_STAGE_PREPARED_LIM_BEGIN, 1u},
-        {PIPELINE_STAGE_PREPARED_LIM_BEGIN, 64u},
-        {PIPELINE_STAGE_PREPARED_LIM_END - 64u, 64u},
-        {PIPELINE_STAGE_PREPARED_LIM_BEGIN, PIPELINE_STAGE_PREPARED_LIM_END - PIPELINE_STAGE_PREPARED_LIM_BEGIN},
+        {PIPELINE_STAGE_FIXTURE_LIM_BEGIN, 1u},
+        {PIPELINE_STAGE_FIXTURE_LIM_BEGIN, 64u},
+        {PIPELINE_STAGE_FIXTURE_LIM_END - 64u, 64u},
+        {PIPELINE_STAGE_FIXTURE_LIM_BEGIN, PIPELINE_STAGE_FIXTURE_LIM_END - PIPELINE_STAGE_FIXTURE_LIM_BEGIN},
     }};
 
     for (const auto& [addr, bytes] : valid) {
@@ -417,7 +417,7 @@ TEST(PipelineStageLocalSpans, AcceptsCompleteAlignedHalfOpenRanges) {
 }
 
 TEST(PipelineStageLocalSpans, AcceptsDeclaredComputeAndForwardSpanSets) {
-    const uint64_t begin = PIPELINE_STAGE_PREPARED_LIM_BEGIN;
+    const uint64_t begin = PIPELINE_STAGE_FIXTURE_LIM_BEGIN;
     const std::array<std::pair<uint64_t, uint64_t>, 4> compute = {{
         {begin, 88u},
         {begin + 128u, X280_PINNED_INPUT_SPAN},
@@ -449,12 +449,12 @@ TEST(PipelineStageLocalSpans, AcceptsDeclaredComputeAndForwardSpanSets) {
 
 TEST(PipelineStageLocalSpans, RejectsEmptyOutOfBoundsAndOverflowingRanges) {
     constexpr std::array<std::pair<uint64_t, uint64_t>, 8> invalid = {{
-        {PIPELINE_STAGE_PREPARED_LIM_BEGIN, 0u},
-        {PIPELINE_STAGE_PREPARED_LIM_BEGIN - 1u, 1u},
-        {PIPELINE_STAGE_PREPARED_LIM_BEGIN, PIPELINE_STAGE_PREPARED_LIM_END - PIPELINE_STAGE_PREPARED_LIM_BEGIN + 1u},
-        {PIPELINE_STAGE_PREPARED_LIM_END - 63u, 64u},
-        {PIPELINE_STAGE_PREPARED_LIM_END, 1u},
-        {PIPELINE_STAGE_PREPARED_LIM_END + 1u, 1u},
+        {PIPELINE_STAGE_FIXTURE_LIM_BEGIN, 0u},
+        {PIPELINE_STAGE_FIXTURE_LIM_BEGIN - 1u, 1u},
+        {PIPELINE_STAGE_FIXTURE_LIM_BEGIN, PIPELINE_STAGE_FIXTURE_LIM_END - PIPELINE_STAGE_FIXTURE_LIM_BEGIN + 1u},
+        {PIPELINE_STAGE_FIXTURE_LIM_END - 63u, 64u},
+        {PIPELINE_STAGE_FIXTURE_LIM_END, 1u},
+        {PIPELINE_STAGE_FIXTURE_LIM_END + 1u, 1u},
         {UINT64_C(0x0A000000), 2704u},
         {std::numeric_limits<uint64_t>::max() - 63u, 64u},
     }};
@@ -470,7 +470,7 @@ TEST(PipelineStageLocalSpans, RejectsCanonicalInputOrResultAsALocalSpan) {
 }
 
 TEST(PipelineStageLocalSpans, AcceptsAdjacentRegionsAndRejectsEveryOverlapOrder) {
-    const uint64_t begin = PIPELINE_STAGE_PREPARED_LIM_BEGIN;
+    const uint64_t begin = PIPELINE_STAGE_FIXTURE_LIM_BEGIN;
     EXPECT_TRUE(spans_disjoint(begin, 64u, begin + 64u, 128u));
     EXPECT_TRUE(spans_disjoint(begin + 64u, 128u, begin, 64u));
 
@@ -909,22 +909,22 @@ ComputeWords compute_words() {
         PIPELINE_STAGE_INSTRUMENTATION_OFF,
         0x0BADF00Du,
         pipeline_stage_cookie_for(UBENCH_SECTION_BACKEND),
-        0x08154000u,
-        0x00000000u,
-        0x08155040u,
-        0x00000000u,
+        static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_BEGIN),
+        static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_BEGIN >> 32u),
+        static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_BEGIN + 0x1040u),
+        static_cast<uint32_t>((PIPELINE_STAGE_FIXTURE_LIM_BEGIN + 0x1040u) >> 32u),
         0x00000000u,
         0x00000000u,
         PIPELINE_STAGE_LOOKUP_FIXTURE_V1,
         0u,
         0u,
         0u,
-        static_cast<uint32_t>(PIPELINE_STAGE_PREPARED_LIM_BEGIN),
-        static_cast<uint32_t>(PIPELINE_STAGE_PREPARED_LIM_BEGIN >> 32u),
-        0x0006C000u,
+        static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_BEGIN),
+        static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_BEGIN >> 32u),
+        static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_END - PIPELINE_STAGE_FIXTURE_LIM_BEGIN),
         0u,
-        0x08154000u,
-        0u,
+        static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_BEGIN),
+        static_cast<uint32_t>(PIPELINE_STAGE_FIXTURE_LIM_BEGIN >> 32u),
     }};
 }
 
@@ -937,12 +937,12 @@ TEST(PipelineStageRouteComputeLoad, AcceptsWireAndRetainsValues) {
     const pipeline_stage_common_args_t expected_common{128u, 16384u, PIPELINE_STAGE_INSTRUMENTATION_OFF, 0x0BADF00Du};
     EXPECT_EQ(std::memcmp(&state.args.section.common, &expected_common, sizeof(expected_common)), 0);
     EXPECT_EQ(state.args.section.fixture_id, PIPELINE_STAGE_LOOKUP_FIXTURE_V1);
-    EXPECT_EQ(state.args.section.backend.staged_input_base, UINT64_C(0x08154000));
-    EXPECT_EQ(state.args.section.backend.result_base, UINT64_C(0x08155040));
+    EXPECT_EQ(state.args.section.backend.staged_input_base, PIPELINE_STAGE_FIXTURE_LIM_BEGIN);
+    EXPECT_EQ(state.args.section.backend.result_base, PIPELINE_STAGE_FIXTURE_LIM_BEGIN + 0x1040u);
     EXPECT_EQ(state.args.section.backend.sample_region_base, 0u);
-    EXPECT_EQ(state.args.layout.window.addr, PIPELINE_STAGE_PREPARED_LIM_BEGIN);
-    EXPECT_EQ(state.args.layout.window.bytes, 0x0006C000u);
-    EXPECT_EQ(state.args.layout.source_base, UINT64_C(0x08154000));
+    EXPECT_EQ(state.args.layout.window.addr, PIPELINE_STAGE_FIXTURE_LIM_BEGIN);
+    EXPECT_EQ(state.args.layout.window.bytes, PIPELINE_STAGE_FIXTURE_LIM_END - PIPELINE_STAGE_FIXTURE_LIM_BEGIN);
+    EXPECT_EQ(state.args.layout.source_base, PIPELINE_STAGE_FIXTURE_LIM_BEGIN);
 }
 
 TEST(PipelineStageRouteComputeValidate, RejectsIncompatibleCookiesAndPad) {
@@ -1045,7 +1045,7 @@ TEST(PipelineStageRefusalPath, BadCookieProducesArgLayoutMismatch) {
     alignas(uint64_t) auto words = forward_words();
     words[0] ^= 0xDEADBEEFu;
 
-    const uint64_t res_base = PIPELINE_STAGE_PREPARED_LIM_BEGIN + 64u;
+    const uint64_t res_base = PIPELINE_STAGE_FIXTURE_LIM_BEGIN + 64u;
     words[6] = static_cast<uint32_t>(res_base);
     words[7] = static_cast<uint32_t>(res_base >> 32u);
 

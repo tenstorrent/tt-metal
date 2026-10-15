@@ -20,17 +20,19 @@
 #include "../../include/rt/x280_pinned_input.h"
 #include "../../include/socket_layout.h"
 #include "../../include/x280_address_map.h"
+#include "../../include/x280_hart_protocol.h"
 
 #define PIPELINE_STAGE_COOKIE_BASE 0x50535447u
 
 #define PIPELINE_STAGE_LOOKUP_HEADER_COUNT 16u
 #define PIPELINE_STAGE_LOOKUP_FIXTURE_V1 1u
 
-/* With WAYENABLE=1, fourteen of the fifteen 128 KiB LIM ways remain.
- * The window starts after the socket layout, inside available LIM, which
- * starts after the hart protocol block. */
-#define PIPELINE_STAGE_PREPARED_LIM_BEGIN (X280_LIM_BASE + X280_SOCKET_HIGHEST_END)
-#define PIPELINE_STAGE_PREPARED_LIM_END (X280_LIM_END - X280_PINNED_INPUT_WAYENABLE * (X280_LIM_SIZE / 15u))
+/* Fixture window for the host tests of the image's admission checks: with
+ * WAYENABLE=1, fourteen of the fifteen 128 KiB LIM ways remain. The window
+ * starts at available LIM, which starts after the hart protocol block. */
+#define PIPELINE_STAGE_FIXTURE_LIM_BEGIN \
+    ((X280_HART_PROTOCOL_END + UBENCH_LIM_LINE_BYTES - 1u) & ~(uint64_t)(UBENCH_LIM_LINE_BYTES - 1u))
+#define PIPELINE_STAGE_FIXTURE_LIM_END (X280_LIM_END - X280_PINNED_INPUT_WAYENABLE * (X280_LIM_SIZE / 15u))
 
 #if defined(__cplusplus)
 constexpr uint32_t pipeline_stage_cookie_for(ubench_section_t section) {
@@ -241,8 +243,11 @@ static inline void pipeline_stage_publish_batch_delta(
 
 UBENCH_LAYOUT_ASSERT(sizeof(pipeline_stage_result_t) == 64u, "pipeline result is exactly one cache line");
 UBENCH_LAYOUT_ASSERT(
-    PIPELINE_STAGE_PREPARED_LIM_BEGIN == 0x08154000u, "the prepared window begins after every socket reservation");
-UBENCH_LAYOUT_ASSERT(PIPELINE_STAGE_PREPARED_LIM_END == 0x081C0000u, "WAYENABLE 1 leaves fourteen 128 KiB LIM ways");
+    PIPELINE_STAGE_FIXTURE_LIM_BEGIN % UBENCH_LIM_LINE_BYTES == 0u &&
+        PIPELINE_STAGE_FIXTURE_LIM_BEGIN >= X280_HART_PROTOCOL_END &&
+        PIPELINE_STAGE_FIXTURE_LIM_BEGIN < PIPELINE_STAGE_FIXTURE_LIM_END,
+    "the fixture window begins at a line boundary at or above the hart protocol end, below its end");
+UBENCH_LAYOUT_ASSERT(PIPELINE_STAGE_FIXTURE_LIM_END == 0x081C0000u, "WAYENABLE 1 leaves fourteen 128 KiB LIM ways");
 UBENCH_LAYOUT_ASSERT(
     offsetof(pipeline_stage_result_t, raw_batch_delta) == 24u, "pipeline counters retain their published offset");
 UBENCH_LAYOUT_ASSERT(
