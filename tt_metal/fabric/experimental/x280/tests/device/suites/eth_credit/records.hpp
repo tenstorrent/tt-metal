@@ -154,23 +154,34 @@ inline x280::harness::output::RecordSpec link_record(const LinkState& link) {
 // E1 sinking locally, or the sending forwarder, whose window counts what it sent.
 enum class Receiver { Forwarder, E1, Sender };
 
+// The bytes of one request a throughput record counts as useful: the
+// EC_HEADER_BYTES header a forwarder moves, the slot's payload, or the one
+// pointer word a W2 or R1 store moves.
+enum class Useful { Header, Payload, Pointer };
+
 // What a throughput record measures: its member, the kernel whose window it
-// reports, and the writes inside that window (docs/benchmarks/eth_credit.md,
-// "The nine writes").
+// reports, the writes inside that window (docs/benchmarks/eth_credit.md,
+// "The nine writes"), and what of each request is useful.
 struct Path {
     const char* member;
     Receiver receiver;
     const char* legs;
+    Useful useful;
 };
 
 // The whole path, forwarder to forwarder.
-inline constexpr Path kFullPath{"eth_credit", Receiver::Forwarder, "W1 W2 W3 W4 W5 W6 R1 R2 R3"};
+inline constexpr Path kFullPath{"eth_credit", Receiver::Forwarder, "W1 W2 W3 W4 W5 W6 R1 R2 R3", Useful::Header};
 // E0 sourcing and E1 sinking locally.
-inline constexpr Path kEthernetHop{"eth_credit_hop", Receiver::E1, "W3 W4 R2"};
+inline constexpr Path kEthernetHop{"eth_credit_hop", Receiver::E1, "W3 W4 R2", Useful::Payload};
 // The sending forwarder into E0 sinking locally.
-inline constexpr Path kNocHop{"eth_credit_leg", Receiver::Sender, "W1 W2 R3"};
+inline constexpr Path kNocHop{"eth_credit_leg", Receiver::Sender, "W1 W2 R3", Useful::Header};
 // E1 sourcing locally into the receiving forwarder.
-inline constexpr Path kReceiveSide{"eth_credit_leg", Receiver::Forwarder, "W5 W6 R1"};
+inline constexpr Path kReceiveSide{"eth_credit_leg", Receiver::Forwarder, "W5 W6 R1", Useful::Header};
+// One write repeated by the sending forwarder with nothing else, one request
+// per header (W1) or per pointer store (W2, R1).
+inline constexpr Path kW1Alone{"eth_credit_leg", Receiver::Sender, "W1", Useful::Header};
+inline constexpr Path kW2Alone{"eth_credit_leg", Receiver::Sender, "W2", Useful::Pointer};
+inline constexpr Path kR1Alone{"eth_credit_leg", Receiver::Sender, "R1", Useful::Pointer};
 
 // One completed direction's receiver for `p` and where it ran: the sending
 // chip's E0 and receiving chip's E1 Ethernet tile, and each chip's X280 tile.
@@ -190,6 +201,16 @@ struct ReceiveWindow {
     Path path = kFullPath;
 };
 
+/** The bytes of one request `useful` names, for a slot of `shape`. */
+inline uint32_t useful_bytes(Useful useful, const ec_shape_t& shape) {
+    switch (useful) {
+        case Useful::Header: return EC_HEADER_BYTES;
+        case Useful::Payload: return shape.slot_size - EC_HEADER_BYTES;
+        case Useful::Pointer: return sizeof(uint32_t);
+    }
+    return 0;
+}
+
 /**
  * The `window.path.member` record of `window.p` at `window.path.receiver`,
  * whose result block is `forwarder`: identity, the shape, the writes inside
@@ -200,10 +221,9 @@ struct ReceiveWindow {
  * request's slot bytes are the slot and `payload_bytes_per_request` the slot
  * less the header.
  *
- * A forwarder's record is on the fixed mtime clock, and a request's useful
- * bytes are the EC_HEADER_BYTES header the forwarder moves. E1's is on its
- * ERISC wall clock converted by `rx_erisc_clock`, and a request's useful bytes
- * are its payload. The run has no warm-up.
+ * A forwarder's record is on the fixed mtime clock, E1's on its ERISC wall
+ * clock converted by `rx_erisc_clock`; a request's useful bytes are as
+ * `window.path.useful` names. The run has no warm-up.
  */
 inline x280::harness::output::RecordSpec throughput_record(
     const ReceiveWindow& window,
@@ -237,7 +257,7 @@ inline x280::harness::output::RecordSpec throughput_record(
              .start_ticks = forwarder.first_ts,
              .end_ticks = forwarder.last_ts,
              .completed = forwarder.status.state == EC_STATE_DONE,
-             .useful_bytes_per_request = at_e1 ? window.shape.slot_size - EC_HEADER_BYTES : EC_HEADER_BYTES,
+             .useful_bytes_per_request = useful_bytes(window.path.useful, window.shape),
              .slot_bytes_per_request = window.shape.slot_size,
          })},
         {"tx_erisc_clock", hout::Value::clock(tx_erisc_clock)},

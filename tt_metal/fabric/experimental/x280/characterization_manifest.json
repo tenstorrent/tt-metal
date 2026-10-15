@@ -3574,6 +3574,42 @@
         "TT_VISIBLE_DEVICES": null,
         "X280_ETH_CREDIT_FW_IMAGE": "${FW_BUILD}/firmware-eth-credit-x280-fwd.bin"
       }
+    },
+    {
+      "id": "eth_credit.w1_alone",
+      "member": "eth_credit/eth_credit",
+      "argv": [
+        "${HOST_BUILD}/x280_eth_credit",
+        "--gtest_filter=EthCredit/EthCreditHw.W1AloneBySlotAndP/0"
+      ],
+      "environment": {
+        "TT_VISIBLE_DEVICES": null,
+        "X280_ETH_CREDIT_MEASURE_FW_IMAGE": "${FW_BUILD}/firmware-eth-credit-x280-fwd-measure.bin"
+      }
+    },
+    {
+      "id": "eth_credit.w2_alone",
+      "member": "eth_credit/eth_credit",
+      "argv": [
+        "${HOST_BUILD}/x280_eth_credit",
+        "--gtest_filter=EthCredit/EthCreditHw.W2AloneByP/0"
+      ],
+      "environment": {
+        "TT_VISIBLE_DEVICES": null,
+        "X280_ETH_CREDIT_MEASURE_FW_IMAGE": "${FW_BUILD}/firmware-eth-credit-x280-fwd-measure.bin"
+      }
+    },
+    {
+      "id": "eth_credit.r1_alone",
+      "member": "eth_credit/eth_credit",
+      "argv": [
+        "${HOST_BUILD}/x280_eth_credit",
+        "--gtest_filter=EthCredit/EthCreditHw.R1AloneByP/0"
+      ],
+      "environment": {
+        "TT_VISIBLE_DEVICES": null,
+        "X280_ETH_CREDIT_MEASURE_FW_IMAGE": "${FW_BUILD}/firmware-eth-credit-x280-fwd-measure.bin"
+      }
     }
   ]
 }

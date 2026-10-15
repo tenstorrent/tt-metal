@@ -101,6 +101,10 @@ struct Stage {
     uint32_t counter_first_delay = 0;
     /** Launch E1 on the receiving tile; false leaves the link's far end idle. */
     bool launch_e1 = true;
+    /** Nonzero, one EC_FWD_FLAG_*_ALONE: the sending forwarders repeat that
+     * write send-count times and nothing else, on the measurement image; E0
+     * sends nothing. */
+    uint32_t leg_alone = 0;
     /** Launch E0 on chip B; false withholds one side of the handshake. */
     bool launch_e0_b = true;
     /** Misalign chip A's E0 peer_rx_base, an argument E0 must refuse. */
@@ -607,8 +611,11 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
             if (c.stage.e0_source_self || c.stage.e1_source_self) {
                 args.chips[i].fwd[p].send_count = 0u;
             }
-            if (c.stage.e1_source_self) {
+            if (c.stage.e1_source_self || c.stage.leg_alone != 0u) {
                 args.chips[i].e0.erisc.count[p] = 0u;
+            }
+            if (args.chips[i].fwd[p].send_count != 0u) {
+                args.chips[i].fwd[p].flags |= c.stage.leg_alone;
             }
             if (c.stage.e1_sink_local || c.stage.e0_sink_local || !c.stage.launch_e1) {
                 args.chips[i].fwd[p].recv_count = 0u;
@@ -699,11 +706,16 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
         }
     }
 
+    /* The forwarder's measurement modes are built into their own image. */
+    const auto image =
+        c.stage.leg_alone != 0u
+            ? hart_::image_path("X280_ETH_CREDIT_MEASURE_FW_IMAGE", "firmware-eth-credit-x280-fwd-measure.bin")
+            : hart_::image_path(spec.open.image_env_var, spec.open.image_file);
     std::array<hexec::X280Launch, ec::kChips> launches{};
     for (uint32_t i = 0; i < ec::kChips; ++i) {
         const ec::ChipLayout& l = out.admission.layout.chips[i];
         launches[i] = hexec::X280Launch{
-            .image_path = hart_::image_path(spec.open.image_env_var, spec.open.image_file),
+            .image_path = image,
             .run_value = (static_cast<uint64_t>(0xEC00u + i) << 32) | cfg.run_nonce,
             .args_addr = l.lim_base + l.x280.args_offset,
             .args_bytes = l.x280.args_bytes,
@@ -1020,6 +1032,11 @@ inline Path measured_path(const Stage& st) {
     }
     if (st.e1_source_self) {
         return kReceiveSide;
+    }
+    switch (st.leg_alone) {
+        case EC_FWD_FLAG_W1_ALONE: return kW1Alone;
+        case EC_FWD_FLAG_W2_ALONE: return kW2Alone;
+        case EC_FWD_FLAG_R1_ALONE: return kR1Alone;
     }
     return kFullPath;
 }

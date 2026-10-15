@@ -478,6 +478,8 @@ aggregates only:
 - **Bring-up modes** are E0/E1 compile-time defines, off by default and JIT-built
   per case: `EC_E0_SINK_LOCAL`, `EC_E0_SOURCE_SELF`, `EC_E1_SINK_LOCAL`,
   `EC_E1_SOURCE_SELF`, `EC_TAIL_MARKER` and `EC_E0_COUNTER_FIRST_DELAY`.
+  The forwarder's measurement modes are built into a second image
+  (`EC_FWD_MEASURE`, below) and selected by its args flags.
 - **One struct per role** (`ec_x280_fwd_args_t`, `ec_e0_args_t`,
   `ec_e1_args_t`), each starting `{magic, kernel_id}`. There is no schema word:
   any change to an args or result record changes its magic (`EC_ABI_MAGIC`
@@ -692,6 +694,18 @@ the `packet_injection` host does.
   delivers it (W5, W6) with no E0, link or R2; the receiving forwarder
   consumes it and returns R1. Its window is the whole path's, the receiving
   forwarder's, written as an `eth_credit_leg` record.
+- W1, W2 and R1 each alone (`EC_FWD_FLAG_W1_ALONE`, `_W2_ALONE`, `_R1_ALONE`,
+  on `firmware-eth-credit-x280-fwd-measure.bin`, the forwarder built with
+  `EC_FWD_MEASURE=1`): the sending forwarder repeats one write `packets` times
+  in a loop of its own whose operands stay in registers, with E0 sending
+  nothing and E1 not launched, stamping after the first write and after the
+  last, so the window covers `packets` − 1 writes. W1 is one header into
+  `tx_fifo[p]` as the send step writes it; W2 and R1 are one store each, into
+  E0's write shadow and E1's read shadow, through the build's pointer store
+  (`pointer_store()`): `x280_counter_store()` through the counter window. Each
+  is an `eth_credit_leg` record with legs `W1`, `W2` or `R1`, one request per
+  write. The benchmark image is built without the measurement modes, so they
+  leave its code unchanged.
 - Per kernel, on its own clock: stall counts and stall time per stall site, and
   per-packet service time, written as one `eth_credit_kernel` JSONL record per
   launched kernel: case, chip, role, kernel id, state, code, detail, packets in
@@ -739,6 +753,7 @@ must fail:
 | `EthernetHopBySlotAndBatch` | the Ethernet hop alone (`EC_E0_SOURCE_SELF`, `EC_E1_SINK_LOCAL`) over payloads 64 B to 16 KiB and `BATCH` 1 to 8 at P = 1, `N_LINK` = 8: packet rate on E1's clock, against the 400G per-link rate the tabulator sets beside it |
 | `NocHopBySlotAndP` | the NoC hop alone (`EC_E0_SINK_LOCAL`, W1, W2 and R3) on the leg grid, the throughput sweep's slot sizes at P = 1, 2 and 4 and `BATCH` 4: packet rate on the sending forwarder's clock |
 | `ReceiveSideBySlotAndP` | the receive side alone (`EC_E1_SOURCE_SELF`, W5, W6 and R1) on the leg grid: packet rate on the receiving forwarder's clock |
+| `W1AloneBySlotAndP`, `W2AloneByP`, `R1AloneByP` | W1 alone on the leg grid, and W2 and R1 alone at P = 1, 2 and 4, 20000 each per forwarder on the measurement image: write rate on the sending forwarder's clock |
 
 The E0/E1 kernels are built by the Metal JIT at launch. `x280_eth_credit_jit`
 (`tools/eth_credit_jit_check.sh`) compiles them without a device the way the JIT
@@ -896,7 +911,10 @@ ticks and, for a failed run, the attribution line and every chip's kernel
 results; rates come from the tabulator. The manifest's `eth_credit.throughput`,
 `eth_credit.ethernet_hop`, `eth_credit.noc_hop` and `eth_credit.receive_side`
 configurations run `ThroughputBySlotBatchAndP`, `EthernetHopBySlotAndBatch`,
-`NocHopBySlotAndP` and `ReceiveSideBySlotAndP` with every card visible
+`NocHopBySlotAndP` and `ReceiveSideBySlotAndP`, and `eth_credit.w1_alone`,
+`eth_credit.w2_alone` and `eth_credit.r1_alone` run `W1AloneBySlotAndP`,
+`W2AloneByP` and `R1AloneByP` (`X280_ETH_CREDIT_MEASURE_FW_IMAGE` names their
+image), each with every card visible
 (`TT_VISIBLE_DEVICES` unset),
 for the reason below. The design is above.
 

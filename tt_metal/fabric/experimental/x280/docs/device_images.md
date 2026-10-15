@@ -213,6 +213,7 @@ Built by `ninja -C build x280_images` ([README](../README.md#2-build-boot-and-ru
 | `firmware-core-sync-release-probe.bin` | `src/core_sync_release_probe.cpp` | test-only release of one or more X280 multicast groups, run by `x280_core_sync_director` |
 | `firmware-packet-injection-{latency-include,latency-exclude,throughput,backpressure-include,backpressure-exclude}.bin` | `src/packet_injection_x280.cpp` | the X280 consumer of packet_injection, one image per mode and creation flag; `x280_packet_injection_tensix_to_x280` runs each point's variant and `x280_packet_injection_erisc_to_x280_header` the throughput image. The latency variants link the pinned-input operations |
 | `firmware-eth-credit-x280-fwd.bin` | `src/eth_credit_x280_fwd.cpp` | the X280 forwarders of eth_credit on both chips, run by `x280_eth_credit` |
+| `firmware-eth-credit-x280-fwd-measure.bin` | `src/eth_credit_x280_fwd.cpp` with `EC_FWD_MEASURE=1` | the same forwarders with their measurement modes (W1, W2 and R1 alone), run by `x280_eth_credit`'s `W1AloneBySlotAndP`, `W2AloneByP` and `R1AloneByP` |
 
 Every image compiles with `-mcpu=sifive-x280 -march=rv64gc -mabi=lp64d
 -mcmodel=medany -O2 -Werror -fno-zero-initialized-in-bss`, freestanding, and

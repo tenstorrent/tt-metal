@@ -749,6 +749,16 @@ x280_add_image(
         kernels/shared
         kernels/eth_credit
 )
+# The same forwarder with its measurement modes built in (EC_FWD_MEASURE).
+x280_add_image(
+    NAME firmware-eth-credit-x280-fwd-measure
+    SOURCES src/eth_credit_x280_fwd.cpp
+    INCLUDES
+        kernels
+        kernels/shared
+        kernels/eth_credit
+    DEFINES EC_FWD_MEASURE=1
+)
 _x280_check_headers(
     DIRS kernels/shared kernels/eth_credit
     C_AND_CXX eth_credit_abi.h

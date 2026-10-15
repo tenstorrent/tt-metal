@@ -33,6 +33,13 @@
 #define X280_ETH_CREDIT_FWD 0
 #endif
 
+/* Nonzero builds the measurement modes the args flags select
+ * (EC_FWD_FLAG_LEGS_ALONE). The benchmark image leaves them out, so its code
+ * is unchanged by them. */
+#ifndef EC_FWD_MEASURE
+#define EC_FWD_MEASURE 0
+#endif
+
 static_assert(
     X280_TLB_ETH_CREDIT_PER_HART == 2u,
     "each forwarder hart needs two windows onto its Ethernet tile: strict for W1, a counter window for W2 and R1");
@@ -95,7 +102,12 @@ public:
                 sync == core_sync::Outcome::StopRequested ? EC_ERROR_STALL_TIMEOUT : EC_ERROR_BAD_ARGS,
                 EC_SITE_BARRIER);
         }
-        const ec_error_t err = loop();
+        ec_error_t err;
+        if constexpr (EC_FWD_MEASURE) {
+            err = (a_.flags & EC_FWD_FLAG_LEGS_ALONE) != 0u ? leg_alone() : loop();
+        } else {
+            err = loop();
+        }
         if (err != EC_ERROR_NONE) {
             return err;
         }
@@ -527,6 +539,60 @@ private:
                 return err;
             }
         }
+        return EC_ERROR_NONE;
+    }
+
+    /* W2's and R1's store on this build: x280_counter_store() through the
+     * counter window, as send_step() and publish_rd() store. */
+    static void pointer_store(volatile uint32_t* dst, uint32_t value) { x280_counter_store(dst, value); }
+
+    /* `step(i)` for i in [0, n), counted in packets_out, the window opening at
+     * the stamp after step 0 as every window opens after its first batch. */
+    template <typename Step>
+    __attribute__((always_inline)) void time_alone(uint32_t n, Step step) {
+        step(0u);
+        x280_fence_iorw();
+        const uint64_t first = x280_mtime_fenced();
+        for (uint32_t i = 1u; i < n; ++i) {
+            step(i);
+        }
+        x280_fence_iorw();
+        const uint64_t last = x280_mtime_fenced();
+        result_->first_ts = first;
+        result_->first_batch_packets = 1u;
+        result_->last_ts = last;
+        result_->packets_out[a_.p] = n;
+    }
+
+    /* The leg its EC_FWD_FLAG_*_ALONE flag names, alone, send_count times back
+     * to back in a loop whose operands stay in registers: W1 is one header
+     * into tx_fifo[p] as send_step() writes it, W2 and R1 one pointer_store()
+     * each into E0's and E1's shadow. Nothing else runs. */
+    ec_error_t leg_alone() {
+        const uint32_t n = a_.send_count;
+        if ((a_.flags & EC_FWD_FLAG_W1_ALONE) != 0u) {
+            volatile fs_hybrid_mesh_packet_header_t* const staging =
+                reinterpret_cast<volatile fs_hybrid_mesh_packet_header_t*>(
+                    static_cast<uintptr_t>(area_ + lim_.staging));
+            const volatile uint64_t* const src = reinterpret_cast<const volatile uint64_t*>(staging);
+            volatile uint8_t* const tx = eth_window(eth_tx_base_ + a_.p * eth_.fifo_stride);
+            const uint32_t mask = s_.n_link - 1u;
+            const uint32_t slot_size = s_.slot_size;
+            time_alone(n, [=](uint32_t i) __attribute__((always_inline)) {
+                ec_header_set_seq(staging, i);
+                x280_fence_iorw();
+                volatile uint64_t* dst = reinterpret_cast<volatile uint64_t*>(tx + (i & mask) * slot_size);
+                for (uint32_t w = 0; w < kHeaderWords; ++w) {
+                    dst[w] = src[w];
+                }
+            });
+            return EC_ERROR_NONE;
+        }
+        const bool w2 = (a_.flags & EC_FWD_FLAG_W2_ALONE) != 0u;
+        volatile uint32_t* const dst = reinterpret_cast<volatile uint32_t*>(
+            counter_window_ + a_.eth_ctrl_base + (w2 ? eth_.e0_wr_sh : eth_.e1_out_rd_sh) + a_.p * kUnit);
+        const uint32_t mask = ec_ptr_mask(w2 ? s_.n_link : s_.n_deliver);
+        time_alone(n, [=](uint32_t i) __attribute__((always_inline)) { pointer_store(dst, (i + 1u) & mask); });
         return EC_ERROR_NONE;
     }
 

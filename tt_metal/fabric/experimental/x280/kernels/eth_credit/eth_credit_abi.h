@@ -166,6 +166,12 @@ static inline uint32_t ec_e0_idle_site(uint32_t credit) {
 #define EC_FWD_FLAG_DIRECTOR (1u << 0)
 #define EC_FWD_FLAG_OUTBOUND_ACTIVE (1u << 1)
 #define EC_FWD_FLAG_INBOUND_ACTIVE (1u << 2)
+/* With EC_FWD_MEASURE, one leg alone send_count times and nothing else: W1, W2
+ * or R1. */
+#define EC_FWD_FLAG_W1_ALONE (1u << 3)
+#define EC_FWD_FLAG_W2_ALONE (1u << 4)
+#define EC_FWD_FLAG_R1_ALONE (1u << 5)
+#define EC_FWD_FLAG_LEGS_ALONE (EC_FWD_FLAG_W1_ALONE | EC_FWD_FLAG_W2_ALONE | EC_FWD_FLAG_R1_ALONE)
 /* ec_e0_args_t::flags */
 #define EC_E0_FLAG_HANDSHAKE_SENDER (1u << 0)
 #define EC_E0_FLAG_OUTBOUND_ACTIVE (1u << 1)

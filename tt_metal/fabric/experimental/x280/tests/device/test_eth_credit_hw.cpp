@@ -7,8 +7,9 @@
 // alone, the Ethernet hop alone, the admission test, the full path, P
 // forwarders, and both directions. Each step carries a run that must fail.
 //
-// Runs X280_ETH_CREDIT_FW_IMAGE when set, else the build's forwarder image, and
-// requires live resident idle on L2CPU 0 of both chips. Slow dispatch comes
+// Runs X280_ETH_CREDIT_FW_IMAGE when set, else the build's forwarder image
+// (the writes alone: X280_ETH_CREDIT_MEASURE_FW_IMAGE, else the build's
+// measurement image), and requires live resident idle on L2CPU 0 of both chips. Slow dispatch comes
 // from the x280_slow_dispatch link.
 
 #include "harness/artifacts/artifacts.hpp"
@@ -65,6 +66,10 @@ protected:
         suite::print_run(c, r);
         return r;
     }
+
+    /** Runs the sending forwarders' write `leg` (an EC_FWD_FLAG_*_ALONE) alone,
+     * 20000 times on each of P forwarders at `slot`, and records it. */
+    void run_write_alone(const char* name, uint32_t leg, uint32_t P, uint32_t slot);
 
     /** Runs `c` with every gtest failure from any thread captured instead of
      * reported, and returns the run's result; `failures` receives each
@@ -655,6 +660,44 @@ TEST_P(EthCreditHw, ReceiveSideBySlotAndP) {
             EXPECT_EQ(r.chips[1].fwd[p].block.packets_in[p], 20000u) << "forwarder " << p;
         }
         suite::record_throughput(spec(), fixture(), c, r, 0u);
+    }
+}
+
+void EthCreditHw::run_write_alone(const char* name, uint32_t leg, uint32_t P, uint32_t slot) {
+    suite::Case c{.name = name, .shape = {P, 8u, 8u, slot, kLegBatch}, .direction = ec::Direction::AToB};
+    c.packets = each(P, 20000u);
+    c.stage.leg_alone = leg;
+    c.stage.launch_e1 = false;
+    const auto r = run(c);
+    ASSERT_TRUE(r.launched);
+    suite::expect_all_done(r);
+    for (uint32_t p = 0; p < P; ++p) {
+        EXPECT_EQ(r.chips[0].fwd[p].block.packets_out[p], 20000u) << "forwarder " << p;
+        EXPECT_EQ(r.chips[0].e0.block.packets_out[p], 0u) << "E0 p " << p << " must send nothing";
+    }
+    suite::record_throughput(spec(), fixture(), c, r, 0u);
+}
+
+// W1 alone: each sending forwarder writes one header into E0's tx_fifo[p] as
+// its send step does, back to back on the measurement image, on the leg grid.
+TEST_P(EthCreditHw, W1AloneBySlotAndP) {
+    for (const LegPoint& pt : kLegGrid) {
+        run_write_alone("w1_alone", EC_FWD_FLAG_W1_ALONE, pt.P, pt.slot);
+    }
+}
+
+// W2 alone and R1 alone: each sending forwarder repeats the build's pointer
+// store into E0's write shadow (W2) or E1's read shadow (R1), at P = 1, 2 and
+// 4. No slot size changes a pointer store.
+TEST_P(EthCreditHw, W2AloneByP) {
+    for (const uint32_t P : {1u, 2u, 4u}) {
+        run_write_alone("w2_alone", EC_FWD_FLAG_W2_ALONE, P, Slot(64u));
+    }
+}
+
+TEST_P(EthCreditHw, R1AloneByP) {
+    for (const uint32_t P : {1u, 2u, 4u}) {
+        run_write_alone("r1_alone", EC_FWD_FLAG_R1_ALONE, P, Slot(64u));
     }
 }
 
