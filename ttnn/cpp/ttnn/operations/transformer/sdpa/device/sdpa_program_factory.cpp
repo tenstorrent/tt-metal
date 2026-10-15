@@ -14,10 +14,12 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <hostdevcommon/common_values.hpp>
+#include <algorithm>
 #include <bit>
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <cmath>
 
 using namespace tt::constants;
@@ -212,6 +214,10 @@ WindowedSetup setup_windowed_cbs(
     cb_ids.windowed_q_offset = cb_ids.q_in;
     cb_ids.windowed_cu_reader = cb_ids.q_in;
     cb_ids.windowed_k_range = cb_ids.q_in;
+    // A mask block map feeds the compute its per Q chunk K count over the same ctrl CB windowed mode uses.
+    if (tensors.attn_mask_block_map.has_value()) {
+        cb_ids.windowed_k_range = allocate_cb(16, 2, tt::DataFormat::Int32);
+    }
     if (!is_windowed_mode(attrs.windowed_mode)) {
         return w;
     }
@@ -240,6 +246,50 @@ WindowedSetup setup_windowed_cbs(
         w.q_offset_buffer = off.buffer();
     }
     return w;
+}
+
+template <typename AllocateCb>
+uint32_t allocate_mask_block_map_cb(const SDPAInputs& tensors, sdpa_cb::CBIds& cb_ids, const AllocateCb& allocate_cb) {
+    if (!tensors.attn_mask_block_map.has_value()) {
+        return 0;
+    }
+    const uint32_t stick_size = tensors.attn_mask_block_map->buffer()->aligned_page_size();
+    cb_ids.mask_block_map = allocate_cb(stick_size, 1, tt::DataFormat::Int32);
+    return stick_size;
+}
+
+// Blackhole serves DRAM slowest on the low rows of the full grid; moving a block float Q remainder off them pays.
+bool remainder_goes_to_last_cores(
+    bool is_causal,
+    bool is_blackhole,
+    uint32_t cores_doing_extra,
+    uint32_t num_cores,
+    uint32_t grid_cores,
+    DataType q_dtype) {
+    return is_causal && is_blackhole && 2 * cores_doing_extra <= num_cores &&
+           (q_dtype == DataType::BFLOAT8_B || q_dtype == DataType::BFLOAT4_B) && num_cores == grid_cores;
+}
+
+std::pair<uint32_t, uint32_t> global_q_range(
+    uint32_t i,
+    uint32_t first_extra_core,
+    uint32_t cores_doing_extra,
+    uint32_t base_chunks_per_core,
+    uint32_t extra_chunks_per_core,
+    uint32_t total_q_chunks) {
+    const uint32_t extras_before = std::min(i > first_extra_core ? i - first_extra_core : 0u, cores_doing_extra);
+    uint32_t start = (i * base_chunks_per_core) + (extras_before * extra_chunks_per_core);
+    uint32_t count = base_chunks_per_core;
+    if (i >= first_extra_core && i < first_extra_core + cores_doing_extra) {
+        count += extra_chunks_per_core;
+    }
+    if (start >= total_q_chunks) {
+        start = total_q_chunks;
+        count = 0;
+    } else if (start + count > total_q_chunks) {
+        count = total_q_chunks - start;
+    }
+    return {start, count};
 }
 
 }  // namespace
@@ -368,6 +418,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Windowed masks are complete dense masks synthesized from cu_window_seqlens. They already cover padding
     // positions outside the final boundary, so the generic generated-padding-mask paths must stay disabled.
     const bool generated_padding_mask = use_padded_mask && !is_windowed;
+    const bool use_mask_block_map = tensor_args.attn_mask_block_map.has_value();
+    const bool use_k_range_ctrl = is_windowed || use_mask_block_map;
 
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
@@ -499,6 +551,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             ? (Sk % TILE_HEIGHT)
             : 0;
     const bool lw_partial_active = (k_partial_col > 0);
+    const bool remainder_on_last_cores = remainder_goes_to_last_cores(
+        use_causal_kernel,
+        device->arch() == tt::ARCH::BLACKHOLE,
+        global_q_cores_doing_extra,
+        num_cores,
+        device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y,
+        input_tensor_q.dtype());
+    const uint32_t global_q_first_extra_core = remainder_on_last_cores ? (num_cores - global_q_cores_doing_extra) : 0u;
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
@@ -624,6 +684,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 32
     reader_compile_time_args.push_back(static_cast<uint32_t>(windowed_mode));         // arg 33: K-range narrowing
+    reader_compile_time_args.push_back(static_cast<uint32_t>(use_mask_block_map));    // arg 34
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -639,6 +700,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(reader_compile_time_args);
     TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
         .append_to(reader_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.attn_mask_block_map)).append_to(reader_compile_time_args);
 
     // Set up semaphore IDs for KV chain forwarding (non-causal only).
     // In the descriptor pattern, semaphore IDs are explicit sequential integers
@@ -731,7 +793,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         valid_Skt,                                    // arg 27: unpadded K tile count for streaming padded_k_tiles
         k_partial_col,                                // arg 28: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 29: unified zigzag remap
-        static_cast<uint32_t>(windowed_mode),         // arg 28: K-range narrowing (bounds from the ctrl CB)
+        static_cast<uint32_t>(use_k_range_ctrl),      // arg 28: K-range narrowing (windowed mode or a mask block map)
     };
 
     std::map<std::string, std::string> defines_map;
@@ -841,6 +903,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     if (is_chunked) {
         cb_ids.page_table = allocate_cb(page_table_stick_size, 1, page_table_df);
     }
+    const uint32_t block_map_stick_size = allocate_mask_block_map_cb(tensor_args, cb_ids, allocate_cb);
     if (flexible_chunked) {
         constexpr uint32_t chunk_start_idx_page_size = 32;
         cb_ids.chunk_start_idx_compute = allocate_cb(chunk_start_idx_page_size, 1, tt::DataFormat::Int32);
@@ -1431,16 +1494,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
         // Global Q scheduling per-core range: contiguous slice of the flat (B, NQH, q_num_chunks) space.
-        uint32_t global_q_start = i * global_q_base_chunks_per_core +
-                                  std::min(i, global_q_cores_doing_extra) * global_q_extra_chunks_per_core;
-        uint32_t global_q_count =
-            global_q_base_chunks_per_core + ((i < global_q_cores_doing_extra) ? global_q_extra_chunks_per_core : 0u);
-        if (global_q_start >= total_q_chunks) {
-            global_q_start = total_q_chunks;
-            global_q_count = 0;
-        } else if (global_q_start + global_q_count > total_q_chunks) {
-            global_q_count = total_q_chunks - global_q_start;
-        }
+        const auto [global_q_start, global_q_count] = global_q_range(
+            i,
+            global_q_first_extra_core,
+            global_q_cores_doing_extra,
+            global_q_base_chunks_per_core,
+            global_q_extra_chunks_per_core,
+            total_q_chunks);
 
         log_debug(
             tt::LogOp,
@@ -1492,6 +1552,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(cu_window_seqlens_eles);
         reader_args.push_back(windowed_q_token_offset);
         reader_args.push_back(windowed_q_offset_buffer);
+        if (use_mask_block_map) {
+            reader_args.push_back(buffer_or_null(tensor_args.attn_mask_block_map));
+            reader_args.push_back(block_map_stick_size);
+        }
 
         reader_desc.emplace_runtime_args(core, reader_args);
 
