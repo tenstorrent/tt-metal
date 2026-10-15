@@ -19,7 +19,8 @@ constexpr std::uint32_t TILE_VECTORS = TILE_ELEMS / GATHER_COMPRESS_ELEM_CNT;
 
 // Gather pushes one index byte per element. Compress pushes GATHER_COMPRESS_ELEM_CNT 1-bit mask values packed
 // into the vec FIFO entry, i.e. GATHER_COMPRESS_ELEM_CNT/8 bytes.
-constexpr std::uint32_t ARG_PUSH_BYTES = (GATHER_COMPRESS_MODE == GatherCompressModeSelect::COMPRESS) ? GATHER_COMPRESS_ELEM_CNT / 8 : GATHER_COMPRESS_ELEM_CNT;
+constexpr std::uint32_t ARG_PUSH_BYTES =
+    (GATHER_COMPRESS_MODE == ckernel::GatherCompressModeSelect::COMPRESS) ? GATHER_COMPRESS_ELEM_CNT / 8 : GATHER_COMPRESS_ELEM_CNT;
 
 using namespace ckernel;
 
