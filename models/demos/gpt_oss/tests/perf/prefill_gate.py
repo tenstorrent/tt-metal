@@ -63,6 +63,10 @@ V2_KL_RATIO = 1.15
 # against a dense-tree run (--v3-reference <json>) iff pooled top1 >= ref - V3_TOP1_DROP, pooled KL <= V3_KL_RATIO x
 # ref KL, and no NaN/Inf.
 V3_LENGTHS = [128, 1024, 2048]
+# Optional long window (--v3-window L:N, e.g. 8192:1024): also prefill the first L prompt tokens and score the LAST N
+# positions against GOLDENS_DIR/hf_full/hf_full_L{L}_last{N}.pt (prefill_hf_ref.py --full --last N --lengths L).
+# It is its own row "L_lastN" and joins the pooled numbers, so the reference run must use the same window (checked).
+# Same acceptance rule. Without the flag v3 is unchanged.
 V3_TOP1_DROP = 0.01
 V3_KL_RATIO = 1.05
 # ---------------------------------------------------------------------------------------------------------------
@@ -295,6 +299,13 @@ if __name__ != "__main__":
 
         result_path = os.getenv("PREFILL_GATE_RESULT")
         ref_path = os.getenv("PREFILL_GATE_V3_REF")
+        # cases: (row label, prompt length, first scored position); the base lengths score every position
+        cases = [(str(L), L, 0) for L in V3_LENGTHS]
+        window = os.getenv("PREFILL_GATE_V3_WINDOW", "")
+        if window:
+            win_len, win_rows = (int(v) for v in window.split(":"))
+            assert 0 < win_rows <= win_len, window
+            cases.append((f"{win_len}_last{win_rows}", win_len, win_len - win_rows))
         ctx = build_prefill_generator(mesh_device, max(PREFILL_LENGTHS))
         tokens = load_or_build_prompt_tokens(ctx["tokenizer"])
 
@@ -315,21 +326,33 @@ if __name__ != "__main__":
 
         tt_model.ttnn_prefill_forward = fwd_all_positions
         tt_model.process_output_prefill = out_all_positions
-        report = {"mode": "v3", "git": git_info(), "env": env_snapshot(), "lengths": {}}
+        report = {
+            "mode": "v3",
+            "git": git_info(),
+            "env": env_snapshot(),
+            "cases": [label for label, _, _ in cases],
+            "lengths": {},
+        }
         top1s, top5s, kls, nan = [], [], [], False
         try:
-            for L in V3_LENGTHS:
+            for label, L, first in cases:
                 captured.clear()
                 captured["L"] = L
                 _, last = run_prefill(ctx, tokens[:L].unsqueeze(0))
                 tt = captured.pop("full")
                 assert tt.shape[0] == L, f"expected {L} rows, got {tuple(tt.shape)}"
-                ref = torch.load(GOLDENS_DIR / "hf_full" / f"hf_full_L{L}.pt")
+                if first:
+                    ref = torch.load(GOLDENS_DIR / "hf_full" / f"hf_full_L{L}_last{L - first}.pt")
+                    assert ref["positions"] == [first, L], (ref["positions"], first, L)
+                    tt = tt[first:]
+                else:
+                    ref = torch.load(GOLDENS_DIR / "hf_full" / f"hf_full_L{L}.pt")
                 hf = ref["logits"]
-                assert ref["length"] == L and hf.shape[0] == L, (ref["length"], tuple(hf.shape))
+                rows = L - first
+                assert ref["length"] == L and hf.shape[0] == rows, (ref["length"], tuple(hf.shape), rows)
                 n = min(tt.shape[-1], hf.shape[-1])
                 top1, top5, kl = [], [], []
-                for i in range(0, L, 256):  # float32 math, chunked over positions
+                for i in range(0, rows, 256):  # float32 math, chunked over positions
                     t, h = tt[i : i + 256, :n].float(), hf[i : i + 256, :n].float()
                     nan = nan or not bool(torch.isfinite(t).all())
                     h1 = h.argmax(-1)
@@ -342,7 +365,7 @@ if __name__ != "__main__":
                 top5s.append(top5)
                 kls.append(kl)
                 entry = {
-                    "positions": L,
+                    "positions": rows,
                     "top1": float(top1.mean()),
                     "top5_hit": float(top5.mean()),
                     "kl_hf_tt": float(kl.mean()),
@@ -351,22 +374,33 @@ if __name__ != "__main__":
                 gold = GOLDENS_DIR / f"tt_L{L}.pt"
                 if gold.exists():  # sanity: the hooked last row vs the normal path's last-token golden (dense tree)
                     entry["last_row_vs_tt_golden_pcc"] = compare_logits(last.float(), torch.load(gold)["logits"])["pcc"]
-                report["lengths"][str(L)] = entry
-                logger.info(f"[gate v3] L={L} {entry}")
+                report["lengths"][label] = entry
+                logger.info(f"[gate v3] L={label} {entry}")
                 del tt, hf, ref
         finally:
             tt_model.ttnn_prefill_forward, tt_model.process_output_prefill = orig_fwd, orig_out
-        overall = {
-            "positions": int(sum(t.numel() for t in top1s)),
-            "top1": float(torch.cat(top1s).mean()),
-            "top5_hit": float(torch.cat(top5s).mean()),
-            "kl_hf_tt": float(torch.cat(kls).mean()),
-            "nan": nan,
-        }
+
+        def pooled(n_cases):
+            return {
+                "positions": int(sum(t.numel() for t in top1s[:n_cases])),
+                "top1": float(torch.cat(top1s[:n_cases]).mean()),
+                "top5_hit": float(torch.cat(top5s[:n_cases]).mean()),
+                "kl_hf_tt": float(torch.cat(kls[:n_cases]).mean()),
+            }
+
+        overall = {**pooled(len(cases)), "nan": nan}
         report["overall"] = overall
+        if window:  # the 128/1K/2K pool alone, comparable with runs without the window
+            report["overall_base"] = pooled(len(V3_LENGTHS))
         fails = ["NaN/Inf in TT logits"] if nan else []
         if ref_path:
-            base = json.loads(Path(ref_path).read_text())["overall"]
+            ref_report = json.loads(Path(ref_path).read_text())
+            ref_cases = ref_report.get("cases", [str(L) for L in V3_LENGTHS])
+            assert ref_cases == report["cases"], (
+                f"reference {ref_path} was run with cases {ref_cases}, this run with {report['cases']}: "
+                "pooled numbers are not comparable (rerun the reference with the same --v3-window)"
+            )
+            base = ref_report["overall"]
             report["reference"] = {"path": ref_path, **base}
             if overall["top1"] < base["top1"] - V3_TOP1_DROP:
                 fails.append(f"top1 {overall['top1']:.4f} < reference {base['top1']:.4f} - {V3_TOP1_DROP}")
@@ -379,7 +413,13 @@ if __name__ != "__main__":
             Path(result_path).write_text(json.dumps(report, indent=2))
             # per-position vectors for paired (run vs run) analysis
             torch.save(
-                {"lengths": V3_LENGTHS, "top1": top1s, "top5": top5s, "kl": kls},
+                {
+                    "lengths": [L for _, L, _ in cases],
+                    "cases": report["cases"],
+                    "top1": top1s,
+                    "top5": top5s,
+                    "kl": kls,
+                },
                 Path(result_path).with_suffix(".positions.pt"),
             )
         assert not fails, "prefill gate v3 FAIL:\n" + "\n".join(fails)
@@ -405,10 +445,18 @@ def main():
     )
     ap.add_argument("--v2-reference", default=None, help="v2: JSON report of the dense reference run to accept against")
     ap.add_argument("--v3-reference", default=None, help="v3: JSON report of the dense reference run to accept against")
+    ap.add_argument(
+        "--v3-window",
+        default="",
+        help="v3: add a long case L:N scoring the last N positions of an L-token prefill (e.g. 8192:1024); "
+        "the reference must have been run with the same window",
+    )
     args = ap.parse_args()
 
     env = dict(os.environ)
     env["PREFILL_GATE_LENGTHS"] = args.lengths
+    if args.v3_window:
+        env["PREFILL_GATE_V3_WINDOW"] = args.v3_window
     env["PREFILL_GATE_SAVE"] = "1" if args.save_goldens else "0"
     if args.result:
         env["PREFILL_GATE_RESULT"] = str(Path(args.result).resolve())

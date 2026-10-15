@@ -43,7 +43,15 @@ def main():
         help="store fp16 full-vocab logits of ALL positions 0..L-1 as GOLDENS_DIR/hf_full/hf_full_L{L}.pt "
         "(prefill_gate.py --mode v3) instead of the last-token vector",
     )
+    ap.add_argument(
+        "--last",
+        type=int,
+        default=0,
+        help="with --full: keep only the last N positions (L-N..L-1; the LM head runs on those rows only) and store "
+        "them as GOLDENS_DIR/hf_full/hf_full_L{L}_last{N}.pt (the gate v3 long window, --v3-window L:N)",
+    )
     args = ap.parse_args()
+    assert args.last == 0 or args.full, "--last needs --full"
     lengths = parse_lengths(args.lengths)
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -65,6 +73,8 @@ def main():
             if args.last32:
                 # logits_to_keep: the LM head runs on the last 32 positions only.
                 out = model(tokens[:L].unsqueeze(0), use_cache=False, logits_to_keep=32)
+            elif args.full and args.last:
+                out = model(tokens[:L].unsqueeze(0), use_cache=False, logits_to_keep=args.last)
             else:
                 out = model(tokens[:L].unsqueeze(0), use_cache=False)
         if args.last32:
@@ -86,10 +96,15 @@ def main():
             continue
         if args.full:
             full = out.logits[0].to(torch.float16)  # [L, vocab]; bf16 logits fit fp16 range, fp16 keeps more mantissa
-            assert full.shape[0] == L and torch.isfinite(full).all(), (full.shape, L)
-            path = GOLDENS_DIR / "hf_full" / f"hf_full_L{L}.pt"
+            rows = args.last or L
+            assert full.shape[0] == rows and torch.isfinite(full).all(), (full.shape, L, rows)
+            name = f"hf_full_L{L}_last{rows}.pt" if args.last else f"hf_full_L{L}.pt"
+            path = GOLDENS_DIR / "hf_full" / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save({"length": L, "logits": full, "dtype": args.dtype, "git": git_info()}, path)
+            record = {"length": L, "logits": full, "dtype": args.dtype, "git": git_info()}
+            if args.last:
+                record["positions"] = [L - rows, L]  # half-open row range of the prompt
+            torch.save(record, path)
             print(
                 f"L={L}: forward {time.time() - t0:.0f}s all-position logits {tuple(full.shape)} -> {path}", flush=True
             )
