@@ -2640,8 +2640,9 @@ std::optional<tt::tt_fabric::FabricConfig> resolve_mesh_fabric_config(
         tt::tt_fabric::MeshGraph mesh_graph(cluster, path.string(), process_wide_override);
         resolved = mesh_graph.get_fabric_config(MeshId{mesh_id});
     } catch (const std::exception&) {
-        // Intentionally swallow: a rejected config (config-vs-topology or the 1D-multi-mesh guard) is the
-        // expected negative outcome here, reported to callers as nullopt.
+        // A rejected config (config-vs-topology or the 1D-multi-mesh guard) is the expected negative
+        // outcome here; report it to callers as nullopt.
+        resolved.reset();
     }
     std::filesystem::remove(path);
     return resolved;
