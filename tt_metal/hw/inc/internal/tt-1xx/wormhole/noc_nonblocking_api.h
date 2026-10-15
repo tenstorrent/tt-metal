@@ -333,15 +333,15 @@ inline __attribute__((always_inline)) void noc_increment_nonposted_writes_issued
     noc_nonposted_writes_num_issued[noc] += delta;
 }
 
-// Marks the nonposted writes issued so far, for a later noc_nonposted_writes_sent_since.
-inline __attribute__((always_inline)) uint32_t noc_nonposted_writes_mark(uint32_t noc) {
+// Returns a checkpoint of the nonposted writes issued so far, for a later noc_nonposted_writes_sent_since.
+inline __attribute__((always_inline)) uint32_t noc_nonposted_writes_checkpoint(uint32_t noc) {
     return noc_nonposted_writes_num_issued[noc];
 }
 
-// Returns true once every nonposted write issued before the mark has been sent (wrap-around safe).
-inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_since(uint32_t noc, uint32_t mark) {
+// Returns true once every nonposted write issued before the checkpoint has been sent (wrap-around safe).
+inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_since(uint32_t noc, uint32_t checkpoint) {
     uint32_t sent = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
-    return (int32_t)(sent - mark) >= 0;
+    return (int32_t)(sent - checkpoint) >= 0;
 }
 
 /**

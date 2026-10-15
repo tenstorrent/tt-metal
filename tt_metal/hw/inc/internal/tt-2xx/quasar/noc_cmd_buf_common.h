@@ -494,12 +494,13 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_trans
     return __builtin_riscv_ttrocc_scmdbuf_wr_sent_trid(transcation_id) == 0;
 }
 
-// The RoCC write counts track what is outstanding now, not a running total, so there is nothing to mark.
-inline __attribute__((always_inline)) uint32_t noc_nonposted_writes_mark(uint32_t noc) { return 0; }
+// The RoCC write counts track what is outstanding now, not a running total, so there is nothing to checkpoint.
+inline __attribute__((always_inline)) uint32_t noc_nonposted_writes_checkpoint(uint32_t noc) { return 0; }
 
 // Returns true once every static-trid write on this tile has been read out of L1, from any DM core and issued
-// before or after the mark. That covers the caller's writes before the mark, at the cost of also waiting on the rest.
-inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_since(uint32_t noc, uint32_t mark) {
+// before or after the checkpoint. That covers the caller's writes before the checkpoint, at the cost of also
+// waiting on the rest.
+inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_since(uint32_t noc, uint32_t checkpoint) {
     return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, NOC_OVERLAY_TRID_STATIC);
 }
 

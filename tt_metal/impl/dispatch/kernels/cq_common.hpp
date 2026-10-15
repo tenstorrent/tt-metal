@@ -692,7 +692,7 @@ class CBReaderWithReleasePolicy : public CBReader<my_sem_id, cb_log_page_size, c
 public:
     FORCE_INLINE void init() {
         this->CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base>::init();
-        this->block_writes_mark_ = noc_nonposted_writes_mark(noc_index);
+        this->block_writes_checkpoint_ = noc_nonposted_writes_checkpoint(noc_index);
     }
 
     // Returns how much data is available. Will block until data is available. Tracks via blocked
@@ -749,19 +749,19 @@ public:
 
 private:
     FORCE_INLINE void release_block_pages() {
-        // When finishing a block, don't immediately return it, but just mark the nonposted writes issued so far.
-        // We will wait for writes to be sent and will return the block when the next block is finished; this
-        // allows time for writes from that block to complete. Note: on archs that mark with a count, this is
+        // When finishing a block, don't immediately return it, but just checkpoint the nonposted writes issued so
+        // far. We will wait for writes to be sent and will return the block when the next block is finished; this
+        // allows time for writes from that block to complete. Note: on archs that checkpoint with a count, this is
         // incorrect if writes can be sent out of order. We should use transaction IDs instead in that case.
         if (released_prev_block_) {
             WAYPOINT("CBRW");
-            while (!noc_nonposted_writes_sent_since(noc_index, this->block_writes_mark_));
+            while (!noc_nonposted_writes_sent_since(noc_index, this->block_writes_checkpoint_));
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(cb_pages_per_block);
             WAYPOINT("CBRD");
         } else {
             released_prev_block_ = true;
         }
-        this->block_writes_mark_ = noc_nonposted_writes_mark(noc_index);
+        this->block_writes_checkpoint_ = noc_nonposted_writes_checkpoint(noc_index);
     }
 
     FORCE_INLINE void move_rd_to_next_block_and_release_pages() {
@@ -770,8 +770,8 @@ private:
     }
 
     bool released_prev_block_{false};
-    // Mark of the nonposted writes issued at block entry; used to wait/clear before releasing credits.
-    uint32_t block_writes_mark_{0};
+    // Checkpoint of the nonposted writes issued at block entry; used to wait/clear before releasing credits.
+    uint32_t block_writes_checkpoint_{0};
 };
 
 template <uint32_t my_sem_id, uint32_t cb_log_page_size, uint32_t cb_base, uint32_t cb_end>
