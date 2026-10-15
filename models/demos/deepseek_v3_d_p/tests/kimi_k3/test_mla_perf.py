@@ -11,11 +11,11 @@ contract is intentionally identical:
 * ``long`` profiles one chunk with a 500K-token Galaxy prefix.
 
 On smaller boxes the chunk scales with SP/8: 2,560 tokens on LoudBox (SP=4 x TP=2) and 1,280 on
-QuietBox (SP=2 x TP=2). Their warm cases keep the full 50K-token Galaxy prefix; cold and long retain
-the SP-scaled prefixes (25.6K and 256K on LoudBox, 12.8K and 128K on QuietBox). The synthetic perf
-config scales the global head count with TP, preserving Galaxy's 24 heads and 640 query tokens per
-chip. LoudBox and QuietBox warm therefore match Galaxy's total attention arithmetic per chip, while
-each ring step sees 8/SP times as many KV rows.
+QuietBox (SP=2 x TP=2). The synthetic perf config scales the global head count with TP, preserving
+Galaxy's 24 heads and 640 query tokens per chip. Warm and long keep the full 50K and 500K Galaxy
+prefixes, so they match Galaxy's attention arithmetic per chip, while each ring step sees 8/SP times
+as many KV rows. Cold fills the cache contiguously over the same number of chunks as Galaxy, so its
+prefix also scales with SP/8 (25.6K on LoudBox, 12.8K on QuietBox) and it does SP/8 of Galaxy's work.
 
 K3 is deliberately not another variant in the sparse harness.  It has no DSA indexer, uses the dense
 tiled BFP8 KV cache, has NoPE, and adds the output ``g_proj`` gate.  Keeping those facts structural
@@ -33,7 +33,7 @@ Run all three cases on a supported Blackhole box::
 Narrow with ``-k warm``, ``-k cold``, or ``-k long``.  Outputs live under
 ``generated/profiler/kimi_k3_dense_mla_perf``.  Sizes can be overridden with
 ``K3_MLA_PERF_CACHE``, ``K3_MLA_PERF_CHUNK``, and ``K3_MLA_PERF_LONG_CACHE``; these are Galaxy-global
-sizes and retain the same SP scaling.
+sizes, scaled on smaller boxes as above. The perf gates apply only at the default sizes.
 """
 
 import copy
@@ -70,23 +70,29 @@ pytestmark = pytest.mark.perf
 
 GALAXY_SP = 8
 GALAXY_TP = 4
-CACHE_TOKENS = int(os.environ.get("K3_MLA_PERF_CACHE", 50 * 1024))
+DEFAULT_CACHE_TOKENS = 50 * 1024
 DEFAULT_CHUNK_TOKENS = 5 * 1024
+DEFAULT_LONG_CACHE_TOKENS = 500 * 1024
+CACHE_TOKENS = int(os.environ.get("K3_MLA_PERF_CACHE", DEFAULT_CACHE_TOKENS))
 CHUNK_TOKENS = int(os.environ.get("K3_MLA_PERF_CHUNK", DEFAULT_CHUNK_TOKENS))
-LONG_CACHE_TOKENS = int(os.environ.get("K3_MLA_PERF_LONG_CACHE", 500 * 1024))
+LONG_CACHE_TOKENS = int(os.environ.get("K3_MLA_PERF_LONG_CACHE", DEFAULT_LONG_CACHE_TOKENS))
+DEFAULT_SIZES = (CACHE_TOKENS, CHUNK_TOKENS, LONG_CACHE_TOKENS) == (
+    DEFAULT_CACHE_TOKENS,
+    DEFAULT_CHUNK_TOKENS,
+    DEFAULT_LONG_CACHE_TOKENS,
+)
 RT_RECORD_TIMEOUT_S = float(os.environ.get("K3_MLA_PERF_RT_TIMEOUT", 30.0))
 WRITE_OPS_DUMP = os.environ.get("K3_MLA_PERF_OPS_DUMP", "") not in ("", "0", "false")
-# Device-time targets per box: scenario -> (local prefix tokens, target ns).
+# Device-time targets in ns at the default sizes, per box and scenario.
 PERF_TARGETS = {
     "LoudBox": {
-        "warm": (50 * 1024, 10_900_000),
-        "cold": (25 * 1024, 49_500_000),
-        "long": (250 * 1024, 45_500_000),
+        "warm": 10_900_000,
+        "cold": 49_500_000,
     },
     "QuietBox": {
-        "warm": (50 * 1024, 11_100_000),
-        "cold": (12_800, 35_500_000),
-        "long": (128_000, 24_400_000),
+        "warm": 11_100_000,
+        "cold": 35_500_000,
+        "long": 91_400_000,
     },
 }
 PERF_MARGIN = 0.03
@@ -488,16 +494,12 @@ def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_
     assert (sp, tp) == PERF_WORKLOAD.mesh_shape
     assert PERF_WORKLOAD.num_attention_heads % tp == 0
 
-    cache = (
-        SCENARIOS[scenario]["cache"]
-        if scenario == "warm" and PERF_WORKLOAD.system_name in PERF_TARGETS
-        else _local_tokens(SCENARIOS[scenario]["cache"], sp)
-    )
+    is_cold = SCENARIOS[scenario]["loop"]
+    cache = _local_tokens(SCENARIOS[scenario]["cache"], sp) if is_cold else SCENARIOS[scenario]["cache"]
     chunk = PERF_WORKLOAD.chunk_tokens
     total = cache + chunk
     assert cache % chunk == 0, f"cache {cache} must be a whole number of {chunk}-token chunks"
     assert chunk % (sp * ttnn.TILE_SIZE) == 0
-    is_cold = SCENARIOS[scenario]["loop"]
 
     fixture_config, weights = random_weights
     config, weights = _shape_normalized_config_and_weights(fixture_config, weights, tp)
@@ -585,12 +587,13 @@ def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_
 
     _write_outputs(scenario=scenario, cache=cache, chunk=chunk, forwards=forwards, by_op=by_op)
     box = PERF_WORKLOAD.system_name
-    if box in PERF_TARGETS and CHUNK_TOKENS == DEFAULT_CHUNK_TOKENS:
-        expected_cache, target_ns = PERF_TARGETS[box][scenario]
-        if cache == expected_cache:
-            measured_ns = by_op["inclusive_ns"].sum()
-            limit_ns = target_ns * (1 + PERF_MARGIN)
-            logger.info(f"{box} {scenario} device time: {measured_ns:,.0f} ns; limit: {limit_ns:,.0f} ns")
-            assert (
-                measured_ns <= limit_ns
-            ), f"{box} {scenario} device time {measured_ns:,.0f} ns exceeds {limit_ns:,.0f} ns"
+    target_ns = PERF_TARGETS.get(box, {}).get(scenario)
+    measured_ns = by_op["inclusive_ns"].sum()
+    if target_ns is None:
+        logger.warning(f"{box} {scenario}: no perf target; device time {measured_ns:,.0f} ns is not gated")
+    elif not DEFAULT_SIZES:
+        logger.warning(f"{box} {scenario}: perf gate skipped because the cache or chunk size is overridden")
+    else:
+        limit_ns = target_ns * (1 + PERF_MARGIN)
+        logger.info(f"{box} {scenario} device time: {measured_ns:,.0f} ns; limit: {limit_ns:,.0f} ns")
+        assert measured_ns <= limit_ns, f"{box} {scenario} device time {measured_ns:,.0f} ns exceeds {limit_ns:,.0f} ns"
