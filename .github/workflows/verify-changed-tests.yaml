@@ -266,8 +266,11 @@ jobs:
         leg: ${{ fromJson(needs.scope.outputs.matrix) }}
     runs-on: ${{ matrix.leg.runs_on }}
     container:
+      # gate_llk_image wins outright: the generic dev image lacks LLK's pinned test
+      # deps. build-artifact already resolves that tag and builds it when missing.
       image: >-
-        ${{ (matrix.leg.gate_packages && matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.basic-dev-docker-image)
+        ${{ (matrix.leg.gate_llk_image && needs.build-default.outputs.llk-ci-docker-image)
+         || (matrix.leg.gate_packages && matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.basic-dev-docker-image)
          || (matrix.leg.gate_packages && needs.build-default.outputs.basic-dev-docker-image)
          || (matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.dev-docker-image)
          || needs.build-default.outputs.dev-docker-image
@@ -444,6 +447,15 @@ jobs:
               cd '${{ matrix.leg.gate_workdir }}'
               mkdir -p generated/test_reports
             fi
+            # What the owning pipeline runs before testing. Subshell, so its own
+            # `cd` does not move the ground under the cmd's.
+            SETUP=$(cat <<'GATE_SETUP_EOF'
+            ${{ matrix.leg.gate_setup }}
+            GATE_SETUP_EOF
+            )
+            if [[ -n "${SETUP//[[:space:]]/}" ]]; then
+              (set -euo pipefail; eval "$SETUP")
+            fi
             eval "$CMD"
 
       - name: ${{ matrix.leg.name }} (simulator)
@@ -468,6 +480,15 @@ jobs:
             if [[ -n '${{ matrix.leg.gate_workdir }}' ]]; then
               cd '${{ matrix.leg.gate_workdir }}'
               mkdir -p generated/test_reports
+            fi
+            # What the owning pipeline runs before testing. Subshell, so its own
+            # `cd` does not move the ground under the cmd's.
+            SETUP=$(cat <<'GATE_SETUP_EOF'
+            ${{ matrix.leg.gate_setup }}
+            GATE_SETUP_EOF
+            )
+            if [[ -n "${SETUP//[[:space:]]/}" ]]; then
+              (set -euo pipefail; eval "$SETUP")
             fi
             eval "$CMD"
 
