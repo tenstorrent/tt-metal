@@ -1234,6 +1234,39 @@ median chips 2.25-2.39; busiest chips L45c3 2.441 / 2.452, L11c9 2.473 / 2.559 (
 even. 56 experts' weights (1040 MB, 2.03 ms at 512 GB/s) dominate; compute (~0.19 us per row) only matters past ~12k
 rows per chip (~4.7x the mean).
 
+**12 x 10 grid: bh-lb-09 flashed Galaxy-like (2026-10-15).** All 8 P150Bs: fw 19.12.0 with tensix disable-count 1
+(scripts/setup_harvesting.py, chip type 2): ENABLED_TENSIX_COL 0xfff -> 0x1fff, 13 columns; fast-dispatch compute
+grid 11 x 10 -> 12 x 10 (a Galaxy chip's). Rollback: the stock bundle (tt-metal/p150b-19.12.0-stock-rollback.fwbundle).
+Numbers from here on are on 12 x 10. The extra column only adds down cores (38 vs 28; gate/up stays 64), which the
+weight-bound K3 does not use: E56 M 46 2.395 -> 2.445 ms, MIMO_FL_COLS=11 (down cores in 11 columns) 2.447.
+
+**K3 E56 (4x4 stage, ~46 rows per expert) on 12 x 10, ms per call at M 46:** default (dual DRISC) 2.445; weights only
+(no math, x resident) 2.193; compute only 0.705; no x reads 2.347; X1 2.334; DRISC off (Tensix readers) 2.365; DRISC
+pure 2.255; pure, weights only 2.054 (= 506 GB/s, 99% of DRAM: pure streams the weights at the ceiling). us / expert:
+
+| M | 32 | 46 | 64 | 96 | 128 | 192 | 256 | 384 | 512 |
+|---|---|---|---|---|---|---|---|---|---|
+| dual (old default) | 40.1 | 43.7 | 45.1 | 46.6 | 49.3 | 54.4 | 58.3 | 72.4 | 96.0 |
+| Tensix readers (DRISC off) | | 42.2 | | | 47.9 | 51.8 | 57.1 | 72.6 | |
+| pure | 39.2 | 40.3 | 41.2 | 44.1 | 46.7 | 54.1 | 61.2 | 72.7 | 96.3 |
+| pure + X1 | 39.4 | 40.6 | 41.3 | 43.1 | 44.6 | 59.4 | 74.4 | 105.8 | 137.2 |
+| pure, Tensix above 192 | | | | | 46.7 | 53.9 | 64.9 | 73.1 | |
+| pure, readers' assignment, Tensix above 96 (new default) | 39.3 | 40.4 | 41.4 | 44.7 | 47.9 | 51.8 | 56.9 | | 96.0 |
+
+Pure's own Tensix fallback was slow because pure assigns each slot's gate/up cores by NoC distance from its DRAM tile
+(`by_drisc`), so on a Tensix call every reader forwards to far cores (64.9 vs 57.1 at M 256); the readers' assignment
+(MIMO_FL_DRISC_ASSIGN=0) costs the DRISC calls ~0.1-0.2 us at M <= 64 and fixes the fallback. Two DRISC tiles past M
+224 (MIMO_FL_DRISC_ALT_MAXCNT 384 / 1024) do not help (M 256 62.4 / 62.6). X1 wins only to M 128 (one primary's
+tilize + double multicast limits it); not used. Other models with the new mode (us / expert, M 32 / 64 / 96 / 128 /
+192 / 256 / 512): K3 E12 dual 43.6 / 46.6 / 48.6 / 52.3 / 58.2 / 63.4 / 101.2 -> 41.5 / 44.3 / 48.5 / 49.5 / 55.0 / 60.0 /
+101.2; GLM-Flash 32.9 / 35.3 / 37.1 / 38.7 / 42.9 / 47.9 / 68.3 -> 33.3 / 33.8 / 36.1 / 38.2 / 42.9 / 46.4 / 68.3. Plans
+with reader down columns are better on dual: GLM 5.3 (H 6144, E32) dual 48.3 / 51.4 / 54.0 / 57.8 / 63.5 / 70.0 / 108.9,
+pure 50.6 / 52.7 / 54.1 / 57.3 / 62.7 / 72.6 / 107.7, pure + fallback 50.7 / 52.7 / 54.6 / 57.6 / 63.5 / 70.0 / 108.9 (K2.7
+E12 likewise: dual 56.2 vs pure 60.1 at M 32). New default (galaxy-unified `8555ecd8565`; 100k-call 2x4 stress bit-exact, no hang): pure DRISC with the readers' assignment
+and Tensix readers above 96 tokens per expert for plans without reader down columns, dual for the others
+(MIMO_FL_DRISC_PURE=0/1 forces). Outputs bit-identical across dual / pure-DRISC / pure-Tensix paths (K3, K2.7 y at M
+128).
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
