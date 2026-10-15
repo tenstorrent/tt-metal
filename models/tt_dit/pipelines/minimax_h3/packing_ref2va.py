@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import math
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -612,8 +613,25 @@ def _decode_soundtrack(av, container, stream) -> tuple[torch.Tensor, int]:
     return torch.cat(chunks, dim=-1).to(torch.float32), sample_rate
 
 
+def _reject_external_reference(url, flags, options):
+    raise ValueError("reference media must be self-contained; external references are unsupported")
+
+
+@contextmanager
+def _open_reference_media(av, path):
+    # Python opens exactly the caller's local file, without interpreting URL protocols.
+    # Deny all FFmpeg protocols, including file: concat creates child contexts that
+    # inherit the whitelist but not io_open. The callback also rejects secondary
+    # opens made directly by demuxers (e.g. HLS or MOV external tracks).
+    with open(path, "rb") as media:
+        with av.open(media, options={"protocol_whitelist": ""}, io_open=_reject_external_reference) as container:
+            yield container
+
+
 def decode_reference_video(path: str | os.PathLike) -> tuple[np.ndarray, float, tuple[torch.Tensor, int] | None]:
-    """Decode a video file into ``uint8`` RGB frames, its frame rate, and its soundtrack.
+    """Decode a self-contained local video into ``uint8`` RGB frames, its rate, and its soundtrack.
+
+    URLs, playlists and containers requiring other files are unsupported.
 
     The display-matrix rotation is undone, snapped to the nearest quarter turn,
     which is what ``ffmpeg`` does to display a frame upright. A non-square pixel
@@ -622,7 +640,7 @@ def decode_reference_video(path: str | os.PathLike) -> tuple[np.ndarray, float, 
     shape, and correcting it here would be untested guesswork.
     """
     av = _import_av()
-    with av.open(str(path)) as container:
+    with _open_reference_media(av, path) as container:
         stream = container.streams.video[0]
         frames, rotation = [], 0.0
         for frame in container.decode(stream):
@@ -652,9 +670,12 @@ def decode_reference_video(path: str | os.PathLike) -> tuple[np.ndarray, float, 
 
 
 def decode_reference_audio(path: str | os.PathLike) -> tuple[torch.Tensor, int]:
-    """Decode an audio file (or a video's soundtrack) into a waveform at its own sample rate."""
+    """Decode self-contained local audio (or a video's soundtrack) at its own sample rate.
+
+    URLs, playlists and containers requiring other files are unsupported.
+    """
     av = _import_av()
-    with av.open(str(path)) as container:
+    with _open_reference_media(av, path) as container:
         if not container.streams.audio:
             raise ValueError(f"no audio stream to decode in {path}")
         return _decode_soundtrack(av, container, container.streams.audio[0])
