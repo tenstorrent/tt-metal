@@ -362,8 +362,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if constexpr (full)
                 {
                     // ---- Epilogue: out = acc * s_a[m], written over the accumulated tiles ----
-                    // PACK0 posts once it has written the last group of this loop.
-                    _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_ZERO>(ACC_READY_SEM);
+                    // PACK0 posts once it has written the last group of this loop. STALL_SYNC holds
+                    // the SEMGET (it runs on the sync unit), STALL_UNPACK holds the epilogue reads.
+                    _llk_sync_wait_<p_stall::STALL_SYNC | p_stall::STALL_UNPACK, p_stall::STALL_ON_ZERO>(ACC_READY_SEM);
                     _llk_sync_get_(ACC_READY_SEM);
 
                     // s_a is laid out per output tile, so both reads share one L1 index (no SET between them).
@@ -461,10 +462,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    // The previous loop's epilogue rewrites these tiles through PACK1.
+                    // The previous loop's epilogue rewrites these tiles through PACK1. STALL_SYNC holds
+                    // the SEMGET, STALL_PACK holds the packs.
                     if (loop > 0)
                     {
-                        _llk_sync_wait_<p_stall::STALL_PACK, p_stall::STALL_ON_ZERO>(EPILOGUE_DONE_SEM);
+                        _llk_sync_wait_<p_stall::STALL_SYNC | p_stall::STALL_PACK, p_stall::STALL_ON_ZERO>(EPILOGUE_DONE_SEM);
                         _llk_sync_get_(EPILOGUE_DONE_SEM);
                     }
                 }
