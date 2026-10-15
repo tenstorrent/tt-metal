@@ -155,7 +155,7 @@ You oversee; the agents do the work. Every correction of the model's code, its k
 done reaches the agents as a note, so the fix and its lesson land where the next step and the next model find them.
 
 - **Feedback: a note.** `python -m models.demos.common.bringup.overseer note --spec <spec> --tasks '<glob>' [--roles
-  <role>] "<what is wrong; what to do or check>"`. Every open note heads the brief of every matching step; the agent
+  <role>] "<what is wrong; what to do or check>"` (repeat `--tasks` / `--roles` for more than one). Every open note heads the brief of every matching step; the agent
   acts on it and answers it in its knowledge-use report (done / n/a / disagree with evidence). Your watch wakes on
   `OVERSEER NOTE <id> DISAGREED` (read the evidence: accept it, or reword the note) and on `unanswered`. Close a note
   once it is settled (`overseer close OV-n --why "..."`); `overseer list` shows them all. Notes are for things the
@@ -227,8 +227,11 @@ Never:
 - run `tt-smi -r`, or use long timeouts for a device check (the box test takes seconds).
 
 Report briefly on each gate the person would care about; say plainly what you decided, stopped or rejected, and why.
-The orchestrator re-exports the dashboards after every gate; republish them (Artifact) when the person wants a
-link. When gates pass every few minutes, wait with the watch's `--quiet-passes` (problems only; its timeout prints the
+The orchestrator re-exports the dashboards after every gate. Publishing is yours: only an interactive session can
+publish to claude.ai (a `claude -p` run has no Artifact tool). Publish each style once (Artifact), record its link
+with `python -m models.demos.common.bringup.dashboard.links --spec <spec> set --style <style> --url <url>`; from then
+on the watch wakes you with `DASHBOARD STALE` when the local files are 15 minutes ahead of the last publish: publish
+every link (same file paths, or `url` from a new session), then `dashboard.links --spec <spec> published`. When gates pass every few minutes, wait with the watch's `--quiet-passes` (problems only; its timeout prints the
 progress) and report progress at each timeout instead of every gate.
 
 ### At the end

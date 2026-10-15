@@ -62,8 +62,15 @@ def last_event(log: Path) -> str:
 
 
 def watch(
-    run_dir: Path, timeout: float, poll: float = 15.0, quiet_gates: bool = False, out=print, quiet_passes=False
+    run_dir: Path,
+    timeout: float,
+    poll: float = 15.0,
+    quiet_gates: bool = False,
+    out=print,
+    quiet_passes=False,
+    stale=lambda: None,
 ) -> int:
+    """stale: returns a line when the published dashboard lags the local one (dashboard/links.py, F71)."""
     log = run_dir / "orchestrator.log"
     if not alive(run_dir):
         out(f"ORCHESTRATOR NOT RUNNING; last event: {last_event(log)}")
@@ -86,6 +93,10 @@ def watch(
         if not alive(run_dir):
             out(f"ORCHESTRATOR NOT RUNNING; last event: {last_event(log)}")
             return NOT_RUNNING
+        s = stale()
+        if s:
+            out(s)
+            return EVENT
         if time.monotonic() >= end:
             out(f"no event in {timeout:.0f} s; the orchestrator is running (re-arm the watch)")
             return TIMEOUT
@@ -103,6 +114,7 @@ def main(argv=None) -> int:
         "--quiet-passes", action="store_true", help="skip gate PASS lines (problems only; the timeout reports progress)"
     )
     a = ap.parse_args(argv)
+    stale = lambda: None  # noqa: E731
     if a.run_dir:
         run_dir = Path(a.run_dir)
     else:
@@ -112,7 +124,10 @@ def main(argv=None) -> int:
 
         spec = Spec.load(a.spec)
         run_dir = spec.run_dir(run_name(Ledger(spec.bringup_dir)))
-    rc = watch(run_dir, a.timeout, a.poll, a.quiet_gates, quiet_passes=a.quiet_passes)
+        from models.demos.common.bringup.dashboard import links as LK
+
+        stale = lambda: LK.stale(spec.bringup_dir)  # noqa: E731
+    rc = watch(run_dir, a.timeout, a.poll, a.quiet_gates, quiet_passes=a.quiet_passes, stale=stale)
     if rc == TIMEOUT:
         log = (
             (run_dir / "orchestrator.log").read_text(errors="replace")
