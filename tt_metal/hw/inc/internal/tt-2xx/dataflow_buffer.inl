@@ -21,7 +21,9 @@
 
 #include <type_traits>
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
+// MATH and ISOLATE_SFPU TRISCs own no DFB state (g_dfb_interface exists only on UNPACK/PACK; see trisc.cc),
+// so both carry only logical_dfb_id_ and no-op the sync / runtime-interface accessors.
+#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU))
 #define DFB_IS_COMPUTE_MATH 1
 #else
 #define DFB_IS_COMPUTE_MATH 0
