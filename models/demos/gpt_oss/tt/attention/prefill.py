@@ -75,7 +75,9 @@ def prefill_forward(
         raise ValueError(f"Prefill mode requires seq_len>1, got {seq_len}. Use decode mode for single tokens.")
 
     # QKV projection
-    xqkv_fused = apply_qkv_projection(hidden_states, weights)
+    xqkv_fused = apply_qkv_projection(
+        hidden_states, weights, program_config.get_prefill_proj_config(mesh_device, "qkv", hidden_states, weights.wqkv)
+    )
     hidden_states.deallocate(True)  # Free input activations after projection
 
     # Reshape for batch: [1, 1, B*S, QKV] -> [B, 1, S, QKV]
@@ -184,11 +186,21 @@ def prefill_forward(
         tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
     elif mesh_config.tp > 1 and weights.o_proj_prefill is not None:
         tt_out_result = apply_output_projection_allreduce_prefill(
-            tt_sdpa_out, weights, activation_dtype, mesh_config, ccl_manager
+            tt_sdpa_out,
+            weights,
+            activation_dtype,
+            mesh_config,
+            ccl_manager,
+            program_config.get_prefill_proj_config(mesh_device, "o", tt_sdpa_out, weights.o_proj_prefill),
         )
         tt_sdpa_out.deallocate(True)
     else:
-        tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
+        tt_out = apply_output_projection(
+            tt_sdpa_out,
+            weights,
+            activation_dtype,
+            program_config=program_config.get_prefill_proj_config(mesh_device, "o", tt_sdpa_out, weights.o_proj),
+        )
         tt_sdpa_out.deallocate(True)
         tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
     return tt_out_result

@@ -45,3 +45,5 @@ class GPTOSSAttentionProgramConfig(ProgramConfig):
     decode_out_cores: tuple[int, int] | None = None
     prefill_qkv_cores: tuple[int, int] | None = None
     prefill_out_cores: tuple[int, int] | None = None
+    # Prefill QKV / o_proj 2D multicast configs on Blackhole (attention/config.py prefill_proj_program_config).
+    prefill_proj_2d: bool = True

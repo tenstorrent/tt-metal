@@ -27,6 +27,59 @@ class AttentionConfig:
             self.scaling = self.head_dim**-0.5
 
 
+# Prefill QKV / o_proj 2D multicast matmul geometry per role: (grid columns, N tiles per core, in0_block_w). The ttnn
+# default for these shapes picks in0_block_w=1 (one K tile per multicast step); in0_block_w 8-9 and an out_block_h of at
+# most 32 tiles measured QKV 0.35 -> 0.24 ms at S = 8192 and 1.54 -> 1.01 ms at 32768, o_proj 0.31 -> 0.24 and
+# 1.44 -> 1.00 ms (BH, per-device 1x4 shapes, l11/probe_mm.py). Keyed by the per-device (K, N) of each projection.
+PREFILL_PROJ_2D = {
+    "qkv": (10, 4, 9),  # [S, 2880] x [2880, 1280]: N = 40 tiles over 10 columns, K = 90 tiles
+    "o": (9, 10, 8),  # [S, 1024] x [1024, 2880]: N = 90 tiles over 9 columns, K = 32 tiles
+}
+PREFILL_PROJ_L1_BYTES = 1_100_000
+
+
+def prefill_proj_program_config(grid, m_tiles, k_tiles, n_tiles, role):
+    """2D multicast program config for a prefill projection of m_tiles x k_tiles x n_tiles (bf8 in0 and weight), or
+    None when the role's geometry does not fit (other shapes or a smaller grid keep the ttnn default).
+
+    M splits over at most grid.y rows. out_block_h is the largest divisor of per_core_M (at most 32) whose circular
+    buffers (in0 + in1 double-buffered, output + bf16 intermediate block) fit PREFILL_PROJ_L1_BYTES; when that leaves
+    fewer than 12 rows, per_core_M is rounded up (up to 8 tiles) to a value with a larger such divisor
+    (out_block_h = 1 measured 2-3x slower, and in0_block_w 8 with the whole 26-tile block overflows L1 at S = 8192)."""
+    gx, pcn, kb = PREFILL_PROJ_2D[role]
+    if gx > grid.x or gx * pcn != n_tiles or k_tiles % kb:
+        return None
+    out_tile = 2048 if role == "qkv" else 1088  # QKV writes bf16, o_proj bf8
+
+    def block_h(pcm):
+        for obh in range(min(pcm, 32), 0, -1):
+            l1 = obh * kb * 2 * 1088 + kb * pcn * 2 * 1088 + obh * pcn * (out_tile + 2048)
+            if pcm % obh == 0 and l1 <= PREFILL_PROJ_L1_BYTES:
+                return obh
+        return 1
+
+    pcm = -(-m_tiles // grid.y)
+    obh = block_h(pcm)
+    if obh < 12 and pcm > 12:
+        pcm, obh = max(((p, block_h(p)) for p in range(pcm, pcm + 9)), key=lambda t: (t[1], -t[0]))
+    gy = -(-m_tiles // pcm)
+    sw = 4 if pcn % 4 == 0 else 2 if pcn % 2 == 0 else 1
+    sh = next(h for h in (4, 2, 1) if obh % h == 0 and h * sw <= 8)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=kb,
+        out_subblock_h=sh,
+        out_subblock_w=sw,
+        out_block_h=obh,
+        out_block_w=pcn,
+        per_core_M=pcm,
+        per_core_N=pcn,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
+
 @dataclass
 class ProgramConfig:
     """
@@ -85,6 +138,10 @@ class ProgramConfig:
     prefill_out_in0_block_w: int = 1
     prefill_out_out_subblock_h: int = 1
     prefill_out_out_subblock_w: int = 1
+
+    # Prefill QKV / o_proj on Blackhole: 2D multicast program configs from prefill_proj_program_config instead of the
+    # ttnn default (False keeps the default everywhere).
+    prefill_proj_2d: bool = False
 
     def __post_init__(self):
         """Validate configuration on creation"""
@@ -162,6 +219,23 @@ class ProgramConfig:
         if self.prefill_sdpa_math_fidelity is not None and ttnn.device.is_blackhole(mesh_device):
             fidelity = self.prefill_sdpa_math_fidelity
         return self.get_compute_kernel_config(fidelity)
+
+    def get_prefill_proj_config(self, mesh_device, role: str, x, weight):
+        """Program config of the prefill QKV (role "qkv") or o_proj ("o") linear of x [1, 1, M, K] by weight [K, N]:
+        a 2D multicast config on Blackhole when prefill_proj_2d is set and the shape matches the role's geometry,
+        else None (ttnn default)."""
+        if not self.prefill_proj_2d or not ttnn.device.is_blackhole(mesh_device):
+            return None
+        shape = x.padded_shape
+        if any(shape[i] != 1 for i in range(len(shape) - 2)):
+            return None
+        return prefill_proj_program_config(
+            mesh_device.compute_with_storage_grid_size(),
+            shape[-2] // ttnn.TILE_SIZE,
+            shape[-1] // ttnn.TILE_SIZE,
+            weight.padded_shape[-1] // ttnn.TILE_SIZE,
+            role,
+        )
 
     def get_compute_kernel_config(self, math_fidelity: str | None = None) -> ttnn.WormholeComputeKernelConfig:
         """Get compute kernel config (math_fidelity overrides the configured fidelity)"""

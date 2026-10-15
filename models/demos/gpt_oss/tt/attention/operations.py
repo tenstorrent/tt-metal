@@ -8,18 +8,21 @@ import ttnn
 from .weights import AttentionWeights
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights):
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, program_config=None):
     """
     Apply QKV projection and add bias.
 
     Args:
         hidden_states: Input tensor [batch, seq_len, hidden_size]
         weights: Attention weights container
+        program_config: matmul program config (None: ttnn default)
 
     Returns:
         Fused QKV tensor [batch, seq_len, total_qkv_dim]
     """
-    xqkv_fused = ttnn.linear(hidden_states, weights.wqkv, bias=weights.wqkv_bias, dtype=ttnn.bfloat16)
+    xqkv_fused = ttnn.linear(
+        hidden_states, weights.wqkv, bias=weights.wqkv_bias, dtype=ttnn.bfloat16, program_config=program_config
+    )
     return xqkv_fused
 
 
@@ -98,7 +101,7 @@ def concat_heads(tensor, is_decode_mode: bool):
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype, unpadded=False):
+def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype, unpadded=False, program_config=None):
     """
     Apply output projection and bias.
 
@@ -107,6 +110,7 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype,
         weights: Attention weights container
         activation_dtype: Target dtype for output
         unpadded: use the prefill o_proj without the CCL padding columns (weights.o_proj_prefill)
+        program_config: matmul program config (None: ttnn default)
 
     Returns:
         Output tensor after projection
@@ -114,13 +118,13 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype,
     w, b = (weights.o_proj_prefill, weights.o_proj_bias_prefill) if unpadded else (weights.o_proj, weights.o_proj_bias)
     tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
     # Bias fused into the matmul (one pass over the output instead of a separate in-place add).
-    out = ttnn.linear(tensor, w, bias=b, dtype=activation_dtype)
+    out = ttnn.linear(tensor, w, bias=b, dtype=activation_dtype, program_config=program_config)
     tensor.deallocate(True)
     return out
 
 
 def apply_output_projection_allreduce_prefill(
-    tensor, weights: AttentionWeights, activation_dtype, mesh_config, ccl_manager
+    tensor, weights: AttentionWeights, activation_dtype, mesh_config, ccl_manager, program_config=None
 ):
     """Prefill o_proj on the unpadded weight, then one TP all_reduce over the full hidden width.
 
@@ -133,7 +137,7 @@ def apply_output_projection_allreduce_prefill(
     it falls back to the composite all-gather + local sum: still correct, but slower and with a TP-times larger
     intermediate.
     """
-    out = apply_output_projection(tensor, weights, activation_dtype, unpadded=True)
+    out = apply_output_projection(tensor, weights, activation_dtype, unpadded=True, program_config=program_config)
     reduced = ttnn.all_reduce(
         out,
         num_links=ccl_manager.num_links,
