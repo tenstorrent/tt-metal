@@ -38,17 +38,18 @@ SS_COL = PACK_N * (PACK_N + 2)
 
 class TtDistributedRmsNorm:
     """One column-split RMSNorm. Call with the per-chip [1, 1, S/SP, H/TP] fp32 TILE; returns [1, 1, S/SP, H/TP]
-    fp32 TILE (same split). Does not consume its input."""
+    fp32 TILE (same split). Does not consume its input. ``split=False``: the rows are whole on every chip ([.., H],
+    replicated over TP, e.g. q_norm / kv_norm): the same chain with a replicated weight and no exchange."""
 
-    def __init__(self, mesh, weight: torch.Tensor, eps: float):
+    def __init__(self, mesh, weight: torch.Tensor, eps: float, split: bool = True):
         hidden = weight.numel()
-        tp = mesh.shape[TP_AXIS]
+        tp = mesh.shape[TP_AXIS] if split else 1
         assert hidden % (32 * tp) == 0, f"hidden {hidden} does not split into tiles over TP {tp}"
-        self.mesh, self.hidden, self.eps = mesh, hidden, float(eps)
+        self.mesh, self.hidden, self.eps, self.split, self.tp = mesh, hidden, float(eps), split, tp
         self.inv_h = 1.0 / float(hidden)
         # w as [1, 1, 1, H] fp32 TILE, the last dim split over the TP axis (chip column c holds w[c H/TP, (c+1) H/TP)),
-        # replicated over the SP axis.
-        dims = (None, 3) if TP_AXIS == 1 else (3, None)
+        # replicated over the SP axis; split=False: replicated everywhere.
+        dims = ((None, 3) if TP_AXIS == 1 else (3, None)) if split else (None, None)
         self.weight = ttnn.from_torch(
             weight.float().reshape(1, 1, 1, hidden).contiguous(),
             dtype=ttnn.float32,
@@ -66,8 +67,11 @@ class TtDistributedRmsNorm:
         ttnn.deallocate(mix)
         part = ttnn.slice(packed, [0, 0, 0, SS_COL], [1, 1, rows, SS_COL + 1], memory_config=DRAM)
         ttnn.deallocate(packed)
-        ss = tp_sum(self.mesh, part)
-        ttnn.deallocate(part)
+        if self.split:
+            ss = tp_sum(self.mesh, part)
+            ttnn.deallocate(part)
+        else:
+            ss = part
         ms = ttnn.multiply(ss, self.inv_h, dtype=ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(ss)
         t = ttnn.add(ms, self.eps, dtype=ttnn.float32, memory_config=DRAM)
@@ -78,7 +82,7 @@ class TtDistributedRmsNorm:
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         assert x.dtype == ttnn.float32, x.dtype
-        assert x.shape[-1] * self.mesh.shape[TP_AXIS] == self.hidden, (x.shape, self.hidden)
+        assert x.shape[-1] * self.tp == self.hidden, (x.shape, self.hidden)
         rs = self.rstd(x)
         xn = ttnn.multiply(x, rs, dtype=ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(rs)
