@@ -5,6 +5,7 @@
 
 from dataclasses import dataclass
 
+import ttnn
 from models.demos.gpt_oss.tt.experts.config import ProgramConfig
 
 
@@ -35,7 +36,9 @@ class GPTOSSProgramConfig(ProgramConfig):
 
 # One device (TP=1): prefill computes all 90 output tile columns of every expert on one chip. Spread them over 90
 # cores (one column per core, same K blocks) where the grid allows (Blackhole 11x10): measured on one P150 with BFP8
-# experts, 2x faster expert prefill than the 12 / 30-core defaults (ISL 1024: 95 vs 187 ms per layer).
+# experts, 2x faster expert prefill than the 12 / 30-core defaults (ISL 1024: 95 vs 187 ms per layer). The expert
+# activations stay BF16 between the prefill matmuls on one chip: with BFP8 ones the teacher-forced decode top-1 against
+# the HuggingFace reference was 0.8 points lower (accuracy_quick, 512 positions).
 TP1_PREFILL_GATE_UP_CORES = (10, 9)
 TP1_PREFILL_DOWN_CORES = (9, 10)
 
@@ -48,6 +51,8 @@ def gpt_oss_program_config(mesh_device, mesh_config):
     )
     if mesh_config is not None and mesh_config.prefill.tp == 1 and mesh_device.get_num_devices() == 1 and fits:
         return GPTOSSProgramConfig(
-            prefill_gate_up_cores=TP1_PREFILL_GATE_UP_CORES, prefill_down_cores=TP1_PREFILL_DOWN_CORES
+            prefill_gate_up_cores=TP1_PREFILL_GATE_UP_CORES,
+            prefill_down_cores=TP1_PREFILL_DOWN_CORES,
+            prefill_activation_dtype=ttnn.bfloat16,
         )
     return GPTOSSProgramConfig()

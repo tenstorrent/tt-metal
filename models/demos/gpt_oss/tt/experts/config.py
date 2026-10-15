@@ -55,6 +55,9 @@ class ProgramConfig:
     prefill_gate_up_cores: tuple[int, int] = (3, 4)
     prefill_down_cores: tuple[int, int] = (5, 6)
 
+    # dtype of the prefill gate / up / down matmul outputs (the activations between them)
+    prefill_activation_dtype: ttnn.DataType = ttnn.bfloat8_b
+
     # Sparse matmul subblock widths
     decode_gate_up_subblock_w: int = 1
     decode_down_subblock_w: int = 1
