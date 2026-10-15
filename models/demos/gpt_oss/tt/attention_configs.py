@@ -19,11 +19,21 @@ class GPTOSSAttentionProgramConfig(ProgramConfig):
 
     # SDPA chunk sizes
     decode_k_chunk_size: int = 128
-    prefill_q_chunk_size_small: int = 32
-    prefill_k_chunk_size_small: int = 32
-    prefill_q_chunk_size_large: int = 256
-    prefill_k_chunk_size_large: int = 256
-    prefill_threshold: int = 2048
+    # Prefill SDPA chunks (min_seq_len, q_chunk, k_chunk) for the full-attention and the sliding-window (128) layers.
+    # From 4K up: the fastest config of a standalone sweep of the op at the 1x4 per-device shapes (16 Q / 2 KV heads,
+    # head_dim 64, sink, bf16 Q, bf8 K/V, HiFi4) on the full Blackhole grid (11x10), 4K-64K. Below 4K the original
+    # 32/32 and 256/256 stay: the run is host-bound there and smaller chunks gave no measurable TTFT gain.
+    prefill_chunk_regimes: tuple[tuple[int, int, int], ...] | None = (
+        (0, 32, 32),
+        (2048, 256, 256),
+        (4096, 128, 512),
+        (16384, 256, 1024),
+    )
+    prefill_sliding_chunk_regimes: tuple[tuple[int, int, int], ...] | None = (
+        (0, 32, 32),
+        (2048, 256, 256),
+        (4096, 128, 128),
+    )
 
     # Matmul configs - None = auto-optimize (recommended)
     decode_qkv_cores: tuple[int, int] | None = None

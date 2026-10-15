@@ -150,7 +150,7 @@ def prefill_forward(
         tt_v,
         is_causal=True,
         sliding_window_size=config.sliding_window,
-        program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len),
+        program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len, config.sliding_window),
         compute_kernel_config=program_config.get_compute_kernel_config(),
         attention_sink=weights.sinks,
     )

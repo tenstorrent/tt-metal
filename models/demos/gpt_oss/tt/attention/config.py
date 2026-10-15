@@ -46,6 +46,12 @@ class ProgramConfig:
     prefill_q_chunk_size_large: int = 256
     prefill_k_chunk_size_large: int = 256
     prefill_threshold: int = 2048
+    # Optional per-length chunks for full-attention layers, replacing the small/large rule above when set:
+    # ((min_seq_len, q_chunk, k_chunk), ...) with ascending min_seq_len starting at 0; the last entry whose
+    # min_seq_len <= seq_len applies.
+    prefill_chunk_regimes: tuple[tuple[int, int, int], ...] | None = None
+    # Same format, for sliding-window layers; None uses the full-attention chunks.
+    prefill_sliding_chunk_regimes: tuple[tuple[int, int, int], ...] | None = None
 
     # Compute config
     math_fidelity: str = "HiFi4"
@@ -92,6 +98,16 @@ class ProgramConfig:
         if self.prefill_threshold <= 0:
             raise ValueError("Prefill threshold must be positive")
 
+        for name in ("prefill_chunk_regimes", "prefill_sliding_chunk_regimes"):
+            regimes = getattr(self, name)
+            if regimes is None:
+                continue
+            starts = [r[0] for r in regimes]
+            if not starts or starts[0] != 0 or starts != sorted(set(starts)):
+                raise ValueError(f"{name} must start at 0 and ascend: {regimes}")
+            if any(q <= 0 or k <= 0 for _, q, k in regimes):
+                raise ValueError(f"{name} chunk sizes must be positive: {regimes}")
+
         # Validate math_fidelity
         valid_fidelities = ["LoFi", "HiFi2", "HiFi3", "HiFi4"]
         if self.math_fidelity not in valid_fidelities:
@@ -106,9 +122,14 @@ class ProgramConfig:
             exp_approx_mode=False,
         )
 
-    def get_prefill_sdpa_config(self, mesh_device, seq_len: int) -> ttnn.SDPAProgramConfig:
-        """Get SDPA config for prefill mode based on sequence length"""
-        if seq_len >= self.prefill_threshold:
+    def get_prefill_sdpa_config(self, mesh_device, seq_len: int, sliding_window=None) -> ttnn.SDPAProgramConfig:
+        """Get SDPA config for prefill mode based on sequence length and layer type (sliding_window set or None)"""
+        regimes = self.prefill_chunk_regimes
+        if sliding_window is not None and self.prefill_sliding_chunk_regimes is not None:
+            regimes = self.prefill_sliding_chunk_regimes
+        if regimes is not None:
+            _, q_chunk, k_chunk = [r for r in regimes if r[0] <= seq_len][-1]
+        elif seq_len >= self.prefill_threshold:
             q_chunk = self.prefill_q_chunk_size_large
             k_chunk = self.prefill_k_chunk_size_large
         else:
