@@ -8,7 +8,7 @@ and tied LM head turn them into logits, and two runs (or a run and a reference) 
 ΔNLL of the gold next token, top-1 agreement, and KL over the reference's top-k plus a tail bucket. The last
 prompt position, whose logits are a served request's first output token, is reported on its own.
 
-    python -m models.demos.gemma4_d_p.tt.runners.likelihood REFERENCE CANDIDATE
+    python -m models.demos.gemma4_d_p.tests.scripts.likelihood REFERENCE CANDIDATE
 
 Each argument is a directory or file holding ``hidden_samples.safetensors`` (a TT run or a CPU reference). The
 reference may instead be a GPU trace directory, whose final-layer stream covers every position; the candidate's saved

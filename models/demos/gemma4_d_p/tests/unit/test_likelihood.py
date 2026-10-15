@@ -7,8 +7,8 @@ import math
 import torch
 from safetensors.torch import save_file
 
-from models.demos.gemma4_d_p.tt.runners import likelihood
-from models.demos.gemma4_d_p.tt.runners.likelihood import (
+from models.demos.gemma4_d_p.tests.scripts import likelihood
+from models.demos.gemma4_d_p.tests.scripts.likelihood import (
     HiddenSampler,
     Samples,
     check_limits,

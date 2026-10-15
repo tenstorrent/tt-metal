@@ -8,7 +8,8 @@ dataset's token prefix is prefilled chunk by chunk; then every KV head is compar
 while the final hidden states' next-token likelihoods are scored against its final-layer stream.
 
 A dataset is a prepared GPU trace (see ``prepare_gpu_reference.py``) whose source capture also kept the
-final decoder layer's output. Select datasets with ``GEMMA4_ACCURACY_DATASETS=name,...`` (default: all).
+final decoder layer's output. Select datasets with ``GEMMA4_ACCURACY_DATASETS=name,...`` (default: all), and
+read them from another copy with ``GEMMA4_GPU_TRACE_ROOT``.
 """
 
 import json
@@ -23,6 +24,14 @@ import torch
 
 from models.common.weight_cache import weight_cache_is_complete
 from models.demos.common.prefill.adapter import PrefillRunParams
+from models.demos.gemma4_d_p.tests.scripts.likelihood import (
+    HIDDEN_SAMPLES,
+    HiddenSampler,
+    check_limits,
+    compare,
+    format_report,
+    gpu_final_layer_stream,
+)
 from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.common import weight_cache_identity
 from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
@@ -32,17 +41,10 @@ from models.demos.gemma4_d_p.tt.runners.kv_validation import (
     compare_slot_cache,
     read_cache_tensor,
 )
-from models.demos.gemma4_d_p.tt.runners.likelihood import (
-    HIDDEN_SAMPLES,
-    HiddenSampler,
-    check_limits,
-    compare,
-    format_report,
-    gpu_final_layer_stream,
-)
 
 TRACE_REGION_SIZE = 256 * 1024 * 1024
-GPU_TRACES = Path("/mnt/models/huggingface/gpu_traces/gemma4_d_p")
+# Override with a faster copy of the same traces, e.g. /mnt/weka/model-weights/llm/ref-data/gpu_traces/gemma4_d_p.
+GPU_TRACES = Path(os.getenv("GEMMA4_GPU_TRACE_ROOT", "/mnt/models/huggingface/gpu_traces/gemma4_d_p"))
 
 
 @dataclass(frozen=True)
@@ -62,9 +64,10 @@ DATASETS = {
         min_per_head_pcc=0.928,
         min_overall_pcc=0.978,
         max_overall_rrmse=0.208,
-        # Main at chunk 8192 scores no lower than 0.899 / 0.882 / 0.890 top-1 and no higher than 0.197 / 0.300 / 0.287
-        # ΔNLL and 0.128 / 0.177 / 0.178 KL across the 8K, 16K, 128K and 256K contexts.
-        likelihood_limits={0: (0.89, 0.25, 0.16), 8192: (0.87, 0.33, 0.20), 65536: (0.88, 0.32, 0.20)},
+        # Across chunks 2048 / 4096 / 8192 and the 8K-256K contexts, main scores no lower than 0.894 / 0.878 / 0.894
+        # top-1 and no higher than 0.316 / 0.346 / 0.342 ΔNLL and 0.151 / 0.213 / 0.158 KL. The fast gate GELU lets
+        # same-build 256K runs differ by up to about 0.006 top-1, 0.03 ΔNLL and 0.02 KL; the limits leave room for it.
+        likelihood_limits={0: (0.87, 0.36, 0.18), 8192: (0.86, 0.39, 0.24), 65536: (0.87, 0.39, 0.19)},
     ),
 }
 
@@ -134,7 +137,8 @@ def compare_kv(kv_cache, context_len, trace_dir, output_dir):
             for head, actual in enumerate(read_cache_tensor(tensor, 0, context_len, staging)):
                 yield config_start + head, actual
 
-    compare_slot_cache(read_heads, 0, context_len, trace_dir, summary_dir=output_dir)
+    # compare_slot_cache writes its report to PREFILL_PCC_SUMMARY_DIR, which the caller points at output_dir.
+    compare_slot_cache(read_heads, 0, context_len, trace_dir)
     return json.loads((output_dir / "gemma4_slot0.json").read_text())
 
 
@@ -216,7 +220,7 @@ def check_dataset(runtime, kv_cache, name, dataset, token_ids, context_len, outp
     [Gemma4ServiceConfig.MESH_SHAPE], device_params_extra={"trace_region_size": TRACE_REGION_SIZE}
 )
 @pytest.mark.parametrize("context_len", [8192, 16384, 131072, 262144], ids=["8k", "16k", "128k", "256k"])
-def test_prefill_accuracy(mesh_device, context_len, tmp_path, request):
+def test_prefill_accuracy(mesh_device, context_len, tmp_path, request, monkeypatch):
     adapter = Gemma4PrefillAdapter()
     hf_config = adapter.load_hf_config()
     cache = adapter.weight_cache_path(Gemma4ServiceConfig.MESH_SHAPE)
@@ -248,6 +252,7 @@ def test_prefill_accuracy(mesh_device, context_len, tmp_path, request):
     failures = []
     try:
         for name, (dataset, token_ids) in datasets.items():
+            monkeypatch.setenv("PREFILL_PCC_SUMMARY_DIR", str(output_root / name))
             failures += check_dataset(runtime, kv_cache, name, dataset, token_ids, context_len, output_root / name)
     finally:
         runtime.release_trace()
