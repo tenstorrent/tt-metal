@@ -1,0 +1,181 @@
+{
+ "metrics": {
+  "auto_moe_add_L00_big_bias": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_big_ratio_max": {
+   "t": "2026-10-15T19:00:14",
+   "value": 1.0
+  },
+  "auto_moe_add_L00_big_ratio_min": {
+   "t": "2026-10-15T19:00:14",
+   "value": 1.0
+  },
+  "auto_moe_add_L00_big_rel": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_big_rel_limit": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.03
+  },
+  "auto_moe_add_L00_big_row": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_layer24_bias": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_layer24_ratio_max": {
+   "t": "2026-10-15T19:00:14",
+   "value": 1.0
+  },
+  "auto_moe_add_L00_layer24_ratio_min": {
+   "t": "2026-10-15T19:00:14",
+   "value": 1.0
+  },
+  "auto_moe_add_L00_layer24_rel": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_layer24_rel_limit": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.03
+  },
+  "auto_moe_add_L00_layer24_row": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_mixed_bias": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_mixed_ratio_max": {
+   "t": "2026-10-15T19:00:14",
+   "value": 1.0
+  },
+  "auto_moe_add_L00_mixed_ratio_min": {
+   "t": "2026-10-15T19:00:14",
+   "value": 1.0
+  },
+  "auto_moe_add_L00_mixed_rel": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_mixed_rel_limit": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.03
+  },
+  "auto_moe_add_L00_mixed_row": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_small_bias": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_small_ratio_max": {
+   "t": "2026-10-15T19:00:14",
+   "value": 1.0
+  },
+  "auto_moe_add_L00_small_ratio_min": {
+   "t": "2026-10-15T19:00:14",
+   "value": 1.0
+  },
+  "auto_moe_add_L00_small_rel": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_small_rel_limit": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.03
+  },
+  "auto_moe_add_L00_small_row": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_vs_cpu_bias": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_vs_cpu_col": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_vs_cpu_col_index": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0
+  },
+  "auto_moe_add_L00_vs_cpu_col_limit": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.014186963438987732
+  },
+  "auto_moe_add_L00_vs_cpu_ratio_max": {
+   "t": "2026-10-15T19:00:14",
+   "value": 1.0
+  },
+  "auto_moe_add_L00_vs_cpu_ratio_min": {
+   "t": "2026-10-15T19:00:14",
+   "value": 1.0
+  },
+  "auto_moe_add_L00_vs_cpu_rel": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_vs_cpu_rel_limit": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.003546740859746933
+  },
+  "auto_moe_add_L00_vs_cpu_row": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0
+  },
+  "auto_moe_add_L00_vs_golden_bias": {
+   "t": "2026-10-15T19:00:14",
+   "value": 7.748603820800781e-06
+  },
+  "auto_moe_add_L00_vs_golden_col": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.002554292557761073
+  },
+  "auto_moe_add_L00_vs_golden_col_index": {
+   "t": "2026-10-15T19:00:14",
+   "value": 2086
+  },
+  "auto_moe_add_L00_vs_golden_col_limit": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.023087631911039352
+  },
+  "auto_moe_add_L00_vs_golden_ratio_max": {
+   "t": "2026-10-15T19:00:14",
+   "value": 1.0018726587295532
+  },
+  "auto_moe_add_L00_vs_golden_ratio_min": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.9981634020805359
+  },
+  "auto_moe_add_L00_vs_golden_rel": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0022251668851822615
+  },
+  "auto_moe_add_L00_vs_golden_rel_limit": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0057719077449291945
+  },
+  "auto_moe_add_L00_vs_golden_row": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.0038705654442310333
+  },
+  "det_moe_add_L00": {
+   "t": "2026-10-15T19:00:16",
+   "value": 1.0
+  },
+  "pcc_moe_add_L00": {
+   "t": "2026-10-15T19:00:14",
+   "value": 0.999997521172099
+  }
+ },
+ "task": "C.swa.moe_add"
+}
