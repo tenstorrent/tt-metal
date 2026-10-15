@@ -323,17 +323,12 @@ inline void run_axis(
     hout::append_placement(
         placement,
         drisc ? "drisc" : "erisc",
-        {
-            .logical =
-                std::array<uint32_t, 2>{
-                    static_cast<uint32_t>(target.logical_core.x), static_cast<uint32_t>(target.logical_core.y)},
-            .virt = std::array<uint32_t, 2>{target.virtual_core.x(), target.virtual_core.y()},
-            .noc0 = hexec::noc0_at(
-                x280::harness::cluster(),
-                fixture.tile_id.chip_id,
-                ttm::CoreCoord{target.virtual_core.x(), target.virtual_core.y()}),
-            .noc = static_cast<uint32_t>(target.noc),
-        });
+        hexec::placement_at(
+            x280::harness::cluster(),
+            fixture.tile_id.chip_id,
+            target.logical_core,
+            ttm::CoreCoord{target.virtual_core.x(), target.virtual_core.y()},
+            static_cast<uint32_t>(target.noc)));
     if (drisc) {
         placement.insert(
             placement.end(),

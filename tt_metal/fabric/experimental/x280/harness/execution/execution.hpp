@@ -25,6 +25,7 @@
 #include "x280/device/x280_runtime.hpp"
 #include "harness/targets/x280_tile.hpp"
 #include "harness/measurement/measurement.hpp"
+#include "harness/output/output.hpp"
 #include "kernels/shared/tensix_live_timer.h"
 #include "internal/ethernet/tt_eth_ss_regs.h"
 #include "llrt/tt_cluster.hpp"
@@ -116,6 +117,23 @@ inline std::array<uint32_t, 2> noc0_at(const tt::Cluster& cluster, int chip, con
     }
     const auto noc0 = soc.translate_coord_to(found, tt::CoordSystem::NOC0);
     return {static_cast<uint32_t>(noc0.x), static_cast<uint32_t>(noc0.y)};
+}
+
+// The core at `logical` and translated `virt` on `chip`, issuing on `noc`, as
+// records place it: its NoC0 coordinate from noc0_at(), which throws for a
+// translated coordinate the descriptor does not resolve.
+inline x280::harness::output::CorePlacement placement_at(
+    const tt::Cluster& cluster,
+    int chip,
+    const tt::tt_metal::CoreCoord& logical,
+    const tt::tt_metal::CoreCoord& virt,
+    uint32_t noc) {
+    return {
+        .logical = std::array<uint32_t, 2>{static_cast<uint32_t>(logical.x), static_cast<uint32_t>(logical.y)},
+        .virt = std::array<uint32_t, 2>{static_cast<uint32_t>(virt.x), static_cast<uint32_t>(virt.y)},
+        .noc0 = noc0_at(cluster, chip, virt),
+        .noc = noc,
+    };
 }
 
 // The translated core AICLK evidence for a workload at translated `core`

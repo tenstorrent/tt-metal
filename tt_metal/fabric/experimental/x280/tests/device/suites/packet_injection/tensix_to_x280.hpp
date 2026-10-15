@@ -653,19 +653,12 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
                     tensix_to_x280_worker(
                         run,
                         {.index = w, .slot = consumer_slots[w], .lim_dump = lim_dump, .producer = producer_res[w]},
-                        {
-                            .logical =
-                                std::array<uint32_t, 2>{
-                                    cfg.ordered_tiles[tile_index].x, cfg.ordered_tiles[tile_index].y},
-                            .virt =
-                                std::array<uint32_t, 2>{
-                                    plan.translated[tile_index].x(), plan.translated[tile_index].y()},
-                            .noc0 = hexec::noc0_at(
-                                x280::harness::cluster(),
-                                f.tile_id.chip_id,
-                                ttm::CoreCoord{plan.translated[tile_index].x(), plan.translated[tile_index].y()}),
-                            .noc = static_cast<uint32_t>(kRiscNoc.at(pi_worker_risc_index(&L, w))),
-                        },
+                        hexec::placement_at(
+                            x280::harness::cluster(),
+                            f.tile_id.chip_id,
+                            ttm::CoreCoord{cfg.ordered_tiles[tile_index].x, cfg.ordered_tiles[tile_index].y},
+                            ttm::CoreCoord{plan.translated[tile_index].x(), plan.translated[tile_index].y()},
+                            static_cast<uint32_t>(kRiscNoc.at(pi_worker_risc_index(&L, w)))),
                         std::move(samples)),
                     hmeas::Counter::TensixLiveTimer,
                     clock,

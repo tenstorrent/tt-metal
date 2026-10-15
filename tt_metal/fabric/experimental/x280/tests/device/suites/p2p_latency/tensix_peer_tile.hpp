@@ -145,13 +145,12 @@ inline void launch(
     x280::harness::output::append_placement(
         out.placement,
         "tensix",
-        {
-            .logical = std::array<uint32_t, 2>{static_cast<uint32_t>(worker.x), static_cast<uint32_t>(worker.y)},
-            .virt = std::array<uint32_t, 2>{worker_virtual.x(), worker_virtual.y()},
-            .noc0 = hexec::noc0_at(
-                x280::harness::cluster(), f.tile_id.chip_id, ttm::CoreCoord{worker_virtual.x(), worker_virtual.y()}),
-            .noc = static_cast<uint32_t>(kTensixNoc),
-        });
+        hexec::placement_at(
+            x280::harness::cluster(),
+            f.tile_id.chip_id,
+            ttm::CoreCoord{worker.x, worker.y},
+            ttm::CoreCoord{worker_virtual.x(), worker_virtual.y()},
+            static_cast<uint32_t>(kTensixNoc)));
 
     const metal_peer::X280Regions XR = metal_peer::X280Regions::compute(*f.tile);
     hreg::zero_region(*f.tile, XR.mailbox);
