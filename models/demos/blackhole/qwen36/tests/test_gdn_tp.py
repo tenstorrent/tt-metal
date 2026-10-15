@@ -570,17 +570,20 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
 
 
 def _snapshot_layer_state(gdn, mesh_device):
-    """Host copy of one GDN layer's (rec_state, conv_carry, conv_states)."""
+    """Host copy of one GDN layer's (rec_state, conv_carry, conv_states, fused-decode conv history). With the fused
+    decode path on, decode reads its conv history from the fused buffer rather than conv_states, so it must be part
+    of the snapshot too (None when that path is off)."""
     comp = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     return (
         ttnn.to_torch(gdn.rec_state, mesh_composer=comp),
         ttnn.to_torch(gdn.conv_carry, mesh_composer=comp) if gdn.conv_carry is not None else None,
         [ttnn.to_torch(c, mesh_composer=comp) for c in gdn.conv_states] if gdn.conv_states is not None else None,
+        gdn.snapshot_fused_decode_state(),
     )
 
 
 def _restore_layer_state(gdn, mesh_device, snap):
-    rec, carry, convs = snap
+    rec, carry, convs, fused_hist = snap
     mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
 
     def _back(t, dtype):
@@ -598,6 +601,7 @@ def _restore_layer_state(gdn, mesh_device, snap):
             cc = _back(cs, gdn.conv_states[j].dtype)
             ttnn.copy(cc, gdn.conv_states[j])
             ttnn.deallocate(cc)
+    gdn.restore_fused_decode_state(fused_hist)
 
 
 @torch.no_grad()

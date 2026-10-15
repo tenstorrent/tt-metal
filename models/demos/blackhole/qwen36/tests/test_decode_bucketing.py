@@ -326,6 +326,7 @@ def _decode_warmup_harness(monkeypatch):
             num_devices=4,
             args=SimpleNamespace(max_batch_size=8),
             sampling=SimpleNamespace(set_trace_bucket=lambda _: None),
+            _gdn_prefill_scratch=None,  # no B=1 prefill scratch: the GDN slot-write trace capture is skipped
         )
     ]
     gen.mesh_device = object()
@@ -426,7 +427,14 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
     """#56474: the eager call allocates/compiles prefill; the traced call records on the same buffers."""
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     calls = []
-    model = SimpleNamespace(num_devices=4, args=SimpleNamespace(max_batch_size=8), _chunked_trace_id=None)
+    # No prefix cache and no short bucket traces: this test covers the chunk-trace prepare/record split only.
+    model = SimpleNamespace(
+        num_devices=4,
+        args=SimpleNamespace(max_batch_size=8),
+        _chunked_trace_id=None,
+        _prefix_cache=None,
+        short_prefill_trace_enabled=lambda: False,
+    )
 
     def record(device):
         calls.append("record")
@@ -439,15 +447,16 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
     )
     model.record_prefill_trace_chunked = record
     model.warmup_gdn_slot_ops = lambda: calls.append("slot_ops")
-    wrapper = SimpleNamespace(model=[model], mesh_device="mesh")
+    wrapper = SimpleNamespace(model=[model], mesh_device="mesh", warmup_vision=lambda: calls.append("vision"))
     kv_cache = [(SimpleNamespace(shape=(100, 1, 64, 128)), None)]
 
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, False)
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
 
+    # The vision tower warms only in the eager call, before any trace exists.
     prepare, unbind = ("prepare", (1, 128)), ("unbind", "batched")
-    assert calls == ["bind", prepare, unbind, "slot_ops", "bind", prepare, "record", unbind, "slot_ops"]
+    assert calls == ["vision", "bind", prepare, unbind, "slot_ops", "bind", prepare, "record", unbind, "slot_ops"]
 
 
 def test_prefill_prepare_is_idempotent_and_record_requires_it(monkeypatch, expect_error):
@@ -617,7 +626,10 @@ def _parametrize_traced(max_tp=8, trace_bytes=1073741824):
             "device_params",
             [
                 {
-                    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                    # QWEN36_FABRIC_RING=1: a Galaxy column's Ring CCLs need the ring (torus) fabric.
+                    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING
+                    if os.environ.get("QWEN36_FABRIC_RING") == "1"
+                    else ttnn.FabricConfig.FABRIC_1D,
                     "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE,
                     "trace_region_size": trace_bytes,
                 }
