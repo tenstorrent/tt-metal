@@ -46,8 +46,6 @@ template <typename T>
 inline constexpr bool is_nullable_callable_v =
     std::is_pointer_v<T> || std::is_member_pointer_v<T> || is_move_only_function<T>::value;
 
-// Checked where the compiler provides the trait: clang-20 does; gcc-12 does not, nor does its own
-// std::move_only_function.
 template <typename R, typename V>
 inline constexpr bool binds_to_temporary_v =
 #if __has_builtin(__reference_converts_from_temporary)
@@ -67,7 +65,6 @@ concept MoveOnlyFunctionTarget =
     !std::is_same_v<std::remove_cvref_t<F>, Self> && !is_in_place_type<std::remove_cvref_t<F>>::value &&
     CallableFrom<std::decay_t<F>, R, Args...>;
 
-// A target whose move can throw goes to the heap, since this type's move is noexcept.
 template <typename T>
 inline constexpr bool stored_inline_v =
     sizeof(T) <= kMoveOnlyFunctionInlineSize && alignof(T) <= kMoveOnlyFunctionInlineAlign &&
