@@ -69,6 +69,7 @@ cmake -B build -DTT_METAL_BUILD_X280=ON
 ninja -C build x280_images x280_abi_headers x280_runtime_host_tests x280_runtime_coordinate_tests \
   x280_bench_host_tests x280_bench_device_tests x280_bench_release_selector_tests \
   x280_transport_bandwidth_tensix_to_x280 x280_transport_bandwidth_x280_to_tensix \
+  x280_transport_bandwidth_erisc_to_x280 \
   x280_p2p_latency_x280_same_tile x280_p2p_latency_x280_peer_tile x280_p2p_latency_tensix_peer_tile \
   x280_p2p_latency_erisc_peer_tile x280_p2p_latency_drisc_peer_tile \
   x280_pipeline_stage_route_compute x280_pipeline_stage_route_forward \

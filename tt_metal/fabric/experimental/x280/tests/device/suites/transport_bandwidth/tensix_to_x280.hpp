@@ -67,11 +67,14 @@ struct SweepPoint {
 };
 using Axis = SweepPoint;
 
+// One Metal sender's L1 block. The gate line is used only by the ERISC
+// sender's start gate (TB_TX2X_ARG_GATE_ADDR).
 struct L1Layout {
     uint32_t block_bytes;
     uint32_t staging_offset;
     uint32_t scratch_offset;
     uint32_t result_offset;
+    uint32_t gate_offset;
 
     static L1Layout compute() {
         L1Layout L{};
@@ -83,6 +86,8 @@ struct L1Layout {
         cursor += static_cast<uint32_t>(hreg::kCacheLineBytes);
         L.result_offset = cursor;
         cursor += ru(sizeof(transport_bw_result_t), hreg::kCacheLineBytes);
+        L.gate_offset = cursor;
+        cursor += static_cast<uint32_t>(hreg::kCacheLineBytes);
         L.block_bytes = cursor;
         return L;
     }
@@ -102,6 +107,70 @@ struct LimRegions {
         return R;
     }
 };
+
+// One Metal sender's runtime arguments (TB_TX2X_ARG_*). L1 addresses are the
+// sender's own; gate_addr is 0 for no start gate.
+struct SenderArgs {
+    uint32_t transfer_size;
+    uint32_t warmup_count;
+    uint32_t transfer_count;
+    uint32_t boundary;
+    uint32_t run_nonce;
+    uint32_t staging_addr;
+    uint32_t scratch_addr;
+    uint32_t result_addr;
+    uint32_t gate_addr;
+    uint64_t peer_dst_addr;
+    uint64_t peer_verify_addr;
+    uint32_t peer_noc_x;
+    uint32_t peer_noc_y;
+};
+
+inline std::vector<uint32_t> sender_args(const SenderArgs& a) {
+    std::vector<uint32_t> args(TB_TX2X_ARG_COUNT, 0u);
+    args[TB_TX2X_ARG_LAYOUT_COOKIE] = TB_TX2X_LAYOUT_COOKIE;
+    args[TB_TX2X_ARG_TRANSFER_SIZE] = a.transfer_size;
+    args[TB_TX2X_ARG_WARMUP_COUNT] = a.warmup_count;
+    args[TB_TX2X_ARG_TRANSFER_COUNT] = a.transfer_count;
+    args[TB_TX2X_ARG_BOUNDARY] = a.boundary;
+    args[TB_TX2X_ARG_RUN_NONCE] = a.run_nonce;
+    args[TB_TX2X_ARG_OWN_STAGING_ADDR] = a.staging_addr;
+    args[TB_TX2X_ARG_OWN_SCRATCH_ADDR] = a.scratch_addr;
+    args[TB_TX2X_ARG_OWN_RESULT_ADDR] = a.result_addr;
+    args[TB_TX2X_ARG_PEER_DST_ADDR_LO] = static_cast<uint32_t>(a.peer_dst_addr & 0xFFFFFFFFu);
+    args[TB_TX2X_ARG_PEER_DST_ADDR_HI] = static_cast<uint32_t>(a.peer_dst_addr >> 32);
+    args[TB_TX2X_ARG_PEER_VERIFY_ADDR_LO] = static_cast<uint32_t>(a.peer_verify_addr & 0xFFFFFFFFu);
+    args[TB_TX2X_ARG_PEER_VERIFY_ADDR_HI] = static_cast<uint32_t>(a.peer_verify_addr >> 32);
+    args[TB_TX2X_ARG_PEER_NOC_X] = a.peer_noc_x;
+    args[TB_TX2X_ARG_PEER_NOC_Y] = a.peer_noc_y;
+    args[TB_TX2X_ARG_GATE_ADDR] = a.gate_addr;
+    return args;
+}
+
+// Checks one sender's completion record: `backend_id`, DONE, and the echoed
+// size, boundary and counts; a fatal failure for an unusable interval.
+inline void check_result(
+    const transport_bw_result_t& result,
+    uint32_t backend_id,
+    uint32_t transfer_size,
+    uint32_t boundary,
+    uint32_t W,
+    uint32_t N) {
+    EXPECT_EQ(result.backend_id, backend_id);
+    EXPECT_EQ(result.boundary, boundary);
+    ASSERT_EQ(result.terminal_state, static_cast<uint32_t>(TRANSPORT_BW_STATE_DONE))
+        << "terminal state: " << state_name(result.terminal_state) << " (path_sentinel=0x" << std::hex
+        << result.path_sentinel << std::dec << ")";
+
+    EXPECT_EQ(result.transfer_size, transfer_size);
+    EXPECT_EQ(result.transfer_count, N);
+    EXPECT_EQ(result.warmup_completed, W);
+    EXPECT_EQ(result.logical_bytes, static_cast<uint64_t>(N) * static_cast<uint64_t>(transfer_size));
+    ASSERT_GT(result.raw_batch_delta, 0ull);
+    // Checked here, before the pilot's delta reaches warm-up calibration.
+    ASSERT_NE(result.raw_batch_delta, UINT64_MAX) << "wall-timer interval refused on device";
+    ASSERT_NE(result.secondary_batch_delta, UINT64_MAX) << "cycle interval refused on device";
+}
 
 // One launch's result. clock is set only when the launch assessed AICLK
 // around the workload.
@@ -124,7 +193,6 @@ inline void launch(
     TransportLaunch& out) {
     const uint32_t transfer_size = point.transfer_size;
     const uint32_t boundary = point.boundary;
-    const uint64_t logical_bytes = static_cast<uint64_t>(N) * static_cast<uint64_t>(transfer_size);
 
     const L1Layout TL = L1Layout::compute();
     const ttm::CoreCoord worker{0, 0};
@@ -143,22 +211,21 @@ inline void launch(
     ++s_run_seq;
     const uint32_t run_nonce = 0x900u + s_run_seq;
 
-    std::vector<uint32_t> tensix_args(TB_TX2X_ARG_COUNT, 0u);
-    tensix_args[TB_TX2X_ARG_LAYOUT_COOKIE] = TB_TX2X_LAYOUT_COOKIE;
-    tensix_args[TB_TX2X_ARG_TRANSFER_SIZE] = transfer_size;
-    tensix_args[TB_TX2X_ARG_WARMUP_COUNT] = W;
-    tensix_args[TB_TX2X_ARG_TRANSFER_COUNT] = N;
-    tensix_args[TB_TX2X_ARG_BOUNDARY] = boundary;
-    tensix_args[TB_TX2X_ARG_RUN_NONCE] = run_nonce;
-    tensix_args[TB_TX2X_ARG_OWN_STAGING_ADDR] = l1_base + TL.staging_offset;
-    tensix_args[TB_TX2X_ARG_OWN_SCRATCH_ADDR] = l1_base + TL.scratch_offset;
-    tensix_args[TB_TX2X_ARG_OWN_RESULT_ADDR] = l1_base + TL.result_offset;
-    tensix_args[TB_TX2X_ARG_PEER_DST_ADDR_LO] = static_cast<uint32_t>(XR.dst.addr & 0xFFFFFFFFu);
-    tensix_args[TB_TX2X_ARG_PEER_DST_ADDR_HI] = static_cast<uint32_t>(XR.dst.addr >> 32);
-    tensix_args[TB_TX2X_ARG_PEER_VERIFY_ADDR_LO] = static_cast<uint32_t>(XR.verify.addr & 0xFFFFFFFFu);
-    tensix_args[TB_TX2X_ARG_PEER_VERIFY_ADDR_HI] = static_cast<uint32_t>(XR.verify.addr >> 32);
-    tensix_args[TB_TX2X_ARG_PEER_NOC_X] = l2cpu_translated.x();
-    tensix_args[TB_TX2X_ARG_PEER_NOC_Y] = l2cpu_translated.y();
+    const std::vector<uint32_t> tensix_args = sender_args({
+        .transfer_size = transfer_size,
+        .warmup_count = W,
+        .transfer_count = N,
+        .boundary = boundary,
+        .run_nonce = run_nonce,
+        .staging_addr = l1_base + TL.staging_offset,
+        .scratch_addr = l1_base + TL.scratch_offset,
+        .result_addr = l1_base + TL.result_offset,
+        .gate_addr = 0u,
+        .peer_dst_addr = XR.dst.addr,
+        .peer_verify_addr = XR.verify.addr,
+        .peer_noc_x = l2cpu_translated.x(),
+        .peer_noc_y = l2cpu_translated.y(),
+    });
 
     ttm::Program program = ttm::CreateProgram();
     const ttm::KernelHandle kernel = ttm::CreateKernel(
@@ -198,21 +265,8 @@ inline void launch(
     ASSERT_EQ(l1_readback.size(), TL.block_bytes / sizeof(uint32_t));
     transport_bw_result_t& result = out.result;
     std::memcpy(&result, l1_readback.data() + TL.result_offset / sizeof(uint32_t), sizeof(result));
-
-    EXPECT_EQ(result.backend_id, TRANSPORT_BW_BACKEND_ID_TENSIX_TO_X280);
-    EXPECT_EQ(result.boundary, boundary);
-    ASSERT_EQ(result.terminal_state, static_cast<uint32_t>(TRANSPORT_BW_STATE_DONE))
-        << "terminal state: " << state_name(result.terminal_state) << " (path_sentinel=0x" << std::hex
-        << result.path_sentinel << std::dec << ")";
-
-    EXPECT_EQ(result.transfer_size, transfer_size);
-    EXPECT_EQ(result.transfer_count, N);
-    EXPECT_EQ(result.warmup_completed, W);
-    EXPECT_EQ(result.logical_bytes, logical_bytes);
-    ASSERT_GT(result.raw_batch_delta, 0ull);
-    // Checked here, before the pilot's delta reaches warm-up calibration.
-    ASSERT_NE(result.raw_batch_delta, UINT64_MAX) << "live-timer interval refused on device";
-    ASSERT_NE(result.secondary_batch_delta, UINT64_MAX) << "cycle interval refused on device";
+    ASSERT_NO_FATAL_FAILURE(
+        check_result(result, TRANSPORT_BW_BACKEND_ID_TENSIX_TO_X280, transfer_size, boundary, W, N));
 }
 
 inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::RunSpec& spec, const SweepPoint& point) {

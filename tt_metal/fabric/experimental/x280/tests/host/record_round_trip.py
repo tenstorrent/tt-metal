@@ -116,6 +116,9 @@ HEADS = {
         "run GB/s",
     },
     "transport_bandwidth tensix_to_x280": BATCH_HEADS | {"size B", "boundary", "W", "N", "items", "logical B", "GB/s"},
+    "transport_bandwidth erisc_to_x280": BATCH_HEADS
+    | {"size B", "boundary", "W", "N", "items", "logical B", "writers", "GB/s"}
+    | {"slowest ticks", "run GB/s", "writer GB/s min", "writer GB/s max", "gate ns"},
     "pipeline_stage route_compute X280 per_sample": PS_COMPUTE_HEADS | PS_X280_HEADS,
     "pipeline_stage route_forward X280 decide off": PS_FORWARD_HEADS | PS_X280_POLICY_HEADS,
     "packet_injection tensix_to_x280 throughput aggregate": PI_AGGREGATE_HEADS | {"header B", "header GB/s"},
@@ -236,6 +239,16 @@ EXPECTED = {
         "span ticks": "200300",
         "run B": "2097152",
         "run GB/s": "0.524",
+    },
+    # Two writers over 200000 and 400000 ticks of a 1 GHz AICLK, 1 MiB each.
+    ("transport_bandwidth erisc_to_x280", 0): {
+        "writers": "2",
+        "GB/s": "5.243",
+        "slowest ticks": "400000",
+        "run GB/s": "5.243",
+        "writer GB/s min": "2.621",
+        "writer GB/s max": "5.243",
+        "gate ns": "1500",
     },
     ("transport_bandwidth tensix_to_x280", 0): {
         "ns": "200000.000",

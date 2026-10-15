@@ -141,6 +141,61 @@ inline x280::harness::output::RecordSpec tensix_to_x280_record(
     };
 }
 
+// An idle-ERISC writer's logical Ethernet coordinate.
+struct WriterAt {
+    uint32_t x = 0;
+    uint32_t y = 0;
+};
+
+/**
+ * The erisc_to_x280 record of one point, run by `results.size()` idle ERISCs
+ * (writer w at index w of `results` and `at`, at least one, the same count):
+ * writer 0's raw ERISC wall-clock and cycle batch over its `samples` transfers
+ * and their logical bytes, and in `writer_batches` every writer's raw batch.
+ * Writers' clocks share no stated origin, so only their deltas are recorded.
+ * `gate_release_host_ns` is the host time spent writing every writer's start
+ * word. AICLK evidence sampled on writer 0 converts every writer's ticks.
+ * Throws as record() does for an invalid batch, and std::invalid_argument for
+ * no writers or mismatched lengths.
+ */
+inline x280::harness::output::RecordSpec erisc_to_x280_record(
+    const std::vector<transport_bw_result_t>& results,
+    const std::vector<WriterAt>& at,
+    const Point& point,
+    const x280::harness::measurement::WarmupSelection& selection,
+    const x280::harness::measurement::AiclkRunEvidence& clock,
+    uint64_t gate_release_host_ns) {
+    using x280::harness::measurement::Counter;
+    using x280::harness::output::Field;
+    using x280::harness::output::Value;
+    if (results.empty() || results.size() != at.size()) {
+        throw std::invalid_argument("erisc_to_x280 record needs one result and one coordinate per writer");
+    }
+    std::vector<Value> batches;
+    for (size_t w = 0; w < results.size(); ++w) {
+        batches.push_back(Value::object(std::vector<Field>{
+            {"writer", w},
+            {"logical_x", at[w].x},
+            {"logical_y", at[w].y},
+            {"wall_ticks", results[w].raw_batch_delta},
+            {"cpu_cycles", results[w].secondary_batch_delta}}));
+    }
+    auto fields = detail::point_fields(point, "DRAINED");
+    fields.push_back({"writers", results.size()});
+    fields.push_back({"writer_batches", Value::array(std::move(batches))});
+    fields.push_back({"gate_release_host_ns", gate_release_host_ns});
+    return {
+        .suite = "transport_bandwidth",
+        .member = "erisc_to_x280",
+        .fields = std::move(fields),
+        .wall_counter = Counter::EriscWallClock,
+        .cpu_counter = Counter::Rv32Cycle,
+        .batch = detail::batch(results.front(), point),
+        .warmup = selection,
+        .clock = clock,
+    };
+}
+
 }  // namespace x280::suites::transport_bandwidth
 
 #endif  // X280_SUITES_TRANSPORT_BW_RECORDS_HPP

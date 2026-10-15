@@ -2,21 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// kernels/transport_bandwidth/backends/tensix_to_x280.hpp -- Tensix backend
-// for the Tensix -> X280 transport_bandwidth member.
+// kernels/transport_bandwidth/backends/tensix_to_x280.hpp -- Metal backend
+// for the Tensix -> X280 transport_bandwidth member, and for its idle-ERISC
+// variant (erisc_to_x280) when the kernel is built with
+// TRANSPORT_BW_SENDER_IDLE_ERISC.
 //
-// This header is included ONLY by the Tensix data-movement kernel (the .cpp
+// This header is included ONLY by the Metal data-movement kernel (the .cpp
 // under tests/device/kernels). It uses Metal's dataflow API and must not
 // leak into an X280 image compilation, which is why it lives beside the
-// Tensix kernel path rather than under kernels/shared/.
+// Metal kernel path rather than under kernels/shared/.
 //
-// Tensix is the initiator; X280 is a passive addressable target -- no X280
-// image is submitted for this member. Every issue is one noc_async_write
+// The Metal core is the initiator; X280 is a passive addressable target -- no
+// X280 image is submitted for this member. Every issue is one noc_async_write
 // of `transfer_size` bytes from a host-seeded L1 staging region into an
 // X280 LIM destination the host allocated and prepared.
 //
-// Timing: paired native live-timer and per-RISC cycle CSR reads. Failed reads
-// publish an invalid delta for host rejection.
+// Timing: paired native wall-timer and per-RISC cycle CSR reads: the Tensix
+// live timer, or the Ethernet tile's wall clock. Failed reads publish an
+// invalid delta for host rejection.
 //
 // See docs/benchmarks/design.md § Transport bandwidth.
 
@@ -30,18 +33,27 @@
 #include "../../shared/ubench_units.h"
 
 #include "api/dataflow/dataflow_api.h"
+#if defined(TRANSPORT_BW_SENDER_IDLE_ERISC)
+#include "internal/ethernet/tt_eth_api.h"
+#endif
 
-#include "tensix_to_x280.h"
-#include "transport_bandwidth_common.h"
-#include "transport_bandwidth_frontend_cxx.hpp"
+#include "../tensix_to_x280.h"
+#include "../transport_bandwidth_common.h"
+#include "../transport_bandwidth_frontend_cxx.hpp"
 
 namespace transport_bandwidth::backend_tensix_to_x280 {
 
-// Path-verification magic. Different from the X280 -> Tensix member's magic
-// so a mis-launched kernel can never accidentally pass; chosen not-zero and
-// not equal to the nonce for any small nonce so a stale word from an
-// earlier run cannot answer.
-constexpr uint32_t kVerifyMagic = 0xB4A5C0DEu;
+constexpr uint32_t kVerifyMagic = TB_TX2X_VERIFY_MAGIC;
+
+#if defined(TRANSPORT_BW_SENDER_IDLE_ERISC)
+constexpr uint32_t kBackendId = TRANSPORT_BW_BACKEND_ID_ERISC_TO_X280;
+#else
+constexpr uint32_t kBackendId = TRANSPORT_BW_BACKEND_ID_TENSIX_TO_X280;
+#endif
+
+// Wall ticks rendezvous() waits for the host's start word: 2^31, about 1.5 s
+// at a 1.35 GHz AICLK.
+constexpr uint64_t kGateBoundTicks = 1ull << 31;
 
 // Admitted transfer sizes: multiples of the 64 B NoC word up to
 // NOC_MAX_BURST_SIZE, so every issue is one NoC packet.
@@ -74,6 +86,7 @@ struct state_t {
     // Own regions on L1 (u32 addresses; the API takes u32 for source).
     uint32_t own_staging_addr;  // source of every issue
     uint32_t own_scratch_addr;  // 4B slot for the verify read-back
+    uint32_t gate_addr;         // TB_TX2X_ARG_GATE_ADDR; 0 for none
 
     // L1 pointers for the verify path.
     volatile tt_l1_ptr uint32_t* staging32;
@@ -97,8 +110,9 @@ struct state_t {
 // any layout or option mismatch -- a layout cookie other than
 // TB_TX2X_LAYOUT_COOKIE before any other slot is read; the kernel returns
 // without touching the transport, and the host observes DONE-not-set as
-// ARG_LAYOUT_MISMATCH.
-inline bool initialize(state_t& state) {
+// ARG_LAYOUT_MISMATCH. always_inline: out of line, `state` escapes, and the
+// issue loop reloads its operands from the stack after every NoC counter store.
+inline __attribute__((always_inline)) bool initialize(state_t& state) {
     if (!ubench_layout_is_current(get_arg_val<uint32_t>(TB_TX2X_ARG_LAYOUT_COOKIE), TB_TX2X_LAYOUT_COOKIE)) {
         return false;
     }
@@ -111,6 +125,7 @@ inline bool initialize(state_t& state) {
 
     state.own_staging_addr = get_arg_val<uint32_t>(TB_TX2X_ARG_OWN_STAGING_ADDR);
     state.own_scratch_addr = get_arg_val<uint32_t>(TB_TX2X_ARG_OWN_SCRATCH_ADDR);
+    state.gate_addr = get_arg_val<uint32_t>(TB_TX2X_ARG_GATE_ADDR);
     const uint32_t own_result = get_arg_val<uint32_t>(TB_TX2X_ARG_OWN_RESULT_ADDR);
     const uint32_t peer_dst_lo = get_arg_val<uint32_t>(TB_TX2X_ARG_PEER_DST_ADDR_LO);
     const uint32_t peer_dst_hi = get_arg_val<uint32_t>(TB_TX2X_ARG_PEER_DST_ADDR_HI);
@@ -156,7 +171,7 @@ inline bool initialize(state_t& state) {
 
     // Initialise the result region. Preserves the invariant that the host
     // reads DONE only after every field is populated.
-    state.r->backend_id = TRANSPORT_BW_BACKEND_ID_TENSIX_TO_X280;
+    state.r->backend_id = kBackendId;
     state.r->boundary = state.args.boundary;
     state.r->terminal_state = static_cast<uint32_t>(TRANSPORT_BW_STATE_INIT);
     state.r->transfer_size = state.args.transfer_size;
@@ -231,8 +246,34 @@ struct Backend {
         noc_async_write(s.own_staging_addr, NOC_XY_ADDR(s.peer_noc.x, s.peer_noc.y, s.peer_dst), TransferSize);
     }
 
-    // One participant: nothing to wait for.
-    static bool rendezvous(state_t&) { return true; }
+    // The host start gate (TB_TX2X_ARG_GATE_ADDR), after warm-up, in the
+    // idle-ERISC build only: publishes run_nonce in gate word 0, then waits
+    // until the host writes run_nonce into word 1. True at once without a gate,
+    // and always in the Tensix build, whose one sender has no one to wait for;
+    // false when the start word did not arrive within kGateBoundTicks.
+    static inline __attribute__((always_inline)) bool rendezvous(state_t& s) {
+#if !defined(TRANSPORT_BW_SENDER_IDLE_ERISC)
+        (void)s;
+        return true;
+#else
+        if (s.gate_addr == 0u) {
+            return true;
+        }
+        volatile tt_l1_ptr uint32_t* gate = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s.gate_addr);
+        gate[0] = s.args.run_nonce;
+        const uint64_t start = measurement_now(s).ticks;
+        while (true) {
+            invalidate_l1_cache();
+            if (gate[1] == s.args.run_nonce) {
+                return true;
+            }
+            const uint64_t now = measurement_now(s).ticks;
+            if (start == UINT64_MAX || now == UINT64_MAX || now - start > kGateBoundTicks) {
+                return false;
+            }
+        }
+#endif
+    }
 
     // Drain: barrier on outstanding writes.
     static void drain(state_t&) { noc_async_write_barrier(); }
@@ -241,8 +282,14 @@ struct Backend {
     // preserves compiler ordering; the counters have independent origins.
     static timestamp_t measurement_now(state_t&) {
         timestamp_t stamp{UINT64_MAX, UINT64_MAX};
-        if (!tensix_live_timer_read(TENSIX_TIMER_LOCAL_LOW_ADDR, 8, &stamp.ticks) ||
-            !measurement_cpu_cycles(&stamp.cpu)) {
+#if defined(TRANSPORT_BW_SENDER_IDLE_ERISC)
+        stamp.ticks = eth_read_wall_clock();
+#else
+        if (!tensix_live_timer_read(TENSIX_TIMER_LOCAL_LOW_ADDR, 8, &stamp.ticks)) {
+            return {UINT64_MAX, UINT64_MAX};
+        }
+#endif
+        if (!measurement_cpu_cycles(&stamp.cpu)) {
             return {UINT64_MAX, UINT64_MAX};
         }
         return stamp;
@@ -270,7 +317,7 @@ struct Backend {
 
     static bool publish_footer(state_t&) { return true; }
 
-    static constexpr uint32_t BACKEND_ID = TRANSPORT_BW_BACKEND_ID_TENSIX_TO_X280;
+    static constexpr uint32_t BACKEND_ID = kBackendId;
 };
 
 }  // namespace transport_bandwidth::backend_tensix_to_x280

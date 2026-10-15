@@ -1141,9 +1141,10 @@ INIT → VERIFY_PATH ─┬→ PATH_MISMATCH
   operation.
 - `WARMUP` uses the measured `issue()` primitive and then drains.
 - Between `WARMUP` and the timed bracket, `rendezvous()` waits for every
-  participant of a multi-participant run (the X280 -> Tensix harts), so their
-  brackets start together. A participant that does not arrive within the
-  backend's bound ends the run `RENDEZVOUS_TIMEOUT`.
+  participant of a multi-participant run (the X280 -> Tensix harts, and the
+  idle-ERISC writers through the host's start gate), so their brackets start
+  together. A participant that does not arrive within the backend's bound ends
+  the run `RENDEZVOUS_TIMEOUT`.
 - `TIMED_DRAINED` issues the batch and drains inside one uninterrupted bracket.
 - `TIMED_INJECTION` measures issue only; `DRAIN` completes the same batch after
   the bracket.
@@ -1346,6 +1347,7 @@ documented `issue()` semantics on that component.
 | Member | Primitive | Readiness |
 |---|---|---|
 | Tensix write to X280 | asynchronous NOC write into X280 LIM; passive X280 target | landed (`tensix_to_x280`) |
+| Idle-ERISC write to X280 | the Tensix write's kernel and backend on 1-8 idle ERISCs, each into its own LIM range, their timed loops released together by a host start gate after warm-up; ERISC wall clock | landed (`erisc_to_x280`) |
 | X280 write to Tensix | X280 harts 0..H-1 (H = 1, 2 or 4) each issue `SIZE/W` uncached stores of `W` = 4 (`sw`), 8 (`sd`) or 64 B (`vse32.v`) per issue through their own paired TLB slot 120+h in ordering mode 2 (posted) into their own range of a Tensix L1 buffer; passive Tensix target. `DRAINED` ends on one read through the window, so it is an issue rate, not a delivered rate, and is recorded as `RETIRED` ([docs/measurement.md "Quantities that share a label"](../measurement.md#quantities-that-share-a-label)) | landed (`x280_to_tensix`) |
 | ERISC raw transmit | raw Ethernet issue and completion | peer operation, completion, and byte accounting unresolved |
 | DRISC read from Tensix | repeated NOC read from host-seeded Tensix L1 | primitive, drain, and supported depth unresolved |

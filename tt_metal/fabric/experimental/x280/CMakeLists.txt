@@ -516,8 +516,9 @@ _x280_gtest_ctest(x280_release_selector x280_bench_release_selector_tests "Relea
 )
 
 # ---------------------------------------------------------------------------
-# transport_bandwidth: Tensix -> X280 (a Tensix kernel writes into passive LIM; no X280 image) and
-# X280 -> Tensix (hart 0 stores through one NoC window into Tensix L1).
+# transport_bandwidth: Tensix -> X280 (a Tensix kernel writes into passive LIM; no X280 image), its
+# idle-ERISC variant (the same kernel on 1-8 idle ERISCs) and X280 -> Tensix (hart 0 stores through
+# one NoC window into Tensix L1).
 # ---------------------------------------------------------------------------
 x280_add_image(
     NAME firmware-transport-bandwidth-x280-to-tensix
@@ -541,6 +542,11 @@ _x280_device_test(x280_transport_bandwidth_tensix_to_x280
 _x280_device_test(x280_transport_bandwidth_x280_to_tensix
     tests/device/test_transport_bandwidth_x280_to_tensix_hw.cpp
     KERNELS shared transport_bandwidth
+)
+_x280_device_test(x280_transport_bandwidth_erisc_to_x280
+    tests/device/test_transport_bandwidth_erisc_to_x280_hw.cpp
+    KERNELS shared transport_bandwidth
+    SLOW_DISPATCH
 )
 
 # ---------------------------------------------------------------------------

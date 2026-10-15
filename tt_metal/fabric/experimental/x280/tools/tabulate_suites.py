@@ -301,6 +301,54 @@ def tb_x280_span(row):
 
 # Every hart moves the batch's logical bytes.
 TB_X280_RUN_BYTES = product(tb_x280_harts, field("logical_bytes"))
+
+
+def tb_erisc_writer_ticks(row):
+    """Every writer's own batch wall ticks, one per writer."""
+    ticks = each("writer_batches", "wall_ticks")(row)
+    if len(ticks) != lookup(row.record, ("writers",)):
+        raise ParseError("writer_batches holds %d writers, writers is %r" % (len(ticks), row.record["writers"]))
+    if 0 in ticks:
+        raise ParseError("a writer's batch has zero wall ticks")
+    return ticks
+
+
+def tb_erisc_writer_rate(pick):
+    """GB/s of the writer `pick` (min or max) selects by rate, at the row's rate."""
+
+    def value(row):
+        ticks = tb_erisc_writer_ticks(row)
+        if row.hz is None:
+            return None
+        return counter_value(row.record, ("logical_bytes",)) / ticks_to_ns(pick(ticks), row.hz)
+
+    return value
+
+
+# The writers' wall clocks share no stated origin, so no span is measured: the
+# start gate releases their timed loops together (to within gate ns), and the
+# run ends with the slowest writer, whose interval stands for the run's.
+TB_ERISC_RUN_BYTES = product(field("writers"), field("logical_bytes"))
+TB_ERISC_SLOWEST_NS = ns(lambda row: max(tb_erisc_writer_ticks(row)))
+# With writers > 1 the batch columns are writer 0's.
+TB_ERISC_TABLES = (
+    Table(
+        "",
+        {},
+        tuple(
+            TB_IDENTITY
+            + [ident("writers")]
+            + TB_VALUES
+            + [
+                Column("slowest ticks", lambda row: max(tb_erisc_writer_ticks(row))),
+                Column("run GB/s", ratio(TB_ERISC_RUN_BYTES, TB_ERISC_SLOWEST_NS)),
+                Column("writer GB/s min", tb_erisc_writer_rate(max)),
+                Column("writer GB/s max", tb_erisc_writer_rate(min)),
+                Column("gate ns", field("gate_release_host_ns")),
+            ]
+        ),
+    ),
+)
 # Records written before the store-width axis carry no store_width; they stored with sw.
 # With harts > 1 the batch columns are hart 0's; span and run GB/s cover every hart.
 TB_X280_TABLES = (
@@ -611,6 +659,7 @@ MEMBERS = {
     "p2p_latency drisc_peer_tile": P2P_TABLES,
     "transport_bandwidth x280_to_tensix": TB_X280_TABLES,
     "transport_bandwidth tensix_to_x280": TB_TABLES,
+    "transport_bandwidth erisc_to_x280": TB_ERISC_TABLES,
     "pipeline_stage route_compute": PS_COMPUTE_TABLES,
     "pipeline_stage route_forward": PS_FORWARD_TABLES,
     "packet_injection tensix_to_x280": PI_TENSIX_TABLES,
@@ -1018,6 +1067,7 @@ WARMUP_SOURCE = {
     "p2p_latency/drisc_peer_tile": "P2P_LATENCY_DRISC_PEER_TILE_W",
     "transport_bandwidth/x280_to_tensix": None,
     "transport_bandwidth/tensix_to_x280": "TRANSPORT_BW_W",
+    "transport_bandwidth/erisc_to_x280": "TRANSPORT_BW_W",
     "pipeline_stage/route_compute": None,
     "pipeline_stage/route_forward": None,
     "packet_injection/tensix_to_x280": None,

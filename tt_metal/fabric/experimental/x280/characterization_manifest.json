@@ -1000,6 +1000,490 @@
       }
     },
     {
+      "id": "bw.erisc_to_x280.w1.64.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w1_size64"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w1.128.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w1_size128"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w1.256.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w1_size256"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w1.320.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w1_size320"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w1.384.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w1_size384"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w1.512.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w1_size512"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w1.1024.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w1_size1024"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w1.2048.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w1_size2048"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w1.4096.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w1_size4096"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w1.8192.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w1_size8192"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w1.16384.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w1_size16384"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w2.64.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w2_size64"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w2.128.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w2_size128"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w2.256.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w2_size256"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w2.320.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w2_size320"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w2.384.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w2_size384"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w2.512.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w2_size512"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w2.1024.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w2_size1024"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w2.2048.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w2_size2048"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w2.4096.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w2_size4096"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w2.8192.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w2_size8192"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w2.16384.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w2_size16384"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w4.64.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w4_size64"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w4.128.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w4_size128"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w4.256.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w4_size256"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w4.320.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w4_size320"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w4.384.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w4_size384"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w4.512.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w4_size512"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w4.1024.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w4_size1024"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w4.2048.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w4_size2048"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w4.4096.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w4_size4096"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w4.8192.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w4_size8192"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w4.16384.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w4_size16384"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w8.64.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w8_size64"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w8.128.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w8_size128"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w8.256.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w8_size256"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w8.320.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w8_size320"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w8.384.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w8_size384"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w8.512.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w8_size512"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w8.1024.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w8_size1024"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w8.2048.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w8_size2048"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w8.4096.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w8_size4096"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w8.8192.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w8_size8192"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
+      "id": "bw.erisc_to_x280.w8.16384.injection",
+      "member": "transport_bandwidth/erisc_to_x280",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_erisc_to_x280",
+        "--gtest_filter=Sweep/TransportBandwidthEriscToX280.RepeatedIssueMeasuresInjection/w8_size16384"
+      ],
+      "environment": {
+        "TRANSPORT_BW_N": "16384"
+      }
+    },
+    {
       "id": "pipeline.x280.route_compute.direction_table_plain",
       "member": "pipeline_stage/route_compute",
       "argv": [

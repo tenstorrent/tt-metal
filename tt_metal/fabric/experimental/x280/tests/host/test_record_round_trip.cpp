@@ -280,6 +280,15 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
         write(
             "bw.tensix_to_x280.64.drained",
             x280::suites::transport_bandwidth::tensix_to_x280_record(r, point, calibrated, tensix_clock));
+        // Two idle-ERISC writers, the second taking twice as long.
+        transport_bw_result_t slow = r;
+        slow.raw_batch_delta = 400000;
+        x280::suites::transport_bandwidth::Point injection = point;
+        injection.boundary = TRANSPORT_BW_BOUNDARY_INJECTION;
+        write(
+            "bw.erisc_to_x280.w2.64.injection",
+            x280::suites::transport_bandwidth::erisc_to_x280_record(
+                {r, slow}, {{0, 0}, {0, 1}}, injection, calibrated, erisc_clock, 1500));
     }
 
     // pipeline_stage: route_compute instrumented, and route_forward's one
@@ -470,5 +479,5 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                  .erisc_clock = &erisc_clock}));
     }
 
-    validate(17);
+    validate(18);
 }
