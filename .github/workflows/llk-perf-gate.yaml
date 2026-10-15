@@ -209,6 +209,7 @@ jobs:
     with:
       architecture: all
       speed-of-light: false
+      perf-run-types: ALL_MODES
       upload-to-warehouse: true
       pipeline: nightly
     secrets: inherit

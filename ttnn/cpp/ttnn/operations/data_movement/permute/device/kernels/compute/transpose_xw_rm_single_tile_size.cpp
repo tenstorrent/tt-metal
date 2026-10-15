@@ -8,6 +8,9 @@
 #include "api/compute/transpose.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
+#ifdef ARCH_QUASAR
+#include "api/compute/pack.h"  // pack_init: Quasar packer-BFD retarget before tilize (see loop below)
+#endif
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
@@ -29,6 +32,14 @@ void kernel_main() {
     copy_init(cb_in);
 
     for (uint32_t n = 0; n < num_blocks; n++) {
+#ifdef ARCH_QUASAR
+        // Quasar: the packer's L1 destination (BFD) is baked by pack_init, and Quasar's tilize_init
+        // programs unpack+math only. compute_kernel_hw_startup aimed the packer at cb_out and
+        // pack_untilize_dest_init below re-aims it at cb_out every iteration, so without this the
+        // tilized tile is packed into cb_out's ring (the LLK re-init guard asserts; with asserts off
+        // cb_tilize is never written). WH/BH tilize_init programs the packer itself; nothing changes there.
+        pack_init(cb_tilize);
+#endif
         // Tilize input via unpack and then pack (asymmetric: x_block_size rows → 1 tile)
         compute_kernel_lib::tilize<
             1,

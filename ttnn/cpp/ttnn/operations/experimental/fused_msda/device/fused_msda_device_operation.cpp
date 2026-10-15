@@ -20,10 +20,15 @@ using tt::tt_metal::TensorMemoryLayout;
 // here rather than discovered as a stack smash on device.
 constexpr uint32_t MAX_LEVELS = 8;
 
-void check_common_tensor(const Tensor& t, std::string_view name, const Tensor& ref) {
+void check_common_tensor(const Tensor& t, std::string_view name, const Tensor& ref, bool allow_float32 = false) {
     TT_FATAL(t.storage_type() == StorageType::DEVICE, "fused_msda: {} must be on device", name);
     TT_FATAL(t.device() == ref.device(), "fused_msda: {} must be on the same device as value", name);
-    TT_FATAL(t.dtype() == DataType::BFLOAT16, "fused_msda: {} must be BFLOAT16, got {}", name, t.dtype());
+    TT_FATAL(
+        t.dtype() == DataType::BFLOAT16 || (allow_float32 && t.dtype() == DataType::FLOAT32),
+        "fused_msda: {} must be BFLOAT16{}, got {}",
+        name,
+        allow_float32 ? " or FLOAT32" : "",
+        t.dtype());
     TT_FATAL(t.layout() == Layout::ROW_MAJOR, "fused_msda: {} must be ROW_MAJOR, got {}", name, t.layout());
     TT_FATAL(
         t.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -187,7 +192,9 @@ MSDAShapes derive_shapes(
     // ---- reference_points (V2 only) ----
     if (attrs.from_offsets) {
         const Tensor& ref = *args.reference_points;
-        check_common_tensor(ref, "reference_points", value);
+        // float32 reference points keep the sampling position sub-pixel on wide maps: a bf16
+        // point in [0, 1] moves in steps of up to 2^-8, 0.8 px at W = 200.
+        check_common_tensor(ref, "reference_points", value, /*allow_float32=*/true);
         const auto& rs = ref.logical_shape();
         TT_FATAL(rs.rank() == 4, "fused_msda: reference_points rank must be 4 (B, Q, R, 2), got shape {}", rs);
         TT_FATAL(

@@ -90,6 +90,7 @@
 #include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
+#include <tt-metalium/experimental/op_profiler_support.hpp>
 #include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -97,6 +98,7 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
+#include <fmt/ranges.h>
 
 namespace tt {
 enum CBIndex : std::uint8_t;
@@ -116,6 +118,80 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
                hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
     }
     return hal.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+}
+
+// End of a kernel group's packed binaries. finalize_kernel_bins sizes the kernel text section by the
+// largest end, so the group with it is the text-sizing group.
+uint32_t kernel_text_end(const KernelGroup& kg) {
+    const auto sizes = kg.launch_msg.view().kernel_config().kernel_text_size();
+    uint32_t end = 0;
+    for (uint32_t p = 0; p < kg.kernel_text_offsets.size(); p++) {
+        end = std::max(end, kg.kernel_text_offsets[p] + sizes[p]);
+    }
+    return end;
+}
+
+// The rows as "  label  value" lines, one per row, for the TT_FATAL message.
+std::string format_rows(const SummaryRows& rows) {
+    std::string out;
+    for (const auto& [label, value] : rows) {
+        fmt::format_to(std::back_inserter(out), "\n  {:<28} {}", label, value);
+    }
+    return out;
+}
+
+// A program's kernel config buffer use as (label, value) rows. Each section is sized by the kernel group
+// that needs the most of it; kernel text dominates in practice, so the rows also give each RISC's binary
+// size, cores and kernels for the text-sizing group.
+SummaryRows program_config_breakdown(
+    const MetalContext& metal_ctx,
+    HalProgrammableCoreType core_type,
+    const detail::ProgramOffsetsState& state,
+    const std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
+    const std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels) {
+    const auto bytes = [](uint32_t b) { return fmt::format("{} B", b); };
+    const uint32_t rta_size = state.sem_offset - state.rta_offset;
+    SummaryRows rows = {
+        {"runtime args", bytes(rta_size)},
+        {"semaphores", bytes(state.sem_size)},
+        {"circular buffers", bytes(state.cb_size)},
+        {"dataflow buffers", bytes(state.dfb_size)},
+    };
+    // Alignment padding and the cross-node DFB and prefetcher pipe regions. Listed before kernel text so
+    // the text rows below follow their section.
+    const uint32_t listed = rta_size + state.sem_size + state.cb_size + state.dfb_size + state.kernel_text_size;
+    TT_ASSERT(state.offset >= listed, "Program config sections ({} B) exceed its size ({} B)", listed, state.offset);
+    if (state.offset > listed) {
+        rows.emplace_back("other", bytes(state.offset - listed));
+    }
+    rows.emplace_back("kernel text", bytes(state.kernel_text_size));
+    // No packed text (binaries not stored in the config buffer, or not finalized): no group sizes it.
+    if (state.kernel_text_size == 0) {
+        return rows;
+    }
+    const auto& hal = metal_ctx.hal();
+    const uint32_t num_processors = hal.get_num_risc_processors(core_type);
+    // kernel_text_size > 0 means some group packed text, so kernel_groups is not empty.
+    const KernelGroup& sizing_group =
+        **std::ranges::max_element(kernel_groups, {}, [](const auto& kg) { return kernel_text_end(*kg); });
+    auto sizes = sizing_group.launch_msg.view().kernel_config().kernel_text_size();
+    for (uint32_t p = 0; p < num_processors; p++) {
+        const auto [processor_class, processor_id] = hal.get_processor_class_and_type_from_index(core_type, p);
+        rows.emplace_back(
+            "  " + hal.get_jit_build_query().target_name(
+                       {false, core_type, processor_class, processor_id, metal_ctx.rtoptions()}),
+            bytes(sizes[p]));
+    }
+    std::vector<std::string> names;
+    for (const auto kernel_id : sizing_group.kernel_ids) {
+        auto name = kernels.at(kernel_id)->name();
+        if (std::find(names.begin(), names.end(), name) == names.end()) {
+            names.push_back(std::move(name));
+        }
+    }
+    rows.emplace_back("  text-sizing group, cores", sizing_group.core_ranges.str());
+    rows.emplace_back("  text-sizing group, kernels", fmt::format("{}", fmt::join(names, ", ")));
+    return rows;
 }
 
 void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId physical_chip_id) {
@@ -420,6 +496,7 @@ Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::mov
 Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+    ScopedBusyClock build_busy(kProgramBuildBusy);
 
     if (descriptor.reload_table.has_value()) {
         internal_->set_reload_table(descriptor.reload_table->address, descriptor.reload_table->cores);
@@ -828,6 +905,11 @@ const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrow
     return metal2_registry_->dfb_borrowed_bindings;
 }
 // ============================================================================
+
+std::vector<detail::KernelMeta> experimental::collect_kernel_meta(
+    const Program& program, distributed::MeshDevice& mesh_device) {
+    return program.impl().collect_kernel_meta(&mesh_device);
+}
 
 std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
     return program.impl().collect_kernel_meta(device);
@@ -3129,6 +3211,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
         return;
     }
+    ScopedBusyClock compile_busy(kProgramCompileBusy);
     // Clear the determined sub_device_ids when we compile the program for the first time
     // This way, determine_sub_device_ids is forced to recalculate with the finalized information on the used cores
     if (compiled_.empty()) {
@@ -3662,13 +3745,19 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         size_t max_size = get_ringbuffer_size(device, programmable_core_type);
+        const auto breakdown = [&] {
+            return program_config_breakdown(
+                metal_ctx, programmable_core_type, state, kernel_groups_getter(index), kernels_getter(index));
+        };
 
         TT_FATAL(
             state.offset <= max_size,
-            "Program size ({}) too large for kernel config buffer ({}) on {}",
+            "Program size ({}) too large for kernel config buffer ({}) on {}, {} B over:{}",
             state.offset,
             max_size,
-            enchantum::to_string(programmable_core_type));
+            enchantum::to_string(programmable_core_type),
+            state.offset - max_size,
+            format_rows(breakdown()));
 
         // Recorded here, not per program: `state` is computed once per core type and then copied
         // into every program in the span, so recording inside the loop below would log the same
@@ -3687,6 +3776,15 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             record_size("program_config_size.dataflow_buffer", state.dfb_size);
             record_size("program_config_size.kernel_text", state.kernel_text_size);
             record_size("program_config_size.total", state.offset);
+            // Bytes left in the kernel config buffer; its min is how close any program came to the
+            // TT_FATAL above. Core types the program doesn't use (offset 0) are skipped: their headroom
+            // is the whole buffer, which would only inflate the metric's mean and max.
+            if (state.offset != 0) {
+                const auto limit = static_cast<uint32_t>(max_size);
+                const uint32_t headroom = limit - state.offset;
+                record_size("program_config_size.headroom", headroom);
+                BuildCacheTelemetry::inst().note_program_headroom(target, headroom, limit, breakdown);
+            }
         }
 
         for (auto& program : programs) {
