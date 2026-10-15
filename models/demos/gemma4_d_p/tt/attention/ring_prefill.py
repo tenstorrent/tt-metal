@@ -191,6 +191,11 @@ def global_ring_prefill_attention(
         q_chunk, k_chunk, k_splits, segmented = ring_sdpa_chunk_sizes(
             tt_q.shape[-2], sliding=False, num_heads=tt_q.shape[1], num_cores=(sdpa_grid.x - 1) * sdpa_grid.y
         )
+        # TEMP experiment knob: GEMMA4_GLOBAL_SDPA_CFG="q,k,splits,segmented(0|1)".
+        _cfg = __import__("os").environ.get("GEMMA4_GLOBAL_SDPA_CFG")
+        if _cfg:
+            _q, _k, _s, _seg = (int(v) for v in _cfg.split(","))
+            q_chunk, k_chunk, k_splits, segmented = _q, _k, _s, bool(_seg)
         program_config = ring_prefill_program_config(
             mesh_device,
             ccl_manager,
