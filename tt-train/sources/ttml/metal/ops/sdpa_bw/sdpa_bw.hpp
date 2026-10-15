@@ -10,6 +10,7 @@
 namespace ttml::metal {
 
 // Returns [grad_Q, grad_K, grad_V, grad_gate]
+// With a gate, attn_output must be the gated forward output Y = sdpa(Q, K, V) * sigmoid(gate).
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> sdpa_bw(
     const ttnn::Tensor& grad_output,                              // Gradient w.r.t. output
     const ttnn::Tensor& attn_output,                              // sdpa forward output (needed for gradients)
@@ -23,8 +24,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>
     const std::optional<ttnn::Tensor>& gate =
         std::nullopt,  // out = sdpa(Q, K, V) * sigmoid(gate); gate shape (B, H, S, Dv)
     const std::optional<ttnn::Tensor>& preallocated_grad_gate =
-        std::nullopt,  // grad_gate output buffer, shape (B, H, S, Dv); may alias attn_output
-    const std::optional<ttnn::Tensor>& preallocated_gated_grad_output =
-        std::nullopt);  // dO = dY * sigmoid(gate) buffer, shape (B, H, S, Dv); may alias grad_output
+        std::nullopt);  // grad_gate output buffer, shape (B, H, S, Dv); may alias attn_output
 
 }  // namespace ttml::metal

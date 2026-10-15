@@ -1126,6 +1126,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ArbitraryMask_TwoTileRows) {
 //   * the gate_args offset after mask_args, with (Arbitrary) and without (Causal / None) a DRAM mask.
 // run_sdpa_test with use_gate=true additionally checks, against the kernel's own ungated output, that
 // gated == ungated * sigmoid(gate) to ~2 bf16 ULP and that the logsumexp intermediates are bit-identical.
+// The rows are NIGHTLY_ because each one compiles its own kernels. In Merge Gate, GateTest_IsElementwiseNotBroadcast
+// covers the multi-block finalize loop and the batch / head / row indexing. Both Merge Gate gate tests are causal,
+// so the gate_args offset after a DRAM mask is only checked nightly.
 // =============================================================================
 
 class SDPAForwardGateTest : public ::testing::TestWithParam<SDPATestConfig> {
@@ -1257,43 +1260,29 @@ std::pair<xt::xarray<float>, xt::xarray<float>> run_kernel_causal(
 }  // namespace
 
 TEST_F(SDPAForwardTest, GateTest_IsElementwiseNotBroadcast) {
-    // Gate pattern that differs along every axis the kernel has to index:
-    //   batch 0 / batch 1 are swapped, head h and column block alternate, and odd sequence rows are inverted.
-    //   gate = +16 (open)  where parity(b + h + s + d/32) is even
-    //   gate = -16 (closed) otherwise
-    // If the kernel broadcasts the gate over any axis, reads the wrong tile, or applies it to the wrong head,
-    // some open elements will come out zero or some closed ones non-zero.
-    const uint32_t B = 2U, H = 2U, S = 64U, Dh = 64U;
-    auto t = make_gate_fixture(B, H, S, Dh, Dh);
+    // Each gate element is independently +16 (open) or -16 (closed), so a gate tile read from the wrong batch,
+    // head, row or column block, or broadcast over any axis, zeroes some open elements or lets some closed ones
+    // through. Dh_v = 192 gives vWt = 6 -> block_size = 3: two finalize blocks that each fill DST, so the gate
+    // copy has to offset by tile_idx into the second block and that block has to be re-initialised after the
+    // first block's gate code.
+    const uint32_t B = 2U, H = 2U, S = 64U, Dh_qk = 64U, Dh_v = 192U;
+    auto t = make_gate_fixture(B, H, S, Dh_qk, Dh_v);
     auto [ungated, ungated_lse] = run_kernel_causal(t, std::nullopt);
 
-    xt::xarray<float> gate = xt::empty<float>(t.out_shape);
-    xt::xarray<float> expected = xt::empty<float>(t.out_shape);
-    for (size_t b = 0; b < B; ++b) {
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t s = 0; s < S; ++s) {
-                for (size_t d = 0; d < Dh; ++d) {
-                    const bool open = ((b + h + s + (d / 32U)) % 2U) == 0U;
-                    gate(b, h, s, d) = open ? 16.0F : -16.0F;
-                    expected(b, h, s, d) = open ? ungated(b, h, s, d) : 0.0F;
-                }
-            }
-        }
-    }
+    auto& rng = ttml::autograd::ctx().get_generator();
+    const xt::xarray<float> coin = ttml::test_utils::make_uniform_xarray<float>(t.out_shape, -1.0F, 1.0F, rng());
+    const xt::xarray<bool> open = coin >= 0.0F;
+    const xt::xarray<float> gate = xt::where(open, 16.0F, -16.0F);
+    // sigmoid(+16) and sigmoid(-16) round to 1 and 0 in bf16, so the gated output is the ungated output with the
+    // closed elements zeroed.
+    const xt::xarray<float> expected = xt::where(open, ungated, 0.0F);
 
     auto [gated, gated_lse] = run_kernel_causal(t, gate);
     ASSERT_EQ(gated.shape(), expected.shape());
-    EXPECT_TRUE(xt::allclose(gated, expected, 1e-2F, 1e-2F))
-        << "Structured gate mismatch: the gate is not being applied elementwise with the right indexing (MSE: "
+    // Same ~2 bf16 ULP bound as the gated == ungated * sigmoid(gate) check in run_sdpa_test.
+    EXPECT_TRUE(xt::allclose(gated, expected, 8e-3F, 1e-4F))
+        << "Random +/-16 gate mismatch: the gate is not being applied elementwise with the right indexing (MSE: "
         << compute_mse(expected, gated) << ")";
-
-    // Spot-check a few closed/open positions with a stronger statement than allclose.
-    EXPECT_LT(std::abs(gated(0, 0, 1, 0)), 1e-3F) << "(b=0,h=0,s=1,d=0) is closed and should be ~0";
-    EXPECT_LT(std::abs(gated(1, 0, 0, 0)), 1e-3F) << "(b=1,h=0,s=0,d=0) is closed and should be ~0";
-    EXPECT_LT(std::abs(gated(0, 1, 0, 0)), 1e-3F) << "(b=0,h=1,s=0,d=0) is closed and should be ~0";
-    EXPECT_LT(std::abs(gated(0, 0, 0, 32)), 1e-3F) << "(b=0,h=0,s=0,d=32) is closed and should be ~0";
-    EXPECT_NEAR(gated(0, 0, 0, 0), ungated(0, 0, 0, 0), 1e-2F) << "(b=0,h=0,s=0,d=0) is open";
-    EXPECT_NEAR(gated(1, 1, 0, 0), ungated(1, 1, 0, 0), 1e-2F) << "(b=1,h=1,s=0,d=0) is open";
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_GateTest_WorksWithoutIntermediates) {

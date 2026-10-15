@@ -280,10 +280,9 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto out = ttml::autograd::create_tensor(attn_output);
 
     // ========== Register Backward Function using sdpa_bw kernel ==========
-    // With a gate, sdpa_bw writes grad_gate into Y (attn_output) and the gated dO into dY (grad_output): the Q
-    // reader reads each row of both into L1 before that row's outputs are written. After backward, out holds dG
-    // as its value and dO as its gradient, so out->get_grad() must not be shared with another tensor. Single
-    // backward only: a second gated pass (retain_graph=true) throws.
+    // With a gate, sdpa_bw writes grad_gate into Y (attn_output): the Q reader reads each row of Y into L1 before
+    // that row's dG is written. After backward, out holds dG as its value. Single backward only: a second gated
+    // pass (retain_graph=true) throws.
     ttml::autograd::GradFunction grad = [query,
                                          key,
                                          value,
@@ -297,7 +296,7 @@ autograd::TensorPtr scaled_dot_product_attention(
         if (!saved_attn_output.has_value()) {
             throw std::runtime_error(
                 "scaled_dot_product_attention: backward ran twice with a gate. The first pass overwrote the "
-                "forward output and its gradient, so retain_graph=true is not supported for the gated op.");
+                "forward output, so retain_graph=true is not supported for the gated op.");
         }
         const ttnn::Tensor attn_output = saved_attn_output.value();
         if (gate_ptr) {
@@ -322,8 +321,7 @@ autograd::TensorPtr scaled_dot_product_attention(
             mask_tensor,
             dropout_probability,
             gate_ptr ? std::make_optional(gate_ptr->get_value()) : std::nullopt,
-            /*preallocated_grad_gate=*/gate_ptr ? std::make_optional(attn_output) : std::nullopt,
-            /*preallocated_gated_grad_output=*/gate_ptr ? std::make_optional(grad_output) : std::nullopt);
+            /*preallocated_grad_gate=*/gate_ptr ? std::make_optional(attn_output) : std::nullopt);
 
         query->add_grad(dL_dQ);
         key->add_grad(dL_dK);

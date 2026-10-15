@@ -20,8 +20,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>
     const std::optional<ttnn::Tensor>& attn_mask,
     const float dropout_probability,
     const std::optional<ttnn::Tensor>& gate,
-    const std::optional<ttnn::Tensor>& preallocated_grad_gate,
-    const std::optional<ttnn::Tensor>& preallocated_gated_grad_output) {
+    const std::optional<ttnn::Tensor>& preallocated_grad_gate) {
     // Call Q kernel first to compute grad_Q and u_scaler = rowsum(dO * O)
     auto [grad_Q, u_scaler, grad_gate, gated_grad_output] = ttnn::prim::ttml_sdpa_q_bw(
         grad_output,
@@ -36,8 +35,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>
         /*preallocated_grad_query=*/std::nullopt,
         /*preallocated_u_scaler=*/std::nullopt,
         gate,
-        preallocated_grad_gate,
-        preallocated_gated_grad_output);
+        preallocated_grad_gate);
 
     const auto& kv_grad_output = gated_grad_output.has_value() ? gated_grad_output.value() : grad_output;
 
