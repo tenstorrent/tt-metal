@@ -6,8 +6,14 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 
 
+def _has_l1_small(device) -> bool:
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1_SMALL)
+    return view.total_bytes_allocated_per_bank + view.total_bytes_free_per_bank > 0
+
+
 def exchange_convolution_carry(
     projected_qkv: ttnn.Tensor,
+    layer_history: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
     selections: ChronologicalSelections,
@@ -24,8 +30,16 @@ def exchange_convolution_carry(
         outgoing, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     predecessor = selections.select_predecessor_history(gathered_outgoing_history)
-    physical_tail_history = selections.select_local_final_history(projected_qkv)
-    broadcast_tail_histories = ttnn.all_broadcast(physical_tail_history, cluster_axis=sequence_parallel_axis)
+    physical_tail_history = selections.select_local_final_history(projected_qkv, layer_history, predecessor)
+    # all_broadcast's global semaphores live as long as its cached program and default to L1. The first
+    # call runs while the layer's L1 input projection is live, so they would land just below it and,
+    # once it frees, split L1 for good (ring_mla's static CBs then no longer fit). all_gather already
+    # takes L1_SMALL whenever the device has one; match it.
+    broadcast_tail_histories = ttnn.all_broadcast(
+        physical_tail_history,
+        cluster_axis=sequence_parallel_axis,
+        use_l1_small_for_semaphores=_has_l1_small(projected_qkv.device()),
+    )
     candidates = ttnn.concat(broadcast_tail_histories, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     final_carry = selections.select_final_history(candidates)
     return predecessor, final_carry

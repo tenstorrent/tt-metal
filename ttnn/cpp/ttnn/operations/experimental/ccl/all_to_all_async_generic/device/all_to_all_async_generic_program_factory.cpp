@@ -768,6 +768,7 @@ AllToAllAsyncGenericProgram::create_at(
     const size_t mux_l1_base_address = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*device);
     tt::tt_fabric::FabricMuxV2Config mux_config(
+        /*mesh_device=*/*device,
         /*num_channels=*/static_cast<uint8_t>(mux_config_clients),
         /*num_buffers_per_channel=*/num_mux_buffers_per_channel,
         /*channel_buffer_size_bytes=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
