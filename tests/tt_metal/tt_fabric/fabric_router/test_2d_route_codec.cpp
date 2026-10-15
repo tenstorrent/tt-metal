@@ -150,10 +150,10 @@ TEST(Routing2DCodec, ZPacksOnEitherAxis) {
     auto z_on_any = [](uint32_t, uint32_t) { return eth_chan_directions::Z; };
 
     ASSERT_TRUE(pack_2d_route_vectors(table.data(), table.size(), 8, 4, z_on_any, dor_x));
-    EXPECT_EQ(Codec::get_action_2bit(Codec::y_row(table.data(), 8, /*dst_y=*/5), /*cur=*/0), Codec::Y2_Z);
+    EXPECT_EQ(Codec::get_action_2bit(Codec::y_row(table.data(), 8, /*dst_y=*/5), /*index=*/0), Codec::Y2_Z);
 
     ASSERT_TRUE(pack_2d_route_vectors(table.data(), table.size(), 8, 4, dor_y, z_on_any));
-    EXPECT_EQ(Codec::get_action_2bit(Codec::x_row(table.data(), 8, 4, /*dst_x=*/3), /*cur=*/0), Codec::X2_Z);
+    EXPECT_EQ(Codec::get_action_2bit(Codec::x_row(table.data(), 8, 4, /*dst_x=*/3), /*index=*/0), Codec::X2_Z);
 }
 
 TEST(Routing2DCodec, WidenMapsEveryTwoBitCode) {
