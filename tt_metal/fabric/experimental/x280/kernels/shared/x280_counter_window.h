@@ -17,8 +17,7 @@
 
 #include "noc.h"
 
-/* Request VC of every counter window. Default AXI unicast writes take VC 0 and
- * reads VC 1, so VC 2 shares a VC with neither. */
+/* Request VC of every counter window. */
 #define X280_COUNTER_WINDOW_VC 2u
 
 /**
