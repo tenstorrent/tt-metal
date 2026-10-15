@@ -68,8 +68,13 @@ class V41PrefillEngram(_TtHyperBase):
     def upload_rows(self, rows: torch.Tensor, seq_pad: int):
         """[S, 6144] host rows -> [1, 1, S_pad / sp, 6144] bf16 (SP-sharded on S, replicated over TP); pad rows are zero."""
         S, K = rows.shape
-        t = torch.zeros(1, 1, seq_pad, K, dtype=torch.bfloat16)
-        t[0, 0, :S] = rows.to(torch.bfloat16)
+        if S == seq_pad and rows.dtype == torch.bfloat16 and rows.is_contiguous():
+            t = rows.view(
+                1, 1, S, K
+            )  # DS41F-0068: a full chunk needs no zero-filled copy (~100 MB written twice per layer)
+        else:
+            t = torch.zeros(1, 1, seq_pad, K, dtype=torch.bfloat16)
+            t[0, 0, :S] = rows.to(torch.bfloat16)
         return ttnn.from_torch(
             t,
             device=self.device,

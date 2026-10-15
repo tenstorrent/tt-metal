@@ -41,6 +41,8 @@ def _first_device(t) -> torch.Tensor:
 
 
 PROFILE = os.environ.get("V41_PREFILL_PROFILE", "0") == "1"
+# DS41F-0068: the chunk embedding uploaded S-sharded / TP-replicated and split on device (0 = the D-over-TP mapper)
+EMBED_PARTITION = os.environ.get("V41_PREFILL_EMBED_PARTITION", "1") == "1"
 
 
 class PhaseProfile:
@@ -235,8 +237,18 @@ class V41Prefill:
             assert int(k.max()) < self._image_rows.shape[0], (int(k.max()), tuple(self._image_rows.shape))
             rows[vl] = self._image_rows[k].to(torch.bfloat16)
         h[0, 0, : len(ids)] = rows
-        mapper = ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, 3))
-        t = ttnn.from_torch(h, device=self.mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
+        if EMBED_PARTITION:
+            # DS41F-0068: S-sharded + TP-replicated upload (contiguous host slices: ~25 ms for the 8192-row chunk, vs ~104 ms for
+            # the D-over-TP mapper's strided copies, MEASURED ut/a3/upload_bench.py), then each chip keeps its D / tp on device
+            mapper = ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, None))
+            full = ttnn.from_torch(
+                h, device=self.mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper
+            )
+            t = ttnn.mesh_partition(full, dim=3, cluster_axis=self.tp_axis)
+            ttnn.deallocate(full)
+        else:
+            mapper = ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, 3))
+            t = ttnn.from_torch(h, device=self.mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
         return [t] + [ttnn.clone(t) for _ in range(HC - 1)]  # model.py: h.unsqueeze(2).repeat(1, 1, hc, 1)
 
     # ---- the prefill --------------------------------------------------------------------------------------------
@@ -359,16 +371,17 @@ class V41Prefill:
         real_len = len(part)
         prof = PhaseProfile(self.mesh) if PROFILE else None
         mark = prof if prof is not None else (lambda name: None)
+        rows = {}
+        if self.engrams and engram_host is not None:
+            # layer 14's rows are only needed at block 14: gather them in the background while blocks 0..13 run. DS41F-0068: the
+            # fetch starts BEFORE the embedding (its host gather + upload, ~140 ms at 8192) so layer 1's rows are not waited for
+            fetch = getattr(engram_host, "rows_async", None)
+            rows = fetch(self.slot, part, start) if fetch is not None else engram_host.rows_for(self.slot, part, start)
+        mark("engram.host")
         streams = self._streams(part)
         self._route_bias(part)
         pre = identity_pre_row(self.mesh, self.chunk // self.sp, self.sp_axis)
         mark("embed")
-        rows = {}
-        if self.engrams and engram_host is not None:
-            # layer 14's rows are only needed at block 14: gather them in the background while blocks 0..13 run
-            fetch = getattr(engram_host, "rows_async", None)
-            rows = fetch(self.slot, part, start) if fetch is not None else engram_host.rows_for(self.slot, part, start)
-        mark("engram.host")
         owned = True
         for blk in self.blocks:
             L = blk.layer
