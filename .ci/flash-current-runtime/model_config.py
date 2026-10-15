@@ -1,11 +1,11 @@
 """CPU-only admission of the pinned model configuration and required Transformers release."""
+import base64
 import hashlib
 import inspect
 import json
 import os
 from pathlib import Path
 import sys
-import urllib.request
 
 import transformers
 from transformers import AutoConfig
@@ -14,11 +14,9 @@ assert transformers.__version__ == "5.16.1"
 assert sys.version_info[:2] == (3, 12)
 out = Path(sys.argv[1])
 out.mkdir(exist_ok=False)
-url = (
-    "https://modelscope.cn/models/Qwen/Qwen3.8-Flash-Next/resolve/2741eec155d03a8ce151b993ccce1a7b1e398d6b/config.json"
-)
-with urllib.request.urlopen(url, timeout=60) as response:
-    raw = response.read()
+# Exact public release config, admitted from the existing shared snapshot. CI's
+# proxy refuses ModelScope; use this small immutable test input, never bypass it.
+raw = base64.b64decode(Path(__file__).with_name("pinned_config.fixture.b64").read_text().strip(), validate=True)
 assert len(raw) == 4745
 assert hashlib.sha256(raw).hexdigest() == "889658f2508e8c61d409b02e70e0d78d8d4452ec65aaafbe129805d213d2e74b"
 (out / "config.json").write_bytes(raw)
