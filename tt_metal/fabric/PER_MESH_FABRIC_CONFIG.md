@@ -59,7 +59,7 @@ differing 2D configs across intermesh-linked meshes.
 | 2 | Allocator buffer-slot counts match | `fabric_static_sized_channels_allocator.cpp:484-497,553-560,737-749`; `erisc_datamover_builder.cpp:480` | slot-count table chosen by topology + buffer size + avail space; `num_buffers` emitted as CT args; remote mirror from same config | Credit/flow-control: sender tracks N remote slots, receiver must physically have N. Different table/size on the two ends → slot mismatch → credit under/overflow → stall or corruption | **A (check)** | open → **deferred to Tier 2** (see §4) |
 | 3 | Deadlock-avoidance support (non-express) | `fabric_context.cpp:316-332`; caller `compute_mesh_router_builder.cpp:452-456`; EDM `erisc_datamover_builder.cpp:1076` | non-express branch uses global `topology_` + `get_fabric_type(fabric_config_,…)`, ignores `mesh_id` | mesh A=TORUS_Y vs B=TORUS_X: wrong DA/first-level-ACK axis for the mesh whose axis ≠ global; **Mesh global ⇒ no DA on any mesh's genuine ring** (the hang) | **B (per-mesh)** | open → **FIXED in this PR** |
 | 4 | Inter-mesh DA enable (#56515) | `erisc_datamover_builder.cpp:1076` (`!is_inter_mesh && …`) | both ends of an inter-mesh EDM must agree on DA polarity; far end may be plain Mesh | — | — | **already-fixed (#56515)** |
-| 5 | `bubble_flow_control_enabled_` | `fabric_context.cpp:252`; `fabric_tensix_builder_impl.cpp:1092` | global `is_ring_or_torus(topology_)` baked into tensix-mux CT arg | tensix mux decrements a specific router's credits; BFC enablement must follow that router's mesh | **B (per-mesh)** | open (see plan) |
+| 5 | `bubble_flow_control_enabled_` | `fabric_context.cpp:252`; `fabric_tensix_builder_impl.cpp:1092` | global `is_ring_or_torus(topology_)` baked into tensix-mux CT arg | tensix mux decrements a specific router's credits; BFC enablement must follow that router's mesh | **B (per-mesh)** | open → **FIXED in this PR** |
 | 6 | `topology_` global | `fabric_context.cpp:247`; `compute_mesh_router_builder.cpp:179,267`; `fabric_builder.cpp:211`; `fabric_builder_context.cpp:86,240` | one `Topology` for all meshes; also collapses TORUS_X/Y/XY → `Torus` (loses axis) | router archetype/channel shape + connection pairs for a router in mesh X must use mesh X's topology | **B (per-mesh)** | open (see plan) |
 | 7 | EDM `enable_first_level_ack` | `erisc_datamover_builder.cpp:714-715` | `config.topology == Ring/Torus` (global topology) | first-level-ACK must agree with DA on the link | **B (per-mesh)** | open — subsumed by #3 (same flag path) |
 | 8 | Single FabricContext construction | `control_plane.cpp:950-953`, guard `:943-949` | one `FabricContext(… fabric_config_ …)` for whole system | a single context cannot represent two meshes with different topologies | **B (root)** | open (see plan) |
@@ -184,6 +184,13 @@ rather than new support; implement real per-mesh support only where the feature 
   `erisc_datamover_builder.cpp:1076-1105`) on its own ring axis. This flips M_X's genuine E/W ring from
   DA-off to DA-on under a Mesh-opened fabric — the direct fix for the hang. **#7 (first-level-ACK) is
   fixed by the same flag.**
+* **#5 — per-mesh bubble flow control for the tensix fabric mux** in
+  `FabricContext::is_bubble_flow_control_enabled(FabricNodeId)`: the tensix-mux kernel CT arg
+  (`fabric_tensix_builder_impl.cpp:1092`) was the global `is_ring_or_torus(topology_)`, i.e. OFF for
+  every mesh under a Mesh-opened fabric. Now keyed off the node's own resolved per-mesh config (via
+  `FabricContext::control_plane_` → mesh graph), so a per-mesh ring gets the bubble at BOTH the EDM
+  (VC0, via #3) and the tensix-mux level — matching what the TORUS_XY envelope provided globally.
+  Uniform runs preserved.
 * **Revert the TORUS_XY-envelope workaround** — `galaxy-fabric-per-mesh-torus-yx` points back at the
   original `test_fabric_multi_mesh_sanity_common.yaml` (whose first cases open `topology: Mesh` — the
   exact repro); the bespoke `test_fabric_per_mesh_torus_sanity.yaml` is removed.
@@ -221,3 +228,30 @@ rather than new support; implement real per-mesh support only where the feature 
   * `tt_metal/impl/device/firmware/fabric_firmware_initializer.cpp` — router-sync / stuck-stage
     diagnostics if the hang is during fabric init.
   * Preserve the failing state before reset; collect triage first.
+
+---
+
+## 6. E2E iteration log (galaxy `galaxy-fabric-per-mesh-torus-yx`, BH galaxy)
+
+| Run | Code under test | Result | Evidence |
+|-----|-----------------|--------|----------|
+| `38667692636` | TORUS_XY envelope workaround | **PASS** | full suite green — but masks per-mesh difference (opens both axes globally) |
+| `38671263096` | #3 DA fix only (reverted to common sanity config) | **HANG** (15-min timeout) | `MeshNeighborExchange_num_links_1_ntype_unicast_write` on `topology: Mesh`: ranks `[1,0]`,`[1,2]` logged "Finished", ranks `[1,1]`,`[1,3]` never did → deadlock. CI tt-triage produced no artifact. |
+| `38674433232` | #3 DA fix + #5 tensix-mux bubble per-mesh | *pending* | — |
+
+**Diagnosis after run 2.** The DA fix (#3) enables the EDM-level VC0 bubble + first-level-ACK on
+M_X's ring, but the test still hung on the Mesh-topology `MeshNeighborExchange`. The passing envelope
+(run 1) differs from the DA-only build in more than DA: opening `topology: Torus` also set the global
+`bubble_flow_control_enabled_` true (→ tensix-mux bubble, #5) **and** set a Torus `routing_mode` /
+packet spec / VC config (#6). Run 3 adds #5. If run 3 still hangs, the remaining lever is **#6 — the
+global `topology_` → `routing_mode`/VC/packet-spec**, which only a per-mesh `FabricContext` (#8) fully
+addresses: M_X's routers are still built with Mesh routing mode / VC shape even though its ring links
+exist, so the torus wrap may not be routed with the dateline the ring needs. That is the Tier-2
+architectural change (per-mesh FabricContext or per-mesh router config); it should not be rushed. If it
+is not taken on now, the **TORUS_XY envelope (run 1) is the correct, passing interim** for the test —
+it is not "wrong", it simply provisions both axes globally rather than per-mesh.
+
+**Why the DA fix + #5 are still correct and worth landing regardless:** both are genuine per-mesh
+correctness fixes (each mesh now gets deadlock avoidance + bubble on its own ring axis), both are
+behaviour-preserving for uniform runs, and both are prerequisites for the per-mesh-FabricContext end
+state — they are not throwaway.
