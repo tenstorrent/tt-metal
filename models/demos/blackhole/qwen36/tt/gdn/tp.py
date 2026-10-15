@@ -600,11 +600,13 @@ class TPGatedDeltaNet:
         self._conv_fmt = "both"
 
     def _decode_step_op_supported(self, args, tw):
-        if not gdn_decode_step_op_enabled() or not self._fused_batched:
+        # max_batch_size == 1 takes the op too (its single binding owns a [1, Nv, 4, 32, 32] packed history) instead of
+        # the single-user fused kernels (_forward_decode_fused); QWEN36_GDN_DECODE_STEP_OP=0 reverts both.
+        if not gdn_decode_step_op_enabled() or not self._fused_decode:
             return False
         reasons = []
-        if not (1 < self._decode_B <= 32):
-            reasons.append(f"max_batch_size {self._decode_B} not in [2, 32]")
+        if not (1 <= self._decode_B <= 32):
+            reasons.append(f"max_batch_size {self._decode_B} not in [1, 32]")
         if self.K != 4 or self.Dk != self.Dv or self.Nv % self.Nk or 2 * self.Nv > 32 or self.Nv > 16:
             reasons.append("unsupported GDN head geometry")
         if self.qkvz_dim_tp != self.qkv_dim_tp + self.Nv * self.Dv:
@@ -877,6 +879,15 @@ class TPGatedDeltaNet:
         ttnn.copy(rm, hist)
         ttnn.deallocate(rm)
 
+    def _refresh_packed_single(self):
+        """max_batch_size == 1 with the gdn_decode_step op: re-pack the just-written RM history into the packed history
+        the op reads, so both formats are current, and tag "packed". Device ops only (the packed buffer and the pack
+        tables exist since reset_state), so a traced prefill captures it too: a prefill trace replay, where no Python
+        runs to update the tag, still leaves the packed history current for the next decode. No-op otherwise."""
+        if self._decode_op and self._decode_B == 1 and self._needed_conv_fmt(1) == "packed":
+            self._pack_conv_hist()
+            self._conv_fmt = "packed"
+
     def _rows_to_rm(self, tiles):
         """list of [1, 1, C] TILE conv rows -> one [1, len, C] RM bf16 tensor (consumes nothing)."""
         rows = []
@@ -921,6 +932,7 @@ class TPGatedDeltaNet:
         if self._hist_hook_active():
             self._sync_conv_hist_from_states()
             self._conv_fmt = "both"
+            self._refresh_packed_single()
 
     def _sync_conv_states_from_hist(self):
         """hist -> states: conv_states[j] (j = 1..K-1, FULL Bmax rows) <- hist[:, j-1, :] as [1, Bmax, C] TILE, in
@@ -1232,8 +1244,16 @@ class TPGatedDeltaNet:
         """Make the conv state of the width class of `B` valid before decoding at width B (call once per width
         change, eagerly, outside any trace capture/replay). Returns True when a sync ran. No-op unless the batched
         fused mode is on. hist -> states and states -> hist are in-place full syncs of persistent buffers."""
-        if not self._fused_batched or self.B != self._decode_B:
+        if self.B != self._decode_B:
             return False
+        if not self._fused_batched:
+            # max_batch_size == 1: only the gdn_decode_step op has a conv format to prepare (packed). The RM writers
+            # re-pack as they go (_refresh_packed_single); this covers a history still tagged "both" / "hist".
+            if not (self._decode_op and self._needed_conv_fmt(B) == "packed") or self._conv_fmt == "packed":
+                return False
+            self._pack_conv_hist()
+            self._conv_fmt = "packed"
+            return True
         need = self._needed_conv_fmt(B)
         synced = False
         if need == "packed":
@@ -1658,6 +1678,7 @@ class TPGatedDeltaNet:
         ttnn.copy(src, self._conv_hist_rm)
         ttnn.deallocate(src)
         self._conv_fmt = "hist"  # conv_states is not part of the snapshot
+        self._refresh_packed_single()  # max_batch_size == 1 + decode op: re-pack, tag "packed"
 
     def _kda_conv_packed(self, E, T):
         """KDA conv + SiLU + q/k/v split for B independent windows in one op call.
@@ -1974,6 +1995,7 @@ class TPGatedDeltaNet:
                     # (A batched model prefills per user into the B=1 scratch; write_slot / assemble_batched_state
                     # then move the state into the decode history, so the hook is single-user only.)
                     self._write_conv_hist(conv_new_state)
+                    self._refresh_packed_single()  # gdn_decode_step at max_batch_size == 1 reads the packed history
                 # Prefill wrote the taps directly, so they are the truth and the [B,K,C] window
                 # mirror is behind (_ensure_conv_win re-seeds it at the next eager spec seed).
                 self._conv_taps_stale = False
@@ -2126,6 +2148,7 @@ class TPGatedDeltaNet:
             else:
                 self._write_conv_hist_users(conv_new_list)  # full replace: row u = user u
             self._conv_fmt = "both"  # conv_states[1..K-1] were written above, hist just now
+            self._refresh_packed_single()
         for t in rec_list:
             ttnn.deallocate(t)
         for t in conv_new_list:
@@ -2301,6 +2324,8 @@ class TPGatedDeltaNet:
         if self._hist_hook_active() and self._decode_B == 1:
             # Fused single-user decode reads its conv history from the RM buffer, not conv_states.
             self._sync_conv_hist_from_states()
+            self._conv_fmt = "both"
+            self._refresh_packed_single()
 
     def remap_slots(self, remap, live=None):
         """Reindex the batched decode state after a vLLM batch condense: slot i takes the state
@@ -2595,6 +2620,7 @@ class TPGatedDeltaNet:
             # just-written conv_states (single-user: the [1, K-1, C] row; batched: every user's row).
             self._sync_conv_hist_from_states()
             self._conv_fmt = "both"
+            self._refresh_packed_single()
 
         # ---- output (gated RMSNorm + SiLU(z) gate + row-parallel out proj + all-reduce) ----
         out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
