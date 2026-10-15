@@ -96,3 +96,10 @@ def row_split_copies_to_host(mesh, t: ttnn.Tensor) -> list[torch.Tensor]:
     w = t.shape[-1]
     full = full.reshape(-1, full.shape[-1])
     return [full[:, c * w : (c + 1) * w] for c in range(mesh.shape[1])]
+
+
+def hidden_split_to_host(mesh, t: ttnn.Tensor) -> torch.Tensor:
+    """A tensor split by rows over axis 0 and by hidden columns over axis 1 ([1, 1, S/SP, H/TP] per chip; chip (r, c)
+    holds columns [c H/TP, (c+1) H/TP)) -> host [S, H]."""
+    full = ttnn.to_torch(t, mesh_composer=_composer(mesh))
+    return full.reshape(-1, full.shape[-1])
