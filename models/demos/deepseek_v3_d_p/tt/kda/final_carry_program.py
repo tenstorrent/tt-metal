@@ -29,6 +29,11 @@ _WRAPPED_AXES = {
 }
 
 
+def fabric_wraps_axis(axis: int) -> bool:
+    """Whether the current fabric config wraps mesh axis `axis` into a ring."""
+    return axis in _WRAPPED_AXES.get(ttnn.get_fabric_config(), ())
+
+
 def _ring_mcast_distance(ring_size: int, ring_index: int) -> tuple[int, int]:
     """ttnn::ccl::get_forward_backward_line_mcast_distance for a ring with static alternation."""
     forward = (ring_size - 1 + 1) // 2
@@ -73,6 +78,7 @@ class FinalCarryProgram:
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None,
         local_rows: int,
+        prefix_on_last_rank: bool = False,
     ) -> ttnn.ProgramDescriptor:
         mesh = self.mesh_device
         sp_size = tuple(mesh.shape)[self.axis]
@@ -97,7 +103,7 @@ class FinalCarryProgram:
             return min(tiles, index * per), min(tiles, (index + 1) * per)
 
         # A ring when the fabric wraps the SP axis (and it has more than two ranks), else a line, as the C++ op.
-        ring = sp_size > 2 and self.axis in _WRAPPED_AXES.get(ttnn.get_fabric_config(), ())
+        ring = sp_size > 2 and fabric_wraps_axis(self.axis)
         neighbors = []
         for step in (1, -1):
             if ring or 0 <= sp_rank + step < sp_size:
@@ -161,6 +167,8 @@ class FinalCarryProgram:
                 kernel_source=_KERNEL_DIR + "reader_select_final_carry.cpp",
                 core_ranges=core_set,
                 compile_time_args=reader_ct,
+                # Without a split tail, the last chronological rank multicasts the prefix's final state.
+                defines=[("PREFIX_ON_LAST_RANK", "1")] if prefix_on_last_rank else [],
                 runtime_args=ttnn.RuntimeArgs(),
                 config=ttnn.ReaderConfigDescriptor(),
             ),

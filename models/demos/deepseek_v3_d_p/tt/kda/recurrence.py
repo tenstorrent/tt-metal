@@ -29,6 +29,8 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     l1_when_it_fits,
     preparation_bytes,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.final_carry_program import fabric_wraps_axis
+from models.demos.deepseek_v3_d_p.tt.kda.ring_relay_prefix import RingRelayPrefix
 
 
 def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim: int) -> ttnn.MemoryConfig:
@@ -104,6 +106,8 @@ class PendingFinalCarry:
     rank_final: ttnn.Tensor
     prefix_final: ttnn.Tensor
     local_rows: int
+    # The prefix's final state is valid only on the last chronological rank (and the first), not replicated.
+    prefix_on_last_rank: bool = False
 
 
 @dataclass(frozen=True)
@@ -456,6 +460,8 @@ def _scan_sp_grouped_chunks(
     compute_config: _RecurrenceComputeConfig,
     gather_buffer: ttnn.Tensor | None = None,
     defer_final_carry: bool = False,
+    ring_relay: RingRelayPrefix | None = None,
+    prefix_companion=None,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
@@ -473,15 +479,20 @@ def _scan_sp_grouped_chunks(
             compute_kernel_config=compute_config.preparation,
             packed_head=True,
         )
-        group_entry_states, prefix_final_state = distributed_prefix(
-            packed,
-            initial_state,
-            sequence_parallel_axis=sequence_parallel_axis,
-            compute_config=compute_config.affine_prefix,
-            actual_start=actual_start,
-            local_rows=geometry.local_rows,
-            gather_buffer=gather_buffer,
-        )
+        if ring_relay is not None:
+            group_entry_states, prefix_final_state = ring_relay(
+                packed, initial_state, actual_start, companion=prefix_companion
+            )
+        else:
+            group_entry_states, prefix_final_state = distributed_prefix(
+                packed,
+                initial_state,
+                sequence_parallel_axis=sequence_parallel_axis,
+                compute_config=compute_config.affine_prefix,
+                actual_start=actual_start,
+                local_rows=geometry.local_rows,
+                gather_buffer=gather_buffer,
+            )
     else:
         head_a, head_b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
             *grouped.as_kernel_args(),
@@ -533,7 +544,12 @@ def _scan_sp_grouped_chunks(
     )
     rank_final = ttnn.reshape(scan.final_state, (geometry.batch_heads, groups, geometry.key_dim, geometry.value_dim))
     if defer_final_carry:
-        return RecurrenceResult(output, PendingFinalCarry(rank_final, prefix_final_state, geometry.local_rows))
+        return RecurrenceResult(
+            output,
+            PendingFinalCarry(
+                rank_final, prefix_final_state, geometry.local_rows, prefix_on_last_rank=ring_relay is not None
+            ),
+        )
     # The device chooses the completed tail when split, or the prefix's final state when unsplit, at runtime: only
     # the owner of a separated tail sends its last group's state over the fabric.
     final_state = ttnn.experimental.kda.select_final_carry(
@@ -645,6 +661,30 @@ class KDARecurrence:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(device),
             )
+        # The relay leaves the prefix's final state on the first and last chronological ranks only, which the
+        # deferred final carry's program broadcasts; the SP ring must wrap for the last rank to reach the first.
+        self._ring_relay_args = None
+        self._ring_relay_cores = None
+        if (
+            self._sequence_parallel
+            and program_config.ring_relay_prefix
+            and defer_final_carry
+            and grouped
+            and self._groups == 1
+            and fabric_wraps_axis(sequence_parallel_axis)
+            and tuple(device.shape)[sequence_parallel_axis] > 2
+            and _sp_links(device, sequence_parallel_axis) > 0
+        ):
+            self._ring_relay_args = dict(
+                mesh_device=device,
+                sequence_parallel_axis=sequence_parallel_axis,
+                batch_heads=batch * heads,
+                key_dim=key_dim,
+                value_dim=value_dim,
+                num_links=_sp_links(device, sequence_parallel_axis),
+                local_rows=local_rows,
+                math_fidelity=program_config.affine_prefix_math_fidelity,
+            )
         if self._sequence_parallel:
             self._execute = self._run_sp
         elif grouped:
@@ -729,14 +769,19 @@ class KDARecurrence:
         initial_state: ttnn.Tensor,
         beta_logits_column_offset: int,
         release_gate: bool = False,
+        prefix_companion=None,
     ) -> RecurrenceResult:
         """Execute the constructed graph using caller-owned state and chronology.
 
         ``beta`` is a token-major BF16 tensor whose ``heads`` columns from ``beta_logits_column_offset`` hold beta's
         pre-sigmoid logits, such as the fused input projection; chunk preparation applies the sigmoid.
         With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
-        read it.
+        read it. ``prefix_companion`` returns (io_tensors, MeshProgramDescriptor) of a program on the cores the SP
+        ring relay leaves idle (``place_ring_relay``), built and dispatched together with it; only the ring relay
+        takes one.
         """
+        if prefix_companion is not None and not self.uses_ring_relay:
+            raise ValueError("a prefix companion program needs the SP ring relay")
         prepared, state, geometry = self._prepare(
             q=q,
             k=k,
@@ -749,7 +794,10 @@ class KDARecurrence:
             beta_logits_column_offset=beta_logits_column_offset,
             release_gate=release_gate,
         )
-        result = self._execute(prepared, state, actual_start, actual_end)
+        if prefix_companion is not None:
+            result = self._run_sp(prepared, state, actual_start, actual_end, prefix_companion)
+        else:
+            result = self._execute(prepared, state, actual_start, actual_end)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory.
         for tensor in prepared.as_kernel_args():
             ttnn.deallocate(tensor)
@@ -792,12 +840,29 @@ class KDARecurrence:
             sequence_parallel_axis=self._sequence_parallel_axis,
         )
 
+    def place_ring_relay(self, cores) -> None:
+        """Run the SP ring relay on these cores, leaving the rest to a program merged into its dispatch."""
+        self._ring_relay_cores = cores
+        # Build it now: its persistent L1 landing buffers must exist before a companion plans its L1 around them.
+        self._ring_relay()
+
+    @property
+    def uses_ring_relay(self) -> bool:
+        return self._ring_relay_args is not None
+
+    def _ring_relay(self) -> RingRelayPrefix | None:
+        # Built on first use, after the layer has placed it, so only the placement it runs with holds L1.
+        if self._ring_relay_args is None:
+            return None
+        return RingRelayPrefix.shared(**self._ring_relay_args, cores=self._ring_relay_cores)
+
     def _run_sp(
         self,
         prepared: _PreparedChunks,
         state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None,
+        prefix_companion=None,
     ) -> RecurrenceResult:
         return _scan_sp_grouped_chunks(
             prepared,
@@ -812,4 +877,6 @@ class KDARecurrence:
             sequence_parallel_axis=self._sequence_parallel_axis,
             gather_buffer=self._gather_buffer,
             defer_final_carry=self._defer_final_carry,
+            ring_relay=self._ring_relay(),
+            prefix_companion=prefix_companion,
         )

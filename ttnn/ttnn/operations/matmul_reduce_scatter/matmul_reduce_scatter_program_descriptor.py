@@ -570,6 +570,10 @@ def create_mesh_program_descriptor(
     handoff_base = int(handoff.buffer_address())
 
     W = blk.waves
+    # A local matmul (no cluster axis) has one block per core and nothing to reduce: every compute core's reader
+    # stores its block straight to the output, so it needs no final cores.
+    direct = cluster_axis is None
+    assert not direct or (G == 1 and W == 1), "a local matmul computes one unwaved block per core"
     a_pages = cm * blk.Kt if blk.a_resident else OPERAND_DEPTH * cm * blk.k_block_tiles
     w_pages = blk.Kt * cn if blk.w_resident else OPERAND_DEPTH * blk.k_block_tiles * cn
     um, un = blk.unit_m_tiles, blk.unit_n_tiles
@@ -667,6 +671,11 @@ def create_mesh_program_descriptor(
                     ]
                     + order_rt
                     + consumers
+                    + (
+                        [out_addr, row0, col0, min(cm, um - row0), min(cn, un - col0), blk.blk_n_tiles, cn]
+                        if direct
+                        else []
+                    )
                 )
                 wr_rt[c.x][c.y] = (
                     [
@@ -688,7 +697,7 @@ def create_mesh_program_descriptor(
                 rt[c.x][c.y] = rd_rt[c.x][c.y]
             reader_kernels.append(
                 ttnn.KernelDescriptor(
-                    defines=defs,
+                    defines=defs + ([("MMRS_DIRECT_STORE", "1")] if direct else []),
                     kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_reader.cpp"),
                     core_ranges=_cset(cores),
                     compile_time_args=[
@@ -705,7 +714,8 @@ def create_mesh_program_descriptor(
                         INJECT_READ_AHEAD,
                         num_banks,
                     ]
-                    + a_ct,
+                    + a_ct
+                    + (out_ct if direct else []),
                     runtime_args=rt,
                     config=_dm("RISCV_1", a_noc),
                 )
@@ -954,79 +964,83 @@ def create_mesh_program_descriptor(
                 snd_rt[core.x][core.y] = args
                 senders.append(core)
 
-        # finals receive the own block forward iff the previous chip's fwd list (ending with p) is non-empty, backward
-        # iff the next chip's bwd list is
-        has_fa = int(prev is not None and len(sched[groups[prev][0]][0]) > 0)
-        has_fb = int(nxt is not None and len(sched[groups[nxt][0]][1]) > 0)
-        rd_final, add_final, wr_final = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for i, core in enumerate(finals):  # final (l, h) = index l F + h: segments l + h L, stride F L
-            first = i // F + (i % F) * L
-            entries = xport_entries([p], [True], lambda j: j, lambda j: G, first, FL)
-            rd_final[core.x][core.y] = xport_reader_rt(FL, entries, sem_arr_fwd, sem_arr_bwd, sem_block_ack[2])
-            add_final[core.x][core.y] = [0, sum(e[5] for e in entries)]
-            incs = sum(_incs(e[5]) for e in entries)  # one increment stream per wave (see the port sender)
-            # the summed own block leaves the add kernel wave by wave: the writer walks the same windows
-            wr_entries = [v for e in entries for v in (e[4], e[5], e[8], e[9])]
-            wr_final[core.x][core.y] = [
-                out_addr,
-                xp.segs_per_row,
-                blk.blk_n_tiles,
-                FL,
-                sem_arr_fwd,
-                incs if has_fa else 0,
-                sem_arr_bwd,
-                incs if has_fb else 0,
-                len(entries),
-            ] + wr_entries
+        if not direct:  # the transport and the final cores (a local matmul's compute cores store directly)
+            # finals receive the own block forward iff the previous chip's fwd list (ending with p) is non-empty, backward
+            # iff the next chip's bwd list is
+            has_fa = int(prev is not None and len(sched[groups[prev][0]][0]) > 0)
+            has_fb = int(nxt is not None and len(sched[groups[nxt][0]][1]) > 0)
+            rd_final, add_final, wr_final = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+            for i, core in enumerate(finals):  # final (l, h) = index l F + h: segments l + h L, stride F L
+                first = i // F + (i % F) * L
+                entries = xport_entries([p], [True], lambda j: j, lambda j: G, first, FL)
+                rd_final[core.x][core.y] = xport_reader_rt(FL, entries, sem_arr_fwd, sem_arr_bwd, sem_block_ack[2])
+                add_final[core.x][core.y] = [0, sum(e[5] for e in entries)]
+                incs = sum(_incs(e[5]) for e in entries)  # one increment stream per wave (see the port sender)
+                # the summed own block leaves the add kernel wave by wave: the writer walks the same windows
+                wr_entries = [v for e in entries for v in (e[4], e[5], e[8], e[9])]
+                wr_final[core.x][core.y] = [
+                    out_addr,
+                    xp.segs_per_row,
+                    blk.blk_n_tiles,
+                    FL,
+                    sem_arr_fwd,
+                    incs if has_fa else 0,
+                    sem_arr_bwd,
+                    incs if has_fb else 0,
+                    len(entries),
+                ] + wr_entries
 
-        xport_cores = relay_ports + end_ports + finals
-        cbs.append(_cb(CB_XPORT_SUM, xport_pages, BF16_TILE_BYTES, ttnn.bfloat16, _cset(xport_cores)))
-        if relay_ports + finals:
-            cbs.append(_cb(CB_XPORT_PARTIAL, xport_pages, BF16_TILE_BYTES, ttnn.bfloat16, _cset(relay_ports + finals)))
-        arr_a_cores = relay_ports + (finals if has_fa else [])
-        if arr_a_cores:
-            cbs.append(_cb(CB_XPORT_ARRIVAL_A, xport_pages, BF16_TILE_BYTES, ttnn.bfloat16, _cset(arr_a_cores)))
-        if has_fb:
-            cbs.append(_cb(CB_XPORT_ARRIVAL_B, xport_pages, BF16_TILE_BYTES, ttnn.bfloat16, _cset(finals)))
-        if has_fa and has_fb:
-            cbs.append(_cb(CB_XPORT_ZERO, 1, BF16_TILE_BYTES, ttnn.bfloat16, _cset(finals)))
+            xport_cores = relay_ports + end_ports + finals
+            cbs.append(_cb(CB_XPORT_SUM, xport_pages, BF16_TILE_BYTES, ttnn.bfloat16, _cset(xport_cores)))
+            if relay_ports + finals:
+                cbs.append(
+                    _cb(CB_XPORT_PARTIAL, xport_pages, BF16_TILE_BYTES, ttnn.bfloat16, _cset(relay_ports + finals))
+                )
+            arr_a_cores = relay_ports + (finals if has_fa else [])
+            if arr_a_cores:
+                cbs.append(_cb(CB_XPORT_ARRIVAL_A, xport_pages, BF16_TILE_BYTES, ttnn.bfloat16, _cset(arr_a_cores)))
+            if has_fb:
+                cbs.append(_cb(CB_XPORT_ARRIVAL_B, xport_pages, BF16_TILE_BYTES, ttnn.bfloat16, _cset(finals)))
+            if has_fa and has_fb:
+                cbs.append(_cb(CB_XPORT_ZERO, 1, BF16_TILE_BYTES, ttnn.bfloat16, _cset(finals)))
 
-        if relay_ports:
-            kernels.append(xport_reader_kernel(relay_ports, rd_relay, CB_XPORT_PARTIAL, 0 if PORT_ARR else 1, 0))
-            kernels.append(add_kernel(relay_ports, add_relay, 1, 0))
-        if end_ports:
-            kernels.append(xport_reader_kernel(end_ports, rd_end, CB_XPORT_SUM, 0, 0))
-        kernels.append(xport_reader_kernel(finals, rd_final, CB_XPORT_PARTIAL, has_fa, has_fb))
-        kernels.append(add_kernel(finals, add_final, has_fa, has_fb))
-        if senders:
+            if relay_ports:
+                kernels.append(xport_reader_kernel(relay_ports, rd_relay, CB_XPORT_PARTIAL, 0 if PORT_ARR else 1, 0))
+                kernels.append(add_kernel(relay_ports, add_relay, 1, 0))
+            if end_ports:
+                kernels.append(xport_reader_kernel(end_ports, rd_end, CB_XPORT_SUM, 0, 0))
+            kernels.append(xport_reader_kernel(finals, rd_final, CB_XPORT_PARTIAL, has_fa, has_fb))
+            kernels.append(add_kernel(finals, add_final, has_fa, has_fb))
+            if senders:
+                kernels.append(
+                    ttnn.KernelDescriptor(
+                        defines=defs + ([("MMRS_PORT_ARR_CB", str(CB_XPORT_ARRIVAL_A))] if PORT_ARR else []),
+                        kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_port_sender.cpp"),
+                        core_ranges=_cset(senders),
+                        compile_time_args=[
+                            CB_XPORT_SUM,
+                            xp.seg_tiles,
+                            xp.xport_group,
+                            INC_EVERY,
+                            xp.cap_segs,
+                            BF16_TILE_BYTES,
+                        ]
+                        + scr_ct,
+                        runtime_args=snd_rt,
+                        config=_dm("RISCV_0", NOC0 if XPORT_NOC_SWAP else NOC1),
+                    )
+                )
             kernels.append(
                 ttnn.KernelDescriptor(
-                    defines=defs + ([("MMRS_PORT_ARR_CB", str(CB_XPORT_ARRIVAL_A))] if PORT_ARR else []),
-                    kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_port_sender.cpp"),
-                    core_ranges=_cset(senders),
-                    compile_time_args=[
-                        CB_XPORT_SUM,
-                        xp.seg_tiles,
-                        xp.xport_group,
-                        INC_EVERY,
-                        xp.cap_segs,
-                        BF16_TILE_BYTES,
-                    ]
-                    + scr_ct,
-                    runtime_args=snd_rt,
+                    defines=defs,
+                    kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_final_writer.cpp"),
+                    core_ranges=_cset(finals),
+                    compile_time_args=[CB_XPORT_SUM, xp.seg_tiles, xp.xport_group, xp.cap_segs, BF16_TILE_BYTES]
+                    + out_ct,
+                    runtime_args=wr_final,
                     config=_dm("RISCV_0", NOC0 if XPORT_NOC_SWAP else NOC1),
                 )
             )
-        kernels.append(
-            ttnn.KernelDescriptor(
-                defines=defs,
-                kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_final_writer.cpp"),
-                core_ranges=_cset(finals),
-                compile_time_args=[CB_XPORT_SUM, xp.seg_tiles, xp.xport_group, xp.cap_segs, BF16_TILE_BYTES] + out_ct,
-                runtime_args=wr_final,
-                config=_dm("RISCV_0", NOC0 if XPORT_NOC_SWAP else NOC1),
-            )
-        )
         program.cbs = cbs
         program.kernels = kernels
         r, c = coord

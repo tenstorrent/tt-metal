@@ -47,6 +47,10 @@ void kernel_main() {
     constexpr bool read_ahead = get_compile_time_arg_val(10) != 0;  // injector DRAM read-ahead (injector header)
     constexpr uint32_t num_banks = get_compile_time_arg_val(11);    // DRAM banks A is interleaved over
     constexpr auto a_args = TensorAccessorArgs<12>();
+#ifdef MMRS_DIRECT_STORE
+    // Local matmul (no reduction): this core stores its own block, so there are no consumers to hand it to.
+    constexpr auto out_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
+#endif
     constexpr auto mc_a =
         McastArgs<get_named_compile_time_arg_val("a_ct_offset"), get_named_compile_time_arg_val("a_rt_offset")>();
 
@@ -70,6 +74,17 @@ void kernel_main() {
     arg += 2 * num_links + num_finals;
 
     const auto a_acc = TensorAccessor(a_args, a_addr, a_tile_bytes);
+#ifdef MMRS_DIRECT_STORE
+    const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t out_row0 = get_arg_val<uint32_t>(arg++);        // this core's first output tile row
+    const uint32_t out_col0 = get_arg_val<uint32_t>(arg++);        // and tile column
+    const uint32_t out_valid_rows = get_arg_val<uint32_t>(arg++);  // <= core_m_tiles (ragged last m-line)
+    const uint32_t out_valid_cols = get_arg_val<uint32_t>(arg++);  // <= core_n_tiles (ragged last n-line)
+    const uint32_t out_row_tiles = get_arg_val<uint32_t>(arg++);   // output tiles per tile row
+    const uint32_t core_n_tiles = get_arg_val<uint32_t>(arg++);    // hand-off slot row stride (TileRowMajor)
+    const uint32_t handoff_tile_bytes = get_tile_size(cb_partial_handoff);
+    const auto out_acc = TensorAccessor(out_args, out_addr, handoff_tile_bytes);
+#endif
 
     uint32_t signalled = 0, popped = 0;
     auto kind_ack = [&](uint32_t kind) {
@@ -77,6 +92,26 @@ void kernel_main() {
     };
     // handoff_block: signal block `signalled` to its consumers once it is fronted.
     auto try_signal = [&]() {
+#ifdef MMRS_DIRECT_STORE
+        // Store the fronted block (one per call) straight to the output and free its slot.
+        if (signalled >= num_blocks || !cb_pages_available_at_front(cb_partial_handoff, block_tiles)) {
+            return;
+        }
+        const uint32_t slot = get_read_ptr(cb_partial_handoff);
+        for (uint32_t r = 0; r < out_valid_rows; ++r) {
+            for (uint32_t c = 0; c < out_valid_cols; ++c) {
+                noc_async_write_page(
+                    (out_row0 + r) * out_row_tiles + out_col0 + c,
+                    out_acc,
+                    slot + (r * core_n_tiles + c) * handoff_tile_bytes);
+            }
+        }
+        noc_async_write_barrier();
+        cb_pop_front(cb_partial_handoff, block_tiles);
+        ++signalled;
+        ++popped;
+        return;
+#endif
         if (signalled >= num_blocks ||
             !cb_pages_available_at_front(cb_partial_handoff, (signalled - popped + 1) * block_tiles)) {
             return;
@@ -99,6 +134,9 @@ void kernel_main() {
     };
     // release_block: pop block `popped` once its consumers have acked it.
     auto try_release = [&]() {
+#ifdef MMRS_DIRECT_STORE
+        return;
+#endif
         if (popped < signalled && kind_ack(get_arg_val<uint32_t>(order_idx + order_stride * popped + 1)) >=
                                       get_arg_val<uint32_t>(order_idx + order_stride * popped + 2)) {
             cb_pop_front(cb_partial_handoff, block_tiles);
@@ -167,6 +205,9 @@ void kernel_main() {
             poll();
         }
     }
+#ifdef MMRS_DIRECT_STORE
+    return;  // no consumer acked anything
+#endif
     // Re-arm: every semaphore is zero between calls.
     // re-arm each kind's counter by its total (the cumulative count of its last block)
     uint32_t totals[3] = {0, 0, 0};

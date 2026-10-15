@@ -74,13 +74,24 @@ void kernel_main() {
     } else {
         topology = kda_chronology::derive(actual_start, sp_rank, sp_size, local_rows);
     }
+#ifdef PREFIX_ON_LAST_RANK
+    // The prefix's final state is not replicated: without a split tail, the last chronological rank multicasts it.
+    const uint32_t last_rank = (topology.first_rank + sp_size - 1) % sp_size;
+    const Mode mode = !topology.split ? (last_rank == sp_rank ? broadcast : receive)
+                                      : (topology.final_owner == sp_rank ? broadcast : receive);
+#else
     const Mode mode = !topology.split ? copy_prefix : (topology.final_owner == sp_rank ? broadcast : receive);
+#endif
     words[0] = mode;
     cb_push_back(mode_cb, 1);
 
     if (mode == copy_prefix) {
         stream_tiles<false>(TensorAccessor(prefix_args, prefix_address), copy_begin, copy_end);
     } else if (mode == broadcast) {
-        stream_tiles<true>(TensorAccessor(tail_args, tail_address), send_begin, send_end);
+        if (topology.split) {
+            stream_tiles<true>(TensorAccessor(tail_args, tail_address), send_begin, send_end);
+        } else {
+            stream_tiles<false>(TensorAccessor(prefix_args, prefix_address), send_begin, send_end);
+        }
     }
 }

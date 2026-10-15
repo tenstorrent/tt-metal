@@ -209,7 +209,19 @@ def _get_sems(mesh_device, cluster_axis, num_links, ring=False):
 
 
 def _get_plan(
-    mesh_device, cluster_axis, num_links, M, K, N, scatter_dim, a_dtype, w_dtype, fp32_acc, fidelity, ring=False
+    mesh_device,
+    cluster_axis,
+    num_links,
+    M,
+    K,
+    N,
+    scatter_dim,
+    a_dtype,
+    w_dtype,
+    fp32_acc,
+    fidelity,
+    ring=False,
+    l1_capacity=None,
 ):
     """Host plan + the persistent DRAM relay scratch, cached per plan key (global semaphores: `_get_sems`).
 
@@ -219,6 +231,7 @@ def _get_plan(
     program cache patches its CB address on a hit (UpdateDynamicCircularBufferAddress)."""
     key = (
         id(mesh_device),
+        l1_capacity,
         cluster_axis,
         ring,
         num_links,
@@ -243,19 +256,25 @@ def _get_plan(
     if key in _PLAN_CACHE:
         return _PLAN_CACHE[key][1]
     mesh_shape = tuple(mesh_device.shape)
-    G = mesh_shape[cluster_axis]
-    ring = ring and G >= 3  # a 2-device ring is the line (one link pair; both directions would share a channel)
-    if ring:
-        _check_ring_fabric(cluster_axis)
-    groups = _groups(mesh_shape, cluster_axis, ring)
-    links, L = _links(mesh_device, groups, num_links)
+    if cluster_axis is None:
+        # Local matmul: every device is its own group, so there is no transport, only the finals storing the result.
+        G, ring = 1, False
+        groups = {(r, c): (0, None, None) for r in range(mesh_shape[0]) for c in range(mesh_shape[1])}
+        links, L = {}, num_links or 1
+    else:
+        G = mesh_shape[cluster_axis]
+        ring = ring and G >= 3  # a 2-device ring is the line (one link pair; both directions would share a channel)
+        if ring:
+            _check_ring_fabric(cluster_axis)
+        groups = _groups(mesh_shape, cluster_axis, ring)
+        links, L = _links(mesh_device, groups, num_links)
     pl = _plan_placement(mesh_device, L, groups, links)
     num_banks = mesh_device.dram_grid_size().x * mesh_device.dram_grid_size().y
     if num_banks % (2 * L):
         raise ValueError(f"matmul_reduce_scatter: {num_banks} DRAM banks do not split into {2 * L} bank sets")
     comp_rows, comp_cols = pl.grid_y - pl.transport_rows, pl.grid_x
     # L1 a compute core can give to its CBs: the allocator's L1 region minus the hand-off shard and a fixed reserve.
-    l1_free = _l1_cb_capacity(mesh_device) - L1_RESERVE
+    l1_free = (l1_capacity if l1_capacity is not None else _l1_cb_capacity(mesh_device)) - L1_RESERVE
     plan_args = dict(
         comp_rows=comp_rows,
         comp_cols=comp_cols,
@@ -458,3 +477,72 @@ def _merge_extra_programs(mesh_device, desc, extra_program):
             extra = extra_program((r, c), free)
             merged[key] = program if extra is None else ttnn.merge_program_descriptors([program, extra])
     return merged
+
+
+def matmul_local_program(input_tensor, weight, *, compute_kernel_config=None, num_links=None, memory_config=None):
+    """A @ W on every device independently (no reduction), with this op's matmul and its finals storing the result.
+
+    Returns (io_tensors, mesh program descriptor, output) instead of dispatching, so a caller can merge other programs
+    onto the cores it leaves idle (ttnn.merge_program_descriptors) and dispatch once with ttnn.generic_op; the output
+    is the last of io_tensors. A and W must be DRAM-interleaved TILE tensors; A rank 2-4 with leading dims 1. The output
+    is interleaved in `memory_config` (DRAM by default)."""
+    a_shape, w_shape = list(input_tensor.shape), list(weight.shape)
+    if not 2 <= len(a_shape) <= 4 or any(d != 1 for d in a_shape[:-2]) or len(w_shape) != 2:
+        raise ValueError(f"matmul_local_program: A {a_shape} must be rank 2-4 with leading dims 1, W rank 2")
+    if a_shape[-1] != w_shape[0]:
+        raise ValueError(f"matmul_local_program: A's K={a_shape[-1]} != W's K={w_shape[0]}")
+    _check_dram_interleaved(input_tensor, "A")
+    _check_dram_interleaved(weight, "W")
+    mesh_device = input_tensor.device()
+    cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
+    M, K, N = a_shape[-2], a_shape[-1], w_shape[-1]
+    # The finals store whole blocks, so the output's padded extent is the block (here M x N, one group).
+    output = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(a_shape[:-2] + [M, N]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        mesh_device,
+        memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # It runs alongside other work: its static CBs (growing up from the allocator base) must stay below the lowest L1
+    # buffer live at the call, so it plans with the span under that buffer rather than the whole allocator span.
+    # Round down so the plan is reused while the live footprint stays within the same 64 KiB.
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
+    allocated = [int(b["address"]) for b in view.block_table if b.get("allocated") == "yes"]
+    free = min(allocated, default=int(view.total_bytes_per_bank))
+    plan = _get_plan(
+        mesh_device,
+        None,
+        num_links,
+        M,
+        K,
+        N,
+        -1,
+        input_tensor.dtype,
+        weight.dtype,
+        bool(cfg.fp32_dest_acc_en),
+        cfg.math_fidelity,
+        l1_capacity=free // 65536 * 65536,
+    )
+    blk = plan["blk"]
+    assert (blk.blk_m_tiles * 32, blk.blk_n_tiles * 32) == (M, N), "a local matmul's block is the whole output"
+    handoff_l1 = _allocate_handoff(mesh_device, plan)
+    desc = create_mesh_program_descriptor(
+        mesh_device,
+        a=input_tensor,
+        w=weight,
+        scratch=plan["relay_scratch"],
+        handoff=handoff_l1,
+        output=output,
+        sems=tuple(int(ttnn.get_global_semaphore_address(s)) for s in plan["sems"]),
+        blk=blk,
+        xp=plan["xp"],
+        pl=plan["pl"],
+        groups=plan["groups"],
+        cluster_axis=None,
+        links=plan["links"],
+        num_links=plan["num_links"],
+        compute_config=cfg,
+        ring=False,
+    )
+    return [input_tensor, weight, plan["relay_scratch"], handoff_l1, output], desc, output
