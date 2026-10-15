@@ -363,6 +363,17 @@ Measured on one Galaxy (vLLM 0.31, 4 users, plain decode):
 | Sanity requests | `17*23` -> 391, capital of France -> Paris |
 | 100,020-token prompt with a needle at the end | answered correctly (4817); prefill 163.8 s at chunk 512 (412 s at chunk 128) |
 
+Other (users x context) points on the same tree, same method (vLLM 0.31, plain decode, chunk 512, trace region 800,000,000, 100,020-token needle at the end, 391 / Paris sanity):
+
+| Users | Context | Tokens per mesh row | Ready | Needle (4817) prefill | |
+|---|---|---|---|---|---|
+| 4 | 1,048,576 | 1,048,576 | 13-24 min | 163 s | works |
+| 8 | 524,288 | 1,048,576 | 22 min | 141 s | works |
+| 16 | 262,144 | 1,048,576 | 27 min | 121 s | works |
+| 8 | 1,048,576 | 2,097,152 | - | - | out of DRAM during warm-up (32 MB free per bank at a 128 MiB allocation) |
+
+Users times context per mesh row is the budget that fits (the paged KV pool and the per-user prefill tables scale with it); the ready times of the later rows include three hosts reading the Engram tables from NFS at once. A 2-users-per-row decode at a 262,144-slot index needs the per-user ranking of the decode indexer (`SELECT_CONCAT_BYTES`): without it the score rows of two users do not fit a core's L1.
+
 Not measured: a prompt close to 1,000,000 tokens (estimated ~12 min of prefill from the 100k run), GSM8K accuracy and the speed table at this configuration, speculative
 decoding (it is off: its draft state does not fit at this context). The prefill kv table is still replicated over the mesh columns.
 

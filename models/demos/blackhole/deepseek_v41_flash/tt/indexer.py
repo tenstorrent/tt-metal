@@ -74,6 +74,11 @@ def pos_buckets(max_pos):
     return sorted({int(x) for x in raw.split(",") if x.strip() and 0 < int(x) < int(max_pos)})
 
 
+SELECT_CONCAT_BYTES = (
+    1 << 20
+)  # score rows of the users concatenated into one tensor must stay below this (the circular buffer of the concat holds a few of them in L1)
+
+
 class DSV41DecodeIndexer:
     def __init__(
         self,
@@ -377,6 +382,20 @@ class DSV41DecodeIndexer:
         """
         if self.backend == "fused":
             rows = [ttnn.slice(s, [0, 0, 0, 0], [1, 1, 1, self.n_alloc]) for s in scores]
+            if len(rows) > 1 and len(rows) * self.n_alloc * 2 >= SELECT_CONCAT_BYTES:
+                # long context, U > 1 users per mesh row: concatenating the users' score rows needs a circular buffer larger than the L1 of a core (2 MiB at 2 x 262144 slots,
+                # 1 M context at B = 8): rank every user's row on its own and concatenate the (tiny) ids. Same ids, one topk call per user.
+                ids = []
+                for u, row in enumerate(rows):
+                    if "nvalid" in st:
+                        ar = self._arange_for(self.n_score)
+                        keep = ttnn.lt(ar, ttnn.slice(st["nvalid"], [u, 0, 0, 0], [u + 1, 1, 1, 1]))
+                        masked = ttnn.where(
+                            keep, ttnn.typecast(ttnn.to_layout(row, ttnn.TILE_LAYOUT), ttnn.float32), -1e30
+                        )
+                        row = ttnn.to_layout(ttnn.typecast(masked, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
+                    ids.append(ttnn.experimental.topk_large_indices(row, k=self.topk, valid_length_tensor=st["valid"]))
+                return ttnn.concat(ids, dim=0)
             scores = rows[0] if len(rows) == 1 else ttnn.concat(rows, dim=0)  # [U,1,1,T] row-major
         if (
             "nvalid" in st
