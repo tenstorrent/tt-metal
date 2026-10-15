@@ -68,6 +68,7 @@ DEVICE_STEPS = {
         "ffn_norm",
         "router",
         "experts",
+        "shared_expert",
     },
 }
 
@@ -305,6 +306,24 @@ def _experts_host_fn(mesh, module):
     return fn
 
 
+def _rows_to_hidden_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> host [S, H] fp32 (harness boundary: ffn_norm's gathered rows split over axis 0,
+    replicated over axis 1, in; the rows over axis 0 and hidden columns over axis 1 back)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_host, row_split_to_device
+
+    def fn(ctx, x):
+        xd = row_split_to_device(mesh, x)
+        od = module(xd)
+        out = hidden_split_to_host(mesh, od).float()
+        ttnn.deallocate(xd)
+        ttnn.deallocate(od)
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _chunk(spec):
     """The serving chunk the window tables are built for (the run's target chunk; every ladder rung uses it)."""
     return int(spec.get("target.chunk"))
@@ -344,6 +363,10 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         from models.demos.deepseek_v41_flash_d_p.tt.experts import build_experts
 
         return _experts_host_fn(mesh, build_experts(mesh, ck, cfg, layer, _chunk(spec)))
+    if step == "shared_expert":
+        from models.demos.deepseek_v41_flash_d_p.tt.shared_expert import build_shared_expert
+
+        return _rows_to_hidden_host_fn(mesh, build_shared_expert(mesh, ck, cfg, layer))
     if step == "router":
         from models.demos.deepseek_v41_flash_d_p.tt.router import build_router
 
