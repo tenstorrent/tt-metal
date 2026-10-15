@@ -155,13 +155,11 @@ FORMATS_BFP4_B = [
 # WITH_COVERAGE is set. Membership is measured, never inferred: run the op under
 # `--coverage` on the arch in question before adding it here.
 #
-# Reciprocal on Blackhole is the only entry the sweep has. The counts below come from a sweep
-# that also ran 12 more Reciprocal ids per arch (the dest_acc:No twins of the promoted
-# dest_acc:Yes ids); re-measure before relying on them. 46 of its 153 Blackhole variants
-# come back with alternate elements stale while its sfp* instruction stream stays
-# byte-identical to the non-coverage build, which is what makes it a timing fault rather
-# than a codegen one. Two things are needed to reproduce it, and neither predicts it on its
-# own:
+# Reciprocal on Blackhole is the only entry the sweep has. 46 of its 153 Blackhole
+# variants come back with alternate elements stale while its sfp* instruction stream
+# stays byte-identical to the non-coverage build, which is what makes it a timing fault
+# rather than a codegen one. Two things are needed to reproduce it, and neither predicts
+# it on its own:
 #
 #   - It needs the SFPLOADMACRO path: `--coverage --disable-sfploadmacro` passes 153/153.
 #     But emitting SFPLOADMACRO does not imply failing. Counting the mnemonic in the
