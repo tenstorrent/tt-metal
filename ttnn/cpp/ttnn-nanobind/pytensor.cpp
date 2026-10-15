@@ -70,8 +70,8 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::tensor {
-using experimental::per_core_allocation::L1TensorExtent;
-using experimental::per_core_allocation::L1TensorViewPlacement;
+using tt::tt_metal::experimental::per_core_allocation::L1TensorExtent;
+using tt::tt_metal::experimental::per_core_allocation::L1TensorViewPlacement;
 
 struct L1TensorGeometry {
     DeviceAddr packed_size, page_size, aligned_shard_size, allocation_shard_size;
@@ -511,7 +511,7 @@ void pytensor_module(nb::module_& mod) {
             L1TensorGeometry geometry{};
             geometry.packed_size = spec.compute_packed_buffer_size_bytes();
             geometry.page_size = spec.compute_page_size_bytes();
-            geometry.per_core = experimental::per_core_allocation::is_per_core_allocation(args);
+            geometry.per_core = tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(args);
             size_t pages;
             if (const auto& distribution = args.buffer_distribution_spec(); distribution.has_value()) {
                 geometry.cores = distribution->cores_with_data();
@@ -541,7 +541,7 @@ void pytensor_module(nb::module_& mod) {
         [](const Tensor& tensor) {
             TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "L1 owner must be a device tensor");
             const auto& storage = tensor.device_storage();
-            return experimental::per_core_allocation::get_l1_tensor_owner_extents(
+            return tt::tt_metal::experimental::per_core_allocation::get_l1_tensor_owner_extents(
                 storage.get_mesh_buffer(), {storage.get_coords().begin(), storage.get_coords().end()});
         },
         nb::arg("tensor"),
@@ -557,10 +557,10 @@ void pytensor_module(nb::module_& mod) {
                 TT_FATAL(owner.storage_type() == StorageType::DEVICE, "L1 view owner must be a device tensor");
                 const auto& storage = owner.device_storage();
                 TT_FATAL(&storage.get_mesh_tensor().device() == &mesh, "L1 view owner uses a different MeshDevice");
-                extents.push_back(experimental::per_core_allocation::get_l1_tensor_owner_extents(
+                extents.push_back(tt::tt_metal::experimental::per_core_allocation::get_l1_tensor_owner_extents(
                     storage.get_mesh_buffer(), {storage.get_coords().begin(), storage.get_coords().end()}));
             }
-            auto buffer = experimental::per_core_allocation::create_l1_tensor_view(
+            auto buffer = tt::tt_metal::experimental::per_core_allocation::create_l1_tensor_view(
                 mesh,
                 distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
                 distributed::DeviceLocalBufferConfig{
