@@ -635,13 +635,13 @@ executables: external exclusive ownership must cover preparation through final
 teardown. Failed preparation or unconfirmed cleanup aborts the prepared sequence,
 with no automatic cache-state recovery.
 
-The current component and socket reservation requires at least eleven LIM ways.
+The current component reservation requires at least ten LIM ways.
 WayEnable is increase-only, so a shape that expands LIM returns
 `ResetRequired`. A same-mesh reopen with a different shape returns `Failed`
 without touching hardware. `X280Runtime::lim_shape()` reports the effective
 partition. Under the default `LimLayout::Legacy` profile, `X280Tile::reserved_lim()`
-covers `[0x08000000, 0x08154000)`, and `available_lim()` extends from that end to the
-backed-LIM limit (with the default fifteen-way shape, `0x081e0000 - 0x08154000 = 0x8c000 = 573,440` bytes).
+covers `[0x08000000, 0x08131B00)`, and `available_lim()` extends from that end to the
+backed-LIM limit (with the default fifteen-way shape, `0x081e0000 - 0x08131B00 = 0xae500 = 713,984` bytes).
 Under the opt-in `LimLayout::PacketInjection` profile (14 LIM ways), `X280Tile::reserved_lim()`
 reports the low image/idle prefix `[0x08000000, 0x08020000)`, and `available_lim()` exposes
 the lower arena `[0x08020000, 0x080FFF80)` (917,376 bytes), leaving upper active stacks,
