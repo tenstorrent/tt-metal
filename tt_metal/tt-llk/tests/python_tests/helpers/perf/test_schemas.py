@@ -13,7 +13,6 @@ test_perf_header_gate.py re-derives each test's columns and fails on any drift
 from this catalog.
 """
 
-
 PERF_TEST_SCHEMAS = {
     "perf_eltwise_bcast_col_custom": {
         "version": 3,
@@ -966,7 +965,7 @@ PERF_TEST_SCHEMAS = {
 
 PERF_TEST_SCHEMAS_QSR = {
     "perf_eltwise_binary_broadcast_quasar": {
-        "version": 6,
+        "version": 7,
         "columns": [
             "acc_to_dest",
             "block_ct_dim",
@@ -985,7 +984,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "input_tile_cnt",
@@ -1014,7 +1012,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_binary_quasar": {
-        "version": 7,
+        "version": 8,
         "columns": [
             "acc_to_dest",
             "block_ct_dim",
@@ -1033,7 +1031,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "input_tile_cnt",
@@ -1062,7 +1059,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_binary_reuse_dest_quasar": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1079,7 +1076,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "input_tile_cnt",
@@ -1105,7 +1101,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_binary_sfpu_quasar": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "approx_mode",
             "broadcast_type",
@@ -1124,7 +1120,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
-            "implied_math_format",
             "input_format",
             "loop_factor",
             "marker",
@@ -1151,7 +1146,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_unary_datacopy_quasar": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1170,7 +1165,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "loop_factor",
@@ -1196,7 +1190,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_unary_sfpu_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "approx_mode",
             "data_copy_type",
@@ -1212,7 +1206,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
-            "implied_math_format",
             "input_format",
             "loop_factor",
             "marker",
@@ -1240,7 +1233,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_fused_quasar": "perf_fused_quasar"},
     },
     "perf_matmul_quasar": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -1258,7 +1251,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "in0_face_r_dim",
             "in1_face_c_dim",
             "in1_face_r_dim",
-            "implied_math_format",
             "k_dimm",
             "loop_factor",
             "marker",
@@ -1279,7 +1271,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_matmul_quasar": "perf_matmul_quasar"},
     },
     "perf_pack_l1_acc_quasar": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1296,7 +1288,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "loop_factor",
@@ -1316,7 +1307,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_pack_l1_acc_quasar": "perf_pack_l1_acc_quasar"},
     },
     "perf_pack_quasar": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1333,7 +1324,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "loop_factor",
@@ -1357,7 +1347,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_pack_quasar": "perf_pack_quasar"},
     },
     "perf_pack_untilize_quasar": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1374,7 +1364,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
             "loop_factor",
             "marker",
             "num_faces",
@@ -1392,7 +1381,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_pack_untilize_quasar": "perf_pack_untilize_quasar"},
     },
     "perf_reduce_quasar": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1409,7 +1398,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
             "loop_factor",
             "marker",
             "math_fidelity",
@@ -1430,7 +1418,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_reduce_quasar": "perf_reduce_quasar"},
     },
     "perf_sfpu_add_parallel_matmul_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -1444,7 +1432,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
-            "implied_math_format",
             "k_dimm",
             "loop_factor",
             "marker",
@@ -1463,7 +1450,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_sfpu_exp_parallel_matmul_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -1477,7 +1464,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
-            "implied_math_format",
             "k_dimm",
             "loop_factor",
             "marker",
@@ -1497,7 +1483,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_sfpu_reduce_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1515,7 +1501,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
             "loop_factor",
             "marker",
             "mathop",
@@ -1531,7 +1516,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_sfpu_reduce_quasar": "perf_sfpu_reduce_quasar"},
     },
     "perf_sfpu_where_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "data_copy_type",
             "dest_acc",
@@ -1546,7 +1531,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
-            "implied_math_format",
             "loop_factor",
             "marker",
             "mathop",
@@ -1562,7 +1546,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_sfpu_where_quasar": "perf_sfpu_where_quasar"},
     },
     "perf_transpose_dest_quasar": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1581,7 +1565,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "loop_factor",
@@ -1608,7 +1591,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_unary_broadcast_quasar": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1626,7 +1609,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "loop_factor",
@@ -1652,7 +1634,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_unpack_reduce_col_tilizeA_strided_quasar": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1669,7 +1651,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
             "loop_factor",
             "marker",
             "math_fidelity",
@@ -1691,42 +1672,6 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_unpack_tilize_quasar": {
-        "version": 4,
-        "columns": [
-            "block_ct_dim",
-            "block_rt_dim",
-            "data_copy_type",
-            "dest_acc",
-            "dest_sync",
-            "face_c_dim",
-            "face_r_dim",
-            "formats.input_A",
-            "formats.input_B",
-            "formats.output",
-            "formats.register_A",
-            "formats.register_B",
-            "formats.sfpu_src",
-            "formats.sfpu_dst",
-            "full_ct_dim",
-            "full_rt_dim",
-            "implied_math_format",
-            "loop_factor",
-            "marker",
-            "num_faces",
-            "num_faces_A",
-            "num_faces_B",
-            "num_faces_c_dim_A",
-            "num_faces_c_dim_B",
-            "num_faces_r_dim_A",
-            "num_faces_r_dim_B",
-            "tile_cnt",
-            "unpack_to_dest",
-            "unpacker_engine_sel",
-        ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
-        "test_name_aliases": {"perf_unpack_tilize_quasar": "perf_unpack_tilize_quasar"},
-    },
-    "perf_unpack_unary_operand_quasar": {
         "version": 5,
         "columns": [
             "block_ct_dim",
@@ -1745,7 +1690,41 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "implied_math_format",
+            "loop_factor",
+            "marker",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "num_faces_c_dim_A",
+            "num_faces_c_dim_B",
+            "num_faces_r_dim_A",
+            "num_faces_r_dim_B",
+            "tile_cnt",
+            "unpack_to_dest",
+            "unpacker_engine_sel",
+        ],
+        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_unpack_tilize_quasar": "perf_unpack_tilize_quasar"},
+    },
+    "perf_unpack_unary_operand_quasar": {
+        "version": 6,
+        "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
+            "data_copy_type",
+            "dest_acc",
+            "dest_sync",
+            "face_c_dim",
+            "face_r_dim",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "loop_factor",

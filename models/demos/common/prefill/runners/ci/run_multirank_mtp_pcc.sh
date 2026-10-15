@@ -17,7 +17,6 @@ MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configura
 CHUNK_SIZE=5120
 GOLDEN_LEN=56320
 MAX_SEQ_LEN=${GOLDEN_LEN}
-NUM_USERS=1
 PCC_THRESHOLD=0.85
 # The MTP levels are decoder blocks chained on the trunk output, so their KV inherits the trunk error
 # and adds one block's worth per level. GLM-5.3 drifts ~0.03/level against its own CPU reference
@@ -34,6 +33,20 @@ case "${CONFIG}" in
   sc1|sc4) ;;
   *) echo "unknown config '${CONFIG}' (expected sc1 or sc4)" >&2; exit 2 ;;
 esac
+
+# The manifest count is the sc4 ceiling at the manifest's 1,044,480 context. The ranks take it through
+# setdefault but allocate it at MAX_SEQ_LEN, so the leg runs the full slot pool without gating capacity.
+# sc1 runs all 78 layers on one rank, so it overrides down to one user. The export has to be explicit:
+# the rank shell receives a fixed export list, so a value exported into this script does not reach it.
+RUNNER_NUM_USERS=""
+if [ "${CONFIG}" != sc4 ]; then
+  RUNNER_NUM_USERS=1
+fi
+if [ -n "${PREFILL_NUM_USERS:-}" ]; then
+  RUNNER_NUM_USERS=${PREFILL_NUM_USERS}
+fi
+RUNNER_NUM_USERS_EXPORT="${RUNNER_NUM_USERS:+export PREFILL_NUM_USERS=${RUNNER_NUM_USERS}; }"
+
 MANIFEST="${MANIFEST_DIR}/${MODEL}_mtp${LEVELS}.json"
 [ -f "${MANIFEST}" ] || { echo "no manifest for ${MODEL} MTP${LEVELS} at ${MANIFEST}" >&2; exit 2; }
 MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
@@ -108,7 +121,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "resolved shape for ${MODEL} MTP${MTP_LEVELS}/${CONFIG}: layers=${NUM_LAYERS} max_seq_len=${MAX_SEQ_LEN} users=${NUM_USERS} chunks=${REAL_CHUNKS}"
+echo "resolved shape for ${MODEL} MTP${MTP_LEVELS}/${CONFIG}: layers=${NUM_LAYERS} max_seq_len=${MAX_SEQ_LEN} users=${RUNNER_NUM_USERS:-manifest} chunks=${REAL_CHUNKS}"
 
 cd "${TTRUN_CWD}"
 python3 "${TTRUN_PY}" \
@@ -123,7 +136,7 @@ python3 "${TTRUN_PY}" \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
-    export PREFILL_NUM_USERS=${NUM_USERS}; \
+    ${RUNNER_NUM_USERS_EXPORT}\
     export PREFILL_SYNC_PER_CHUNK=1; \
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
     export PREFILL_ENABLE_MIGRATION=0; \
@@ -166,6 +179,8 @@ echo "producer host order from tt-run discovery: ${HOSTS}"
 
 MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 set +e
+# The producer pins itself to one slot rather than taking the manifest count the ranks allocate for:
+# the leg sends a single request.
 "${MPIRUN}" \
   --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
   --output-filename "${RANKLOGS}/producer" \
@@ -176,7 +191,7 @@ set +e
     export PYTHONUNBUFFERED=1; \
     export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
-    export PREFILL_NUM_USERS=${NUM_USERS}; \
+    export PREFILL_NUM_USERS=1; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PRODUCER_MAX_REQUESTS=1; \
     export PREFILL_PRODUCER_MULTI_TURN_PROB=0; \

@@ -1098,7 +1098,7 @@
   model_family: Qwen
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -1115,6 +1115,22 @@
   skus:
     wh_llmbox_perf:
       timeout: 5
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  budget_type: unit
+
+- name: Qwen2.5-VL-7B unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    uv pip install -r models/demos/qwen25_vl/requirements.txt
+    export HF_MODEL=Qwen/Qwen2.5-VL-7B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-7B-Instruct MESH_DEVICE=T3K
+    pytest --timeout 600 models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
+  model: qwen2.5-vl-7b
+  model_family: Qwen
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -2318,5 +2334,21 @@
       timeout: 8
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
+  team: models
+  budget_type: unit
+
+# ESM-2 650M protein language model (facebook/esm2_t33_650M_UR50D).
+# 10 tests in ~66 s warm on bh_p150 (run 38277387590); the checkpoint
+# resolves from the shared HF cache. 5 min covers first-run JIT compilation.
+- name: esm2 unit tests
+  cmd: |
+    pytest models/experimental/esm2/tests --timeout=300
+  model: esm2-650m
+  model_family: ESM
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 3
+  owner_id: U09B1UE301K # Abror Shopulatov
   team: models
   budget_type: unit
