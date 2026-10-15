@@ -31,6 +31,14 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
+// The program sits at the kernel-config size limit. Out-of-line helpers shrink the pack thread's binary but grow the
+// unpack thread's (its format reconfiguration no longer folds the buffer ids), so only the pack build outlines them.
+#ifdef TRISC_PACK
+#define KDA_PREP_HELPER __attribute__((noinline))
+#else
+#define KDA_PREP_HELPER inline
+#endif
+
 constexpr uint32_t max_dst_tiles =
     ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
 
@@ -42,7 +50,7 @@ enum class ElementwiseBinaryOp { Add, Subtract, Multiply };
 // Compute out[Mt,Nt] = A[Mt,Kt] @ (transpose_b ? B[Nt,Kt]^T : B[Kt,Nt]) in the largest rectangular
 // subblocks that exactly divide the output and fit in destination registers.
 template <uint32_t Mt, uint32_t Kt, uint32_t Nt, bool Tr>
-void matmul_blocks(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o) {
+KDA_PREP_HELPER void matmul_blocks(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o) {
     constexpr uint32_t subblock_columns = kda::MatmulSubblock<Mt, Nt>::columns;
     constexpr uint32_t subblock_rows = kda::MatmulSubblock<Mt, Nt>::rows;
     const uint32_t a_id = a.get_id();
@@ -77,62 +85,64 @@ void matmul_blocks(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o) {
     o.push_back(Mt * Nt);
 }
 
-// Apply a typed binary operation tilewise, batching each destination-register synchronization.
-template <ElementwiseBinaryOp Op>
-void elementwise_binary(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o, uint32_t n) {
+// Tilewise binary operation, shared by every elementwise stage and by the batched inverse, where the core's work
+// items run each stage together, up to max_dst_tiles items per
+// destination-register acquire, so the inverse pays its ~20 dependent stages once per core instead of once per item.
+// a's tile for item i is a_base + i (or a_base alone when a is a shared constant), likewise b. Out of line, with the
+// operation a runtime argument: the program sits at the kernel-config size limit.
+__attribute__((noinline)) void binary_items(
+    ElementwiseBinaryOp op,
+    DataflowBuffer& a,
+    uint32_t a_base,
+    bool a_shared,
+    DataflowBuffer& b,
+    uint32_t b_base,
+    bool b_shared,
+    DataflowBuffer& o,
+    uint32_t n) {
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t o_id = o.get_id();
-
     o.reserve_back(n);
-    reconfig_data_format(a_id, b_id);  // binary(a_id,b_id): a_id->srcA, b_id->srcB
-    if constexpr (Op == ElementwiseBinaryOp::Add) {
+    reconfig_data_format(a_id, b_id);
+    if (op == ElementwiseBinaryOp::Add) {
         add_init(a_id, b_id);
-    } else if constexpr (Op == ElementwiseBinaryOp::Subtract) {
+    } else if (op == ElementwiseBinaryOp::Subtract) {
         sub_init(a_id, b_id);
     } else {
         mul_init(a_id, b_id);
     }
-    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
-        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
+    for (uint32_t first = 0; first < n; first += max_dst_tiles) {
+        const uint32_t count = n - first < max_dst_tiles ? n - first : max_dst_tiles;
         tile_regs_acquire();
-        if constexpr (Op == ElementwiseBinaryOp::Add) {
-            add_block(a_id, b_id, block_start, block_start, 0, block_tiles);
-        } else if constexpr (Op == ElementwiseBinaryOp::Subtract) {
-            sub_block(a_id, b_id, block_start, block_start, 0, block_tiles);
-        } else {
-            mul_block(a_id, b_id, block_start, block_start, 0, block_tiles);
+        for (uint32_t item = 0; item < count; ++item) {
+            const uint32_t a_tile = a_shared ? a_base : a_base + first + item;
+            const uint32_t b_tile = b_shared ? b_base : b_base + first + item;
+            if (op == ElementwiseBinaryOp::Add) {
+                add_block(a_id, b_id, a_tile, b_tile, item, 1);
+            } else if (op == ElementwiseBinaryOp::Subtract) {
+                sub_block(a_id, b_id, a_tile, b_tile, item, 1);
+            } else {
+                mul_block(a_id, b_id, a_tile, b_tile, item, 1);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
+        for (uint32_t item = 0; item < count; ++item) {
+            pack_tile(item, o_id, first + item);
         }
         tile_regs_release();
     }
     o.push_back(n);
 }
 
-// Multiply one selected source-tile pair and publish the result.
-void multiply_selected_tile(DataflowBuffer& a, uint32_t a_tile, DataflowBuffer& b, uint32_t b_tile, DataflowBuffer& o) {
-    const uint32_t a_id = a.get_id();
-    const uint32_t b_id = b.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(1);
-    reconfig_data_format(a_id, b_id);
-    mul_init(a_id, b_id);
-    tile_regs_acquire();
-    mul_block(a_id, b_id, a_tile, b_tile, 0, 1);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, o_id, 0);
-    tile_regs_release();
-    o.push_back(1);
+// Apply a binary operation tilewise to n tiles of a and b.
+template <ElementwiseBinaryOp Op>
+inline void elementwise_binary(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o, uint32_t n) {
+    binary_items(Op, a, 0, false, b, 0, false, o, n);
 }
 
-void square_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+KDA_PREP_HELPER void square_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
 
@@ -162,7 +172,7 @@ void square_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
 // and 1, and two of a face's eight SFPU iterations span its first rows, row 0 included. The rest of each output tile
 // is then unspecified.
 template <VectorMode Mode = VectorMode::RC, int Iterations = 8>
-void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+KDA_PREP_HELPER void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
 
@@ -188,7 +198,7 @@ void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     o.push_back(n);
 }
 
-void multiply_by_half(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+KDA_PREP_HELPER void multiply_by_half(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     constexpr uint32_t fp32_half_bits = __builtin_bit_cast(uint32_t, 0.5F);
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
@@ -215,7 +225,7 @@ void multiply_by_half(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     o.push_back(n);
 }
 
-void reciprocal_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+KDA_PREP_HELPER void reciprocal_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
 
@@ -244,7 +254,8 @@ void reciprocal_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
 }
 
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
-void multiply_by_column(DataflowBuffer& a, DataflowBuffer& col, DataflowBuffer& o, uint32_t Mt, uint32_t Nt) {
+KDA_PREP_HELPER void multiply_by_column(
+    DataflowBuffer& a, DataflowBuffer& col, DataflowBuffer& o, uint32_t Mt, uint32_t Nt) {
     const uint32_t a_id = a.get_id();
     const uint32_t col_id = col.get_id();
     const uint32_t o_id = o.get_id();
@@ -273,7 +284,7 @@ void multiply_by_column(DataflowBuffer& a, DataflowBuffer& col, DataflowBuffer& 
 }
 
 // out[n] = A[n] * row[n]  (broadcast row 0 of each `row` tile down its tile)
-void multiply_by_row(DataflowBuffer& a, DataflowBuffer& row, DataflowBuffer& o, uint32_t n) {
+KDA_PREP_HELPER void multiply_by_row(DataflowBuffer& a, DataflowBuffer& row, DataflowBuffer& o, uint32_t n) {
     const uint32_t a_id = a.get_id();
     const uint32_t row_id = row.get_id();
     const uint32_t o_id = o.get_id();
@@ -298,77 +309,118 @@ void multiply_by_row(DataflowBuffer& a, DataflowBuffer& row, DataflowBuffer& o, 
     o.push_back(n);
 }
 
-// Invert (I-N) for the strictly lower N by nesting three block levels, so every matmul keeps
-// one strictly-lower factor and no large cancelling power of PS4 is ever formed.
+// o[i] = a[i] @ b[i] for one-tile matrices.
+__attribute__((noinline)) void matmul_items(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o, uint32_t n) {
+    const uint32_t a_id = a.get_id();
+    const uint32_t b_id = b.get_id();
+    const uint32_t o_id = o.get_id();
+    o.reserve_back(n);
+    reconfig_data_format(b_id, a_id);
+    matmul_block_init(a_id, b_id, false, 1, 1, 1);
+    for (uint32_t first = 0; first < n; first += max_dst_tiles) {
+        const uint32_t count = n - first < max_dst_tiles ? n - first : max_dst_tiles;
+        tile_regs_acquire();
+        for (uint32_t item = 0; item < count; ++item) {
+            matmul_block(a_id, b_id, first + item, first + item, item, false, 1, 1, 1);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t item = 0; item < count; ++item) {
+            pack_tile(item, o_id, first + item);
+        }
+        tile_regs_release();
+    }
+    o.push_back(n);
+}
+
+// T_inv = (I + strictly_lower(Akk))^-1 for the n items whose raw Akk tiles are the front of `akk`.
+// Invert (I-N) for the strictly lower N = -strictly_lower(Akk) by nesting three block levels, so every matmul keeps
+// one strictly-lower factor and no large cancelling power of PS4 is ever formed:
 //   level 1: 4-row diagonal blocks. N1^4=0, so A = (I-N1)^-1 = I+N1(I+N1(I+N1)) in two matmuls.
 //   level 2: pair those blocks. M2 = A L2 satisfies M2^2=0, so B = (I+M2)A = A + M2 A.
-//   level 3: join the 8-row blocks. M3 = B L3 satisfies M3^4=0, so
-//            (I-N)^-1 = (I+M3)(I+M3^2)B.
-// Eight matmuls in total, two fewer than a single 8-row Horner series over the same input.
-void invert_block_nested(
-    DataflowBuffer& negative_strict_lower_akk,
-    DataflowBuffer& inverse,
+//   level 3: join the 8-row blocks. M3 = B L3 satisfies M3^4=0, so (I-N)^-1 = (I+M3)(I+M3^2)B.
+// Every operation and its operand order is the per-item sequence's.
+__attribute__((noinline)) void invert_items(
+    DataflowBuffer& akk,
+    DataflowBuffer& causal_mask,
     DataflowBuffer& identity,
     DataflowBuffer& block_masks,
+    DataflowBuffer& inverse,
     DataflowBuffer& matrix,
     DataflowBuffer& total,
-    DataflowBuffer& product) {
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 0, matrix);  // N1
-    matrix.wait_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, total, 1);
-    total.wait_front(1);
-    for (uint32_t step = 0; step < 2; ++step) {
-        matmul_blocks<1, 1, 1, false>(matrix, total, product);
-        product.wait_front(1);
-        // The two-entry total DFB holds the old and new Horner values together.
-        // Discarding the old front makes the new value current without a second DFB.
-        elementwise_binary<ElementwiseBinaryOp::Add>(identity, product, total, 1);
-        total.wait_front(2);
-        total.pop_front(1);
-        product.pop_front(1);
+    DataflowBuffer& product,
+    uint32_t n) {
+    using Op = ElementwiseBinaryOp;
+    akk.wait_front(n);
+    {
+        DataflowBuffer& lower = matrix;
+        DataflowBuffer& diagonal = total;
+        binary_items(Op::Multiply, akk, 0, false, causal_mask, 0, true, lower, n);  // lower(A), with diagonal
+        lower.wait_front(n);
+        akk.pop_front(n);
+        binary_items(Op::Multiply, lower, 0, false, identity, 0, true, diagonal, n);  // diag(A)
+        diagonal.wait_front(n);
+        binary_items(Op::Subtract, diagonal, 0, false, lower, 0, false, akk, n);  // -strictly_lower(A)
+        akk.wait_front(n);
+        diagonal.pop_front(n);
+        lower.pop_front(n);
     }
-    matrix.pop_front(1);  // total holds A
+    DataflowBuffer& negative_strict_lower = akk;
 
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 1, matrix);  // L2
-    matrix.wait_front(1);
-    matmul_blocks<1, 1, 1, false>(total, matrix, product);  // M2 = A L2
-    product.wait_front(1);
-    matrix.pop_front(1);
-    matmul_blocks<1, 1, 1, false>(product, total, matrix);  // M2 A
-    matrix.wait_front(1);
-    product.pop_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(total, matrix, total, 1);  // B = A + M2 A
-    total.wait_front(2);
-    total.pop_front(1);
-    matrix.pop_front(1);
+    binary_items(Op::Multiply, negative_strict_lower, 0, false, block_masks, 0, true, matrix, n);  // N1
+    matrix.wait_front(n);
+    binary_items(Op::Add, identity, 0, true, matrix, 0, false, total, n);
+    total.wait_front(n);
+    for (uint32_t step = 0; step < 2; ++step) {
+        matmul_items(matrix, total, product, n);
+        product.wait_front(n);
+        // The double-depth total holds the old and new Horner values together.
+        binary_items(Op::Add, identity, 0, true, product, 0, false, total, n);
+        total.wait_front(2 * n);
+        total.pop_front(n);
+        product.pop_front(n);
+    }
+    matrix.pop_front(n);  // total holds A
 
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 2, product);  // L3
-    product.wait_front(1);
-    // -strict_lower(Akk) is dead after extracting L3. Reuse its one-tile DFB
-    // below for I+M3; all transactions remain one tile wide.
-    negative_strict_lower_akk.pop_front(1);
-    matmul_blocks<1, 1, 1, false>(total, product, matrix);  // M3 = B L3
-    matrix.wait_front(1);
-    product.pop_front(1);
-    matmul_blocks<1, 1, 1, false>(matrix, matrix, product);  // M3^2
-    product.wait_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, negative_strict_lower_akk, 1);
-    negative_strict_lower_akk.wait_front(1);
-    matrix.pop_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(identity, product, matrix, 1);
-    matrix.wait_front(1);
-    product.pop_front(1);
-    matmul_blocks<1, 1, 1, false>(negative_strict_lower_akk, matrix, product);  // (I+M3)(I+M3^2)
-    product.wait_front(1);
-    negative_strict_lower_akk.pop_front(1);
-    matrix.pop_front(1);
-    matmul_blocks<1, 1, 1, false>(product, total, inverse);
-    product.pop_front(1);
-    total.pop_front(1);
+    binary_items(Op::Multiply, negative_strict_lower, 0, false, block_masks, 1, true, matrix, n);  // L2
+    matrix.wait_front(n);
+    matmul_items(total, matrix, product, n);  // M2 = A L2
+    product.wait_front(n);
+    matrix.pop_front(n);
+    matmul_items(product, total, matrix, n);  // M2 A
+    matrix.wait_front(n);
+    product.pop_front(n);
+    binary_items(Op::Add, total, 0, false, matrix, 0, false, total, n);  // B = A + M2 A
+    total.wait_front(2 * n);
+    total.pop_front(n);
+    matrix.pop_front(n);
+
+    binary_items(Op::Multiply, negative_strict_lower, 0, false, block_masks, 2, true, product, n);  // L3
+    product.wait_front(n);
+    // -strictly_lower(Akk) is dead after extracting L3; its buffer holds I+M3 below.
+    negative_strict_lower.pop_front(n);
+    matmul_items(total, product, matrix, n);  // M3 = B L3
+    matrix.wait_front(n);
+    product.pop_front(n);
+    matmul_items(matrix, matrix, product, n);  // M3^2
+    product.wait_front(n);
+    binary_items(Op::Add, identity, 0, true, matrix, 0, false, negative_strict_lower, n);  // I+M3
+    negative_strict_lower.wait_front(n);
+    matrix.pop_front(n);
+    binary_items(Op::Add, identity, 0, true, product, 0, false, matrix, n);  // I+M3^2
+    matrix.wait_front(n);
+    product.pop_front(n);
+    matmul_items(negative_strict_lower, matrix, product, n);  // (I+M3)(I+M3^2)
+    product.wait_front(n);
+    negative_strict_lower.pop_front(n);
+    matrix.pop_front(n);
+    matmul_items(product, total, inverse, n);
+    product.pop_front(n);
+    total.pop_front(n);
 }
 
 // Transpose a tiled row [1,row_tiles] into a tiled column [row_tiles,1].
-void transpose_tile_row_to_column(DataflowBuffer& in, DataflowBuffer& o, uint32_t row_tiles) {
+KDA_PREP_HELPER void transpose_tile_row_to_column(DataflowBuffer& in, DataflowBuffer& o, uint32_t row_tiles) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
 
@@ -396,7 +448,7 @@ void transpose_tile_row_to_column(DataflowBuffer& in, DataflowBuffer& o, uint32_
 // Reduce each row of squared values directly to its inverse-L2 factor. Applying epsilon, rsqrt,
 // and optional scaling in DST avoids materializing row sums in a separate intermediate DFB.
 template <bool Scale, uint32_t SquaredDfb, uint32_t InverseNormsDfb>
-void reduce_squared_rows_to_inverse_norms(
+KDA_PREP_HELPER void reduce_squared_rows_to_inverse_norms(
     uint32_t row_tiles, uint32_t column_tiles, uint32_t eps_bits, uint32_t scale_bits) {
     auto inverse_norm = [eps_bits, scale_bits](uint32_t dst) {
         binop_with_scalar_tile_init();
@@ -418,7 +470,7 @@ void reduce_squared_rows_to_inverse_norms(
 }
 
 template <uint32_t RowTiles, uint32_t ColumnTiles, bool Scale, uint32_t SquaredDfb, uint32_t InverseNormsDfb>
-void normalize_l2_rows(
+KDA_PREP_HELPER void normalize_l2_rows(
     DataflowBuffer& input,
     DataflowBuffer& normalized,
     uint32_t eps_bits,
@@ -444,7 +496,7 @@ void normalize_l2_rows(
 // beta = sigmoid(logits) in FP32, from the BF16 logits the reader moved into column 0. The SFPU sigmoid is the
 // accurate one ttnn.sigmoid runs; BF16 widens exactly into the FP32 destination.
 template <uint32_t Ct>
-void activate_beta(DataflowBuffer& logits, DataflowBuffer& beta) {
+KDA_PREP_HELPER void activate_beta(DataflowBuffer& logits, DataflowBuffer& beta) {
     beta.reserve_back(Ct);
     reconfig_data_format_srca(logits.get_id());
     pack_reconfig_data_format(beta.get_id());
@@ -464,14 +516,14 @@ void activate_beta(DataflowBuffer& logits, DataflowBuffer& beta) {
 }
 
 template <uint32_t Ct, uint32_t Vt>
-void prepare_v_beta(DataflowBuffer& v, DataflowBuffer& beta, DataflowBuffer& v_beta) {
+KDA_PREP_HELPER void prepare_v_beta(DataflowBuffer& v, DataflowBuffer& beta, DataflowBuffer& v_beta) {
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
     multiply_by_column(v, beta, v_beta, Ct, Vt);
     v.pop_front(chunk_value_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt>
-void prepare_gate_factors(
+KDA_PREP_HELPER void prepare_gate_factors(
     DataflowBuffer& g,
     DataflowBuffer& prefix_sum_mask,
     DataflowBuffer& sum_broadcast_matrix,
@@ -490,12 +542,10 @@ void prepare_gate_factors(
     matmul_blocks<Ct, Ct, Kt, false>(prefix_sum_mask, g, centered_decay);
     centered_decay.wait_front(chunk_key_tiles);
 
-    matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, g, g_last);  // replicated G_last
-    g_last.wait_front(chunk_key_tiles);
-    g.pop_front(chunk_key_tiles);
-
-    multiply_by_half(g_last, anchor_g, chunk_key_tiles);  // anchor = G_last/2
+    // The sum-broadcast matrix carries half the gate scale, so this is the anchor G_last/2, replicated.
+    matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, g, anchor_g);
     anchor_g.wait_front(chunk_key_tiles);
+    g.pop_front(chunk_key_tiles);
 
     {
         DataflowBuffer& centered_g = anchor_decay;
@@ -518,7 +568,7 @@ void prepare_gate_factors(
 }
 
 template <uint32_t Ct, uint32_t Kt>
-void prepare_scan_and_pairwise_inputs(
+KDA_PREP_HELPER void prepare_scan_and_pairwise_inputs(
     DataflowBuffer& normalized_q,
     DataflowBuffer& normalized_k,
     DataflowBuffer& beta,
@@ -554,15 +604,15 @@ void prepare_scan_and_pairwise_inputs(
 
 // exp(G_last) = exp(G_last / 2)^2, squared in FP32 from the anchor's rows, of which the transpose to dl reads row 0.
 template <uint32_t Ct, uint32_t Kt>
-void prepare_final_decay_rows(DataflowBuffer& g_last, DataflowBuffer& anchor_decay, DataflowBuffer& final_decay_rows) {
+KDA_PREP_HELPER void prepare_final_decay_rows(
+    DataflowBuffer& g_last, DataflowBuffer& anchor_decay, DataflowBuffer& final_decay_rows) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     square_tiles(anchor_decay, final_decay_rows, chunk_key_tiles);
     final_decay_rows.wait_front(chunk_key_tiles);
-    g_last.pop_front(chunk_key_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt>
-void prepare_k_pairwise(
+KDA_PREP_HELPER void prepare_k_pairwise(
     DataflowBuffer& normalized_k, DataflowBuffer& centered_inverse_decay, DataflowBuffer& k_pairwise) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
@@ -574,7 +624,7 @@ void prepare_k_pairwise(
 }
 
 template <uint32_t Ct, uint32_t Kt>
-void prepare_pairwise_matrices(
+KDA_PREP_HELPER void prepare_pairwise_matrices(
     DataflowBuffer& k_beta_pairwise,
     DataflowBuffer& q_pairwise,
     DataflowBuffer& k_pairwise,
@@ -601,48 +651,8 @@ void prepare_pairwise_matrices(
     }
 }
 
-template <uint32_t Ct>
-void prepare_t_inv(
-    DataflowBuffer& akk,
-    DataflowBuffer& causal_mask,
-    DataflowBuffer& identity,
-    DataflowBuffer& block_masks,
-    DataflowBuffer& t_inv,
-
-    // intermediate
-    DataflowBuffer& scratch_0,
-    DataflowBuffer& scratch_1,
-    DataflowBuffer& product) {
-    constexpr uint32_t chunk_matrix_tiles = Ct * Ct;
-
-    {
-        DataflowBuffer& lower_akk = scratch_0;
-        DataflowBuffer& diagonal_akk = scratch_1;
-
-        // T_inv = (I + strictly_lower(Akk))^-1.
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(akk, causal_mask, lower_akk, chunk_matrix_tiles);
-        lower_akk.wait_front(chunk_matrix_tiles);  // lower(A), including diagonal
-        akk.pop_front(chunk_matrix_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(lower_akk, identity, diagonal_akk, chunk_matrix_tiles);
-        diagonal_akk.wait_front(chunk_matrix_tiles);  // diag(A)
-        elementwise_binary<ElementwiseBinaryOp::Subtract>(diagonal_akk, lower_akk, akk, chunk_matrix_tiles);
-        akk.wait_front(chunk_matrix_tiles);  // -strictly_lower(A)
-        diagonal_akk.pop_front(chunk_matrix_tiles);
-        lower_akk.pop_front(chunk_matrix_tiles);
-    }
-
-    invert_block_nested(
-        akk,
-        t_inv,
-        identity,
-        block_masks,
-        /*matrix=*/scratch_0,
-        /*total=*/scratch_1,
-        /*product=*/product);
-}
-
 template <uint32_t Ct, uint32_t Kt>
-void prepare_decay_outputs(
+KDA_PREP_HELPER void prepare_decay_outputs(
     DataflowBuffer& k_pairwise,
     DataflowBuffer& anchor_decay,
     DataflowBuffer& final_decay_rows,
@@ -721,13 +731,14 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer workspace_3(dfb::workspace_3);
 
     compute_kernel_hw_startup(dfb::q, dfb::k, dfb::workspace_3);
-    eye.wait_front(chunk_matrix_tiles);
-    tril.wait_front(chunk_matrix_tiles);
-    block_masks.wait_front(2);
+    // The reader generates the constants after publishing the first work item, the inverse's last; those are
+    // awaited just before the batched inverse.
     ones.wait_front(chunk_matrix_tiles);
     gate_tril.wait_front(chunk_matrix_tiles);
     gate_ones.wait_front(chunk_matrix_tiles);
+    tril.wait_front(chunk_matrix_tiles);
 
+    uint32_t inverse_items = 0;
     for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
         if ((work_item_start + work_item) % num_chunks >= valid_chunks) {
             continue;
@@ -786,22 +797,24 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
 
         prepare_pairwise_matrices<Ct, Kt>(k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra, tile_workspace_0);
 
-        // All inverse scratch transactions are one tile. tile_workspace_1 has two entries so each
-        // level can enqueue its replacement before popping the old value; its four transactions
-        // per work item also return both cursors to their starting slot.
-        prepare_t_inv<Ct>(
+        pack_reconfig_data_format(intra.get_id(), final_decay.get_id());
+        prepare_decay_outputs<Ct, Kt>(k_pairwise, anchor_decay, final_decay_rows, k_decay_transposed, final_decay);
+        pack_reconfig_data_format(k_decay_transposed.get_id(), workspace_3.get_id());
+        // v_beta, kd, q_decay, intra, k_dec_t and dl stay pushed for the writer; Akk waits for the batched inverse.
+        ++inverse_items;
+    }
+    if (inverse_items != 0) {
+        eye.wait_front(chunk_matrix_tiles);
+        block_masks.wait_front(3);
+        invert_items(
             akk,
             tril,
             eye,
             block_masks,
             t_inv,
-            /*scratch_0=*/tile_workspace_0,
-            /*scratch_1=*/tile_workspace_1,
-            /*product=*/tile_workspace_2);
-
-        pack_reconfig_data_format(t_inv.get_id(), final_decay.get_id());
-        prepare_decay_outputs<Ct, Kt>(k_pairwise, anchor_decay, final_decay_rows, k_decay_transposed, final_decay);
-        pack_reconfig_data_format(k_decay_transposed.get_id(), workspace_3.get_id());
-        // v_beta, kd, q_decay, intra, k_dec_t, dl, T_inv stay pushed for the writer.
+            /*matrix=*/tile_workspace_0,
+            /*total=*/tile_workspace_1,
+            /*product=*/tile_workspace_2,
+            inverse_items);
     }
 }
