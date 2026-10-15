@@ -186,6 +186,11 @@ def global_ring_prefill_attention(
 ):
     """Attend over the packed cache: K is its first GLOBAL_HEAD_DIM columns and V its last GLOBAL_HEAD_DIM."""
     mesh_device = mesh_config.device
+    # TEMP: GEMMA4_DUMP_L1_BEFORE_GLOBAL_SDPA=<prefix> dumps the allocator state once, before the first global call.
+    _dump = __import__("os").environ.get("GEMMA4_DUMP_L1_BEFORE_GLOBAL_SDPA")
+    if _dump and not getattr(global_ring_prefill_attention, "_dumped", False):
+        global_ring_prefill_attention._dumped = True
+        ttnn.dump_device_memory_state(mesh_device, _dump)
     if program_config is None:
         sdpa_grid = ccl_manager.compute_grid_size
         q_chunk, k_chunk, k_splits, segmented = ring_sdpa_chunk_sizes(
