@@ -74,8 +74,8 @@ def test_golden_full_layers(fx):
     assert set(g.layer(2, 1)) == {"in", "attn_norm", "attn_out", "h_mid", "ffn_norm", "mlp_out", "out"}
     assert g.state(0)["key"].shape == (256, 64) and g.tokens().shape == (256,)
     assert set(g.model(3)) >= {"embed", "final_norm", "top32_ids", "top32_values", "logits_tail", "tokens"}
-    with pytest.raises(SystemExit, match="generated once"):
-        generate_golden.main(["--spec", spec_path, "--rung", "s256"])
+    generate_golden.main(["--spec", spec_path, "--rung", "s256"])  # F75: an existing matching golden is reused
+    assert got()["golden_reused"] == 1 and got()["golden_hash_ok"] == 1
     (g.dir / "chunk_00/model.safetensors").write_bytes(b"tampered")
     assert not Golden(g.dir).verify()
 

@@ -590,6 +590,13 @@ class Orchestrator:
             f"deployment box `{dep}` (mesh {mesh(dep)}) at {s.deploy_seq:,} tokens in {s.deploy_chunk:,}-token chunks. "
             "The code must work on every box below, not only this one (agent rule 15).\n" + rows + "\n"
         )
+        if s.scaled:  # F75: on a smaller box the whole run is the scaled model
+            text += (
+                f"\nThis box is smaller than the deployment box, so this run IS the scaled model: the checkpoint at "
+                f"`{s.scaled_hf_dir}` (heads and experts cut so each chip holds what a deployment chip holds), its "
+                f"goldens, and {s.data['target']['chunk']:,}-token chunks. Read every dimension from that checkpoint's "
+                "config; never assume the real model's counts.\n"
+            )
         if role == "plan":
             text += (
                 "\nPlan for the deployment box, then fit the plan to every box (schema and checks in "
@@ -600,7 +607,7 @@ class Orchestrator:
                 "`conditions` every per-chip count that decides a code path (an op's limit on experts or heads per "
                 "chip, tile alignment of a chip's share of a chunk), with the path taken otherwise in `else`. "
                 "Per-box dtype or activation differences go under `boxes`. The gate prints the per-box table (scale, "
-                "scaled context, full-model fit and longest context, the run's layers scaled and at real size, each "
+                "scaled context, full-model fit and longest context, the run's layers' memory, each "
                 "condition's path) and writes `results/plan_boxes.json`. `plan.md` needs a `## Boxes` section with "
                 "that table and, for every path that differs from the deployment box, either the change that makes "
                 "the box take the deployment's path, or why it stays different and what goes untested until the "
@@ -610,8 +617,9 @@ class Orchestrator:
 
             if scaling_applies(s):
                 text += (
-                    f"\nThis run's box has fewer chips than the deployment box, so the run also goes scaled: a reduced "
-                    "model with heads and experts cut so each chip holds what a deployment chip holds (task SG.1, "
+                    f"\nThis run's box has fewer chips than the deployment box, so the whole run is the scaled model "
+                    "(F75): heads and experts cut so each chip holds what a deployment chip holds, the deployment chunk "
+                    "times the sequence factor; the goldens and every step after the plan use it (task SG.1, "
                     "`models/demos/common/bringup/plan/scale.py`). Write `scaling.yaml` next to the plan: which "
                     "config counts are scaled (by the factor of which role), and for every tensor whose size follows "
                     "one of them, the dimension to cut or the index to keep (per-expert tensors). The gate checks the "

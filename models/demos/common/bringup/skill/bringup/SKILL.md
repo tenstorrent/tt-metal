@@ -11,6 +11,24 @@ do not implement the model yourself; agents do, one gated step at a time. Framew
 
 Always: `export PYTHONPATH=$PWD` (the shell's default points at another checkout); `B="python -m models.demos.common.bringup"`.
 
+## The rule for a box smaller than the deployment box (read this first)
+
+The deployment box exists for ONE thing: the scale factors. On a box with fewer chips than the deployment box, a
+partial bring-up runs the SCALED model, and only the scaled model. There is no real-size track on this box.
+
+- The factors come from the plan: each role's mesh share on this box over the deployment box's (`plan.yaml` roles,
+  `plan/boxes.py`). Heads and experts are cut so that each chip of this box holds what a deployment chip holds; the
+  chunk is the deployment chunk times the sequence factor, so each mesh row holds the deployment's tokens per row.
+- Once the plan is approved, SG.1 cuts the checkpoint (`plan/scale.py`, `scaling.yaml`). From then on EVERYTHING on
+  this box uses it: the goldens (made from the cut checkpoint, after SG.1), every component and swap test, the ladder,
+  the contract tests, the profile and the perf picks. Fewer experts, fewer heads, the scaled chunk.
+- Only these read the real checkpoint (their gates carry `BRINGUP_SCALED=0`): the reference checks against the
+  model's own code (R.*) and the plan's memory check (PL.*), which is about the deployment box.
+- The spec's `target` and `ladder` are written in this box's units: the scaled chunk, a context this box runs. The spec
+  check refuses a target chunk that is not the scaled chunk.
+- Never propose, plan or run a real-size version of the model on a smaller box. "Real model on this box" is only the
+  CPU reference. A full-model run at real size happens on a box where it fits (mode `full`), not as a second track.
+
 ## 1. Interview
 
 Ask in one message for what you cannot find out yourself, with defaults proposed:
@@ -20,16 +38,17 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
   `core/spec.py`): the plan is made for the deployment box and checked on every listed box. List every box the model
   may run on (with its mesh, DRAM per chip and any overrides, e.g. 4-bit experts on a smaller box).
 - **Mode**: `partial` (the first layers that cover every layer type bring up the layout; on a box smaller than the
-  deployment box the run also goes scaled: heads and experts cut so each chip holds what a deployment chip holds) or
-  `full` (every layer at real size, every end-to-end check; only where the full model fits, which the plan gate checks).
+  deployment box the whole run is the scaled model, see the rule above) or `full` (every layer at real size, every
+  end-to-end check; only on a box where the full model fits, which the plan gate checks).
 - **Serving chunk**: the chunk size the server sends on the deployment box (`deploy.chunk`). Always ask; propose 4096.
   It never grows on a bigger box (more rows, fewer tokens per row) and never exceeds `serving.max_chunk` (5120, the
   owner's limit). A smaller box (the proxy) shrinks it by its sequence factor so each mesh row holds the deployment's
   tokens per row (4096 on a 4x4 -> 1024 per row -> 2048 on a 2x2) (F67). Show the per-row numbers when you ask.
-- **Target**: this run's context at real size, in whole chunks of this box's chunk (e.g. 55296 = 27 x 2048).
+- **Target**: this run's context in this box's units, in whole chunks of this box's (scaled) chunk (e.g. 55296 = 27 x
+  2048 on a 2x2 standing in for a 4x4 with 4096-token chunks).
 - **Ladder**: every rung at this box's chunk (no golden for a chunk this box never runs): default three rungs: 2 chunks
   with full dumps (they feed the component and swap tests), the last chunk after a golden prefix, then the full target.
-  The scaled run uses the same lengths and chunk (`scaled.ladder`), at most the canonical prompt's length. Goldens are
+  At most the canonical prompt's length. On a smaller box the goldens are the scaled model's (after SG.1). Goldens are
   made only for this box's rungs; another box's goldens come from that box's own run.
 - **Layer subset**: in partial mode, the first layers that cover every layer type; in full mode, every layer.
 - **Owner rules** for every agent of this model (beyond the standing ones in the agent definition, such as always

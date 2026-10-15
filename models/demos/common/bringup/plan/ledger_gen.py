@@ -40,8 +40,7 @@ SAFE = "scripts/run_safe_pytest.sh --run-all"
 PY = "python -m models.demos.common.bringup"
 # PROGRAM_SUPPORT_COUNT: the pipelined timeline reads the device profiler once per chunk; the default 1000 programs per
 # core drops markers on large models (GLM-5.3, 5 layers: 1319 programs per chip per chunk).
-SCALED = "BRINGUP_SCALED=1"  # F64: the scaled run (core/spec.py, plan/scale.py)
-SCALED_CALLS = "fork_calls_scaled.json"
+REAL = "BRINGUP_SCALED=0"  # F75: a step that must read the real checkpoint on a scaled run (core/spec.py)
 PROFILE_ENV = (
     "TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1"
     " TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000"
@@ -77,6 +76,10 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     ladder = spec.data["ladder"]
     first = ladder[0]
     tasks = []
+    # F75: on a box with fewer chips than the deployment box the run IS the scaled model (core/spec.py): goldens and
+    # every device step use the reduced checkpoint; only the reference checks and the plan check read the real one
+    scaled = scaling_applies(spec)
+    real = f"{REAL} " if scaled else ""
 
     def add(tid, title, step, deps, cmd, metrics, **kw):
         tasks.append(
@@ -101,7 +104,8 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         + ("" if late else ", HF sanity (revision, usage-example smoke, accuracy floor)"),
         "intake",
         [],
-        f"{PY}.intake.check_checkpoint && {PY}.reference.prompt" + ("" if late else f" && {PY}.intake.check_hf_sanity"),
+        f"{real}{PY}.intake.check_checkpoint && {real}{PY}.reference.prompt"
+        + ("" if late else f" && {real}{PY}.intake.check_hf_sanity"),
         {
             "intake_approved": "== 1",
             "prompt_hash_ok": "== 1",
@@ -120,8 +124,8 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         + "eference matches HF per layer and on logits (fp32)",
         "reference",
         ["R.1"],
-        (f"{PY}.intake.check_hf_sanity && " if late else "")
-        + f"{PY}.reference.check_hf --seq {spec.get('hf.parity_seq', 512)}",
+        (f"{real}{PY}.intake.check_hf_sanity && " if late else "")
+        + f"{real}{PY}.reference.check_hf --seq {spec.get('hf.parity_seq', 512)}",
         {
             **(sanity if late else {}),
             "pcc_hidden_L*": ">= 0.9999",
@@ -147,7 +151,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         f"Reference chunked == one-shot ({first['seq']} in {first['chunk']}) and block graphs replay exactly",
         "reference",
         ["R.2"],
-        f"{PY}.reference.check_reference --seq {first['seq']} --chunk {first['chunk']}",
+        f"{real}{PY}.reference.check_reference --seq {first['seq']} --chunk {first['chunk']}",
         {
             "pcc_hidden": ">= 0.99999",
             "pcc_state_min": ">= 0.99999",
@@ -157,27 +161,33 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         },
         paths=ref_paths,
     )
-    prev = "R.3"
     golden_task = {}
-    for r in ladder:
-        if r.get("golden"):
-            golden_task[r["name"]] = f"G.{r['golden']}"
-            continue
-        tid = f"G.{r['name']}"
-        add(
-            tid,
-            f"Golden {r['name']}: {r['seq']} tokens in {r['chunk']}-token chunks{', full dumps' if r.get('full_dumps') else ''}",
-            "goldens",
-            [prev],
-            f"{PY}.reference.generate_golden --rung {r['name']}",
-            {
-                "golden_layers": f"== {len(spec.layers())}",
-                "golden_chunks": f"== {r['seq'] // r['chunk']}",
-                "golden_hash_ok": "== 1",
-            },
-        )
-        golden_task[r["name"]] = tid
-        prev = tid
+
+    def add_goldens(prev: str) -> None:
+        for r in ladder:
+            if r.get("golden"):
+                golden_task[r["name"]] = f"G.{r['golden']}"
+                continue
+            tid = f"G.{r['name']}"
+            full = ", full dumps" if r.get("full_dumps") else ""
+            add(
+                tid,
+                f"Golden {r['name']}: {r['seq']} tokens in {r['chunk']}-token chunks{full}"
+                + (" (the scaled model)" if scaled else ""),
+                "goldens",
+                [prev],
+                f"{PY}.reference.generate_golden --rung {r['name']}",
+                {
+                    "golden_layers": f"== {len(spec.layers())}",
+                    "golden_chunks": f"== {r['seq'] // r['chunk']}",
+                    "golden_hash_ok": "== 1",
+                },
+            )
+            golden_task[r["name"]] = tid
+            prev = tid
+
+    if not scaled:  # a scaled run's goldens come from the reduced checkpoint, after the plan (below)
+        add_goldens("R.3")
     add(
         "B.1",
         "Box: mesh opens with the spec's device params, collectives are exact",
@@ -214,7 +224,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved",
         "plan",
         ["PL.0", "B.1", "SC.1"],
-        f"{PY}.plan.check_plan",
+        f"{real}{PY}.plan.check_plan",
         {
             "plan_fits": "== 1",
             "unplaced_tensors": "== 0",
@@ -238,26 +248,19 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         approval="plan",
     )
 
-    # F64: a partial run on a box smaller than the deployment box also runs scaled: the reduced model (plan/scale.py)
-    # whose chips hold what the deployment's chips hold, for the deployment's code paths and per-chip performance
-    scaled = scaling_applies(spec)
-    sladder = [r["name"] for r in ((spec.raw.get("scaled") or {}).get("ladder") or [])] or ["scaled", "scaled_last"]
+    # F75: the scaled model is cut once the plan fixes the scale factors; its goldens, and everything after, use it
     if scaled:
         add(
             "SG.1",
-            "Scaled run: the reduced checkpoint (heads and experts cut by the plan's scale factors) and its golden",
+            "The scaled model: the reduced checkpoint (heads and experts cut by the plan's scale factors)",
             "scale",
             ["PL.1"],
-            f"{PY}.plan.scale && {SCALED} {PY}.reference.generate_golden --rung {sladder[0]}",
-            {
-                "scale_errors": "== 0",
-                "scale_tensors_total": ">= 1",
-                "golden_layers": f"== {len(spec.layers())}",
-                "golden_hash_ok": "== 1",
-            },
+            f"{PY}.plan.scale",
+            {"scale_errors": "== 0", "scale_tensors_total": ">= 1"},
             role="scale",
             paths=ref_paths + [f"{model_dir}/bringup/scaling.yaml"],
         )
+        add_goldens("SG.1")
 
     def served_format() -> dict:
         """F58: with the served KV dtype in the spec (serving.kv_dtype, the owner's answer to SC.1), every ladder
@@ -379,21 +382,6 @@ def generate(spec, ref=None, early: bool = False) -> dict:
             device=True,
             paths=impl_paths,
         )
-    sl_prev = None
-    if scaled:
-        for n, name in enumerate(sladder):
-            tid = f"SL.{name}"
-            add(
-                tid,
-                f"Scaled ladder {name}: the reduced model at the deployment's per-chip shapes",
-                "integrate",
-                [smoke or prev, "SG.1"] if sl_prev is None else [sl_prev],
-                f"{SCALED} BRINGUP_RUNG={name} {SAFE} models/demos/common/bringup/tests/test_ladder.py",
-                {"pcc_layer_L*": thr(spec, "layer"), "pcc_state_min": thr(spec, "state")},
-                device=True,
-                paths=impl_paths,
-            )
-            sl_prev = tid
     add(
         "K.1",
         "Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)",
@@ -416,20 +404,10 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         {"device_ms_total": "> 0", "profiled_programs": ">= 1"},
         device=True,
     )
-    if scaled:
-        add(
-            "SX.1",
-            "Scaled profile: warm per-section, per-chip profile of one long chunk of the reduced model",
-            "perf",
-            ["X.1", sl_prev],
-            f"{SCALED} {PROFILE_ENV} {SAFE} --no-precompile models/demos/common/bringup/tests/test_profile.py",
-            {"device_ms_total": "> 0", "profiled_programs": ">= 1"},
-            device=True,
-        )
-    prof = "SX.1" if scaled else "X.1"  # per-chip shapes of the deployment box rank the opportunities
+    prof = "X.1"
     add(
         "X.2",
-        "Opportunity list ranked by measured device time" + (" (scaled run)" if scaled else ""),
+        "Opportunity list ranked by measured device time",
         "perf",
         [prof],
         f"{PY}.plan.opportunities --profile {prof}",
@@ -470,20 +448,13 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     )
     calls = f"{rel(spec, spec.bringup_dir)}/results/fork_calls.json"
     capture = " models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture"
-    scaled_calls = f"{rel(spec, spec.bringup_dir)}/results/{SCALED_CALLS}"
-    scaled_capture = (
-        f" && {SCALED} BRINGUP_CAPTURE_FORKS={scaled_calls} BRINGUP_RUNG={sladder[-1]} {SAFE} --no-precompile{capture}"
-        if scaled
-        else ""
-    )
     add(
         "O.1",
-        "Derived-op tests: a random-input case for every ttnn.bringup call this model makes"
-        + (" (real and scaled runs)" if scaled else ""),
+        "Derived-op tests: a random-input case for every ttnn.bringup call this model makes",
         "optests",
         ["X.3"],
-        f"BRINGUP_CAPTURE_FORKS={calls} BRINGUP_RUNG={cap['name']} {SAFE} --no-precompile{capture}{scaled_capture}"
-        f" && {PY}.testing.fork_cases --capture {calls}{' ' + scaled_calls if scaled else ''} --run-tests",
+        f"BRINGUP_CAPTURE_FORKS={calls} BRINGUP_RUNG={cap['name']} {SAFE} --no-precompile{capture}"
+        f" && {PY}.testing.fork_cases --capture {calls} --run-tests",
         {"forks_used": ">= 0", "fork_calls_uncovered": "== 0", "fork_tests_failed": "== 0"},
         role="optests",
         paths=["ttnn/ttnn/bringup"],
