@@ -509,22 +509,29 @@ def set_quant_config(pipeline, config: QuantConfig) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Environment opt-in (test / experiment plumbing; never changes a default)
+# Environment selection of the 5B precision preset
 # ---------------------------------------------------------------------------
 
 QUANT_CONFIG_ENV = "WAN5B_QUANT_CONFIG"
-"""Name of a `QuantConfig` preset (`all_weights_bf8`, `all_lofi`, `all_bf8_lofi`) to opt into."""
+"""Name of a `QuantConfig` preset to use instead of the 5B default; `bf16` (or `none`) keeps bf16 weights."""
+
+QUANT_CONFIG_DEFAULT_5B = "all_bf8_lofi_act8_out8"
+"""Preset applied when `WAN5B_QUANT_CONFIG` is unset: the fastest PCC-passing 5B configuration on a
+BH Galaxy (sprint 7, 720p T2V / I2V / 480p, PCC 99.983 % vs the torch reference)."""
+
+QUANT_CONFIG_BF16_NAMES = ("bf16", "none")
 
 
 def quant_config_from_env(var: str = QUANT_CONFIG_ENV) -> tuple[str, QuantConfig] | None:
-    """Return `(name, QuantConfig)` for the preset named in `var`, or None when unset.
+    """Return `(name, QuantConfig)` for the preset named in `var`, or None for bf16.
 
-    `default` is accepted and means "apply the explicit bf16/HiFi2 config", which is a no-op on
-    the weights but replaces the layers' compute configs with the preset's, so it is a useful
-    control when comparing presets.
+    Unset means `QUANT_CONFIG_DEFAULT_5B`; `bf16` / `none` mean no preset (bf16 weights, the
+    layers' own compute configs). `default` is accepted and means "apply the explicit bf16/HiFi2
+    config", which is a no-op on the weights but replaces the layers' compute configs with the
+    preset's, so it is a useful control when comparing presets.
     """
-    name = os.environ.get(var, "").strip()
-    if not name:
+    name = os.environ.get(var, "").strip() or QUANT_CONFIG_DEFAULT_5B
+    if name.lower() in QUANT_CONFIG_BF16_NAMES:
         return None
     factory = getattr(QuantConfig, name, None) if not name.startswith("_") else None
     if factory is None or not callable(factory):
