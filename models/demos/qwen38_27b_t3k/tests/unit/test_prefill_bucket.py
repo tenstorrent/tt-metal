@@ -59,6 +59,9 @@ class OwnedPrefillFixture(unittest.TestCase):
             pad=lambda tensor, *a, **kw: tensor,
             execute_trace=lambda mesh, trace, **kw: None,
             release_trace=lambda mesh, trace: None,
+            synchronize_device=lambda mesh: None,
+            begin_trace_capture=lambda mesh, **kw: "new-trace",
+            end_trace_capture=lambda mesh, trace, **kw: None,
         )
         self.methods = load_methods(
             "generator.py",
@@ -66,6 +69,11 @@ class OwnedPrefillFixture(unittest.TestCase):
             [
                 "_prefill_for_generate",
                 "_release_traces",
+                "_drop_trace",
+                "_admit_traced",
+                "_active_prefill_cache",
+                "_record_prefill_trace",
+                "_record_prefill_sample_trace",
                 "_prefill_trace_logits",
                 "_prefill_trace_step",
                 "_aim_prefill_selectors",
@@ -91,7 +99,8 @@ class OwnedPrefillFixture(unittest.TestCase):
             ),
             page_table=SimpleNamespace(shape=(4, 256)),
             prefill_prepared=None,
-            prefill_resident={},
+            prefill_buckets={},
+            prefill_traced={},
             prefill_signatures=set(),
             trace=None,
             sample_trace=None,
@@ -100,6 +109,12 @@ class OwnedPrefillFixture(unittest.TestCase):
             counters=Counter(),
         )
         self.gen._release_traces = MethodType(self.methods["_release_traces"], self.gen)
+        for name in ("_drop_trace", "_admit_traced", "_active_prefill_cache"):
+            setattr(self.gen, name, MethodType(self.methods[name], self.gen))
+        # Recording on demand needs a live decode trace; the fakes start without one, so these
+        # return immediately unless a test arranges otherwise.
+        for name in ("_record_prefill_trace", "_record_prefill_sample_trace"):
+            setattr(self.gen, name, MethodType(self.methods[name], self.gen))
         self.gen._prefill_trace_logits = MethodType(self.methods["_prefill_trace_logits"], self.gen)
         self.gen._aim_prefill_selectors = MethodType(self.methods["_aim_prefill_selectors"], self.gen)
         self.gen._bucket_selectors = MethodType(self.methods["_bucket_selectors"], self.gen)
@@ -110,7 +125,8 @@ class OwnedPrefillFixture(unittest.TestCase):
 
     def run_prompt(self, valid):
         self.gen.prefill_prepared = None
-        self.gen.prefill_resident.clear()
+        self.gen.prefill_traced.clear()
+        self.gen.prefill_buckets.clear()
         self.calls.clear()
         self.owned(torch.arange(valid, dtype=torch.int64).reshape(1, valid))
         return self.calls[0]
@@ -168,7 +184,7 @@ class ResidentBucketTests(OwnedPrefillFixture):
         small = self.gen.prefill_prepared
         self.owned(torch.arange(300, dtype=torch.int64).reshape(1, 300))
         large = self.gen.prefill_prepared
-        self.assertEqual([prepared["length"] for prepared in self.gen.prefill_resident.values()], [128, 320])
+        self.assertEqual([prepared["length"] for prepared in self.gen.prefill_traced.values()], [128, 320])
         self.assertIsNot(small["tokens"], large["tokens"])
 
     def test_returning_to_a_resident_bucket_reuses_its_buffers(self):
@@ -179,14 +195,72 @@ class ResidentBucketTests(OwnedPrefillFixture):
         self.assertIs(self.gen.prefill_prepared, small)
         self.assertEqual(self.gen.counters["prefill_bucket_allocations"], 2)
 
-    def test_a_resident_trace_survives_a_detour_through_another_bucket(self):
+    def test_a_buckets_first_sight_releases_every_recording(self):
         self.run_prompt(100)
         self.gen.prefill_prepared["trace"] = "small-trace"
         self.owned(torch.arange(300, dtype=torch.int64).reshape(1, 300))
-        # Allocating the second bucket releases every trace, because its buffers must not land on
-        # an address a live trace still reads.
-        self.assertIsNone(self.gen.prefill_resident[self.gen.prefill_prepared["key"]]["trace"])
-        self.assertEqual([prepared["trace"] for prepared in self.gen.prefill_resident.values()], [None, None])
+        # A bucket allocates once, and its buffers must not land on an address a live trace still
+        # reads, so that one visit pays for every later one.
+        self.assertEqual([prepared["trace"] for prepared in self.gen.prefill_traced.values()], [None, None])
+
+    def test_returning_to_an_evicted_bucket_leaves_every_other_recording_alone(self):
+        """A cold bucket must not cost the recapture of the warm ones.
+
+        Allocation is what forces a release, and a bucket whose buffers already exist does not
+        allocate, so every other bucket keeps the recording it holds.
+        """
+        from models.demos.qwen38_27b_t3k.tt.generator import MAX_RESIDENT_PREFILL
+
+        lengths = [32 * (i + 1) for i in range(MAX_RESIDENT_PREFILL + 1)]
+        self.run_prompt(lengths[0])
+        first = self.gen.prefill_prepared
+        for length in lengths[1:]:
+            self.owned(torch.arange(length, dtype=torch.int64).reshape(1, length))
+        newest = self.gen.prefill_prepared
+        newest["trace"], newest["trace_cache"] = "newest-trace", self.gen.cache
+        self.assertNotIn(first["key"], self.gen.prefill_traced)
+        self.owned(torch.arange(lengths[0], dtype=torch.int64).reshape(1, lengths[0]))
+        self.assertIs(self.gen.prefill_prepared, first)
+        self.assertEqual(newest["trace"], "newest-trace")
+
+    def test_an_evicted_bucket_keeps_its_buffers_and_never_reallocates(self):
+        from models.demos.qwen38_27b_t3k.tt.generator import MAX_RESIDENT_PREFILL
+
+        lengths = [32 * (i + 1) for i in range(MAX_RESIDENT_PREFILL + 1)]
+        self.run_prompt(lengths[0])
+        first = self.gen.prefill_prepared
+        buffers = first["tokens"]
+        for length in lengths[1:]:
+            self.owned(torch.arange(length, dtype=torch.int64).reshape(1, length))
+        self.assertNotIn(first["key"], self.gen.prefill_traced)
+        self.assertIn(first["key"], self.gen.prefill_buckets)
+        self.owned(torch.arange(lengths[0], dtype=torch.int64).reshape(1, lengths[0]))
+        self.assertIs(self.gen.prefill_prepared["tokens"], buffers)
+        self.assertEqual(self.gen.counters["prefill_bucket_allocations"], len(lengths))
+
+    def test_an_evicted_recording_is_rebuilt_in_place_once_decode_holds_one(self):
+        # Eviction must not be permanent, or a workload wider than the set decays to all-eager.
+        self.run_prompt(100)
+        prepared = self.gen.prefill_prepared
+        self.gen.trace = "decode-trace"
+        self.owned(torch.arange(110, dtype=torch.int64).reshape(1, 110))
+        self.assertEqual(prepared["trace"], "new-trace")
+        self.assertIs(prepared["trace_cache"], self.gen.cache)
+
+    def test_a_recording_bound_to_state_that_is_no_longer_live_is_not_replayed(self):
+        # A recording writes whichever copy of the GDN state it was captured against.
+        self.run_prompt(100)
+        prepared = self.gen.prefill_prepared
+        prepared["trace"], prepared["trace_cache"] = "stale-trace", object()
+        self.owned(torch.arange(110, dtype=torch.int64).reshape(1, 110))
+        self.assertEqual(self.gen.counters["prefill_replays"], 0)
+
+    def test_a_recording_bound_to_the_live_state_is_replayed(self):
+        self.run_prompt(100)
+        prepared = self.gen.prefill_prepared
+        prepared["trace"], prepared["trace_cache"] = "small-trace", self.gen.cache
+        self.owned(torch.arange(110, dtype=torch.int64).reshape(1, 110))
+        self.assertEqual(self.gen.counters["prefill_replays"], 1)
 
     def test_the_coldest_bucket_is_evicted_once_the_set_is_full(self):
         from models.demos.qwen38_27b_t3k.tt.generator import MAX_RESIDENT_PREFILL
@@ -198,7 +272,7 @@ class ResidentBucketTests(OwnedPrefillFixture):
         # Touching the oldest again makes it the newest, so the next allocation evicts the second.
         self.owned(torch.arange(lengths[0], dtype=torch.int64).reshape(1, lengths[0]))
         self.owned(torch.arange(4096, dtype=torch.int64).reshape(1, 4096))
-        resident = [prepared["length"] for prepared in self.gen.prefill_resident.values()]
+        resident = [prepared["length"] for prepared in self.gen.prefill_traced.values()]
         self.assertEqual(len(resident), MAX_RESIDENT_PREFILL)
         self.assertIn(lengths[0], resident)
         self.assertNotIn(lengths[1], resident)
