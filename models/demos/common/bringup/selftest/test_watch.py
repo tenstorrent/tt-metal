@@ -65,6 +65,7 @@ def test_event_filter():
         "  [C.1] gate PASS -> abc",
         "  [C.2] STOPPED: out of attempts",
         "  [C.3] KNOWLEDGE CONTRADICTED K-1: x",
+        "  [G.s1] fix attempt 1: bringup-engineer (brief G.s1.fix.1.md)",
     ]
     assert W.events(lines) == lines[1:2] + lines[3:]
     assert W.events(lines, quiet_gates=True) == lines[3:]
