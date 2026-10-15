@@ -128,8 +128,10 @@ them into tables and `tools/run_characterization.py` collects a campaign from
 | [docs/harness.md](docs/harness.md) | the characterization harness: architecture, targets, lifecycle, regions, the runtime as the harness uses it, measurement discipline, safety invariants, decisions, running benchmarks |
 | [docs/measurement.md](docs/measurement.md) | the record contract, counters and clock evidence, unconfirmed hardware assumptions, collection and tabulation |
 | [docs/benchmarks/design.md](docs/benchmarks/design.md) | the design shared by the families: conventions, naming, preconditions, and the p2p_latency, transport_bandwidth and pipeline_stage designs |
+| [docs/benchmarks/transport_bandwidth.md](docs/benchmarks/transport_bandwidth.md) | transport_bandwidth: its two members and how to run them |
 | [docs/benchmarks/p2p_latency.md](docs/benchmarks/p2p_latency.md) | p2p_latency: tile placement, the Metal peers, running it |
 | [docs/benchmarks/pipeline_stage.md](docs/benchmarks/pipeline_stage.md) | pipeline_stage: routing lookup and forwarding micro-ops over the prepared input |
+| [docs/benchmarks/core_sync.md](docs/benchmarks/core_sync.md) | core_sync: the cross-core barrier, its executables and its release characterization |
 | [docs/benchmarks/packet_injection.md](docs/benchmarks/packet_injection.md) | packet_injection: Tensix and ERISC producers into an X280 consumer, protocol, layout, running it |
 | [docs/benchmarks/eth_credit.md](docs/benchmarks/eth_credit.md) | eth_credit: credit flow control across a direct Ethernet link |
 | [docs/results.md](docs/results.md) | the recorded results of every family, with their conditions |

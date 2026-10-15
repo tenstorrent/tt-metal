@@ -522,9 +522,8 @@ that member published into successive X280 FIFO slots with a sideband
 `pkt_valid` word and never waited for its consumer. Its per-header cost against
 the unified point, the cost of the credit protocol, and its historical results
 are in
-[`docs/results.md`](../results.md#erisc---x280-header-ingress);
-its contract is kept in
-[`docs/benchmarks/packet_header_ingress.md`](packet_header_ingress.md#prototype-member-superseded).
+[`docs/results.md`](../results.md#erisc---x280-header-ingress) and
+[packet_injection.md](packet_injection.md#credit-protocol-cost).
 
 `p2p_latency` participant entries 3–6 have no numbered counterpart. The IDs
 touching entries 4–6 — 4, 5, and 17–19 — are credit-flow and link-bandwidth

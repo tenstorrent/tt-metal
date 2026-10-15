@@ -752,8 +752,8 @@ writers. One to all available inactive `IDLE_ETH` cores, one per Ethernet tile,
 each run the shared `Producer` against their own SPSC ring into the one shared
 X280 consumer image (the throughput variant). There is no second single-writer
 implementation: `writers=1` is the same loop, protocol and result schema as every
-larger point. See [docs/benchmarks/packet_header_ingress.md](packet_header_ingress.md)
-for the measured operation and the prototype member it replaces.
+larger point. § Measured operation below states what is timed, and § Credit-protocol cost
+compares it with the single-writer prototype it replaced.
 
 **Axes.** The GTest executable `x280_packet_injection_erisc_to_x280_header`
 registers `Axes/PacketInjectionEriscToX280Header.Run/<writers>_b<B>`:
@@ -970,6 +970,47 @@ each tile through a one-tile multicast group, failed at the release
 (`PI_ERROR_STOPPED` from the producer, `PI_ERROR_PEER_FAILED` from X280): a
 one-tile broadcast does not reach an Ethernet tile.
 
+### Measured operation
+
+On production receive, ERISC owns two ordered destinations:
+
+```text
+Ethernet RX staging
+    |
+    +-- full packet ----------> selected DRISC slot
+    |                            wait for copy completion
+    |
+    +-- 96 B header ----------> X280 FIFO slot
+                                 drain header write
+                                 publish
+```
+
+The X280 must not observe a header before its packet is resident in DRISC SRAM.
+The benchmark starts from a backlog for which that invariant is already true;
+the timed ERISC code performs only FIFO publication. This makes the result a
+ceiling for the header-ingress operation rather than a measurement of Ethernet
+receive or the full receive-side pipeline.
+
+The unified member publishes with the packet-injection ring protocol: the slot
+write, a write barrier, then the ring-tail produced counter, which X280 polls
+with a fence before the counter load and another before the slot loads (see
+[Architectural Overview](#architectural-overview)).
+Comparing that encoding with a per-slot or in-header valid flag, such as the
+prototype's, is Fabric 2.0 ID 15.
+
+### Credit-protocol cost
+
+The prototype never waits on its consumer: its X280 validation pass runs after
+the ERISC batch ends. The unified member's writer waits for ring credit from the
+X280 consumer, so the difference between the two per-header costs is the cost of
+the credit protocol at the unified member's settings. On 2026-09-30 the
+prototype's `DRAINED` point took 420.17 ERISC wall ticks per header and
+`writers1_b1` (S=16, C=1, K=1) 973.4, so the credit protocol costs 553.2 ticks per
+header there. 992 of 1,024 measured headers entered the credit wait: the writer
+is paced by X280 service and credit return, not by its own publication code.
+Conditions, both intervals and the evidence are in
+[results.md](../results.md#erisc---x280-header-ingress).
+
 ## Running the Benchmark
 
 `x280_packet_injection_tensix_to_x280` injects fabric packet headers from
@@ -978,9 +1019,8 @@ Tensix BRISC/NCRISC producers into an X280 consumer, and
 open the 14-way `LimLayout::PacketInjection` profile. The ERISC member links
 `x280_slow_dispatch` ([harness.md](../harness.md#running-benchmarks)). The header-ingress member, which
 runs on the packet-injection throughput image, is in
-[§ ERISC Header-Ingress Member](#erisc-header-ingress-member);
-the ID 14 contract and the removed single-writer prototype are in
-[`packet_header_ingress.md`](packet_header_ingress.md).
+[§ ERISC Header-Ingress Member](#erisc-header-ingress-member), with the ID 14
+contract under [§ Measured operation](#measured-operation).
 Each record names the tt-metal revision the executable was built from
 (`tt_metal_sha`, `source_dirty`).
 
