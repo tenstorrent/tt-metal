@@ -14,9 +14,12 @@ import json
 from pathlib import Path
 
 import torch
-from safetensors import safe_open
 
-from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256
+from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
+    kda_state_dict_sha256,
+    load_checkpoint_tensor,
+    resolve_model_root,
+)
 
 # Names what ``FirstLayerInput`` computes, for golden identities: a golden built another way is a different input.
 FIRST_LAYER_INPUT = "input_layernorm(embed_tokens), vLLM rounding (FP32, one BF16 rounding)"
@@ -33,19 +36,9 @@ class FirstLayerInput:
         checkpoint_dir = Path(checkpoint_dir)
         config = json.loads((checkpoint_dir / "config.json").read_text(encoding="utf-8"))
         self.eps = config.get("text_config", config)["rms_norm_eps"]
-        with (checkpoint_dir / "model.safetensors.index.json").open(encoding="utf-8") as index_file:
-            weight_map = json.load(index_file)["weight_map"]
-        root = next(r for r in ("language_model.model.", "model.") if f"{r}embed_tokens.weight" in weight_map)
-        self.embedding = self._tensor(checkpoint_dir, weight_map, f"{root}embed_tokens.weight")
-        self.norm_weight = self._tensor(checkpoint_dir, weight_map, f"{root}layers.0.input_layernorm.weight")
-
-    @staticmethod
-    def _tensor(checkpoint_dir: Path, weight_map: dict[str, str], key: str) -> torch.Tensor:
-        shard = checkpoint_dir / weight_map[key]
-        if not shard.is_file():
-            raise FileNotFoundError(f"{key} lives in {shard.name}, which is not in {checkpoint_dir}")
-        with safe_open(shard, framework="pt", device="cpu") as handle:
-            return handle.get_tensor(key)
+        root = resolve_model_root(checkpoint_dir)
+        self.embedding = load_checkpoint_tensor(checkpoint_dir, f"{root}embed_tokens.weight")
+        self.norm_weight = load_checkpoint_tensor(checkpoint_dir, f"{root}layers.0.input_layernorm.weight")
 
     def weights_sha256(self) -> str:
         """Content identity of the two tensors this input is built from (embedding table and norm weight)."""
