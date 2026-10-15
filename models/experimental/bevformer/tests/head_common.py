@@ -44,7 +44,7 @@ CENTER_MAX_ATOL = 0.15
 
 
 def center_channels():
-    """The box code's cx, cy and cz channels."""
+    """Indexes of cx, cy and cz in the box code, which are not contiguous."""
     channels = list(range(CODE_SIZE))
     return channels[CODE_XY] + channels[CODE_Z]
 

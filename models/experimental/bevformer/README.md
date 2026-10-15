@@ -61,8 +61,8 @@ and, per decoder layer, the classification branch.
   the weights only, so `tt/model_preprocessing_head.py` computes them once. The parameters also
   carry the head's BEV shape and `pc_range`.
 - The box predictions are the decoder's box codes with cx, cy and cz replaced by its refined
-  float32 points, scaled from [0, 1] to `pc_range` metres. The class logits are float32, the
-  dtype the coder ranks.
+  float32 points, scaled from [0, 1] to `pc_range` metres. The class logits are float32, as the
+  coder's exact re-rank needs.
 - The encoder side of BEVFormer's `PerceptionTransformer` (BEV queries, positional encoding, can
   bus, previous BEV) is not part of the head.
 
@@ -70,9 +70,9 @@ and, per decoder layer, the classification branch.
 layer by score, their box predictions decoded to `(cx, cy, cz, w, l, h, yaw, vx, vy)`, and the
 range and score filters.
 
-- The top-k and the decoding run on device. A float32 top-k over all 9000 scores is slow, so the
-  logits are ranked in bfloat16 against a pivot, the bfloat16 k-th logit, and the 512 candidates
-  are re-ranked exactly in float32.
+- The top-k and the decoding run on device. On Blackhole a float32 top-k over all 9000 scores is
+  far slower than a bfloat16 one, so the logits are ranked in bfloat16 against a pivot, the
+  bfloat16 k-th logit, and the 512 candidates are re-ranked exactly in float32.
 - The range and score tests, upstream's lowering of the score threshold when no score passes it
   included, run on device as a validity mask over the 300 boxes. Only dropping the invalid boxes
   runs on host: it leaves a data-dependent number of boxes and ends the pipeline.
@@ -170,10 +170,13 @@ Tests the detection head, and the coder on the head's outputs.
 - The tiny grid, a traced run on new BEV features, batch size 2, and the base 200x200 grid
 - PCC 0.99 on the class logits and, channel by channel, on the box predictions, over all layers
   and on the last one; a joint PCC would be carried by the metre-scale centers alone
+- The box centers within a mean and a max error in metres (`tests/head_common.py`), which PCC
+  over the 102.4 m axes does not bound
 - That the coder, on the head's outputs, selects pairs within twice the score error of the reference
-  head's top 300, with the reference's scores and boxes at those pairs
+  head's top 300, with scores and boxes that match the reference's at those pairs by PCC
 
-The decoder and reg branches use `test_decoder.py`'s dummy weights.
+The decoder and reg branches use `tests/decoder_common.py`'s dummy-weight init, and the reference
+points BEVFormer's xavier init (`tests/head_common.py`).
 
 **Usage:**
 ```bash

@@ -20,23 +20,33 @@ import torch
 
 import ttnn
 from models.experimental.bevformer.config.decoder_config import (
-    CODE_COS,
+    CENTERS_FIRST,
     CODE_H,
-    CODE_SIN,
     CODE_SIZE,
-    CODE_VELOCITY,
     CODE_WL,
     CODE_XY,
     CODE_Z,
 )
-from models.experimental.bevformer.tt.tt_common import SCORE_DTYPE, layer_norm
+from models.experimental.bevformer.tt.tt_common import layer_norm
 from models.experimental.bevformer.tt.tt_decoder import GRID_DTYPE, TtDetectionTransformerDecoder
 
-# __call__ rebuilds the box code by concatenation, which needs these parts contiguous and in this order.
-_LAYOUT = (CODE_XY, CODE_WL, CODE_Z, CODE_H, CODE_SIN, CODE_COS, CODE_VELOCITY)
-assert [part.start for part in _LAYOUT] == [0] + [part.stop for part in _LAYOUT[:-1]] and (
-    CODE_VELOCITY.stop == CODE_SIZE
-), "the head's box code concat expects xy | wl | z | h | sin | cos | velocity, contiguous"
+# The dtypes of the head's outputs. Class logits: in bfloat16 many of the num_query * num_classes
+# scores tie, and the coder's top-k order departs from the reference's. Box predictions: the
+# decoder's, as their centers are the refined reference points.
+SCORE_DTYPE = ttnn.float32
+BOX_DTYPE = GRID_DTYPE
+
+# __call__ turns the decoder's centers-first box codes into the box code layout by one concat:
+# cx cy | w l | cz | h onward, which needs this order on both sides.
+_CHANNELS = [*range(CODE_SIZE)]
+if not (
+    _CHANNELS[CODE_XY] == [0, 1]
+    and _CHANNELS[CODE_WL] == [2, 3]
+    and _CHANNELS[CODE_Z] == [4]
+    and _CHANNELS[CODE_H.start :] == CENTERS_FIRST[5:]
+    and CENTERS_FIRST[3:5] == _CHANNELS[CODE_WL]
+):
+    raise ValueError("the head's box code concat expects xy | wl | z | h onward, and centers-first codes")
 
 
 class TtBEVFormerHead:
@@ -66,7 +76,7 @@ class TtBEVFormerHead:
         """``bev_embed`` is ``(bs, bev_h * bev_w, embed_dims)``.
 
         Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)``
-        (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``GRID_DTYPE``):
+        (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``BOX_DTYPE``):
         ``config/decoder_config.py``'s code layout with cx, cy and cz in metres.
         """
         p = self.params
@@ -82,15 +92,9 @@ class TtBEVFormerHead:
             [self._cls_branch(hs[lvl], branch) for lvl, branch in enumerate(p.cls_branches)], dim=0
         )
 
-        # The refined points are (x, y, z).
         centers = ttnn.add(ttnn.multiply(refined_points, self.pc_size), self.pc_min)
+        # The refined points and the codes' first three channels are (x, y, z).
         all_bbox_preds = ttnn.concat(
-            [
-                centers[..., 0:2],
-                box_codes[..., CODE_WL],
-                centers[..., 2:3],
-                box_codes[..., CODE_H.start :],
-            ],
-            dim=-1,
+            [centers[..., 0:2], box_codes[..., 3:5], centers[..., 2:3], box_codes[..., 5:]], dim=-1
         )
         return all_cls_scores, all_bbox_preds

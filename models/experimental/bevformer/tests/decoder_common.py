@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.common.utility_functions import comp_pcc
-from models.experimental.bevformer.config.decoder_config import CODE_SIZE, CODE_XY, CODE_Z
+from models.experimental.bevformer.config.decoder_config import CENTERS_FIRST, CODE_SIZE, CODE_XY, CODE_Z
 from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid, reg_branch
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 from models.experimental.bevformer.tests.backbone_common import assert_pcc
@@ -132,6 +132,12 @@ def build_reg_branches(seed=1):
     torch.manual_seed(seed)
     branches = init_reg_branches(nn.ModuleList(reg_branch(EMBED_DIMS, CODE_SIZE) for _ in range(NUM_LAYERS)))
     return branches.eval().requires_grad_(False)
+
+
+def reference_box_codes(outputs, reg_branches):
+    """Each layer's reg branch on the reference decoder's ``(L, nq, bs, C)`` outputs: the box codes
+    the TT decoder also returns, ``(L, bs, nq, code_size)`` in its ``CENTERS_FIRST`` order."""
+    return torch.stack([branch(out.permute(1, 0, 2)) for branch, out in zip(reg_branches, outputs)])[..., CENTERS_FIRST]
 
 
 def random_reference_points(batch_size, generator=None):

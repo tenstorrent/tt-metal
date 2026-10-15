@@ -46,7 +46,7 @@ def test_head_perf(device, reset_seeds):
     bev_shape = BEV_SHAPES["base"]
     torch_model = build_reference_head(bev_shape)
     tt_model = TtBEVFormerHead(create_head_parameters(torch_model, device), device)
-    coder = TtNMSFreeCoder()
+    coder = TtNMSFreeCoder(device)
 
     generator = torch.Generator().manual_seed(0)
     bev_embed = random_bev_features(bev_shape, 1, generator).permute(1, 0, 2).contiguous()

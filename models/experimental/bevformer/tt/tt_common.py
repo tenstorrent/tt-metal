@@ -3,8 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Blocks shared across the port: the LayerNorm helper that passes the module's eps, used by the
-encoder and the decoder, the conv the ResNet101-DCN backbone and the FPN share, and the dtype of
-the head's class logits, which the coder takes.
+encoder and the decoder, and the conv the ResNet101-DCN backbone and the FPN share.
 
 The conv's weights are prepared once, in the constructor, for one interleaved DRAM input dtype
 and layout. A later call with a different input fails. A 1x1 stride-1 conv whose
@@ -15,10 +14,6 @@ number of width slices.
 import math
 
 import ttnn
-
-# The dtype of the head's class logits, which the coder ranks: in bfloat16 many of the
-# num_query * num_classes scores tie, and the top-k order departs from the reference's.
-SCORE_DTYPE = ttnn.float32
 
 
 def layer_norm(x, params, residual=None):

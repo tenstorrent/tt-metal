@@ -54,7 +54,7 @@ def _check(torch_outputs, tt_outputs):
     for name, tensor in zip(("class logits", "box predictions"), tt_outputs):
         assert torch.isfinite(tensor).all(), f"non-finite values in the head {name}"
     assert_centers_close(torch_outputs[1], tt_outputs[1])
-    # Over all layers, then the last alone, which the coder reads and where the error is largest.
+    # Over all layers, then the last alone, which the coder reads and where bfloat16 error has built up most.
     for layers in (slice(None), -1):
         assert_pcc(torch_outputs[0][layers], tt_outputs[0][layers], 0.99)
         # Channel by channel: a joint PCC would be the centers' alone, as x and y span 102.4 m
@@ -114,7 +114,7 @@ def test_head_detections(device, reset_seeds):
 
     reference = NMSFreeCoder()
     tt_scores, tt_labels, tt_query_index, tt_boxes = (
-        ttnn.to_torch(t) for t in TtNMSFreeCoder().topk(tt_cls_scores[-1], tt_bbox_preds[-1])
+        ttnn.to_torch(t) for t in TtNMSFreeCoder(device).topk(tt_cls_scores[-1], tt_bbox_preds[-1])
     )
     # The largest score error over all num_query * num_classes pairs. topk ranks the head's
     # logits exactly, which order as their exact sigmoid does.

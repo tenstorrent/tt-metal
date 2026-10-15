@@ -15,6 +15,7 @@ from models.experimental.bevformer.tests.decoder_common import (
     build_reg_branches,
     layer_metrics,
     random_decoder_inputs,
+    reference_box_codes,
 )
 from models.experimental.bevformer.tt.model_preprocessing_decoder import (
     create_decoder_parameters,
@@ -82,11 +83,9 @@ def test_decoder(device, reset_seeds, name, bev_shape, batch_size, traced, batch
     spatial_shapes = torch.tensor([bev_shape])
 
     def reference(inputs):
-        """The reference decoder's outputs, plus the box codes the TT decoder also returns: each
-        layer's reg branch on its output."""
+        """The reference decoder's outputs, plus the box codes the TT decoder also returns."""
         outputs, points = torch_model(**inputs, spatial_shapes=spatial_shapes, reg_branches=reg_branches)
-        box_codes = torch.stack([branch(out.permute(1, 0, 2)) for branch, out in zip(reg_branches, outputs)])
-        return outputs, points, box_codes
+        return outputs, points, reference_box_codes(outputs, reg_branches)
 
     tt_model = TtDetectionTransformerDecoder(
         create_decoder_parameters(torch_model, device), device, bev_shape, batch_first=batch_first

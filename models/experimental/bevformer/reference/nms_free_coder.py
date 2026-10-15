@@ -80,7 +80,7 @@ def filter_boxes(scores, labels, boxes, post_center_range, score_threshold=None)
 
 class NMSFreeCoder:
     """
-    BEVFormer's NMS-free box coder: top-k by score, decode, range filter.
+    BEVFormer's NMS-free box coder: top-k by score, decode, range and score filters.
 
     Args:
         pc_range, voxel_size: Unused, accepted so upstream's ``bbox_coder`` config applies.
@@ -89,7 +89,8 @@ class NMSFreeCoder:
         post_center_range (tuple[float]): ``(x_min, y_min, z_min, x_max, y_max, z_max)`` box
             centers are kept in.
         max_num (int): Boxes kept per sample, by score.
-        score_threshold (float, optional): Minimum score; BEVFormer sets none.
+        score_threshold (float, optional): Score a box must exceed, lowered as in ``filter_boxes``
+            when no box does; BEVFormer sets none.
         num_classes (int): Class logits per query.
     """
 

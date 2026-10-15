@@ -17,3 +17,9 @@ CODE_H = slice(5, 6)
 CODE_SIN = slice(6, 7)
 CODE_COS = slice(7, 8)
 CODE_VELOCITY = slice(8, 10)
+
+_CENTERS = [*range(CODE_SIZE)][CODE_XY] + [*range(CODE_SIZE)][CODE_Z]
+# The TTNN port's channel order for box codes: the centers first, (cx, cy, cz, w, l, h, sin, cos,
+# vx, vy), so its decoder takes the center offsets in one slice. Its reg branches emit it, from
+# the last Linear's rows in this order.
+CENTERS_FIRST = _CENTERS + [channel for channel in range(CODE_SIZE) if channel not in _CENTERS]

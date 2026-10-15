@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import torch
 
+from models.experimental.bevformer.config.decoder_config import CENTERS_FIRST
 from models.experimental.bevformer.tt.model_preprocessing import (
     DEFAULT_DTYPE,
     linear_params,
@@ -71,11 +72,15 @@ def create_reg_branch_parameters(reg_branches, device, dtype=DEFAULT_DTYPE):
     """The three Linears of each ``Linear-ReLU-Linear-ReLU-Linear`` branch.
 
     The decoder runs each branch once per layer: it refines its reference points with the
-    center channels of the box code and returns the whole code, which the head uses.
+    center channels of the box code and returns the whole code, which the head uses. The last
+    Linear's rows go in ``CENTERS_FIRST`` order, the code order the decoder takes.
     """
     branches = []
     for branch in reg_branches:
         # Unpacking checks the three Linears TtDetectionTransformerDecoder._reg_branch runs.
         first, second, last = (m for m in branch if isinstance(m, torch.nn.Linear))
-        branches.append([linear_params(m.weight, m.bias, device, dtype) for m in (first, second, last)])
+        branches.append(
+            [linear_params(m.weight, m.bias, device, dtype) for m in (first, second)]
+            + [linear_params(last.weight[CENTERS_FIRST], last.bias[CENTERS_FIRST], device, dtype)]
+        )
     return branches
