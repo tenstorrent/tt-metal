@@ -6,6 +6,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
