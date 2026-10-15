@@ -1239,6 +1239,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     ack_shm_name = scheduler_shm_name(service_id)
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
+    if num_ranks > 1:
+        # Collective: the master writes every rank's D2D receiver to one file for the engine.
+        path = ttnn.D2DStreamService.export_pipeline_descriptor(service_id, d2d_in, root=master_rank)
+        if path is not None:
+            logger.info(f"[pp rank {rank}] [d2d] pipeline descriptor service_id={service_id!r} -> {path}")
     router = None
     d2h_service = None
     layer_ack_service = None

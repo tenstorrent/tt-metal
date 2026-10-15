@@ -219,6 +219,12 @@ from ttnn._ttnn.d2d_stream_service import (
     D2DStageGateDescriptor,
     D2DStageGateMode,
     D2D_STAGE_GATE_UNGATED_SLOT,
+    PCIeCoreLocation,
+    D2DReceiverCoordDescriptor,
+    D2DReceiverDescriptor,
+    D2DRankDescriptor,
+    D2DPipelineDescriptor,
+    d2d_pipeline_descriptor_path,
 )
 
 from ttnn._ttnn.layer_ack_service import (
