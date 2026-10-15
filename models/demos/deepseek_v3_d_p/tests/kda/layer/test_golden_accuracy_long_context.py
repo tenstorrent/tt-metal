@@ -22,6 +22,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import run_for_blackhole
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
@@ -44,11 +45,14 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     nrmse,
 )
 
+# The 1M case runs ~7 min on SP2xTP4 plus setup; pytest.ini's 300 s default would cut it short.
+pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
+
 _CALL = PREFILL_CHUNK_TOKENS  # tokens per prefill call, as in production; a multiple of the golden's segments
 _WINDOW = 1024
 _PCC = 0.999
 # PCC is the structural sanity gate; NRMSE carries precision. The worst head's state drifts with context on
-# main (PCC 0.9975 and NRMSE 0.16 after 1M tokens), so the state's sanity bound is looser than the output's.
+# main (PCC 0.9975 and NRMSE 0.16 after 1M tokens), so the state's per-head sanity bound is looser than the output's.
 _STATE_PCC = 0.99
 
 # NRMSE thresholds per context length (call, output, window, token, state head).
@@ -145,6 +149,7 @@ def test_kimi_k3_layer0_long_context_accuracy(
         pcc_threshold=_STATE_PCC,
         nrmse_threshold=thresholds["state_head"],
         nrmse_keep_dims=(0,),
+        pcc_keep_dims=(0,),
     )
     assert result["output_nrmse"] <= thresholds["output"], result
     assert result["window_nrmse_max"] <= thresholds["window"], result
