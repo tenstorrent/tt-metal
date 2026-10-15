@@ -190,7 +190,7 @@ class MuseGlimmerGenerator:
         for u in range(n):
             t = int(cur[u])
             generated[u].append(t)
-            if t in stop:
+            if t in stop or pos[u] >= self.models[0].args.max_seq_len:
                 active[u] = False
 
         dev_sp = self._to_sampling_params(sampling) if self.device_sampling else None
