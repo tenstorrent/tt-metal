@@ -1,0 +1,39 @@
+{
+ "used": [
+  {
+   "id": "K-12",
+   "how": "did not reuse xing40's rms_norm_pre/post_all_gather chain (fp32 stats junk, FPU stats); took its wide-row pointer, ttnn.bringup.mhc_pre_xing_pack, with n=1 for the exact local sum x^2",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "partial sums exchanged with tt/common.py:tp_sum (all_gather + SFPU ttnn.add), every multiply fp32 on the SFPU: device output equals the CPU step to rel 7.9e-8",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "that mhc_pre_xing_pack(n=1) overwrites column 3 of any fp32 [R, 32] mix, so it serves as an exact distributed-RMSNorm statistic with no zero constant (mhc_pre_xing_writer.cpp pack_stats)"
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.attn_norm",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T12:54:00",
+  "head": "eff17cc7043",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.attn_norm.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/layout.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py"
+  ]
+ }
+}
