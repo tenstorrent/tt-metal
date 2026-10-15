@@ -211,6 +211,8 @@ class TtMiMoAttention:
         k_rot = ttnn.experimental.rotary_embedding_llama(k, cos, sin, trans, is_decode_mode=False)
         q.deallocate(True)
         k.deallocate(True)
+        cos.deallocate(True)
+        sin.deallocate(True)
 
         k_cache, v_cache = kv_cache
         k_fill = ttnn.typecast(k_rot, k_cache.dtype)

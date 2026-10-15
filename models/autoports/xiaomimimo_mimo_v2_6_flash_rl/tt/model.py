@@ -70,8 +70,8 @@ class TtMiMoModel:
         head_dim = cfg.head_dim
         rope_dim = int(head_dim * cfg.partial_rotary_factor)
         self.rope_setups = {
-            "swa": MiMoRotarySetup(mesh_device, max_batch, head_dim, rope_dim, max_seq_len, cfg.swa_rope_theta),
-            "full": MiMoRotarySetup(mesh_device, max_batch, head_dim, rope_dim, max_seq_len, cfg.rope_theta),
+            "swa": MiMoRotarySetup(mesh_device, max_batch, head_dim, rope_dim, cfg.swa_rope_theta),
+            "full": MiMoRotarySetup(mesh_device, max_batch, head_dim, rope_dim, cfg.rope_theta),
         }
 
         def warm(tag):
@@ -222,7 +222,8 @@ class TtMiMoModel:
 
     # ------------------------------------------------------------------ decode
     def prepare_decode_inputs_host(self, tokens, positions):
-        """Host tensors for one step: tokens [1, B] u32, cur_pos [B] i32, RoPE idx [1, B] u32, MoE token mask,
+        """Host tensors for one step: tokens [1, B] u32, cur_pos [B] i32, cos/sin [1, 1, B, 192] for the SWA and
+        the global theta, MoE token mask,
         and the global layers' per-chip view: owned positions [B] i32 and owner mask [1, 1, B, 1]."""
         assert tokens.numel() == self.max_batch and positions.numel() == self.max_batch
         rep = self.plan.replicate()
@@ -234,7 +235,8 @@ class TtMiMoModel:
         return (
             host(tokens.reshape(1, -1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
             host(positions.to(torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-            self.rope_setups["full"].get_rot_idxs(positions.clamp(min=0), on_host=True),
+            *self.rope_setups["swa"].decode_host_inputs(positions),
+            *self.rope_setups["full"].decode_host_inputs(positions),
             host((positions >= 0).to(torch.bfloat16).reshape(1, 1, -1, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT),
             kv_lib.per_chip(
                 self.plan, kv_lib.owned_positions(positions, tp, kv_rep), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, False
@@ -244,14 +246,15 @@ class TtMiMoModel:
             ),
         )
 
-    def decode_forward_device(self, tokens_tt, cur_pos_tt, rot_idx_tt, mask_tt, pos_owned_tt, owner_mask_tt):
+    def decode_forward_device(
+        self, tokens_tt, cur_pos_tt, cos_swa, sin_swa, cos_full, sin_full, mask_tt, pos_owned_tt, owner_mask_tt
+    ):
         """One decode step from device-resident inputs only (trace-capturable). Returns [1, 1, B, vocab / tp]."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, self.max_batch, self.cfg.hidden_size))
-        # Both thetas share the RoPE index; each layer type looks up its own table.
         rot_mats = {
-            True: self.rope_setups["swa"].get_rot_mats(rot_idx_tt),
-            False: self.rope_setups["full"].get_rot_mats(rot_idx_tt),
+            True: self.rope_setups["swa"].decode_rot_mats(cos_swa, sin_swa),
+            False: self.rope_setups["full"].decode_rot_mats(cos_full, sin_full),
         }
         positions = {"pos": cur_pos_tt, "pos_owned": pos_owned_tt, "owner_mask": owner_mask_tt}
         for i, layer in enumerate(self.layers):

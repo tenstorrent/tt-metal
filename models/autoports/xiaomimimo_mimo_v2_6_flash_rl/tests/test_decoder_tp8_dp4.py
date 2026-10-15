@@ -69,8 +69,8 @@ def test_decoder_layer_tp8_dp4(mesh_device, layer_idx):
     for r, sm in enumerate(dp_submeshes(mesh_device)):
         plan = MeshPlan(sm)
         ropes = {
-            "swa": MiMoRotarySetup(sm, MAX_BATCH, dims.head_dim, dims.rope_dim, MAX_SEQ, cfg.swa_rope_theta),
-            "full": MiMoRotarySetup(sm, MAX_BATCH, dims.head_dim, dims.rope_dim, MAX_SEQ, cfg.rope_theta),
+            "swa": MiMoRotarySetup(sm, MAX_BATCH, dims.head_dim, dims.rope_dim, cfg.swa_rope_theta),
+            "full": MiMoRotarySetup(sm, MAX_BATCH, dims.head_dim, dims.rope_dim, cfg.rope_theta),
         }
         # Replica 0 converts the weights and fills the cache; the other rows load the cached tensors.
         layer = TtMiMoDecoderLayer(
