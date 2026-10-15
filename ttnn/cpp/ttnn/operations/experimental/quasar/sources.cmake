@@ -15,9 +15,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     slice/slice.hpp
     transpose/transpose.hpp
     reshard/reshard.hpp
-    halo/halo.hpp
-    pool_generic/generic_pools.hpp
-    conv2d/conv2d.hpp
     matmul/matmul.hpp
     binary_ng/types.hpp
     binary/binary.hpp
@@ -36,7 +33,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     typecast/typecast.hpp
     padded_slice/padded_slice.hpp
     slice_write/slice_write.hpp
-    op_slicing/op_slicing.hpp
     # transformer
     transformer/sdpa_decode/sdpa_decode.hpp
     transformer/sdpa/sdpa.hpp
@@ -88,9 +84,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     slice_write/device/slice_write_rm_sharded_input_program_factory.cpp
     slice_write/device/slice_write_rm_interleaved_program_factory.cpp
     slice_write/device/slice_write_tiled_sharded_input_program_factory.cpp
-    # op_slicing (quasar fork of the conv2d DRAM output-height-slicing driver; routes per-slice
-    # padded_slice / slice_write unconditionally through the quasar Metal-2 ops)
-    op_slicing/op_slicing.cpp
     slice/device/slice_program_factory_tile.cpp
     slice/device/slice_program_factory_tile_tensor_args.cpp
     # transpose
@@ -119,19 +112,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     move/device/move_overlap_program_factory.cpp
     move/device/move_program_factory.cpp
     move/device/move_sharded_program_factory.cpp
-    # halo (no nanobind; internal op)
-    halo/halo.cpp
-    halo/device/halo_device_operation.cpp
-    halo/device/untilize_with_halo_program_factory.cpp
-    # pool_generic
-    pool_generic/generic_pools.cpp
-    pool_generic/device/pool_op.cpp
-    pool_generic/device/pool_multi_core_program_factory.cpp
-    # conv2d
-    conv2d/conv2d.cpp
-    conv2d/device/conv2d_device_operation.cpp
-    conv2d/device/conv2d_op_sharded_program_factory.cpp
-    conv2d/device/conv2d_op_width_sharded_program_factory.cpp
     # binary_ng (device backend; no host op / no nanobind)
     binary_ng/device/binary_ng_device_operation.cpp
     binary_ng/device/binary_ng_program_factory.cpp
@@ -246,8 +226,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     slice/slice_nanobind.cpp
     transpose/transpose_nanobind.cpp
     reshard/reshard_nanobind.cpp
-    pool_generic/generic_pools_nanobind.cpp
-    conv2d/conv2d_nanobind.cpp
     padded_slice/padded_slice_nanobind.cpp
     slice_write/slice_write_nanobind.cpp
     matmul/matmul_nanobind.cpp

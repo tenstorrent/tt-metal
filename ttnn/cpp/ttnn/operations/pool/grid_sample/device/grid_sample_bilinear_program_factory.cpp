@@ -10,7 +10,6 @@
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "grid_sample_utils.hpp"
-#include "ttnn/operations/pool/pool_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -18,6 +17,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
+#include "ttnn/operations/pool/device/aligned_stick_size.hpp"
 
 namespace ttnn::prim {
 
@@ -95,8 +95,8 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         single_partial_output_fits_in_face ? std::optional{TileDescriptor{1, tt::constants::FACE_WIDTH, false}}
                                            : std::nullopt;
 
-    const uint32_t grid_stick_size =
-        is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
+    const uint32_t grid_stick_size = is_sharded ? grid_shape[-1] * grid_tensor.element_size()
+                                                : ttnn::operations::pool::aligned_stick_size(grid_shape, grid_tensor);
     const uint32_t grid_cb_index = cb_idx++;
     const uint32_t grid_cb_num_pages = is_sharded ? grid_nsticks_per_core : 1;
     desc.cbs.push_back(CBDescriptor{
@@ -216,9 +216,10 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
     });
 
     // Prepare stick size arguments with proper names
-    const uint32_t input_stick_size = get_aligned_stick_size(input_shape, input_tensor);
-    const uint32_t grid_stick_size_arg =
-        is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
+    const uint32_t input_stick_size = ttnn::operations::pool::aligned_stick_size(input_shape, input_tensor);
+    const uint32_t grid_stick_size_arg = is_sharded
+                                             ? grid_shape[-1] * grid_tensor.element_size()
+                                             : ttnn::operations::pool::aligned_stick_size(grid_shape, grid_tensor);
 
     // Reader compile-time arguments - shared arguments first, then specific ones
     std::vector<uint32_t> reader_compile_time_args = {
@@ -304,7 +305,8 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
     // Compute kernels
     const uint32_t channels_per_shard = input_shape[-1];
 
-    auto pool_defines_map = ttnn::operations::pool::get_defines(ttnn::operations::pool::Pool2DType::AVG_POOL2D);
+    auto pool_defines_map =
+        std::map<std::string, std::string>{{"REDUCE_OP", "PoolType::AVG"}, {"REDUCE_DIM", "ReduceDim::REDUCE_COL"}};
 
     auto make_compute_desc = [&](tt::tt_metal::CoreRangeSet cores, uint32_t total_interpolations) {
         // Compute kernel compile-time arguments
@@ -351,6 +353,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         };
 
         KernelDescriptor compute_desc;
+        // TODO(nuked-op pool): this kernel was deleted with max/avg pool; restore compute_pool_2d.cpp
         compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = std::move(cores);
@@ -381,9 +384,9 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
     if (has_writer) {
         // Writer compile-time arguments - expanded row by row for readability
         std::vector<uint32_t> writer_compile_time_args = {
-            output_cb_index,                                      // ct_arg[0]: output_cb_index
-            get_aligned_stick_size(output_shape, output_tensor),  // ct_arg[1]: output_stick_size
-            out_ntiles_c                                          // ct_arg[2]: out_ntiles_c
+            output_cb_index,                                                          // ct_arg[0]: output_cb_index
+            ttnn::operations::pool::aligned_stick_size(output_shape, output_tensor),  // ct_arg[1]: output_stick_size
+            out_ntiles_c                                                              // ct_arg[2]: out_ntiles_c
         };
         tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
 

@@ -16,16 +16,10 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation_types.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <utility>
 #include <vector>
 
 namespace ttnn::prim {
-
-struct UpsampleBilinearProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
-};
 
 struct UpsampleMultiCoreInterleavedProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
@@ -50,7 +44,6 @@ struct UpsampleOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        UpsampleBilinearProgramFactory,
         UpsampleMultiCoreInterleavedProgramFactory,
         UpsampleMultiCoreShardedProgramFactory,
         UpsampleNearestFloatProgramFactory>;
@@ -67,7 +60,6 @@ ttnn::Tensor upsample(
     float scale_factor_w,
     const std::string& mode,
     const MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<ttnn::operations::sliding_window::SlidingWindowConfig>& sliding_window_config = std::nullopt);
+    const DeviceComputeKernelConfig& compute_kernel_config);
 
 }  // namespace ttnn::prim

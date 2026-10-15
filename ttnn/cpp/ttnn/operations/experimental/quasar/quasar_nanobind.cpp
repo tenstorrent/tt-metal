@@ -13,8 +13,6 @@
 #include "ttnn/operations/experimental/quasar/slice/slice_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/transpose/transpose_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/reshard/reshard_nanobind.hpp"
-#include "ttnn/operations/experimental/quasar/pool_generic/generic_pools_nanobind.hpp"
-#include "ttnn/operations/experimental/quasar/conv2d/conv2d_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/binary/binary_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/fold/fold_nanobind.hpp"
@@ -46,12 +44,6 @@ void bind_quasar(nb::module_& mod) {
     detail::bind_slice_descriptor(m_quasar);
     detail::bind_transpose(m_quasar);
     detail::bind_reshard(m_quasar);
-
-    // conv2d.
-    detail::bind_conv2d(m_quasar);
-
-    // pool (host namespace ttnn::operations::pool::quasar).
-    ttnn::operations::pool::quasar::py_module(m_quasar);
 
     // matmul (its own py_module binds matmul/linear/addmm/sparse_matmul + program-config classes).
     matmul::py_module(m_quasar);

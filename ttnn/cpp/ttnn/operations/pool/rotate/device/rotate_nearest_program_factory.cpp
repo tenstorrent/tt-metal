@@ -4,7 +4,6 @@
 
 #include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
 #include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
-#include <ttnn/operations/pool/pool_utils.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -15,7 +14,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
+#include "ttnn/operations/pool/device/aligned_stick_size.hpp"
 
 namespace ttnn::operations::rotate {
 
@@ -129,10 +130,12 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
 
     const bool any_sharded = is_sharded || is_nd_sharded;
     const uint32_t effective_channels = any_sharded ? shard_width : input_channels;
-    const uint32_t aligned_input_stick_nbytes = any_sharded ? effective_channels * input_tensor.element_size()
-                                                            : pool::get_aligned_stick_size(input_shape, input_tensor);
-    const uint32_t aligned_output_stick_nbytes = any_sharded ? effective_channels * output_tensor.element_size()
-                                                             : pool::get_aligned_stick_size(input_shape, output_tensor);
+    const uint32_t aligned_input_stick_nbytes =
+        any_sharded ? effective_channels * input_tensor.element_size()
+                    : ttnn::operations::pool::aligned_stick_size(input_shape, input_tensor);
+    const uint32_t aligned_output_stick_nbytes =
+        any_sharded ? effective_channels * output_tensor.element_size()
+                    : ttnn::operations::pool::aligned_stick_size(input_shape, output_tensor);
 
     const uint32_t available_l1 = NUM_TILES_DEST * tt::constants::TILE_HW * element_size;
     const uint32_t l1_for_cb = available_l1 / NEAREST_BUFFERING_FACTOR;

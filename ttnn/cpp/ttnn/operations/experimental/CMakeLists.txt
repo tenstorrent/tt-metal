@@ -16,8 +16,6 @@
 # active owner of those ops.
 
 # metalium-developers-convolutions
-add_subdirectory(adaptive_pool)
-add_subdirectory(conv3d)
 add_subdirectory(cnn)
 
 # metalium-developers-ops-data-movement
@@ -81,8 +79,6 @@ add_library(TTNN::Ops::Experimental ALIAS ttnn_op_experimental_shared)
 target_link_libraries(
     ttnn_op_experimental_shared
     INTERFACE
-        TTNN::Ops::Experimental::AdaptivePool
-        TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::CNN
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::MoEGPT
@@ -133,8 +129,6 @@ target_link_libraries(
 target_sources(
     ttnn_op_experimental_shared
     INTERFACE
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::AdaptivePool>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Conv3d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::CNN>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::CCL>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MoEGPT>

@@ -7,13 +7,13 @@
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "grid_sample_utils.hpp"
-#include "ttnn/operations/pool/pool_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
+#include "ttnn/operations/pool/device/aligned_stick_size.hpp"
 
 namespace ttnn::prim {
 
@@ -76,8 +76,8 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
     uint32_t cb_idx = tt::CBIndex::c_0;
 
     // Create CBs
-    const uint32_t grid_stick_size =
-        is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
+    const uint32_t grid_stick_size = is_sharded ? grid_shape[-1] * grid_tensor.element_size()
+                                                : ttnn::operations::pool::aligned_stick_size(grid_shape, grid_tensor);
     const uint32_t grid_cb_index0 = cb_idx++;
     const uint32_t grid_cb_num_pages0 = is_sharded ? grid_nsticks_per_core : 1;
     desc.cbs.push_back(CBDescriptor{
@@ -135,9 +135,10 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
     });
 
     // Prepare stick size arguments with proper names
-    const uint32_t input_stick_size = get_aligned_stick_size(input_shape, input_tensor);
-    const uint32_t grid_stick_size_arg =
-        is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
+    const uint32_t input_stick_size = ttnn::operations::pool::aligned_stick_size(input_shape, input_tensor);
+    const uint32_t grid_stick_size_arg = is_sharded
+                                             ? grid_shape[-1] * grid_tensor.element_size()
+                                             : ttnn::operations::pool::aligned_stick_size(grid_shape, grid_tensor);
 
     // Writer for nearest mode with sharded grid - matches sharded reader argument structure
     std::vector<uint32_t> writer_compile_time_args = {
