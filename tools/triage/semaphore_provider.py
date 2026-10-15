@@ -110,10 +110,13 @@ class SemaphoreProvider:
 
     def get_semaphores(self, location: OnChipCoordinate) -> list[SemaphoreData]:
         with self._lock:
-            if location not in self._cache:
-                program = read_program_semaphores(location, self.dispatcher_data, self.by_kernel)
-                self._cache[location] = program + read_global_semaphores(location, self.globals_)
-            return self._cache[location]
+            if location in self._cache:
+                return self._cache[location]
+        program = read_program_semaphores(location, self.dispatcher_data, self.by_kernel)
+        semaphores = program + read_global_semaphores(location, self.globals_)
+        with self._lock:
+            self._cache[location] = semaphores
+        return semaphores
 
 
 @triage_singleton

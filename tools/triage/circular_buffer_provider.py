@@ -132,9 +132,12 @@ class CircularBufferProvider:
 
     def get_circular_buffers(self, location: OnChipCoordinate) -> list[CircularBufferData]:
         with self._lock:
-            if location not in self._cache:
-                self._cache[location] = read_core(location, self.dispatcher_data, self.dump_content)
-            return self._cache[location]
+            if location in self._cache:
+                return self._cache[location]
+        cbs = read_core(location, self.dispatcher_data, self.dump_content)
+        with self._lock:
+            self._cache[location] = cbs
+        return cbs
 
 
 @triage_singleton
