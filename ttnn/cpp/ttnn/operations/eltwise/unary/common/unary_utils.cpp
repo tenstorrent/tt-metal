@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <numeric>
 #include <mutex>
 
 namespace ttnn::operations::unary {
@@ -73,6 +74,7 @@ enum class OpCost : uint8_t {
     Moderate,    // below it, but close to it on a slower SFPU
     Mid,         // close to it
     Heavy,       // above it
+    VeryHeavy,   // far above it: the SFPU sets the time whatever the reads do
     Unmeasured,  // keeps main's path
 };
 
@@ -115,15 +117,16 @@ OpCost op_cost(const EltwiseUnaryWithParam& op) {
         case UnaryOpType::SELU:
         case UnaryOpType::MISH:
         case UnaryOpType::GELU_TANH:
+        case UnaryOpType::LOGSIGMOID: return OpCost::Heavy;
         case UnaryOpType::LOGIT:
-        case UnaryOpType::LOGSIGMOID:
-        case UnaryOpType::XIELU: return OpCost::Heavy;
+        case UnaryOpType::XIELU: return OpCost::VeryHeavy;
         // Parameter 1 of SIGMOID and parameter 0 of GELU, ERF and SQRT select the fast variant.
         case UnaryOpType::SQRT:
             return op.get_param_if<float>(0).value_or(0.0f) == 1.0f ? OpCost::Light : OpCost::Moderate;
         case UnaryOpType::SIGMOID:
             return op.get_param_if<float>(1).value_or(0.0f) == 1.0f ? OpCost::Light : OpCost::Mid;
-        case UnaryOpType::GELU: return op.get_param_if<float>(0).value_or(0.0f) == 1.0f ? OpCost::Light : OpCost::Heavy;
+        case UnaryOpType::GELU:
+            return op.get_param_if<float>(0).value_or(0.0f) == 1.0f ? OpCost::Light : OpCost::VeryHeavy;
         case UnaryOpType::ERF: return op.get_param_if<float>(0).value_or(0.0f) == 1.0f ? OpCost::Mid : OpCost::Heavy;
         default: return OpCost::Unmeasured;
     }
@@ -138,13 +141,57 @@ OpCost chain_cost(const std::vector<EltwiseUnaryWithParam>& op_chain) {
     return cost;
 }
 
+// Ops whose 4-byte kernels compute for longer than a 4 KB page takes to move.
+bool slow_on_large_pages(const EltwiseUnaryWithParam& op) {
+    switch (op.type()) {
+        case UnaryOpType::ERF:
+        case UnaryOpType::TANHSHRINK:
+        case UnaryOpType::SOFTPLUS:
+        case UnaryOpType::LOGSIGMOID: return true;
+        // Parameter 0 of MISH selects the fast variant.
+        case UnaryOpType::MISH: return op.get_param_if<float>(0).value_or(0.0f) != 1.0f;
+        default: return false;
+    }
+}
+
+// With 4 KB pages a tile takes twice as long to move: single ops up to heavy and chains of light ops count as light,
+// except the slow ones, and the rest as very heavy.
+OpCost large_page_cost(const std::vector<EltwiseUnaryWithParam>& op_chain) {
+    const OpCost cost = chain_cost(op_chain);
+    if (cost == OpCost::Unmeasured) {
+        return cost;
+    }
+    const bool fits = cost <= (op_chain.size() == 1 ? OpCost::Heavy : OpCost::Moderate) &&
+                      std::none_of(op_chain.begin(), op_chain.end(), slow_on_large_pages);
+    return fits ? OpCost::Light : OpCost::VeryHeavy;
+}
+
 // What the flow choice needs to know about the tensor.
 struct TensorReads {
     bool interleaved;
     bool width_shards;
     bool all_banks;    // the tensor is spread over every DRAM bank: interleaved, or as many shards as banks
     bool large_pages;  // above 2 KB (fp32, int32): twice the DRAM time per tile
+    // Interleaved: how many banks main's cores start on while in step, its per-core ranges ceil(pages / cores) apart.
+    uint32_t main_start_banks;
+    uint32_t num_shards;
+    uint32_t shard_width;
+    // Width shards: how many shards main's cores start in; those in one shard read one bank while in step.
+    uint32_t main_start_shards;
 };
+
+// Main gives each core a contiguous range of pages, the first ones a page more than the rest.
+uint32_t width_shards_main_starts_in(const DramReadPlan& plan, uint64_t total_pages, uint32_t num_cores) {
+    std::vector<bool> started(plan.num_shards);
+    const uint64_t pages_per_core = total_pages / num_cores;
+    const uint64_t cores_with_more = total_pages % num_cores;
+    uint64_t first_page = 0;
+    for (uint32_t core = 0; core < num_cores && first_page < total_pages; ++core) {
+        started[(first_page % plan.row_pages) / plan.shard_width] = true;
+        first_page += pages_per_core + (core < cores_with_more ? 1 : 0);
+    }
+    return static_cast<uint32_t>(std::count(started.begin(), started.end(), true));
+}
 
 // Flow for many cores per DRAM bank; None keeps main's path. Main's per-core ranges queue cores on one bank while
 // others idle, so the flows win up to close to the DRAM time per tile. Each branch is taken only where it beat main.
@@ -183,32 +230,57 @@ DramReadFlow choose_flow_many_cores_per_bank(OpCost cost, const TensorReads& t, 
 // Flow for few cores per DRAM bank; None keeps main's path. Main's order leaves fewer cores idle there, so the flows
 // win only where DRAM clearly sets the time. Each branch is taken only where it beat main.
 DramReadFlow choose_flow_few_cores_per_bank(OpCost cost, const TensorReads& t, uint64_t pages_per_core) {
-    // Bursts get a height shard's first tiles in sooner: below this range the first burst is most of a core's share,
-    // above it they lose to main.
+    // Bursts get a height shard's first tiles in sooner; below this the first burst is most of a core's share.
     constexpr uint64_t kMinPagesPerCoreForBursts = 24;
-    constexpr uint64_t kMaxPagesPerCoreForBursts = 48;
     // From this on the queue saves more than its start-up and last chunk cost.
     constexpr uint64_t kMinPagesPerCoreForQueue = 96;
-    // Large pages were not measured with this rule.
-    if (cost == OpCost::Unmeasured || t.large_pages) {
+    // Where main's cores, in step, start on between these many banks and have at least this share, they pile onto
+    // those banks and mid ops on interleaved tensors gain from the queue; elsewhere main kept up.
+    constexpr uint32_t kMinMainStartBanks = 3;
+    constexpr uint32_t kMaxMainStartBanks = 4;
+    constexpr uint64_t kMinPagesPerCoreForMidQueue = 448;
+    // Smallest share where the queue beat main on width shards whose cores start in few shards; with large pages
+    // the slower ops lost at 48.
+    constexpr uint64_t kMinPagesPerCoreForPiledQueue = 48;
+    constexpr uint64_t kMinPagesPerCoreForPiledQueueLargePages = 64;
+    // Narrower shards move main's cores on to the next bank sooner, and heavier ops lost there.
+    constexpr uint32_t kMinShardWidthForPiledQueue = 32;
+    if (cost == OpCost::Unmeasured) {
         return DramReadFlow::None;
     }
-    // Interleaved pages already cross the banks: only light ops gain, from the queue.
+    // Width shards where main's cores start in at most two thirds of the shards: in step, they pile onto those shards'
+    // banks. The fewer the shards, the heavier the ops the queue beats main for.
+    if (t.width_shards && t.shard_width >= kMinShardWidthForPiledQueue &&
+        pages_per_core >= (t.large_pages ? kMinPagesPerCoreForPiledQueueLargePages : kMinPagesPerCoreForPiledQueue)) {
+        const uint32_t started = t.main_start_shards;
+        const OpCost max_cost = 3 * started <= t.num_shards       ? OpCost::VeryHeavy
+                                : 2 * started <= t.num_shards     ? OpCost::Heavy
+                                : 3 * started <= 2 * t.num_shards ? OpCost::Mid
+                                                                  : OpCost::Light;
+        if (max_cost > OpCost::Light && cost <= max_cost) {
+            return DramReadFlow::WorkQueue;
+        }
+    }
+    // Interleaved pages already cross the banks: light ops gain from the queue, mid ops only where main's cores pile
+    // onto a few banks.
     if (t.interleaved) {
-        return cost == OpCost::Light && pages_per_core >= kMinPagesPerCoreForQueue ? DramReadFlow::WorkQueue
-                                                                                   : DramReadFlow::None;
+        const bool few_start_banks = t.main_start_banks >= kMinMainStartBanks &&
+                                     t.main_start_banks <= kMaxMainStartBanks &&
+                                     pages_per_core >= kMinPagesPerCoreForMidQueue;
+        const bool queue = cost == OpCost::Light || (cost == OpCost::Mid && few_start_banks);
+        return queue && pages_per_core >= kMinPagesPerCoreForQueue ? DramReadFlow::WorkQueue : DramReadFlow::None;
     }
     // No bursts on width shards: main's order already crosses the banks.
     DramReadFlow deep = DramReadFlow::None;
     if (pages_per_core >= kMinPagesPerCoreForQueue) {
         deep = DramReadFlow::WorkQueue;
-    } else if (
-        !t.width_shards && pages_per_core >= kMinPagesPerCoreForBursts && pages_per_core < kMaxPagesPerCoreForBursts) {
+    } else if (!t.width_shards && pages_per_core >= kMinPagesPerCoreForBursts) {
         deep = DramReadFlow::StaticBurst;
     }
-    // On fewer shards than banks main queues more cores on each bank, so the flows win up to mid ops.
+    // On fewer shards than banks main queues more cores on each bank, so the flows win up to heavy ops, and for every
+    // op with large pages.
     if (!t.all_banks) {
-        return cost <= OpCost::Mid ? deep : DramReadFlow::None;
+        return cost <= OpCost::Heavy || t.large_pages ? deep : DramReadFlow::None;
     }
     // With every bank serving, main's reads keep up with moderate ops.
     return cost == OpCost::Light ? deep : DramReadFlow::None;
@@ -233,6 +305,8 @@ DramReadPlan get_dram_read_plan(
     // A chunk must take longer to read than a request round trip to the scheduler, or the reader waits for it.
     constexpr uint64_t kMinChunkPages = 16;
     constexpr uint64_t kMaxChunkPages = 256;
+    // With few cores per bank, larger chunks lost at the largest sizes.
+    constexpr uint64_t kMaxChunkPagesFewCoresPerBank = 48;
     // Pages per read barrier and per write flush.
     constexpr uint32_t kReadBurst = 8;
     constexpr uint32_t kWriteBurst = 2;
@@ -296,14 +370,23 @@ DramReadPlan get_dram_read_plan(
         .interleaved = interleaved,
         .width_shards = !interleaved && shard_width != row_pages,
         .all_banks = interleaved || plan.num_shards >= num_dram_banks,
-        .large_pages = input_spec.compute_page_size_bytes() > kMinPageBytes};
+        .large_pages = input_spec.compute_page_size_bytes() > kMinPageBytes,
+        .main_start_banks = static_cast<uint32_t>(
+            num_dram_banks / std::gcd(tt::div_up(total_pages, uint64_t{num_cores}), uint64_t{num_dram_banks})),
+        .num_shards = plan.num_shards,
+        .shard_width = shard_width,
+        .main_start_shards = !interleaved && shard_width != row_pages
+                                 ? width_shards_main_starts_in(plan, total_pages, num_cores)
+                                 : plan.num_shards};
     const bool many_cores_per_bank = num_cores >= kManyCoresPerDramBank * num_dram_banks;
     // The stricter rule was measured on the whole grid; on part of it each core has more DRAM bandwidth.
     if (!many_cores_per_bank && num_cores != num_device_cores) {
         return {};
     }
-    plan.flow = many_cores_per_bank ? choose_flow_many_cores_per_bank(chain_cost(op_chain), reads, pages_per_core)
-                                    : choose_flow_few_cores_per_bank(chain_cost(op_chain), reads, pages_per_core);
+    plan.flow = many_cores_per_bank
+                    ? choose_flow_many_cores_per_bank(chain_cost(op_chain), reads, pages_per_core)
+                    : choose_flow_few_cores_per_bank(
+                          reads.large_pages ? large_page_cost(op_chain) : chain_cost(op_chain), reads, pages_per_core);
     if (plan.flow == DramReadFlow::WorkQueue &&
         (num_cores > dram_read::kMaxWorkers ||
          !utils::compute_kernel_supports_work_queue(op_chain[0].type(), input_spec.data_type()))) {
@@ -319,8 +402,16 @@ DramReadPlan get_dram_read_plan(
     plan.read_burst = kReadBurst;
     plan.write_burst = kWriteBurst;
     if (plan.flow == DramReadFlow::WorkQueue) {
-        plan.chunk_pages = static_cast<uint32_t>(
-            std::clamp((pages_per_core + kChunksPerCore / 2) / kChunksPerCore, kMinChunkPages, kMaxChunkPages));
+        const uint64_t max_chunk_pages = many_cores_per_bank ? kMaxChunkPages : kMaxChunkPagesFewCoresPerBank;
+        uint64_t chunk_pages =
+            std::clamp((pages_per_core + kChunksPerCore / 2) / kChunksPerCore, kMinChunkPages, max_chunk_pages);
+        // In the read order consecutive pages come from consecutive banks (shards), so a chunk size that is a multiple
+        // of their count starts every chunk on the same bank, and the workers, in step, pile onto it.
+        const uint32_t period = interleaved ? num_dram_banks : plan.num_shards;
+        if (!many_cores_per_bank && chunk_pages % period == 0) {
+            ++chunk_pages;
+        }
+        plan.chunk_pages = static_cast<uint32_t>(chunk_pages);
     }
     return plan;
 }

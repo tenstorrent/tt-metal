@@ -80,10 +80,22 @@ def run_against_main_path(op, a, device, memory_config, dtype=ttnn.bfloat16):
 @pytest.mark.parametrize("op_name", list(OPS))
 @pytest.mark.parametrize(
     "case, num_shards",
-    [("small", 7), ("large", 7), ("large_short_last_shard", 7), ("large_four_shards", 4), ("large_eight_shards", 8)],
+    [
+        ("small", 7),
+        ("few_pages_per_core", 7),
+        ("large", 7),
+        ("large_short_last_shard", 7),
+        ("large_four_shards", 4),
+        ("large_eight_shards", 8),
+    ],
 )
 def test_height_sharded(device, op_name, case, num_shards):
-    rows = 7 * 1024 if case == "small" else large_rows(device, 1024, 32 * num_shards)
+    if case == "small":
+        rows = 7 * 1024
+    elif case == "few_pages_per_core":  # bursts on every chip
+        rows = large_rows(device, 1024, 32 * num_shards, pages_per_core=32)
+    else:
+        rows = large_rows(device, 1024, 32 * num_shards)
     if case == "large_short_last_shard":
         rows -= 64
     shape = [1, 1, rows, 1024]
@@ -107,6 +119,18 @@ def test_width_sharded(device, op_name, case, width, num_shards):
     run_against_main_path(OPS[op_name], random_input(shape), device, dram_sharded(shape, WIDTH, num_shards))
 
 
+@pytest.mark.parametrize("op_name", ["relu", "silu", "elu", "gelu_accurate"])
+def test_width_sharded_main_starts_in_few_shards(device, op_name):
+    """128 pages per core on 32-page shards over every bank: main's cores start in a quarter of the shards, where every
+    op takes the queue on chips with few cores per bank."""
+    grid = device.compute_with_storage_grid_size()
+    num_shards = device.dram_grid_size().x
+    width = num_shards * 1024
+    rows = -(-grid.x * grid.y * 128 * 1024 // width // 32) * 32
+    shape = [1, 1, rows, width]
+    run_against_main_path(OPS[op_name], random_input(shape), device, dram_sharded(shape, WIDTH, num_shards))
+
+
 def test_width_sharded_uneven(device):
     """A short last width shard keeps the interleaved page order."""
     shape = [1, 1, 1024, 7 * 1024]
@@ -123,14 +147,18 @@ def test_fewer_tiles_than_cores(device, layout):
 
 
 @pytest.mark.parametrize("op_name", list(OPS))
-@pytest.mark.parametrize("case", ["small", "large", "odd_shape"])
+@pytest.mark.parametrize("case", ["small", "large", "few_main_start_banks", "odd_shape"])
 def test_interleaved(device, op_name, case):
     """Light ops take bursts on small tensors and the queue on large ones, mid ops bursts on large ones; heavy and
-    unmeasured ops keep main's path."""
+    unmeasured ops keep main's path. With 460 pages per core main's cores start on a few banks, where mid ops queue on
+    chips with few cores per bank."""
     if case == "odd_shape":
         shape = [3, 5, 96, 160]
+    elif case == "small":
+        shape = [1, 1, 7 * 1024, 1024]
     else:
-        shape = [1, 1, 7 * 1024 if case == "small" else large_rows(device, 1024, 32), 1024]
+        pages_per_core = 460 if case == "few_main_start_banks" else 600
+        shape = [1, 1, large_rows(device, 1024, 32, pages_per_core), 1024]
     run_against_main_path(OPS[op_name], random_input(shape), device, ttnn.DRAM_MEMORY_CONFIG)
 
 
@@ -150,7 +178,7 @@ def test_interleaved_very_large(device, op_name):
 @pytest.mark.parametrize("layout", ["height", "width", "interleaved"])
 @pytest.mark.parametrize("large", [False, True], ids=["small", "large"])
 def test_other_formats(device, dtype, op_name, layout, large):
-    """4 KB pages (fp32) take the flows from 128 pages per core on interleaved; bfp8 pages keep main's path."""
+    """4 KB pages (fp32) take the flows; bfp8 pages keep main's path."""
     width = 7 * 1024 if layout == "width" else 1024
     if layout == "width":
         rows = large_rows(device, width, 32) if large else 1024
