@@ -201,21 +201,19 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
  * scalar reduce a single datum. Default tiled packing selects the row mask per face through
  * TILE_FACE_SET_MAPPING_0; Blackhole has one packer, so the packer selectors cannot select faces.
  *
- * @tparam reduce_type: Pool type; MAX selects negative-infinity mode, except BFP, integer and Fp8_e4m3 outputs retain zero fill.
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
- * @param pack_dst_format: Packer output (L1) data format, as last programmed by the caller's pack reconfig.
  * @param tensor_shape: Output face dimensions and face grid.
  * @note Untilize retains its existing row-mask configuration; face selection below is for Default only.
  * @note Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
  * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
  */
-template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
-inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
+template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
+inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
 {
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
 
-    // PCK_EDGE_OFFSET_SEC0 masks every datum in the row with the selected fill value.
+    // We initialize PCK_EDGE_OFFSET_SEC0 mask to clear out all the datums in the row
     pack_edge_offset.f.mask             = 0x0;
     std::uint32_t row_set_mapping_1     = 0;
     std::uint32_t edge_offset_sec1_mask = 0;
@@ -225,7 +223,7 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, c
 
     if constexpr (dim == ReduceDim::REDUCE_ROW)
     {
-        // PCK_EDGE_OFFSET_SEC1 masks every datum in the row except the first one
+        // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
         edge_offset_sec1_mask = 0x0001;
         if constexpr (pack_mode == PackMode::Untilize)
         {
@@ -254,7 +252,7 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, c
     }
     else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
     {
-        // PCK_EDGE_OFFSET_SEC1 masks every datum in the row except the first one
+        // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
         edge_offset_sec1_mask = 0x0001;
         // TILE_ROW_SET_MAPPING_1 configuration sets only first row to use PCK_EDGE_OFFSET_SEC1 mask
         row_set_mapping_1 = 0x00000001;
@@ -276,15 +274,6 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, c
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
-
-    if constexpr (reduce_type == PoolType::MAX)
-    {
-        // Masked infinities can overwrite the shared BFP exponent and zero the valid result.
-        // Integer outputs keep zero fill: the all-ones pattern is not a MAX identity for them.
-        // Fp8_e4m3 has no infinity encoding, so it keeps zero fill as well.
-        cfg_reg_rmw_tensix<PCK_EDGE_MODE_mode_RMW>(
-            !IS_BFP_FORMAT(pack_dst_format) && !IS_INTEGER_FORMAT(pack_dst_format) && pack_dst_format != to_underlying(DataFormat::Fp8_e4m3));
-    }
 
     if constexpr (pack_mode == PackMode::Default)
     {

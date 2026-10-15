@@ -262,32 +262,30 @@ inline void program_partial_face_bfp_mop()
  * datums survive: for row reduce a single column per row, for col reduce only the first row, and for
  * scalar reduce a single datum, with per-packer selection appropriate to the reduce dimension.
  *
- * @tparam reduce_type: Pool type; MAX selects negative-infinity mode, except BFP and integer outputs retain zero fill.
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
- * @param pack_dst_format: Packer output (L1) data format, as last programmed by the caller's pack reconfig.
  * @param tensor_shape: Output face dimensions and face grid.
  * @note Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
  * @note For partial-face BFP outputs this also selects a zero-writing last-face PACR in the pack MOP, which
  *       @ref _llk_pack_init_ keeps when called afterwards.
  * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
  */
-template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
-inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
+template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
+inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
         "Wormhole B0 pack reduce-mask config supports only PackMode::Default and PackMode::Untilize");
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
 
-    // PCK_EDGE_OFFSET_SEC0 masks every datum in the row with the selected fill value.
+    // We initialize PCK_EDGE_OFFSET_SEC0 mask to clear out all the datums in the row
     pack_edge_offset.f.mask             = 0x0;
     std::uint32_t row_set_mapping_1     = 0;
     std::uint32_t edge_offset_sec1_mask = 0;
 
     if constexpr (dim == ReduceDim::REDUCE_ROW)
     {
-        // PCK_EDGE_OFFSET_SEC1 masks every datum in the row except the first one
+        // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
 
         // Tiled packing uses one packer per face in row-major order. Keep only the left
         // face of each face-row; the other packers use the all-zero row table.
@@ -331,7 +329,7 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, c
     }
     else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
     {
-        // PCK_EDGE_OFFSET_SEC1 masks every datum in the row except the first one
+        // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
         edge_offset_sec1_mask = 0x0001;
         // Packer 0  will use TILE_ROW_SET_MAPPING_1, while packers 1,2 and 3 will keep using
         // TILE_ROW_SET_MAPPING_0 configuration which is the default one
@@ -370,17 +368,10 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, c
     TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
 
-    if constexpr (reduce_type == PoolType::MAX)
-    {
-        // Masked infinities can overwrite the shared BFP exponent and zero the valid result.
-        // Integer outputs keep zero fill: the all-ones pattern is not a MAX identity for them.
-        cfg_reg_rmw_tensix<PCK_EDGE_MODE_mode_RMW>(!IS_BFP_FORMAT(pack_dst_format) && !IS_INTEGER_FORMAT(pack_dst_format));
-    }
-
     // Partial faces pack BFP through packer 0 alone, so the per-packer selectors above apply the face-0 mask to
-    // face 1 too. ROW and SCALAR need face 1 to be padding only; BFP outputs pad with zero, so its PACR writes zeros.
-    const bool zero_last_face = pack_mode == PackMode::Default && dim != ReduceDim::REDUCE_COL && IS_BFP_FORMAT(pack_dst_format) &&
-                                tensor_shape.face_r_dim < FACE_R_DIM && tensor_shape.num_faces_c_dim == 2;
+    // face 1 too. ROW and SCALAR need face 1 to be padding only, so its PACR writes zeros.
+    const bool zero_last_face =
+        pack_mode == PackMode::Default && dim != ReduceDim::REDUCE_COL && tensor_shape.face_r_dim < FACE_R_DIM && tensor_shape.num_faces_c_dim == 2;
     if (zero_last_face != llk_pack_internal::zero_partial_face_bfp_last_face)
     {
         llk_pack_internal::zero_partial_face_bfp_last_face = zero_last_face;
