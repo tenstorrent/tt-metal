@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <limits>
+
 // Canonical semantic body for the tanh op (storm contract: fresh_cpp/README.md).
 // Migrated verbatim from fresh_cpp_operations.h (Lane BR batch 1); byte-stable
 // algorithm, only the file moved.
@@ -39,12 +41,14 @@ __attribute__((noinline)) void calculate_tanh_fresh_cpp()
         r                    = r * a;
         r                    = sfpi::min(r, 1.0f);
         r                    = sfpi::copysgn(r, x);
-        v_if (sfpi::is_nan(x))
+        // SFPSWAP's sign-magnitude order sends a NaN to the clamp; leave NaN
+        // lanes untouched in Dest instead (every NaN sorts above +inf once
+        // its sign is cleared).
+        v_if (sfpi::setsgn(x, 0) <= std::numeric_limits<float>::infinity())
         {
-            r = x;
+            sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         }
         v_endif;
-        sfpi::dst_reg[0]     = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         sfpi::dst_reg++;
     }
 }
