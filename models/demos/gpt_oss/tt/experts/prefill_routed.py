@@ -551,7 +551,9 @@ class RoutedPrefillExperts:
         tok_of_row = ttnn.to_layout(tok_of_row, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
         x_rm = ttnn.reshape(x_rm, (C, H))
-        dispatched = ttnn.embedding(tok_of_row, x_rm, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        # padding_idx=0: every row that reads token 0 (about 3/4 of the k*C buffer rows on each of the N devices are
+        # unwritten and read token 0) is served from a per-core L1 copy of x[0] instead of DRAM; same values.
+        dispatched = ttnn.embedding(tok_of_row, x_rm, padding_idx=0, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(tok_of_row)
         ttnn.deallocate(x_rm)
         dispatched = ttnn.reshape(dispatched, (consts["rows"], H))
@@ -579,7 +581,11 @@ class RoutedPrefillExperts:
         out_rm = ttnn.to_layout(expert_out, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
         if out_rm is not expert_out:
             ttnn.deallocate(expert_out)
-        combined = ttnn.embedding(pos_tm, out_rm, layout=ttnn.ROW_MAJOR_LAYOUT)  # [C, k, H]
+        # padding_idx=spare: the non-local pairs (about (N-1)/N of them) all point at the spare row and are served from
+        # a per-core L1 copy of it instead of DRAM; same values, and post_combine_reduce skips them anyway.
+        combined = ttnn.embedding(
+            pos_tm, out_rm, padding_idx=consts["spare"], layout=ttnn.ROW_MAJOR_LAYOUT
+        )  # [C, k, H]
         ttnn.deallocate(out_rm)
         ttnn.deallocate(pos_tm)
         combined = ttnn.reshape(combined, (1, 1, C, k, H))
