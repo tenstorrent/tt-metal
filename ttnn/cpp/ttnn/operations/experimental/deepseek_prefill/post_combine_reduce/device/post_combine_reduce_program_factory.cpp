@@ -19,9 +19,9 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buf
 uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
 uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
 
-// 1x32 scaled-fp8 combine rows [H e4m3 | H/32 fp32 scales] (fused DQ2, sparse SDPA style): per 32-token block the
-// reader stacks each token's compacted local slots as row-major e4m3 rows, compute tilizes them (tile row = token,
-// one 1x32 scale block per tile row) and applies weight * scale with column-broadcast multiplies on the FPU.
+// 1xB scaled-fp8 combine rows [H e4m3 | H/B fp32 scales] (fused DQ2, sparse SDPA style): per 32-token block the
+// reader stacks each token's compacted local slots as row-major e4m3 rows and stages weight * scale per row and scale
+// block, and compute tilizes the rows (tile row = token) and applies it with column-broadcast multiplies on the FPU.
 tt::tt_metal::ProgramDescriptor create_fp8_block_descriptor(
     const PostCombineReduceParams& operation_attributes,
     const PostCombineReduceInputs& tensor_args,
@@ -59,18 +59,26 @@ tt::tt_metal::ProgramDescriptor create_fp8_block_descriptor(
 
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t num_cores_total = grid.x * grid.y;
-    // Column parts: part_wt tiles per core (a multiple of the 4-tile DEST batch, <= 32 tiles = 1024 columns); the
-    // narrowest part whose parts x blocks still fit the grid, else the widest.
+    // Column parts: part_wt tiles per core, a multiple of the 4-tile DEST batch and of a scale block. A block costs a
+    // core about the same at any width, its reads being latency-bound, so the busiest core's block count sets the
+    // op's time: pick the width that gives it the fewest blocks, then the narrowest such. c_0 holds a whole block's
+    // top-k stages, which bounds the width.
+    constexpr uint32_t RM_BYTES_MAX = 512 * 1024;
+    const uint32_t fp8_tile_bytes = tt::tile_size(tt::DataFormat::Fp8_e4m3);
     uint32_t part_wt = 0;
-    for (uint32_t d = 4; d <= 32 && d <= emb_wt; d += 4) {
-        if (emb_wt % d == 0 && d % tiles_per_scale == 0) {
+    uint32_t best_blocks = 0;
+    for (uint32_t d = 4; d <= emb_wt && num_experts * d * fp8_tile_bytes <= RM_BYTES_MAX; d += 4) {
+        if (emb_wt % d != 0 || d % tiles_per_scale != 0 || emb_wt / d > num_cores_total) {
+            continue;
+        }
+        const uint32_t cores = std::min(total_chunks, num_cores_total / (emb_wt / d));
+        const uint32_t blocks = (total_chunks + cores - 1) / cores;
+        if (part_wt == 0 || blocks < best_blocks) {
             part_wt = d;
-            if ((emb_wt / d) * total_chunks <= num_cores_total) {
-                break;
-            }
+            best_blocks = blocks;
         }
     }
-    TT_FATAL(part_wt != 0, "1x32 fp8 post_combine_reduce: {} tiles per row have no part width in 4..32", emb_wt);
+    TT_FATAL(part_wt != 0, "fp8 post_combine_reduce: {} tiles per row have no part width that fits", emb_wt);
     const uint32_t num_parts = emb_wt / part_wt;
     const uint32_t cores_per_part = std::max(1u, std::min(total_chunks, num_cores_total / num_parts));
     TT_FATAL(
@@ -99,8 +107,8 @@ tt::tt_metal::ProgramDescriptor create_fp8_block_descriptor(
         });
     };
     // Sizes stay 64-B multiples so every CB base keeps the DRAM-read congruence.
-    add_cb(tt::CBIndex::c_0, tt::DataFormat::Fp8_e4m3, fp8_tile, 2 * part_wt);  // stage rows, double-buffered
-    add_cb(tt::CBIndex::c_1, bf16, bf16_tile, 2);                               // weight column
+    add_cb(tt::CBIndex::c_0, tt::DataFormat::Fp8_e4m3, fp8_tile, num_experts * part_wt);  // a block's stage rows
+    add_cb(tt::CBIndex::c_1, bf16, bf16_tile, 2);  // unused here, but the shared writer reads its tile size
     const uint32_t dispatch_table_num_pages = get_num_pages(expert_dispatch_table);
     const uint32_t dispatch_table_aligned_page_size = get_aligned_page_size(expert_dispatch_table);
     add_cb(
@@ -114,17 +122,14 @@ tt::tt_metal::ProgramDescriptor create_fp8_block_descriptor(
         tt::tt_metal::datatype_to_dataformat_converter(indices.dtype()),
         tt::round_up(TOKENS_PER_CHUNK * indices_aligned_page_size, DRAM_ALIGN),
         1);
-    add_cb(tt::CBIndex::c_4, bf16, bf16_tile, 2 * part_wt);            // per-tile 1x32 scales (column 0)
-    add_cb(tt::CBIndex::c_5, bf16, bf16_tile, part_wt);                // weight * scale
-    add_cb(tt::CBIndex::c_6, bf16, bf16_tile, part_wt);                // tilized stage
-    add_cb(tt::CBIndex::c_7, tt::DataFormat::Float32, DRAM_ALIGN, 2);  // stage-count mailbox
+    add_cb(tt::CBIndex::c_4, bf16, bf16_tile, 2 * (part_wt / tiles_per_scale));  // weight * scale per block (column 0)
+    add_cb(tt::CBIndex::c_6, bf16, bf16_tile, part_wt);                          // tilized stage
+    add_cb(tt::CBIndex::c_7, tt::DataFormat::Float32, DRAM_ALIGN, 2);            // stage-count mailbox
     const uint32_t weight_aligned_page_size = get_aligned_page_size(weights);
     add_cb(
         tt::CBIndex::c_8,
         tt::DataFormat::UInt32,
-        tt::round_up(
-            TOKENS_PER_CHUNK * num_experts * weight_aligned_page_size + TOKENS_PER_CHUNK * scale_slot_bytes,
-            DRAM_ALIGN),
+        tt::round_up(TOKENS_PER_CHUNK * num_experts * (weight_aligned_page_size + scale_slot_bytes), DRAM_ALIGN),
         1);
     const auto out_df = tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
     add_cb(tt::CBIndex::c_16, out_df, tt::tile_size(out_df), 2 * part_wt);
@@ -144,7 +149,7 @@ tt::tt_metal::ProgramDescriptor create_fp8_block_descriptor(
         get_page_size(indices),
         indices_aligned_page_size,
         scale_slot_bytes,
-        2 * part_wt * fp8_tile,
+        num_experts * part_wt * fp8_tile,
     };
     tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(weight_buffer).append_to(reader_ct_args);
@@ -182,7 +187,8 @@ tt::tt_metal::ProgramDescriptor create_fp8_block_descriptor(
     compute_kernel_desc.kernel_source = kdir + "deepseek_moe_post_combine_reduce_fp8_block_compute.cpp";
     compute_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = core_range_set;
-    compute_kernel_desc.compile_time_args = {part_wt};
+    compute_kernel_desc.compile_time_args = {part_wt, num_experts};
+    compute_kernel_desc.defines = {{"TILES_PER_SCALE", std::to_string(tiles_per_scale)}};
     // Fp8_e4m3 CBs on Blackhole need 32-bit DEST (as per_token_cast_back's bf16 datapath).
     tt::tt_metal::ComputeConfigDescriptor::UnpackToDestModes m(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
