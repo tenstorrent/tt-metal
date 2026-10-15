@@ -96,7 +96,8 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 3. Show the spec. Wait for an explicit yes. Then `$B approve intake --spec <spec>`.
 4. `python -m models.demos.common.bringup.plan.ledger_gen --spec <spec> --early --write` and `$B init-run run1 --spec <spec>`.
 5. Launch: `python -u -m models.demos.common.bringup.orchestrator run --spec <spec> >> $ART/runs/run1/orchestrator.log 2>&1`
-   in a tmux session (`tmux new-session -d -s <name> "<command>"`; it survives the session; to restart, kill the
+   from the checkout being brought up (it pins TT_METAL_HOME / PYTHONPATH / TT_METAL_CACHE / PYTHON_ENV_DIR to that
+   checkout itself, F68), in a tmux session (`tmux new-session -d -s <name> "<command>"`; it survives the session; to restart, kill the
    session and start a new one: keys sent to a finished session's pane go nowhere), then arm the watch (section 4,
    "Always be watching"). The first task, R.1, builds the canonical prompt and runs the HF sanity gate (revision,
    usage-example smoke, next-token accuracy floor).
