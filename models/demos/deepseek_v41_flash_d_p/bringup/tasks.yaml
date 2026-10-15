@@ -763,6 +763,13 @@ tasks:
     - ffn_collapse
     - ffn_norm
     layer: 0
+  frozen:
+    at: '2026-10-15T16:27:15'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_10_ffn_norm.py: e6fb030ad43e9821d1c774875e5fc8a93a23c00bf8666b9ee93fe42f4b52f593
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.router
   title: swa router (router) on device, layer 0
   step: implement
