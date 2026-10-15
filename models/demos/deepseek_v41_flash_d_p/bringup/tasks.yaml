@@ -569,6 +569,13 @@ tasks:
     - attention
     - attn_residual
     layer: 0
+  frozen:
+    at: '2026-10-15T23:45:02'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_07_attn_residual.py: 9686f3648654c2180ac310008dd0186524bd52210f582bc42316317164625420
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.swa.ffn_hc
   title: swa ffn_hc (op) on device, layer 0
   step: implement
