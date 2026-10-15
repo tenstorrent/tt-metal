@@ -368,6 +368,7 @@ jobs:
             --module-threshold "$MODULE_THRESHOLDS" \
             --report perf_gate_report.md \
             --test 'LLK perf' \
+            --arch '${{ inputs.arch }}' \
             --baseline-sha "$BASELINE_SHA" \
             --current-sha "${{ github.event.pull_request.head.sha || github.sha }}" \
             --baseline-label "$BASELINE_LABEL" \
