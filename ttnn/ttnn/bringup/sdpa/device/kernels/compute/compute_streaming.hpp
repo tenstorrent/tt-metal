@@ -852,6 +852,10 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 // scalar to a first-column vector for every Q tile.
                 if constexpr (sink_per_row) {
                     // Sparse SDPA packs different heads in each row; both inputs hold a first-column vector.
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+                    // srcB is the Float32 row-sum here (see above); the max and the sink are bf16
+                    reconfig_data_format(cur_max_cb_rt, cb_attention_sink);
+#endif
                     sub_init(cur_max_cb_rt, cb_attention_sink);
                     sub_tiles(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, sink_row_offset + s, 1);
                 } else {
@@ -861,7 +865,13 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 // The custom first-column exp needs generic unary SFPU addrmod state, but not the
                 // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
                 MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, DST_ACCUM_MODE>()));
+#ifdef SPARSE_SDPA_HIGH_PRECISION
+                // the scale the scores' exact exp uses (sub_exp_block_bcast_cols): bf16, rounded to nearest
+                constexpr uint16_t scale_bf16 =
+                    static_cast<uint16_t>((scale_fp32 + 0x7FFFu + ((scale_fp32 >> 16) & 1u)) >> 16);
+#else
                 constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+#endif
                 constexpr uint16_t negated_scale_bf16 = scale_bf16 ^ 0x8000;
                 MATH((exp_tile_first_column<EXP_APPROX_MODE, negated_scale_bf16>(1)));
                 add_binary_tile_init();

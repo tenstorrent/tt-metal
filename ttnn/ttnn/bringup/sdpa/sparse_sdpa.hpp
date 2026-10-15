@@ -49,7 +49,8 @@ enum class SparseKVFormat : uint8_t {
 // high_precision (bring-up fork option, default false = the source program): keep the flash running state that is
 // L1-accumulated across k_chunks (output and row-sum ping-pong CBs) in Float32 instead of bf16, and compute the
 // softmax exp exactly (the source always uses the fast approximate exp there; the scale then multiplies in as a
-// bf16 immediate, rounded to nearest). Needs fp32_dest_acc_en, bf16 q and a BF16 kv, and no attention_sink.
+// bf16 immediate, rounded to nearest). Needs fp32_dest_acc_en, bf16 q and a BF16 kv. An attention_sink is
+// supported (its exp uses the same rounded-to-nearest bf16 scale).
 //
 // attention_sink: optional [1,1,1,H] unpadded interleaved ROW_MAJOR BF16 tensor in DRAM.
 // Like classic SDPA, the sink is multiplied by scale and contributes only to the softmax denominator.
