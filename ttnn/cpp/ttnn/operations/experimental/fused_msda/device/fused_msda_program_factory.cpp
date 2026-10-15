@@ -201,7 +201,6 @@ MSDAWorkSplit msda_work_split(
     split.slots = slots_group_1;
 
     for (uint32_t b = 0; b < s.batch; ++b) {
-        // Rows past the batch's valid count are neither computed nor written.
         const uint32_t q_end = attrs.num_valid_queries.empty() ? s.num_queries : attrs.num_valid_queries[b];
         for (uint32_t h = 0; h < s.num_heads; ++h) {
             for (uint32_t q_start = 0; q_start < q_end; q_start += kTileMaxRows) {
@@ -210,8 +209,7 @@ MSDAWorkSplit msda_work_split(
         }
     }
 
-    // Spread the tiles evenly over every core. ceil(active / n) never exceeds the
-    // slots, which are ceil(total / n) for active <= total.
+    // ceil(active / n) never exceeds the slots: slots are ceil(total / n) and active <= total.
     const auto n = static_cast<uint32_t>(split.cores.size());
     const auto active = static_cast<uint32_t>(split.tiles.size());
     split.counts.resize(n);
@@ -238,7 +236,7 @@ MSDARuntimeArgs msda_runtime_args(
     const Tensor& loc = attrs.from_offsets ? *tensor_args.sampling_offsets : *tensor_args.sampling_locations;
     const uint32_t ref_addr = attrs.from_offsets ? tensor_args.reference_points->buffer()->address() : 0u;
 
-    // Same constants on every core. Slot 0 is the per-core tile count.
+    // Same constants on every core.
     std::vector<uint32_t> compute_template;
     compute_template.reserve(1 + kAxisConstantsPerLevel * s.num_levels);
     compute_template.push_back(0);

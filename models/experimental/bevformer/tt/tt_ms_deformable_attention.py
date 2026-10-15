@@ -83,8 +83,7 @@ def multi_scale_deformable_attn_fused(
         value: (bs, num_keys, num_heads, head_dim) or packed (bs, num_keys, num_heads*head_dim)
         reference_points: (bs, num_queries, num_points_in_pillar, 2), normalized [0, 1]
         sampling_offsets: (bs, num_queries, num_heads, num_levels*num_points*2) ROW_MAJOR,
-            raw, in feature-map pixel units -- the op accounts for the per-level
-            ``/ [W_l, H_l]`` normalization itself.
+            raw, in feature-map pixel units. The SFPU applies the per-level scale.
         attention_weights: (bs, num_queries, num_heads, num_levels*num_points) ROW_MAJOR
         spatial_shapes: torch (num_levels, 2) of (H, W)
         num_valid_queries: optional per-batch count of rows to compute. Rows past it are left
