@@ -14,10 +14,8 @@ include(x280_image.cmake)
 x280_add_image(NAME firmware-lim-idle LIM_IDLE SOURCES src/lim_idle.c)
 # The sentinel active image.
 x280_add_image(NAME firmware SOURCES src/main.c)
-# Preparation and teardown are separate trusted artifacts compiled from one source, each with
-# exactly one operation define.
+# Pinned-input preparation, a trusted artifact compiled with exactly one operation define.
 x280_add_image(NAME firmware-pinned-input-prepare SOURCES src/x280_pinned_input.c DEFINES X280_PINNED_INPUT_BUILD_PREPARE=1)
-x280_add_image(NAME firmware-pinned-input-teardown SOURCES src/x280_pinned_input.c DEFINES X280_PINNED_INPUT_BUILD_TEARDOWN=1)
 # Test-only images: the atomics micro-benchmark, which the active-image contract also runs, and
 # the deliberate non-conformer that traps and CEASEs hart 2.
 x280_add_image(NAME firmware-atomic-bench SOURCES src/atomic_bench.c)
@@ -115,8 +113,7 @@ foreach(
     ITEMS
         "none|define exactly one pinned-input image operation"
         "X280_PINNED_INPUT_BUILD_PREPARE=0|X280_PINNED_INPUT_BUILD_PREPARE must be 1 when defined"
-        "X280_PINNED_INPUT_BUILD_TEARDOWN=0|X280_PINNED_INPUT_BUILD_TEARDOWN must be 1 when defined"
-        "X280_PINNED_INPUT_BUILD_PREPARE=1,X280_PINNED_INPUT_BUILD_TEARDOWN=1|define exactly one pinned-input image operation"
+        "X280_PINNED_INPUT_BUILD_PREPARE=1,X280_PINNED_INPUT_BUILD_LIBRARY=1|define exactly one pinned-input image operation"
 )
     string(REPLACE "|" ";" _case "${_case}")
     list(GET _case 0 _defines)

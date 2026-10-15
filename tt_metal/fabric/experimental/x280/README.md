@@ -301,8 +301,8 @@ ID 7 uses the first 96-byte header in this region at `0x0A000AC0`. Its
 `decide_plain` configuration reseeds that complete header before warmup; it
 does not allocate a source region or change the prepared policy.
 
-The operation is compiled into each image instead of supplied through a
-firmware control block, so the image path selects the operation. The trusted
+The operation is compiled into the image instead of supplied through a
+firmware control block. The trusted
 artifact path remains an operator responsibility; the operation-specific hart
 result is the final mismatch check.
 
@@ -319,10 +319,7 @@ chip left at 14 LIM ways skips them until an ASIC reset. Prepare every
 participating tile under the same external ownership.
 
 There is no teardown: an ASIC reset (`tt-smi -r <device>`) clears the pinning,
-the 14-way partition and the record together. The `x280_images` target also
-builds `firmware-pinned-input-teardown.bin`, which re-enables only way 1's
-replacement bit without flushing the region or changing `WAYENABLE`; nothing in
-this tree runs it. Do not run cache-flush, repartition, ECC-priming, or
+the 14-way partition and the record together. Do not run cache-flush, repartition, ECC-priming, or
 conflicting Zero Device experiments inside this prepared sequence.
 
 A preparation that fails after its image may have run, including a failed
@@ -673,7 +670,7 @@ ctest --test-dir build -R x280      # image placement, pinned-input guards, host
 |---|---|---|
 | `firmware-lim-idle.bin` | `src/lim_idle.c` | resident idle, the runtime prerequisite |
 | `firmware.bin` | `src/main.c` | active session success image (the sentinel) |
-| `firmware-pinned-input-prepare.bin`, `firmware-pinned-input-teardown.bin` | `src/x280_pinned_input.c` | pinned-input preparation, run by `X280Tile::prepare_pinned_input`, and teardown, which nothing in this tree runs (§ 1) |
+| `firmware-pinned-input-prepare.bin` | `src/x280_pinned_input.c` | pinned-input preparation, run by `X280Tile::prepare_pinned_input` (§ 1) |
 | `firmware-atomic-bench.bin` | `src/atomic_bench.c` | cross-hart atomics micro-benchmark (§ 7); in the active-image contract set |
 | `firmware-active-session-fault.bin` | `src/active_session_fault.c` | traps and CEASEs hart 2, for `x280_active_failure_test` only |
 
