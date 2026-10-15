@@ -618,9 +618,11 @@ class TtTransformer(LightweightModule):
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs, is_cur_pos_sharded=False):
         ttnn.plus_one(
             current_pos,
-            sub_core_grids=self.args.sub_core_grids
-            if is_cur_pos_sharded
-            else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            sub_core_grids=(
+                self.args.sub_core_grids
+                if is_cur_pos_sharded
+                else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+            ),
             skip_negative_entries=True,
         )
         ttnn.plus_one(
@@ -770,6 +772,13 @@ class TtTransformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
             )
+            if (
+                mode == "prefill"
+                and _os.environ.get("OLMO_EAGER_PREFILL_LAYER_SYNC") == "1"
+                and not getattr(layer, "enable_trace", False)
+            ):
+                # debug: drain the device between layers of an eager (untraced) prefill
+                ttnn.synchronize_device(self.mesh_device)
         # ttnn.deallocate(h)
         if mode == "decode" and self.prefetcher_setup is not None:
             ttnn.deallocate(garbage_tensor)

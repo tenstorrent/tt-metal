@@ -565,8 +565,8 @@ class TtQwenModelArgs(TtModelArgs):
                 #
                 # If the number is less than or equal to 320 we still wouldn't want it to be prime so we'll add one if thats the case.
                 next_multiple_of_8 = lambda x: int(x + (8 - x % 8) % 8)
-                add_one_if_prime = (
-                    lambda n: n + 1 if n > 1 and all(n % i != 0 for i in range(2, int(n**0.5) + 1)) else n
+                add_one_if_prime = lambda n: (
+                    n + 1 if n > 1 and all(n % i != 0 for i in range(2, int(n**0.5) + 1)) else n
                 )
                 total_per_core_out_M = add_one_if_prime(math.ceil(seq_len / (7 * self.tile_size)))
                 per_core_M = (
@@ -643,10 +643,8 @@ class TtQwenModelArgs(TtModelArgs):
 
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = w2_prg_config
 
-            self.model_config["WO_PREFILL_PROGCFG"] = (
-                lambda seq_len: self.matmul_1d_config(
-                    seq_len, 1024, 1280, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=8
-                )
+            self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: (
+                self.matmul_1d_config(seq_len, 1024, 1280, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=8)
                 if seq_len == 128
                 else (
                     ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -808,10 +806,8 @@ class TtQwenModelArgs(TtModelArgs):
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
-            self.model_config["XQKV_PREFILL_PROGCFG"] = (
-                lambda seq_len: self.matmul_1d_config(
-                    seq_len, 1280, 1280, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=8
-                )
+            self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: (
+                self.matmul_1d_config(seq_len, 1280, 1280, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=8)
                 if seq_len == 128
                 else (
                     ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(

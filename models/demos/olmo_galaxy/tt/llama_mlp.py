@@ -204,9 +204,11 @@ class TtLlamaMLP(LightweightModule):
                 w1_out = ttnn.linear(
                     x,
                     self.w1,
-                    compute_kernel_config=self.args.compute_kernel_config_lofi
-                    if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi3,
+                    compute_kernel_config=(
+                        self.args.compute_kernel_config_lofi
+                        if self.four_bit_mlp
+                        else self.args.compute_kernel_config_hifi3
+                    ),
                     dtype=ff_out_dtype,
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -229,9 +231,11 @@ class TtLlamaMLP(LightweightModule):
                 w3_out = ttnn.linear(
                     x,
                     self.w3,
-                    compute_kernel_config=self.args.compute_kernel_config_lofi
-                    if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi3,
+                    compute_kernel_config=(
+                        self.args.compute_kernel_config_lofi
+                        if self.four_bit_mlp
+                        else self.args.compute_kernel_config_hifi3
+                    ),
                     dtype=ff_out_dtype,
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -255,9 +259,11 @@ class TtLlamaMLP(LightweightModule):
                 w1_out = ttnn.linear(
                     x,
                     self.w1,
-                    compute_kernel_config=self.args.compute_kernel_config_lofi
-                    if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi3,
+                    compute_kernel_config=(
+                        self.args.compute_kernel_config_lofi
+                        if self.four_bit_mlp
+                        else self.args.compute_kernel_config_hifi3
+                    ),
                     dtype=ttnn.bfloat8_b,
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -276,9 +282,11 @@ class TtLlamaMLP(LightweightModule):
                 w3_out = ttnn.linear(
                     x,
                     self.w3,
-                    compute_kernel_config=self.args.compute_kernel_config_lofi
-                    if self.four_bit_mlp
-                    else self.args.compute_kernel_config_hifi3,
+                    compute_kernel_config=(
+                        self.args.compute_kernel_config_lofi
+                        if self.four_bit_mlp
+                        else self.args.compute_kernel_config_hifi3
+                    ),
                     dtype=ttnn.bfloat8_b,
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
@@ -305,16 +313,18 @@ class TtLlamaMLP(LightweightModule):
                 cluster_axis=1,
                 num_links=self.model_config["GALAXY_NUM_LINKS"],
                 RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-                compute_kernel_config=self.args.compute_kernel_config_lofi
-                if self.four_bit_mlp
-                else self.args.compute_kernel_config_hifi3,
+                compute_kernel_config=(
+                    self.args.compute_kernel_config_lofi if self.four_bit_mlp else self.args.compute_kernel_config_hifi3
+                ),
                 dtype=ff_out_dtype,
                 program_config=pc_1_3,
                 memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-                sub_device_id=self.prefetcher_setup.worker_sub_device_id
-                if (mode == "decode" and self.prefetcher_setup is not None)
-                else None,
+                sub_device_id=(
+                    self.prefetcher_setup.worker_sub_device_id
+                    if (mode == "decode" and self.prefetcher_setup is not None)
+                    else None
+                ),
                 use_noc1_only=False,
             )
 
@@ -455,9 +465,11 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
                 core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
                 global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-                sub_device_id=self.prefetcher_setup.worker_sub_device_id
-                if (mode == "decode" and self.prefetcher_setup is not None)
-                else None,
+                sub_device_id=(
+                    self.prefetcher_setup.worker_sub_device_id
+                    if (mode == "decode" and self.prefetcher_setup is not None)
+                    else None
+                ),
             )
             self._debug_check_mlp("w2_out", w2_out)
             w2_out_reduced = self.tt_ccl.line_all_reduce(

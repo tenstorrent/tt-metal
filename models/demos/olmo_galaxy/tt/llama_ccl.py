@@ -130,6 +130,12 @@ class TT_CCL:
             # all the way to 1024, which fills the KV cache with 847 EOS tokens and causes incoherence.
             # OLMo: 8K/16K run in eager mode with sync CCL fix in line_all_gather (2026-04-03).
             self.support_seqlens = [4096, 2048, 1024, 512, 256, 128]
+            # Prefill longer than the largest traced length runs eagerly, and the eager long-prefill path produces garbage
+            # (or hangs) once buffer addresses differ from the first call, which they do under vLLM. Trace it instead.
+            extra = [int(x) for x in os.environ.get("OLMO_TRACE_SEQLENS", "").split(",") if x]
+            if os.environ.get("OLMO_TRACE_8K") == "1":
+                extra.append(8192)
+            self.support_seqlens = sorted(set(extra), reverse=True) + self.support_seqlens
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()

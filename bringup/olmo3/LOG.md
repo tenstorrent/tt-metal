@@ -130,3 +130,22 @@ and later ones return garbage from the first token (also with the older generato
 Unresolved: page-table order vs stale cached program (a test with `mesh_device.clear_program_cache()` before each eager
 prefill was queued but the host lost chip 16 first). Each device hang/engine crash leaves chip 16 unrecoverable by
 `tt-smi -glx_reset`; it needed a power cycle.
+
+## 2026-10-15 (later) long prompts (> 4096 tokens): narrowed, NOT fixed
+Under vLLM, prefill longer than 4096 tokens (padded 8192/16384/...) is unreliable. Findings:
+- Eager path (default for > 4096): first request at a padded length is correct, later ones are garbage from the first token
+  or hang the device. Reproduced offline in the demo: repeating `long-8k-b1` is fine, but allocating a DRAM spacer tensor
+  between batches (`OLMO_PERTURB_ALLOC=1`) makes the second 8K prefill hang in an eager `ttnn.all_gather`.
+  Not the program cache (`OLMO_NO_PROGRAM_CACHE=1` still hangs; clearing it under live traces hangs decode).
+  Not the KV cache contents. The page-table order differs between good and bad calls under vLLM but also changes with
+  anything else; it is not proven to matter.
+- Tracing 8K / 16K prefill (`OLMO_TRACE_SEQLENS=8192,16384`, trace region 640 MB) fixes the demo repeat + spacer test and four
+  repeated 8.2K server requests, but is not a complete fix: after bursts of concurrent traffic only 8/20 (8K) and 7/20 (16K)
+  greedy requests matched the majority output, and one traced replay hung the device. 32K / 64K traced do not fit in DRAM
+  next to the KV cache (OOM allocating the per-length persistent buffers).
+- Prompts up to 4096 tokens (traced) were reliable in every test (2K x10 identical, 3.9K x10, mixed stress, 4K x32).
+- Capping prompts via `max_num_batched_tokens` does not work: the plugin bumps it back to max_model_len (no chunked prefill).
+- Pending (devices were lost first): `OLMO_EAGER_PREFILL_LAYER_SYNC=1` (drain the device between layers of an eager prefill),
+  to test whether the corruption is a CCL race that the first, compiling call hides.
+Opt-in switches left in the code: OLMO_TRACE_SEQLENS, OLMO_LOG_PT, OLMO_EAGER_PREFILL_LAYER_SYNC, demo OLMO_PERTURB_ALLOC /
+OLMO_NO_KV_RESET / OLMO_NO_PROGRAM_CACHE / OLMO_TRACE_REGION / OLMO_REPEAT_BATCHES. Scripts: debug/serving/.

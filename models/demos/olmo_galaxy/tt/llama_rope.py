@@ -134,7 +134,7 @@ class TtLlamaRotarySetup(LightweightModule):
             1,
             1,
             self.batch_size_per_device_group,
-            1
+            1,
             # 1, 1, num_cores, 1
         )  # Repeat across all cores on device
         trans_mat_mem_config = ttnn.create_sharded_memory_config(
@@ -193,13 +193,15 @@ class TtLlamaRotarySetup(LightweightModule):
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.device,
-                    dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
-                    mesh_shape=list(self.device.shape),
-                )
-                if self.is_mesh_device
-                else None,
+                mesh_mapper=(
+                    ttnn.ShardTensor2dMesh(
+                        self.device,
+                        dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
+                        mesh_shape=list(self.device.shape),
+                    )
+                    if self.is_mesh_device
+                    else None
+                ),
             )
         else:  # On device
             rot_idxs = ttnn.as_tensor(
@@ -208,13 +210,15 @@ class TtLlamaRotarySetup(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.device,
-                    dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
-                    mesh_shape=list(self.device.shape),
-                )
-                if self.is_mesh_device
-                else None,
+                mesh_mapper=(
+                    ttnn.ShardTensor2dMesh(
+                        self.device,
+                        dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
+                        mesh_shape=list(self.device.shape),
+                    )
+                    if self.is_mesh_device
+                    else None
+                ),
             )
 
         return rot_idxs
@@ -236,13 +240,15 @@ class TtLlamaRotarySetup(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=None if on_host else self.device,
             memory_config=None if on_host else ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.device,
-                dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
-                mesh_shape=list(self.device.shape),
-            )
-            if self.is_mesh_device
-            else None,
+            mesh_mapper=(
+                ttnn.ShardTensor2dMesh(
+                    self.device,
+                    dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
+                    mesh_shape=list(self.device.shape),
+                )
+                if self.is_mesh_device
+                else None
+            ),
         )
 
         return rot_idxs

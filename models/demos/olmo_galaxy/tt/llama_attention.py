@@ -221,17 +221,21 @@ class TtLlamaAttention(LightweightModule):
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            memory_config=self.model_config["SHARDED_WO_RING_MEMCFG"]
-            if (self.use_fused_all_gather_matmul or self.TG)
-            else wo_mem_config,
+            memory_config=(
+                self.model_config["SHARDED_WO_RING_MEMCFG"]
+                if (self.use_fused_all_gather_matmul or self.TG)
+                else wo_mem_config
+            ),
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
             ),
-            cache_file_name=cache_name("wo_width_sharded_2d_prefetcher")
-            if (self.use_fused_all_gather_matmul or self.TG)
-            else cache_name("wo"),
+            cache_file_name=(
+                cache_name("wo_width_sharded_2d_prefetcher")
+                if (self.use_fused_all_gather_matmul or self.TG)
+                else cache_name("wo")
+            ),
         )
         self.wo_interleaved = ttnn.as_tensor(
             pt_wo,
@@ -533,9 +537,11 @@ class TtLlamaAttention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}_bf16"
-                if weight_cache_path and not configuration.dummy_weights
-                else None,
+                cache_file_name=(
+                    f"{weight_cache_path}/kvcache_{k_or_v.shape}_bf16"
+                    if weight_cache_path and not configuration.dummy_weights
+                    else None
+                ),
             )
             for k_or_v in [cache_k, cache_v]
         ]

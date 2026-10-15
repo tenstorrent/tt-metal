@@ -1301,8 +1301,8 @@ class TtOlmoModelArgs(TtModelArgs):
         qkv_pf_n_tiles = qkv_size_per_device_prefill // 32  # 28 tiles
         qkv_pf_n_cores = 7  # 28 / 7 = 4 evenly
         qkv_pf_per_core_n = qkv_pf_n_tiles // qkv_pf_n_cores  # 4
-        self.model_config["XQKV_PREFILL_PROGCFG"] = (
-            lambda seq_len: self.matmul_1d_config(
+        self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: (
+            self.matmul_1d_config(
                 seq_len,
                 self.dim // 4,
                 qkv_size_per_device_prefill,
@@ -1372,8 +1372,8 @@ class TtOlmoModelArgs(TtModelArgs):
         wo_n_tiles = self.dim // 4 // 32  # 40 tiles
         wo_n_cores = 7
         wo_per_core_n = math.ceil(wo_n_tiles / wo_n_cores)  # ceil(40/7) = 6
-        self.model_config["WO_PREFILL_PROGCFG"] = (
-            lambda seq_len: self.matmul_1d_config(
+        self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: (
+            self.matmul_1d_config(
                 seq_len, wo_k_prefill, self.dim // 4, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=4
             )
             if seq_len == 128

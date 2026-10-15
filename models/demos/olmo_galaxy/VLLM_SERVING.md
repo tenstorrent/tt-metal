@@ -82,11 +82,11 @@ Long context through the server: needle retrieval passes at ~28K and ~57K prompt
 
 ## Known issues
 
-* **Prompts over 4096 tokens (eager prefill) are only correct on the first request at a padded length.** Later requests at
-  that length return garbage from the first token (observed at 8K and 16K, with the older generator too). The first call's
-  page table was ascending, the second's descending (vLLM's free-block order); the demo, with a fixed table, repeats an 8K
-  prefill correctly. Root cause not found yet; see `bringup/olmo3/LOG.md` (2026-10-15). Needle retrieval at 28K/57K above
-  was a first call per length. Until fixed, serve long prompts only after a server restart per length, or use shorter ones.
+* **Prompts over 4096 tokens are unreliable.** Eager prefill is correct only on the first request at a padded length (later
+  ones return garbage or hang the device); tracing 8K/16K prefill (`OLMO_TRACE_SEQLENS=8192,16384`, 640 MB trace region)
+  helps but still fails intermittently after bursts of traffic; 32K/64K do not fit in DRAM when traced. Prompts up to 4096
+  tokens are reliable. The plugin cannot cap prompt length (it undoes `max_num_batched_tokens`). Details and the pending
+  per-layer-sync test: `bringup/olmo3/LOG.md` (2026-10-15 later). Needle retrieval above (28K/57K) was a first call per length.
 * On-device first-token sampling must leave the model in prefill mode and must not re-seed unseeded lanes (see the same log
   entry): doing either made device-sampled text contain repeated words (0.5-2.6 per 1000 words).
 

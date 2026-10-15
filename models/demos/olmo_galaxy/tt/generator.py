@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from collections import defaultdict
 from dataclasses import fields, replace
 from typing import List
@@ -318,6 +319,11 @@ class Generator(WarmupForwardMixin):
                 prefill_ids = torch.cat(
                     [tokens[id : id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
                 )
+            if os.environ.get("OLMO_LOG_PT") == "1" and page_table is not None:
+                logger.info(
+                    f"PREFILL PT: seq={prefill_seq_len} trace={enable_trace} slot={user_id} "
+                    f"blocks[:5]={page_table[0, :5].tolist()} n={page_table.shape[1]}"
+                )
             if page_table is not None:
                 page_table_user = self._get_prefill_user_page_table(
                     page_table, kv_cache, prefill_seq_len, user_id, use_batched_prefill
@@ -350,6 +356,8 @@ class Generator(WarmupForwardMixin):
                     self.tt_logits_accumulated_batched = []
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
+                if os.environ.get("OLMO_CLEAR_PC_EAGER") == "1":
+                    self.mesh_device.clear_program_cache()  # debug: stale cached programs on the eager long-ISL path?
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
 
             if not do_device_sampling:

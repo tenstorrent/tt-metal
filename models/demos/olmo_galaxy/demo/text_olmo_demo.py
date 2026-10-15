@@ -122,6 +122,8 @@ def run_olmo_demo(
     stop_at_eos=False,
 ):
     enable_trace = os.environ.get("OLMO_DECODE_TRACE", "1") == "1"
+    if os.environ.get("OLMO_NO_PROGRAM_CACHE") == "1":  # debug: are cached eager programs reused with stale addresses?
+        mesh_device.disable_and_clear_program_cache()
     if os.environ.get("OLMO_MAX_NEW"):  # debug: cap generated tokens for quick determinism bisects
         max_generated_tokens = int(os.environ["OLMO_MAX_NEW"])
     num_batches = int(
@@ -262,10 +264,23 @@ def run_olmo_demo(
         # ── KV cache reset for repeat batches ────────────────────────────
         if batch_idx != 0:
             model.switch_mode("prefill")
-            for layer in model.layers:
-                k_cache, v_cache = layer.attention.layer_past
-                k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+            if os.environ.get("OLMO_NO_KV_RESET") != "1":  # debug: vLLM never zeroes the cache between requests
+                for layer in model.layers:
+                    k_cache, v_cache = layer.attention.layer_past
+                    k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                    v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+            if os.environ.get("OLMO_PERTURB_ALLOC") == "1":
+                # debug: shift the allocator between batches so cached eager programs see different buffer addresses
+                _spacers = globals().setdefault("_OLMO_SPACERS", [])
+                _spacers.append(
+                    ttnn.from_torch(
+                        torch.zeros(1, 1, 4096, 4096),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh_device,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    )
+                )
 
         # Check if ISL fits within traced seqlens
         max_trace_seqlen = max(model.tt_ccl.support_seqlens)
@@ -937,7 +952,7 @@ def run_olmo_demo(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 184915840,
+            "trace_region_size": int(os.environ.get("OLMO_TRACE_REGION", 184915840)),
             "num_command_queues": 1,
             "worker_l1_size": 1345000,
             "fabric_config": True,
