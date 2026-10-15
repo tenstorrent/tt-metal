@@ -1604,6 +1604,14 @@ tasks:
     kind: attention
     layer: 1
     stateful: true
+  frozen:
+    at: '2026-10-15T20:32:13'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attention.py: 1d9c329c46043249aeb8845b644572ea1cbaf39af010852236aa14e60d8c08b4
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.09
   title: 'swa_engram block with steps 1-9 on device (last: attention)'
   step: implement
