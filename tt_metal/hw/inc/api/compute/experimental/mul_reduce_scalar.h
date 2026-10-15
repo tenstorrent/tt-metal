@@ -202,9 +202,9 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
  * accumulate_in_one_tile sums every product in dest[0] instead: num_tiles is then unbounded, and one column
  * reduce serves the whole row. With a bf16 DEST each element's running sum is rounded to bf16 at every
  * accumulate, so its error grows with num_tiles.
- * On Blackhole, row_tiles (the row length at compile time, also given to mul_reduce_scalar_init) lets a row of two or
- * more 32x32 tiles take two faces per SrcA/SrcB bank and, at LoFi, pool each product while the next tile is
- * multiplied, with the same results.
+ * On Blackhole, row_tiles (the row length at compile time, also given to mul_reduce_scalar_init and
+ * mul_reduce_scalar_uninit) lets a row of two or more 32x32 tiles take two faces per SrcA/SrcB bank and, at LoFi,
+ * pool each product while the next tile is multiplied, with the same results.
  *
  * | Param Type | Name                   | Description                                                | Type     | Valid Range | Required |
  * |------------|------------------------|------------------------------------------------------------|----------|-------------|----------|
@@ -297,6 +297,12 @@ ALWI void mul_reduce_scalar_tile_fidelity(
  * Return value: None
  */
 // clang-format on
-ALWI void mul_reduce_scalar_uninit() { PACK((llk_pack_reduce_mask_clear())); }
+template <uint32_t row_tiles = 0>
+ALWI void mul_reduce_scalar_uninit() {
+#if defined(ARCH_BLACKHOLE)
+    UNPACK(if constexpr (row_tiles >= 2) { llk_unpack_mul_reduce_scalar_two_face_banks_uninit(); });
+#endif
+    PACK((llk_pack_reduce_mask_clear()));
+}
 
 }  // namespace ckernel
