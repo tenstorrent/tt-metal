@@ -142,8 +142,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // One scaler face for the whole block, then one full operand tile per UNPACR.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _perf_unpack_loop_set_valid<false, true>(1);
-                _perf_unpack_loop_set_valid<true, false>(REDUCE_BLOCK_CT_DIM);
+                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(1 /*iterations*/);
+                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(REDUCE_BLOCK_CT_DIM /*iterations*/);
             }
         }
         else
@@ -306,13 +306,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             // The reduce clears SrcA after every tile and the scaler SrcB once per block.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _perf_math_loop_clear_valid<true, false>(REDUCE_BLOCK_CT_DIM);
-                _perf_math_loop_clear_valid<false, true>(1);
+                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(REDUCE_BLOCK_CT_DIM /*iterations*/);
+                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
             }
         }
         else
@@ -356,6 +356,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -413,7 +414,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION;
+            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 // Single output tile: the per-row maxima live in column [0] of DEST[0].
