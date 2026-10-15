@@ -30,13 +30,13 @@ Math (per output (h_o, w_o), output channel c_out):
     use the align_corners=False normalization, gy = (2*sy + 1)/H - 1; switching
     to align_corners=True needs (H - 1) in both formulas.
 
-The offsets reach this module in pixels but already in grid_sample's (x, y)
-channel order: `grid_offset_order` gives the reorder from DCNv2's (y, x), which
-the preprocessor folds into the offset conv. The forward scales them to [-1, 1] units
-with one multiply and adds the base grid.
+The offsets reach this module in grid_sample's (x, y) channel order and in its [-1, 1]
+units: ``model_preprocessing`` folds both the reorder from DCNv2's (y, x)
+(`grid_offset_order`) and the scale by ``2 / [W, H]`` into the offset conv. The forward
+adds the base grid.
 
-x is split along C_in into chunks of at most 256 channels (one chunk for the
-layer3 DCNs, C_in = 256; two for layer4, C_in = 512). Each chunk runs the
+x is split along C_in into chunks of at most GRID_SAMPLE_C_CAP channels (one chunk for
+the layer3 DCNs, C_in = 256; two for layer4, C_in = 512). Each chunk runs the
 grid_sample / mask / matmul pipeline and the partial C_out outputs are added,
 which equals a single matmul over the full K*K*C_in reduction axis.
 ttnn.grid_sample does not need the split, since it tiles wide channel dims
@@ -48,7 +48,7 @@ import torch
 import ttnn
 
 # Largest C_in chunk sampled at once; see the module docstring.
-_GRID_SAMPLE_C_CAP = 256
+GRID_SAMPLE_C_CAP = 256
 
 
 def grid_offset_order(kernel_positions):
@@ -61,70 +61,42 @@ def grid_offset_order(kernel_positions):
 
 
 class TtModulatedDeformConv2dDevice:
-    """Device-side modulated deformable conv 2D.
+    """Device-side modulated deformable conv 2D, groups and deform_groups 1.
 
-    Per-instance constants (base grids, weight slices, bias) are uploaded once, at
+    Per-instance constants (base grids, weight chunks, bias) are uploaded once, at
     construction.
     """
 
     def __init__(
         self,
-        weight,  # torch.Tensor (C_out, C_in, K, K)
-        bias,  # torch.Tensor (C_out,) or None
+        weight_chunks,
+        bias,
+        kernel_size,
         stride,
         padding,
         dilation,
-        groups,
-        deform_groups,
         device,
         input_shape,
         relu=False,
     ):
-        """``input_shape`` is the (batch, height, width) of the NHWC input every call will see.
-        It fixes the sampling base grid, which is built and uploaded here so a forward does
-        no host work. ``relu`` applies a ReLU to the output, inside its last add."""
-        assert groups == 1, f"device DCN supports groups=1 only, got {groups}"
-        assert deform_groups == 1, f"device DCN supports deform_groups=1 only, got {deform_groups}"
-
+        """``weight_chunks`` and ``bias`` are host tensors from ``model_preprocessing``: per
+        C_in chunk the ``(K*K*c_chunk, C_out)`` matmul weight, rows kk-major as grid_sample
+        emits its samples, and the ``(1, C_out)`` bias or None. ``kernel_size`` is the square
+        kernel's K. ``input_shape`` is the (batch, height, width) of the NHWC input every call
+        will see. It fixes the sampling base grid, which is built and uploaded here so a forward
+        does no host work. ``relu`` applies a ReLU to the output, inside its last add."""
         self.device = device
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
-        self.C_out, self.C_in, self.K, _ = weight.shape
-        assert weight.shape[2] == weight.shape[3], "kernel must be square"
+        self.K = kernel_size
+        rows, self.C_out = weight_chunks[0].shape
+        self.c_chunk = rows // (self.K * self.K)
+        self.n_c_chunks = len(weight_chunks)
+        self.C_in = self.c_chunk * self.n_c_chunks
 
-        # The DCN C_in values here (256, 512) are multiples of _GRID_SAMPLE_C_CAP,
-        # so one chunk size fits every instance; the assert flags a shape that
-        # would need ragged chunking.
-        self.c_chunk = min(self.C_in, _GRID_SAMPLE_C_CAP)
-        assert (
-            self.C_in % self.c_chunk == 0
-        ), f"C_in={self.C_in} is not a multiple of grid_sample chunk size {self.c_chunk}"
-        self.n_c_chunks = self.C_in // self.c_chunk
-
-        # Per-chunk concatenated weight (K*K*c_chunk, C_out): for chunk q, the
-        # rows of the matmul's reduction axis are the K*K weight slices
-        # restricted to the chunk's C_in range. Per chunk we run a full
-        # K*K*c_chunk -> C_out matmul, then sum the partials.
-        self.weight_cat_chunks = []
-        for q in range(self.n_c_chunks):
-            c_start = q * self.c_chunk
-            c_end = c_start + self.c_chunk
-            chunk_blocks = []
-            for kh in range(self.K):
-                for kw in range(self.K):
-                    chunk_blocks.append(weight[:, c_start:c_end, kh, kw].t().contiguous())  # (c_chunk, C_out)
-            wc_chunk = torch.cat(chunk_blocks, dim=0).contiguous()  # (K*K*c_chunk, C_out)
-            self.weight_cat_chunks.append(
-                ttnn.from_torch(wc_chunk, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            )
-
-        if bias is not None:
-            self.bias = ttnn.from_torch(
-                bias.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-            )
-        else:
-            self.bias = None
+        self.weight_cat_chunks = [ttnn.to_device(chunk, device) for chunk in weight_chunks]
+        self.bias = None if bias is None else ttnn.to_device(bias, device)
 
         # HiFi4 + fp32 accumulator + no math approx. ttnn.grid_sample
         # bilinear reads bf16 corner sticks and would normally accumulate

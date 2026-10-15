@@ -11,10 +11,10 @@ the SFPU from the reference point and the raw offset.
 Same weights, same inputs, compared against the reference module rather than
 against another TT implementation.
 
-Complements `test_ms_deformable_attention.py`, which checks the same module with
-the repo's usual tolerance bundle; here the gate is a tighter PCC across several
-seeds, because a location-generation bug shows up as a seed-dependent drift
-rather than a uniform offset.
+Complements `test_ms_deformable_attention.py`, which checks the same module over
+the presets and reference point dtypes; here the gate runs across several seeds,
+because a location-generation bug shows up as a seed-dependent drift rather than
+a uniform offset.
 """
 
 import pytest
@@ -24,8 +24,7 @@ from loguru import logger
 
 from models.experimental.bevformer.model_config import DeformableAttentionConfig
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
-from models.experimental.bevformer.tests.common import PRESETS
-from models.experimental.bevformer.tests.test_utils import check_with_pcc
+from models.experimental.bevformer.tests.common import PRESETS, assert_finite, assert_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_ms_deformable_attention_parameters
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 
@@ -97,8 +96,8 @@ def test_msda_matches_reference(device, config_name, batch_size, num_queries, se
     assert got.shape == expected.shape, f"{tuple(got.shape)} != {tuple(expected.shape)}"
     logger.info(f"{config_name} q={num_queries} seed={seed}: output {tuple(got.shape)}")
 
-    passed, message = check_with_pcc(expected, got, pcc=0.999)
-    assert passed, f"msda_output[{config_name}, seed={seed}]: {message}"
+    assert_finite("the MSDA output", got)
+    assert_pcc(expected, got, 0.999)
 
 
 def test_msda_output_is_deterministic(device):

@@ -20,11 +20,10 @@ from tracy import signpost
 import ttnn
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
-    assert_centers_close,
-    assert_channels_close,
-    assert_pcc,
     build_reference_head,
+    check_head_outputs,
     random_bev,
+    to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_head_parameters
 from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
@@ -32,12 +31,7 @@ from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
 
 
 def _check(torch_outputs, tt_outputs):
-    tt_cls_scores, tt_bbox_preds = (ttnn.to_torch(t).float() for t in tt_outputs)
-    for name, tensor in (("class logits", tt_cls_scores), ("box predictions", tt_bbox_preds)):
-        assert torch.isfinite(tensor).all(), f"non-finite values in the head {name}"
-    assert_pcc(torch_outputs[0], tt_cls_scores, 0.99)
-    assert_channels_close(torch_outputs[1], tt_bbox_preds)
-    assert_centers_close(torch_outputs[1], tt_bbox_preds)
+    check_head_outputs(torch_outputs, tuple(ttnn.to_torch(t).float() for t in tt_outputs))
 
 
 @torch.no_grad()
@@ -57,7 +51,7 @@ def test_head_perf(device, reset_seeds):
     bev_embed = random_bev(bev_shape, 1, generator).permute(1, 0, 2).contiguous()
     torch_outputs = torch_model(bev_embed)
     # Uploaded once so the profiled replay measures the head, not the transfer.
-    tt_bev_embed = ttnn.from_torch(bev_embed, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_bev_embed = to_device(bev_embed, device)
 
     def run():
         cls_scores, bbox_preds = tt_model(tt_bev_embed)
