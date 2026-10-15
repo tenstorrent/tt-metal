@@ -10,14 +10,14 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_buffer.h"
-#include "ttnn/operations/eltwise/unary/device/kernels/dram_read_common.hpp"
+#include "experimental/kernel_args.h"
 
 namespace dram_read {
 
 #if WORK_QUEUE
 // Tile count of the next chunk from the reader; 0 when there is no more work.
 ALWI uint32_t next_chunk_tiles() {
-    DataflowBuffer counts(kCbComputeCount);
+    DataflowBuffer counts(dfb::chunk_count);
     counts.wait_front(1);
     const uint32_t count = counts.read_tile_value(0, 0);
     counts.pop_front(1);

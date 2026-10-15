@@ -2864,6 +2864,7 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
     halo_slots=None,
+    max_k_splits=1,
 ):
     """Numerically validate compact GQA sliding attention over a fixed, garbage-padded KV cache.
 
@@ -2960,6 +2961,7 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
+            max_k_splits=max_k_splits,
         )
         main_row_dim = input_shard_dims[0] if input_shard_dims[0] is not None else -1
         main_col_dim = input_shard_dims[1] if input_shard_dims[1] is not None else -1
@@ -4083,7 +4085,7 @@ def test_ring_mla_full_mesh_rejects_invalid_placements(expect_error):
                 use_column_major_ccl=True,
             )
 
-        with expect_error(RuntimeError, "requires Q sequence dim 2 and KV gather dim"):
+        with expect_error(RuntimeError, "requires KV sequence shards on every device"):
             invoke(tt_axis_q, tt_axis_kv, tt_persistent, Topology.Ring)
         with expect_error(RuntimeError, "persistent gathered-KV buffer to be replicated"):
             invoke(tt_q, tt_kv, tt_sharded_persistent, Topology.Ring)
@@ -6194,6 +6196,26 @@ def test_ring_joint_attention_gemma_multi_hop_sliding_halo_geometry(expect_error
         head_dim=256,
         prefix_group_counts=(0, 1),
         num_iterations=1,
+    )
+
+
+@pytest.mark.parametrize("max_k_splits", [2, 3, 4])
+@pytest.mark.parametrize("chunk_size_local", [512, 256], ids=["two_hop", "four_hop"])
+def test_ring_joint_attention_gemma_sliding_ksplit_accuracy(expect_error, chunk_size_local, max_k_splits):
+    """Gemma's W1024 sliding attention with each (head, Q chunk) unit's work plan split across K-split bands."""
+    run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+        gpt_oss_chunked_mesh_config(),
+        batch_size=1,
+        expect_error=expect_error,
+        chunk_size_local=chunk_size_local,
+        sliding_window_size=1024,
+        local_q_heads=4,
+        local_kv_heads=2,
+        head_dim=256,
+        q_chunk_size=128,
+        prefix_group_counts=(0, 1, 3),
+        num_iterations=1,
+        max_k_splits=max_k_splits,
     )
 
 

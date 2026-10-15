@@ -45,18 +45,40 @@
  * already halves the usable slot count when it is on. There is no per-element opt-in and no
  * mid-kernel `enable_fp32_dest_acc()` / `disable_fp32_dest_acc()` toggle.
  *
+ * Binding DataflowBuffers
+ * -----------------------
+ * Each `input(...)` / `output(...)` spec names a buffer by its compile-time id (what the reconfig
+ * fold and the compile-time checks reason about). The element that carries the spec also takes that
+ * buffer's `DataflowBuffer` by reference as a leading constructor argument — one per spec, in the
+ * order the specs appear in its template arguments — and the chain issues every wait/pop/reserve/push
+ * through it. The chain never constructs a DataflowBuffer itself; construct each one once in the
+ * kernel and pass the same object to every chain that uses it:
+ *
+ *   CopyTile<input(dfb::in)>{in}                                  // 1 spec  -> 1 buffer
+ *   DestReuseBinary<BinaryFpuOp::Mul, input(dfb::s), ...>{s}      // 1 spec  -> 1 buffer
+ *   BinaryFpu<BinaryFpuOp::Add, input(dfb::a), input(dfb::b)>{a, b}   // 2 specs -> 2 buffers (A, B)
+ *   PackTile<output(dfb::out)>{out}                               // 1 spec  -> 1 buffer
+ *   Exp<>{}                                                       // DEST-only: no buffer
+ *
+ * Runtime tile bases (`TileAddressing::Offset` / `Strided`) follow the buffers:
+ * `CopyTile<input(dfb::in, ..., TileAddressing::Offset)>{in, base}`,
+ * `BinaryFpu<...>{a, b, base_a, base_b}`. A buffer whose id differs from its spec's id trips a watcher
+ * assert; without the watcher it is not diagnosed, so keep the buffers in spec order.
+ *
  * Examples
  * --------
- *   // Streaming unary — Exp(x) -> out (dfb_* are dataflow-buffer ids, i.e. buffer indices)
+ *   DataflowBuffer in(dfb::in), a(dfb::a), b(dfb::b), out(dfb::out);   // once, at the top of the kernel
+ *
+ *   // Streaming unary — Exp(x) -> out
  *   eltwise_chain(IterationShape::tiles(num_tiles),
- *       CopyTile<input(dfb_in)>{},
+ *       CopyTile<input(dfb::in)>{in},
  *       Exp<>{},
- *       PackTile<output(dfb_out)>{});
+ *       PackTile<output(dfb::out)>{out});
  *
  *   // Streaming binary — A + B -> out (BinaryFpu writes DEST; the output buffer lives on PackTile)
  *   eltwise_chain(IterationShape::tiles(num_tiles),
- *       BinaryFpu<BinaryFpuOp::Add, input(dfb_a), input(dfb_b)>{},
- *       PackTile<output(dfb_out)>{});
+ *       BinaryFpu<BinaryFpuOp::Add, input(dfb::a), input(dfb::b)>{a, b},
+ *       PackTile<output(dfb::out)>{out});
  *
  * Not supported: per-iteration (mid-loop) dtype swaps — each element's dtype reconfig point is
  * resolved per element at compile time (fold-driven, emitted once at element entry), so there is
@@ -67,7 +89,8 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
-#include "api/compute/common_globals.h"  // ALWI (used by the public eltwise_chain() declaration)
+#include "api/compute/common_globals.h"    // ALWI (used by the public eltwise_chain() declaration)
+#include "api/dataflow/dataflow_buffer.h"  // DataflowBuffer — elements bind the caller's buffers by reference
 // The heavier LLK / compute-API includes are impl-only and live in chain.inl.
 
 namespace compute_kernel_lib {
@@ -77,6 +100,8 @@ namespace compute_kernel_lib {
 // NO_PREV_DFB sentinels) are dataflow-buffer ids: today an integer `tt::CBIndex` value.
 // The public element aliases accept complete input(...) / output(...) specs and forward each
 // id as a separate implementation NTTP so it does not consume packed configuration bits.
+// The matching runtime `DataflowBuffer` objects are bound by reference at element construction
+// (see "Binding DataflowBuffers" above).
 
 // (The marker-tag hierarchy — CbReaderTag/CbWriterTag/DestOnlyTag + the per-element
 //  leaf tags — and the is_*_op_v classification predicates are internal pipeline
@@ -479,9 +504,14 @@ struct DestReuseBinaryImpl;
 
 }  // namespace detail
 
+/// Load one input tile into `DstSlot`. Constructor: `{in}`, `{in, base}` (Offset) or `{in, range}` (Strided),
+/// where `in` is the DataflowBuffer named by `Input`.
 template <InputSpec Input, Dst DstSlot = Dst::D0>
 using CopyTile = detail::CopyTileImpl<Input.cb_id, detail::copy_tile_config_bits(DstSlot, Input)>;
 
+/// FPU binary of two input tiles into `DstSlot`. Constructor: `{a, b}` — the DataflowBuffers named by
+/// `AInput` and `BInput`, in that order (the same object twice when both name one buffer) — optionally
+/// followed by per-side tile bases: `{a, b, base_a}`, `{a, b, base_a, base_b}`, or StridedTileRange forms.
 template <
     BinaryFpuOp Op,
     InputSpec AInput,
@@ -496,10 +526,13 @@ using BinaryFpu = detail::BinaryFpuImpl<
 /// Apply an FPU binary operation between one CB input and `DstSlot`.
 /// The LLK operation is in-place in DEST: it reads and overwrites the same slot.
 /// `Op` is the first template argument, matching `BinaryFpu`.
+/// Constructor: `{in}`, `{in, base}` or `{in, range}`, where `in` is the DataflowBuffer named by `Input`.
 template <BinaryFpuOp Op, InputSpec Input, DestReuseType ReuseType, Dst DstSlot = Dst::D0>
 using DestReuseBinary =
     detail::DestReuseBinaryImpl<Input.cb_id, detail::dest_reuse_binary_config_bits(Op, ReuseType, Input, DstSlot)>;
 
+/// Pack `DstSlot` to an output tile. Constructor: `{out}`, `{out, base}` or `{out, range}`, where `out` is the
+/// DataflowBuffer named by `Output`.
 template <OutputSpec Output, Dst DstSlot = Dst::D0>
 using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bits(Output, DstSlot)>;
 

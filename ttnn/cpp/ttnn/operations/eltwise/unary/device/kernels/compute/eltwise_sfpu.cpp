@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// eltwise_sfpu_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
+
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
@@ -13,7 +18,6 @@
 #include "api/compute/eltwise_unary/rdiv.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "dram_read.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -26,7 +30,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input, cb_output);
     copy_init(cb_input);
-    for (dram_read::Tiles tiles(num_tiles); tiles.next();) {
+    for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
 
         dfb_in.wait_front(1);
