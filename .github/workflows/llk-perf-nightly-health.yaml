@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   health:
-    name: "Check the nightlies and message the owner"
+    name: "Check the nightlies and report"
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'schedule'
     runs-on: ubuntu-slim
     steps:
@@ -37,21 +37,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           OWNER_SLACK_ID: U0BCPNHUF43
+          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
           DAY: ${{ inputs.date || github.event.workflow_run.created_at }}
           TRIGGER_RUN: ${{ github.event.workflow_run.id }}
         run: |
           python3 tt_metal/tt-llk/perf/nightly_health.py \
-            --repo "$GITHUB_REPOSITORY" --channel "$OWNER_SLACK_ID" \
+            --repo "$GITHUB_REPOSITORY" --dm "$OWNER_SLACK_ID" --channel "$SLACK_CHANNEL_ID" \
             ${DAY:+--date "${DAY:0:10}"} ${TRIGGER_RUN:+--trigger-run "$TRIGGER_RUN"}
-          [ -f health_payload.json ] || exit 0
-          RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
-            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-            -H "Content-type: application/json; charset=utf-8" \
-            --data @health_payload.json)
-          case "$RESPONSE" in
-            *'"ok":true'*) echo "Sent the health message." ;;
-            *) echo "::error::Slack rejected the health message: ${RESPONSE}"; exit 1 ;;
-          esac
+          [ -f health_payloads.json ] || exit 0
+          python3 -c 'import json; [json.dump(p, open(f"payload_{i}.json", "w")) for i, p in enumerate(json.load(open("health_payloads.json")))]'
+          for payload in payload_*.json; do
+            RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H "Content-type: application/json; charset=utf-8" \
+              --data @"$payload")
+            case "$RESPONSE" in
+              *'"ok":true'*) echo "Sent $payload." ;;
+              *) echo "::error::Slack rejected $payload: ${RESPONSE}"; exit 1 ;;
+            esac
+          done
       - name: Report a failed check
         if: failure()
         env:

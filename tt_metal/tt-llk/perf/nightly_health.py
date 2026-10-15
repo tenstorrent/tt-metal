@@ -39,10 +39,33 @@ def _time(stamp):
     return dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
 
 
-def leg_limits(tests_yaml):
+def _entries(tests_yaml):
     with open(tests_yaml) as fh:
-        entries = yaml.safe_load(fh)
-    return {e["name"]: max(s["timeout"] for s in e["skus"].values()) for e in entries}
+        return yaml.safe_load(fh)
+
+
+def leg_limits(tests_yaml):
+    return {
+        e["name"]: max(s["timeout"] for s in e["skus"].values())
+        for e in _entries(tests_yaml)
+    }
+
+
+def owners(tests_yaml):
+    return sorted({e["owner_id"] for e in _entries(tests_yaml) if e.get("owner_id")})
+
+
+def payloads(text, problems, dm, channel, owner_ids):
+    out = [{"channel": dm, "text": text}]
+    if channel:
+        cc = " ".join(f"<@{o}>" for o in owner_ids)
+        out.append(
+            {
+                "channel": channel,
+                "text": f"{text}\n\ncc {cc}" if problems and cc else text,
+            }
+        )
+    return out
 
 
 def scheduled_run(repo, workflow, day):
@@ -228,7 +251,8 @@ def last_to_finish(runs, trigger_run):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", required=True)
-    ap.add_argument("--channel", required=True)
+    ap.add_argument("--dm", required=True, help="Slack user id that always gets it")
+    ap.add_argument("--channel", default="", help="channel that also gets it")
     ap.add_argument("--tests-yaml", default="tests/pipeline_reorg/llk_perf_tests.yaml")
     ap.add_argument(
         "--date", default=dt.datetime.now(dt.timezone.utc).date().isoformat()
@@ -238,7 +262,7 @@ def main(argv=None):
         type=int,
         help="send only once every nightly of the day is done and this run finished last",
     )
-    ap.add_argument("--out", default="health_payload.json")
+    ap.add_argument("--out", default="health_payloads.json")
     a = ap.parse_args(argv)
     day = dt.date.fromisoformat(a.date)
     runs = [scheduled_run(a.repo, workflow, a.date) for _, workflow in NIGHTLIES]
@@ -254,8 +278,9 @@ def main(argv=None):
         logs = {j["id"]: job_log(a.repo, j["id"]) for j in jobs if _is_gate(j)}
         reports.append(assess(name, run, jobs, logs, limits, day))
     text = build_text(a.date, reports)
+    problems = any(r["problems"] for r in reports)
     with open(a.out, "w") as fh:
-        json.dump({"channel": a.channel, "text": text}, fh)
+        json.dump(payloads(text, problems, a.dm, a.channel, owners(a.tests_yaml)), fh)
     print(text)
     return 0
 

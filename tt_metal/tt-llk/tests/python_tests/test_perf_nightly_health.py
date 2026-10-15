@@ -15,6 +15,8 @@ from nightly_health import (
     gate_result,
     last_to_finish,
     leg_limits,
+    owners,
+    payloads,
 )
 
 DAY = dt.date(2026, 10, 13)
@@ -187,3 +189,18 @@ class _Conn:
 
     def close(self):
         pass
+
+
+def test_the_channel_copy_tags_the_owners_only_when_something_is_wrong(tmp_path):
+    path = tmp_path / "t.yaml"
+    path.write_text(
+        "- name: a\n  owner_id: U2\n  skus: {x: {timeout: 1}}\n"
+        "- name: b\n  owner_id: U2\n  skus: {x: {timeout: 1}}\n"
+    )
+    assert owners(str(path)) == ["U2"]
+    assert payloads("ok", False, "U1", "C1", ["U2"]) == [
+        {"channel": "U1", "text": "ok"},
+        {"channel": "C1", "text": "ok"},
+    ]
+    assert payloads("bad", True, "U1", "C1", ["U2"])[1]["text"] == "bad\n\ncc <@U2>"
+    assert payloads("bad", True, "U1", "", ["U2"]) == [{"channel": "U1", "text": "bad"}]
