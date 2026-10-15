@@ -371,7 +371,7 @@ enum class BinaryOp : std::uint8_t
     LOGADDEXP  = 45,
     LOGADDEXP2 = 46,
     // swiglu_oai has a Blackhole kernel only: the harness dispatches it on Blackhole.
-    SWIGLU_OAI = 47,
+    SWIGLU_OAI = 50,
 };
 
 enum class PackMode : std::uint8_t
