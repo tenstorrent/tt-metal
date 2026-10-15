@@ -422,6 +422,24 @@ def test_runner_smoke_kind_gates_k1_on_its_answer(fx):
     assert any("unknown kind" in e for e in SV.check(s, s.repo))
 
 
+def test_runner_smoke_not_required_for_a_layer_subset(fx):
+    """A partial run (a layer subset short of the last layer) cannot answer the smoke: no L.smoke, and K.1 runs the
+    runner smoke (it skips itself) without requiring smoke_runner_ok."""
+    s = Spec.load(fx(intake={"smoke": {"prompt": "capital of France?", "expect": "Paris"}}, layers="0"))
+    write(s, "serving_contract.md", SERVING_MD)
+    smoke = {
+        "test": "models/demos/fixture/tests/bringup/contract/test_runner_smoke.py",
+        "checks": "runner smoke",
+        "section": "Adapter and table",
+        "gates": "adapter",
+        "kind": "runner_smoke",
+    }
+    write(s, "contract_tests.yaml", {"tests": [smoke]})
+    t = {x["id"]: x for x in generate(s, Reference())["tasks"]}
+    assert "L.smoke" not in t and "smoke_runner_ok" not in t["K.1"]["gate"]["metrics"]
+    assert "test_runner_smoke.py" in t["K.1"]["gate"]["cmd"]
+
+
 # ---- F64: a plan for the deployment box, checked on every box
 
 
@@ -527,6 +545,16 @@ def test_boxes_errors(fx):
     skip = deploy_plan()
     skip["placements"].insert(0, {"pattern": "model.layers.1.*", "placement": "skip"})
     assert any("skips decoder layers [1]" in e for e in check_boxes(s, skip, TENSORS)["errors"])
+    # host: a decoder layer's tensor used from host memory (e.g. a lookup table) is placed, not counted per chip
+    host = deploy_plan()
+    host["placements"].insert(
+        0, {"pattern": "model.layers.1.q.weight", "placement": "host", "dtype": "bf16", "why": "t"}
+    )
+    assert check_boxes(s, host, TENSORS)["errors"] == []
+    base, moved = (check_plan(s, p, TENSORS, {"num_key_value_heads": 4}) for p in (deploy_plan(), host))
+    assert moved["host_gb"] > 0 and moved["total_gb"] < base["total_gb"] and base["host_gb"] == 0
+    del host["placements"][0]["why"]
+    assert any("host needs a why" in e for e in check_plan(s, host, TENSORS, {})["errors"])
     assert "roles" in check_boxes(s, deploy_plan(roles={"heads": [1]}), TENSORS)["errors"][0]
     tight = deploy_plan(activations_gb_per_chip=0.0099)
     assert any(e.startswith("deployment box big:") and "exceeds" in e for e in check_boxes(s, tight, TENSORS)["errors"])

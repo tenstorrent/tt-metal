@@ -25,14 +25,20 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 4. Always use 2D fabric. Open meshes with `ttnn.FabricConfig.FABRIC_2D` (the spec's `box.device_params` does this for
    the gates), and configure CCLs, dispatch and combine for 2D fabric. Never open a device, or write a test or a
    module, with `FABRIC_1D` or `FABRIC_1D_RING`.
-5. No host work in the forward path. A module's forward (its `__call__` and everything it calls per chunk) never calls
-   `ttnn.from_torch`, `ttnn.to_torch` or `ttnn.synchronize_device`, never computes on the host, and never rebuilds a
-   constant per call. Build everything that depends only on shapes, positions or weights (RoPE cos/sin tables, masks,
-   page tables, index and dispatch tables) once at load time for `max_seq`, keep it on the device, and slice it on the
-   device for each chunk (`ttnn.slice`, or an op that takes a start position). Per chunk, the only host transfers are
-   the token ids in and what the harness itself reads back. A step with no TTNN op is tagged CPU in
-   `components.yaml`, not hidden in a module. The ladder and the profile count host round-trips per layer on warm
-   chunks (`host_transfers_per_layer`), and the ladder gates it at 0.
+5. No unnecessary host work in the forward path. A module's forward (its `__call__` and everything it calls per chunk)
+   never calls `ttnn.from_torch`, `ttnn.to_torch` or `ttnn.synchronize_device`, never computes on the host, and never
+   rebuilds a constant per call. Build everything that depends only on shapes, positions or weights (RoPE cos/sin
+   tables, masks, page tables, index and dispatch tables) once at load time for `max_seq`, keep it on the device, and
+   slice it on the device for each chunk (`ttnn.slice`, or an op that takes a start position). Per chunk, the only
+   host transfers are the token ids in, what the harness itself reads back, and the model's host inputs. A host input
+   is data the model defines to live on the host and that depends only on the token ids, such as a lookup table too
+   large for the device (DeepSeek-V4.1's engram tables): the plan places it `host` with a reason, `components.yaml`
+   tags its step CPU, and the device model computes it in `begin_chunk(tokens, start)`, once per chunk before the
+   first layer, sending only the rows the chunk needs. That step does only the host part (hash, lookup); everything
+   after it runs on the device, and nothing a device op can do moves to the host because the data is there anyway.
+   Any other step with no TTNN op is tagged CPU in `components.yaml` too, never hidden in a module. The ladder and the
+   profile count host round-trips inside each layer call on warm chunks (`host_transfers_per_layer`), and the ladder
+   gates it at 0.
 6. Never edit an existing TTNN op. If a step needs an op changed (a feature or a bug fix), use the bring-up forks in
    `ttnn/ttnn/bringup/`, following `models/demos/common/bringup/skill/bringup-fork-op/SKILL.md`. Check `INDEX.md` there
    first: if the op is already forked, call the fork (`ttnn.bringup.<op>`) and extend it, with any new behaviour behind

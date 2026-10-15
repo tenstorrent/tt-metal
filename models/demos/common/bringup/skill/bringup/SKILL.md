@@ -90,8 +90,10 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 3. Show the spec. Wait for an explicit yes. Then `$B approve intake --spec <spec>`.
 4. `python -m models.demos.common.bringup.plan.ledger_gen --spec <spec> --early --write` and `$B init-run run1 --spec <spec>`.
 5. Launch: `python -u -m models.demos.common.bringup.orchestrator run --spec <spec> >> $ART/runs/run1/orchestrator.log 2>&1`
-   as a background process, and watch the log (step 4). The first task, R.1, builds the canonical prompt and runs the
-   HF sanity gate (revision, usage-example smoke, next-token accuracy floor).
+   in a tmux session (`tmux new-session -d -s <name> "<command>"`; it survives the session; to restart, kill the
+   session and start a new one: keys sent to a finished session's pane go nowhere), then arm the watch (section 4,
+   "Always be watching"). The first task, R.1, builds the canonical prompt and runs the HF sanity gate (revision,
+   usage-example smoke, next-token accuracy floor).
 6. The serving contract comes first. Task SC.1 runs the `serving-contract` agent (`agents/serving-contract.md`): it
    reads how tt-d-gen drives a prefill model at its latest commit and writes `serving_contract.md` (a how-to for
    each part of the model) and the frozen contract tests (`contract_tests.yaml` says which step's gate runs each).
@@ -105,7 +107,27 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 ## 4. Supervise the run
 
 Watch the orchestrator log for gate results, attempts, stops and problems. After every gate, re-export and republish
-the dashboards. Classify every failure before acting, and log every intervention in `<bringup_dir>/supervision.md`
+the dashboards.
+
+### Always be watching
+
+While a run is live, a watch is always armed: the run must never sit at a stop (an approval, a STOPPED task, a pause,
+a crash) with nobody told. The one wait is
+
+```
+python -m models.demos.common.bringup.watch --spec <spec>      # Bash, run_in_background, timeout 7200000
+```
+
+It returns on the next event (gate result, a second attempt, STOPPED, WAITING FOR A PERSON, paused, DEFERRED,
+KNOWLEDGE CONTRADICTED, a traceback, the end), with exit 2 after 110 minutes with nothing to act on, and with exit 3
+at once when the orchestrator is not running (it reads the pid file `run` / `resume` write), printing the log's last
+event. Rules:
+- Re-arm it in the same turn you handle its result, every time: after an event, after exit 2 (only re-arm), after
+  your own resume or relaunch. Never end a turn with a live run and no watch armed; never write your own grep loop.
+- Exit 3 means act now: WAITING FOR A PERSON is an approval (yours if the owner delegated it, else tell the owner at
+  once and say what they must decide); STOPPED and a crash are classified below. A run you paused yourself is the one
+  exit 3 you expect: do the work, then resume and re-arm.
+- When the person asks "status?", run the watch once (it returns at once if the run stopped) before answering. Classify every failure before acting, and log every intervention in `<bringup_dir>/supervision.md`
 (time, task, trigger, classification, action, resulting commit):
 
 | Failure | Action |
@@ -141,6 +163,8 @@ the gate commit (`git show --stat`, then the parts that matter), not only the ve
 - loosens a threshold, edits a frozen test, a golden, `tasks.yaml`, `state.json` or `results/`, or skips a check;
 - special-cases the test: recognizes the golden input or layer, hard-codes outputs, or reads the golden inside the model;
 - hides CPU work in a device module (torch math in a forward, a host round-trip per chunk, per-call constant rebuilds);
+  the one exception is a host input the plan places `host` (agent rule 5), and only its host part (e.g. a table lookup
+  in `begin_chunk`), never work a device op could do;
 - silences the problem instead of fixing it (a try/except that swallows it, a fallback path only the test takes);
 - fakes an interface (attributes set only to get past a check, e.g. an MLA field on a non-MLA model);
 - defers a step to op-gen (task DEFERRED, a commit "(deferred to op-gen: <op>)") on thin evidence, or when a TTNN op,
@@ -201,8 +225,8 @@ A run takes hours and dozens of gates; the supervising session must not fill its
 - Pull numbers, not files: extract the metrics you need from `state.json` / `results/<task>.json` with a short
   `python -c` or `grep`, and `tail -n` the orchestrator log. Never `cat` a gate log, an agent transcript
   (`runs/<run>/agents/*.jsonl`), a golden or a dashboard page.
-- Filter the monitor to the events you act on (gate PASS/FAIL/HANG, attempts, STOPPED, WAITING, paused, problems,
-  `KNOWLEDGE CONTRADICTED`, exit); do not stream step starts or freezes.
+- Wait with the watch (section 4, "Always be watching"), which already filters to the events you act on; do not
+  stream step starts, freezes or agent transcripts.
 - One line per routine gate ("C.x passed, 29/56, commit abc123"); detail only for failures, stops and decisions.
 - A `KNOWLEDGE CONTRADICTED <id>: <evidence>` line: tell the owner at once (the entry, what the agent says is wrong,
   the evidence); the entry is re-checked at the run end (contradicted, below), or sooner if the owner asks.
