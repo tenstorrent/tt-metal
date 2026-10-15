@@ -258,6 +258,12 @@ inline void open_or_skip(Fixture& f, const OpenConfig& cfg) {
     const auto state = f.tile->inspect();
     ASSERT_TRUE(state.observation_valid) << state.invalid_reason;
     if (!state.resident_idle_live) {
+        if (state.reset_released) {
+            GTEST_SKIP() << "requires a tile in live resident idle; chip " << f.tile_id.chip_id << " L2CPU "
+                         << f.tile_id.hw_index
+                         << " is out of reset without one (an active image may still hold it); reset the "
+                            "device (tt-smi -r <device>)";
+        }
         GTEST_SKIP() << "requires a tile in live resident idle; chip " << f.tile_id.chip_id
                      << " is partly out of reset, so none of its L2CPUs can boot until an ASIC reset "
                         "(tt-smi -r <device>)";

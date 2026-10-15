@@ -145,8 +145,9 @@ public:
             std::ostringstream why;
             why << "the pinned input needs fresh cache placement, and chip " << f.tile_id.chip_id << " L2CPU "
                 << f.tile_id.hw_index
-                << " was already out of reset when this process opened it; reset the device (tt-smi -r <device>) "
-                   "before running this executable";
+                << " was not booted from reset by this case's open (it was already out of reset, or an "
+                   "earlier case in this process booted it); reset the device (tt-smi -r <device>) before "
+                   "running this executable";
             reason_ = why.str();
             GTEST_SKIP() << reason_;
         }
