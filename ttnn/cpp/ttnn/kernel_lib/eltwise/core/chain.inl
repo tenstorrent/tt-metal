@@ -454,7 +454,7 @@ struct DestReuseBinaryTag : CbReaderTag {};
 /// 1 CB → DEST row/col/scalar broadcast (unary_bcast).
 struct UnaryBcastTag : CbReaderTag {};
 
-/// DEST → CB store (pack_tile / pack_tile_block).
+/// DEST → CB store (pack_tile / pack_block).
 struct PackTileTag : CbWriterTag {};
 
 /// Constant → DEST (no CB read).
@@ -1184,7 +1184,7 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
                 mul_init(CbA, CbB, static_cast<uint32_t>(acc_to_dest), __builtin_LINE());
             }
         } else {
-            // Use the *_init_short form from bcast.h:352-446 (math init + unpack init only,
+            // Use the per-op {op}_bcast_{dim}_init form from bcast.h (math init + unpack init only,
             // no hw_configure / pack_dest_init / sync_init — the full init is undefined
             // mid-MAIN). The operand form reads the actual tensor shape from CB metadata via
             // get_operand_tensor_shape, matching `add_bcast_rows_init` /
@@ -2625,7 +2625,7 @@ ALWI void hoist_compute_init_one(SelectedElement<E, TransitionFacts<PrevA, PrevB
 //   - Helper does NOT wrap any "BIG init" (`compute_kernel_hw_startup`,
 //     `compute_kernel_hw_startup`, `mm_init`, `reduce_init`).
 //   - Helper owns per-element init only — `add_init`, `*_tile_init`,
-//     `init_bcast`, `copy_init`, `reconfig_data_format_*`,
+//     `bcast_init`, `copy_init`, `reconfig_data_format_*`,
 //     `tile_regs_*` lifecycle.
 //   - Per `compute_kernel_hw_startup.h:26-30`, mid-`MAIN()` boot is undefined.
 //     Multi-stage kernels are the only exception (one boot per stage,

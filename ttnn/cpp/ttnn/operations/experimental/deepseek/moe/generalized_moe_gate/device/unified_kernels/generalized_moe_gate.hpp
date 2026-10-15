@@ -149,7 +149,7 @@ struct GeneralizedMoeGate {
             // step2-only (transpose math->standard, NO normalize): PACK can only read the STANDARD layout,
             // so the math-layout run must be transposed to standard BEFORE pack_untilize, else pack reads
             // empty standard cells -> all-zero. No normalize (the combine needs raw scores for global top-8;
-            // normalize runs once after the combine). transpose_wh restores standard->math on the way back.
+            // normalize runs once after the combine). transpose_tile restores standard->math on the way back.
             generalized_moe_gate_step2_only<false>();
             tile_regs_commit();
             run_scores_cb.reserve_back(1);
@@ -157,7 +157,7 @@ struct GeneralizedMoeGate {
             run_bias_cb.reserve_back(1);
             tile_regs_wait();
             // pack_untilize each region (DEST tile 0/1/2) to its run CB as ROW-MAJOR (linearized). Unlike
-            // pack_tile, this survives the round-trip in a form tilize+transpose_wh can restore to math.
+            // pack_tile, this survives the round-trip in a form tilize+transpose_tile can restore to math.
             // NOTE: the DEST tile to pack FROM is the RUNTIME tile_dst_rt_offset (last arg), NOT the 3rd
             // positional arg (that is block_c_index, only used when full_ct_dim > block_ct_dim). Passing
             // the tile as block_c_index left all three packs reading DEST tile 0 (scores) -> run_idx/run_bias
@@ -262,7 +262,7 @@ struct GeneralizedMoeGate {
                 // A2 combine (L1 stash, v3 — MERGE-ONLY acquire). Both blocks are stashed to L1 via the
                 // proven round-trip (process_block_to_run). Then ALL fields are tilize'd into scratch, and a
                 // SINGLE merge-only acquire (NO produce_run inside it — produce_run's SFPU/srcb state poisons a
-                // same-acquire transpose_wh) restores both runs via transpose_wh -> interm -> SFPU place
+                // same-acquire transpose_tile) restores both runs via transpose_tile -> interm -> SFPU place
                 // (block1->{0,2}, block0->{4,6}) and merges them. This mirrors the clean state of the proven
                 // 256 place-isolation. Per-block indices carry global ids.
                 process_block_to_run<0>();  // -> L1 run CBs page 0
@@ -307,27 +307,27 @@ struct GeneralizedMoeGate {
                 tile_regs_acquire();
                 // block1 -> {0,2}: scores(cb_tilize p1), idx(cb_tilize_idx p1), bias(cb_tilize p3)
                 reconfig_data_format_srca(CTArgs::cb_tilize);
-                transpose_wh_init_short(CTArgs::cb_tilize);
-                transpose_wh_tile(CTArgs::cb_tilize, 1, 3);
+                transpose_init(CTArgs::cb_tilize);
+                transpose_tile(CTArgs::cb_tilize, 1, 3);
                 generalized_moe_gate_place_field_from_interm<2, 0, 2, 0, 4>();
                 reconfig_data_format_srca(CTArgs::cb_tilize_idx);
-                transpose_wh_init_short(CTArgs::cb_tilize_idx);
-                transpose_wh_tile(CTArgs::cb_tilize_idx, 1, 3);
+                transpose_init(CTArgs::cb_tilize_idx);
+                transpose_tile(CTArgs::cb_tilize_idx, 1, 3);
                 generalized_moe_gate_place_field_from_interm<1, 0, 2, 0, 4>();
                 reconfig_data_format_srca(CTArgs::cb_tilize);
-                transpose_wh_init_short(CTArgs::cb_tilize);
-                transpose_wh_tile(CTArgs::cb_tilize, 3, 3);
+                transpose_init(CTArgs::cb_tilize);
+                transpose_tile(CTArgs::cb_tilize, 3, 3);
                 generalized_moe_gate_place_field_from_interm<0, 0, 2, 0, 4>();
                 // block0 -> {4,6}: scores(cb_tilize p0), idx(cb_tilize_idx p0), bias(cb_tilize p2)
-                transpose_wh_tile(CTArgs::cb_tilize, 0, 3);
+                transpose_tile(CTArgs::cb_tilize, 0, 3);
                 generalized_moe_gate_place_field_from_interm<2, 4, 6, 0, 4>();
                 reconfig_data_format_srca(CTArgs::cb_tilize_idx);
-                transpose_wh_init_short(CTArgs::cb_tilize_idx);
-                transpose_wh_tile(CTArgs::cb_tilize_idx, 0, 3);
+                transpose_init(CTArgs::cb_tilize_idx);
+                transpose_tile(CTArgs::cb_tilize_idx, 0, 3);
                 generalized_moe_gate_place_field_from_interm<1, 4, 6, 0, 4>();
                 reconfig_data_format_srca(CTArgs::cb_tilize);
-                transpose_wh_init_short(CTArgs::cb_tilize);
-                transpose_wh_tile(CTArgs::cb_tilize, 2, 3);
+                transpose_init(CTArgs::cb_tilize);
+                transpose_tile(CTArgs::cb_tilize, 2, 3);
                 generalized_moe_gate_place_field_from_interm<0, 4, 6, 0, 4>();
                 // merge {0,2}+{4,6} -> global top-8 + normalize + step2. srcb dummy-valid AFTER the transposes.
                 generalized_moe_gate_combine_init<false>();
