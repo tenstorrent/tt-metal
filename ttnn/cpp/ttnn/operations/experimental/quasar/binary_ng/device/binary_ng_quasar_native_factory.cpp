@@ -36,36 +36,31 @@
 // in the CB->DFB translation:
 //   - CBDescriptor -> DataflowBufferSpec (one per CB index the NONE path allocates: c_0->in0/pre_lhs,
 //     c_1->in1/pre_rhs, c_2->out, c_3->post_lhs, c_4->post_rhs).
-//   - The decisive property is BORROWED vs NoC-READ, all-or-nothing. An operand is BORROWED only when the
-//     config is is_native_L1_sharding (output L1-sharded, a and b sharing that memory config, every sharded
-//     input carrying the output's shard spec, all buffers L1) AND every operand is itself L1-sharded with a
-//     shard spec.
-//     is_native_L1_sharding can hold with an L1-interleaved input (a single sharded operand satisfies it),
-//     and an interleaved operand has no shard spec to back a DFB, so any interleaved operand forces the
-//     whole op to the NoC path. When borrowed, all three are co-resident L1 shards on one grid with
-//     identical per-core tile partitions: each CB `.buffer = tensor.buffer()` ->
-//     DataflowBufferSpec::borrowed_from (reader/writer move only the tail tiles). Otherwise NONE are borrowed:
-//     every operand's CB -> a real ring + a KernelSpec TensorBinding (TensorAccessor(tensor::name),
-//     sharding-aware), and the buffer-address runtime arg the descriptor passed is dropped (the binding
-//     injects the address). Placement and has_sharding follow the same all-or-nothing borrow decision.
-//     The descriptor borrows per-operand and gates placement on get_shard_volumes().has_value()
-//     (is_native_L1_sharding plus an uneven-shard all-specs-match guard); this factory's all-or-nothing
-//     borrow is the stricter subset.
+//   - The decisive property is BORROWED vs NoC-READ, all-or-nothing. All three operands are borrowed when
+//     they are L1 shards with one memory config (get_shard_volumes), or L1-interleaved slices that the
+//     compute count divides, on exactly the allocator's bank cores (l1_interleaved_borrow_tiles). A borrowed
+//     CB `.buffer = tensor.buffer()` -> DataflowBufferSpec::borrowed_from, and the reader and writer move
+//     only a shard's tail tiles. Otherwise every operand's CB -> a real ring + a KernelSpec TensorBinding
+//     (TensorAccessor(tensor::name), sharding-aware), and the buffer-address runtime arg the descriptor
+//     passed is dropped (the binding injects the address). Placement follows the same decision. The
+//     descriptor borrows shards per operand and never borrows an interleaved operand.
 //   - Positional get_arg_val<>(idx) / get_compile_time_arg_val(idx) -> named get_arg(args::name). The
 //     reader's 19 named args / writer's 9 named args are the descriptor's 21 / 11 arg vectors minus
 //     the buffer-address args (reader src0@0 / src1@15, writer dst@0, writer trailing pad).
 //   - KernelDescriptor::core_ranges + per-core dummy args on unused cores -> WorkUnitSpec::target_nodes
 //     scoped to exactly the active cores (DFB places only on target_nodes, so no dummy args needed).
-//   - The descriptor's `has_sharding` TensorAccessor CTA -> a HAS_SHARDING #define (the DFB kernels
-//     read it as a macro).
+//   - The descriptor's `has_sharding` TensorAccessor CTA -> a HAS_SHARDING #define, set for a borrowed
+//     shard; kernels_qsr/ does not read it.
 //
 // Deferred to the descriptor (rejected by the ORIGINAL's matches_metal_v2_slice; the native gate
-// matches_quasar_native_slice is strictly narrower still -- see below): row-major (non-tile)
+// matches_quasar_native_slice is narrower still in op, dtype and broadcast, and it also admits DRAM
+// shards, which the original sends to the descriptor -- see below): row-major (non-tile)
 // layout, tensor-scalar (no input_tensor_b), where-op, quantization, and mixed lhs/rhs dtype. Mixed
 // sharded/interleaved layouts AND width sharding ARE handled: the borrow path is taken only when all
-// three operands are co-resident L1 shards with one memory config; everything else (interleaved output OR
-// input, or a different shard spec) takes the NoC path via sharding-aware TensorAccessors. A borrowed
-// operand is L1-sharded-tiled (height/block/width).
+// three operands are co-resident L1 shards with one memory config, or all three are L1-interleaved with a
+// slice the compute count divides; everything else (a mix of layouts, a DRAM operand, an indivisible slice
+// or a different shard spec) takes the NoC path via sharding-aware TensorAccessors. A borrowed operand is
+// tiled: L1-sharded (height/block/width) or L1-interleaved.
 
 #include "binary_ng_device_operation.hpp"
 #include "binary_ng_utils.hpp"
@@ -73,10 +68,12 @@
 #include "ttnn/operations/experimental/quasar/binary/common/binary_op_utils.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -129,8 +126,8 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using ttnn::device_operation::ProgramArtifacts;
 
-// Kernel sources for the no-broadcast DFB path (dual-mode: a sharded operand publishes its borrowed
-// shard, an interleaved operand reads/writes over the NoC via a tensor binding).
+// Kernel sources for the no-broadcast DFB path (dual-mode: a borrowed operand publishes its resident shard
+// or slice; any other operand reads/writes over the NoC via a tensor binding).
 constexpr const char* kReaderDfb =
     "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/dataflow/reader_no_bcast_dfb.cpp";
 constexpr const char* kWriterDfb =
@@ -381,6 +378,63 @@ m2::DataflowBufferSpec make_dfb(
     };
 }
 
+// Tiles per core when a, b and c are L1-interleaved and borrowable: bank k holds pages k, k+N, ... from the
+// buffer's address, one bank per core, so a core's slices of a, b and c hold the same pages. Every bank
+// reserves the same page count, and a short bank computes a pad slot. No tail rings, so C must divide it.
+// A program-cache hit keeps this decision. It reads only the hashed specs and worker grid, the tuning, and
+// the bank layout of the operands' device, which never changes after the device opens.
+std::optional<uint32_t> l1_interleaved_borrow_tiles(
+    const Tensor& a, const Tensor& b, const Tensor& c, const CoreRangeSet& worker_grid, uint32_t compute_threads) {
+    const Buffer* c_buffer = c.buffer();
+    for (const Tensor* operand : std::array<const Tensor*, 3>{&a, &b, &c}) {
+        const MemoryConfig& memory_config = operand->memory_config();
+        const bool l1_interleaved_tiles = memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                                          memory_config.buffer_type() == BufferType::L1 &&
+                                          operand->layout() == Layout::TILE;
+        if (!l1_interleaved_tiles) {
+            return std::nullopt;
+        }
+        // One slot per tile: the page stride must be the tile size.
+        const Buffer* buffer = operand->buffer();
+        const uint32_t tile_bytes =
+            operand->tensor_spec().tile().get_tile_size(datatype_to_dataformat_converter(operand->dtype()));
+        if (buffer->aligned_page_size() != tile_bytes) {
+            return std::nullopt;
+        }
+        // A core's slices hold the same pages only when a, b and c have one page count and one bank layout.
+        // Otherwise every operand takes the NoC path.
+        const bool same_bank_slices =
+            buffer->num_pages() == c_buffer->num_pages() && buffer->allocator() == c_buffer->allocator();
+        if (!same_bank_slices) {
+            return std::nullopt;
+        }
+    }
+    // The bank's own reservation, which the runtime also checks the borrowed DFB against.
+    const auto tiles = static_cast<uint32_t>(c_buffer->aligned_size_per_bank() / c_buffer->aligned_page_size());
+    if (tiles % compute_threads != 0) {
+        return std::nullopt;
+    }
+    // The program must run on exactly the cores that hold the banks, one bank each at offset 0; a sub-device
+    // grid does not.
+    const Allocator* allocator = c_buffer->allocator();
+    const uint32_t num_banks = allocator->get_num_banks(BufferType::L1);
+    if (worker_grid.num_cores() != num_banks) {
+        return std::nullopt;
+    }
+    std::set<CoreCoord> bank_cores;
+    for (uint32_t bank = 0; bank < num_banks; ++bank) {
+        const CoreCoord core = allocator->get_logical_core_from_bank_id(bank);
+        if (allocator->get_bank_offset(BufferType::L1, bank) != 0 || !worker_grid.contains(core)) {
+            return std::nullopt;
+        }
+        bank_cores.insert(core);
+    }
+    if (bank_cores.size() != num_banks) {
+        return std::nullopt;
+    }
+    return tiles;
+}
+
 ProgramArtifacts create_no_bcast_artifacts(
     const BinaryNgDeviceOperation::operation_attributes_t& op,
     const BinaryNgDeviceOperation::tensor_args_t& tensor_args,
@@ -413,7 +467,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     const std::optional<Tensor>& b_opt = tensor_args.input_tensor_b;
 
     // Tuned thread counts and ring depth: the same cached instance matches_quasar_native_slice gated on.
-    // A borrowed shard runs one reader and one writer thread; see the thread counts below.
+    // A borrowed program runs one reader and one writer thread; see the thread counts below.
     const NativeTuning& t = native_tuning();
 
     const bool is_sfpu = op.is_sfpu;
@@ -427,23 +481,11 @@ ProgramArtifacts create_no_bcast_artifacts(
         a_buffer != nullptr && (is_scalar || b_buffer != nullptr) && c_buffer != nullptr,
         "binary_ng Quasar-native no-bcast factory requires allocated device buffers");
 
-    // --- Borrow vs NoC routing. The borrow facts come from the shared get_shard_volumes helper -- the
-    // same one the descriptor factory uses -- so this factory and the descriptor agree on what
-    // "native L1 sharding" means: get_shard_volumes is is_native_L1_sharding plus an
-    // uneven-shard guard (an unevenly-sharded output additionally requires all three operands to share one
-    // shard spec), so it returns nullopt both for a non-native config and for an uneven output the
-    // all-or-nothing borrow cannot serve; it reports a per-operand shard volume only for an operand that is
-    // itself L1-sharded with a shard spec. The per-operand a/b/c_sharded flags are derived
-    // from it, but this no-broadcast slice collapses borrow to all-or-nothing: an operand is BORROWED (its
-    // resident L1 shard backs the DFB; reader/writer move only the tail tiles) only when EVERY operand is sharded, so
-    // all three are co-resident L1 shards on one grid with identical per-core tile partitions. Otherwise --
-    // an interleaved output OR input, or a different shard spec -- NONE are borrowed and every
-    // operand is read/written through its own sharding-aware TensorAccessor over a linear page-id walk (the
-    // get_shard_volumes == nullopt / single-or-partial-sharded case). The per-operand a/b/c_borrowed flags
-    // are kept separate (the DFB specs, SRC_SHARDED defines, tensor bindings and placement already branch
-    // on them), so enabling per-operand borrow for broadcast later is a one-line change here. The all-NoC
-    // path is correct for any layout mix; borrowing is a throughput optimization for the fully co-resident
-    // case (a block-sharded residual add). ---
+    // --- Borrow vs NoC routing, all or nothing. All three operands are borrowed when they are L1 shards with
+    // one memory config (get_shard_volumes, shared with the descriptor factory) or L1-interleaved slices
+    // (l1_interleaved_borrow_tiles); each borrowed DFB is the resident shard or slice. Otherwise every operand
+    // is read or written through its own sharding-aware TensorAccessor over a linear page-id walk, which is
+    // correct for any layout mix. The a/b/c_borrowed flags stay separate so per-operand borrow can follow. ---
     const auto shard_volumes = get_shard_volumes(
         a.tensor_spec(),
         is_scalar ? std::optional<tt::tt_metal::TensorSpec>{}
@@ -454,27 +496,36 @@ ProgramArtifacts create_no_bcast_artifacts(
     const bool b_sharded = native && shard_volumes->b_shard_volume.has_value();
     const bool c_sharded = native && shard_volumes->c_shard_volume.has_value();
     const bool borrow_shards = a_sharded && b_sharded && c_sharded;
+    // All three L1-interleaved: each core borrows its bank's slice of every tensor instead.
+    const std::optional<uint32_t> interleaved_tiles =
+        (borrow_shards || is_scalar) ? std::nullopt
+                                     : l1_interleaved_borrow_tiles(a, *b_opt, c, op.worker_grid, t.compute_threads);
+    const bool borrow = borrow_shards || interleaved_tiles.has_value();
+    // Tile count of every core on the borrow path: its full shard, or its bank's slice.
+    const uint32_t borrowed_tiles = borrow_shards ? *shard_volumes->c_shard_volume : interleaved_tiles.value_or(0u);
 
-    const bool a_borrowed = borrow_shards;
-    const bool b_borrowed = borrow_shards;
-    const bool c_borrowed = borrow_shards;
+    const bool a_borrowed = borrow;
+    const bool b_borrowed = borrow;
+    const bool c_borrowed = borrow;
 
-    // Thread counts for this program. A borrowed shard moves nothing through the reader or writer, so each
+    // Thread counts for this program. A borrowed operand moves nothing through the reader or writer, so each
     // runs one thread, and the compute always runs the tuned count: both ring strides then equal it.
-    const uint32_t reader_threads = borrow_shards ? 1u : t.reader_threads;
+    const uint32_t reader_threads = borrow ? 1u : t.reader_threads;
     const uint32_t compute_threads = t.compute_threads;
-    const uint32_t writer_threads = borrow_shards ? 1u : t.writer_threads;
+    const uint32_t writer_threads = borrow ? 1u : t.writer_threads;
     // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
     // capacity, the tiles past its largest multiple go through three owned tail rings of one entry per
     // compute thread. A shard smaller than the count has no borrowed ring: all of it uses the tail rings.
-    const uint32_t tail_tiles = borrow_shards ? *shard_volumes->c_shard_volume % compute_threads : 0u;
-    const bool has_main_ring = !borrow_shards || *shard_volumes->c_shard_volume > tail_tiles;
-    if (borrow_shards) {
+    // An interleaved slice has no tail: it is borrowed only when the count divides.
+    const uint32_t tail_tiles = borrow ? borrowed_tiles % compute_threads : 0u;
+    const bool has_main_ring = !borrow || borrowed_tiles > tail_tiles;
+    if (borrow) {
         log_debug(
             tt::LogOp,
-            "binary_ng Quasar-native: a borrowed shard of {} tiles runs R={} C={} W={} (tuned {},{},{}), {} in the "
+            "binary_ng Quasar-native: a borrowed {} of {} tiles runs R={} C={} W={} (tuned {},{},{}), {} in the "
             "tail rings",
-            *shard_volumes->c_shard_volume,
+            borrow_shards ? "shard" : "L1-interleaved slice",
+            borrowed_tiles,
             reader_threads,
             compute_threads,
             writer_threads,
@@ -484,9 +535,7 @@ ProgramArtifacts create_no_bcast_artifacts(
             tail_tiles);
     }
 
-    // HAS_SHARDING gates the borrow-path one-shard-per-core placement + per-shard tile-walk wrap. Off the
-    // borrow path every operand (including a sharded output) is NoC-read/written via TensorAccessor over a
-    // linear page-id walk. The reader/writer read it as a #define.
+    // HAS_SHARDING mirrors the descriptor's define for a borrowed shard; kernels_qsr/ does not read it.
     const bool has_sharding = borrow_shards;
 
     // --- Dtypes / data formats / tile sizes (mirrors the descriptor factory). For a scalar there is no
@@ -589,7 +638,7 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // --- num_tiles_per_cycle: DST register capacity per tile_regs_acquire (mirrors the descriptor
     // factory + the shipped factory's min(.,shard_tiles) cap). The default batches only when EVERY
-    // operand is borrowed AND both rings have stride 1. A borrowed ring is the shard, walked exactly
+    // operand is borrowed AND both rings have stride 1. A borrowed ring is the shard or slice, walked exactly
     // once, so a batch never wraps and only the capacity bounds it; but the pack path spaces a batch by
     // one entry rather than by the ring stride, so above stride 1 the default stays 1 (the knob below
     // may override it at any stride). Any NoC-read operand uses a derived ring, so the default chunk
@@ -599,20 +648,19 @@ ProgramArtifacts create_no_bcast_artifacts(
     const uint32_t out_producers_consumers = std::max(compute_threads, writer_threads);
     const bool ring_stride_one = in_producers_consumers == 1 && out_producers_consumers == 1;
     const bool all_borrowed = a_borrowed && b_borrowed && c_borrowed;
-    // Tile count of one full shard, from the same helper the gate used to admit it. Every core
-    // processes this count, including a partial end core under an uneven shard: the buffer allocates
-    // the full shard, so computing on the pad rows is in bounds and never reaches the logical output.
-    // The borrowed rings hold the first c_main_tiles of it, and the tail rings the rest.
-    const uint32_t c_full_shard_tiles = c_borrowed ? *shard_volumes->c_shard_volume : 0u;
-    const uint32_t c_main_tiles = c_full_shard_tiles - tail_tiles;
+    // Every core processes borrowed_tiles, including a partial end core under an uneven shard and a bank
+    // with one real page fewer: the buffer allocates the full count on every core, so computing on the pad
+    // slots is in bounds and never reaches the logical output. The borrowed rings hold the first
+    // c_main_tiles of it, and the tail rings the rest.
+    const uint32_t c_main_tiles = borrowed_tiles - tail_tiles;
     uint32_t num_tiles_per_cycle = 1;
     if (all_borrowed && ring_stride_one) {
         num_tiles_per_cycle = std::min<uint32_t>(is_sfpu ? 2u : 8u, c_main_tiles);
     }
-    // EXPERIMENTAL (TTNN_QSR_TILES_PER_CYCLE): reach the batched path on interleaved operands, which the
-    // default above cannot. Capacity is one hard bound -- wait_front(n) never completes if n exceeds it
-    // -- so check it here rather than letting the op hang. A borrowed ring is the shard, walked once, so
-    // it has no double-buffer or wrap condition to check.
+    // EXPERIMENTAL (TTNN_QSR_TILES_PER_CYCLE): batch the NoC path, or a borrowed ring above stride 1, which
+    // the default above does not. Capacity is one hard bound -- wait_front(n) never completes if n exceeds
+    // it -- so check it here rather than letting the op hang. A borrowed ring is the shard or slice, walked
+    // once, so it has no double-buffer or wrap condition to check.
     if (t.tiles_per_cycle != 0) {
         num_tiles_per_cycle = t.tiles_per_cycle;
     }
@@ -709,7 +757,7 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // The bcast compute processes exactly ONE tile per cycle (unary_bcast -> pack -> binary op on DST
     // index 0) while advancing every DFB by num_tiles_per_cycle; that is only correct at
-    // num_tiles_per_cycle == 1 (the interleaved / non-borrowed path this task wires). A future borrowed
+    // num_tiles_per_cycle == 1 (the NoC-read path this task wires). A future borrowed
     // or multi-tile broadcast path MUST revisit the kernel's per-tile loop before relaxing this.
     TT_FATAL(
         !(bcast_lhs || bcast_rhs) || num_tiles_per_cycle == 1,
@@ -717,8 +765,8 @@ ProgramArtifacts create_no_bcast_artifacts(
         num_tiles_per_cycle);
 
     // --- DataflowBuffers (mirrors the descriptor factory's CB block). A BORROWED operand backs the DFB
-    // with its resident L1 shard (num_entries == the shard's borrowed part, borrowed_from set); any NoC-read operand
-    // (interleaved, or sharded with a different shard spec) is a derived-depth ring filled over the NoC.
+    // with its resident L1 shard or slice (num_entries == its borrowed part, borrowed_from set); any
+    // NoC-read operand is a derived-depth ring filled over the NoC.
     // post_lhs/post_rhs exist only when that operand has activations; their format is the op_has_exp
     // Float16_b intermediate on the FPU path, else the operand's own format. ---
     // capacity = num_entries / max(producers, consumers) is what reaches the credit register, so the
@@ -754,12 +802,12 @@ ProgramArtifacts create_no_bcast_artifacts(
     const uint32_t reader_num_tcs = compute_threads >= reader_threads ? compute_threads / reader_threads : 1u;
     const uint32_t writer_num_tcs = compute_threads >= writer_threads ? compute_threads / writer_threads : 1u;
 
-    // A borrowed ring is the shard's first tiles, a multiple of the compute count, so it divides by the
-    // ring's max(producers, consumers) as the DFB host asserts, and the reader's publish fills each
+    // A borrowed ring is the first tiles of the shard or slice, a multiple of the compute count, so it divides
+    // by the ring's max(producers, consumers) as the DFB host asserts, and the reader's publish fills each
     // counter exactly. Borrowed operands share one shape and memory config, so c's count serves a and b.
     const uint32_t a_entries = a_borrowed ? c_main_tiles : in_entries;
-    // Scalar in1 is a single writer-filled tile (never borrowed); otherwise the borrowed shard or the
-    // derived NoC ring.
+    // Scalar in1 is a single writer-filled tile (never borrowed); otherwise the borrowed shard or slice, or
+    // the derived NoC ring.
     const uint32_t b_entries = is_scalar ? 1u : (b_borrowed ? c_main_tiles : in_entries);
     const uint32_t c_entries = c_borrowed ? c_main_tiles : out_entries;
 
@@ -837,9 +885,8 @@ ProgramArtifacts create_no_bcast_artifacts(
     }
 
     // --- Dataflow defines. SRC_SHARDED[_B]/DST_SHARDED select the BORROWED (publish/drain a resident
-    // shard, no NoC) vs NoC-read code path per operand. HAS_SHARDING follows the OUTPUT layout: it tells
-    // a NoC-read operand's tile walk to wrap each row onto one output-shard width (the descriptor passed
-    // has_sharding as a TensorAccessor CTA; the DFB kernels read the macro). ---
+    // shard or L1-interleaved slice, no NoC) vs NoC-read code path per operand; for a slice they mean
+    // borrowed, not sharded. HAS_SHARDING mirrors the descriptor's define; kernels_qsr/ does not read it. ---
     std::map<std::string, std::string> reader_defines = make_dataflow_defines(a_dtype, b_dtype);
     reader_defines["SRC_SHARDED"] = a_borrowed ? "1" : "0";
     reader_defines["SRC_SHARDED_B"] = b_borrowed ? "1" : "0";
@@ -938,7 +985,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         compute_defines_tbl.emplace(k, v);
     }
 
-    // Reader: publishes a borrowed shard (borrowed operand) or reads it over the NoC (via
+    // Reader: publishes a borrowed shard or slice (borrowed operand) or reads it over the NoC (via
     // TensorAccessor(tensor::in0/in1)). A borrowed operand borrows via the DFB and needs a tensor binding
     // only for the tail copy, whose LocalTensorAccessor gives the shard's L1 base; every NoC-read operand is
     // bound — including a sharded input with a different shard spec, whose accessor is sharding-aware.
@@ -1100,10 +1147,10 @@ ProgramArtifacts create_no_bcast_artifacts(
         .hw_config = compute_hw,
     };
 
-    // --- Placement + per-core runtime args (mirrors the descriptor factory's per-core loop). Borrowed:
-    // place on the shard grid, the same counts on every core. Interleaved: split_work_to_cores over the
-    // worker grid; per-node num_tiles by group. Either way target_nodes is exactly the active cores
-    // (no dummy args). ---
+    // --- Placement + per-core runtime args (mirrors the descriptor factory's per-core loop). Borrowed
+    // shards: the shard grid; borrowed slices: the worker grid, which the gate checked is the bank cores;
+    // both with the same counts on every core. NoC path: split_work_to_cores over the worker grid, with
+    // per-node num_tiles by group. Either way target_nodes is exactly the active cores (no dummy args). ---
     const int out_rank = c.logical_shape().rank();
     const uint32_t aND = extract_nD_dims(a, out_rank);
     // Scalar has no `b`: its dims are all 1 so every b stride below collapses to 0 (unread by the
@@ -1163,9 +1210,10 @@ ProgramArtifacts create_no_bcast_artifacts(
     uint32_t c_shard_height = 0, c_shard_width = 0, num_shards_per_width = 1;
     bool row_major = true;
 
-    // Placement is driven by borrow_shards. The borrow path places one output shard per core on the
+    // Placement is driven by the borrow decision. Borrowed shards place one output shard per core on the
     // output shard grid (each core's output shard is its work), with the per-shard tile counts and the
-    // per-core output start tile derived from the output shard geometry. Off the borrow path,
+    // per-core output start tile derived from the output shard geometry. Borrowed L1-interleaved slices
+    // place one core per bank, which the gate checked is every core of op.worker_grid. Off the borrow path,
     // split_work_to_cores spreads the output tiles linearly across all of op.worker_grid (the full
     // sub-device TENSIX worker set returned by get_worker_grid, NOT the output shard grid); for a
     // NoC-written sharded output the sharding-aware TensorAccessor maps each global output tile id to its
@@ -1181,6 +1229,8 @@ ProgramArtifacts create_no_bcast_artifacts(
         c_shard_width = tt::round_up(c_shard.shape[1], c_tile.get_width()) / c_tile.get_width();
         const TensorMemoryLayout memory_layout = c.memory_config().memory_layout();
         num_shards_per_width = get_shards_per_width(c_shard, memory_layout);
+    } else if (borrow) {
+        cores = corerange_to_cores(op.worker_grid, std::nullopt, row_major);
     } else {
         row_major = true;
         const uint32_t tile_hw = c.tensor_spec().tile().get_height() * c.tensor_spec().tile().get_width();
@@ -1215,16 +1265,19 @@ ProgramArtifacts create_no_bcast_artifacts(
 
         uint32_t a_num_tiles = 0, b_num_tiles = 0, c_num_tiles_core = 0;
         uint32_t c_start_id = 0, c_current_shard_width = 0;
-        if (borrow_shards) {
-            // Borrow path: each core owns one output shard, and every operand's shard matches it. The count
-            // is the shard's borrowed part, the same for a, b and c; the tail tiles start right after it.
-            // c_start_id is the global tile id of this output shard's top-left tile.
+        if (borrow) {
+            // Borrow path: each core computes its own output shard, whose operand shards match it, or its
+            // bank's slice of each tensor. The count is the borrowed part, the same for a, b and c; the tail
+            // tiles start right after it. c_start_id is the global tile id of this output shard's top-left
+            // tile. A slice has no such tile, and the borrowed kernels do not read it, so it stays 0.
             c_num_tiles_core = c_main_tiles;
             a_num_tiles = c_num_tiles_core;
             b_num_tiles = c_num_tiles_core;
             c_current_shard_width = c_shard_width;
-            c_start_id =
-                (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
+            if (borrow_shards) {
+                c_start_id =
+                    (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
+            }
         } else {
             // Off the borrow path: split_work_to_cores gives this core's output tile count, walked
             // linearly from start_tile_id. Nothing is borrowed here, so every operand is NoC-read/written
