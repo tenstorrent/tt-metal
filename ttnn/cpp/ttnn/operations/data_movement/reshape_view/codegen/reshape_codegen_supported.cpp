@@ -139,8 +139,9 @@ const char* call_contract_violation(
     if (padded_shape != logical_shape || logical_shape.volume() != input.logical_volume()) {
         return "explicit padded shape or volume change";
     }
-    const bool padded_tile_output = logical_shape.rank() >= 2 && (logical_shape[-1] % tt::constants::TILE_WIDTH != 0 ||
-                                                                  logical_shape[-2] % tt::constants::TILE_HEIGHT != 0);
+    // A rank-one output is a single row, so its tile pads the height from 1 to 32.
+    const bool padded_tile_output = logical_shape.rank() < 2 || logical_shape[-1] % tt::constants::TILE_WIDTH != 0 ||
+                                    logical_shape[-2] % tt::constants::TILE_HEIGHT != 0;
     if (input.layout() == Layout::TILE && pad_value.has_value() && padded_tile_output) {
         return "explicit pad_value on a padded tile output";
     }

@@ -291,3 +291,33 @@ def test_forced_codegen_refuses_out_of_scope_case(device, expect_error, case, in
     x = ttnn.from_torch(torch.rand(in_shape), dtype=dtype, layout=layout, device=device)
     with expect_error(RuntimeError, "outside the codegen scope"):
         _force_codegen(x, out_shape)
+
+
+# (id, in shape, out shape). Each output pads its tiles: a rank-one output pads the height from 1 to 32.
+_PAD_VALUE_CASES = [
+    ("rank1", [32, 32], [1024]),
+    ("rank2_h50", [50, 64], [100, 32]),
+]
+
+
+@pytest.mark.parametrize("case,in_shape,out_shape", _PAD_VALUE_CASES, ids=[c[0] for c in _PAD_VALUE_CASES])
+def test_explicit_pad_value_on_padded_output_runs_native(device, expect_error, case, in_shape, out_shape):
+    # Codegen writes zeros into tile padding, so a call that asks native to fill it must not reach codegen.
+    # Native fills through a compute kernel that rewrites NaN payloads and subnormals in every edge tile, so the
+    # data holds plain finite values only.
+    pad_value = 7.0
+    torch.manual_seed(0)
+    source = torch.randn(in_shape, dtype=torch.bfloat16)
+    x = _to_device(device, source, ttnn.bfloat16, ttnn.TILE_LAYOUT, _DRAM)
+    with expect_error(RuntimeError, "explicit pad_value on a padded tile output"):
+        _force_codegen(x, out_shape, memory_config=_DRAM, pad_value=pad_value)
+    out = ttnn.reshape(x, out_shape, memory_config=_DRAM, pad_value=pad_value)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), ttnn.bfloat16)
+    # The inner two dims' tile padding is what native fills; a rank-one output is one row of a [32, W] tile row.
+    h, w = ([1] + out_shape)[-2:]
+    padded = out.cpu().to_torch_with_padded_shape()
+    padded = padded.reshape(-1, padded.shape[-2], padded.shape[-1])
+    in_padding = torch.ones(padded.shape[-2:], dtype=torch.bool)
+    in_padding[:h, :w] = False
+    assert in_padding.any()
+    assert (padded[:, in_padding] == pad_value).all()
