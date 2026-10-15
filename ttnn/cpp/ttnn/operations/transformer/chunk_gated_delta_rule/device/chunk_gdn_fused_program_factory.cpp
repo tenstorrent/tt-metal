@@ -111,6 +111,7 @@ constexpr uint32_t s3 = tt::CBIndex::c_31;
 tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const ChunkGdnParams& attrs, const ChunkGdnInputs& in, std::vector<Tensor>& outputs) {
     const uint32_t BH = attrs.BH;
+    const uint32_t h0 = attrs.head_offset;  // DRAM row offset of head 0; the hand-off protocol indexes heads from 0
     const uint32_t NC = attrs.num_chunks;
     const uint32_t Ct = attrs.chunk_size / TILE_HEIGHT;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
@@ -420,7 +421,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
             const uint32_t cnt = (NC - j + NP - 1) / NP;
             prep_reader.emplace_runtime_args(
                 pc,
-                {h * NC + j,
+                {(h0 + h) * NC + j,
                  cnt,
                  q_buf,
                  k_buf,
@@ -454,7 +455,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         }
 
         // Receiver (h, v): its V-slice index, s0 from DRAM, then NP and N_INIT (= NP: every producer
-        // of this head bumps `init` once) and the producers' coords for the rotating credit.
+        // of this head bumps `init` once), the producers' coords for the rotating credit, and the DRAM
+        // row offset of its initial state.
         for (uint32_t v = 0; v < NV; v++) {
             const CoreCoord& rc = rcv_cores[h * NV + v];
             std::vector<std::variant<uint32_t, Buffer*>> r_args = {h, v, NC, s0_buf, NP, NP};
@@ -462,17 +464,23 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
                 r_args.push_back(static_cast<uint32_t>(pv[j].x));
                 r_args.push_back(static_cast<uint32_t>(pv[j].y));
             }
+            TT_ASSERT(r_args.size() == fused_rt::receiver_head_offset_arg(NP));
+            r_args.push_back(h0);
             receiver_reader.emplace_runtime_args(rc, r_args);
             scan_compute.emplace_runtime_args(rc, {NC});
-            scan_writer.emplace_runtime_args(rc, {h, v, NC, o_buf, fs_buf});
+            scan_writer.emplace_runtime_args(rc, {h0 + h, v, NC, o_buf, fs_buf});
         }
     }
 
+    // Push order = the kernel indices of fused_rt (get_dynamic_runtime_args addresses them by index).
+    TT_ASSERT(desc.kernels.size() == fused_rt::kPrepReaderKernel);
     desc.kernels.push_back(std::move(prep_reader));
     desc.kernels.push_back(std::move(prep_compute));
     desc.kernels.push_back(std::move(fused_writer));
+    TT_ASSERT(desc.kernels.size() == fused_rt::kReceiverReaderKernel);
     desc.kernels.push_back(std::move(receiver_reader));
     desc.kernels.push_back(std::move(scan_compute));
+    TT_ASSERT(desc.kernels.size() == fused_rt::kScanWriterKernel);
     desc.kernels.push_back(std::move(scan_writer));
     return desc;
 }

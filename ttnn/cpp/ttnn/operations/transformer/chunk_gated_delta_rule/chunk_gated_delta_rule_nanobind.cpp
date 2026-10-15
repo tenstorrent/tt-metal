@@ -243,32 +243,46 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             unicast (bool): default True. Per-receiver unicast writes; False sends the linked
                 multicast chain.
             posted (bool): default False. Posted unicast data writes with the VALID flag ordered by
-                in-order delivery; requires unicast.)doc")
+                in-order delivery; requires unicast.
+            wave_heads (int, optional): heads per program. The BH heads run as ceil(BH / wave_heads)
+                programs of nearly equal size, each with its own geometry, into shared outputs. None:
+                the op's plan (see chunk_gdn_fused_wave_plan): one program up to 32 heads when a
+                geometry fits, else the fewest waves of at most 24 heads.)doc")
         .def(
-            nb::init<std::optional<uint32_t>, std::optional<uint32_t>, std::optional<bool>, uint32_t, bool, bool>(),
+            nb::init<
+                std::optional<uint32_t>,
+                std::optional<uint32_t>,
+                std::optional<bool>,
+                uint32_t,
+                bool,
+                bool,
+                std::optional<uint32_t>>(),
             nb::kw_only(),
             nb::arg("num_producers") = nb::none(),
             nb::arg("num_receivers") = nb::none(),
             nb::arg("row_local") = nb::none(),
             nb::arg("handoff_depth") = 2,
             nb::arg("unicast") = true,
-            nb::arg("posted") = false)
+            nb::arg("posted") = false,
+            nb::arg("wave_heads") = nb::none())
         .def_rw("num_producers", &ChunkGdnFusedProgramConfig::num_producers)
         .def_rw("num_receivers", &ChunkGdnFusedProgramConfig::num_receivers)
         .def_rw("row_local", &ChunkGdnFusedProgramConfig::row_local)
         .def_rw("handoff_depth", &ChunkGdnFusedProgramConfig::handoff_depth)
         .def_rw("unicast", &ChunkGdnFusedProgramConfig::unicast)
         .def_rw("posted", &ChunkGdnFusedProgramConfig::posted)
+        .def_rw("wave_heads", &ChunkGdnFusedProgramConfig::wave_heads)
         .def("__repr__", [](const ChunkGdnFusedProgramConfig& c) {
             return fmt::format(
                 "ChunkGdnFusedProgramConfig(num_producers={}, num_receivers={}, row_local={}, handoff_depth={}, "
-                "unicast={}, posted={})",
+                "unicast={}, posted={}, wave_heads={})",
                 py_opt(c.num_producers),
                 py_opt(c.num_receivers),
                 py_opt(c.row_local),
                 c.handoff_depth,
                 py_bool(c.unicast),
-                py_bool(c.posted));
+                py_bool(c.posted),
+                py_opt(c.wave_heads));
         });
 
     // Host-side geometry oracle: what the fused op will choose for (grid, BH, NC, Vt) when the program
@@ -297,6 +311,33 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         program config leaves it free (fixed_nv / fixed_np = a pinned num_receivers / num_producers, 0 =
         free): (nv, np, placement, T_fused_us, T_phased_us, fused_pays). nv == 0 means no fused geometry
         fits the grid.)doc");
+    mod.def(
+        "chunk_gdn_fused_wave_plan",
+        [](uint32_t grid_x,
+           uint32_t grid_y,
+           uint32_t BH,
+           uint32_t NC,
+           uint32_t Vt,
+           uint32_t max_wave,
+           uint32_t fixed_nv,
+           uint32_t fixed_np) {
+            const auto p = ttnn::prim::plan_fused_waves(grid_x, grid_y, BH, NC, Vt, max_wave, fixed_nv, fixed_np);
+            return std::make_tuple(p.waves, p.t_fused_us, p.t_phased_us, p.fused_pays);
+        },
+        nb::arg("grid_x"),
+        nb::arg("grid_y"),
+        nb::arg("BH"),
+        nb::arg("NC"),
+        nb::arg("Vt") = 4,
+        nb::arg("max_wave") = 0,
+        nb::arg("fixed_nv") = 0,
+        nb::arg("fixed_np") = 0,
+        R"doc(Heads per fused program the op runs for BH heads on (grid_x, grid_y) when the fused program
+        config leaves wave_heads free: (waves, T_fused_us, T_phased_us, fused_pays). waves lists the head
+        count of each program in launch order (empty: no fused geometry fits): one program up to 32 heads
+        when a geometry fits, else the fewest waves of at most max_wave heads (0 = 24), sizes within one of
+        each other, more waves only if a size does not fit; T_fused_us is the cost model's sum over them;
+        fixed_nv / fixed_np pin num_receivers / num_producers as in chunk_gdn_fused_geometry.)doc");
     mod.def(
         "chunk_gdn_fused_row_local_feasible",
         &ttnn::prim::fused_row_local_feasible,
@@ -372,7 +413,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             program_config (ChunkGdnFusedProgramConfig | ChunkGdnPhasedProgramConfig |
                 ChunkGdnMonoProgramConfig, optional): which device implementation runs and how it is
                 laid out on the chip — the alternative you pass selects the path, its fields the
-                geometry (see each class). None: the fused path or the phased path depending on the cost model.
+                geometry (see each class). None: the fused path or the phased path depending on the cost
+                model. The fused path runs any batch size: heads beyond what one program's core map
+                holds run as further programs (waves) into the same outputs.
             wy_inverse (ttnn.ChunkGdnWyInverse): default AUTO. How each chunk's WY inverse is
                 computed: HORNER on the matrix engine (every architecture),
                 FORWARD_SUBSTITUTION (one solve on the SFPU, Blackhole and chunk_size 32 only, refused
