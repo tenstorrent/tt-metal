@@ -708,9 +708,8 @@ class V41CSAConsumer(_V41QStem, TtCSA):
             max_seq_len=max_seq_len,
         )
         state.entry_count = 0
-        state.slot = int(
-            slot
-        )  # DS41F-0068: the block replays THIS slot's attention islands (they read its source's slot state)
+        # DS41F-0068: the block replays THIS slot's attention islands (they read its source's slot state)
+        state.slot = int(slot)
         return state
 
     def forward(self, hidden_states, seq_len_actual=None, *, state, export=None):
