@@ -1,0 +1,4 @@
+tt_metal/tt-llk/tt_llk_blackhole/common/inc/cpack_common.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack_common.h
+tt_metal/tt-llk/tests/helpers/include/llk_lib_unpack_wrappers.h
