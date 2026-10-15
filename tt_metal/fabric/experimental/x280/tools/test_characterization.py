@@ -152,7 +152,7 @@ class Tables(unittest.TestCase):
         forward = dict(
             compute_record(member="route_forward", backend_id=0x10200002, instrumentation="off"),
             source_placement="pinned_zero_device",
-            source_base=0x0A000A40,
+            source_base=0x0A000AC0,
             source_bytes=96,
             hop_count=4,
             boundary="decision",

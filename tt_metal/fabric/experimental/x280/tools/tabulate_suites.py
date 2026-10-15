@@ -327,7 +327,7 @@ PS_FORWARD_IDENTITY = {
     "packet_header_bytes": {96},
     "route_buffer_capacity": {35},
     "source_placement": {"pinned_zero_device"},
-    "source_base": {0x0A000A40},
+    "source_base": {0x0A000AC0},
     "source_bytes": {96},
     "hop_count": {4},
     "boundary": {"decision"},
