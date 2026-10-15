@@ -272,6 +272,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             for slot in getattr(getattr(model, "sampling", None), "_trace_states", {}).values()
         )
 
+    def _batched_prefill_samples_on_device(self, model_id: int) -> bool:
+        """Whether the model has the hooks of the batched prefill's on-device sampling (prefill_forward_text):
+        last-token extraction from the batched hidden states, then norm + LM head on those rows. A model without
+        them (GPT-OSS) prefills sequentially when sampling on device, and warms only batch 1 for it."""
+        model = self.model[model_id]
+        return hasattr(model, "extract_last_tokens_batched_prefill") and hasattr(model, "_apply_norm_and_lm_head")
+
     def _get_sampling_contract(self, model_id: int):
         sampling_module = getattr(self.model[model_id], "sampling", None)
         sampling_dp = getattr(self.model[model_id], "sampling_dp", 1)
@@ -316,7 +323,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if (
             self.data_parallel == 1
             and not getattr(self.model_args[0], "disable_batched_prefill", False)
-            and (not can_sample_on_device or sampling_dp == 1)
+            and (not can_sample_on_device or (sampling_dp == 1 and self._batched_prefill_samples_on_device(0)))
             and not self._overrides_prefill_capture()
             and not self._uses_prefetcher()
         ):
@@ -1351,6 +1358,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # must fall back to sequential prefill until a row-sharded
                 # batched-prefill sampling contract is implemented.
                 use_batched_prefill = False
+            elif on_device_sampling_enabled and not self._batched_prefill_samples_on_device(0):
+                logger.info("Batched prefill disabled: the model has no batched on-device sampling hooks")
+                use_batched_prefill = False
 
         if use_batched_prefill:
             padded_batch = batched_prefill_padded_batch(batch_size, empty_slots, self.model_args[0].max_batch_size)
@@ -1537,6 +1547,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     **local_kwargs,
                 )
             else:
+                # Opt-in hook (GPT-OSS): a model whose batched prefill forward can take the per-user last-token
+                # list returns one logits row per slot instead of every row of every user.
+                batched_last_token_rows = (
+                    use_batched_prefill
+                    and not sampling_enabled
+                    and not return_hidden_states
+                    and getattr(self.model[model_id], "batched_prefill_last_token_rows", False)
+                )
+                if batched_last_token_rows:
+                    local_kwargs["batched_last_token_rows"] = True
                 logits = self.prefill_forward_single_user_text(
                     prefill_ids,
                     page_table=page_table_user,
@@ -1548,6 +1568,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     batch_size=padded_batch if use_batched_prefill else 1,
                     **local_kwargs,
                 )
+                if batched_last_token_rows:
+                    rows = self.model[model_id].process_output_prefill_rows(logits, empty_slots)
+                    for local_idx, row in enumerate(rows):
+                        output_tensor[local_idx] = row
+                    break
             if use_batched_prefill:
                 hidden_dim = logits.shape[-1]
                 logits = ttnn.reshape(logits, [padded_batch, 1, prefill_seq_len, hidden_dim])
@@ -1952,6 +1977,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         model_id=-1,
         num_cached_tokens: int = 0,
         batch_size=1,
+        batched_last_token_rows=False,  # opt-in (prefill_forward_text): get_last_token = the per-user list
         **kwargs,
     ):
         seq_len = tokens.shape[-1]
@@ -2084,7 +2110,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
-                get_last_token=-1 if batch_size > 1 else (last_token_idx // 32) * 32,
+                get_last_token=(
+                    list(last_token_idx)
+                    if batched_last_token_rows
+                    else -1
+                    if batch_size > 1
+                    else (last_token_idx // 32) * 32
+                ),
                 kv_cache=kv_cache,
                 batch_size=batch_size,
             )

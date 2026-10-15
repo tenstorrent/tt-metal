@@ -113,7 +113,11 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
-        self.disable_batched_prefill = True
+        # Batched prefill (several users flattened into one [1, 1, B*S, H] forward, attention per user) is validated
+        # on the Blackhole 1x4 mesh only (the routed-MoE prefill placement, experts/prefill_routed_placement.py, and
+        # the per-user exact reductions of batched_prefill.py); other meshes keep the sequential per-user prefill.
+        mesh_shape = tuple(mesh_device.shape) if mesh_device is not None else ()
+        self.disable_batched_prefill = not (mesh_shape == (1, 4) and is_blackhole())
         self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 

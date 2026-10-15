@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert, routed_expert_weight_memory_config
 from models.demos.gpt_oss.config import Mode
 
+from ..batched_prefill import batched_reduce_links, per_user_reduce
 from .prefill_routed_placement import ROUTED_EXPERT_PLACEMENT, ROUTED_EXPERT_PLACEMENT_DEVICES
 
 ROUTED_PREFILL_ENV = "GPT_OSS_ROUTED_PREFILL"
@@ -854,14 +855,18 @@ class RoutedPrefillExperts:
         ttnn.deallocate(idx_rm)
         return pieces
 
-    def __call__(self, hidden_states, topk_indices, topk_weights, scatter=False):
+    def __call__(self, hidden_states, topk_indices, topk_weights, scatter=False, batch_size=1):
         """hidden_states: [1, 1, S, H] replicated; topk_indices / topk_weights: [S, k] (router top-k path).
         topk_indices are slot ids: id v is expert self.expert_order[v] (the HF id itself when expert_order is None),
         as the MLP's routed router emits them (TopKRouter.with_expert_order).
 
         Returns the MoE output [1, 1, S, H] (bf8), all-reduced over the mesh row like the dense TP path; with scatter
         (sequence-parallel prefill, S % (32 * N) == 0) only the reduce-scatter half: [1, 1, S / N, H], device d holding
-        rows d * S / N onward, bit-identical to those rows of the all-reduce."""
+        rows d * S / N onward, bit-identical to those rows of the all-reduce.
+
+        batch_size > 1 (batched prefill): the S rows are B users' tokens stacked by user; the experts are per token,
+        and the reduction is batched_prefill.per_user_reduce (each user's rows as in that user's batch-1 call; with
+        scatter, device d holds rows d * S / (B N) onward of every user)."""
         seq_len = hidden_states.shape[-2]
         assert self.supports(
             hidden_states.shape
@@ -890,6 +895,12 @@ class RoutedPrefillExperts:
             out = ttnn.concat(outputs, dim=2)
             for t in outputs:
                 ttnn.deallocate(t)
+        if batch_size > 1:
+            axis = self.mesh_config.tp_axis
+            links = batched_reduce_links(self.ccl_manager, axis)
+            reduced = per_user_reduce(out, batch_size, axis, links, scatter=scatter)
+            ttnn.deallocate(out)
+            return reduced
         if scatter:
             reduced = ttnn.reduce_scatter(
                 out,

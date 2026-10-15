@@ -176,11 +176,30 @@ class TopKRouter:
             )
         return out
 
-    def __call__(self, hidden_states, use_throughput_experts):
+    def __call__(self, hidden_states, use_throughput_experts, batch_size=1):
         # Compute actual token count from the tensor volume before reshape,
         # since shape[0] after reshape returns the tile-padded dimension
         # (e.g. 8 tokens padded to 32 in TILE_LAYOUT).
         actual_tokens = hidden_states.volume() // self.hidden_dim
+        if batch_size > 1 and actual_tokens // batch_size <= 128:
+            # Batched prefill of short users: the linear below writes L1 for a user's own <= 128 tokens, and its L1
+            # program rounds differently from the DRAM one a B*S-row call would take. A [B, 1, S, H] linear with the
+            # L1 output gives every user the rows of its batch-1 call (tests/unit/test_batched_prefill.py).
+            per_user = actual_tokens // batch_size
+            x4 = ttnn.reshape(hidden_states, (batch_size, 1, per_user, self.hidden_dim))
+            logits4 = ttnn.linear(
+                x4,
+                self.weight,
+                bias=self.bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
+            router_logits = ttnn.reshape(logits4, (actual_tokens, self.num_experts))
+            expert_indices, expert_weights = topk_router(
+                router_logits, self.top_k, use_throughput_experts, self.softmax_compute_config
+            )
+            ttnn.deallocate(router_logits)
+            return expert_indices, expert_weights
         hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
 
         # Fused op only supports decode mode (B=32, seq_len=1 → shape [32, hidden_dim])

@@ -15,6 +15,7 @@ from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
+from .batched_prefill import gather_users, last_token_rows, partition_users
 from .fused_decode.config import fused_decode_supported
 from .fused_decode.inputs import DecodeInputs
 from .fused_decode.terminal import DecodeTerminal, FusedSamplingGenerator
@@ -102,6 +103,11 @@ class Model:
     - Paged attention support for memory efficiency
     - Compatible with tt_transformers generator interface
     """
+
+    # Generator opt-in (models/tt_transformers/tt/generator.py prefill_forward_text): a batched prefill passes the
+    # per-user last-token indices as get_last_token, the forward runs the final norm and LM head on those rows only,
+    # and process_output_prefill_rows reads the logits back once for all users.
+    batched_prefill_last_token_rows = True
 
     def __init__(
         self,
@@ -444,17 +450,21 @@ class Model:
 
         # Sequence-parallel prefill (DecoderLayer._prefill_forward_sp): the residual stream stays split over the mesh
         # row by sequence rows, so the residual adds and RMSNorms run on S / TP rows per device instead of all S rows.
+        # A batched prefill (batch_size > 1: B users' rows stacked by user, batched_prefill.py) gates on the per-user
+        # length, so that every user runs the same path as its batch-1 prefill.
+        batched_last_tokens = isinstance(get_last_token, (list, tuple))
+        user_seq_len = hidden_states.shape[-2] // batch_size
         sequence_parallel = (
             not is_decode
             and os.getenv(PREFILL_SP_ENV, "1") == "1"
-            and hidden_states.shape[-2] >= PREFILL_SP_MIN_SEQ
+            and user_seq_len >= PREFILL_SP_MIN_SEQ
             and len(self.layers) > 0
             and all(layer.prefill_sequence_parallel_supported(hidden_states, batch_size) for layer in self.layers)
         )
         if sequence_parallel:
             sp_axis = self.layers[0].self_attn.mesh_config.tp_axis
             full = hidden_states
-            hidden_states = ttnn.mesh_partition(full, 2, cluster_axis=sp_axis)
+            hidden_states = partition_users(full, batch_size, sp_axis)
             full.deallocate(True)
 
         # Process through decoder layers
@@ -472,8 +482,27 @@ class Model:
                 batch_size=batch_size,
                 sequence_parallel=sequence_parallel,
             )
-        if sequence_parallel:
-            hidden_states = self._gather_prefill_rows(hidden_states, get_last_token, sp_axis)
+        if batched_last_tokens:
+            # Batched prefill, get_last_token = each user's last token index: the head runs on those B rows only
+            # ([1, 1, B padded to 32, H]; row b = user b).
+            rows = hidden_states
+            hidden_states = last_token_rows(
+                rows,
+                get_last_token,
+                user_seq_len,
+                self.mesh_device,
+                cluster_axis=sp_axis if sequence_parallel else None,
+            )
+            rows.deallocate(True)
+            get_last_token = -1
+        elif sequence_parallel:
+            if batch_size > 1:
+                assert get_last_token == -1, "a batched sequence-parallel prefill selects rows via a per-user list"
+                rows = hidden_states
+                hidden_states = gather_users(rows, batch_size, sp_axis)
+                rows.deallocate(True)
+            else:
+                hidden_states = self._gather_prefill_rows(hidden_states, get_last_token, sp_axis)
             if get_last_token != -1:
                 get_last_token = -1  # already the [1, 1, 32, H] tile of the last token
         logits = hidden_states
@@ -1302,7 +1331,8 @@ class Model:
         # Cached per sequence length: the slice runs on device, so recomputing it allocates. On a traced
         # prefill that allocation happens with the trace live -- and is then discarded, since the replay
         # uses the matrices that were bound when the trace was captured.
-        seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
+        # A batched prefill (batch_size users flattened into one row) rotates every user from position 0.
+        seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2] // batch_size
         rot_mats_global = self._prefill_rope_slices.get(seq_len)
         if rot_mats_global is None:
             rot_mats_global = [
@@ -1537,6 +1567,15 @@ class Model:
             torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         result = torch_output[..., last_token_idx, : self.vocab_size]
         return result
+
+    def process_output_prefill_rows(self, tt_out, rows):
+        """Logits of a batched prefill whose forward ran the head on one row per slot ([1, 1, B padded to 32,
+        vocab / TP] per device, row b = slot b): one untilize and readback, then [1, 1, vocab] for each slot in rows
+        (the per-user value process_output_prefill returns)."""
+        host = ttnn.untilize(tt_out, use_multicore=True).cpu()
+        tt_out.deallocate(True)
+        out = self.process_output_prefill(host, last_token_idx=slice(None))  # [1, 1, B, vocab]
+        return [out[..., int(r) : int(r) + 1, :].reshape(1, 1, -1) for r in rows]
 
     def process_output_prefill_batched(self, tt_out, last_token_idxs, users_per_row=1, seq_len_per_user=None):
         """Process row-parallel batched prefill output.

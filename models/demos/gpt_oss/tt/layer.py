@@ -8,6 +8,7 @@ from models.demos.gpt_oss.utils.substate import substate
 from .attention import Attention, AttentionConfig
 from .attention.prefill import prefill_sequence_parallel_supported
 from .attention_configs import GPTOSSAttentionProgramConfig
+from .batched_prefill import gather_users
 from .fused_decode.boundary import PendingBoundary
 from .fused_decode.config import DECODE_BOUNDARY_FUSE_CONSUMER
 from .mlp import MLP
@@ -185,17 +186,20 @@ class DecoderLayer:
 
     def prefill_sequence_parallel_supported(self, x, batch_size=1):
         """Whether this layer can run the sequence-parallel prefill (_prefill_forward_sp) for the replicated prefill
-        input x [1, 1, S, H]: one user, a single mesh row, the unpadded o_proj + all_reduce attention path and the
-        routed MoE experts, with S % (32 * TP) == 0 (where both all-reduces scatter rows)."""
+        input x [1, 1, B*S, H] (B users stacked by user): a single mesh row, the unpadded o_proj + all_reduce
+        attention path and the routed MoE experts, with S % (32 * TP) == 0 (where both all-reduces scatter rows;
+        with B > 1 each user's rows are scattered, batched_prefill.per_user_reduce)."""
         attn = self.self_attn
+        rows = x.padded_shape[-2]
         return (
-            batch_size == 1
-            and self.mesh_device.shape[0] == 1
+            self.mesh_device.shape[0] == 1
+            and rows % batch_size == 0
+            and (rows // batch_size) % (ttnn.TILE_SIZE * attn.mesh_config.tp) == 0
             and prefill_sequence_parallel_supported(attn.mesh_config, attn.weights, x)
             and self.mlp.routed_prefill_supports(x.shape)
         )
 
-    def _prefill_forward_sp(self, residual, position_embeddings, page_table, kv_cache, user_id):
+    def _prefill_forward_sp(self, residual, position_embeddings, page_table, kv_cache, user_id, batch_size=1):
         """Sequence-parallel prefill of one layer. residual: this device's S / TP rows of the residual stream
         ([1, 1, S / TP, H], device d holding rows d * S / TP onward). Returns the next residual rows.
 
@@ -207,15 +211,18 @@ class DecoderLayer:
         embedding, then the in-place add into the bf8 MoE output); so the QKV projection reads the same bf8 rows as
         on the replicated path, and this gather moves as many bytes as the MoE all-reduce's gather it replaces. After
         the post-attention norm the router runs on the local rows and the experts' input is gathered as bf8
-        (MLP.prefill_sequence_parallel)."""
+        (MLP.prefill_sequence_parallel).
+
+        batch_size > 1 (batched prefill): residual holds rows d * S / TP onward of each of the B users, stacked by
+        user ([1, 1, B * S / TP, H]); the gathers and reduce-scatters keep that layout (batched_prefill.py)."""
         cluster_axis = self.self_attn.mesh_config.tp_axis
         if residual.shape[-2] * self.self_attn.mesh_config.tp > 32 * 1024:
             # As in __call__: reallocate the residual to limit DRAM fragmentation on long prefills.
             residual = ttnn.move(residual)
         x = self.input_layernorm(residual)
-        x_full = ttnn.all_gather(x, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_full = gather_users(x, batch_size, cluster_axis)
         x.deallocate(True)
-        seqlen = x_full.shape[-2]
+        seqlen = x_full.shape[-2] // batch_size  # per-user length, as in __call__
         attn_rows = self.self_attn(
             x_full,
             rope_mats=position_embeddings,
@@ -223,6 +230,7 @@ class DecoderLayer:
             kv_cache=kv_cache,
             is_decode=False,
             user_id=user_id,
+            batch_size=batch_size,
             sequence_parallel=True,
         )
         # x_full is consumed (deallocated) by the attention's QKV projection.
@@ -235,7 +243,7 @@ class DecoderLayer:
         residual.deallocate(True)
         residual = hidden
         x = self.post_attention_layernorm(residual)
-        moe_rows = self.mlp.prefill_sequence_parallel(x, cluster_axis)
+        moe_rows = self.mlp.prefill_sequence_parallel(x, cluster_axis, batch_size)
         x.deallocate(True)
         hidden = ttnn.add(residual, moe_rows, output_tensor=moe_rows)
         residual.deallocate(True)
@@ -256,8 +264,10 @@ class DecoderLayer:
         if is_decode and self.fused_decode:
             return self._decode_forward(hidden_states, position_embeddings, position_idx, page_table, kv_cache)
         if sequence_parallel:
-            assert not is_decode and batch_size == 1
-            return self._prefill_forward_sp(hidden_states, position_embeddings, page_table, kv_cache, user_id)
+            assert not is_decode
+            return self._prefill_forward_sp(
+                hidden_states, position_embeddings, page_table, kv_cache, user_id, batch_size
+            )
 
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -301,7 +311,8 @@ class DecoderLayer:
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
         # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
 
-        hidden_states = self.mlp(hidden_states_post_norm, is_decode=is_decode)  # diff with llama: router scores
+        # diff with llama: router scores
+        hidden_states = self.mlp(hidden_states_post_norm, is_decode=is_decode, batch_size=batch_size)
         hidden_states_post_norm.deallocate(True)
 
         # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]

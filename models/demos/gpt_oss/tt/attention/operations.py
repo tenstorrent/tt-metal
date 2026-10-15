@@ -5,6 +5,7 @@ import math
 
 import ttnn
 
+from ..batched_prefill import batched_reduce_links, per_user_reduce
 from .weights import AttentionWeights
 
 
@@ -124,7 +125,14 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype,
 
 
 def apply_output_projection_allreduce_prefill(
-    tensor, weights: AttentionWeights, activation_dtype, mesh_config, ccl_manager, program_config=None, scatter=False
+    tensor,
+    weights: AttentionWeights,
+    activation_dtype,
+    mesh_config,
+    ccl_manager,
+    program_config=None,
+    scatter=False,
+    batch_size=1,
 ):
     """Prefill o_proj on the unpadded weight, then one TP all_reduce over the full hidden width.
 
@@ -139,8 +147,16 @@ def apply_output_projection_allreduce_prefill(
 
     scatter: return only the reduce-scatter half (each device keeps its S / TP rows, the sequence-parallel prefill of
     DecoderLayer); the same ttnn.reduce_scatter that ttnn.all_reduce runs first, so the rows are bit-identical.
+
+    batch_size > 1 (batched prefill, rows stacked by user): batched_prefill.per_user_reduce, which reduces every
+    user's rows as this function does for that user alone.
     """
     out = apply_output_projection(tensor, weights, activation_dtype, unpadded=True, program_config=program_config)
+    if batch_size > 1:
+        links = batched_reduce_links(ccl_manager, mesh_config.tp_axis)
+        reduced = per_user_reduce(out, batch_size, mesh_config.tp_axis, links, scatter=scatter)
+        out.deallocate(True)
+        return reduced
     if scatter:
         reduced = ttnn.reduce_scatter(
             out,
