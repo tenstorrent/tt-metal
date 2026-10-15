@@ -12,6 +12,11 @@ A 2-layer model with random weights prefills a long prompt, captures a decode tr
 padded length, replays the decode trace, prefills the short prompt again and requires bit-identical logits. It also
 requires that an eager prefill keeps no device tensor alive in the model.
 
+The short prefill compiles new programs, and those can own long-lived device buffers (e.g. global semaphores) placed in
+the trace's scratch region. The generator therefore re-captures the decode trace before the next replay when programs
+were compiled since its capture (Model._tt_recapture_decode_trace_on_new_programs); the test does the same, so it checks
+the serving protocol rather than the memory layout of the program cache.
+
 Run on a QuietBox 2 (Blackhole 1x4):
     HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b pytest models/demos/gpt_oss/tests/unit/test_prefill_after_decode_trace.py
 """
@@ -99,21 +104,32 @@ def test_prefill_after_decode_trace_capture(mesh_device, device_params, reset_se
             tokens=tokens, current_pos=current_pos, rot_mat_idxs=rot_idxs, page_table=tt_page_table
         )
 
+    def capture():
+        trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        decode()
+        ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
+        return trace
+
     decode()
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    decode()
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    trace_id = capture()
+    captured_programs = mesh_device.num_program_cache_entries()
 
     try:
         live_slices = set(model._prefill_rope_slices)
         first = _prefill(model, short_ids, page_table)
         kept = set(model._prefill_rope_slices) - live_slices
+        if mesh_device.num_program_cache_entries() != captured_programs:
+            # As the generator does at the start of the next request.
+            ttnn.release_trace(mesh_device, trace_id)
+            trace_id = None
+            trace_id = capture()
         for _ in range(REPLAYS):
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
         again = _prefill(model, short_ids, page_table)
     finally:
-        ttnn.release_trace(mesh_device, trace_id)
+        if trace_id is not None:
+            ttnn.release_trace(mesh_device, trace_id)
 
     assert torch.isfinite(first).all()
     assert torch.equal(
