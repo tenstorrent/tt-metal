@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE,
     KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
     KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
+    KDA_HIGH_BW_PREFIX_GATHER_LINKS,
     KDA_LOCAL_PREFIX_MEMORY_CONFIG,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
@@ -236,6 +237,16 @@ def pack_transform(transform: AffineTransform) -> ttnn.Tensor:
     return ttnn.typecast(packed, KDA_AFFINE_SUMMARY_DTYPE, memory_config=KDA_OUTPUT_MEMORY_CONFIG)
 
 
+def _sp_links(device: ttnn.MeshDevice, sequence_parallel_axis: int) -> int:
+    """Ethernet links between neighbours on the SP axis; 0 for a system the link table does not know."""
+    from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_num_links
+
+    try:
+        return get_num_links(device, sequence_parallel_axis)
+    except (KeyError, ValueError):
+        return 0
+
+
 def distributed_prefix(
     packed: ttnn.Tensor,
     initial_state: ttnn.Tensor,
@@ -255,14 +266,23 @@ def distributed_prefix(
     """
     device = packed.device()
     _, batch_heads, key_dim, row_width = tuple(packed.shape)
-    gathered_bytes = tuple(device.shape)[sequence_parallel_axis] * batch_heads * key_dim * row_width * 2
-    state_bytes = batch_heads * key_dim * (row_width - key_dim) * 4
-    output_memory = l1_when_it_fits(device, gathered_bytes + 2 * state_bytes, KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE)
+    # The chain's entry state and final carry share initial_state's FP32 [B*H, K, V] shape.
+    chain_output_bytes = 2 * batch_heads * key_dim * (row_width - key_dim) * initial_state.element_size()
     if gather_buffer is not None:
+        # The gather lands in the persistent DRAM buffer, so only the chain's outputs count against L1.
+        output_memory = l1_when_it_fits(device, chain_output_bytes, KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE)
         gathered = ttnn.experimental.high_bw_all_gather(
-            packed, dim=0, output_tensor=gather_buffer, cluster_axis=sequence_parallel_axis, num_links=2
+            packed,
+            dim=0,
+            output_tensor=gather_buffer,
+            cluster_axis=sequence_parallel_axis,
+            num_links=KDA_HIGH_BW_PREFIX_GATHER_LINKS,
         )
     else:
+        gathered_bytes = tuple(device.shape)[sequence_parallel_axis] * packed.logical_volume() * packed.element_size()
+        output_memory = l1_when_it_fits(
+            device, gathered_bytes + chain_output_bytes, KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE
+        )
         gathered = ttnn.all_gather(
             packed,
             dim=0,
@@ -591,7 +611,13 @@ class KDARecurrence:
         # A persistent, replicated output for high_bw_all_gather of the per-rank packed [A | B] summaries; only the
         # one-group-per-head summary gathers them directly.
         self._gather_buffer = None
-        if self._sequence_parallel and program_config.high_bw_prefix_gather and grouped and self._groups == 1:
+        if (
+            self._sequence_parallel
+            and program_config.high_bw_prefix_gather
+            and grouped
+            and self._groups == 1
+            and _sp_links(device, sequence_parallel_axis) >= KDA_HIGH_BW_PREFIX_GATHER_LINKS
+        ):
             self._gather_buffer = ttnn.from_torch(
                 torch.zeros(
                     (tuple(device.shape)[sequence_parallel_axis], batch * heads, key_dim, key_dim + value_dim),
