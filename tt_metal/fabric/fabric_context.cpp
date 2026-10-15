@@ -343,6 +343,16 @@ bool FabricContext::need_deadlock_avoidance_support(
     return false;
 }
 
+bool FabricContext::is_bubble_flow_control_enabled(const FabricNodeId& fabric_node_id) const {
+    // Mirror the per-mesh decision in need_deadlock_avoidance_support: a mesh running a ring/torus needs
+    // the tensix-mux bubble even when the fabric was opened under a Mesh/global config. Key it off the
+    // node's own resolved per-mesh config instead of the global bubble_flow_control_enabled_. For a
+    // uniform single-config run get_fabric_config(mesh_id) == fabric_config_, so this equals the global
+    // value and behaviour is preserved.
+    const auto mesh_fabric_config = control_plane_.get_mesh_graph().get_fabric_config(fabric_node_id.mesh_id);
+    return is_ring_or_torus(FabricContext::get_topology_from_config(mesh_fabric_config));
+}
+
 std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(const ControlPlane& control_plane) const {
     std::map<std::string, std::string> defines;
 
