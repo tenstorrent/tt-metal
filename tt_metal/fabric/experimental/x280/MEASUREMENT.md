@@ -358,9 +358,13 @@ Metal's unicast writes use; it is not confirmed on silicon.
 
 ## Collection and reproduction
 
-Use existing runtime CLI preparation for default 15-way LIM, prepared 14-way
-pipeline inputs and the admitted PacketInjection profile. Epoch changes and
-recovery are explicit operator actions; the runner never resets a device.
+Each benchmark prepares its own device state: the harness boots resident idle on
+a chip whose L2CPUs are all held in reset, at the default 15-way LIM or the
+14-way shape the pipeline and PacketInjection members request, and the
+pipeline_stage suite prepares and tears down its pinned input only on a tile its
+own process booted. Resets between them are explicit operator actions: a chip
+left at 14 ways skips the 15-way members, and each pipeline_stage configuration
+needs a reset before it runs. The runner never resets a device.
 
 `tools/run_characterization.py` accepts explicit `--id` selections, build/firmware/
 Metal paths, visible device, campaign directory and, to collect, a `--host-label`
@@ -409,7 +413,7 @@ or establish exclusive ownership. C++ fixtures own device admission.
 a fresh directory containing `attempt.json`, `run.log`, `gtest.xml` and `raw/`.
 The attempt record is atomically updated from `running` to `passed` or `failed`;
 `running` means no terminal outcome was recorded, including interrupted runs.
-It records the command/environment, start/end times, checkout SHA, executable
+It records the command/environment, host label, start/end times, checkout SHA, executable
 and firmware hashes, outcome, and one hash list for captured files. The existing
 `producer_sha` field identifies the checkout at launch; it does not attest that
 a supplied binary was built from that revision.
@@ -424,14 +428,14 @@ database, generic scheduler or implicit recovery.
 Regenerate into a new report directory:
 
 ```sh
-python3 x280/tools/tabulate_suites.py --campaign /path/to/campaign --report-dir /new/report
+python3 tt_metal/fabric/x280/tools/tabulate_suites.py --campaign /path/to/campaign --report-dir /new/report
 ```
 
 The report checks raw hashes and exact configuration populations and emits
 `master_results.jsonl`, `coverage.json`, `campaign.json` and `MASTER_RESULTS.md`.
 `MASTER_RESULTS.md` holds the coverage table and, under "Results", a result table
 per member and record shape, each row linking its raw file. Table mode,
-`python3 x280/tools/tabulate_suites.py FILE...`, prints the same tables for
+`python3 tt_metal/fabric/x280/tools/tabulate_suites.py FILE...`, prints the same tables for
 current-format JSONL. Both render the p2p_latency, transport_bandwidth,
 pipeline_stage, packet_injection, core_sync and eth_credit members; eth_credit's
 kernel, attribution and link records are recognised and tabulated by no table.

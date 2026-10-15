@@ -527,7 +527,8 @@ obligations are left to the image, and `X280ActiveContract` in
    poll it, or the host cannot end that hart at all. This is the load-bearing
    one: it also makes obligation 2 non-fatal, because a coordinator that
    forgets to release its workers does not strand them.
-   `X280ActiveContract` checks it on hardware.
+   The `x280_stop_poll` CTest checks it statically, with no hardware;
+   `X280ActiveContract` catches what the static check cannot.
    The `p2p_latency` X280 images break it in their timed poll, which checks
    STOP only when built with `-DP2P_LATENCY_POLL_CHECKS_STOP`: a token that
    never arrives there strands the hart until `tt-smi -r`.
@@ -672,7 +673,7 @@ ninja -C build x280_images x280_abi_headers x280_runtime_host_tests x280_runtime
   x280_core_sync_director x280_core_sync_characterization \
   x280_packet_injection_tensix_to_x280 x280_packet_injection_erisc_to_x280_header \
   x280_eth_credit
-ctest --test-dir build -R x280      # image placement, pinned-input guards, header refusals, host, offline and mock-cluster tests; no device
+ctest --test-dir build -R x280      # image placement, pinned-input guards, header refusals, host, offline and mock-cluster tests, results tools, STOP-poll scan; no device
 ```
 
 | Image (`build/x280/`) | Source | Use |
@@ -701,6 +702,19 @@ sentinel's at `0x08001000`. The `x280_abi_headers` build target compiles each
 ABI header alone as C, C++ and, for the two `entry.S` includes, assembly.
 It also compiles each benchmark suite header under `kernels/` alone, as C and
 C++, or as C++ only for the templates.
+
+`x280_stop_poll` scans every source an active image links and fails on any
+unbounded `fence ir, ir` wait that cannot reach `x280_hart_stop_requested`. The
+scan needs no toolchain and no hardware. Its source list is what
+`x280_add_image` records for every image linking the active harness, so no
+image can link the harness without being scanned.
+
+A wait that genuinely must not poll STOP carries
+`/* STOP-POLL-EXEMPT(released-by=<agent>): <justification> */` immediately
+above it; no wait in this tree carries one. Both fields are mandatory, the
+marker binds to the loop that follows it, and a marker on a loop that already
+polls or on no wait at all is an error, so it cannot be sprinkled to silence
+the check. Every honoured exemption prints on every run.
 
 ### Benchmark harness
 
@@ -801,7 +815,9 @@ ERISC clock evidence; and an `eth_credit_kernel` record per launched kernel
 with its result block: status, packets per `p`, every stall and cost site's
 count and ticks, and failure detail. The console prints raw packet counts and
 ticks and, for a failed run, the attribution line and every chip's kernel
-results; rates come from the tabulator. The design is in
+results; rates come from the tabulator. The manifest's `eth_credit.throughput`
+configuration runs `ThroughputBySlotBatchAndP` with every card visible
+(`TT_VISIBLE_DEVICES` empty), for the reason below. The design is in
 [`ETH_CREDIT.md`](ETH_CREDIT.md).
 
 ```bash
@@ -924,6 +940,25 @@ a silent skip:
 | Image | Why it is excluded |
 |---|---|
 | `firmware-active-session-fault.bin` | the deliberate non-conformer, with its own gated binary and its own test |
+
+### Offline analysis and tabulation
+
+Tabulate current-format JSONL records of the p2p_latency, transport_bandwidth,
+pipeline_stage, packet_injection, core_sync and eth_credit members, one result
+table per member and record shape:
+
+```bash
+# Tabulate suite results to stdout:
+python3 tt_metal/fabric/x280/tools/tabulate_suites.py <path_to_jsonl>
+```
+
+A campaign's report (`--campaign DIR --report-dir NEW`) carries the same tables in
+its `MASTER_RESULTS.md`; `MEASUREMENT.md` "Collection and reproduction" describes
+both outputs and how `tools/run_characterization.py` collects a campaign from
+`characterization_manifest.json`. The tabulator reads only the current record
+format. The `x280_characterization` CTest runs the tabulator's and the
+campaign runner's tests, and `x280_record_round_trip` renders every member's
+records and reads them back with the live tabulator.
 
 ## 7. Cross-hart atomics micro-benchmark
 
