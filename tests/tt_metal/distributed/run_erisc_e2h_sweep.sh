@@ -9,7 +9,7 @@
 # Examples (run from anywhere; build target erisc_e2h_benchmark first):
 #   MD=1 MIB=256 BATCH=8 OUT=e2h_pr_table.md tests/tt_metal/distributed/run_erisc_e2h_sweep.sh
 #   MD=1 RAND=1 SEED=42 N=40 OUT=e2h_pr_random_42.md tests/tt_metal/distributed/run_erisc_e2h_sweep.sh
-set -u
+set -uo pipefail
 cd "$(dirname "$0")/../../.." || exit 2
 B=${B:-./build_Release/test/tt_metal/distributed/erisc_e2h_benchmark}
 MIB=${MIB:-1024}; WARMUP=${WARMUP:-10}; BATCH=${BATCH:-32}; HANG=${HANG:-90}
