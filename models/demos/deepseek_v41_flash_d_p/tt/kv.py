@@ -7,8 +7,9 @@
 
 on the SP x TP mesh. Per chip (r, c) the input is attn_norm's column split [1, 1, S/SP, H/TP] fp32 TILE:
 
-    tt/quant.fp8_qdq + tt/q_a.TtAttnInProj   q(attn_norm) @ the chip's K rows of wkv^T, HiFi4 + fp32 accumulation,
-                                  exact all_gather + SFPU add over TP (the q_a exchange: in the assembled model the
+    tt/quant.fp8_qdq + tt/q_a.TtAttnInProj   q(attn_norm) @ the chip's K rows of wkv^T, HiFi4 + fp32 accumulation
+                                  (ExactMatmul by default: the FPU's ~TF32 in-tile partials would flip ~0.8 % of
+                                  the output's fp8 values, DS41-16), exact all_gather + SFPU add over TP (the q_a exchange: in the assembled model the
                                   kv step slices its columns of the projection q_a already made, ``from_proj``)
     slice kv [S/SP, 512] -> tt/norm.TtDistributedRmsNorm(split=False) kv_norm (fp32, eps 1e-20, replicated weight)
     tt/rope.rope_deinterleaved    the last 64 dims at absolute positions (theta 10000 for ratio-0 layers, 160000 +

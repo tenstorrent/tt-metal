@@ -243,3 +243,25 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   CPU ring the CPU attention writes; per-chip write offsets differ for starts not a multiple of W (SPMD ops take one
   offset), so the write needs the device state / position tables the attention (or contract) step builds.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_kv.py`
+
+## S.swa.05 implement (attempt 1)
+- Previous attempt failed only the tail check: swap_kv_out rel 0.01085 > 0.01 (block out with the device kv vs with
+  the CPU kv). The kv module already existed (C.swa.kv); hooks already registered kv in DEVICE_STEPS["swa"].
+- Cause (DS41-16, corrects DS41-15's "sum order"): Blackhole's FPU rounds each in-tile partial dot (32 products) to
+  ~TF32 before adding it to fp32 DEST, even with bf16 operands. Probes (2x2, FABRIC_2D): 1 + 2^-12 in one tile -> 1,
+  1 + 2^-11 -> 1 + 2^-10; across K tiles exact fp32; ttnn.linear of e4m3-grid operands rel 1.8e-4 vs fp64 at
+  LoFi/HiFi2/HiFi4, any K, any in0_block_w, with or without packer_l1_acc; one nonzero per tile-dot: 3.5e-9. That
+  1.8e-4 flipped 0.84 % of the window KV's fp8 values (DS41-1), which the MoE after attention amplifies to 1 %.
+- Fix: `tt/exact_mm.py:ExactMatmul` (new): x * mask_u (mask_u = [k % 32 == u], built at load, [1, 8, 1, K] per group)
+  -> one batched matmul per group of 8 (explicit MatmulMultiCoreReuseMultiCastProgramConfig, out_block_h <= 8, fp32
+  DEST subblock <= 4 tiles, cached per shape; grid from the mesh) -> fp32 SFPU adds (groups, then a pairwise tree).
+  Bit-identical on every chip, rel 5e-8 vs fp64 (torch fp32: 6.6e-8). packer_l1_acc changes bits: not used.
+  Cost per chip: [1024, 2560] x [2560, 1792] 7.9 ms vs 0.39 ms plain; [512, 1280] x [1280, 1792] 2.8 ms.
+- `tt/q_a.py:TtAttnInProj` uses it when settings ATTN_IN_MM == "exact" (default and max_precision; "fpu" = the old
+  ttnn.linear, a perf pick). Load-time assert: weights on the e4m3 x 2^k grid (low 20 fp32 mantissa bits zero), so
+  products have <= 8 significant bits. q_a and kv share it (the assembled model's one projection).
+- Gate: PASS. pcc_swap_out 0.999972; kv vs CPU rel 0.0 (worst row 2e-6); q_a vs CPU rel 0.0; swap_kv_out rel
+  1.5e-4 (limit 0.01). Re-ran C.swa.kv (PASS, fp8 mismatch vs CPU 3e-6 on all 5 inputs, was 0.0084) and C.swa.q_a
+  (PASS). Probe dir deleted (K-56).
+- Perf note for later: the exact projection is ~20x the plain matmul; ATTN_IN_MM=fpu restores it (judge end to end).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_05_kv.py`
