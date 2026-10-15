@@ -223,7 +223,7 @@ def _format_report(results, *, box, arch, trials, kernel_iters):
 # Built with the CF_MICROBENCH define, each phase is wrapped in a device zone (CF_*). A
 # compute-kernel zone records on all three TRISCs (unpack/math/pack), so per phase we see both
 # the wall time (max of the three) and which engine dominates. The device profiler writes every
-# marker to profile_log_device.csv; we isolate one launch by its (new) run-host-id and average
+# marker to profile_log_device.csv; we isolate one launch by the rows it appends and average
 # each zone over the in-kernel loop.
 # =============================================================================
 _DEVICE_CSV = os.path.join(os.environ.get("TT_METAL_HOME", "."), "generated/profiler/.logs/profile_log_device.csv")
@@ -231,31 +231,35 @@ _RISC_LABEL = {"TRISC_0": "unpack", "TRISC_1": "math", "TRISC_2": "pack"}
 _RISC_ORDER = ["unpack", "math", "pack"]
 
 
-def _read_csv_rows(path):
-    with open(path) as f:
-        lines = f.read().splitlines()
+def _csv_size(path):
+    return os.path.getsize(path) if os.path.exists(path) else 0
+
+
+def _read_csv_rows(path, offset=0):
+    """Rows appended after byte `offset` (all rows when 0). The CSV grows for the whole pytest
+    session, so re-reading it in full per launch gets slow once earlier perf tests have filled it."""
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        header = f.readline().decode()
+        f.readline()  # column names
+        if f.tell() < offset <= size:
+            f.seek(offset)
+        lines = f.read().decode().splitlines()
     freq_mhz = 1000.0
-    for part in lines[0].split(","):
+    for part in header.split(","):
         if "CHIP_FREQ" in part:
             freq_mhz = float(part.split(":")[1])
-    rows = [[x.strip() for x in ln.split(",")] for ln in lines[2:] if ln.strip()]
+    rows = [[x.strip() for x in ln.split(",")] for ln in lines if ln.strip()]
     return [r for r in rows if len(r) >= 12], 1000.0 / freq_mhz
 
 
-def _all_run_ids(path):
-    if not os.path.exists(path):
-        return set()
-    rows, _ = _read_csv_rows(path)
-    return {r[7] for r in rows}
-
-
-def _zone_durations_for_new_run(path, seen_ids, zone_names, drop_first=True):
-    """{zone: {engine: median_ns}} for rows whose run-host-id is new (this launch only)."""
-    rows, ns_per_cycle = _read_csv_rows(path)
+def _zone_durations_for_new_run(path, offset, zone_names, drop_first=True):
+    """{zone: {engine: median_ns}} for rows appended after `offset` (this launch only)."""
+    rows, ns_per_cycle = _read_csv_rows(path, offset)
     starts, ends = {}, {}
     for r in rows:
-        risc, cyc, run_id, zone, typ = r[3], r[5], r[7], r[10], r[11]
-        if run_id in seen_ids or zone not in zone_names:
+        risc, cyc, zone, typ = r[3], r[5], r[10], r[11]
+        if zone not in zone_names:
             continue
         (starts if typ == "ZONE_START" else ends).setdefault((risc, zone), []).append(int(cyc))
     out = {}
@@ -272,13 +276,13 @@ def _zone_durations_for_new_run(path, seen_ids, zone_names, drop_first=True):
 
 def _measure_zones(device, inputs, variant, num_tiles, kernel_iters):
     kw = dict(variant=variant, num_tiles=num_tiles, kernel_iters=kernel_iters, microbench=True)
-    run_fusion(inputs, **kw)  # warmup + flush so its markers land under an id we mark 'seen'
+    run_fusion(inputs, **kw)  # warmup + flush so its markers land before the measured launch
     ttnn.ReadDeviceProfiler(device)
-    seen = _all_run_ids(_DEVICE_CSV)
+    offset = _csv_size(_DEVICE_CSV)
     run_fusion(inputs, **kw)  # measured
     ttnn.synchronize_device(device)
     ttnn.ReadDeviceProfiler(device)
-    return _zone_durations_for_new_run(_DEVICE_CSV, seen, set(PHASE_ZONES[variant]))
+    return _zone_durations_for_new_run(_DEVICE_CSV, offset, set(PHASE_ZONES[variant]))
 
 
 def test_compute_fusion_microbench(device):
