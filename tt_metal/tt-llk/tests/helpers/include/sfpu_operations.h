@@ -737,13 +737,6 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
 }
 
-// One cumsum tile; `first` false continues the carry of the previous tile.
-template <DstSync DST_SYNC_MODE, bool DST_ACCUM_MODE, bool APPROX_MODE, int ITERATIONS>
-void call_cumsum_sfpu_operation(std::uint32_t dst_index, bool first)
-{
-    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cumsum, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC_custom, first);
-}
-
 /**
  * Calls only the calculate portion of a unary SFPU operation.
  * Must be preceded by a call to call_unary_sfpu_operation_init() for the same operation.
@@ -1677,7 +1670,12 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
+#ifdef SFPU_CUMSUM_CHAIN
+        // The carry runs across the tiles of a DEST block, so only its first tile starts a scan.
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cumsum, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC_custom, dst_index == 0);
+#else
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cumsum, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC_custom, true);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {

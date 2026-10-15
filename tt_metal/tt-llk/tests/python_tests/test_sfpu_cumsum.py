@@ -23,11 +23,12 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
-    CUMSUM_CHAIN,
+    CLAMP_NEGATIVE,
     FAST_MODE,
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_CUMSUM_CHAIN,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -79,19 +80,21 @@ def test_sfpu_cumsum(formats, dest_acc, chain):
             .reshape(INPUT_DIMENSIONS[0], INPUT_DIMENSIONS[1])
             .to(torch.float32)
         )
+    # The harness moves the buffer to and from L1 as is, and the scan runs down real tile columns.
     src_A_tilized = tilize_block(
         src_A, INPUT_DIMENSIONS, stimuli_format=formats.input_format
     ).flatten()
 
     configuration = TestConfig(
-        "sources/sfpu_cumsum_test.cpp",
+        "sources/eltwise_unary_sfpu_test.cpp",
         formats,
         templates=[
             generate_input_dim(INPUT_DIMENSIONS, INPUT_DIMENSIONS),
             APPROX_MODE(ApproximationMode.No),
             FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(False),
             MATH_OP(mathop=MathOperation.Cumsum),
-            CUMSUM_CHAIN(chain),
+            *([SFPU_CUMSUM_CHAIN()] if chain else []),
         ],
         runtimes=[TILE_COUNT(TILE_CNT), NUM_BLOCKS(1), NUM_TILES_IN_BLOCK(TILE_CNT)],
         variant_stimuli=StimuliConfig(

@@ -814,13 +814,15 @@ class CLAMP_NEGATIVE(TemplateParameter):
 
 
 @dataclass
-class CUMSUM_CHAIN(TemplateParameter):
-    """Whether sfpu_cumsum_test.cpp chains the tiles of a DEST block into one column scan."""
+class SFPU_CUMSUM_CHAIN(TemplateParameter):
+    """Chain the tiles of a DEST block into one column scan, each tile continuing the carry of the one before.
 
-    cumsum_chain: bool = False
+    Emitted as a macro, like :class:`SFPU_SHIFT_AMOUNT`, because sfpu_operations.h selects on
+    ``#ifdef SFPU_CUMSUM_CHAIN``; unset, every cumsum tile starts its own scan.
+    """
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool CUMSUM_CHAIN = {str(self.cumsum_chain).lower()};"
+        return "#define SFPU_CUMSUM_CHAIN"
 
 
 @dataclass
