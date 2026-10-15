@@ -118,25 +118,8 @@ void RelayMux::GenerateStaticConfigs() {
         dst_fabric_node_id,
         link_index);
 
-    // Same layout as FabricMuxConfig::get_fabric_mux_run_time_args, but the fabric connection is resolved in this
-    // relay mux's own context rather than the default MetalContext's.
-    const auto regions_to_clear = mux_kernel_config_->get_memory_regions_to_clear();
-    mux_rt_args_.clear();
-    mux_rt_args_.reserve((regions_to_clear.size() * 2) + 1);
-    mux_rt_args_.push_back(static_cast<uint32_t>(regions_to_clear.size()));
-    for (const auto& [address, size] : regions_to_clear) {
-        mux_rt_args_.push_back(static_cast<uint32_t>(address));
-        mux_rt_args_.push_back(static_cast<uint32_t>(size));
-    }
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        fabric_context,
-        src_fabric_node_id,
-        dst_fabric_node_id,
-        link_index,
-        *program_,
-        {logical_core_},
-        mux_rt_args_,
-        mux_config_core);
+    mux_rt_args_ = mux_kernel_config_->get_fabric_mux_run_time_args(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, link_index, *program_, {logical_core_});
 }
 
 void RelayMux::GenerateDependentConfigs() {}

@@ -11,6 +11,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
@@ -297,6 +298,24 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
     uint32_t link_idx,
     ProgramOrDescriptor& mux_program_or_desc,
     const tt::tt_metal::CoreCoord& mux_logical_core) const {
+    // TODO(#52020): resolves the default context; replace with the const MeshDevice& form.
+    return get_fabric_mux_run_time_args<ProgramOrDescriptor>(
+        tt::tt_metal::MetalContext::instance().get_control_plane(),
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_idx,
+        mux_program_or_desc,
+        mux_logical_core);
+}
+
+template <typename ProgramOrDescriptor>
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
+    const ControlPlane& control_plane,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx,
+    ProgramOrDescriptor& mux_program_or_desc,
+    const tt::tt_metal::CoreCoord& mux_logical_core) const {
     std::vector<uint32_t> args;
 
     auto regions_to_clear = get_memory_regions_to_clear();
@@ -309,7 +328,14 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
     }
 
     tt::tt_fabric::append_fabric_connection_rt_args<ProgramOrDescriptor>(
-        src_fabric_node_id, dst_fabric_node_id, link_idx, mux_program_or_desc, mux_logical_core, args, core_type_);
+        control_plane.get_fabric_context(),
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_idx,
+        mux_program_or_desc,
+        mux_logical_core,
+        args,
+        core_type_);
 
     return args;
 }
@@ -318,7 +344,27 @@ template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt:
     const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::Program&, const tt::tt_metal::CoreCoord&) const;
 
 template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::ProgramDescriptor&, const tt::tt_metal::CoreCoord&) const;
+    const FabricNodeId&,
+    const FabricNodeId&,
+    uint32_t,
+    tt::tt_metal::ProgramDescriptor&,
+    const tt::tt_metal::CoreCoord&) const;
+
+template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::Program>(
+    const ControlPlane&,
+    const FabricNodeId&,
+    const FabricNodeId&,
+    uint32_t,
+    tt::tt_metal::Program&,
+    const tt::tt_metal::CoreCoord&) const;
+
+template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
+    const ControlPlane&,
+    const FabricNodeId&,
+    const FabricNodeId&,
+    uint32_t,
+    tt::tt_metal::ProgramDescriptor&,
+    const tt::tt_metal::CoreCoord&) const;
 
 uint8_t FabricMuxConfig::get_num_buffers(FabricMuxChannelType channel_type) const {
     return channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL ? num_buffers_full_size_channel_
