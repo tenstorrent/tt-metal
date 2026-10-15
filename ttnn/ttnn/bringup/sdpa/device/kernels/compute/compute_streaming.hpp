@@ -839,6 +839,11 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
 #ifdef SPARSE_SDPA_HIGH_PRECISION
             reconfig_data_format(col_identity_cb, cur_sum_cb);  // srcA identity (bf16), srcB Float32 sum
 #endif
+#ifdef SPARSE_SDPA_FP32_OUTPUT
+            // the packer is in the bf16 state here (high_precision restores it after the running-state packs), and
+            // the compile-time check above skips the change when normalized_out_cb is Float32 like scratch_cb
+            pack_reconfig_data_format(scratch_cb);
+#endif
 
             CircularBuffer(col_identity_cb).wait_front(N);
             CircularBuffer(cur_sum_cb).wait_front(1);

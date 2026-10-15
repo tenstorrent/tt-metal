@@ -17,7 +17,10 @@ keeps 1/sum in Float32 and takes the exact exp. Covered here:
 - with an attention sink (one logit per head, added to the softmax denominator only; deepseek_v41_flash_d_p window
   attention): accuracy vs float32 at DeepSeek-V4.1's geometry (H 64, K_DIM = v_dim 512, 128 window ids, scale 1 with
   the softmax scale folded into q, and scale 512^-0.5) and over 4 chunks (the sink rides the SALAD-combined row-sum),
-  sinks small and dominant; the sink moves the output (it is not ignored).
+  sinks small and dominant; the sink moves the output (it is not ignored);
+- fp32_output=True (with high_precision; deepseek_v41_flash_d_p window attention): a Float32 output, the fp32 DEST
+  value untilized exactly (not on the bf16 or TF32 grid), within one bf16 step of the bf16 output and closer to the
+  float32 golden; its own program; refused without high_precision.
 """
 
 import pytest
@@ -248,3 +251,64 @@ def test_high_precision_sink(device, case):
     assert rel <= max_rel, f"rel L2 {rel:.5f} > {max_rel}"
     assert lo <= rmin and rmax <= hi, f"per-row norm ratio [{rmin:.4f}, {rmax:.4f}] outside [{lo}, {hi}]"
     assert no_sink > 3 * max_rel, f"the sink barely moves this case ({no_sink:.5f}): it would not catch a dropped sink"
+
+
+# fp32_output cases: (CASES or SINK_CASES name, how much closer to the golden than the bf16 output, at least)
+FP32_OUT_CASES = ["ds41_window_scale1", "ds41_window_dominant_sink", "ds_h32_k576_chunks", "ds_h32_k576"]
+
+
+def _case_inputs(case):
+    """(q, kv, idx, v_dim, scale, kc, sink tensor values or None) of a CASES / SINK_CASES entry."""
+    if case in SINK_CASES:
+        (H, S, T, topk, k_dim, scale, kc, nv, qs, (spread, offset)), _ = SINK_CASES[case]
+        q, kv, idx = _inputs(H, S, T, topk, k_dim, nv, qs, seed=5)
+        logit = torch.randn(H, generator=torch.Generator().manual_seed(6)) * spread
+        logit = logit.abs() + offset if offset else logit
+        return q, kv, idx, 512, scale, kc, (logit / scale).to(torch.bfloat16)
+    (H, S, T, topk, k_dim, v_dim, scale, kc, nv, qs), _ = CASES[case]
+    q, kv, idx = _inputs(H, S, T, topk, k_dim, nv, qs, seed=7)
+    return q, kv, idx, v_dim, scale, kc, None
+
+
+@pytest.mark.parametrize("case", FP32_OUT_CASES)
+def test_fp32_output(device, case):
+    q, kv, idx, v_dim, scale, kc, sink = _case_inputs(case)
+    kw = dict(high_precision=True)
+    if sink is not None:
+        kw["attention_sink"] = _sink(device, sink)
+    want = _golden(q, kv, idx, scale, v_dim, sink)
+    tq, ti = _dev(q, device, ttnn.bfloat16), _dev(idx.to(torch.int32), device, ttnn.uint32)
+    tkv = _dev(kv, device, ttnn.bfloat16)
+    call = dict(kv_format=ttnn.bringup.SparseKVFormat.BF16, scale=scale, k_chunk_size=kc, compute_kernel_config=_ckc())
+    o32 = ttnn.bringup.sparse_sdpa(tq, tkv, ti, v_dim, fp32_output=True, **call, **kw)
+    o16 = ttnn.bringup.sparse_sdpa(tq, tkv, ti, v_dim, **call, **kw)
+    assert o32.dtype == ttnn.float32 and o16.dtype == ttnn.bfloat16
+    assert list(o32.shape) == list(o16.shape) and o32.layout == ttnn.ROW_MAJOR_LAYOUT
+    a, b = ttnn.to_torch(o32), ttnn.to_torch(o16).float()
+    assert a.dtype == torch.float32 and torch.isfinite(a).all()
+    rel32, rel16 = _stats(a, want)[0], _stats(b, want)[0]
+    # half a bf16 step of the bf16 output (the bf16 output is the same value rounded to nearest by the packer)
+    ulp = torch.where(b == 0, torch.full_like(b, 2.0**-133), b.abs() * 2.0**-7)
+    worst = ((a - b).abs() / ulp).max().item()
+    bits = a.view(torch.int32)
+    off_bf16 = ((bits & 0xFFFF) != 0).float().mean().item()
+    off_tf32 = ((bits & 0x1FFF) != 0).float().mean().item()  # TF32 keeps 10 mantissa bits: the low 13 are zero
+    print(
+        f"{case}: rel fp32 out {rel32:.5f} | bf16 out {rel16:.5f}; |fp32 - bf16| <= {worst:.3f} bf16 steps; "
+        f"off the bf16 grid {off_bf16:.4f}, off the TF32 grid {off_tf32:.4f}"
+    )
+    assert worst <= 0.5001, f"the fp32 output is {worst:.3f} bf16 steps from the bf16 output (its rounding: <= 0.5)"
+    assert off_bf16 > 0.95 and off_tf32 > 0.9, "the fp32 output was rounded (bf16 or TF32 grid)"
+    assert rel32 < rel16, f"fp32 output rel {rel32:.5f} not below the bf16 output's {rel16:.5f}"
+
+
+def test_fp32_output_program_and_refusal(device, expect_error):
+    q, kv, idx, v_dim, scale, kc, _ = _case_inputs("ds_h32_k576")
+    device.clear_program_cache()
+    _fork(device, q, kv, idx, v_dim, scale, kc, _ckc(), high_precision=True)
+    n1 = device.num_program_cache_entries()
+    _fork(device, q, kv, idx, v_dim, scale, kc, _ckc(), high_precision=True, fp32_output=True)
+    n2 = device.num_program_cache_entries()
+    assert n2 > n1, "fp32_output must be a separate program"
+    with expect_error(RuntimeError, "fp32_output requires high_precision"):
+        _fork(device, q, kv, idx, v_dim, scale, kc, _ckc(), fp32_output=True)

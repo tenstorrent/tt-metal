@@ -45,6 +45,13 @@ TABLE = {
         "decision 2026-10-15 (spec rule 'Accuracy is judged against the noise floor', OV-3): high_precision is the "
         "default and the max-precision value; exact stays selectable for comparison only",
     ),
+    "WINDOW_SDPA_OUT": Setting(
+        "fp32",
+        ("fp32", "bf16"),
+        "the output of the high_precision sparse_sdpa: fp32 = ttnn.bringup.sparse_sdpa(fp32_output=True), the "
+        "normalized fp32 DEST value, untilized exactly (DS41-29); bf16 = rounded to bf16 in the op (the fork's previous "
+        "output; DS41-18: S.swa.06 attention vs the CPU step worst row 0.052 > 0.05)",
+    ),
     "WINDOW_PIECES": Setting(
         3,
         (3, 2),
@@ -103,6 +110,7 @@ MAX_PRECISION = {
     "ENGRAM_KV_QDQ": "qdq",
     "ATTN_IN_MM": "fpu",  # owner 2026-10-15 (OV-3): accuracy against the noise floor, not exactness
     "WINDOW_SDPA": "high_precision",  # owner 2026-10-15 (OV-3); "exact" only for comparison
+    "WINDOW_SDPA_OUT": "fp32",
     "WINDOW_PIECES": 3,
     "ATTN_O_SUM": "gather_add",
     "EXPERTS_SUM": "gather_add",
