@@ -1,7 +1,7 @@
-# Blackhole column MAX reduce that reads in0 through the tilizeA_B unpack
+# Column MAX reduce that reads in0 through the tilizeA_B unpack
 # with SrcA pre-filled to -inf (maxpool pattern).
 
-supported_archs: ["blackhole"]
+supported_archs: ["blackhole", "wormhole"]
 
 operands:
   - name: "input_A"

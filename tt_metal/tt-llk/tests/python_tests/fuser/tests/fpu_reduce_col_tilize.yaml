@@ -1,7 +1,7 @@
-# Blackhole column SUM reduce that reads in0 through the tilizeA_B unpack
+# Column SUM reduce that reads in0 through the tilizeA_B unpack
 # (_llk_unpack_tilizeA_B_), the path tt-metal's pooling kernels use.
 
-supported_archs: ["blackhole"]
+supported_archs: ["blackhole", "wormhole"]
 
 operands:
   - name: "input_A"

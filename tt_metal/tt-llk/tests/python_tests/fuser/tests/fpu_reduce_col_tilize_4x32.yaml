@@ -1,7 +1,7 @@
-# Blackhole column SUM reduce through tilizeA_B on 4x32 tiles: 2 faces of face_r_dim=4,
+# Column SUM reduce through tilizeA_B on 4x32 tiles: 2 faces of face_r_dim=4,
 # the geometry tt-metal's pooling kernels use (each face lands at its own 16-row SrcA slot).
 
-supported_archs: ["blackhole"]
+supported_archs: ["blackhole", "wormhole"]
 
 operands:
   - name: "input_A"
