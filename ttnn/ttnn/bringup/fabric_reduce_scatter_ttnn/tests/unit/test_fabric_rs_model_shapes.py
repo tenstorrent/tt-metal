@@ -1,16 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""GLM-5.3-Flash's full-mesh reduce-scatters at the model's shape: what the model runs (common.scatter_rows: the
-shared expert's and the dense MLP's output, fabric_reduce_scatter on axis 0 then axis 1) vs one call over the whole
-mesh (a snake line, a snake ring). Per chip [1, 1, 5120, 4096] bf16 partials (a 5120-token chunk) -> the chip's
-[640, 4096] block of the 8-chip sum, row-major; all variants checked against the torch sum and each other.
+"""GLM-5.3-Flash's reduce-scatters at the model's shape, per chip [1, 1, 5120, 4096] bf16 partials (a 5120-token chunk):
 
-Device time per variant from the program real-time profiler: per call, each chip's summed program durations, the
-busiest chip, median of RS_CALLS calls (the two-stage variant is one "call" of both programs).
+- common.scatter_rows (the shared expert's and the dense MLP's output): one call over the whole mesh as a snake ring
+  (the default, GLM_SCATTER_OP=fabric_ring), else axis 0 then axis 1; also a snake line. Each chip gets its row-major
+  [5120 / n, 4096] block of the n-chip sum; all checked against the torch sum and each other.
+- mla_attention o_proj (mla_attention.py:470): axis 1, chip (r, c) gets block c of the sum over its mesh row.
+
+Device time per variant from the program real-time profiler (when active): per call, each chip's summed program
+durations, the busiest chip, median of RS_CALLS calls (the two-stage variant is one "call" of both programs).
 
   scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_rs_model_shapes.py -s
 
-RS_TRACE=1 also times a traced replay of each variant (no host dispatch). RS_PAYLOAD (router payload bytes, default 8192 as the GLM spec), RS_ROWS (default 5120), RS_LINKS (default 2, the model's GLM_MOE_LINKS), RS_CALLS (default 20)."""
+RS_MESH (default 2x4; 2x2 on a QuietBox), RS_TRACE=1 also times a traced replay of each variant (no host dispatch),
+RS_PAYLOAD (router payload bytes, default 8192 as the GLM spec), RS_ROWS (default 5120), RS_LINKS (default 2, the
+model's GLM_MOE_LINKS), RS_CALLS (default 20), RS_VARIANTS (comma list of name prefixes)."""
 
 import os
 import statistics
@@ -21,6 +25,7 @@ import torch
 
 import ttnn
 
+MESH = tuple(int(v) for v in os.environ.get("RS_MESH", "2x4").split("x"))
 ROWS = int(os.environ.get("RS_ROWS", "5120"))
 LINKS = int(os.environ.get("RS_LINKS", "2"))
 CALLS = int(os.environ.get("RS_CALLS", "20"))
@@ -35,7 +40,7 @@ def _device_params():
 
 
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True, ids=["2x4"])
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True, ids=[f"{MESH[0]}x{MESH[1]}"])
 def test_fabric_rs_model_shapes(mesh_device):
     from ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_reduce_scatter import fabric_reduce_scatter
 
@@ -52,32 +57,40 @@ def test_fabric_rs_model_shapes(mesh_device):
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(0, 1)),
     )
     x = ttnn.reshape(x, (1, 1, ROWS, H))
-    ref = parts.float().sum((0, 1))  # [ROWS, H]; chip d (row-major) owns rows d ROWS/n ..
-    Sb = ROWS // n
+    ref_mesh = parts.float().sum((0, 1))  # [ROWS, H]; chip d (row-major) owns rows d ROWS/n ..
+    row_sum = parts.float().sum(1)  # [rows, ROWS, H]; axis 1: chip (r, c) owns rows c ROWS/cols .. of row r's sum
+    ref_axis1 = torch.cat(
+        [row_sum[r, c * (ROWS // cols) : (c + 1) * (ROWS // cols)] for r in range(rows) for c in range(cols)]
+    )
 
-    def two_stage():  # common.scatter_rows (GLM_SCATTER_OP=fabric_bf16, the default)
+    def two_stage():  # common.scatter_rows, GLM_SCATTER_OP=fabric_bf16 (or a mesh whose snake does not close)
         a = fabric_reduce_scatter(x, cluster_axis=0, num_links=LINKS)
         b = fabric_reduce_scatter(a, cluster_axis=1, num_links=LINKS)
         ttnn.deallocate(a)
         return b
 
-    variants = {
-        "current: axis 0 + axis 1 (2 calls)": two_stage,
-        "mesh line (1 call)": lambda: fabric_reduce_scatter(
-            x, cluster_axis=None, topology=ttnn.Topology.Linear, num_links=LINKS
+    variants = {  # name: (call, reference of the row-major concatenation of every chip's output)
+        "current: axis 0 + axis 1 (2 calls)": (two_stage, ref_mesh),
+        "mesh line (1 call)": (
+            lambda: fabric_reduce_scatter(x, cluster_axis=None, topology=ttnn.Topology.Linear, num_links=LINKS),
+            ref_mesh,
         ),
-        "mesh ring (1 call)": lambda: fabric_reduce_scatter(
-            x, cluster_axis=None, topology=ttnn.Topology.Ring, num_links=LINKS
+        "mesh ring (1 call)": (
+            lambda: fabric_reduce_scatter(x, cluster_axis=None, topology=ttnn.Topology.Ring, num_links=LINKS),
+            ref_mesh,
         ),
+        "attention o_proj: axis 1": (lambda: fabric_reduce_scatter(x, cluster_axis=1, num_links=LINKS), ref_axis1),
     }
-    if os.environ.get("RS_VARIANTS"):  # comma list of name prefixes: current, mesh line, mesh ring
+    if os.environ.get("RS_VARIANTS"):
         keep = [v.strip() for v in os.environ["RS_VARIANTS"].split(",")]
         variants = {k: v for k, v in variants.items() if any(k.startswith(p_) for p_ in keep)}
     rt = ttnn.device.IsProgramRealtimeProfilerActive()
+    if not rt:
+        print("RS_MODEL the program real-time profiler is not active: wall time only", flush=True)
     outs, rows_out = {}, []
-    for name, f in variants.items():
+    for name, (f, ref) in variants.items():
         y = f()  # warm-up / compile, and the result for the check
-        host = torch.cat([ttnn.to_torch(t).float().reshape(Sb, H) for t in ttnn.get_device_tensors(y)])
+        host = torch.cat([ttnn.to_torch(t).float().reshape(-1, H) for t in ttnn.get_device_tensors(y)])
         ttnn.deallocate(y)
         outs[name] = host
         err = (host - ref).abs().max().item()
@@ -116,9 +129,9 @@ def test_fabric_rs_model_shapes(mesh_device):
                 if chips:
                     per_call.append(max(chips.values()))
                     progs.append(prog_us)
-            dev = statistics.median(per_call)
-            per_prog = [statistics.median(p[k] for p in progs if len(p) > k) for k in range(max(map(len, progs)))]
-        traced = None
+            if per_call:
+                dev = statistics.median(per_call)
+                per_prog = [statistics.median(p[k] for p in progs if len(p) > k) for k in range(max(map(len, progs)))]
         if os.environ.get("RS_TRACE") == "1":  # replay from a trace: no host dispatch, chips start in step
             tr = ttnn.begin_trace_capture(mesh_device, cq_id=0)
             yt = f()
@@ -132,16 +145,18 @@ def test_fabric_rs_model_shapes(mesh_device):
             ttnn.release_trace(mesh_device, tr)
             ttnn.deallocate(yt)
             print(f"RS_MODEL {name:36s} traced replay {traced:7.1f} us/call", flush=True)
-        rows_out.append((name, dev, per_prog, wall, err, rel))
+        rows_out.append((name, err, rel))
         print(
-            f"RS_MODEL {name:36s} device {dev:7.1f} us"
+            f"RS_MODEL {rows}x{cols} {name:36s} "
+            + (f"device {dev:7.1f} us" if dev is not None else "device    n/a   ")
             + (f" (per program {', '.join(f'{v:.1f}' for v in per_prog)})" if per_prog and len(per_prog) > 1 else "")
             + f", wall {wall:7.1f} us/call, max abs err {err:.3g}, rel {rel:.2e}",
             flush=True,
         )
     base = outs.get("current: axis 0 + axis 1 (2 calls)")
     for name, host in outs.items() if base is not None else []:
-        d = (host - base).abs().max().item()
-        print(f"RS_MODEL {name:36s} vs current: max abs diff {d:.3g}", flush=True)
-    for name, dev, _, _, err, rel in rows_out:
+        if variants[name][1] is ref_mesh:
+            d = (host - base).abs().max().item()
+            print(f"RS_MODEL {name:36s} vs current: max abs diff {d:.3g}", flush=True)
+    for name, err, rel in rows_out:
         assert rel < 1e-2 and err <= 0.5, (name, err, rel)

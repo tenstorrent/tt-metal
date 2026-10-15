@@ -37,6 +37,20 @@ Needs a rebuild of this tree first: the current build predates `ttnn.fabric.get_
 Record the `FABRIC_RS` lines (device time, busiest chip, if the real-time profiler is active; wall time otherwise),
 RS_ROWS 4096 and the GLM shape. Also note links per neighbour pair on the 2x2 (RS_LINKS 1 and 2).
 
+The GLM shape ([1, 1, 5120, 4096] bf16 per chip, 2 links, 8 KiB payload), `test_fabric_rs_model_shapes.py`:
+
+    RS_MESH=2x2 scripts/run_safe_pytest.sh --run-all \
+      ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_rs_model_shapes.py -s
+
+| QuietBox 2x2, device time (busiest chip, median of 20) | us |
+|---|---|
+| mesh ring, G = 4 (the model's scatter_rows) | 398.2 / 399.1 |
+| axis 0 + axis 1 (2 calls, 296 + 158) | 453.4 / 454.1 |
+| mesh line | 463.8 / 463.6 |
+| axis 1 alone (mla o_proj), G = 2 | 308.3 / 305.3 |
+
+(two runs; the ring moves 2 blocks x 5 MiB per link direction, ~26 GB/s per link.)
+
 ## Stage 1: backward port does the final phase, arrivals in DRAM
 
 Option `final="cores" | "bwd_port"` on `fabric_reduce_scatter` (default `"cores"` until measured); `"bwd_port"` only
