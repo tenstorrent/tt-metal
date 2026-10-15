@@ -459,6 +459,12 @@ def test_cumsum_fp32_non_finite(pattern, scan_length, dim, disable_compensated_s
     what both device paths keep, stays at +-inf. Those two use an fp32 running total as the
     reference.
     """
+    if (
+        device.arch() == ttnn.device.Arch.QUASAR
+        and not disable_compensated_sum
+        and pattern not in ("inf_then_neg_inf", "nan", "inf_last")
+    ):
+        pytest.xfail("Quasar keeps the unguarded compensation: https://github.com/tenstorrent/tt-metal/issues/58986")
     torch.manual_seed(0)
     size = [scan_length, 1, 32, 64] if dim == 0 else [1, 1, scan_length, 64]
     torch_input = torch.randn(size, dtype=torch.float32)
