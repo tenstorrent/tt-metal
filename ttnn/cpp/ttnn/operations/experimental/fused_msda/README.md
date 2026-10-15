@@ -94,6 +94,7 @@ out = ttnn.experimental.fused_msda_from_offsets(
     reference_mode="level",     # "level" | "pillar"
     align_corners=False,
     memory_config=None,
+    num_valid_queries=None,     # optional per-batch row count, see below
 )
 # -> (B, Q, H*D) ROW_MAJOR bf16
 ```
@@ -118,6 +119,15 @@ substituting `loc` into §3 gives `px = ref * W_l + off - 0.5` (or
 `ref * (W_l-1) + off` with `align_corners`), which the SFPU evaluates from the
 per-level constants (§3, §6). No BEVFormer-specific pre-folding is baked into
 the op.
+
+`num_valid_queries` serves rebatched callers whose tail rows are padding. It
+takes one count per batch, each in `[0, Q]` with at least one nonzero; only
+queries `[0, num_valid_queries[b])` are computed. The rows past it are never
+written and hold undefined data, possibly NaN or Inf, so the caller must drop
+them with a select such as `ttnn.where`, not a multiply by a 0/1 mask. The
+counts are left out of the program hash and rewritten on every cache hit (§5),
+so changing them per call does not recompile; a captured trace replays the
+counts it was captured with.
 
 ### 2.3 Output shape
 
@@ -212,21 +222,33 @@ out[b, q, h*D : (h+1)*D] = acc
 ## 5. Core decomposition
 
 The unit of work is **one output tile**: up to 32 consecutive queries of a
-single `(b, h)` pair.
-
-```text
-total_output_tiles = B * H * ceil(Q / 32)
-```
-
-Tiles are distributed with `split_work_to_cores` over
-`compute_with_storage_grid_size()`. Queries and heads are independent, and the
-whole `4 * L * P` reduction for a tile happens on the core that owns it — **no
+single `(b, h)` pair. Queries and heads are independent, and the whole
+`4 * L * P` reduction for a tile happens on the core that owns it — **no
 cross-core reduction**.
 
-`Q % 32 != 0` is supported: the trailing tile of each `(b, h)` carries
-`v_rows = Q % 32` and the reader zeroes the attention lane of rows `>= v_rows`,
-which makes their scalar zero, so they contribute nothing and the writer emits
-only `v_rows` sticks.
+The program and the tiles it runs are sized separately:
+
+```text
+slots per core = ceil(B * H * ceil(Q / 32) / cores)       fixed per program
+active tiles   = sum_b H * ceil(q_end_b / 32)            per call
+q_end_b        = num_valid_queries[b], or Q when not given
+```
+
+`split_work_to_cores` over `compute_with_storage_grid_size()` picks the cores
+and the slot count from every query, so neither depends on `num_valid_queries`.
+The active tiles are then spread evenly over those cores, and unused slots are
+zero-filled. Every core gets the same number of slots: a cached program pads
+each core's runtime args to the kernel's longest (`Kernel::set_runtime_args_count`),
+so per-core lengths could not be matched on a cache hit.
+
+All runtime args, buffer addresses included, are plain values that
+`ProgramFactory::override_runtime_arguments` rebuilds on every cache hit. That
+is what lets `num_valid_queries` stay out of the program hash.
+
+A partial block is supported wherever a batch's rows end: at `Q % 32`, or at
+`num_valid_queries[b] % 32`. That tile carries `v_rows` below 32, the reader
+zeroes the scalar lanes of rows `>= v_rows`, so they contribute nothing, and the
+writer emits only `v_rows` sticks.
 
 `split_work_to_cores` is used rather than the spec's suggested
 `core.x -> query blocks, core.y -> heads` because `B * H * ceil(Q/32)` rarely
@@ -435,6 +457,7 @@ row's `D` values across them into a stick, and writes it at
 | `L` | `1 <= L <= 8` | per-level geometry is held in a fixed reader array |
 | `H_l`, `W_l` | `<= 256` | the SFPU floors the bilinear corner and hands it to the reader as bf16, which carries 8 significant bits. Past 256 an in-bounds corner index would round to a *different, still in-bounds* pixel — a silently wrong sample. Rejected in `derive_shapes`, pinned by `test_fused_msda_rejects_spatial_shape_beyond_bf16_exact_integers` |
 | `Q`, `P`, `H`, `B` | any positive value | `Q % 32 != 0` handled by `v_rows` |
+| `num_valid_queries` | `None`, or `B` counts in `[0, Q]` with at least one nonzero | rows past a count are unwritten; the caller drops them with a select |
 | `S` | must equal `sum_l H_l * W_l` | validated |
 | padding | zeros | |
 
@@ -467,7 +490,7 @@ ttnn/cpp/ttnn/operations/experimental/fused_msda/
 ├── CMakeLists.txt / sources.cmake              build wiring
 └── device/
     ├── fused_msda_device_operation.hpp / .cpp  attrs, validation, output spec
-    ├── fused_msda_program_factory.cpp          CBs, kernels, work split, RT args
+    ├── fused_msda_program_factory.cpp          CBs, kernels, work split, RT args (rebuilt on cache hits)
     └── kernels/
         ├── msda_tile_layout.hpp                tile face-row byte offsets
         ├── dataflow/fused_msda_reader_common.hpp
@@ -491,6 +514,11 @@ Spatial cross-attention, temporal self-attention and the detection decoder build
 module. The decoder passes float32 reference points: on its 200x200 BEV map a bf16
 point in [0, 1] moves in steps of up to 0.8 px, and each layer's refined points feed
 the next.
+
+Spatial cross-attention pads every camera to the longest camera's query count.
+It passes each camera's valid count as `num_valid_queries`, so MSDA skips the
+padding, and drops the unwritten rows with `ttnn.where(row_mask, ...)`. That
+select has to stay a select: the dropped rows are undefined, not zero.
 
 It feeds the op the **packed** rank-4 forms. The `sampling_offsets` Linear emits
 channels ordered `(head, level, point, xy)` and the joint softmax produces

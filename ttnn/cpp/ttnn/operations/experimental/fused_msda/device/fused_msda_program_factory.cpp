@@ -167,6 +167,148 @@ uint32_t page_size_for_cb(const MSDACircularBufferPlan& plan, uint8_t index) {
     return it->page_size;
 }
 
+// Work split shared by create_descriptor (cache miss) and override_runtime_arguments
+// (cache hit). The core set and the tile slots are sized for every query, so they
+// do not depend on num_valid_queries, which is excluded from the program hash. Only
+// which tiles fill the slots, and how many, changes between calls.
+//
+// Every core gets the same number of slots: a cached program reports each core's
+// runtime-arg count as the kernel's longest, so per-core lengths could not be
+// matched on a hit.
+struct MSDAWorkSplit {
+    CoreRangeSet all_cores;
+    std::vector<CoreCoord> cores;
+    uint32_t slots = 0;                 // tile slots per core
+    std::vector<uint32_t> counts;       // tiles this call runs per core
+    std::vector<TileAssignment> tiles;  // tiles this call runs, in core order
+};
+
+MSDAWorkSplit msda_work_split(
+    const FusedMSDAOperation::operation_attributes_t& attrs, const MSDAShapes& s, const CoreCoord& grid) {
+    const uint32_t q_blocks = (s.num_queries + kTileMaxRows - 1) / kTileMaxRows;
+    const uint32_t total_slots = s.batch * s.num_heads * q_blocks;
+
+    MSDAWorkSplit split;
+    auto [num_cores, all_cores, core_group_1, core_group_2, slots_group_1, slots_group_2] =
+        tt::tt_metal::split_work_to_cores(grid, total_slots);
+    (void)core_group_1;
+    (void)core_group_2;
+    (void)slots_group_2;
+    split.all_cores = all_cores;
+    split.cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
+    // split_work_to_cores puts the larger per-core count in group 1; the groups
+    // themselves are not used, since every core gets that many slots.
+    split.slots = slots_group_1;
+
+    for (uint32_t b = 0; b < s.batch; ++b) {
+        // Rows past the batch's valid count are neither computed nor written.
+        const uint32_t q_end = attrs.num_valid_queries.empty() ? s.num_queries : attrs.num_valid_queries[b];
+        for (uint32_t h = 0; h < s.num_heads; ++h) {
+            for (uint32_t q_start = 0; q_start < q_end; q_start += kTileMaxRows) {
+                split.tiles.push_back({b, h, q_start, std::min(kTileMaxRows, q_end - q_start)});
+            }
+        }
+    }
+
+    // Spread the tiles evenly over every core. ceil(active / n) never exceeds the
+    // slots, which are ceil(total / n) for active <= total.
+    const auto n = static_cast<uint32_t>(split.cores.size());
+    const auto active = static_cast<uint32_t>(split.tiles.size());
+    split.counts.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        split.counts[i] = active / n + (i < active % n ? 1u : 0u);
+    }
+    return split;
+}
+
+// Per-core runtime args of the three kernels. Slots past a core's count are
+// zero-filled so the arg count, and with it the cached program, stays fixed.
+struct MSDARuntimeArgs {
+    std::vector<std::vector<uint32_t>> reader;
+    std::vector<std::vector<uint32_t>> compute;
+    std::vector<std::vector<uint32_t>> writer;
+};
+
+MSDARuntimeArgs msda_runtime_args(
+    const FusedMSDAOperation::operation_attributes_t& attrs,
+    const FusedMSDAOperation::tensor_args_t& tensor_args,
+    const Tensor& output,
+    const MSDAShapes& s,
+    const MSDAWorkSplit& split) {
+    const Tensor& loc = attrs.from_offsets ? *tensor_args.sampling_offsets : *tensor_args.sampling_locations;
+    const uint32_t ref_addr = attrs.from_offsets ? tensor_args.reference_points->buffer()->address() : 0u;
+
+    // Same constants on every core. Slot 0 is the per-core tile count.
+    std::vector<uint32_t> compute_template;
+    compute_template.reserve(1 + kAxisConstantsPerLevel * s.num_levels);
+    compute_template.push_back(0);
+    for (uint32_t l = 0; l < s.num_levels; ++l) {
+        const auto kx = axis_constants(
+            attrs.spatial_shapes_hw[2 * l + 1], attrs.align_corners, attrs.locations_in_grid_space, attrs.from_offsets);
+        const auto ky = axis_constants(
+            attrs.spatial_shapes_hw[2 * l], attrs.align_corners, attrs.locations_in_grid_space, attrs.from_offsets);
+        compute_template.push_back(kx.primary_scale);
+        compute_template.push_back(kx.secondary_scale);
+        compute_template.push_back(kx.bias);
+        compute_template.push_back(ky.primary_scale);
+        compute_template.push_back(ky.secondary_scale);
+        compute_template.push_back(ky.bias);
+    }
+
+    MSDARuntimeArgs args;
+    uint32_t tile_cursor = 0;
+    const uint32_t slots = split.slots;
+    for (size_t i = 0; i < split.cores.size(); ++i) {
+        const uint32_t count = split.counts[i];
+
+        auto& reader = args.reader.emplace_back();
+        reader.reserve(5 + 3 * s.num_levels + slots * 4);
+        reader.push_back(tensor_args.value.buffer()->address());
+        reader.push_back(tensor_args.attention_weights.buffer()->address());
+        reader.push_back(loc.buffer()->address());
+        reader.push_back(ref_addr);
+        reader.push_back(count);
+        uint32_t level_start = 0;
+        for (uint32_t l = 0; l < s.num_levels; ++l) {
+            const uint32_t h = attrs.spatial_shapes_hw[2 * l];
+            const uint32_t w = attrs.spatial_shapes_hw[2 * l + 1];
+            reader.push_back(h);
+            reader.push_back(w);
+            reader.push_back(level_start);
+            level_start += h * w;
+        }
+
+        auto& writer = args.writer.emplace_back();
+        writer.reserve(2 + slots * 3);
+        writer.push_back(output.buffer()->address());
+        writer.push_back(count);
+
+        for (uint32_t t = 0; t < count; ++t) {
+            const auto& asn = split.tiles[tile_cursor + t];
+            reader.insert(reader.end(), {asn.batch, asn.head, asn.q_start, asn.v_rows});
+            // Output is (B, Q, H*D): one page per (b, q), head placed by offset.
+            writer.insert(writer.end(), {asn.batch * s.num_queries + asn.q_start, asn.head, asn.v_rows});
+        }
+        reader.resize(5 + 3 * s.num_levels + slots * 4, 0u);
+        writer.resize(2 + slots * 3, 0u);
+
+        // `mul_unary_tile` takes its scalar as a runtime uint32 and the level
+        // index is a runtime value, so the per-level constants are runtime args.
+        // Their count is fixed by num_levels, which is in the program hash.
+        auto compute = compute_template;
+        compute[0] = count;
+        args.compute.push_back(std::move(compute));
+        tile_cursor += count;
+    }
+    return args;
+}
+
+// Kernel order in create_descriptor's descriptor.kernels; override_runtime_arguments
+// patches by these indices.
+constexpr uint32_t kReaderKernel = 0;
+constexpr uint32_t kComputeKernel = 1;
+constexpr uint32_t kWriterKernel = 2;
+
 }  // namespace
 
 // Every CB the program allocates. can_use_fused_msda_from_offsets_l1_value sums
@@ -290,7 +432,7 @@ uint64_t circular_buffer_bytes_per_core(const MSDACircularBufferPlan& plan) {
     return total;
 }
 
-ProgramDescriptor FusedMSDAOperation::create_descriptor(
+ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args, Tensor& output) {
     ProgramDescriptor descriptor{};
 
@@ -305,38 +447,8 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
 
     const uint32_t n_d_tiles = (s.head_dim + kTileWidth - 1) / kTileWidth;
 
-    // ---- work units ----
-    const uint32_t q_blocks = (s.num_queries + kTileMaxRows - 1) / kTileMaxRows;
-    std::vector<TileAssignment> tiles;
-    tiles.reserve(static_cast<size_t>(s.batch) * s.num_heads * q_blocks);
-    for (uint32_t b = 0; b < s.batch; ++b) {
-        for (uint32_t h = 0; h < s.num_heads; ++h) {
-            for (uint32_t q_start = 0; q_start < s.num_queries; q_start += kTileMaxRows) {
-                tiles.push_back({b, h, q_start, std::min(kTileMaxRows, s.num_queries - q_start)});
-            }
-        }
-    }
-    const uint32_t total_output_tiles = static_cast<uint32_t>(tiles.size());
-
-    // ---- per-level geometry (host-side; shipped as reader runtime args) ----
-    std::vector<uint32_t> level_h(s.num_levels);
-    std::vector<uint32_t> level_w(s.num_levels);
-    std::vector<uint32_t> level_start(s.num_levels);
-    // The SFPU geometry's per-level constants go with them: same source, same
-    // place, so the two cannot drift.
-    std::vector<AxisConstants> level_kx(s.num_levels);
-    std::vector<AxisConstants> level_ky(s.num_levels);
-    uint32_t running = 0;
-    for (uint32_t l = 0; l < s.num_levels; ++l) {
-        level_h[l] = attrs.spatial_shapes_hw[2 * l];
-        level_w[l] = attrs.spatial_shapes_hw[2 * l + 1];
-        level_start[l] = running;
-        running += level_h[l] * level_w[l];
-        level_kx[l] =
-            axis_constants(level_w[l], attrs.align_corners, attrs.locations_in_grid_space, attrs.from_offsets);
-        level_ky[l] =
-            axis_constants(level_h[l], attrs.align_corners, attrs.locations_in_grid_space, attrs.from_offsets);
-    }
+    const auto split = msda_work_split(attrs, s, compute_grid);
+    const auto& all_cores = split.all_cores;
 
     // ---- page / stick sizes ----
     const auto cb_plan = derive_circular_buffer_plan(
@@ -377,9 +489,6 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
                 value_stick_raw);
         }
     }
-
-    auto [num_cores, all_cores, core_group_1, core_group_2, tiles_per_core_group_1, tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_grid, total_output_tiles);
 
     // ---- circular buffers (see README.md §6) ----
     for (const auto& spec : cb_plan) {
@@ -515,73 +624,17 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
 
     // ---- per-core runtime args ----
-    // Buffer* entries auto-register as buffer bindings, so the framework patches
-    // addresses on program-cache hits (no override_runtime_arguments needed).
-    const auto logical_cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
-    uint32_t tile_cursor = 0;
-    for (const auto& core : logical_cores) {
-        uint32_t tiles_here = 0;
-        if (core_group_1.contains(core)) {
-            tiles_here = tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            tiles_here = tiles_per_core_group_2;
-        } else {
-            continue;
-        }
-
-        KernelDescriptor::RTArgList reader_args;
-        reader_args.reserve(5 + 3 * s.num_levels + tiles_here * 4);
-        reader_args.push_back(value.buffer());
-        reader_args.push_back(attn.buffer());
-        reader_args.push_back(loc.buffer());
-        if (attrs.from_offsets) {
-            reader_args.push_back(tensor_args.reference_points->buffer());
-        } else {
-            reader_args.push_back(uint32_t{0});
-        }
-        reader_args.push_back(tiles_here);
-        for (uint32_t l = 0; l < s.num_levels; ++l) {
-            reader_args.push_back(level_h[l]);
-            reader_args.push_back(level_w[l]);
-            reader_args.push_back(level_start[l]);
-        }
-
-        KernelDescriptor::RTArgList writer_args;
-        writer_args.reserve(2 + tiles_here * 3);
-        writer_args.push_back(output.buffer());
-        writer_args.push_back(tiles_here);
-
-        for (uint32_t i = 0; i < tiles_here; ++i) {
-            const auto& asn = tiles[tile_cursor + i];
-            reader_args.push_back(asn.batch);
-            reader_args.push_back(asn.head);
-            reader_args.push_back(asn.q_start);
-            reader_args.push_back(asn.v_rows);
-            // Output is (B, Q, H*D): one page per (b, q), head placed by offset.
-            writer_args.push_back(asn.batch * s.num_queries + asn.q_start);
-            writer_args.push_back(asn.head);
-            writer_args.push_back(asn.v_rows);
-        }
-
-        // `mul_unary_tile` takes its scalar as a runtime uint32 and the level
-        // index is a runtime value, so the per-level constants are runtime args.
-        KernelDescriptor::CoreRuntimeArgs compute_args;
-        compute_args.reserve(1 + kAxisConstantsPerLevel * s.num_levels);
-        compute_args.push_back(tiles_here);
-        for (uint32_t l = 0; l < s.num_levels; ++l) {
-            compute_args.push_back(level_kx[l].primary_scale);
-            compute_args.push_back(level_kx[l].secondary_scale);
-            compute_args.push_back(level_kx[l].bias);
-            compute_args.push_back(level_ky[l].primary_scale);
-            compute_args.push_back(level_ky[l].secondary_scale);
-            compute_args.push_back(level_ky[l].bias);
-        }
-
-        reader_desc.emplace_runtime_args(core, reader_args);
-        compute_desc.runtime_args.emplace_back(core, std::move(compute_args));
-        writer_desc.emplace_runtime_args(core, writer_args);
-
-        tile_cursor += tiles_here;
+    // Plain addresses, not Buffer* bindings: override_runtime_arguments rewrites
+    // every arg on a cache hit, addresses included. num_valid_queries changes the
+    // tile lists and is excluded from the program hash, so buffer bindings alone
+    // cannot refresh a hit.
+    // Order must match kReaderKernel, kComputeKernel, kWriterKernel.
+    auto rt = msda_runtime_args(attrs, tensor_args, output, s, split);
+    for (size_t i = 0; i < split.cores.size(); ++i) {
+        const auto& core = split.cores[i];
+        reader_desc.runtime_args.emplace_back(core, std::move(rt.reader[i]));
+        compute_desc.runtime_args.emplace_back(core, std::move(rt.compute[i]));
+        writer_desc.runtime_args.emplace_back(core, std::move(rt.writer[i]));
     }
 
     descriptor.kernels.push_back(std::move(reader_desc));
@@ -589,6 +642,34 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     descriptor.kernels.push_back(std::move(writer_desc));
 
     return descriptor;
+}
+
+void FusedMSDAOperation::ProgramFactory::override_runtime_arguments(
+    Program& program,
+    const operation_attributes_t& attrs,
+    const tensor_args_t& tensor_args,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const auto s = derive_shapes(attrs, tensor_args);
+    const auto split = msda_work_split(attrs, s, tensor_args.value.device()->compute_with_storage_grid_size());
+    const auto rt = msda_runtime_args(attrs, tensor_args, output, s, split);
+    const auto patch = [&](uint32_t kernel, const CoreCoord& core, const std::vector<uint32_t>& values) {
+        auto& args = GetRuntimeArgs(program, kernel, core);
+        TT_FATAL(
+            args.size() == values.size(),
+            "fused_msda: internal error, runtime-arg count changed on a cache hit (kernel {}, core {}: {} cached, {} "
+            "now)",
+            kernel,
+            core,
+            args.size(),
+            values.size());
+        std::copy(values.begin(), values.end(), args.data());
+    };
+    for (size_t i = 0; i < split.cores.size(); ++i) {
+        patch(kReaderKernel, split.cores[i], rt.reader[i]);
+        patch(kComputeKernel, split.cores[i], rt.compute[i]);
+        patch(kWriterKernel, split.cores[i], rt.writer[i]);
+    }
 }
 
 }  // namespace ttnn::operations::experimental::fused_msda

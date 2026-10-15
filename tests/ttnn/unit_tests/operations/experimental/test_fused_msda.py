@@ -135,6 +135,69 @@ def _per_head_stride_supported(num_heads: int, head_dim: int) -> bool:
     return (head_dim * 2) % ttnn.device.get_dram_alignment() == 0
 
 
+def _num_valid_queries_case(B, Q, H, seed):
+    spatial_shapes = [(12, 20), (6, 10)]
+    L, P, D, Z = 2, 4, 32, 2
+    S = sum(h * w for h, w in spatial_shapes)
+    torch.manual_seed(seed)
+    value = _bf16(torch.randn(B, S, H, D))
+    ref_pts = _bf16(torch.rand(B, Q, Z, 2))
+    offsets = _bf16(torch.randn(B, Q, H, L, P, 2))
+    attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
+    reference = _msda_reference(
+        value, _locations_from_offsets(ref_pts, offsets, spatial_shapes, "pillar"), attn, spatial_shapes
+    )
+    return (_pack_value(value), ref_pts, _pack_locations(offsets), _pack_weights(attn)), spatial_shapes, reference
+
+
+@pytest.mark.parametrize(
+    "B,Q,H,counts",
+    [
+        # 18 tiles: fewer than any grid has cores, one slot per core.
+        (3, 70, 2, ([70, 33, 1], [5, 64, 69])),
+        # 160 tiles: more than any grid has cores and not a multiple of them, so the
+        # cores split into two work groups and the slots are padded per core.
+        (2, 300, 8, ([300, 129], [17, 288])),
+    ],
+)
+def test_fused_msda_v2_num_valid_queries_matches_reference_and_reuses_program(device, B, Q, H, counts):
+    """Rows below each batch's count match the reference, and changing the counts is a cache hit.
+
+    The counts cut blocks mid-way, at a block boundary and down to one row; Q itself leaves a
+    partial trailing block. Calls alternate between no counts and two different count lists, so
+    the tile lists in the cached runtime args change on every hit, and each call gets fresh
+    tensors, so the buffer addresses change too. A stale list or a stale address computes the
+    previous call's rows and misses this call's reference. Rows at or past a count are undefined
+    by contract and are not compared.
+    """
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    device.cache_entries_counter.reset()
+
+    first, second = counts
+    calls = []
+    for seed, num_valid_queries in enumerate((None, first, None, second)):
+        tensors, spatial_shapes, reference = _num_valid_queries_case(B, Q, H, seed=seed)
+        # Kept alive until the end so the allocator cannot hand a later call the same addresses.
+        calls.append(([_to_device(t, device) for t in tensors], spatial_shapes, reference, num_valid_queries))
+
+    for (value_t, ref_t, off_t, attn_t), spatial_shapes, reference, num_valid_queries in calls:
+        with device.cache_entries_counter.measure():
+            out = ttnn.experimental.fused_msda_from_offsets(
+                value_t,
+                ref_t,
+                off_t,
+                attn_t,
+                spatial_shapes,
+                reference_mode="pillar",
+                num_valid_queries=num_valid_queries,
+            )
+        got = ttnn.to_torch(out).to(torch.float32)
+        for b, n in enumerate(num_valid_queries or [Q] * B):
+            _assert_close(reference[b, :n], got[b, :n])
+    assert device.cache_entries_counter.total == 1
+
+
 def _to_device(t: torch.Tensor, device) -> ttnn.Tensor:
     return ttnn.from_torch(t.to(torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
@@ -751,10 +814,9 @@ def test_fused_msda_v2_one_pixel_offset(device):
 def test_fused_msda_program_cache_hit_readdresses(device):
     """Same-spec calls share one cached program, so the second call's buffers are not the ones compiled in.
 
-    The factory pushes Buffer* runtime args and has no override_runtime_arguments. A hit replays that
-    program; only the framework's buffer bindings rewrite the addresses. Both allocations stay live and
-    carry different data: a stale address still points at the first call and cannot match the second
-    reference.
+    A hit replays that program; only override_runtime_arguments rewrites the addresses. Both
+    allocations stay live and carry different data: a stale address still points at the first call
+    and cannot match the second reference.
     """
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
@@ -943,6 +1005,24 @@ def test_fused_msda_from_offsets_rejects_float32_inputs(device, expect_error, te
             inputs["attention_weights"],
             shapes,
             reference_mode="level",
+        )
+
+
+@pytest.mark.parametrize(
+    "num_valid_queries,message",
+    [
+        ([], "empty list"),
+        ([8], "one count per batch"),
+        ([8, 9], "exceeds num_queries"),
+        ([0, 0], "no query"),
+    ],
+)
+def test_fused_msda_from_offsets_rejects_bad_num_valid_queries(device, expect_error, num_valid_queries, message):
+    value_t, off_t, attn_t, shapes = _valid_inputs(device, B=2)
+    ref_t = _to_device(torch.rand(2, 8, 2, 2), device)
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.fused_msda_from_offsets(
+            value_t, ref_t, off_t, attn_t, shapes, reference_mode="pillar", num_valid_queries=num_valid_queries
         )
 
 

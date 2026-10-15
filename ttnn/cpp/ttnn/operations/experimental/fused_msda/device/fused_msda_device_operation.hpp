@@ -7,6 +7,8 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <tuple>
+#include <variant>
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
@@ -56,6 +58,29 @@ struct FusedMSDAOperation {
         bool locations_in_grid_space = false;
         bool from_offsets = false;
         MSDAReferenceMode reference_mode = MSDAReferenceMode::Level;
+        // Per-batch count of queries to compute; empty means all of them.
+        ttsl::SmallVector<uint32_t> num_valid_queries;
+
+        // These tuples are the program-cache key, and what op reports print. Every
+        // attribute that shapes the compiled program must be listed in both.
+        // num_valid_queries is left out on purpose: it only changes runtime args,
+        // which ProgramFactory::override_runtime_arguments rewrites on every hit.
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "output_memory_config",
+            "spatial_shapes_hw",
+            "align_corners",
+            "locations_in_grid_space",
+            "from_offsets",
+            "reference_mode");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                output_memory_config,
+                spatial_shapes_hw,
+                align_corners,
+                locations_in_grid_space,
+                from_offsets,
+                reference_mode);
+        }
     };
 
     struct tensor_args_t {
@@ -72,8 +97,21 @@ struct FusedMSDAOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& output);
+    struct ProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& output);
+
+        // Rewrites every runtime arg in place on a cache hit: buffer addresses and
+        // the tile lists, which depend on the hash-excluded num_valid_queries.
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+    };
+
+    using program_factory_t = std::variant<ProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
@@ -122,7 +160,8 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     ttnn::experimental::MSDAReferenceMode reference_mode,
     bool align_corners,
-    const std::optional<MemoryConfig>& memory_config);
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<std::vector<uint32_t>>& num_valid_queries = std::nullopt);
 
 bool can_use_fused_msda_from_offsets_l1_value(
     const Tensor& value,
