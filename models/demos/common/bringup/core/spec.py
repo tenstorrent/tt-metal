@@ -19,7 +19,7 @@ the prior's matching files to start from (orchestrator PRIOR_READS).
 
 Deployment target and boxes (F64). Without these keys the box the spec names is also the target (as before):
 
-    deploy: {box: galaxy_8x4, seq: 1048576, chunk: 8192}   # the system the plan is for
+    deploy: {box: galaxy_8x4, seq: 1044480, chunk: 5120}   # the system the plan is for; chunk: the serving chunk (F67)
     boxes:                                                 # every box the model may run on
       galaxy_8x4: {name: ..., chip: ..., mesh: [8, 4], chip_dram_gb: 32, device_params: {...}}
       quietbox_2x2: {mesh: [2, 2], chip_dram_gb: 32, overrides: {device: {experts_dtype: bfp4}}}
@@ -368,6 +368,17 @@ class Spec:
                     errs.append(f"deploy.{k} must be an int")
             if isinstance(dep.get("seq"), int) and isinstance(dep.get("chunk"), int) and dep["seq"] % dep["chunk"]:
                 errs.append("deploy.seq is not a multiple of deploy.chunk")
+            # F67: the serving chunk is one fixed size on every box, owner limit serving.max_chunk; tests stay below it
+            cap = int(self.get("serving.max_chunk"))
+            chunks = [("deploy.chunk", dep.get("chunk")), ("target.chunk", self.get("target.chunk"))]
+            chunks += [(f"ladder rung {r.get('name')}", r.get("chunk")) for r in self.data.get("ladder") or []]
+            chunks += [
+                (f"scaled.ladder rung {r.get('name')}", r.get("chunk"))
+                for r in (self.raw.get("scaled") or {}).get("ladder") or []
+            ]
+            for what, c in chunks:
+                if isinstance(c, int) and c > cap:
+                    errs.append(f"{what}: chunk {c} > serving.max_chunk {cap} (the owner's limit on the serving chunk)")
         if isinstance(run, dict):
             if run.get("mode") not in MODES:
                 errs.append(f"run.mode must be one of {MODES}")
