@@ -1095,7 +1095,9 @@
     export TT_METAL_WATCHER=30
     uv pip install -r models/demos/qwen25_vl/requirements.txt
     export HF_MODEL=Qwen/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-72B-Instruct MESH_DEVICE=T3K
-    pytest --timeout 600 models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
+    pytest --timeout 600 models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py --ignore=models/demos/qwen25_vl/tests/test_prefix_caching.py
+    # Watcher off for prefix caching: its remote-chip reads time out on T3K under the watcher (#58458).
+    env -u TT_METAL_WATCHER pytest --timeout 600 models/demos/qwen25_vl/tests/test_prefix_caching.py
   model: qwen2.5-vl-72b
   model_family: Qwen
   skus:
