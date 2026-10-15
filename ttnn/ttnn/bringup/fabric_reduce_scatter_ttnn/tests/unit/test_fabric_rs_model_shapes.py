@@ -4,7 +4,8 @@
 
 - common.scatter_rows (the shared expert's and the dense MLP's output): one call over the whole mesh as a snake ring
   (the default, GLM_SCATTER_OP=fabric_ring), else axis 0 then axis 1; also a snake line. Each chip gets its row-major
-  [5120 / n, 4096] block of the n-chip sum; all checked against the torch sum and each other.
+  [5120 / n, 4096] block of the n-chip sum; all checked against the torch sum and each other. The ring also with
+  final="bwd_port" (each chip's own block summed by its backward port, no final cores).
 - mla_attention o_proj (mla_attention.py:470): axis 1, chip (r, c) gets block c of the sum over its mesh row.
 
 Device time per variant from the program real-time profiler (when active): per call, each chip's summed program
@@ -77,6 +78,12 @@ def test_fabric_rs_model_shapes(mesh_device):
         ),
         "mesh ring (1 call)": (
             lambda: fabric_reduce_scatter(x, cluster_axis=None, topology=ttnn.Topology.Ring, num_links=LINKS),
+            ref_mesh,
+        ),
+        "mesh ring, final on bwd port": (
+            lambda: fabric_reduce_scatter(
+                x, cluster_axis=None, topology=ttnn.Topology.Ring, num_links=LINKS, final="bwd_port"
+            ),
             ref_mesh,
         ),
         "attention o_proj: axis 1": (lambda: fabric_reduce_scatter(x, cluster_axis=1, num_links=LINKS), ref_axis1),

@@ -82,7 +82,22 @@ Host: c_2 on the backward ports; L1 per port 4 CBs x 128 KiB = 512 KiB. Semaphor
 Check: `test_fabric_reduce_scatter_topologies.py` (all cases, so the fallbacks run too), `test_fabric_reduce_scatter.py`,
 `test_fabric_rs_model_shapes.py`, on 2x2 and 4x2. Measure against Stage 0.
 
+Result (QuietBox 2x2, GLM shape, device time, two runs each): `final="bwd_port"` 417.4 / 416.9 us vs final cores
+396.6 / 396.6 us, +5% (the estimate was +25%). Correct on every 2x2 group (`RS_FINAL=bwd_port` topology test: the
+4-chip ring on the backward port, the lines falling back to final cores). The 8-chip ring (4x2) is not run yet.
+
 ### Stage 1 ablation: what Stage 2 can buy
+
+Result (2x2, GLM shape, the forward-arrival read deleted, output wrong as it must be: rel 0.98-0.99):
+
+| | with the read | without | the read costs |
+|---|---|---|---|
+| final cores | 396.6 | 364.8 | 32 us |
+| backward port | 417.2 | 354.5 | 63 us |
+
+The read is on the critical path in both designs. Without it the backward port beats today's op by ~10% (no
+credits counted yet; Stage 2 also drops the arrival's DRAM write). Go to Stage 2.
+
 
 Same build, the forward-arrival read in the final loop deleted (wrong numbers, timing only; confirm the result goes
 wrong, so the read really went). That is the best Stage 2 can reach. If Stage 1 is already within noise of Stage 0,

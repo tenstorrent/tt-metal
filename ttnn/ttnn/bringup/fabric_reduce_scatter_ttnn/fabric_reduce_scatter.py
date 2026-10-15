@@ -77,6 +77,12 @@ void kernel_main() {
     const uint32_t lead = get_arg_val<uint32_t>(a++);  // leading blocks without upstream
     const uint32_t nblocks = get_arg_val<uint32_t>(a++);
     const uint32_t blocks_idx = a;
+    a += nblocks;
+    const uint32_t direct = get_arg_val<uint32_t>(a++);  // every block leads: my partials straight into c_16
+    const uint32_t has_fin = get_arg_val<uint32_t>(a++);  // after the sends, my own block's sum (final="bwd_port")
+    const uint32_t own_blk = get_arg_val<uint32_t>(a++);
+    const uint32_t bwd_slot = get_arg_val<uint32_t>(a++);  // G: the backward arrival of my own block
+    const uint32_t b_addr = get_arg_val<uint32_t>(a++);  // counter B: the forward arrival of my own block
     const auto in = TensorAccessor(in_args, in_addr, page_bytes);
     const auto scr = TensorAccessor(scr_args, scr_addr, page_bytes);
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
@@ -89,7 +95,7 @@ void kernel_main() {
     auto room = [&](uint32_t o) { return cap - o < group ? cap - o : group; };
 
     // leading blocks: my partial only
-    const uint32_t cb_lead = lead == nblocks ? 16 : 0;
+    const uint32_t cb_lead = direct ? 16 : 0;
     uint32_t chunks_left = lead * full;
     uint32_t batch = 0, limit = 0, wown = 0, win = 0;
     for (uint32_t k = 0; k < lead; ++k) {
@@ -135,6 +141,43 @@ void kernel_main() {
                 cb_push_back(1, run_pages * batch);
                 o0 = (o0 + batch) % cap;
                 o1 = (o1 + batch) % cap;
+                batch = 0;
+            }
+        });
+    }
+    // my own block: my partial (c_0), the forward arrival (c_1: scratch slot own, counter B) and the backward one
+    // (c_2: scratch slot G, counter A, after the relays)
+    if (has_fin) {
+        volatile tt_l1_ptr uint32_t* arr_b = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(b_addr);
+        const uint32_t own_base = own_blk * blk_pages, bwd_base = bwd_slot * blk_pages;
+        const uint32_t a_before = (nblocks - lead) * full;
+        uint32_t o2 = 0, w2 = 0;
+        chunks_left = full;
+        for_each_chunk(blk_pages, first_bank, bank_stride, num_banks, run_pages, 0, 0, [&](uint32_t page, uint32_t n, uint32_t idx) {
+            if (batch == 0) {
+                limit = room(o0) < room(o1) ? room(o0) : room(o1);
+                limit = room(o2) < limit ? room(o2) : limit;
+                cb_reserve_back(0, run_pages * limit);
+                wown = get_write_ptr(0);
+                cb_reserve_back(1, run_pages * limit);
+                win = get_write_ptr(1);
+                cb_reserve_back(2, run_pages * limit);
+                w2 = get_write_ptr(2);
+            }
+            noc_async_read(in.get_noc_addr(own_base + page), wown + batch * chunk_bytes, n * page_bytes);
+            noc_semaphore_wait_min(arr_b, idx / inc_every + 1);
+            noc_async_read(scr.get_noc_addr(own_base + page), win + batch * chunk_bytes, n * page_bytes);
+            noc_semaphore_wait_min(arrived, (a_before + idx) / inc_every + 1);
+            noc_async_read(scr.get_noc_addr(bwd_base + page), w2 + batch * chunk_bytes, n * page_bytes);
+            --chunks_left;
+            if (++batch == limit || chunks_left == 0) {
+                noc_async_read_barrier();
+                cb_push_back(0, run_pages * batch);
+                cb_push_back(1, run_pages * batch);
+                cb_push_back(2, run_pages * batch);
+                o0 = (o0 + batch) % cap;
+                o1 = (o1 + batch) % cap;
+                o2 = (o2 + batch) % cap;
                 batch = 0;
             }
         });
@@ -228,8 +271,9 @@ _ADD_COMPUTE = r"""
 #include "api/compute/tile_move_copy.h"
 
 // run_pages tiles per chunk. First n_copy chunks: out(c_16) = c_0 (a ring port's leading block: it starts that block's
-// chain). Then n chunks: out = c_0 + c_1 [+ c_2], or c_0 + c_2 (a final core without a forward upstream).
-// Nothing (n_copy = n = 0): a line end's port, whose reader feeds the sender directly.
+// chain). Then n chunks: out = c_0 + c_1 [+ c_2], or c_0 + c_2 (a final core without a forward upstream). Then n_fin
+// chunks: out = c_0 + c_1 + c_2 (a backward port's own block, final="bwd_port").
+// Nothing (n_copy = n = n_fin = 0): a line end's port, whose reader feeds the sender directly.
 void kernel_main() {
     constexpr uint32_t R = get_compile_time_arg_val(0);
     constexpr uint32_t DST = 4;
@@ -237,7 +281,8 @@ void kernel_main() {
     const uint32_t has_b = get_arg_val<uint32_t>(1);  // second input c_1
     const uint32_t has_c = get_arg_val<uint32_t>(2);  // third input c_2
     const uint32_t n_copy = get_arg_val<uint32_t>(3);
-    if (n == 0 && n_copy == 0) {
+    const uint32_t n_fin = get_arg_val<uint32_t>(4);
+    if (n == 0 && n_copy == 0 && n_fin == 0) {
         return;
     }
     const uint32_t cb_b = has_b ? 1 : 2;
@@ -265,42 +310,48 @@ void kernel_main() {
             cb_pop_front(0, R);
         }
     }
-    add_tiles_init(0, cb_b);
-    for (uint32_t i = 0; i < n; ++i) {
-        cb_wait_front(0, R);
-        cb_wait_front(cb_b, R);
-        if (three) {
-            cb_wait_front(2, R);
-        }
-        cb_reserve_back(16, R);
-        for (uint32_t j0 = 0; j0 < R; j0 += DST) {
-            const uint32_t m = R - j0 < DST ? R - j0 : DST;
-            tile_regs_acquire();
-            if (three) {
-                add_tiles_init(0, cb_b);
+    auto adds = [&](uint32_t count, uint32_t in_b, bool tri) {
+        add_tiles_init(0, in_b);
+        for (uint32_t i = 0; i < count; ++i) {
+            cb_wait_front(0, R);
+            cb_wait_front(in_b, R);
+            if (tri) {
+                cb_wait_front(2, R);
             }
-            for (uint32_t j = 0; j < m; ++j) {
-                add_tiles(0, cb_b, j0 + j, j0 + j, j);
-            }
-            if (three) {
-                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(2);
-                for (uint32_t j = 0; j < m; ++j) {
-                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(2, j0 + j, j);
+            cb_reserve_back(16, R);
+            for (uint32_t j0 = 0; j0 < R; j0 += DST) {
+                const uint32_t m = R - j0 < DST ? R - j0 : DST;
+                tile_regs_acquire();
+                if (tri) {
+                    add_tiles_init(0, in_b);
                 }
+                for (uint32_t j = 0; j < m; ++j) {
+                    add_tiles(0, in_b, j0 + j, j0 + j, j);
+                }
+                if (tri) {
+                    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(2);
+                    for (uint32_t j = 0; j < m; ++j) {
+                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(2, j0 + j, j);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < m; ++j) {
+                    pack_tile(j, 16);
+                }
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < m; ++j) {
-                pack_tile(j, 16);
+            cb_push_back(16, R);
+            cb_pop_front(0, R);
+            cb_pop_front(in_b, R);
+            if (tri) {
+                cb_pop_front(2, R);
             }
-            tile_regs_release();
         }
-        cb_push_back(16, R);
-        cb_pop_front(0, R);
-        cb_pop_front(cb_b, R);
-        if (three) {
-            cb_pop_front(2, R);
-        }
+    };
+    adds(n, cb_b, three);
+    if (n_fin > 0) {
+        adds(n_fin, 1, true);
     }
 }
 """
@@ -394,6 +445,7 @@ void kernel_main() {
     constexpr uint32_t group = get_compile_time_arg_val(3);
     constexpr uint32_t inc_every = get_compile_time_arg_val(4);
     constexpr auto scr_args = TensorAccessorArgs<5>();
+    constexpr auto out_args = TensorAccessorArgs<scr_args.next_compile_time_args_offset()>();
     constexpr uint32_t chunk_bytes = run_pages * page_bytes;
     constexpr uint32_t num_headers = group;
 
@@ -410,6 +462,13 @@ void kernel_main() {
     const uint32_t send_ready = get_arg_val<uint32_t>(a++);
     const uint32_t ready_x = get_arg_val<uint32_t>(a++);
     const uint32_t ready_y = get_arg_val<uint32_t>(a++);
+    // fin_mode: where the last block (the downstream chip's own) counts. 0: the downstream final core owning the
+    // chunk's bank; 1: one counter (final_x, final_y); 2: the relay stream's counter, continued
+    const uint32_t fin_mode = get_arg_val<uint32_t>(a++);
+    const uint32_t has_fin = get_arg_val<uint32_t>(a++);  // then my own block's sum out of c_16 into the output
+    const uint32_t out_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t b_addr = get_arg_val<uint32_t>(a++);  // my counter B (the forward arrival of my own block)
+    const uint32_t expect_b = get_arg_val<uint32_t>(a++);
     const uint32_t peer_x = get_arg_val<uint32_t>(a++);
     const uint32_t peer_y = get_arg_val<uint32_t>(a++);
     const uint32_t final_x = get_arg_val<uint32_t>(a++);
@@ -447,7 +506,7 @@ void kernel_main() {
         const uint64_t relay_noc = get_noc_addr(peer_x, peer_y, arrival_addr);
         const uint64_t final_noc = get_noc_addr(final_x, final_y, final_sem_addr);
         const uint64_t final_noc1 = get_noc_addr(final_x1, final_y1, final_sem_addr);
-        const uint32_t relay_total = (nblocks - 1) * full;
+        const uint32_t relay_total = (fin_mode == 2 ? nblocks : nblocks - 1) * full;
         uint32_t chunks_left = nblocks * full;
         uint32_t sent_relay = 0, sent_f0 = 0, sent_f1 = 0;
         uint32_t h = 0, unflushed = 0;
@@ -464,9 +523,9 @@ void kernel_main() {
                 h = (h + 1 == num_headers) ? 0 : h + 1;
                 bool inc;
                 uint64_t ctr;
-                if (fin) {
+                if (fin && fin_mode != 2) {
                     // final core h owns banks first_bank + (2 i + h) * bank_stride of my set
-                    const bool h1 = (((page % num_banks) - first_bank) / bank_stride) & 1;
+                    const bool h1 = fin_mode == 0 && ((((page % num_banks) - first_bank) / bank_stride) & 1);
                     uint32_t& sent = h1 ? sent_f1 : sent_f0;
                     ++sent;
                     inc = (sent % inc_every) == 0 || sent == (h1 ? full_f1 : full_f0);
@@ -493,10 +552,34 @@ void kernel_main() {
         }
         conn.close();
     }
+    // my own block's sum (after the sums I sent, in c_16) into the output, before the re-arm: my reader is past every
+    // wait on A and B once the compute has produced all of it
+    if (has_fin) {
+        const auto out = TensorAccessor(out_args, out_addr, page_bytes);
+        constexpr uint32_t cap = 2 * group;
+        uint32_t o = (nblocks * full) % cap, pending = 0, left = full;
+        for_each_chunk(blk_pages, first_bank, bank_stride, num_banks, run_pages, 0, 0, [&](uint32_t page, uint32_t n, uint32_t) {
+            cb_wait_front(16, run_pages * (pending + 1));
+            noc_async_write(get_read_ptr(16) + pending * chunk_bytes, out.get_noc_addr(page), n * page_bytes);
+            --left;
+            if (++pending == group || left == 0 || o + pending == cap) {
+                noc_async_write_barrier();
+                cb_pop_front(16, run_pages * pending);
+                o = (o + pending) % cap;
+                pending = 0;
+            }
+        });
+    }
     if (expect_in > 0) {
         volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
         noc_semaphore_wait_min(arrived, expect_in);
         noc_semaphore_inc(get_noc_addr(arrival_addr), 0u - expect_in);
+        noc_async_atomic_barrier();
+    }
+    if (expect_b > 0) {
+        volatile tt_l1_ptr uint32_t* arr_b = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(b_addr);
+        noc_semaphore_wait_min(arr_b, expect_b);
+        noc_semaphore_inc(get_noc_addr(b_addr), 0u - expect_b);
         noc_async_atomic_barrier();
     }
 }
@@ -523,7 +606,8 @@ def _schedule(chips, coord, j, d, ring):
     of 0 .. p-1; a line end starts every chain (lead = all), any other position relays every block (lead = 0).
     Ring: each block's partials arrive at its owner forward over a = G // 2 chips and backward over G - 1 - a, so a
     port sends a (or G - 1 - a) blocks; the first, farthest one starts its chain here (lead = 1), the rest are relays.
-    The last block a port sends is the receiver's own: forward it lands in the receiver's own slot, backward in slot G."""
+    The last block a port sends is the receiver's own: forward it lands in the receiver's own slot, backward in slot G.
+    """
     rg = chips[coord]["rings"][j]
     G, p = chips[coord]["G"], rg["p"]
     peer = rg["next"] if d == "fwd" else rg["prev"]
@@ -554,6 +638,7 @@ def create_mesh_program_descriptor(
     *,
     num_links,
     chips_ring=False,
+    on_port=False,
     cb_bytes=128 * 1024,  # 8 chunks of 8 KiB per CB batch: a port reads two streams per chunk, so it needs the depth
     inc_every=8,
 ):
@@ -587,9 +672,10 @@ def create_mesh_program_descriptor(
         assert 2 * lanes <= num_banks, f"{n_rings} rings x {num_links} links need at least {2 * lanes} DRAM banks"
         program = ttnn.ProgramDescriptor()
         ports, finals = ch["ports"], ch["finals"]
+        own = ch["out"]
         cbs = []
         for idx in (CB_OWN, CB_IN, CB_IN2, CB_OUT):
-            cores = list(ports.values()) + finals if idx != CB_IN2 else finals
+            cores = list(ports.values()) + finals if idx != CB_IN2 or on_port else finals
             cbs.append(
                 ttnn.CBDescriptor(
                     total_size=2 * group * chunk_bytes,
@@ -607,23 +693,41 @@ def create_mesh_program_descriptor(
             relays = len(blocks) - lead
             full = _chunks_per_shard(blk_pages, lane, lanes, num_banks, run_pages)
             packed = [b | (s_ << 16) for b, s_ in blocks]
-            pr_rt[core.x][core.y] = [in_addr, scr_addr, blk_pages, lane, lanes, sem_a, full, lead, len(blocks)] + [
-                b for b, _ in blocks
+            # on_port: the backward port also sums my own block after its sends (the forward arrival counts on its B,
+            # the backward arrival continues its relay stream on A)
+            has_fin = on_port and d == "bwd"
+            direct = lead == len(blocks) and not has_fin  # every block starts here: the reader feeds the sender
+            pr_rt[core.x][core.y] = (
+                [in_addr, scr_addr, blk_pages, lane, lanes, sem_a, full, lead, len(blocks)]
+                + [b for b, _ in blocks]
+                + [int(direct), int(has_fin), own, G, sem_b]
+            )
+            pc_rt[core.x][core.y] = [
+                0 if direct else relays * full,
+                1,
+                0,
+                0 if direct else lead * full,
+                full if has_fin else 0,
             ]
-            direct = lead == len(blocks)  # every block starts here: the reader feeds the sender
-            pc_rt[core.x][core.y] = [0 if direct else relays * full, 1, 0, 0 if direct else lead * full]
-            # what upstream relays to me: my relayed blocks (upstream sends the receiver's own block to its final core)
-            expect_in = _incs(relays * full, inc_every)
+            # what upstream relays to me: my relayed blocks, and with has_fin my own block (else it goes to a final core)
+            expect_in = _incs((relays + has_fin) * full, inc_every)
             send_ready = _needs_ready(chips, coord, j, d)
             rc = virt(chips[peer]["ports"][(j, _OPP[d], l)]) if send_ready else None
-            args = [scr_addr, blk_pages, lane, lanes, sem_a, sem_a if d == "fwd" else sem_b, expect_in, full, ready_addr]
+            fin_sem = (sem_b if d == "fwd" else sem_a) if on_port else (sem_a if d == "fwd" else sem_b)
+            args = [scr_addr, blk_pages, lane, lanes, sem_a, fin_sem, expect_in, full, ready_addr]
             args += [1, rc.x, rc.y] if send_ready else [0, 0, 0]
+            fin_mode = (1 if d == "fwd" else 2) if on_port else 0
+            args += [fin_mode, int(has_fin), out_addr, sem_b, _incs(full, inc_every) if has_fin else 0]
             if rg.get(f"{d}_links") and blocks:
                 pc = virt(chips[peer]["ports"][(j, d, l)])
-                fc0 = virt(chips[peer]["finals"][2 * lane])
-                fc1 = virt(chips[peer]["finals"][2 * lane + 1])
-                nf0 = _chunks_per_shard(blk_pages, lane, 2 * lanes, num_banks, run_pages)
-                nf1 = _chunks_per_shard(blk_pages, lane + lanes, 2 * lanes, num_banks, run_pages)
+                if on_port:  # the receiver's backward port sums its own block
+                    fc0 = fc1 = virt(chips[peer]["ports"][(j, "bwd", l)])
+                    nf0, nf1 = full, 0
+                else:
+                    fc0 = virt(chips[peer]["finals"][2 * lane])
+                    fc1 = virt(chips[peer]["finals"][2 * lane + 1])
+                    nf0 = _chunks_per_shard(blk_pages, lane, 2 * lanes, num_banks, run_pages)
+                    nf1 = _chunks_per_shard(blk_pages, lane + lanes, 2 * lanes, num_banks, run_pages)
                 pn = node(peer)
                 args += [
                     pc.x,
@@ -646,13 +750,16 @@ def create_mesh_program_descriptor(
                 args += [0] * 11
             ps_rt[core.x][core.y] = args
         fr_rt, fc_rt, fw_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        own = ch["out"]
         for i, core in enumerate(finals):  # final core 2 lane + h: banks lane + h lanes, stride 2 lanes
             lane, h = divmod(i, 2)
             rg = ch["rings"][lane // num_links]
             # an arrival per direction where a chain ends here: a ring always (G >= 3), a line from each side it has
-            has_f = int(rg["prev"] is not None and bool(_schedule(chips, rg["prev"], lane // num_links, "fwd", ring)[0]))
-            has_b = int(rg["next"] is not None and bool(_schedule(chips, rg["next"], lane // num_links, "bwd", ring)[0]))
+            has_f = int(
+                rg["prev"] is not None and bool(_schedule(chips, rg["prev"], lane // num_links, "fwd", ring)[0])
+            )
+            has_b = int(
+                rg["next"] is not None and bool(_schedule(chips, rg["next"], lane // num_links, "bwd", ring)[0])
+            )
             first, fstride = lane + h * lanes, 2 * lanes
             n = _chunks_per_shard(blk_pages, first, fstride, num_banks, run_pages)
             fr_rt[core.x][core.y] = [
@@ -670,7 +777,7 @@ def create_mesh_program_descriptor(
                 sem_b,
                 n,
             ]
-            fc_rt[core.x][core.y] = [n, has_f, has_b, 0]
+            fc_rt[core.x][core.y] = [n, has_f, has_b, 0, 0]
             fw_rt[core.x][core.y] = [
                 out_addr,
                 blk_pages,
@@ -690,7 +797,7 @@ def create_mesh_program_descriptor(
             runtime_args=rt,
             config=ttnn.ComputeConfigDescriptor(),
         )
-        program.kernels = [
+        kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=_PORT_READER,
                 source_type=src,
@@ -704,28 +811,32 @@ def create_mesh_program_descriptor(
                 kernel_source=_PORT_SENDER,
                 source_type=src,
                 core_ranges=cset(ports.values()),
-                compile_time_args=ct + scr_ct,
+                compile_time_args=ct + scr_ct + out_ct,
                 runtime_args=ps_rt,
                 config=dm("RISCV_0", NOC1),
             ),
-            ttnn.KernelDescriptor(
-                kernel_source=_FINAL_READER,
-                source_type=src,
-                core_ranges=cset(finals),
-                compile_time_args=ct + in_ct + scr_ct,
-                runtime_args=fr_rt,
-                config=dm("RISCV_1", NOC0),
-            ),
-            compute(finals, fc_rt),
-            ttnn.KernelDescriptor(
-                kernel_source=_FINAL_WRITER,
-                source_type=src,
-                core_ranges=cset(finals),
-                compile_time_args=ct + out_ct,
-                runtime_args=fw_rt,
-                config=dm("RISCV_0", NOC1),
-            ),
         ]
+        if finals:
+            kernels += [
+                ttnn.KernelDescriptor(
+                    kernel_source=_FINAL_READER,
+                    source_type=src,
+                    core_ranges=cset(finals),
+                    compile_time_args=ct + in_ct + scr_ct,
+                    runtime_args=fr_rt,
+                    config=dm("RISCV_1", NOC0),
+                ),
+                compute(finals, fc_rt),
+                ttnn.KernelDescriptor(
+                    kernel_source=_FINAL_WRITER,
+                    source_type=src,
+                    core_ranges=cset(finals),
+                    compile_time_args=ct + out_ct,
+                    runtime_args=fw_rt,
+                    config=dm("RISCV_0", NOC1),
+                ),
+            ]
+        program.kernels = kernels
         r, c = coord
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
     return mesh_desc
@@ -734,13 +845,17 @@ def create_mesh_program_descriptor(
 _SEM_CACHE, _SCRATCH_CACHE, _PLAN_CACHE = {}, {}, {}
 
 
-def _with_final_cores(mesh_device, chips, num_links):
-    """Each chip's plan plus "finals": two final cores per lane (ring j, link l), [lane 0 half 0, lane 0 half 1, ...].
+def _with_final_cores(mesh_device, chips, num_links, on_port=False):
+    """Each chip's plan plus "finals": two final cores per lane (ring j, link l), [lane 0 half 0, lane 0 half 1, ...];
+    none with on_port (the backward ports sum the own block).
     A lane's half 0 is fabric_all_gather's copy core of its link (first ring) or the next free core of that row; half 1
     the next free core in that row (else any free core)."""
     allowed = sorted(allowed_cores(mesh_device), key=lambda c: (c[1], c[0]))
     out = {}
     for coord, ch in chips.items():
+        if on_port:
+            out[coord] = {**ch, "finals": []}
+            continue
         taken = {(c.x, c.y) for c in list(ch["ports"].values()) + ch["copy"]}
 
         def free(row):
@@ -770,6 +885,7 @@ def fabric_reduce_scatter(
     scheme="ring",
     output=None,
     placement="auto",
+    final="cores",
 ):
     """Reduce-scatter `input_tensor` ([1, 1, G * Sb, W] TILE, DRAM interleaved, a partial per chip; block i = rows
     i Sb ..) over each group: every chip gets its block of the sum over the group, [1, 1, Sb, W] (the layout
@@ -782,9 +898,13 @@ def fabric_reduce_scatter(
     scheme "dual_cycles" (cluster_axis=None, Ring, a torus with both sides >= 3): two edge-disjoint Hamiltonian
         cycles, each reducing half of every block (half the DRAM banks).
     Whatever order a group travels in, chip (r, c) owns block (its row-major rank in the group), as the all-gather's
-    output slots: block r C + c over the whole mesh, block r (c) along axis 0 (1)."""
+    output slots: block r C + c over the whole mesh, block r (c) along axis 0 (1).
+    final "cores": two extra cores per link sum each chip's own block; "bwd_port": on an even ring (G >= 4) the
+        backward port does it after its sends (it sends one block fewer than the forward port), no extra cores; any
+        other group falls back to "cores"."""
     mesh_device = input_tensor.device()
-    key = (id(mesh_device), cluster_axis, topology, num_links, scheme, placement)
+    assert final in ("cores", "bwd_port"), final
+    key = (id(mesh_device), cluster_axis, topology, num_links, scheme, placement, final)
     if key not in _PLAN_CACHE:
         chips, ring = plan(
             mesh_device,
@@ -794,8 +914,10 @@ def fabric_reduce_scatter(
             placement=placement,
             scheme=scheme,
         )
-        _PLAN_CACHE[key] = (mesh_device, _with_final_cores(mesh_device, chips, num_links), ring)
-    ring = _PLAN_CACHE[key][2]
+        G = next(iter(chips.values()))["G"]
+        on_port = final == "bwd_port" and bool(ring) and G % 2 == 0 and G >= 4
+        _PLAN_CACHE[key] = (mesh_device, _with_final_cores(mesh_device, chips, num_links, on_port), ring, on_port)
+    ring, on_port = _PLAN_CACHE[key][2], _PLAN_CACHE[key][3]
     chips = _PLAN_CACHE[key][1]
     G = next(iter(chips.values()))["G"]
     _check_dram_interleaved(input_tensor, "input")
@@ -829,6 +951,6 @@ def fabric_reduce_scatter(
         _SEM_CACHE[ckey] = (mesh_device, sems)
     sems = tuple(int(ttnn.get_global_semaphore_address(s)) for s in _SEM_CACHE[ckey][1])
     desc = create_mesh_program_descriptor(
-        mesh_device, input_tensor, scratch, output, sems, chips, num_links=num_links, chips_ring=ring
+        mesh_device, input_tensor, scratch, output, sems, chips, num_links=num_links, chips_ring=ring, on_port=on_port
     )
     return ttnn.generic_op([input_tensor, scratch, output], desc)
