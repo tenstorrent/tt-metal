@@ -29,7 +29,8 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    bool fp8_output) {
     // Ring on an axis without a closing link resolves to Linear, which this op cannot run: it sends
     // single hops around a ring.
     const tt::tt_fabric::Topology usable = ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
@@ -66,7 +67,8 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
         num_links,
         usable,
         memory_config,
-        allowed_cores);
+        allowed_cores,
+        fp8_output);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

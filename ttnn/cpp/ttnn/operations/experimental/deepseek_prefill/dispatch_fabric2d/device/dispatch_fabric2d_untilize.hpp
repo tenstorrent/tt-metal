@@ -17,7 +17,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 // row is 32 token rows, one tile high. `plan_untilize` returns nothing for a row-major input.
 //
 // Tiles arrive in the input's format and rows leave in the payload's; the packer converts between them as
-// it writes. Both are BFLOAT16 today.
+// it writes: BFLOAT16 tiles to BFLOAT16 or FP8_E4M3 rows.
 struct UntilizePlan {
     uint32_t num_tile_rows = 0;
     uint32_t tiles_per_row = 0;
@@ -27,6 +27,7 @@ struct UntilizePlan {
     uint32_t sem_addr = 0;
     tt::DataFormat tile_format = tt::DataFormat::Float16_b;
     tt::DataFormat row_format = tt::DataFormat::Float16_b;
+    bool fp32_dest_acc_en = false;
     tt::tt_metal::Buffer* input = nullptr;
     tt::tt_metal::Buffer* staging = nullptr;
 };

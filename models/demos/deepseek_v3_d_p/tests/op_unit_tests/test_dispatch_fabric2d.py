@@ -30,6 +30,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_y_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.fabric2d_contract import fabric2d_min_payload_size
@@ -99,6 +100,24 @@ def _reference_dispatch(indices, table, offs, x, capacity, G, H, seq, topk, emb)
                     meta[g, row, page] = torch.tensor([s * G + g, t, k], dtype=torch.int32)
                     src_of[g, row, page] = s
     return payload, meta, src_of
+
+
+def _fp8_e4m3_blackhole_pack(x):
+    """x cast to FP8_E4M3 the way Blackhole's packer does it, which is neither IEEE nor torch's cast.
+
+    A result of 2^-6 or more, the smallest normal, is rounded toward zero. Nothing is denormalised: below
+    2^-7 a value flushes to a signed zero, and in [2^-7, 2^-6) the exponent field becomes 0 while the top
+    three mantissa bits stay, so the value reads back as the subnormal 0.mmm * 2^-6 and loses its leading 1.
+    Exact for |x| <= 448, the largest FP8_E4M3 value.
+    """
+    f = x.to(torch.float32)
+    bits = f.view(torch.int32)
+    normal = (bits & ~((1 << 20) - 1)).view(torch.float32)
+    leaked = torch.sign(f) * ((bits >> 20) & 0x7).to(torch.float32) * 2**-9
+    flushed = torch.sign(f) * 0.0
+    return torch.where(f.abs() >= 2**-6, normal, torch.where(f.abs() >= 2**-7, leaked, flushed)).to(
+        torch.float8_e4m3fn
+    )
 
 
 def _expert_dispatch_table(num_routed_experts: int, dispatch_group_size: int, num_dispatch_groups: int):
@@ -362,7 +381,27 @@ class _Fixture:
             ttnn.TILE_LAYOUT: self._shard(self.x, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
         }
         self.tt_table = self._shard(self.table.unsqueeze(1), (None, 0), ttnn.int32)
+        self._tt_x_fp8 = None
+        self.mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, 1))
         self.rebuild()
+
+    def tt_x_fp8(self):
+        """`x` as an FP8_E4M3 ROW_MAJOR input, made on first use.
+
+        Converted on host, where only a float32 source converts to FP8_E4M3; widening bf16 is exact. The
+        device conversion would go through an FP8_E4M3 TILE intermediate, which does not exist.
+        """
+        if self._tt_x_fp8 is None:
+            host = ttnn.from_torch(
+                self.x.to(torch.float32),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=(0, 1)
+                ),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.fp8_e4m3,
+            )
+            self._tt_x_fp8 = ttnn.to_device(host, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return self._tt_x_fp8
 
     def _shard(self, t, dims, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
         return ttnn.from_torch(
@@ -425,9 +464,22 @@ class _Fixture:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def run(self, cluster_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT, subdevice_id=None, padding_config=None):
+    def run(
+        self,
+        cluster_axis,
+        num_links,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        subdevice_id=None,
+        padding_config=None,
+        fp8_output=False,
+        x=None,
+    ):
+        """Launch the op. With fp8_output a ROW_MAJOR input is the FP8_E4M3 copy of `x`, as the op requires;
+        pass `x` to override the input."""
+        if x is None:
+            x = self.tt_x_fp8() if fp8_output and layout == ttnn.ROW_MAJOR_LAYOUT else self.tt_x[layout]
         return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
-            self.tt_x[layout],
+            x,
             self.tt_idx,
             self.tt_offs,
             self.tt_table,
@@ -445,6 +497,7 @@ class _Fixture:
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             subdevice_id=subdevice_id,
+            fp8_output=fp8_output,
         )
 
     def reference(self):
@@ -473,9 +526,19 @@ class _Fixture:
             )
         return self._reference
 
-    def check(self, payload, metadata, label):
-        """Every page any chip sourced, byte-exact against `reference()`."""
+    def check(self, payload, metadata, label, fp8_x=None):
+        """Every page any chip sourced, byte-exact against `reference()`.
+
+        `fp8_x` is `x` as the FP8_E4M3 tokens the op should move, in `x`'s (H, G, seq, emb) order. With it the
+        payload must be FP8_E4M3, and each page is compared bit for bit against the token its reference
+        metadata names.
+        """
         ref_payload, ref_meta, src_of = self.reference()
+        if fp8_x is not None:
+            assert payload.dtype == ttnn.fp8_e4m3, f"{label}: payload is {payload.dtype}, expected FP8_E4M3"
+            fp8_x = fp8_x.view(torch.uint8)
+            # One device's FP8_E4M3 shard does not convert to torch; the whole mesh does, through a composer.
+            fp8_payload = ttnn.to_torch(payload, mesh_composer=self.mesh_composer).view(torch.uint8)
         got_payload = ttnn.get_device_tensors(payload)
         got_meta = ttnn.get_device_tensors(metadata)
         checked = 0
@@ -485,10 +548,17 @@ class _Fixture:
             if not pages:
                 continue
             idx = torch.tensor(pages)
-            pay = ttnn.to_torch(got_payload[dev]).reshape(self.capacity, self.emb_dim)
+            if fp8_x is not None:
+                pay = fp8_payload[r, g].reshape(self.capacity, self.emb_dim)[idx]
+                src_chip_and_token = ref_meta[g, r][idx].to(torch.int64)
+                want = fp8_x[src_chip_and_token[:, 0] // self.G, g, src_chip_and_token[:, 1]]
+            else:
+                pay = ttnn.to_torch(got_payload[dev]).reshape(self.capacity, self.emb_dim)[idx]
+                want = ref_payload[g, r][idx]
             met = ttnn.to_torch(got_meta[dev]).to(torch.int32).reshape(self.capacity, 3)
             checked += len(pages)
-            assert torch.equal(pay[idx], ref_payload[g, r][idx]), f"{label}: device {dev} payload differs"
+            wrong = int((pay != want).sum())
+            assert wrong == 0, f"{label}: device {dev} payload differs in {wrong} of {pay.numel()} elements"
             assert torch.equal(met[idx], ref_meta[g, r][idx]), f"{label}: device {dev} metadata differs"
         assert checked > 0, f"{label}: no dispatched pages found; the reference or the routing is wrong"
         logger.info(f"{label}: {checked} pages byte-exact")
@@ -858,3 +928,57 @@ def test_dispatch_fabric2d_padding_config(mesh_device, device_params, num_links,
         payload, metadata = fx.run(cfg.sp_axis, num_links, padding_config=fx.padding_config(real, pad_side))
         fx.check(payload, metadata, label)
     logger.info(f"padding_config: {real} real of {fx.seq_len_per_chip} tokens, byte-exact either side")
+
+
+def _fp8_output_cases():
+    """The production emb_dim on every mesh above, then GLM 5.3's fp8 wire token on the 8x1 at GLM's model payload.
+
+    That token is a 6144-wide row with a scale per 128 values packed in, 6336 B, which is 99 lines of 64 B. It does
+    not fit one packet at that payload, and its half is not a whole number of lines, so the cut is rounded up to one.
+    """
+    cases = []
+    for p in _MESH_CONFIGS + [_HALF_TOKEN_PAYLOAD_8X1]:
+        cases.append(pytest.param(*p.values, 7168, marks=p.marks, id=f"{p.id}-emb7168"))
+    cases.append(
+        pytest.param(
+            (8, 1),
+            torus_y_device_params(fabric_payload_size=fabric2d_min_payload_size(6144)),
+            2,
+            6144 + 6144 // 128 * 4,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="fabric2d-torus-y-8x1-2link-glm-payload-emb6336",
+        )
+    )
+    return cases
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, emb_dim",
+    _fp8_output_cases(),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(900)
+def test_dispatch_fabric2d_fp8_output(mesh_device, device_params, num_links, emb_dim, expect_error):
+    """fp8_output dispatches FP8_E4M3 tokens byte-exact from both input layouts.
+
+    A ROW_MAJOR input is already FP8_E4M3 and is copied as is, so each page must hold the input's own bytes.
+    A TILE input is BFLOAT16 and the untilizer's packer converts it, as `_fp8_e4m3_blackhole_pack` models. At
+    the half-token payload a 7168 B token crosses each hop as one packet; see `_fp8_output_cases` for the token
+    that goes as two.
+
+    A BFLOAT16 ROW_MAJOR input must be refused, since nothing on that path could convert it.
+    """
+    if not is_blackhole():
+        pytest.skip("FP8_E4M3 is Blackhole-only")
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=emb_dim, capacity_div=None)
+    staged_fp8 = ttnn.to_torch(fx.tt_x_fp8(), mesh_composer=fx.mesh_composer)
+    packed_fp8 = _fp8_e4m3_blackhole_pack(fx.x)
+    for layout, label, fp8_x in (
+        (ttnn.ROW_MAJOR_LAYOUT, "fp8 row-major", staged_fp8),
+        (ttnn.TILE_LAYOUT, "bf16 tile -> fp8", packed_fp8),
+    ):
+        payload, metadata = fx.run(cfg.sp_axis, num_links, layout=layout, fp8_output=True)
+        fx.check(payload, metadata, label, fp8_x=fp8_x)
+    with expect_error(RuntimeError, "a ROW_MAJOR input is copied as is"):
+        fx.run(cfg.sp_axis, num_links, fp8_output=True, x=fx.tt_x[ttnn.ROW_MAJOR_LAYOUT])

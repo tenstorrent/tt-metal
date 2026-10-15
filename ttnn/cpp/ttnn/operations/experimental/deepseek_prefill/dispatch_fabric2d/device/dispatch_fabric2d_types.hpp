@@ -26,6 +26,9 @@ struct DispatchFabric2dParams {
     uint32_t num_links = 2;
     // The kernel reads padding_config under a compile-time branch, so this must be in the cache key.
     bool has_padding_config = false;
+    // FP8_E4M3 dispatched buffer instead of BFLOAT16. Every byte the op moves is a payload byte, so this halves
+    // the DRAM and fabric traffic per token.
+    bool fp8_output = false;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     tt::tt_metal::MemoryConfig output_mem_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
