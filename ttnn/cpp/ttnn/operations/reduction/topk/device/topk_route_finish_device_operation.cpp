@@ -122,7 +122,7 @@ ttsl::hash::hash_t TopkRouteFinishDeviceOperation::compute_program_hash(
         total_tile_rows,
         k_rounded,
         index_is_u32,
-        program::finish_units_per_tile(input, indices, grid.x * grid.y));
+        program::finish_units_per_tile(input, indices, /*num_cores*/ grid.x * grid.y));
 }
 
 spec_return_value_t TopkRouteFinishDeviceOperation::compute_output_specs(

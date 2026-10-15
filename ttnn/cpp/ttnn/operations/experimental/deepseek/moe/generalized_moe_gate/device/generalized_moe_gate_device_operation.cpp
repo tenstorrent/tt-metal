@@ -85,6 +85,11 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
     if (input_interleaved) {
         TT_FATAL(input_tensor.layout() == Layout::TILE, "interleaved input_tensor must be TILE layout");
         TT_FATAL(w == 256, "interleaved input_tensor must have 256 columns, one block per token row");
+        // The reader's scratch holds one 256 wide row; a padded width would read past it.
+        TT_FATAL(
+            input_tensor.padded_shape()[-1] == 256,
+            "interleaved input_tensor must have padded width 256, got {}",
+            input_tensor.padded_shape()[-1]);
         TT_FATAL(
             in_shape.volume() == static_cast<uint64_t>(h) * w,
             "interleaved input_tensor must be [1, ..., 1, tokens, 256]");

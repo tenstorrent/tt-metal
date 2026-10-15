@@ -13,6 +13,10 @@
 // freshly allocated output pages hold garbage, and the contract promises zero-filled tile
 // padding, so those units exist purely to write zeros.
 //
+// When half tile units would leave cores idle, finish_units_per_tile splits each half into its two 16x16 faces
+// (four units per tile). The _faces reader and writer gather one face's 16 columns, stage them in the same half
+// tile page and write that face only; everything below describes the half tile units, which run main's kernels.
+//
 // Per unit the gather load is SPLIT ACROSS BOTH RISCs: the reader (BRISC) owns unit rows
 // [0, 8) and the writer (NCRISC) rows [8, 16). Each side reads its own <=8 RM u32
 // index-stick segments into private scratch, zero-fills ITS row ranges of the two staging
@@ -78,6 +82,10 @@ constexpr uint32_t bounce_slot_bytes = 64;
 constexpr uint32_t stick_segment_bytes = TILE_WIDTH * sizeof(uint32_t);
 constexpr uint32_t stick_rows_per_risc = TILE_HEIGHT / 4;  // 8
 
+// Face units halve each core's gather latency until the busier NoC saturates; measured on a p100a over op sweep rows.
+constexpr uint32_t kNocSaturationGathers = 6144;
+constexpr uint32_t kMinHalfUnitsForFaces = 40;
+
 struct FinishWorkSplit {
     uint32_t width_tiles = 0;          // logits W_p / 32
     uint32_t total_tile_rows = 0;      // logits padded volume / W_p / 32 (all batches)
@@ -115,7 +123,7 @@ void set_runtime_args(
     const Tensor& values_out,
     const Tensor& indices_out) {
     const auto grid = input.device()->compute_with_storage_grid_size();
-    const auto split = compute_work_split(input, indices, grid.x * grid.y);
+    const auto split = compute_work_split(input, indices, /*num_cores*/ grid.x * grid.y);
     const auto unit_split = ttnn::split_blocks_for_tilize(CoreCoord(grid.x, grid.y), split.total_units);
 
     const uint32_t logical_rows = input.logical_shape()[-2];
@@ -165,12 +173,12 @@ uint32_t finish_units_per_tile(const Tensor& input, const Tensor& indices, uint3
     const uint32_t half_units = total_tile_rows * tt::div_up(k_rounded, TILE_WIDTH) * 2;
     // The reader gathers rows r % 16 < 8 of each tile row and the writer the others, each on its own NoC.
     const uint32_t rows = input.logical_shape()[-2];
-    const uint32_t reader_rows = rows / 16 * 8 + std::min(rows % 16, 8u);
+    const uint32_t reader_rows =
+        rows / (TILE_HEIGHT / 2) * stick_rows_per_risc + std::min(rows % (TILE_HEIGHT / 2), stick_rows_per_risc);
     const uint32_t batches = input.physical_volume() / (padded[-2] * padded[-1]);
     const uint32_t noc_gathers = batches * std::max(reader_rows, rows - reader_rows) * k_rounded;
-    // Doubling the units pays until the busier NoC saturates near 6144 gathers, and again from 40 half units.
     const bool faces_fit = 2 * half_units <= num_cores;
-    return faces_fit && (noc_gathers <= 6144 || half_units >= 40) ? 4 : 2;
+    return faces_fit && (noc_gathers <= kNocSaturationGathers || half_units >= kMinHalfUnitsForFaces) ? 4 : 2;
 }
 
 TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::create(
@@ -185,7 +193,7 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
     auto program = tt::tt_metal::CreateProgram();
 
     const auto grid = input.device()->compute_with_storage_grid_size();
-    const auto split = compute_work_split(input, indices, grid.x * grid.y);
+    const auto split = compute_work_split(input, indices, /*num_cores*/ grid.x * grid.y);
     const auto unit_split = ttnn::split_blocks_for_tilize(CoreCoord(grid.x, grid.y), split.total_units);
     const auto& all_cores = unit_split.all_cores;
 
@@ -217,7 +225,7 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
 
     // Reader -> writer staging: one page per face-pair half, double-buffered. The page byte
     // layout is EXACTLY the output tile's face-pair range, so the writer issues one
-    // contiguous write per page.
+    // contiguous write per page (a face unit writes its own face of it).
     const auto values_cb_config =
         tt::tt_metal::CircularBufferConfig(2 * value_half_bytes, {{values_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(values_cb_index, value_half_bytes);

@@ -583,7 +583,7 @@ class TTMoEGate:
                 )
             weights_chunks.append(ttnn.to_memory_config(w, memory_config=ttnn.L1_MEMORY_CONFIG))
             indices_chunks.append(ttnn.to_memory_config(idx, memory_config=ttnn.L1_MEMORY_CONFIG))
-            if not direct_input:
+            if not direct_input or cur is not logits:
                 ttnn.deallocate(cur)
         ttnn.deallocate(logits)
 

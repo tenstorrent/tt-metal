@@ -9,6 +9,8 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 
+constexpr std::uint32_t onetile = 1;
+
 // Drain each write before popping its slot, or the compute's next pack can overwrite it mid NoC read.
 void send_tiles(
     const Noc& noc,
@@ -20,7 +22,7 @@ void send_tiles(
     std::uint32_t dst_base) {
     const UnicastEndpoint remote;
     for (std::uint32_t i = 0; i < Kt; ++i) {
-        src_dfb.wait_front(1);
+        src_dfb.wait_front(onetile);
         noc.async_write(
             src_dfb,
             remote,
@@ -28,7 +30,7 @@ void send_tiles(
             {.offset_bytes = 0},
             {.noc_x = noc_x, .noc_y = noc_y, .addr = dst_base + (i * tile_bytes)});
         noc.async_write_barrier();
-        src_dfb.pop_front(1);
+        src_dfb.pop_front(onetile);
     }
 }
 
@@ -38,6 +40,7 @@ void kernel_main() {
     // Args 2, 3 and 5 (final core coordinates, K) belong to the non tree writer; destinations come at runtime here.
     constexpr std::uint32_t Ht = get_compile_time_arg_val(4);
     constexpr std::uint32_t Kt = get_compile_time_arg_val(6);
+    constexpr std::uint32_t merge_tiles = 2 * Kt;  // own Kt tiles, then the partner's
     constexpr std::uint32_t values_dfb_index = get_compile_time_arg_val(7);
     constexpr std::uint32_t output_ind_dfb_index = get_compile_time_arg_val(8);
     constexpr std::uint32_t final_values_dfb_index = get_compile_time_arg_val(9);
@@ -89,9 +92,9 @@ void kernel_main() {
             const std::uint32_t child_noc_x = get_arg_val<std::uint32_t>(child_coords_arg_base + 2 * r);
             const std::uint32_t child_noc_y = get_arg_val<std::uint32_t>(child_coords_arg_base + 2 * r + 1);
 
-            landing_values_dfb.reserve_back(2 * Kt);
+            landing_values_dfb.reserve_back(merge_tiles);
 #if !defined(TOPK_FUSED_STABLE_KEYS)
-            landing_indices_dfb.reserve_back(2 * Kt);
+            landing_indices_dfb.reserve_back(merge_tiles);
 #endif
             // The slot is free: let the child write its half while our own half is copied in.
             credit_sem.up(noc, child_noc_x, child_noc_y, 1);
@@ -104,9 +107,9 @@ void kernel_main() {
             // The child increments data_sem only after its writes are drained, so the slot is complete here.
             ++landed;
             data_sem.wait_min(landed);
-            landing_values_dfb.push_back(2 * Kt);
+            landing_values_dfb.push_back(merge_tiles);
 #if !defined(TOPK_FUSED_STABLE_KEYS)
-            landing_indices_dfb.push_back(2 * Kt);
+            landing_indices_dfb.push_back(merge_tiles);
 #endif
         }
 

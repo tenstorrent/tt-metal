@@ -149,7 +149,7 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
             device->l1_size_per_core(),               // L1 memory per core
             value_tile_size,                          // Value tile memory size
             index_tile_size,                          // Index tile memory size
-            device->arch() == tt::ARCH::BLACKHOLE,    // Tree merge of the local results
+            /*tree_merge*/ topk_uses_tree_merge(device->arch()),
             input_tensor.tensor_spec().tile().get_width());
     }
 
@@ -356,9 +356,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             args.k,                                   // Top-K value
             core_range,                               // Available cores
             device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).largest_free_block_bytes,  // L1 memory
-            value_tile_size,                        // Value tile size
-            index_tile_size,                        // Index tile size
-            device->arch() == tt::ARCH::BLACKHOLE,  // Tree merge of the local results
+            value_tile_size,  // Value tile size
+            index_tile_size,  // Index tile size
+            /*tree_merge*/ topk_uses_tree_merge(device->arch()),
             input_tensor.tensor_spec().tile().get_width());
 
         // Fallback to single-core if multi-core is not feasible

@@ -54,6 +54,7 @@ void kernel_main() {
     constexpr std::uint32_t Wt = get_compile_time_arg_val(7);
     constexpr std::uint32_t K = get_compile_time_arg_val(8);
     constexpr std::uint32_t Kt = get_compile_time_arg_val(9);
+    constexpr std::uint32_t merge_tiles = 2 * Kt;  // own Kt tiles, then the partner's
     constexpr std::uint32_t logk = get_compile_time_arg_val(10);
     constexpr std::uint32_t logWt = get_compile_time_arg_val(11);
     constexpr std::uint32_t largest = get_compile_time_arg_val(12);
@@ -128,26 +129,31 @@ void kernel_main() {
         }
 
         // The first Kt tiles of the transposed buffers hold the local top k; repack them in the output formats.
-        copy_front_tiles(input_transposed_dfb_index, values_dfb_index, Kt, Wt);
+        copy_front_tiles(input_transposed_dfb_index, values_dfb_index, /*num_tiles*/ Kt, /*src_pop*/ Wt);
         if constexpr (!fused_keys) {
             // In fused mode the indices ride inside the packed value tiles; there is no index stream.
-            copy_front_tiles(index_transposed_dfb_index, output_ind_dfb_index, Kt, Wt);
+            copy_front_tiles(index_transposed_dfb_index, output_ind_dfb_index, /*num_tiles*/ Kt, /*src_pop*/ Wt);
         }
 
         for (std::uint32_t r = 0; r < num_recv_rounds; ++r) {
-            copy_front_tiles(landing_values_dfb_index, merge_values_dfb_index, 2 * Kt, 2 * Kt);
+            copy_front_tiles(
+                landing_values_dfb_index, merge_values_dfb_index, /*num_tiles*/ merge_tiles, /*src_pop*/ merge_tiles);
             if constexpr (!fused_keys) {
-                copy_front_tiles(landing_indices_dfb_index, merge_indices_dfb_index, 2 * Kt, 2 * Kt);
+                copy_front_tiles(
+                    landing_indices_dfb_index,
+                    merge_indices_dfb_index,
+                    /*num_tiles*/ merge_tiles,
+                    /*src_pop*/ merge_tiles);
             }
 
             // Partners of the next round must be sorted in opposite directions, like direction_init does locally.
             const bool merge_ascending = (largest == 0) != (((core_id >> (r + 1)) & 1) == 1);
-            std::uint32_t merge_num_k_sequences = (2 * Kt * 32) / K;
+            std::uint32_t merge_num_k_sequences = (merge_tiles * 32) / K;
             uint32_t merge_seq_per_2tiles = initial_seq_per_2tiles;
             process_iteration<network_stable, fused_keys, tie_order>(
                 0,  // Single merge step: at m_iter 0 tile t is paired with tile t + Kt
                 K,
-                2 * Kt,  // Own Kt tiles followed by the partner's Kt tiles
+                merge_tiles,
                 merge_num_k_sequences,
                 tiles_per_seq,
                 merge_values_dfb_index,
@@ -162,9 +168,10 @@ void kernel_main() {
                 merge_seq_per_2tiles,
                 largest);
 
-            copy_front_tiles(merge_values_dfb_index, values_dfb_index, Kt, 2 * Kt);
+            copy_front_tiles(merge_values_dfb_index, values_dfb_index, /*num_tiles*/ Kt, /*src_pop*/ merge_tiles);
             if constexpr (!fused_keys) {
-                copy_front_tiles(merge_indices_dfb_index, output_ind_dfb_index, Kt, 2 * Kt);
+                copy_front_tiles(
+                    merge_indices_dfb_index, output_ind_dfb_index, /*num_tiles*/ Kt, /*src_pop*/ merge_tiles);
             }
         }
     }

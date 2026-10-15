@@ -83,6 +83,12 @@ inline void _bcast_cols_op_()
 
 /**
  * @brief Emit the bcast-col FPU op once per fidelity phase; ADDR_MOD_4 steps the phase, the last op advances and clears it.
+ *
+ * @tparam eltwise_binary_type: FPU op, values = <ELWSUB/ELWMUL>
+ * @tparam addr_mod: addr-mod slot of the last op, with the srcA/srcB/dest strides and fidelity.clr set
+ * @tparam fidelity_phases: number of fidelity phases (1 for LoFi)
+ * @note The caller programs ADDR_MOD_4 with fidelity incr 1 and no srcA/srcB/dest increment, as
+ *       _llk_math_bcast_cols_reuse_custom_ does; _llk_math_sub_bcast_cols_compensated_init_ programs it differently.
  */
 template <EltwiseBinaryType eltwise_binary_type, std::uint8_t addr_mod, std::uint32_t fidelity_phases>
 inline void _bcast_cols_op_phased_()
@@ -107,7 +113,7 @@ inline void _bcast_cols_op_phased_()
  * column instead of per (column, head). cb_qk must be head-major.
  *
  * Each 16x16 face pair (one face-row) is processed by four ops (two per face; each covers an aligned
- * 8x16 block). A full 32x32 tile has two face-rows (F0/F1 and F2/F3); a 16x32 tiny tile has a single
+ * 8x16 block), and each op repeats once per fidelity phase. A full 32x32 tile has two face-rows (F0/F1 and F2/F3); a 16x32 tiny tile has a single
  * face-row (F0/F1).
  *
  * @tparam eltwise_binary_type: FPU op, values = <ELWSUB/ELWMUL>

@@ -53,7 +53,7 @@ void bind_indexer_score(nb::module_& mod) {
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
                 head_group_size; elements, tile-aligned). Omitted: every head
                 resident and the widest k chunk that fits the free L1 (the full strip path),
-                or the 32/32/1 config when q is in L1.
+                or the 32/32/1 config when q is in L1 or no k chunk fits.
             compute_kernel_config: optional DeviceComputeKernelConfig. Only
                 math_fidelity is honored (default: HiFi2, or LoFi when q and k
                 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must

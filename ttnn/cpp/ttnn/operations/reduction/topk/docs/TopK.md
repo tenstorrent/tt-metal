@@ -254,8 +254,12 @@ The strategy consists of two phases:
      - Total cores used = `width / split_size`
      - Width must divide evenly by `split_size` (no remainder)
      - The core count fits the grid as a contiguous rectangle, and the per-core CB footprint fits L1
+     - With the tree merge (Blackhole), `split_size > k`, so each local TopK reduces its chunk
    - Among all valid power-of-two splits, the one with the lowest **modeled makespan** is selected:
      `T ≈ kLocalCostFactor × Wt_local + kFinalCostFactor × Wt_final`, where `Wt_final = num_cores × Kt`.
+     With the tree merge (Blackhole) the final core receives only `Kt` tiles and each merge round is priced:
+     `T ≈ kLocalCostFactor × Wt_local + kTreeRoundCostFactor × log2(num_cores) + kFinalCostFactor × Kt`
+     (7, 3 and 2), so more local cores pay off.
      The constants were fitted on Blackhole (p150a) silicon; a local tile costs ~3.5× a final tile because
      local cores run full 64-element sorts per tile while the final core runs merge/rebuild pair-ops.
      Note this is **not** the maximum-parallelism (most-cores / smallest-split) choice: adding cores grows
@@ -310,8 +314,8 @@ The strategy consists of two phases:
 
 #### Circular Buffers (Final Core):
 
-- **input_cb_index**: Received values from all local cores (Wt_final = num_cores × Kt tiles)
-- **index_cb_index**: Received indices from all local cores (Wt_final = num_cores × Kt tiles)
+- **input_cb_index**: Received values from the local cores (Wt_final = num_cores × Kt tiles, Kt with the tree merge)
+- **index_cb_index**: Received indices from the local cores (Wt_final = num_cores × Kt tiles, Kt with the tree merge)
 - **input_transposed_cb_index**: Staging buffer for global bitonic merge operations (values)
 - **index_transposed_cb_index**: Staging buffer for global bitonic merge operations (indices)
 - **values_cb_index**: Final globally optimal TopK values output (Kt tiles)
@@ -340,8 +344,8 @@ This limits the maximum number of cores and the split size that can be used.
 
 #### Example:
 
-For a tensor of shape `[32, 16384]` (1 × 512 tiles), k=32, on a grid large enough for a
-32-core rectangle (e.g. Blackhole), the makespan model picks:
+For a tensor of shape `[32, 16384]` (1 × 512 tiles), k=32, with the serial final merge (other archs than
+Blackhole) on a grid large enough for a 32-core rectangle, the makespan model picks:
 
 **Configuration:**
 - `split_size = 512` (16 tiles per core): score `7×16 + 2×32 = 176`, beating
@@ -360,6 +364,10 @@ For a tensor of shape `[32, 16384]` (1 × 512 tiles), k=32, on a grid large enou
 2. Executes Bitonic Merge on 32 tiles
 3. Extracts global top 32 elements
 4. Writes 1 tile to DRAM
+
+With the tree merge on Blackhole the same call picks `split_size = 256`: 64 local cores of 8 tiles each,
+score `7×8 + 3×6 + 2×1 = 76` against `7×16 + 3×5 + 2×1 = 129` for 32 cores. Six merge rounds leave the
+top 32 on core 0, and the final core receives 1 tile.
 
 **Advantages:**
 - 32-way parallelism in phase 1, with the local/final split balanced by the fitted cost model

@@ -251,6 +251,20 @@ def test_generalized_moe_gate(
     ), "Normalized scores are not consistent with the device's own top-8 selection"
 
 
+def test_generalized_moe_gate_tile_rows_past_first_tile(device):
+    """Token 32 of an interleaved input sits in the second tile row of the logits."""
+    test_generalized_moe_gate(
+        device,
+        batch_size=33,
+        enable_sigmoid=True,
+        seed=42,
+        topk=8,
+        output_softmax=False,
+        logit_scale=1.0,
+        interleaved_input=True,
+    )
+
+
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])

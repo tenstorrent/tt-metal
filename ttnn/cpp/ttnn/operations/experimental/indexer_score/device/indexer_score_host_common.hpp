@@ -68,15 +68,16 @@ inline IndexerScoreProgramConfig default_program_config(
     uint32_t k_tile_bytes,
     uint64_t l1_budget,
     uint32_t key_compression_ratio = 1) {
-    constexpr uint64_t bf16_tile = 2048;
-    for (uint32_t KC : {16u, 8u, 4u, 2u}) {
+    const uint64_t bf16_tile = tt::tile_size(tt::DataFormat::Float16_b);
+    constexpr uint64_t slack_divisor = 8;
+    for (uint32_t KC : {16u, 8u, 4u, 2u}) {  // widest k chunk first
         if (KC > Tt) {
             continue;
         }
         // Both factories' make_cb sizes at QC 1 and HB Hi with bf16 accumulation, plus an eighth of slack.
         const uint64_t bytes = uint64_t(Hi) * Dt * q_tile_bytes + 2ull * KC * Dt * k_tile_bytes +
                                (uint64_t(Hi) + key_compression_ratio + 1 + uint64_t(KC) * Hi + 4ull * KC) * bf16_tile;
-        if (bytes + bytes / 8 <= l1_budget) {
+        if (bytes + bytes / slack_divisor <= l1_budget) {
             return {tt::constants::TILE_HEIGHT, KC * tt::constants::TILE_WIDTH, 0};
         }
     }
@@ -86,22 +87,6 @@ inline IndexerScoreProgramConfig default_program_config(
 // Heads per DEST pass of the gate multiply; above LoFi a 64 head bf16 DEST sum loses more than the multiply does.
 inline uint32_t gate_mul_heads_per_pass(tt::tt_metal::MathFidelity math_fidelity) {
     return math_fidelity == tt::tt_metal::MathFidelity::LoFi ? 0u : 8u;
-}
-
-inline uint32_t streaming_q_depth(uint64_t q_block_bytes, uint64_t other_cb_bytes, uint64_t l1_budget) {
-    for (uint32_t depth : {8u, 4u}) {
-        if (depth * q_block_bytes <= l1_budget / 2 && depth * q_block_bytes + other_cb_bytes <= l1_budget) {
-            return depth;
-        }
-    }
-    return 2;
-}
-
-inline uint64_t cb_l1_budget(const Tensor& q) {
-    auto* device = q.device();
-    const uint64_t top = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
-    const uint64_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    return top > base ? top - base : 0;
 }
 
 // Shared physical axis tables preserve harvested/non-contiguous coordinates.

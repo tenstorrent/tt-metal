@@ -152,7 +152,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     const auto& device = input_tensor.device();
 
     // The tree merge was measured on Blackhole only; other archs keep the merge on the final core.
-    const bool tree_merge = device.arch() == tt::ARCH::BLACKHOLE;
+    const bool tree_merge = topk_uses_tree_merge(device.arch());
 
     const auto input_shape = input_tensor.padded_shape();
     const std::uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
