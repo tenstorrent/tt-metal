@@ -830,6 +830,15 @@ bool is_native_L1_sharding(
         return false;
     }
 
+    // The native path sizes per-core work from the legacy 2D shard specs, which an ND_SHARDED config lacks.
+    auto lacks_2d_shard_spec = [](const MemoryConfig& config) {
+        return config.is_sharded() && !config.shard_spec().has_value();
+    };
+    if (lacks_2d_shard_spec(c) || lacks_2d_shard_spec(a.memory_config()) ||
+        (b.has_value() && lacks_2d_shard_spec(b->memory_config()))) {
+        return false;
+    }
+
     // Native sharding aliases operand buffers as circular buffers, which Metal permits only for L1. This
     // predicate is a router, not a validator: declining sends the op to the TensorAccessor path, which
     // serves DRAM-sharded tensors.
@@ -958,6 +967,10 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
 }
 
 MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b) {
+    // An ND_SHARDED config has no 2D shard spec to adjust; its nd_shard_spec applies to any shape as is.
+    if (!input_tensor_a.memory_config().shard_spec().has_value()) {
+        return input_tensor_a.memory_config();
+    }
     // Compute adjusted shard spec for output shape
     const auto& padded_a_shape = input_tensor_a.padded_shape();
     const auto& logical_out_shape =

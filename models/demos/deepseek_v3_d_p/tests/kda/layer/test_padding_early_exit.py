@@ -9,6 +9,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState
+from models.demos.deepseek_v3_d_p.tests.kda.utils import LayerNrmseThresholds
 from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_matches_reference as _assert_matches_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import build_layer as _build_layer
 from models.demos.deepseek_v3_d_p.tests.kda.utils import mla_row_permutation as _mla_row_permutation
@@ -173,6 +174,7 @@ def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis,
                     # the inherited peak-error gate without padding. These
                     # cases require exact unpadded carries plus CPU PCC/RMSE.
                     state_linf_threshold=None if p == 1 or length == sequence else 0.60,
+                    nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.004),
                 )
                 physical = reconstruct_sp_tp_tensor(output, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
                 valid_output = physical[:, torch.argsort(permutation)][:, :length].clone()
