@@ -27,3 +27,12 @@ M0 (cheap, no kernels): compact RoPE tables -> frees 0.9-7 GiB; chunked prefill 
 M1: plain decode, B=1/2/4, `DSV41_KV_SEQSHARD=1`, one ratio-1 window+compressed layer without the indexer, PCC vs the replicated path at 8k-32k ctx (needs the (m,l) kernel output); then one indexer layer; then the full model at 262144.
 M2: prefill-side sharding (PrefillKV, key FIFO, score block) and handoff; 524288 / 1M boots.
 M3: spec verify, drafter interaction, vLLM refill, buckets. Deferred.
+
+## 4. Small batches waste the idle mesh rows (B = 1, 2 and 4 all cost the same per chip)  [added 2026-10-15]
+`padded_batch` rounds B up to a multiple of 4 (one user per mesh row at minimum, U = 1) and every mesh tensor is allocated with the SAME shape on all 32 chips. So at 1M context B = 1 and B = 2 need exactly the
+per-chip memory of B = 4: the idle rows' DRAM is allocated (and wasted), and one user can never use more than ONE row's worth of memory (8 chips) however small the batch is.
+Options: (a) per-row tensors via four 1x8 sub-meshes - frees the idle rows' DRAM for nothing, because a user's KV still lives only on its own row's 8 chips; (b) **shard a user's KV over the mesh rows as well as the
+columns** (B = 1: 32-way, B = 2: 16-way, B = 4: 8-way): this is the real fix, it is the column sequence-sharding of section 2 extended to a second mesh axis (page -> chip by page % (rows_used * 8); the q all-gather,
+the (o, max, sum) exchange and the top-k merge run over rows x columns instead of the 8 columns; the idle rows then hold KV of the active users). Cost: the exchange crosses rows (more CCL latency than the measured
+~107 us per layer for 8 columns) and the batch -> row mapping must change (a user is no longer pinned to one row). It builds on milestone M1; do it after the column version works.
+Order of work: B = 4 at 512k (one user per row, 524288 token-users per chip = what B = 16 at 128k already runs) -> B = 4 at 1M -> row-sharding for B = 1 / 2.
