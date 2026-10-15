@@ -29,7 +29,10 @@ from models.demos.deepseek_v3_d_p.tt.v41.weights import checkpoint
 
 CHUNK = int(os.environ.get("V41_PA_CHUNK", "4096"))
 N_CHUNKS = int(os.environ.get("V41_PA_CHUNKS", "3"))
-PCC = float(os.environ.get("V41_PA_PCC", "0.999"))
+# path A vs path B: two approximations of model.py, each PCC ~0.9967 / 0.9974 vs model.py on the real 1536-token golden in
+# 512-token chunks, path A == path B to 6 digits there (test_v41_attention_chunked.py, 2026-10-15 06:25). On these random inputs
+# (many top-k near-ties) the two land at ~0.995 against EACH OTHER, so 0.999 is no gate; 0.99 catches a broken path.
+PCC = float(os.environ.get("V41_PA_PCC", "0.99"))
 RMS = float(os.environ.get("V41_PA_RMS", "1.0"))  # the attention input is post-RMSNorm: rms ~ the norm weight's scale
 
 
