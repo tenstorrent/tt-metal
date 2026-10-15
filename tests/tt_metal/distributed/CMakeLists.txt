@@ -185,6 +185,7 @@ set_target_properties(
 if(TARGET OpenMPI::MPI)
     # erisc H2H: two ranks, MPI one-sided, NO device. Carries its own main(), so no benchmark_main.
     add_executable(erisc_h2h_benchmark)
+    target_precompile_headers(erisc_h2h_benchmark REUSE_FROM metal_test_pch)
     target_sources(erisc_h2h_benchmark PRIVATE benchmark_erisc_h2h_socket.cpp)
     target_link_libraries(
         erisc_h2h_benchmark
