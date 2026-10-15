@@ -320,7 +320,9 @@ class TtDispatch2dModule(LightweightModule):
       - forward also takes the expert token counts, the expert region offsets, and the offsets of
         EVERY source chip in the dispatch group (not just this chip's row), because a chip that
         forwards tokens needs to know how many each source chip sends.
-      - No weights argument, and no fp8 input, fp8 output or scales: the op moves bf16 tokens only.
+      - No weights argument and no scales input. fp8_output gives an FP8_E4M3 buffer: a ROW_MAJOR FP8_E4M3 x,
+        such as per_token_cast_to_fp8's rows with their scales packed in, is copied as is; a TILE bf16 x is
+        cast on device, without scales.
       - Every input must already be in interleaved DRAM; forward checks this and does not copy.
       - The fabric must wrap cluster_axis into a ring, and top-k is at most
         DISPATCH_FABRIC2D_MAX_TOPK; __init__ checks both.
@@ -338,6 +340,7 @@ class TtDispatch2dModule(LightweightModule):
         cluster_axis: int = 0,
         num_links: int = 1,
         subdevice_id=None,
+        fp8_output: bool = False,
     ):
         """
         Initialize the fabric2d dispatch module.
@@ -361,11 +364,16 @@ class TtDispatch2dModule(LightweightModule):
             subdevice_id: Sub-device whose cores the op may use. None means the first sub-device.
                 It must hold the worker core nearest each ethernet core the op sends on. For a TILE
                 x it must also hold the core row under those cores, where the op untilizes x.
+            fp8_output: Make the dispatched buffer FP8_E4M3 instead of BFLOAT16. Blackhole only. A
+                ROW_MAJOR x must then already be FP8_E4M3; a TILE x stays BFLOAT16 and is converted on
+                device.
 
         Note there is no dispatch_group_size (the op takes the ring from cluster_axis and the mesh
         shape), no metadata_len (always 3) and no topology (always Ring).
         """
         check_fabric2d_setup(mesh_device, cluster_axis, emb_dim, num_experts_per_tok=num_experts_per_tok)
+        if fp8_output and "blackhole" not in ttnn.get_arch_name():
+            raise ValueError("fp8_output requires Blackhole hardware")
         super().__init__()
         self.mesh_device = mesh_device
         self.experts_per_chip = experts_per_chip
@@ -376,6 +384,7 @@ class TtDispatch2dModule(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.subdevice_id = subdevice_id
+        self.fp8_output = fp8_output
 
     def forward(
         self,
@@ -394,7 +403,7 @@ class TtDispatch2dModule(LightweightModule):
         not.
 
         Args:
-            x: Input token embeddings, BFLOAT16, ROW_MAJOR or TILE.
+            x: Input token embeddings, BFLOAT16 ROW_MAJOR or TILE, or FP8_E4M3 ROW_MAJOR with fp8_output.
                 Shape per device: (1, seq_len_per_chip, emb_dim)
             indices: Top-k expert indices, UINT16 ROW_MAJOR.
                 Shape per device: (1, seq_len_per_chip, num_experts_per_tok)
@@ -417,7 +426,8 @@ class TtDispatch2dModule(LightweightModule):
 
         Returns:
             dispatched_buffer: Flat expert-centric token buffer, laid out as TtDispatchModule's.
-                Shape per device: (1, 1, max_dispatch_buffer_token_size, emb_dim), BFLOAT16 ROW_MAJOR.
+                Shape per device: (1, 1, max_dispatch_buffer_token_size, emb_dim), ROW_MAJOR, BFLOAT16 or
+                FP8_E4M3 with fp8_output.
             metadata: Per-token routing metadata written alongside dispatched_buffer.
                 Shape per device: (1, 1, max_dispatch_buffer_token_size, 3), INT32 ROW_MAJOR.
                 Fields per token: [linearized_mesh_coord, token_idx, topk_idx].
@@ -461,5 +471,6 @@ class TtDispatch2dModule(LightweightModule):
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             subdevice_id=self.subdevice_id,
+            fp8_output=self.fp8_output,
         )
         return (dispatched_buffer, metadata)

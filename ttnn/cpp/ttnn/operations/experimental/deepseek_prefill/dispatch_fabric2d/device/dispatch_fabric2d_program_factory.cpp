@@ -57,9 +57,11 @@ bool input_is_tiled(const DispatchFabric2dInputs& t) { return t.input_tensor.lay
 // Bytes of a token its first fabric packet carries. A token goes whole when it fits the fabric payload with its
 // fwd_meta, else as two halves with the fwd_meta on the second, so the mesh needs only half a token of payload:
 // a larger payload means larger fabric router buffers, and so fewer of them, which every fabric op pays for.
+// The cut is rounded up to the 64 B DRAM alignment, because the second half lands at that offset in a page. A
+// packed fp8 row, e4m3 values then their scales, is not always an even number of 64 B lines.
 uint32_t first_packet_bytes(uint32_t token_bytes) {
     const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
-    return token_bytes + dspf2d::FWD_EXTRA_BYTES <= max_payload ? token_bytes : token_bytes / 2;
+    return token_bytes + dspf2d::FWD_EXTRA_BYTES <= max_payload ? token_bytes : tt::round_up(token_bytes / 2, 64u);
 }
 
 std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoordinate& coord, uint32_t axis) {

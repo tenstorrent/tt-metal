@@ -17,10 +17,17 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 namespace {
 
-// Tiles the untilizer packs per call: the largest divisor of the tiles per tile row that is at most eight,
-// the packer's limit. pack_untilize puts block i at column offset i * block_ct_dim, so it must be a
-// divisor; a smaller last block would overlap the one before it.
-uint32_t untilize_block_ct_dim(uint32_t tiles_per_row) {
+// Tiles the untilizer packs per call: the largest divisor of the tiles per tile row that fits half of DEST,
+// the packer's limit in half-sync mode. pack_untilize puts block i at column offset i * block_ct_dim, so it
+// must be a divisor; a smaller last block would overlap the one before it.
+//
+// With the 32-bit DEST an FP8_E4M3 payload needs, a block of 3 is never used: at 198 tiles per row it corrupted
+// rows 1-31 of the first tile column on Blackhole, while blocks of 2 and 4 were byte-exact. An FP8_E4M3 row is a
+// whole number of 64 B lines, so its tile count is even and 2 always divides it.
+uint32_t untilize_block_ct_dim(uint32_t tiles_per_row, bool fp32_dest_acc_en) {
+    if (fp32_dest_acc_en) {
+        return tiles_per_row % 4 == 0 ? 4 : (tiles_per_row % 2 == 0 ? 2 : 1);
+    }
     uint32_t block = 8;
     while (block > 1 && tiles_per_row % block != 0) {
         block--;
@@ -45,7 +52,10 @@ std::optional<UntilizePlan> plan_untilize(
     }
     UntilizePlan plan;
     plan.tiles_per_row = static_cast<uint32_t>(input.logical_shape()[-1]) / tt::constants::TILE_WIDTH;
-    plan.block_ct_dim = untilize_block_ct_dim(plan.tiles_per_row);
+    plan.row_format = tt::tt_metal::datatype_to_dataformat_converter(out_payload.dtype());
+    // Blackhole packs FP8_E4M3 only out of a 32-bit DEST, which holds half as many tiles.
+    plan.fp32_dest_acc_en = plan.row_format == tt::DataFormat::Fp8_e4m3;
+    plan.block_ct_dim = untilize_block_ct_dim(plan.tiles_per_row, plan.fp32_dest_acc_en);
     // A partial last tile row is packed whole, including the tile's padding rows. Staging is sized to
     // match, so those rows land in pages past the sequence that nothing reads.
     plan.num_tile_rows = (seq_len_per_chip + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
@@ -53,7 +63,6 @@ std::optional<UntilizePlan> plan_untilize(
     plan.token_bytes = token_bytes;
     plan.sem_addr = sem_addr;
     plan.tile_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    plan.row_format = tt::tt_metal::datatype_to_dataformat_converter(out_payload.dtype());
     plan.input = input.buffer();
     plan.staging = staging;
 
@@ -140,7 +149,8 @@ UntilizerPoolFallback add_untilizer_pool(
     cmp.kernel_source = std::string(kKernelDir) + "compute/untilize_dispatch_fabric2d.cpp";
     cmp.core_ranges = pool_cores;
     cmp.compile_time_args = ct;
-    cmp.config = tt::tt_metal::ComputeConfigDescriptor{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4};
+    cmp.config = tt::tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = plan.fp32_dest_acc_en};
 
     tt::tt_metal::KernelDescriptor wtr;
     wtr.kernel_source = std::string(kKernelDir) + "dataflow/untilize_writer_dispatch_fabric2d.cpp";

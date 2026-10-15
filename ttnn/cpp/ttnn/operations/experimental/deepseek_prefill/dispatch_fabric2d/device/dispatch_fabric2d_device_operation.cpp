@@ -55,6 +55,10 @@ void validate_control_tensor(const ttnn::Tensor& t, uint32_t num_routed_experts,
         num_routed_experts);
 }
 
+tt::tt_metal::DataType payload_dtype(const DispatchFabric2dParams& args) {
+    return args.fp8_output ? tt::tt_metal::DataType::FP8_E4M3 : tt::tt_metal::DataType::BFLOAT16;
+}
+
 uint32_t axis_extent(const DispatchFabric2dParams& args) {
     return static_cast<uint32_t>(args.device->shape()[args.axis]);
 }
@@ -152,17 +156,31 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         tensor_args.expert_dispatch_table_tensor.logical_shape()[-1],
         args.num_routed_experts + 1);
 
+    if (args.fp8_output) {
+        TT_FATAL(
+            args.device->arch() == tt::ARCH::BLACKHOLE,
+            "dispatch_fabric2d: fp8_output needs Blackhole, which is the only arch with an FP8_E4M3 packer");
+    }
     const auto& input = tensor_args.input_tensor;
     validate_dram_interleaved(input, "input_tensor");
-    TT_FATAL(
-        input.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "dispatch_fabric2d: input must be BFLOAT16, got {}",
-        input.dtype());
     TT_FATAL(
         input.layout() == tt::tt_metal::Layout::ROW_MAJOR || input.layout() == tt::tt_metal::Layout::TILE,
         "dispatch_fabric2d: input must be ROW_MAJOR or TILE, got {}",
         input.layout());
-    if (input.layout() == tt::tt_metal::Layout::TILE) {
+    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        // Nothing converts a ROW_MAJOR token on its way through: the stream cores copy it byte for byte.
+        TT_FATAL(
+            input.dtype() == payload_dtype(args),
+            "dispatch_fabric2d: a ROW_MAJOR input is copied as is, so its dtype must be the output's {}, got {}. "
+            "Pass a TILE input to convert.",
+            payload_dtype(args),
+            input.dtype());
+    } else {
+        // The untilizer's packer writes the payload's format, so it converts.
+        TT_FATAL(
+            input.dtype() == tt::tt_metal::DataType::BFLOAT16,
+            "dispatch_fabric2d: a TILE input must be BFLOAT16, got {}",
+            input.dtype());
         const uint32_t hidden = static_cast<uint32_t>(input.logical_shape()[-1]);
         TT_FATAL(
             hidden % tt::constants::TILE_WIDTH == 0,
@@ -227,7 +245,7 @@ DispatchFabric2dDeviceOperation::spec_return_value_t DispatchFabric2dDeviceOpera
 
     auto payload = tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, args.max_dispatch_buffer_token_size, hidden_dim}),
-        tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, layout, args.output_mem_config));
+        tt::tt_metal::TensorLayout(payload_dtype(args), layout, args.output_mem_config));
     auto metadata = tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, args.max_dispatch_buffer_token_size, args.metadata_len}),
         tt::tt_metal::TensorLayout(tt::tt_metal::DataType::INT32, layout, args.output_mem_config));
@@ -280,7 +298,8 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const CoreRangeSet& worker_core_range_set) {
+    const CoreRangeSet& worker_core_range_set,
+    bool fp8_output) {
     using namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d;
     using OperationType = DispatchFabric2dDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -295,6 +314,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .axis = axis,
             .num_links = num_links,
             .has_padding_config = padding_config.has_value(),
+            .fp8_output = fp8_output,
             .topology = topology,
             .output_mem_config = memory_config,
             .worker_core_range_set = worker_core_range_set},

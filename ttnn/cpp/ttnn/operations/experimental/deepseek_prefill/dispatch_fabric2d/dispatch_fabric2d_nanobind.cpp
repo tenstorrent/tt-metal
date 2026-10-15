@@ -26,8 +26,10 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
 
         Inputs. All are interleaved in DRAM, and all except input_tensor are ROW_MAJOR:
 
-            input_tensor          tokens, BFLOAT16, ROW_MAJOR (one token per page) or TILE. A TILE input is
-                                  untilized on device and needs emb_dim to be a multiple of 32.
+            input_tensor          tokens, ROW_MAJOR (one token per page) or TILE. A ROW_MAJOR input is copied
+                                  as is, so it must be in the output dtype: BFLOAT16, or FP8_E4M3 with
+                                  fp8_output. A TILE input is BFLOAT16, is untilized on device into the
+                                  output dtype, and needs emb_dim to be a multiple of 32.
             indices_tensor        top-k expert ids, UINT16, (..., seq_len_per_chip, num_experts_per_tok).
             expert_offsets        INT32 or UINT32, (..., extent, num_routed_experts): where each source
                                   chip's tokens start in each expert's region, one row per source chip.
@@ -60,9 +62,12 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
             subdevice_id          sub-device whose Tensix cores the op may use. Defaults to the first
                                   sub-device, which is the whole compute grid when no sub-device manager
                                   is loaded.
+            fp8_output            make dispatched_buffer FP8_E4M3 instead of BFLOAT16. Blackhole only.
+                                  Default False.
 
         Returns [dispatched_buffer, metadata], both per device and ROW_MAJOR, in `memory_config`.
-        dispatched_buffer is (1, 1, max_dispatch_buffer_token_size, emb_dim) BFLOAT16. metadata is
+        dispatched_buffer is (1, 1, max_dispatch_buffer_token_size, emb_dim), BFLOAT16 or, with fp8_output,
+        FP8_E4M3. metadata is
         (1, 1, max_dispatch_buffer_token_size, 3) INT32 and holds (source chip, token index, topk index) at
         the same page as its token. The source chip is the chip's linearized mesh index. A token past the
         buffer capacity is dropped but still counts toward its expert's offsets, because page numbers must
@@ -86,7 +91,9 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
 
         Not checked: expert_offsets must be replicated along cluster_axis,
         the last column of expert_dispatch_table must be -1, and padded tokens must route to no expert.
-        fp8 input and output are not supported. cluster_axis other than 0 is untested.
+        The op takes no fp8 scales. A ROW_MAJOR FP8_E4M3 input moves byte for byte, so rows that carry their own
+        scales (per_token_cast_to_fp8 with pack_scales_in_row) arrive intact; a TILE input is cast without one.
+        cluster_axis other than 0 is untested.
         )doc",
         &dispatch_fabric2d,
         nb::arg("input_tensor"),
@@ -107,7 +114,8 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         nb::arg("num_links") = 1,
         nb::arg("topology"),
         nb::arg("memory_config"),
-        nb::arg("subdevice_id") = nb::none());
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("fp8_output") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d::detail
