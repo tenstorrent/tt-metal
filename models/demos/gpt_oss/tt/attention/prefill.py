@@ -93,7 +93,9 @@ def prefill_forward(
 
     # QKV projection
     xqkv_fused = apply_qkv_projection(
-        hidden_states, weights, program_config.get_prefill_proj_config(mesh_device, "qkv", hidden_states, weights.wqkv)
+        hidden_states,
+        weights,
+        program_config.get_prefill_proj_config(mesh_device, "qkv", hidden_states, weights.wqkv, mesh_config.tp),
     )
     hidden_states.deallocate(True)  # Free input activations after projection
 
@@ -212,7 +214,10 @@ def prefill_forward(
             activation_dtype,
             mesh_config,
             ccl_manager,
-            program_config.get_prefill_proj_config(mesh_device, "o", tt_sdpa_out, weights.o_proj_prefill),
+            # apply_output_projection casts its input to bf8 before the matmul.
+            program_config.get_prefill_proj_config(
+                mesh_device, "o", tt_sdpa_out, weights.o_proj_prefill, mesh_config.tp, in0_dtype=ttnn.bfloat8_b
+            ),
             scatter=sequence_parallel,
         )
         tt_sdpa_out.deallocate(True)
@@ -221,7 +226,9 @@ def prefill_forward(
             tt_sdpa_out,
             weights,
             activation_dtype,
-            program_config=program_config.get_prefill_proj_config(mesh_device, "o", tt_sdpa_out, weights.o_proj),
+            program_config=program_config.get_prefill_proj_config(
+                mesh_device, "o", tt_sdpa_out, weights.o_proj, mesh_config.tp, in0_dtype=ttnn.bfloat8_b
+            ),
         )
         tt_sdpa_out.deallocate(True)
         tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)

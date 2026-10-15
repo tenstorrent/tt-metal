@@ -203,8 +203,11 @@ class DecoderLayer:
         rows + all_gather) and then runs the residual add and the next RMSNorm on all S rows on every device. Here
         each all-reduce stops after its reduce-scatter, the add and the norm run on the local S / TP rows, and the
         all-gather moves the normed rows instead (the next projection needs all S rows). The input norm output is
-        bf8 as before (same bytes as the all-reduce's gather). After the post-attention norm the router runs on the
-        local rows and the experts' input is gathered as bf8 (MLP.prefill_sequence_parallel)."""
+        bf8 because ttnn.rms_norm keeps its input's dtype and the residual entering a layer is bf8 (the bf8 prefill
+        embedding, then the in-place add into the bf8 MoE output); so the QKV projection reads the same bf8 rows as
+        on the replicated path, and this gather moves as many bytes as the MoE all-reduce's gather it replaces. After
+        the post-attention norm the router runs on the local rows and the experts' input is gathered as bf8
+        (MLP.prefill_sequence_parallel)."""
         cluster_axis = self.self_attn.mesh_config.tp_axis
         if residual.shape[-2] * self.self_attn.mesh_config.tp > 32 * 1024:
             # As in __call__: reallocate the residual to limit DRAM fragmentation on long prefills.

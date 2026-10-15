@@ -22,12 +22,12 @@ from .host_readback import DecodeHostReadback, DecodeHostRows
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
 
-# Sequence-parallel prefill (Transformer._forward_layers_and_head, DecoderLayer._prefill_forward_sp): on by default
+# Sequence-parallel prefill (Model._forward_layers_and_head, DecoderLayer._prefill_forward_sp): on by default
 # where every layer supports it; GPT_OSS_PREFILL_SP=0 keeps the residual stream replicated.
 PREFILL_SP_ENV = "GPT_OSS_PREFILL_SP"
-# Shortest prefill (tokens) that runs sequence-parallel. Measured vs replicated (TTFT ms, BH 1x4, L11): 128 45.2 -> 45.8,
-# 1K 66.0 -> 65.7, 8K 281.6 -> 270.2, 32K 1247.6 -> 1203.0, 64K 2891.3 -> 2800.2; below 1K the extra partition /
-# gather ops cost more than the S / TP-row norms and adds save.
+# Shortest prefill (tokens) that runs sequence-parallel. Measured vs replicated (TTFT ms, BH 1x4, L11):
+# 128 45.2 -> 45.8, 1K 66.0 -> 65.7, 8K 281.6 -> 270.2, 32K 1247.6 -> 1203.0, 64K 2891.3 -> 2800.2; below 1K the
+# extra partition / gather ops cost more than the S / TP-row norms and adds save.
 PREFILL_SP_MIN_SEQ = 1024
 
 
@@ -442,8 +442,8 @@ class Model:
                 f"but model has {len(self.layers)} layers"
             )
 
-        # Sequence-parallel prefill (DecoderLayer._prefill_forward_sp): the residual stream stays split over the mesh row
-        # by sequence rows, so the residual adds and RMSNorms run on S / TP rows per device instead of all S rows.
+        # Sequence-parallel prefill (DecoderLayer._prefill_forward_sp): the residual stream stays split over the mesh
+        # row by sequence rows, so the residual adds and RMSNorms run on S / TP rows per device instead of all S rows.
         sequence_parallel = (
             not is_decode
             and os.getenv(PREFILL_SP_ENV, "1") == "1"

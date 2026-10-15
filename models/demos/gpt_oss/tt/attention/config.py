@@ -36,16 +36,22 @@ PREFILL_PROJ_2D = {
     "o": (9, 10, 8),  # [S, 1024] x [1024, 2880]: N = 90 tiles over 9 columns, K = 32 tiles
 }
 PREFILL_PROJ_L1_BYTES = 1_100_000
+# Tensor parallelism the geometries above were measured at (1x4); any other TP keeps the ttnn default.
+PREFILL_PROJ_TP = 4
 
 
-def prefill_proj_program_config(grid, m_tiles, k_tiles, n_tiles, role):
-    """2D multicast program config for a prefill projection of m_tiles x k_tiles x n_tiles (bf8 in0 and weight), or
-    None when the role's geometry does not fit (other shapes or a smaller grid keep the ttnn default).
+def prefill_proj_program_config(grid, m_tiles, k_tiles, n_tiles, role, tp, in0_dtype, weight_dtype):
+    """2D multicast program config for a prefill projection of m_tiles x k_tiles x n_tiles, or None (ttnn default)
+    when the role's geometry does not fit (other shapes or a smaller grid), at a TP other than PREFILL_PROJ_TP, or when
+    in0 or the weight is not bfloat8_b (the L1 model below sizes their tiles as bf8: a bf16 in0 doubles the in0
+    buffers and can overflow L1 at long sequences).
 
     M splits over at most grid.y rows. out_block_h is the largest divisor of per_core_M (at most 32) whose circular
     buffers (in0 + in1 double-buffered, output + bf16 intermediate block) fit PREFILL_PROJ_L1_BYTES; when that leaves
     fewer than 12 rows, per_core_M is rounded up (up to 8 tiles) to a value with a larger such divisor
     (out_block_h = 1 measured 2-3x slower, and in0_block_w 8 with the whole 26-tile block overflows L1 at S = 8192)."""
+    if tp != PREFILL_PROJ_TP or in0_dtype != ttnn.bfloat8_b or weight_dtype != ttnn.bfloat8_b:
+        return None
     gx, pcn, kb = PREFILL_PROJ_2D[role]
     if gx > grid.x or gx * pcn != n_tiles or k_tiles % kb:
         return None
@@ -220,10 +226,11 @@ class ProgramConfig:
             fidelity = self.prefill_sdpa_math_fidelity
         return self.get_compute_kernel_config(fidelity)
 
-    def get_prefill_proj_config(self, mesh_device, role: str, x, weight):
+    def get_prefill_proj_config(self, mesh_device, role: str, x, weight, tp, in0_dtype=None):
         """Program config of the prefill QKV (role "qkv") or o_proj ("o") linear of x [1, 1, M, K] by weight [K, N]:
-        a 2D multicast config on Blackhole when prefill_proj_2d is set and the shape matches the role's geometry,
-        else None (ttnn default)."""
+        a 2D multicast config on Blackhole when prefill_proj_2d is set and prefill_proj_program_config accepts the
+        shape, TP and dtypes, else None (ttnn default). in0_dtype: the dtype the matmul reads x in, when the caller
+        casts x before the matmul (default x.dtype)."""
         if not self.prefill_proj_2d or not ttnn.device.is_blackhole(mesh_device):
             return None
         shape = x.padded_shape
@@ -235,6 +242,9 @@ class ProgramConfig:
             shape[-1] // ttnn.TILE_SIZE,
             weight.padded_shape[-1] // ttnn.TILE_SIZE,
             role,
+            tp=tp,
+            in0_dtype=x.dtype if in0_dtype is None else in0_dtype,
+            weight_dtype=weight.dtype,
         )
 
     def get_compute_kernel_config(self, math_fidelity: str | None = None) -> ttnn.WormholeComputeKernelConfig:

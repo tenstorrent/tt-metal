@@ -21,6 +21,11 @@ from .experts_throughput import (
 from .fused_decode.config import fused_decode_supported
 from .topk import TopKRouter
 
+# dtype of the expert input rows that MLP.prefill_sequence_parallel all-gathers. bf8 measured TTFT 8K -3.3%, 32K -3.0%
+# together with the local-rows router (L11c); bf16 makes the sequence-parallel prefill bit-identical to the
+# replicated one.
+PREFILL_SP_EXPERT_INPUT_DTYPE = ttnn.bfloat8_b
+
 
 class MLP:
     """Streamlined MoE MLP combining router and experts"""
@@ -204,8 +209,10 @@ class MLP:
         [1, 1, S / N, H] (bf8).
 
         The router is row-wise, so it runs on the local rows and only its top-k ids / weights ([S / N, k]) are
-        all-gathered. The experts need all S rows: those are gathered as bf8 (half the bytes of bf16); the expert op
-        packs its input to bf8 itself, so the experts see bf8 activations either way."""
+        all-gathered. The experts need all S rows: those are gathered in PREFILL_SP_EXPERT_INPUT_DTYPE (bf8, half the
+        bytes of bf16). The expert op packs its bf16 input to bf8 itself, but this typecast rounds differently from
+        that pack, so the output is not bit-identical to the replicated path (gate v4 neutral); with the constant at
+        bf16 it is (tests/unit/test_prefill_sequence_parallel.py)."""
         idx_rows, w_rows = self.routed_router(x_rows, True)
         n = x_rows.shape[-2]
         k = idx_rows.shape[-1]
@@ -218,9 +225,11 @@ class MLP:
 
         expert_indices = gather_rows(idx_rows)
         expert_weights = gather_rows(w_rows)
-        x8 = ttnn.typecast(x_rows, ttnn.bfloat8_b)
-        x_full = ttnn.all_gather(x8, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x8.deallocate(True)
+        dtype = PREFILL_SP_EXPERT_INPUT_DTYPE
+        x_in = x_rows if x_rows.dtype == dtype else ttnn.typecast(x_rows, dtype)
+        x_full = ttnn.all_gather(x_in, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if x_in is not x_rows:
+            x_in.deallocate(True)
         assert self.routed_prefill_supports(x_full.shape), "SP prefill needs routed MoE"
         out = self.routed_prefill(x_full, expert_indices, expert_weights, scatter=True)
         x_full.deallocate(True)
