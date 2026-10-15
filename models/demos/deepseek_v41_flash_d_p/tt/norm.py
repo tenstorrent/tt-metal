@@ -21,6 +21,11 @@ stats tile on an fp32 input):
 
 The fp8 act quant of the output (blocks of 32) belongs to the fp8 linears that read it (q_a / kv: reference
 fp8_linear quantizes its input); the compressor and the indexer's weights_proj read this fp32 output as is.
+
+ffn_norm (``gather=True``) adds one ttnn.all_gather (dim 3, cluster_axis 1; a data move, exact) of the fp32 output
+-> [1, 1, S/SP, H] fp32 per chip, replicated over the mesh row: the router reads these whole rows unquantized, and
+``quant(y)`` (tt/quant.py:fp8_qdq, blocks of 32 along H, bf16 exact) gives q(x), which the shared and the routed
+experts both read (reference _swiglu act_quant's the same ffn_norm output), computed once per layer.
 No host work in __call__.
 """
 
@@ -31,6 +36,7 @@ import torch
 import ttnn
 
 from .common import DRAM, TP_AXIS, tp_sum
+from .quant import fp8_qdq
 
 PACK_N = 1  # mhc_pre_xing_pack with one "stream": the sum of squares lands in column n (n + 2) = 3
 SS_COL = PACK_N * (PACK_N + 2)
@@ -41,8 +47,10 @@ class TtDistributedRmsNorm:
     fp32 TILE (same split). Does not consume its input. ``split=False``: the rows are whole on every chip ([.., H],
     replicated over TP, e.g. q_norm / kv_norm): the same chain with a replicated weight and no exchange."""
 
-    def __init__(self, mesh, weight: torch.Tensor, eps: float, split: bool = True):
+    def __init__(self, mesh, weight: torch.Tensor, eps: float, split: bool = True, gather: bool = False):
+        assert split or not gather, "gather needs a column-split norm"
         hidden = weight.numel()
+        self.gather = gather and mesh.shape[TP_AXIS] > 1
         tp = mesh.shape[TP_AXIS] if split else 1
         assert hidden % (32 * tp) == 0, f"hidden {hidden} does not split into tiles over TP {tp}"
         self.mesh, self.hidden, self.eps, self.split, self.tp = mesh, hidden, float(eps), split, tp
@@ -88,13 +96,26 @@ class TtDistributedRmsNorm:
         ttnn.deallocate(rs)
         y = ttnn.multiply(xn, self.weight, dtype=ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(xn)
-        return y
+        if not self.gather:
+            return y
+        # ffn_norm: whole token rows on every chip of the mesh row (router, dispatch, shared expert); chip column c's
+        # slice lands at columns [c H/TP, (c+1) H/TP) (mesh-column order), so the rows are the reference's.
+        full = ttnn.all_gather(y, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
+        ttnn.deallocate(y)
+        return full
+
+    @staticmethod
+    def quant(y: ttnn.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+        """q(y): the fp8 act quant-dequant (blocks of 32, ue8m0, e4m3 RNE) the experts read; bit-exact (DS41-13)."""
+        return fp8_qdq(y, dtype=dtype)
 
 
-# norm steps -> checkpoint weight under layers.<i>. (ffn_norm also gathers its output over axis 1: its own step.)
-NORM_WEIGHTS = {"attn_norm": "attn_norm.weight"}
+# norm steps -> checkpoint weight under layers.<i>.
+NORM_WEIGHTS = {"attn_norm": "attn_norm.weight", "ffn_norm": "ffn_norm.weight"}
+# norm steps whose output is gathered over the mesh columns (whole rows, replicated within a mesh row).
+GATHERED_NORMS = {"ffn_norm"}
 
 
 def build_norm(mesh, ck, cfg, layer: int, step: str) -> TtDistributedRmsNorm:
     w = ck.weight(f"layers.{layer}.{NORM_WEIGHTS[step]}", torch.float32)
-    return TtDistributedRmsNorm(mesh, w, cfg.eps)
+    return TtDistributedRmsNorm(mesh, w, cfg.eps, gather=step in GATHERED_NORMS)
