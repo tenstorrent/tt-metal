@@ -931,6 +931,9 @@ Program build_receiver_program(
                     {"stage_gate_addr", stage_gate_addr},
                     {"stage_gate_slot_offset", stage_gate ? stage_gate->slot_id_offset_bytes : 0},
                     {"stage_gate_mode_offset", stage_gate ? stage_gate->gate_mode_offset_bytes : 0},
+                    {"gate_open_value", static_cast<uint32_t>(d2d_stream::GateState::Open)},
+                    {"gate_closed_value", static_cast<uint32_t>(d2d_stream::GateState::Closed)},
+                    {"gate_close_on_transit_mode", static_cast<uint32_t>(d2d_stream::GateMode::CloseOnTransit)},
                 },
         });
 

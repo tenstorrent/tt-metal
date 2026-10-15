@@ -34,7 +34,6 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/api/ttnn/tensor/d2d_stage_gate.hpp"
 
 // CT-arg layout (must stay in sync with build_receiver_program in
 // ttnn/core/tensor/d2d_stream_service.cpp).
@@ -84,8 +83,10 @@ constexpr uint32_t num_stage_gates = get_named_compile_time_arg_val("num_stage_g
 constexpr uint32_t stage_gate_addr = get_named_compile_time_arg_val("stage_gate_addr");
 constexpr uint32_t stage_gate_slot_word = get_named_compile_time_arg_val("stage_gate_slot_offset") / sizeof(uint32_t);
 constexpr uint32_t stage_gate_mode_word = get_named_compile_time_arg_val("stage_gate_mode_offset") / sizeof(uint32_t);
-using ttnn::d2d_stream::GateMode;
-using ttnn::d2d_stream::GateState;
+// Gate word and mode values, from the host's d2d_stream::GateState / GateMode.
+constexpr uint32_t gate_open_value = get_named_compile_time_arg_val("gate_open_value");
+constexpr uint32_t gate_closed_value = get_named_compile_time_arg_val("gate_closed_value");
+constexpr uint32_t gate_close_on_transit_mode = get_named_compile_time_arg_val("gate_close_on_transit_mode");
 
 // Wait until the gate selected by the transfer's metadata is open, then close it if the
 // transfer's mode is CloseOnTransit. Returns false if terminated while waiting.
@@ -93,7 +94,7 @@ FORCE_INLINE bool pass_stage_gate(uint32_t metadata_addr) {
     invalidate_l1_cache();
     volatile tt_l1_ptr uint32_t* md = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_addr);
     const uint32_t slot = md[stage_gate_slot_word];
-    const auto mode = static_cast<GateMode>(md[stage_gate_mode_word]);
+    const uint32_t mode = md[stage_gate_mode_word];
     if (slot >= num_stage_gates) {
         return true;
     }
@@ -105,12 +106,12 @@ FORCE_INLINE bool pass_stage_gate(uint32_t metadata_addr) {
         if (termination_semaphore[0] == terminate_value) {
             return false;
         }
-        if (*gate == static_cast<uint32_t>(GateState::Open)) {
+        if (*gate == gate_open_value) {
             break;
         }
     }
-    if (mode == GateMode::CloseOnTransit) {
-        *gate = static_cast<uint32_t>(GateState::Closed);
+    if (mode == gate_close_on_transit_mode) {
+        *gate = gate_closed_value;
     }
     return true;
 }
