@@ -26,11 +26,19 @@ TABLE = {
     ),
     # ---- attention (tt/attention.py)
     "WINDOW_SDPA": Setting(
-        "high_precision",
-        ("high_precision", "source"),
-        "the sparse window attention: high_precision = ttnn.bringup.sparse_sdpa(high_precision=True) (Float32 flash "
-        "output / row-sum, exact exp; K-31) with the sink; source = ttnn.transformer.sparse_sdpa (bf16 running state, "
-        "approximate exp), a perf pick",
+        "exact",
+        ("exact", "high_precision", "source"),
+        "the window attention: exact = tt/window_exact.py (q and the probabilities as fp32 bf16-piece sums, every "
+        "in-tile dot one exact product by lane masks on the keys / values, fp32 SFPU softmax and sink, fp32 output; "
+        "32x the matmul work; DS41-19); high_precision = ttnn.bringup.sparse_sdpa(high_precision=True) (bf16 q, "
+        "scores, probabilities and output; rel 0.021 vs the CPU step, DS41-18); source = ttnn.transformer.sparse_sdpa "
+        "(bf16 running state, approximate exp), a perf pick",
+    ),
+    "WINDOW_PIECES": Setting(
+        3,
+        (3, 2),
+        "exact window attention: bf16 pieces per fp32 operand (q, probabilities); 3 = every fp32 bit, 2 = 16 bits "
+        "(2/3 of the matmul work)",
     ),
     "ATTN_O_SUM": Setting(
         "gather_add",
@@ -53,7 +61,8 @@ MAX_PRECISION = {
     "FP32_DEST_ACC": True,
     "HC_TP_SUM": "gather_add",
     "ATTN_IN_MM": "exact",
-    "WINDOW_SDPA": "high_precision",
+    "WINDOW_SDPA": "exact",
+    "WINDOW_PIECES": 3,
     "ATTN_O_SUM": "gather_add",
 }
 
