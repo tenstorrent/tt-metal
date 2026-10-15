@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The transport_bandwidth frontend's publication order, driven through a fake
-// backend: the footer runs before any terminal state is published, and a
-// footer that fails ends the run WINDOW_CLEANUP_FAILED; and its size dispatch,
+// backend: the footer runs before any terminal state is published, a footer
+// that fails ends the run WINDOW_CLEANUP_FAILED, and a rendezvous that gives up
+// ends it RENDEZVOUS_TIMEOUT; and its size dispatch,
 // which runs only a backend's listed sizes.
 
 #include "kernels/transport_bandwidth/transport_bandwidth_frontend_cxx.hpp"
@@ -20,6 +21,7 @@ struct FakeState {
     transport_bw_protocol_args_t args{};
     transport_bw_result_t result{};
     bool path_ok = true;
+    bool together = true;
     bool footer_ok = true;
     uint64_t now = 0;
     std::vector<uint32_t> issued;  // TransferSize of every issue
@@ -42,6 +44,7 @@ struct FakeBackend {
     static const transport_bw_protocol_args_t& args(state_t& s) { return s.args; }
     static transport_bw_result_t& result(state_t& s) { return s.result; }
     static bool verify_path(state_t& s) { return s.path_ok; }
+    static bool rendezvous(state_t& s) { return s.together; }
     template <uint32_t TransferSize>
     static void issue(state_t& s) {
         s.issued.push_back(TransferSize);
@@ -58,8 +61,13 @@ struct FakeBackend {
 };
 
 FakeState run(
-    bool path_ok, bool footer_ok, uint32_t transfer_size = 64, uint32_t boundary = TRANSPORT_BW_BOUNDARY_DRAINED) {
+    bool path_ok,
+    bool footer_ok,
+    uint32_t transfer_size = 64,
+    uint32_t boundary = TRANSPORT_BW_BOUNDARY_DRAINED,
+    bool together = true) {
     FakeState s;
+    s.together = together;
     s.args.transfer_size = transfer_size;
     s.args.transfer_count = 4;
     s.args.warmup_count = 2;
@@ -84,6 +92,7 @@ TEST(TransportBandwidthFrontend, FooterRunsBeforeTheTerminalStateAndItsFailureIs
         uint32_t transfer_size;
         transport_bw_state_t footer_saw;
         transport_bw_state_t terminal;
+        bool together = true;
     } cases[] = {
         {"done", true, true, 64, TRANSPORT_BW_STATE_PUBLISH, TRANSPORT_BW_STATE_DONE},
         {"done, footer fails", true, false, 64, TRANSPORT_BW_STATE_PUBLISH, TRANSPORT_BW_STATE_WINDOW_CLEANUP_FAILED},
@@ -96,15 +105,23 @@ TEST(TransportBandwidthFrontend, FooterRunsBeforeTheTerminalStateAndItsFailureIs
          TRANSPORT_BW_STATE_WINDOW_CLEANUP_FAILED},
         {"bad size", true, true, 256, TRANSPORT_BW_STATE_INIT, TRANSPORT_BW_STATE_ARG_LAYOUT_MISMATCH},
         {"bad size, footer fails", true, false, 256, TRANSPORT_BW_STATE_INIT, TRANSPORT_BW_STATE_WINDOW_CLEANUP_FAILED},
+        {"rendezvous times out",
+         true,
+         true,
+         64,
+         TRANSPORT_BW_STATE_WARMUP,
+         TRANSPORT_BW_STATE_RENDEZVOUS_TIMEOUT,
+         false},
     };
     for (const auto& c : cases) {
         SCOPED_TRACE(c.name);
-        const auto s = run(c.path_ok, c.footer_ok, c.transfer_size);
+        const auto s = run(c.path_ok, c.footer_ok, c.transfer_size, TRANSPORT_BW_BOUNDARY_DRAINED, c.together);
         EXPECT_EQ(s.footer_saw, std::vector<uint32_t>{static_cast<uint32_t>(c.footer_saw)});
         EXPECT_EQ(s.barrier_published, std::vector<uint32_t>{static_cast<uint32_t>(c.terminal)});
         EXPECT_EQ(s.result.terminal_state, static_cast<uint32_t>(c.terminal));
     }
     EXPECT_EQ(transport_bw_outcome(TRANSPORT_BW_STATE_WINDOW_CLEANUP_FAILED), UBENCH_OUTCOME_TRAP);
+    EXPECT_EQ(transport_bw_outcome(TRANSPORT_BW_STATE_RENDEZVOUS_TIMEOUT), UBENCH_OUTCOME_TIMEOUT);
 }
 
 // Spec (transport_bandwidth_frontend_cxx.hpp, size_list): warmup and the timed

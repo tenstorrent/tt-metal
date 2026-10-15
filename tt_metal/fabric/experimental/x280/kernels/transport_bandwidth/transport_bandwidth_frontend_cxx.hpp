@@ -31,6 +31,13 @@
  *     -- Untimed. Publishes r.path_sentinel as a side effect. Returns true
  *        when the observed value matched the expected sentinel.
  *
+ *   static bool rendezvous(state_t& s);
+ *     -- Untimed, after warm-up and before t0. Returns true once every
+ *        participant of the run has reached it, so the participants' timed
+ *        brackets start together; true at once for a single participant.
+ *        False when the others did not arrive within the backend's bound;
+ *        the run then ends RENDEZVOUS_TIMEOUT.
+ *
  *   template <uint32_t TransferSize>
  *   static void issue(state_t& s);   -- one issue; compile-time-specialized
  *
@@ -72,11 +79,12 @@
  * transfer_count) before the frontend is called.
  * The frontend then advances the state machine:
  *
- *   INIT (already set) -> VERIFY_PATH -> WARMUP ->
+ *   INIT (already set) -> VERIFY_PATH -> WARMUP -> [rendezvous] ->
  *     TIMED_{DRAINED|INJECTION} -> [DRAIN, only under INJECTION] ->
  *     PUBLISH -> DONE
  *
- * or, on a path-verification failure, INIT -> VERIFY_PATH -> PATH_MISMATCH.
+ * or, on a path-verification failure, INIT -> VERIFY_PATH -> PATH_MISMATCH,
+ * or, when the rendezvous gives up, ... -> WARMUP -> RENDEZVOUS_TIMEOUT.
  * A failed footer replaces the terminal state with WINDOW_CLEANUP_FAILED.
  *
  * Timed-loop rule, for every X280 benchmark: a timed loop keeps its operands
@@ -234,6 +242,10 @@ inline __attribute__((always_inline)) void run_member(typename Backend::state_t&
     r.terminal_state = static_cast<uint32_t>(TRANSPORT_BW_STATE_WARMUP);
     warmup<Backend>(s);
     r.warmup_completed = Backend::args(s).warmup_count;
+    if (!Backend::rendezvous(s)) {
+        ubench_finish<Backend>(s, TRANSPORT_BW_STATE_RENDEZVOUS_TIMEOUT, TRANSPORT_BW_STATE_WINDOW_CLEANUP_FAILED);
+        return;
+    }
 
     /* TIMED. run_timed_dispatch selects both the burst length and the
      * boundary specialization before t0 and publishes the batch delta. */

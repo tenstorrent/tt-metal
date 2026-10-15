@@ -1131,14 +1131,19 @@ The canonical state sequence is:
 
 ```text
 INIT → VERIFY_PATH ─┬→ PATH_MISMATCH
-                   └→ WARMUP → TIMED_DRAINED → PUBLISH → DONE
-                                └→ TIMED_INJECTION → DRAIN → PUBLISH → DONE
+                   └→ WARMUP ─┬→ RENDEZVOUS_TIMEOUT
+                              └→ TIMED_DRAINED → PUBLISH → DONE
+                              └→ TIMED_INJECTION → DRAIN → PUBLISH → DONE
 ```
 
 - `INIT` parses arguments and performs backend setup.
 - `VERIFY_PATH` performs one untimed, member-appropriate sentinel or readiness
   operation.
 - `WARMUP` uses the measured `issue()` primitive and then drains.
+- Between `WARMUP` and the timed bracket, `rendezvous()` waits for every
+  participant of a multi-participant run (the X280 -> Tensix harts), so their
+  brackets start together. A participant that does not arrive within the
+  backend's bound ends the run `RENDEZVOUS_TIMEOUT`.
 - `TIMED_DRAINED` issues the batch and drains inside one uninterrupted bracket.
 - `TIMED_INJECTION` measures issue only; `DRAIN` completes the same batch after
   the bracket.
@@ -1230,6 +1235,10 @@ struct counter_delta_t;
 
 // Untimed verification of this member's resolved source/destination.
 static inline bool verify_path(backend_state_t& backend);
+
+// Untimed, before t0: true once every participant of the run has arrived;
+// false when they did not within the backend's bound.
+static inline bool rendezvous(backend_state_t& backend);
 
 // Issues one logical transfer. Required component-local readiness and
 // hardware backpressure are contained here.
@@ -1337,7 +1346,7 @@ documented `issue()` semantics on that component.
 | Member | Primitive | Readiness |
 |---|---|---|
 | Tensix write to X280 | asynchronous NOC write into X280 LIM; passive X280 target | landed (`tensix_to_x280`) |
-| X280 write to Tensix | X280 hart 0 issues `SIZE/W` uncached stores of `W` = 4 (`sw`), 8 (`sd`) or 64 B (`vse32.v`) through paired TLB slot 120 in ordering mode 2 (posted) into a Tensix L1 buffer; passive Tensix target. `DRAINED` ends on one read through the window, so it is an issue rate, not a delivered rate, and is recorded as `RETIRED` ([docs/measurement.md "Quantities that share a label"](../measurement.md#quantities-that-share-a-label)) | landed (`x280_to_tensix`) |
+| X280 write to Tensix | X280 harts 0..H-1 (H = 1, 2 or 4) each issue `SIZE/W` uncached stores of `W` = 4 (`sw`), 8 (`sd`) or 64 B (`vse32.v`) per issue through their own paired TLB slot 120+h in ordering mode 2 (posted) into their own range of a Tensix L1 buffer; passive Tensix target. `DRAINED` ends on one read through the window, so it is an issue rate, not a delivered rate, and is recorded as `RETIRED` ([docs/measurement.md "Quantities that share a label"](../measurement.md#quantities-that-share-a-label)) | landed (`x280_to_tensix`) |
 | ERISC raw transmit | raw Ethernet issue and completion | peer operation, completion, and byte accounting unresolved |
 | DRISC read from Tensix | repeated NOC read from host-seeded Tensix L1 | primitive, drain, and supported depth unresolved |
 | DRISC GDDR DMA | repeated DMA read or write | direction, buffer partition, and completion mapping unresolved |

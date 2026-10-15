@@ -6,11 +6,12 @@
  * kernels/transport_bandwidth/backends/x280_to_tensix.hpp -- X280 backend for
  * the X280 -> Tensix transport_bandwidth member.
  *
- * X280 is the initiator. It programs one paired-range NOC TLB slot at the
- * Tensix worker's L1 destination in posted mode, then issues bursts of
- * `transfer_size / StoreWidth` back-to-back stores through the window:
- * `sw`, `sd`, or `vse32.v` at e32/m1. memcpy does not work through the
- * window; every width is a straight sequence of one store instruction.
+ * X280 is the initiator. Each participating hart programs its own
+ * paired-range NOC TLB slot at its own Tensix L1 destination in posted mode,
+ * then issues bursts of `transfer_size / StoreWidth` back-to-back stores
+ * through the window: `sw`, `sd`, or `vse32.v` at e32/m1. memcpy does not
+ * work through the window; every width is a straight sequence of one store
+ * instruction.
  *
  * The source of every store is a 64 B pattern held in registers across the
  * timed loop. The stack is in LIM, which is uncached, so a load per store
@@ -47,8 +48,10 @@
 #include "rt/x280_hw.h"
 #include "rt/measurement.h"
 #include "rt/x280_measurement.h"
+#include "rt/x280_atomic.h"
 #include "rt/x280_noc_map.h"
 #include "rt/x280_vec_m1.h"
+#include "x280_hart_protocol.h"
 
 namespace transport_bandwidth::backend_x280_to_tensix {
 
@@ -61,6 +64,10 @@ constexpr uint32_t kVerifyMagic = 0x9B7C1D3Eu;
 /* Reads verify_path takes before it reports PATH_MISMATCH. Each is one NoC
  * round trip, outside the timed loop. */
 constexpr uint32_t kVerifyPollBound = 500000u;
+
+/* mtime ticks rendezvous waits for the other harts: 1 s, far above any
+ * launch or warm-up skew between them. */
+constexpr uint64_t kRendezvousBoundTicks = 50000000u;
 
 /* Admitted transfer sizes. Each store through the uncached window is its own
  * NoC request, so a larger transfer_size does not grow a packet. */
@@ -88,10 +95,12 @@ struct timestamp_t {
 };
 
 /* Delta: primary is mtime (PLL-independent wall clock), secondary is
- * raw rdcycle. */
+ * raw rdcycle. wall_start and wall_end are the mtime endpoints themselves. */
 struct counter_delta_t {
     uint64_t primary;
     uint64_t secondary;
+    uint64_t wall_start;
+    uint64_t wall_end;
 };
 
 struct state_t {
@@ -113,7 +122,11 @@ struct state_t {
 
     /* Result region (writable, plain). The volatile-vs-plain cast is done
      * once at image entry. */
-    transport_bw_result_t* r;
+    transport_bw_x280_to_tensix_result_t* r;
+
+    /* Start counter every participating hart increments once before t0. */
+    volatile uint32_t* barrier;
+    uint32_t harts;
 
     /* TLB slot to clear on shutdown, so a residual coordinate does not
      * leak into the next case. */
@@ -164,6 +177,12 @@ inline bool sanity_check(const transport_bw_x280_to_tensix_section_t& s) {
     if (s.backend.own_result_addr == 0u) {
         return false;
     }
+    if (s.backend.own_barrier_addr == 0u || (s.backend.own_barrier_addr % sizeof(uint32_t)) != 0u) {
+        return false;
+    }
+    if (s.backend.harts == 0u || s.backend.harts > X280_HART_COUNT) {
+        return false;
+    }
     if (!store_widths::contains(s.backend.store_width)) {
         return false;
     }
@@ -182,9 +201,12 @@ inline bool sanity_check(const transport_bw_x280_to_tensix_section_t& s) {
  * ends the run through ubench_finish: ARG_LAYOUT_MISMATCH, or
  * WINDOW_CLEANUP_FAILED when shutdown()'s clear does not read back zero.
  * -------------------------------------------------------------------------- */
-inline bool initialize(state_t& state, const transport_bw_x280_to_tensix_section_t& s, transport_bw_result_t& r) {
+inline bool initialize(
+    state_t& state, const transport_bw_x280_to_tensix_section_t& s, transport_bw_x280_to_tensix_result_t& hr) {
     state.args = s.common;
-    state.r = &r;
+    state.r = &hr;
+    state.barrier = reinterpret_cast<volatile uint32_t*>(s.backend.own_barrier_addr);
+    state.harts = s.backend.harts;
     state.tlb_index = s.backend.peer_tlb_index;
     state.run_nonce = s.common.run_nonce;
     state.window = nullptr;
@@ -192,6 +214,7 @@ inline bool initialize(state_t& state, const transport_bw_x280_to_tensix_section
     /* Initialise the result region. terminal_state advances as the state
      * machine moves; the host reads it once at DONE (or its refusal
      * terminal). */
+    transport_bw_result_t& r = hr.common;
     r.backend_id = TRANSPORT_BW_BACKEND_ID_X280_TO_TENSIX;
     r.boundary = s.common.boundary;
     r.terminal_state = static_cast<uint32_t>(TRANSPORT_BW_STATE_INIT);
@@ -203,6 +226,8 @@ inline bool initialize(state_t& state, const transport_bw_x280_to_tensix_section
     r.secondary_batch_delta = 0ull;
     r.path_sentinel = 0u;
     r.reserved = 0u;
+    hr.wall_start = 0ull;
+    hr.wall_end = 0ull;
     x280_fence_ow();
 
     /* Ordering mode 2, Posted Writes. See BlackholeA0/L2CPUTile/TLBWindows.md.
@@ -331,7 +356,7 @@ struct Common {
     using sizes = ::transport_bandwidth::backend_x280_to_tensix::sizes;
 
     static const transport_bw_protocol_args_t& args(state_t& s) { return s.args; }
-    static transport_bw_result_t& result(state_t& s) { return *s.r; }
+    static transport_bw_result_t& result(state_t& s) { return s.r->common; }
 
     /* Path verification: write sentinel through the window, then read the
      * same word until it matches or kVerifyPollBound reads have returned. On
@@ -355,8 +380,23 @@ struct Common {
             }
         }
         x280_fence_iorw();
-        s.r->path_sentinel = observed;
+        s.r->common.path_sentinel = observed;
         return observed == sentinel;
+    }
+
+    /* Every participating hart increments the shared counter once, then waits
+     * for all of them, so the harts' timed brackets start together. False when
+     * they have not all arrived within kRendezvousBoundTicks: a hart that ended
+     * its run before this point never arrives. */
+    static bool rendezvous(state_t& s) {
+        x280_amoadd_w(s.barrier, 1u);
+        const uint64_t start = x280_mtime_fenced();
+        while (*s.barrier < s.harts) {
+            if (x280_mtime_fenced() - start > kRendezvousBoundTicks) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /* Fenced read through the window. It is not proof that preceding posted
@@ -383,12 +423,16 @@ struct Common {
         if (!measurement_delta(t0.cycle_ticks, t1.cycle_ticks, &d.secondary)) {
             d.secondary = UINT64_MAX;
         }
+        d.wall_start = t0.mtime_ticks;
+        d.wall_end = t1.mtime_ticks;
         return d;
     }
 
     static void publish_delta(state_t& s, const counter_delta_t& d) {
-        s.r->raw_batch_delta = d.primary;
-        s.r->secondary_batch_delta = d.secondary;
+        s.r->common.raw_batch_delta = d.primary;
+        s.r->common.secondary_batch_delta = d.secondary;
+        s.r->wall_start = d.wall_start;
+        s.r->wall_end = d.wall_end;
     }
 
     static void publish_barrier(state_t&) { x280_fence_ow(); }

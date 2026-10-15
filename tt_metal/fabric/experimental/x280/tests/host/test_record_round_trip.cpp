@@ -267,9 +267,16 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
         r.secondary_batch_delta = 350000;
         const x280::suites::transport_bandwidth::Point point{
             .transfer_size = 64, .boundary = TRANSPORT_BW_BOUNDARY_DRAINED, .warmup = 128, .samples = 16384};
+        transport_bw_x280_to_tensix_result_t hart0{.common = r, .wall_start = 1000, .wall_end = 201000};
         write(
             "bw.x280_to_tensix.64.retired",
-            x280::suites::transport_bandwidth::x280_to_tensix_record(r, point, /*store_width=*/4));
+            x280::suites::transport_bandwidth::x280_to_tensix_record({hart0}, point, /*store_width=*/4));
+        // Hart 1 starts 100 ticks after hart 0 and ends 300 after it.
+        transport_bw_x280_to_tensix_result_t hart1{.common = r, .wall_start = 1100, .wall_end = 201300};
+        hart1.common.raw_batch_delta = 200200;
+        write(
+            "bw.x280_to_tensix.h2.64.retired",
+            x280::suites::transport_bandwidth::x280_to_tensix_record({hart0, hart1}, point, /*store_width=*/4));
         write(
             "bw.tensix_to_x280.64.drained",
             x280::suites::transport_bandwidth::tensix_to_x280_record(r, point, calibrated, tensix_clock));
@@ -463,5 +470,5 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                  .erisc_clock = &erisc_clock}));
     }
 
-    validate(16);
+    validate(17);
 }

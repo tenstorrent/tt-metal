@@ -446,6 +446,318 @@
       }
     },
     {
+      "id": "bw.x280_to_tensix.h2.64.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h2_size64_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h2.64.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h2_size64_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h2.65536.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h2_size65536_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h2.65536.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h2_size65536_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h2.sd.64.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h2_sd_size64_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h2.sd.64.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h2_sd_size64_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h2.sd.65536.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h2_sd_size65536_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h2.sd.65536.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h2_sd_size65536_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h2.vse32.64.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h2_vse32_size64_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h2.vse32.64.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h2_vse32_size64_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h2.vse32.65536.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h2_vse32_size65536_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h2.vse32.65536.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h2_vse32_size65536_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h4.64.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h4_size64_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h4.64.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h4_size64_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h4.65536.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h4_size65536_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h4.65536.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h4_size65536_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h4.sd.64.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h4_sd_size64_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h4.sd.64.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h4_sd_size64_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h4.sd.65536.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h4_sd_size65536_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h4.sd.65536.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h4_sd_size65536_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h4.vse32.64.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h4_vse32_size64_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h4.vse32.64.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h4_vse32_size64_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h4.vse32.65536.retired",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h4_vse32_size65536_drained"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
+      "id": "bw.x280_to_tensix.h4.vse32.65536.injection",
+      "member": "transport_bandwidth/x280_to_tensix",
+      "argv": [
+        "${HOST_BUILD}/x280_transport_bandwidth_x280_to_tensix",
+        "--gtest_filter=Sweep/TransportBandwidthX280ToTensix.RepeatedIssueMeasuresSustainedAndInjection/h4_vse32_size65536_injection"
+      ],
+      "environment": {
+        "TRANSPORT_BW_W": "128",
+        "TRANSPORT_BW_N": "16384",
+        "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE": "${FW_BUILD}/firmware-transport-bandwidth-x280-to-tensix.bin"
+      }
+    },
+    {
       "id": "bw.tensix_to_x280.64.drained",
       "member": "transport_bandwidth/tensix_to_x280",
       "argv": [

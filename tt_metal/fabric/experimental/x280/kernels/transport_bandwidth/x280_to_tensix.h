@@ -63,10 +63,13 @@
 typedef struct {
     uint64_t peer_dst_addr;    /* Tensix L1 destination base */
     uint64_t own_staging_addr; /* LIM: per-word source pattern for issue() */
-    uint64_t own_result_addr;  /* LIM: transport_bw_result_t destination */
+    uint64_t own_result_addr;  /* LIM: transport_bw_x280_to_tensix_result_t destination */
+    uint64_t own_barrier_addr; /* LIM: u32 start counter, zero at launch, shared by every hart */
     x280_noc_coord_t peer_noc; /* Tensix worker, virtual (UMD TRANSLATED) */
     uint32_t peer_tlb_index;   /* X280_TLB_PAIRED_BASE + n */
     uint32_t store_width;      /* bytes per store: 4 (sw), 8 (sd) or 64 (vse32.v) */
+    uint32_t harts;            /* participating harts, 1..X280_HART_COUNT; one section each */
+    uint32_t pad;
 } transport_bw_x280_to_tensix_backend_args_t;
 
 typedef struct {
@@ -88,16 +91,25 @@ typedef transport_bw_x280_to_tensix_section_t transport_bw_x280_to_tensix_args_b
  * to it. */
 #define TB_X2T_DST_MAX_BYTES 65536u
 
+/* One hart's result: the suite result plus the raw mtime endpoints of its
+ * timed bracket. Every hart of the tile reads the same mtime, so the host can
+ * place the harts' brackets on one clock. */
+typedef struct {
+    transport_bw_result_t common;
+    uint64_t wall_start; /* mtime at t0 */
+    uint64_t wall_end;   /* mtime at t1 */
+} transport_bw_x280_to_tensix_result_t;
+
 /* --------------------------------------------------------------------------
  * Static assertions
  * -------------------------------------------------------------------------- */
 UBENCH_LAYOUT_ASSERT(
-    sizeof(transport_bw_x280_to_tensix_backend_args_t) == 40u, "backend args are 40 bytes: 3 x u64 + 4 x u32");
+    sizeof(transport_bw_x280_to_tensix_backend_args_t) == 56u, "backend args are 56 bytes: 4 x u64 + 6 x u32");
 UBENCH_LAYOUT_ASSERT(
     offsetof(transport_bw_x280_to_tensix_backend_args_t, peer_dst_addr) == 0u, "peer_dst_addr is the first field");
 UBENCH_LAYOUT_ASSERT(
-    offsetof(transport_bw_x280_to_tensix_backend_args_t, peer_noc) == 24u,
-    "u32 tail begins after the three u64 addresses");
+    offsetof(transport_bw_x280_to_tensix_backend_args_t, peer_noc) == 32u,
+    "u32 tail begins after the four u64 addresses");
 
 UBENCH_LAYOUT_ASSERT(
     offsetof(transport_bw_x280_to_tensix_section_t, cookie_common) == 0u, "common cookie is at offset 0");
@@ -106,7 +118,12 @@ UBENCH_LAYOUT_ASSERT(
     "common section follows cookie + 4B pad on 8B alignment");
 
 UBENCH_LAYOUT_ASSERT(
-    sizeof(transport_bw_x280_to_tensix_section_t) == 80u,
-    "section is 80 bytes: cookie + pad + common (24) + cookie + pad + backend (40)");
+    sizeof(transport_bw_x280_to_tensix_section_t) == 96u,
+    "section is 96 bytes: cookie + pad + common (24) + cookie + pad + backend (56)");
+
+UBENCH_LAYOUT_ASSERT(
+    sizeof(transport_bw_x280_to_tensix_result_t) == 72u, "hart result is the suite result (56) + 2 x u64");
+UBENCH_LAYOUT_ASSERT(
+    offsetof(transport_bw_x280_to_tensix_result_t, wall_start) == 56u, "wall_start follows the suite result");
 
 #endif /* X280_TRANSPORT_BW_X280_TO_TENSIX_H */

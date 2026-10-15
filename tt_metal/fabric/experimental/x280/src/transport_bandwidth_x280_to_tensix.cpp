@@ -6,7 +6,8 @@
  * transport_bandwidth_x280_to_tensix.cpp -- X280 image for the X280 -> Tensix
  * addressable member of the transport_bandwidth suite.
  *
- * Only hart 0 participates. The other three harts return immediately.
+ * Harts 0..harts-1 participate, one section each; the rest return
+ * immediately.
  *
  * This image copies the LIM-resident section
  * out of volatile memory, checks cookies and sanity, and hands the state
@@ -36,8 +37,6 @@ extern "C" {
 
 namespace {
 
-constexpr uint64_t kParticipants = 1u;
-
 namespace backend = transport_bandwidth::backend_x280_to_tensix;
 
 }  // namespace
@@ -47,7 +46,7 @@ namespace backend = transport_bandwidth::backend_x280_to_tensix;
  * issue. */
 extern "C" __attribute__((hot)) int main(uint64_t hartid) {
     UBENCH_SECTION_STORAGE(transport_bw_x280_to_tensix_section_t, section) store;
-    if (!x280_load_section<transport_bw_x280_to_tensix_section_t>(hartid, kParticipants, store.as_uint32)) {
+    if (!x280_load_section<transport_bw_x280_to_tensix_section_t>(hartid, X280_HART_COUNT, store.as_uint32)) {
         return 0;
     }
 
@@ -55,14 +54,16 @@ extern "C" __attribute__((hot)) int main(uint64_t hartid) {
      * only address the section carries for the result region is inside the
      * struct we just copied, so a cookie-mismatched section leaves the
      * host observing DONE-not-set and inferring ARG_LAYOUT_MISMATCH from
-     * that. */
-    if (!backend::sanity_check(store.section)) {
+     * that. The block, padded to whole cache lines, holds exactly one section
+     * per participating hart. */
+    if (!backend::sanity_check(store.section) ||
+        x280_hart_args_bytes() / sizeof(transport_bw_x280_to_tensix_section_t) != store.section.backend.harts) {
         return 0;
     }
 
-    volatile transport_bw_result_t* result_v =
-        reinterpret_cast<volatile transport_bw_result_t*>(store.section.backend.own_result_addr);
-    transport_bw_result_t& r = *const_cast<transport_bw_result_t*>(result_v);
+    volatile transport_bw_x280_to_tensix_result_t* result_v =
+        reinterpret_cast<volatile transport_bw_x280_to_tensix_result_t*>(store.section.backend.own_result_addr);
+    transport_bw_x280_to_tensix_result_t& r = *const_cast<transport_bw_x280_to_tensix_result_t*>(result_v);
 
     /* The `state{}` initializer is omitted: state_t carries a 64-byte
      * staging array, and a zero-init would have GCC emit a `memset` call

@@ -231,6 +231,9 @@ struct Backend {
         noc_async_write(s.own_staging_addr, NOC_XY_ADDR(s.peer_noc.x, s.peer_noc.y, s.peer_dst), TransferSize);
     }
 
+    // One participant: nothing to wait for.
+    static bool rendezvous(state_t&) { return true; }
+
     // Drain: barrier on outstanding writes.
     static void drain(state_t&) { noc_async_write_barrier(); }
 

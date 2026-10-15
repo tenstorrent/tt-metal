@@ -279,13 +279,46 @@ TB_IDENTITY = [
 ]
 TB_VALUES = COUNTERS + BATCH_VALUES + [Column("GB/s", ratio(field("logical_bytes"), ns(BATCH_WALL)))]
 TB_TABLES = (Table("", {}, tuple(TB_IDENTITY + TB_VALUES)),)
+
+
+def tb_x280_harts(row):
+    """The run's hart count. Records written before the hart axis carry none: one hart ran."""
+    return row.record.get("harts", 1)
+
+
+def tb_x280_span(row):
+    """mtime ticks from the first hart's t0 to the last hart's t1 (all harts read one mtime).
+
+    A record from before the hart axis carries no brackets: its batch is the span."""
+    if "hart_brackets" not in row.record:
+        return counter_value(row.record, ("raw_wall_ticks",))
+    starts = each("hart_brackets", "wall_start")(row)
+    ends = each("hart_brackets", "wall_end")(row)
+    if len(starts) != tb_x280_harts(row):
+        raise ParseError("hart_brackets holds %d harts, harts is %r" % (len(starts), tb_x280_harts(row)))
+    return endpoint_difference(min(starts), max(ends))
+
+
+# Every hart moves the batch's logical bytes.
+TB_X280_RUN_BYTES = product(tb_x280_harts, field("logical_bytes"))
 # Records written before the store-width axis carry no store_width; they stored with sw.
+# With harts > 1 the batch columns are hart 0's; span and run GB/s cover every hart.
 TB_X280_TABLES = (
     Table(
         "",
         {},
         tuple(
-            TB_IDENTITY + [ident("store_width", "store B", lambda row: row.record.get("store_width", 4))] + TB_VALUES
+            TB_IDENTITY
+            + [
+                ident("store_width", "store B", lambda row: row.record.get("store_width", 4)),
+                ident("harts", "harts", tb_x280_harts),
+            ]
+            + TB_VALUES
+            + [
+                Column("span ticks", tb_x280_span),
+                Column("run B", TB_X280_RUN_BYTES),
+                Column("run GB/s", ratio(TB_X280_RUN_BYTES, ns(tb_x280_span))),
+            ]
         ),
     ),
 )

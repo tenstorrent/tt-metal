@@ -72,7 +72,8 @@ typedef enum {
     TRANSPORT_BW_STATE_PUBLISH = 6u,
     TRANSPORT_BW_STATE_DONE = 7u,
     TRANSPORT_BW_STATE_PATH_MISMATCH = 8u,
-    /* 9 and 10 are unused: no member times out on the device or traps. */
+    TRANSPORT_BW_STATE_RENDEZVOUS_TIMEOUT = 9u, /* another participant never reached the rendezvous */
+    /* 10 is unused: no member traps. */
     TRANSPORT_BW_STATE_ARG_LAYOUT_MISMATCH = 11u,
     TRANSPORT_BW_STATE_WINDOW_CLEANUP_FAILED = 12u /* the TLB clear did not read back zero */
 } transport_bw_state_t;
@@ -82,6 +83,7 @@ static inline ubench_outcome_t transport_bw_outcome(transport_bw_state_t st) {
     switch (st) {
         case TRANSPORT_BW_STATE_DONE: return UBENCH_OUTCOME_OK;
         case TRANSPORT_BW_STATE_PATH_MISMATCH: return UBENCH_OUTCOME_PATH_MISMATCH;
+        case TRANSPORT_BW_STATE_RENDEZVOUS_TIMEOUT: return UBENCH_OUTCOME_TIMEOUT;
         case TRANSPORT_BW_STATE_WINDOW_CLEANUP_FAILED: return UBENCH_OUTCOME_TRAP;
         case TRANSPORT_BW_STATE_ARG_LAYOUT_MISMATCH: return UBENCH_OUTCOME_ARG_LAYOUT_MISMATCH;
         /* Non-terminal; DRAIN means an injection run still owes cleanup. */

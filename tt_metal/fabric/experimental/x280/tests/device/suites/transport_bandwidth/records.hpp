@@ -9,8 +9,10 @@
 #include "harness/output/output.hpp"
 
 #include "kernels/transport_bandwidth/transport_bandwidth_common.h"
+#include "kernels/transport_bandwidth/x280_to_tensix.h"
 
 #include <cstdint>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -38,6 +40,7 @@ inline const char* state_name(uint32_t s) {
         case TRANSPORT_BW_STATE_PUBLISH: return "PUBLISH";
         case TRANSPORT_BW_STATE_DONE: return "DONE";
         case TRANSPORT_BW_STATE_PATH_MISMATCH: return "PATH_MISMATCH";
+        case TRANSPORT_BW_STATE_RENDEZVOUS_TIMEOUT: return "RENDEZVOUS_TIMEOUT";
         case TRANSPORT_BW_STATE_ARG_LAYOUT_MISMATCH: return "ARG_LAYOUT_MISMATCH";
         case TRANSPORT_BW_STATE_WINDOW_CLEANUP_FAILED: return "WINDOW_CLEANUP_FAILED";
     }
@@ -74,16 +77,35 @@ inline x280::harness::output::RecordSpec::Batch batch(const transport_bw_result_
 }  // namespace detail
 
 /**
- * The x280_to_tensix record of one point: the raw mtime and rdcycle batch over
- * `samples` transfers of `store_width`-byte stores and their logical bytes, its
- * explicit warm-up, on the fixed mtime clock. Throws as record() does for an
- * invalid batch.
+ * The x280_to_tensix record of one point, run by `harts.size()` harts (hart h
+ * at index h, at least one): the raw mtime and rdcycle batch of hart 0 over
+ * its `samples` transfers of `store_width`-byte stores and their logical
+ * bytes, and in `hart_brackets` every hart's raw mtime endpoints and rdcycle
+ * delta; its explicit warm-up, on the fixed mtime clock. Every hart issues
+ * `samples` transfers. Throws as record() does for an invalid batch, and
+ * std::invalid_argument for no harts.
  */
 inline x280::harness::output::RecordSpec x280_to_tensix_record(
-    const transport_bw_result_t& result, const Point& point, uint32_t store_width) {
+    const std::vector<transport_bw_x280_to_tensix_result_t>& harts, const Point& point, uint32_t store_width) {
     using x280::harness::measurement::Counter;
+    using x280::harness::output::Field;
+    using x280::harness::output::Value;
+    if (harts.empty()) {
+        throw std::invalid_argument("x280_to_tensix record needs at least one hart's result");
+    }
+    std::vector<Value> brackets;
+    for (size_t h = 0; h < harts.size(); ++h) {
+        brackets.push_back(Value::object(std::vector<Field>{
+            {"hart", h},
+            {"wall_start", harts[h].wall_start},
+            {"wall_end", harts[h].wall_end},
+            {"cpu_cycles", harts[h].common.secondary_batch_delta}}));
+    }
+    const transport_bw_result_t& result = harts.front().common;
     auto fields = detail::point_fields(point, "RETIRED");
     fields.push_back({"store_width", store_width});
+    fields.push_back({"harts", harts.size()});
+    fields.push_back({"hart_brackets", Value::array(std::move(brackets))});
     return {
         .suite = "transport_bandwidth",
         .member = "x280_to_tensix",
