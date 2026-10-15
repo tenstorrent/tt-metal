@@ -50,12 +50,18 @@ INT_RANGES = {
     DataFormat.Int8: (-127, 127),
 }
 
-MATMUL_INT4_FORMATS = [
-    InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
-    InputOutputFormat(
-        DataFormat.Int8, DataFormat.Int32, input_format_B=DataFormat.Int4
-    ),
-]
+# Weight (B) formats against Int8 activations (A); Int8 x Int8 is the control.
+WEIGHT_FORMATS = [DataFormat.Int8, DataFormat.Int4]
+
+
+def matmul_int4_format(weight_format, register_format_hint=None):
+    return InputOutputFormat(
+        DataFormat.Int8,
+        DataFormat.Int32,
+        input_format_B=weight_format,
+        register_format_hint=register_format_hint,
+    )
+
 
 # (ct, rt, kt). kt=4 is K=128, one quantization group.
 MATMUL_TILE_DIMS = [(1, 1, 1), (1, 1, 4), (2, 2, 4), (4, 1, 2), (1, 4, 2)]
@@ -77,13 +83,20 @@ def generate_int_matrix(fmt: DataFormat, dimensions, seed: int):
 
 @pytest.mark.quasar
 @parametrize(
-    format=MATMUL_INT4_FORMATS,
+    weight_format=WEIGHT_FORMATS,
     dest_sync_mode=[DestSync.Half],
     matmul_dims=lambda dest_sync_mode: matmul_tile_dims(dest_sync_mode),
     implied_math_format=[ImpliedMathFormat.Yes, ImpliedMathFormat.No],
 )
-def test_matmul_int4_quasar(format, dest_sync_mode, matmul_dims, implied_math_format):
-    _run_matmul_int4(format, dest_sync_mode, matmul_dims, implied_math_format)
+def test_matmul_int4_quasar(
+    weight_format, dest_sync_mode, matmul_dims, implied_math_format
+):
+    _run_matmul_int4(
+        matmul_int4_format(weight_format),
+        dest_sync_mode,
+        matmul_dims,
+        implied_math_format,
+    )
 
 
 @pytest.mark.quasar
@@ -92,23 +105,17 @@ def test_matmul_int4_quasar(format, dest_sync_mode, matmul_dims, implied_math_fo
     reason="Int8_2x register format exists only on the 4-row Quasar variant",
 )
 @parametrize(
-    format=MATMUL_INT4_FORMATS,
+    weight_format=WEIGHT_FORMATS,
     dest_sync_mode=[DestSync.Half],
     matmul_dims=lambda dest_sync_mode: matmul_tile_dims(dest_sync_mode),
     enable_direct_indexing=[True, False],
 )
 def test_matmul_int4_2x_quasar(
-    format, dest_sync_mode, matmul_dims, enable_direct_indexing
+    weight_format, dest_sync_mode, matmul_dims, enable_direct_indexing
 ):
     # Int4 weights unpack straight into the 2x-packed Int8 SrcA storage.
-    format = InputOutputFormat(
-        format.input_format,
-        format.output_format,
-        input_format_B=format.input_format_B,
-        register_format_hint=DataFormat.Int8_2x,
-    )
     _run_matmul_int4(
-        format,
+        matmul_int4_format(weight_format, DataFormat.Int8_2x),
         dest_sync_mode,
         matmul_dims,
         ImpliedMathFormat.Yes,

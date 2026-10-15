@@ -7,7 +7,7 @@
 
 import pytest
 from helpers.chip_architecture import is_4row_arch
-from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.format_config import DataFormat
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR_4_TRISC,
@@ -29,11 +29,7 @@ PERF_GROUP_DIMS = [
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    format=[
-        InputOutputFormat(
-            DataFormat.Int8, DataFormat.Int32, input_format_B=DataFormat.Int4
-        )
-    ],
+    weight_format=[DataFormat.Int4],
     dest_sync_mode=[DestSync.Half],
     matmul_dims=PERF_GROUP_DIMS,
     # Int8_2x (the fast int8 matmul) exists only on the 4-row variant.
@@ -43,7 +39,7 @@ PERF_GROUP_DIMS = [
 )
 def test_perf_matmul_int4_dequant_quasar(
     perf_report,
-    format,
+    weight_format,
     dest_sync_mode,
     matmul_dims,
     register_format_hint,
@@ -51,7 +47,7 @@ def test_perf_matmul_int4_dequant_quasar(
     loop_factor,
 ):
     run_matmul_int4_dequant(
-        format,
+        weight_format,
         dest_sync_mode,
         matmul_dims,
         register_format_hint,
