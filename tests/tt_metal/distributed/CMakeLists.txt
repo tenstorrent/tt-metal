@@ -211,6 +211,7 @@ if(TARGET OpenMPI::MPI)
 
     # The full E2H -> H2H -> H2E pipeline: two ranks, a device each, launched by tt-run.
     add_executable(erisc_pipeline_benchmark)
+    target_precompile_headers(erisc_pipeline_benchmark REUSE_FROM metal_test_pch)
     target_sources(erisc_pipeline_benchmark PRIVATE benchmark_erisc_e2h2h2e_pipeline.cpp)
     target_link_libraries(
         erisc_pipeline_benchmark
