@@ -186,6 +186,18 @@ nb::list param_groups_to_py(const std::vector<ParamGroup>& groups) {
     return result;
 }
 
+template <typename Optimizer, typename Config>
+void def_init_with_param_groups(nb::class_<Optimizer, OptimizerBase>& py_optimizer) {
+    py_optimizer.def(
+        "__init__",
+        [](Optimizer* self, serialization::NamedParameters parameters, const Config& config, nb::list param_groups) {
+            new (self) Optimizer(std::move(parameters), config, param_groups_from_py(param_groups));
+        },
+        nb::arg("parameters"),
+        nb::arg("config"),
+        nb::arg("param_groups") = nb::list());
+}
+
 }  // namespace
 
 void py_module(nb::module_& m) {
@@ -300,14 +312,7 @@ void py_module(nb::module_& m) {
 
     {
         auto py_sgd = static_cast<nb::class_<SGD, OptimizerBase>>(m.attr("SGD"));
-        py_sgd.def(
-            "__init__",
-            [](SGD* self, serialization::NamedParameters parameters, const SGDConfig& config, nb::list param_groups) {
-                new (self) SGD(std::move(parameters), config, param_groups_from_py(param_groups));
-            },
-            nb::arg("parameters"),
-            nb::arg("config"),
-            nb::arg("param_groups") = nb::list());
+        def_init_with_param_groups<SGD, SGDConfig>(py_sgd);
     }
 
     {
@@ -367,33 +372,13 @@ void py_module(nb::module_& m) {
 
     {
         auto py_adamw = static_cast<nb::class_<AdamW, OptimizerBase>>(m.attr("AdamW"));
-        py_adamw.def(
-            "__init__",
-            [](AdamW* self,
-               serialization::NamedParameters parameters,
-               const AdamWConfig& config,
-               nb::list param_groups) {
-                new (self) AdamW(std::move(parameters), config, param_groups_from_py(param_groups));
-            },
-            nb::arg("parameters"),
-            nb::arg("config"),
-            nb::arg("param_groups") = nb::list());
+        def_init_with_param_groups<AdamW, AdamWConfig>(py_adamw);
     }
 
     {
         auto py_adamw_full_precision =
             static_cast<nb::class_<AdamWFullPrecision, OptimizerBase>>(m.attr("AdamWFullPrecision"));
-        py_adamw_full_precision.def(
-            "__init__",
-            [](AdamWFullPrecision* self,
-               serialization::NamedParameters parameters,
-               const AdamWFullPrecisionConfig& config,
-               nb::list param_groups) {
-                new (self) AdamWFullPrecision(std::move(parameters), config, param_groups_from_py(param_groups));
-            },
-            nb::arg("parameters"),
-            nb::arg("config"),
-            nb::arg("param_groups") = nb::list());
+        def_init_with_param_groups<AdamWFullPrecision, AdamWFullPrecisionConfig>(py_adamw_full_precision);
     }
 
     {
@@ -412,17 +397,7 @@ void py_module(nb::module_& m) {
 
     {
         auto py_muon = static_cast<nb::class_<MuonComposite, OptimizerBase>>(m.attr("MuonComposite"));
-        py_muon.def(
-            "__init__",
-            [](MuonComposite* self,
-               serialization::NamedParameters parameters,
-               const MuonConfig& config,
-               nb::list param_groups) {
-                new (self) MuonComposite(std::move(parameters), config, param_groups_from_py(param_groups));
-            },
-            nb::arg("parameters"),
-            nb::arg("config"),
-            nb::arg("param_groups") = nb::list());
+        def_init_with_param_groups<MuonComposite, MuonConfig>(py_muon);
     }
 
     {
