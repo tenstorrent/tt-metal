@@ -292,8 +292,9 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
+    // UInt8 needs 32-bit Dest on WH/BH.
     const bool fp32_dest_acc_en = data_format == tt::DataFormat::Float32 || data_format == tt::DataFormat::Int32 ||
-                                  data_format == tt::DataFormat::UInt32;
+                                  data_format == tt::DataFormat::UInt32 || data_format == tt::DataFormat::UInt8;
 
     // Metal 2.0's validator requires an explicit unpack mode for every Float32 buffer a compute
     // kernel consumes while 32-bit dest is enabled; legacy defaulted silently. The legacy descriptor
