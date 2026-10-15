@@ -78,3 +78,7 @@ Every intervention by the supervising session: time, task, trigger, classificati
   target 55,296 / 2048, ladder s4096 / last / s55296, scaled ladder 55,296 / 2048. Deleted goldens s16384_c8192,
   s56320_c5120 and the partial scaled ones (s53248_c4096, s65536_c4096); kept s4096_c2048. tasks.yaml regenerated
   (G.s56320 / L.s56320 -> G.s55296 / L.s55296); plan check passes on every box. Intake and plan re-approved.
+- 08:20 after the resume, G.s4096 failed ("golden exists; goldens are generated once") and a fix agent started: the
+  supervisor had dropped G.s4096's PASS record when regenerating the ledger. Supervisor error: agent and orchestrator
+  stopped, G.s4096's PASS record (2026-10-14, 34e5c9ccb0a) and results restored, the fix attempt's report removed.
+  DS41-12 (prompt shorter than the 65536 scaled rung) marked resolved (scaled.ladder 55296 / 2048).
