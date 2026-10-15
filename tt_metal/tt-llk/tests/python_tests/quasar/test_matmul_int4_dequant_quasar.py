@@ -127,6 +127,7 @@ def test_matmul_int4_dequant_quasar(
     # Group-wise scales: out[m, n] = s_a[m] * sum_g s_w[g, n] * partial_g[m, n].
     # The device sums float(partial_g) * s_w[g, n] in fp32 in group order (L1 acc), then
     # multiplies by s_a once, so the reference does the same.
+    assert kt_dim % group_kt_dim == 0, "K must split into whole quantization groups"
     num_groups = kt_dim // group_kt_dim
     group_k = group_kt_dim * TILE
     generator = torch.Generator().manual_seed(3)
