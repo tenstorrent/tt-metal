@@ -36,3 +36,18 @@ columns** (B = 1: 32-way, B = 2: 16-way, B = 4: 8-way): this is the real fix, it
 the (o, max, sum) exchange and the top-k merge run over rows x columns instead of the 8 columns; the idle rows then hold KV of the active users). Cost: the exchange crosses rows (more CCL latency than the measured
 ~107 us per layer for 8 columns) and the batch -> row mapping must change (a user is no longer pinned to one row). It builds on milestone M1; do it after the column version works.
 Order of work: B = 4 at 512k (one user per row, 524288 token-users per chip = what B = 16 at 128k already runs) -> B = 4 at 1M -> row-sharding for B = 1 / 2.
+
+## 5. Column-sharded PREFILL indexer: microbenchmark (tests/test_indexer_shard_microbench.py, host .40, U = 1, C = 512)  [added 2026-10-15]
+`select_dyn` (tt/prefill_sparse.py) scores each chunk against ALL L index keys on every column ([C, L] scores, a [C, L] visibility mask, top-512 per row; the key slab is a sliding FIFO). The sharded variant scores L/8 keys
+per column, takes a local top-512, gathers the 8 x 512 candidates (scores + ids) over the columns and takes the final top-512 of the 4096 candidates:
+| L | replicated | sharded (local + merge) | per-column buffers (scores+masked / vis / keys) replicated -> sharded |
+|---|---|---|---|
+| 65536 | 4.10 ms | 8.25 ms | 128 / 64 / 16 MiB -> 16 / 8 / 2 MiB |
+| 131072 | 7.99 ms | 8.79 ms | 256 / 128 / 32 -> 32 / 16 / 4 |
+| 262144 | 15.71 ms | 12.31 ms | 512 / 256 / 64 -> 64 / 32 / 8 |
+Replicated time is linear in L; sharded = ~8 ms of merge (two all-gathers + gathers + a 4096-wide top-k, not yet optimised) + L/8 of the scoring. Memory per column is 8x smaller at every L; speed only wins from L ~ 131k
+(extrapolation to L ~ 1M: ~63 ms -> ~16 ms per chunk and index layer; NOT measured). The L = S_pad group (ratio 1) is the one with the big buffers (the 250k OOM was exactly its [2048 x 251904] bf16 score buffer).
+Design constraints found while reading the code: the key slab is a sliding FIFO (concat + copy per chunk), so ownership must be strided (slot mod 8, needs C/ratio divisible by 8: true for ratio 1 / 2 / 4 at C = 512, not for
+the tiny ratio-128 group which stays replicated) so every column shifts its local FIFO by Cc/8 with no cross-column traffic; the staircase mask of the current chunk and the visibility mask become per-column strided
+constants; the final ids are global FIFO slots into the REPLICATED kv table (sparse_sdpa still reads all 8 columns' worth of entries: the kv table itself (2.5 KiB / token / user) cannot be sharded without the (max, sum)
+kernel output). Selection ties at the 512th score can differ from the replicated path (bf16 scores tie often), so validation is by quality (needle / GSM8K), not bit-exactness.
