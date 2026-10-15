@@ -39,6 +39,7 @@ from helpers.param_config import (
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
+from helpers.reduce_perf_matrix import reduce_to_one_modes
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
@@ -50,6 +51,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    REDUCE_TO_ONE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -57,7 +59,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, tolerances
 
 # Helper dictionary to map reduce dimensions to math operations
 mathop_mapping = {
@@ -109,6 +111,12 @@ def reduce_implied_math_formats(formats, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
+def reduce_is_reduce_to_one_modes(formats, reduce_dim, pool_type):
+    if formats.input_format.is_mx_format():
+        return [False]
+    return reduce_to_one_modes(reduce_dim, pool_type)
+
+
 def reduce_input_dimensions():
     return [64, 64]
 
@@ -132,6 +140,7 @@ def reduce_math_fidelities(formats, pool_type):
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=POOL_TYPES,
     math_fidelity=reduce_math_fidelities,
+    is_reduce_to_one=reduce_is_reduce_to_one_modes,
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
     implied_math_format=lambda formats: reduce_implied_math_formats(
         formats, is_perf=False
@@ -146,6 +155,7 @@ def test_reduce_quasar(
     reduce_dim,
     pool_type,
     math_fidelity,
+    is_reduce_to_one,
     dest_sync_mode,
     implied_math_format,
     run_types,
@@ -185,8 +195,10 @@ def test_reduce_quasar(
                 1 / math.sqrt(tile_dimensions[0] * tile_dimensions[1]),
             )
 
+    output_tile_cnt = 1 if is_reduce_to_one else tile_cnt
+
     if not is_perf:
-        if pool_type == ReducePool.Max:
+        if pool_type == ReducePool.Max or is_reduce_to_one:
             generate_golden = get_golden_generator(ReduceGolden)
             golden_tensor = generate_golden(
                 src_A,
@@ -194,6 +206,7 @@ def test_reduce_quasar(
                 pool_type,
                 formats.output_format,
                 tile_cnt,
+                reduce_to_one=is_reduce_to_one,
                 tile_shape=tile_shape,
                 input_format=formats.input_format,
             )
@@ -233,6 +246,7 @@ def test_reduce_quasar(
                 tile_dimensions=tile_dimensions,
             ),
             TILE_COUNT(tile_cnt),
+            REDUCE_TO_ONE(is_reduce_to_one),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
@@ -247,7 +261,7 @@ def test_reduce_quasar(
             formats.output_format,
             tile_count_A=tile_cnt,
             tile_count_B=1,
-            tile_count_res=tile_cnt,
+            tile_count_res=output_tile_cnt,
             num_faces=tile_shape.total_num_faces(),
             face_r_dim=tile_shape.face_r_dim,
             tile_dimensions=tile_dimensions,
@@ -279,12 +293,23 @@ def test_reduce_quasar(
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
+    # Reduce-to-one accumulates every tile, so the error budget grows with the tile count.
+    accumulation_tolerance = (
+        dict(
+            custom_pcc_threshold=0.90,
+            custom_atol=tolerances[formats.output_format].atol * tile_cnt,
+            custom_rtol=tolerances[formats.output_format].rtol * tile_cnt,
+        )
+        if is_reduce_to_one
+        else {}
+    )
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
         tile_shape=tile_shape,
         print_errors=True,
+        **accumulation_tolerance,
     ), "Assert against golden failed"
 
 
@@ -392,6 +417,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
+            REDUCE_TO_ONE(False),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
