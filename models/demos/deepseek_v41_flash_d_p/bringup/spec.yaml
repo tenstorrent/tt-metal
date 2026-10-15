@@ -162,6 +162,10 @@ agents:
     - "Host RAM is shared (503 GB): load and dequantize weights one layer (or one expert) at a time."
     - "Precision during bring-up: HiFi4, fp32 accumulation, bf16 KV cache. Routed experts on the device in the format
       that holds the checkpoint's fp4 values exactly (measure it; expected bfp8); a lossy format only by owner decision."
+    - "Accuracy is judged against the noise floor, not against exactness: a value after the model's own fp8 / fp4
+      rounding may differ from the CPU by one rounding step where a correct bf16 device step would too (the checks'
+      limits follow the bf16 precision model). Never trade speed for exactness (kernels that emulate the CPU's summation
+      order, split matmuls, piecewise attention) without the owner's decision; the fast path is the default."
   model: null
   timeout_s: 14400
   read:

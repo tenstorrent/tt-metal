@@ -98,3 +98,9 @@ Every intervention by the supervising session: time, task, trigger, classificati
   per gate, watch --quiet-passes) and F70 (timing breakdown, timeline, device timing log, dashboard section);
   dcf8da27d5a (local); selftests 397 pass. From now on corrections go to the agents as overseer notes.
 - 15:40 pause: S.swa.06 PASS (35beb8bf9ce): exact window attention (tt/window_exact.py; load-time masks only, device-only forward; WINDOW_SDPA / ATTN_IN_MM default exact, fast paths one setting away). Accepted. Precision bar question (1% tail after fp8 requantization vs exact kernels' cost) raised with the owner. F71 (dashboard links + DASHBOARD STALE wake, overseer CLI fix) applied; selftests 399 pass.
+- 15:58 OWNER DECISION (precision bar, option 2): exact-emulation kernels (32-way split matmuls ~25x; piecewise window
+  attention 64 ms per layer) are "completely unacceptable"; thresholds must come from the noise floor of the exact
+  dtypes with the CPU op, not fixed numbers. Framework F72 (db4539a6d62): the swap tail limit = 2 x the bf16
+  precision model's block-out error (no fixed floor or cap). Spec rule "Accuracy is judged against the noise floor"
+  (intake re-approved). Note OV-3: fast paths back as defaults, exact paths as settings, re-run S.swa.05 / S.swa.06.
+  OV-1 closed (both agents answered done; DS41-12 is 352 characters).
