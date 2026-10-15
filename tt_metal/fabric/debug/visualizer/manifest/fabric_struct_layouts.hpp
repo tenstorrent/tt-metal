@@ -16,7 +16,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "tt_metal/fabric/channel_trimming_import.hpp"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
