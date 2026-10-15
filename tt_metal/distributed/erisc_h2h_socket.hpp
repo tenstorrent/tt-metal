@@ -59,6 +59,8 @@ public:
     // The consumer is done with those pages, so the peer may reuse the slots.
     void consumed(uint32_t arena, uint32_t pages);
 
+    // THIS LEG'S OWN CREDIT, between the two hosts: slot reuse in the arena, nothing else.
+    // Fabric's credits are separate and ride over the same arena as words a later leg adds.
     bool publish_credits();
     uint64_t credit_total(uint32_t arena) const;
 
