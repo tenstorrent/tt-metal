@@ -35,6 +35,7 @@ set(UNIT_TESTS_API_SOURCES
     test_banked.cpp
     test_bit_utils.cpp
     test_math.cpp
+    test_tt_align.cpp
     test_filesystem_utils.cpp
     test_simulator_target_devices.cpp
     test_tt_memory.cpp
