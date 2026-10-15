@@ -1,0 +1,37 @@
+{
+ "metrics": {
+  "cpu_seconds": {
+   "t": "2026-10-15T12:32:28",
+   "value": 5169.8
+  },
+  "golden_chunks": {
+   "t": "2026-10-15T12:32:16",
+   "value": 27
+  },
+  "golden_hash_ok": {
+   "t": "2026-10-15T12:32:28",
+   "value": 1
+  },
+  "golden_layers": {
+   "t": "2026-10-15T12:32:16",
+   "value": 8
+  },
+  "scale_errors": {
+   "t": "2026-10-15T11:06:17",
+   "value": 0
+  },
+  "scale_tensors_cut": {
+   "t": "2026-10-15T11:06:17",
+   "value": 250
+  },
+  "scale_tensors_dropped": {
+   "t": "2026-10-15T11:06:17",
+   "value": 43200
+  },
+  "scale_tensors_total": {
+   "t": "2026-10-15T11:06:17",
+   "value": 58399
+  }
+ },
+ "task": "SG.1"
+}
