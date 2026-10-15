@@ -2,23 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Does a configuration-bank flip (SETC16 of the thread's state ID) need a tensix_sync() behind it
-// before the thread's next configuration instruction, or do the two NOPs that follow the flip
-// already cover every consumer?
-//
-// Each TRISC seeds the same scratch word in both banks through the RISC (bank chosen by address),
-// flips the hardware state ID to bank 1, pads with 0..2 NOPs, optionally drains, and issues a
-// read-modify-write of that word. It then flips back to bank 0 the same way and reads the word
-// into a GPR with RDCFG. Both consumers pick their bank from the hardware state ID, so a consumer
-// that sampled the state ID too early lands in, or reads from, the wrong bank. A MOP of
-// read-modify-writes to a second scratch word can be queued ahead of each flip, so the flip and
-// its consumer wait behind a long stream of configuration-unit work; those must all land in the
-// bank that was selected when they were issued.
+// A configuration-bank flip (SETC16 of the thread's state ID) needs no tensix_sync() before the
+// thread's next configuration instruction. Each TRISC seeds a banked word differently in both
+// banks through the RISC, flips to bank 1, pads with 0..2 NOPs, optionally drains, and
+// read-modify-writes the word; then flips back to bank 0 the same way and reads it with RDCFG.
+// A MOP of read-modify-writes to another byte of the word can be queued ahead of each flip.
 //
 // Result words per thread, at word offset 256 * thread (0 unpack, 1 math, 2 pack):
 //   0        magic
 //   1        trials per combination
-//   2        1 if instruction gathering was enabled for the run
 //   8 + 4c   combination c: trials where the read-modify-write, or a backlog MOP, hit the wrong bank
 //   9 + 4c   combination c: trials whose RDCFG read the wrong bank
 //   64 + 4c  combination c: the values read in trial 0 (bank 0 word, bank 1 word, RDCFG result)
@@ -48,13 +40,11 @@ constexpr std::uint32_t COUNT_WORDS      = 8;  // 4 words per combination: rmw w
 constexpr std::uint32_t RAW_WORDS        = 64; // 4 words per combination: trial-0 bank 0, bank 1, RDCFG value, reserved
 constexpr std::uint32_t WORDS_PER_COMBO  = 4;
 
-// No LLK runs on any thread in this test, so every GPR is free; 62 receives the RDCFG result.
+// No LLK runs on any thread in this test, so every GPR is free.
 constexpr std::uint32_t RESULT_GPR = 62;
 
-// The configuration banks are shared by the three TRISCs, so each thread probes its own word. The
-// words are address strides that only an unpacker or packer reads, and none runs in this test. They
-// sit below GLOBAL_CFGREG_BASE_ADDR32, so each has a separate value per bank. The read-modify-write
-// under test touches byte 0 of the word; the backlog MOPs touch byte 1 of the same word.
+// The banks are shared by the three TRISCs, so each thread probes its own word: an address stride
+// that only an idle unpacker or packer reads, below GLOBAL_CFGREG_BASE_ADDR32 so it is banked.
 #ifdef LLK_TRISC_UNPACK
 constexpr std::uint32_t PROBE_WORD = UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32;
 #endif
@@ -120,8 +110,8 @@ inline void run_combination(volatile std::uint32_t* out)
 
     for (std::uint32_t trial = 0; trial < TRIALS; trial++)
     {
-        // Bytes 0 and 1 start clear: byte 0 receives the probe read-modify-write (bank 1 only) and
-        // byte 1 the backlog MOPs (first run into bank 0, second into bank 1).
+        // Byte 0 receives the probe read-modify-write (bank 1 only), byte 1 the backlog MOPs
+        // (first run into bank 0, second into bank 1).
         const std::uint32_t seed0 = 0x5A000000u | (trial << 16);
         const std::uint32_t seed1 = 0x25000000u | (trial << 16);
         seed_word(PROBE_WORD, seed0, seed1);
@@ -129,7 +119,6 @@ inline void run_combination(volatile std::uint32_t* out)
         TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 0 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, HI_16(RESULT_GPR));
         tensix_sync();
 
-        // Bank 0 is selected here. Flip to bank 1 and read-modify-write the probe word there.
         if constexpr (BACKLOG)
         {
             backlog_a.program();
@@ -139,7 +128,6 @@ inline void run_combination(volatile std::uint32_t* out)
         after_flip<NOPS, SYNC>();
         TTI_RMWCIB0(BYTE_MASK /*Mask*/, RMW_BYTE /*Data*/, PROBE_WORD);
 
-        // Flip back to bank 0 and read the probe word from there.
         if constexpr (BACKLOG)
         {
             backlog_b.program();
@@ -201,22 +189,13 @@ inline void run_probe(volatile std::uint32_t* out)
     }
     out[0] = RESULT_MAGIC;
     out[1] = TRIALS;
-    out[2] = GATHERING_ON ? 1u : 0u;
 
-    // Start from a known bank.
+    // Start from, and leave, a known bank.
     TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, BANK0);
     tensix_sync();
 
-    if constexpr (GATHERING_ON)
-    {
-        enable_gathering();
-    }
     run_backlog<false>(out);
     run_backlog<true>(out);
-    if constexpr (GATHERING_ON)
-    {
-        disable_gathering();
-    }
 
     TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, BANK0);
     tensix_sync();

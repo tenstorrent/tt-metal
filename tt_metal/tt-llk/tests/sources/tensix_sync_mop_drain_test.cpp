@@ -2,29 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Does tensix_sync() on its own wait for a MOP that is still expanding, or does it need a
-// mop_sync() in front of it?
-//
-// Each TRISC programs a MOP whose only instruction adds one to a GPR, runs it, synchronises in
-// one of four ways (no sync, tensix_sync, mop_sync, mop_sync then tensix_sync), and then reads
-// the GPR back from the RISC. If the sync returned while the MOP was still expanding, the read
-// comes back short of the programmed number of increments.
-//
-// Two shapes of MOP are used: one long enough that the no-sync read is far short of the total
-// (which shows the probe can see an unfinished MOP at all), and a short MOP of a few dozen
-// increments repeated many times with the counter checked after every run, long enough that a
-// sync returning with the last few generated instructions still in flight reads short. Every
-// thread runs the same probe on its own GPR file, MOP decoder and PC buffer.
+// tensix_sync() on its own must wait for a MOP that is still expanding. Each TRISC runs a MOP whose
+// only instruction increments a GPR, with or without a tensix_sync() behind it, and reads the GPR
+// back from the RISC: a read short of the programmed increments means the sync returned early.
 //
 // Result words per thread, at word offset 256 * thread (0 unpack, 1 math, 2 pack):
-//   0       magic
-//   1       increments programmed into the long MOP
-//   2..5    long MOP: counter read after arm 0..3
-//   6..9    long MOP: wall-clock cycles from the MOP run to the end of the sync, arm 0..3
-//   10..13  short MOP: trials whose read did not see every increment, arm 0..3
-//   14      short MOP trials per arm
-//   15      increments per short MOP run
-// Arms: 0 = no sync, 1 = tensix_sync, 2 = mop_sync, 3 = mop_sync then tensix_sync.
+//   0     magic
+//   1     increments programmed into the long MOP
+//   2, 3  long MOP: counter read with no sync, with tensix_sync
+//   4, 5  short MOP: runs whose read missed an increment, with no sync, with tensix_sync
+//   6     short MOP runs per arm
+//   7     increments per short MOP run
 
 #include <cstdint>
 
@@ -43,9 +31,15 @@ namespace
 
 using namespace ckernel;
 
-constexpr std::uint32_t RESULT_MAGIC = 0x4D4F5053;
+constexpr std::uint32_t RESULT_MAGIC          = 0x4D4F5053;
+constexpr std::uint32_t WORDS_PER_THREAD      = 256;
+constexpr std::uint32_t LONG_INCREMENTS_WORD  = 1;
+constexpr std::uint32_t LONG_COUNT_WORD       = 2;
+constexpr std::uint32_t SHORT_MISS_WORD       = 4;
+constexpr std::uint32_t SHORT_TRIALS_WORD     = 6;
+constexpr std::uint32_t SHORT_INCREMENTS_WORD = 7;
 
-// No LLK runs on any thread in this test, so every GPR is free; 62 is used as the counter.
+// No LLK runs on any thread in this test, so every GPR is free.
 constexpr std::uint32_t COUNTER_GPR = 62;
 
 // Loop lengths are 10-bit fields in the MOP configuration.
@@ -57,19 +51,16 @@ constexpr std::uint32_t SHORT_MOP_INNER      = 64;
 constexpr std::uint32_t SHORT_MOP_INCREMENTS = SHORT_MOP_OUTER * SHORT_MOP_INNER;
 constexpr std::uint32_t SHORT_MOP_TRIALS     = 4096;
 
-constexpr std::uint32_t WORDS_PER_THREAD = 256;
-constexpr std::uint32_t NUM_ARMS         = 4;
+constexpr std::uint32_t NO_SYNC     = 0;
+constexpr std::uint32_t TENSIX_SYNC = 1;
+constexpr std::uint32_t NUM_ARMS    = 2;
 
 // counter = counter + 1 on the scalar unit: operand B is the immediate 1, not a register.
 constexpr std::uint32_t OP_INCREMENT_COUNTER = TT_OP_ADDDMAREG(1 /*OpBisConst*/, COUNTER_GPR, 1 /*OpBRegIndex, the immediate*/, COUNTER_GPR);
 
 inline void sync_for_arm(const std::uint32_t arm)
 {
-    if (arm & 2)
-    {
-        mop_sync();
-    }
-    if (arm & 1)
+    if (arm == TENSIX_SYNC)
     {
         tensix_sync();
     }
@@ -77,8 +68,7 @@ inline void sync_for_arm(const std::uint32_t arm)
 
 inline void reset_counter()
 {
-    // Drain whatever the previous arm left in flight, zero the counter, and make sure the zero has
-    // landed before the next MOP is pushed.
+    // Drain the previous arm, zero the counter, and let the zero land before the next MOP is pushed.
     tensix_sync();
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 0 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, LO_16(COUNTER_GPR));
     TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 0 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, HI_16(COUNTER_GPR));
@@ -96,28 +86,25 @@ inline void run_probe(volatile std::uint32_t* out)
     {
         out[i] = 0;
     }
-    out[0]  = RESULT_MAGIC;
-    out[1]  = LONG_MOP_INCREMENTS;
-    out[14] = SHORT_MOP_TRIALS;
-    out[15] = SHORT_MOP_INCREMENTS;
+    out[0]                     = RESULT_MAGIC;
+    out[LONG_INCREMENTS_WORD]  = LONG_MOP_INCREMENTS;
+    out[SHORT_TRIALS_WORD]     = SHORT_MOP_TRIALS;
+    out[SHORT_INCREMENTS_WORD] = SHORT_MOP_INCREMENTS;
 
     ckernel_template long_mop(LONG_MOP_OUTER, LONG_MOP_INNER, OP_INCREMENT_COUNTER);
     long_mop.program();
-    for (std::uint32_t arm = 0; arm < NUM_ARMS; arm++)
+    for (std::uint32_t arm = NO_SYNC; arm < NUM_ARMS; arm++)
     {
         reset_counter();
-        const std::uint64_t start = read_wall_clock();
         long_mop.run();
         sync_for_arm(arm);
-        const std::uint64_t end = read_wall_clock();
-        out[2 + arm]            = read_counter();
-        out[6 + arm]            = static_cast<std::uint32_t>(end - start);
+        out[LONG_COUNT_WORD + arm] = read_counter();
     }
 
     tensix_sync();
     ckernel_template short_mop(SHORT_MOP_OUTER, SHORT_MOP_INNER, OP_INCREMENT_COUNTER);
     short_mop.program();
-    for (std::uint32_t arm = 0; arm < NUM_ARMS; arm++)
+    for (std::uint32_t arm = NO_SYNC; arm < NUM_ARMS; arm++)
     {
         reset_counter();
         std::uint32_t misses = 0;
@@ -130,7 +117,7 @@ inline void run_probe(volatile std::uint32_t* out)
                 misses++;
             }
         }
-        out[10 + arm] = misses;
+        out[SHORT_MISS_WORD + arm] = misses;
     }
     tensix_sync();
 }

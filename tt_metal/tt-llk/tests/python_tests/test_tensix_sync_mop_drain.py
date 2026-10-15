@@ -4,15 +4,10 @@
 """
 tensix_sync() on its own must wait for a MOP that is still expanding.
 
-Each TRISC runs a MOP whose only instruction increments a GPR, synchronises one of four ways
-(no sync, tensix_sync, mop_sync, mop_sync then tensix_sync) and reads the GPR back from the RISC.
-A sync that returned while the MOP was still expanding shows up as a read short of the programmed
-number of increments. See sources/tensix_sync_mop_drain_test.cpp for the result layout.
-
-Only the two tensix_sync arms are asserted. The no-sync and mop_sync arms are reported: what they
-read depends on how far the MOP got before the read landed, which is what makes the probe able
-to see an unfinished MOP, and the long MOP's no-sync read is asserted short only because a
-million increments leave no margin for timing.
+Each TRISC runs a MOP whose only instruction increments a GPR, with or without a tensix_sync()
+behind it, and reads the GPR back from the RISC. The no-sync arm shows the probe can see an
+unfinished MOP; it is asserted only on the long MOP, where a million increments leave no margin
+for timing. See sources/tensix_sync_mop_drain_test.cpp for the result layout.
 """
 
 from conftest import blackhole_only
@@ -29,15 +24,14 @@ pytestmark = [blackhole_only]
 RESULT_MAGIC = 0x4D4F5053
 WORDS_PER_THREAD = 256
 LONG_INCREMENTS_WORD = 1
-LONG_COUNT_WORDS = slice(2, 6)
-LONG_CYCLE_WORDS = slice(6, 10)
-SHORT_MISS_WORDS = slice(10, 14)
-SHORT_TRIALS_WORD = 14
-SHORT_INCREMENTS_WORD = 15
+LONG_COUNT_WORDS = slice(2, 4)
+SHORT_MISS_WORDS = slice(4, 6)
+SHORT_TRIALS_WORD = 6
+SHORT_INCREMENTS_WORD = 7
 
 THREADS = ["unpack", "math", "pack"]
-ARMS = ["no sync", "tensix_sync", "mop_sync", "mop_sync + tensix_sync"]
-NO_SYNC, TENSIX_SYNC, MOP_SYNC, BOTH = range(4)
+ARMS = ["no sync", "tensix_sync"]
+NO_SYNC, TENSIX_SYNC = range(2)
 
 
 def test_tensix_sync_drains_in_flight_mop():
@@ -65,7 +59,7 @@ def test_tensix_sync_drains_in_flight_mop():
             tile_count_res=1,
             twos_complement=True,
         ),
-        # The result holds wall-clock cycle counts and deliberately unsynchronised reads.
+        # The no-sync reads are deliberately unsynchronised.
         expected_nondeterministic=True,
     )
 
@@ -80,36 +74,21 @@ def test_tensix_sync_drains_in_flight_mop():
 
         increments = region[LONG_INCREMENTS_WORD]
         long_counts = region[LONG_COUNT_WORDS]
-        long_cycles = region[LONG_CYCLE_WORDS]
         short_misses = region[SHORT_MISS_WORDS]
         trials = region[SHORT_TRIALS_WORD]
         short_increments = region[SHORT_INCREMENTS_WORD]
-        for arm, count, cycles, misses in zip(
-            ARMS, long_counts, long_cycles, short_misses
-        ):
+        for arm, count, misses in zip(ARMS, long_counts, short_misses):
             logger.info(
-                f"{thread}: {arm}: long MOP read {count}/{increments} after {cycles} cycles; "
+                f"{thread}: {arm}: long MOP read {count}/{increments}; "
                 f"short MOP ({short_increments} increments) read short on {misses}/{trials} runs"
             )
 
-        # The probe can see an unfinished MOP: without any sync the read lands long before the
-        # long MOP has finished.
         assert (
             long_counts[NO_SYNC] < increments
         ), f"{thread}: no-sync read already saw the whole long MOP"
-        # tensix_sync alone waits for the whole MOP, exactly as the mop_sync + tensix_sync pair does.
         assert (
             long_counts[TENSIX_SYNC] == increments
         ), f"{thread}: tensix_sync returned with the long MOP unfinished"
         assert (
-            long_counts[BOTH] == increments
-        ), f"{thread}: mop_sync + tensix_sync returned with the long MOP unfinished"
-        assert (
             short_misses[TENSIX_SYNC] == 0
         ), f"{thread}: tensix_sync returned early on {short_misses[TENSIX_SYNC]} short MOP runs"
-        assert (
-            short_misses[BOTH] == 0
-        ), f"{thread}: mop_sync + tensix_sync returned early on {short_misses[BOTH]} short MOP runs"
-        # mop_sync alone waits for the MOP decoder, not for the generated instructions to retire,
-        # so it may legitimately read short; it is reported, not asserted.
-        assert long_counts[MOP_SYNC] <= increments
