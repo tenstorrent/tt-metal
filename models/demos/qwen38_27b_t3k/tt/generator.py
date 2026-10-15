@@ -54,8 +54,9 @@ def configure_fabric(*, payload_bytes=None):
 # One live snapshot per serving slot. Each costs 19.24 MB per device, so the whole set is about
 # 5% of the state budget left beside a two-context KV pool.
 MAX_PREFIX_SNAPSHOTS = MAX_SERVING_BATCH
-# A prefill trace measures 11-15 MiB whatever the bucket, against a 128 MiB region that already
-# holds a decode pair of up to 24 MiB. Four leaves room the eighth bucket would not.
+# How many buckets keep a recording. A prefill trace measures 11-15 MiB whatever the bucket,
+# against a 128 MiB region that already holds a decode pair of up to 24 MiB, so four leaves room
+# the eighth would not. Bucket buffers are not bounded by this; they outlive their recordings.
 MAX_RESIDENT_PREFILL = int(os.getenv("QWEN_RESIDENT_PREFILL_TRACES", "4"))
 
 
@@ -167,9 +168,12 @@ class Qwen38Generator:
         self._next_snapshot_handle = 0
         self.prefill_signatures = set()
         self.batched_prefill_shapes = set()
-        # Bucket key -> prepared buffers and the traces built around them. Insertion order is
-        # recency, so the first entry is the one eviction takes.
-        self.prefill_resident = {}
+        # Bucket key -> the buffers a prefill of that length runs over. They outlive every
+        # recording built around them, so returning to a bucket never allocates.
+        self.prefill_buckets = {}
+        # The subset currently holding a recording. Insertion order is recency, so the first
+        # entry is the one eviction takes.
+        self.prefill_traced = {}
         self._prefill_selectors = {}
         self.page_host = None
         self.counters = Counter()
@@ -227,19 +231,90 @@ class Qwen38Generator:
             if trace is not None:
                 ttnn.release_trace(self.mesh, trace)
         self.trace = self.sample_trace = self._prefill_sample_only_trace = None
-        for prepared in self.prefill_resident.values():
-            for name in ("trace", "sample_trace"):
-                if prepared.get(name) is not None:
-                    ttnn.release_trace(self.mesh, prepared[name])
-                    prepared[name] = None
+        for prepared in self.prefill_traced.values():
+            self._drop_trace(prepared)
         if getattr(self.model, "_resident_decode_bucket", None) is not None:
             self.model.flush_decode_bucket()
         self.trace_records_history = None
         if not keep_prefill:
             # Dropping the entries frees their buffers, which only ever happens with no trace
-            # live to be holding those addresses.
-            self.prefill_resident.clear()
+            # live to be holding those addresses. Membership otherwise survives, so the next
+            # capture records the same set rather than relearning it.
+            self.prefill_traced.clear()
+            self.prefill_buckets.clear()
             self.prefill_prepared = None
+
+    def _drop_trace(self, prepared):
+        """Release one bucket's recordings, leaving the buffers they were built around alone."""
+        for name in ("trace", "sample_trace"):
+            if prepared.get(name) is not None:
+                ttnn.release_trace(self.mesh, prepared[name])
+                prepared[name] = None
+        prepared["trace_cache"] = None
+
+    def _admit_traced(self, prepared):
+        """Mark this bucket as one to record, dropping the coldest recording to stay in region.
+
+        Only recordings are bounded. An evicted bucket keeps its buffers, so its next visit costs
+        an eager prefill rather than a reallocation and the recapture of every other bucket.
+        """
+        key = prepared["key"]
+        self.prefill_traced.pop(key, None)
+        while len(self.prefill_traced) >= MAX_RESIDENT_PREFILL:
+            self._drop_trace(self.prefill_traced.pop(next(iter(self.prefill_traced))))
+            self.counters["prefill_bucket_evictions"] += 1
+        self.prefill_traced[key] = prepared
+
+    def _record_prefill_trace(self, prepared):
+        """Record one bucket's prefill beside the recordings already live.
+
+        Capture reserves scratch at the addresses replay will use, so it waits for decode to hold
+        its own: _capture records decode first precisely so its logits have a stable address.
+        Recording executes nothing, so the state the eager run just advanced stays as it is.
+        """
+        if self.trace is None or prepared["trace"] is not None:
+            return
+        ttnn.synchronize_device(self.mesh)
+        trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+        try:
+            self._prefill_trace_step(prepared)
+            ttnn.end_trace_capture(self.mesh, trace, cq_id=0)
+        except BaseException:
+            ttnn.end_trace_capture(self.mesh, trace, cq_id=0)
+            ttnn.release_trace(self.mesh, trace)
+            raise
+        prepared["trace"] = trace
+        prepared["trace_cache"] = self._active_prefill_cache()
+        self.counters["prefill_trace_captures"] += 1
+
+    def _record_prefill_sample_trace(self):
+        """Record the active bucket's sampler, once the eager pass has advanced the RNG."""
+        prepared = self.prefill_prepared
+        if self.trace is None or prepared is None or prepared.get("sample_trace") is not None:
+            return
+        ttnn.synchronize_device(self.mesh)
+        trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+        try:
+            self._sampling_step(prepared["output"])
+            ttnn.end_trace_capture(self.mesh, trace, cq_id=0)
+        except BaseException:
+            ttnn.end_trace_capture(self.mesh, trace, cq_id=0)
+            ttnn.release_trace(self.mesh, trace)
+            raise
+        prepared["sample_trace"] = trace
+        self.counters["prefill_sampling_trace_captures"] += 1
+
+    def _active_prefill_cache(self):
+        """Which copy of the GDN state a prefill writes right now.
+
+        The resident decode bucket holds it whenever that bucket is live. A recording binds the
+        one it was captured against, so replaying it is only correct while the answer still
+        matches.
+        """
+        resident = getattr(self.model, "_resident_decode_bucket", None)
+        if resident is not None and resident[1] == (0,) and self.model._resident_decode_valid:
+            return resident[2]
+        return self.cache
 
     @property
     def prefill_trace(self):
@@ -256,13 +331,9 @@ class Qwen38Generator:
     def _prefill_trace_logits(self, prepared=None):
         """Device-only prefill over generator-owned inputs; output remains transient."""
         prepared = self.prefill_prepared if prepared is None else prepared
-        resident = getattr(self.model, "_resident_decode_bucket", None)
-        cache = self.cache
-        if resident is not None and resident[1] == (0,) and self.model._resident_decode_valid:
-            cache = resident[2]
         logits = self.model.prefill(
             prepared["tokens"],
-            cache=cache,
+            cache=self._active_prefill_cache(),
             page_table=self.page_table,
             length=prepared["length"],
             valid=prepared["valid"],
@@ -301,15 +372,11 @@ class Qwen38Generator:
             False,  # Last-token logits only; public all-logits prefill stays eager.
             trace_sampling,
         )
-        prepared = self.prefill_resident.get(key)
-        if prepared is None or prepared["trace_sampling"] != trace_sampling:
+        prepared = self.prefill_buckets.get(key)
+        if prepared is None:
             # Fresh persistent buffers must not overlap any live trace's scratch, so every trace
-            # goes before anything is freed or allocated.
+            # goes first. Only the first visit to a bucket pays it.
             self._release_traces(keep_prefill=True)
-            self.prefill_resident.pop(key, None)
-            while len(self.prefill_resident) >= MAX_RESIDENT_PREFILL:
-                self.prefill_resident.pop(next(iter(self.prefill_resident)))
-                self.counters["prefill_bucket_evictions"] += 1
             prepared = dict(
                 key=key,
                 length=length,
@@ -317,6 +384,7 @@ class Qwen38Generator:
                 trace_sampling=trace_sampling,
                 trace=None,
                 sample_trace=None,
+                trace_cache=None,
                 selectors=None if length == valid else self._bucket_selectors(length),
                 tokens=self.model.upload(tokens.int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
                 positions=self.model.upload(
@@ -325,7 +393,7 @@ class Qwen38Generator:
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 ),
             )
-            self.prefill_resident[key] = prepared
+            self.prefill_buckets[key] = prepared
             self.prefill_prepared = prepared
             # This is the real prefill, so it both warms the graph and advances
             # request state exactly once. Allocate and warm the output copy too.
@@ -336,19 +404,20 @@ class Qwen38Generator:
             self.counters["prefill_bucket_allocations"] += 1
             self.counters["prefill_eager_calls"] += 1
         else:
-            # Re-inserting makes this the most recent, so eviction takes the coldest bucket.
-            self.prefill_resident.pop(key)
-            self.prefill_resident[key] = prepared
             self.prefill_prepared = prepared
             self._copy(tokens.int(), prepared["tokens"], "prefill_token_refreshes")
             self._aim_prefill_selectors(valid)
-            if prepared["trace"] is None:
-                # G=1 need not create a decode pair just to capture prefill.
+            if prepared["trace"] is None or prepared["trace_cache"] is not self._active_prefill_cache():
+                # A recording writes the state copy it was captured against, so one aimed at a
+                # copy that is no longer live is served eagerly rather than replayed.
                 self._prefill_trace_step(prepared)
                 self.counters["prefill_eager_calls"] += 1
             else:
                 ttnn.execute_trace(self.mesh, prepared["trace"], cq_id=0, blocking=False)
                 self.counters["prefill_replays"] += 1
+        # Re-admitting makes this the most recent, so eviction takes the coldest recording.
+        self._admit_traced(prepared)
+        self._record_prefill_trace(prepared)
         self.prefill_signatures.add((self.cache.batch_size, tuple(self.page_table.shape), 0, 0, length, False))
         return prepared["output"]
 
@@ -409,6 +478,7 @@ class Qwen38Generator:
                 # The real first sample warms the graph without advancing RNG twice.
                 self._sampling_step(output)
                 self.counters["prefill_sampling_eager_calls"] += 1
+                self._record_prefill_sample_trace()
             else:
                 ttnn.execute_trace(self.mesh, self.prefill_sample_trace, cq_id=0, blocking=False)
                 self.counters["prefill_sampling_replays"] += 1
@@ -911,7 +981,7 @@ class Qwen38Generator:
             # Every resident bucket is recorded, so a prompt that changes bucket replays rather
             # than recompiling and recapturing. Each was warmed when its buffers were allocated,
             # and recording executes nothing, so the decode state below is untouched.
-            for prepared in self.prefill_resident.values():
+            for prepared in self.prefill_traced.values():
                 # Record only after decode logits have acquired a stable address.
                 open_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
                 captured.append(open_trace)
@@ -926,7 +996,7 @@ class Qwen38Generator:
                     self._sampling_step(prepared["output"])
                     ttnn.end_trace_capture(self.mesh, open_trace, cq_id=0)
                     open_trace = None
-            if not self.prefill_resident and self.prefill_sample_input is not None:
+            if not self.prefill_traced and self.prefill_sample_input is not None:
                 open_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
                 captured.append(open_trace)
                 prefill_sample_trace = open_trace
@@ -940,8 +1010,10 @@ class Qwen38Generator:
                 ttnn.release_trace(self.mesh, trace)
             raise
         self.trace, self.sample_trace = captured[:2]
+        bound = self._active_prefill_cache()
         for prepared, name, trace in prefill_traces:
             prepared[name] = trace
+            prepared["trace_cache"] = bound
         if prefill_sample_trace is not None:
             self._prefill_sample_only_trace = prefill_sample_trace
         self.trace_records_history = record_history
