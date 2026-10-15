@@ -1,6 +1,6 @@
 # Known issues detail: deepseek_v41_flash_d_p
 
-## (RESOLVED 2026-10-15 by the supervisor) The canonical prompt is shorter than the scaled rung
+## (RESOLVED by the overseer) The canonical prompt was shorter than the scaled rung
 
 Resolved 2026-10-15 by the supervisor: `scaled.ladder` is now 55296 tokens in 2048-token chunks, within the existing
 prompt (56320 tokens); no prompt rebuild.
