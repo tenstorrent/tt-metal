@@ -55,6 +55,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const auto distribution = kda_factory_detail::distribute_prep(
         device.compute_with_storage_grid_size(), num_heads * num_chunks, std::numeric_limits<uint32_t>::max());
     const auto& cores = distribution.core_set;
+    // The inverse runs once over all of a core's work items, so its buffers hold one tile per item.
+    const uint32_t max_items = *std::max_element(distribution.wi_count.begin(), distribution.wi_count.end());
 
     const m2::KernelSpecName READER{"reader"};
     const m2::KernelSpecName WRITER{"writer"};
@@ -135,8 +137,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(block_masks_dfb, 3, fp32),
         make_dfb(workspace_0_dfb, ck, fp32),
         make_dfb(centered_inverse_decay_dfb, ck, fp32),
-        make_dfb(akk_dfb, cc, fp32),
-        make_dfb(t_inv_dfb, 2 * cc, output_formats[6]),
+        make_dfb(akk_dfb, max_items * cc, fp32),
+        make_dfb(t_inv_dfb, max_items * cc, output_formats[6]),
         make_dfb(v_beta_dfb, 2 * cv, output_formats[0]),
         make_dfb(kd_dfb, 2 * ck, output_formats[1]),
         make_dfb(q_decay_dfb, 2 * ck, output_formats[2]),
@@ -149,10 +151,10 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(normalized_k_dfb, ck, fp32),
         // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
         // inverse intermediates separate so no transaction can cross a ring end.
-        make_dfb(tile_workspace_0_dfb, 1, fp32),
-        // The nested inverse reads its current level while packing the next one.
-        make_dfb(tile_workspace_1_dfb, 2, fp32),
-        make_dfb(tile_workspace_2_dfb, 1, fp32),
+        make_dfb(tile_workspace_0_dfb, max_items, fp32),
+        // The nested inverse reads its current level while packing the next one, for every item at once.
+        make_dfb(tile_workspace_1_dfb, 2 * max_items, fp32),
+        make_dfb(tile_workspace_2_dfb, max_items, fp32),
 
         make_dfb(workspace_3_dfb, scratch, fp32),
         make_dfb(workspace_2_dfb, ck, fp32),

@@ -15,10 +15,11 @@
 
 // Fill one tile of `ones` with `value_bits` and one tile of `tril` with it on and below the diagonal (an inclusive
 // lower-triangular matrix): seed one face row, then replicate it with local NoC reads.
+// ones_bits fills the all-ones matrix; the lower-triangular one always carries value_bits.
 // One out-of-line copy serves both fills; it runs once per program, and a copy per value overflows the kernel config
 // buffer.
-template <typename DFB0, typename DFB1>
-__attribute__((noinline)) void fill_ones_and_tril(DFB0& ones, DFB1& tril, uint32_t value_bits) {
+__attribute__((noinline)) void fill_ones_and_tril(
+    DataflowBuffer& ones, DataflowBuffer& tril, uint32_t value_bits, uint32_t ones_bits) {
     constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
     constexpr uint32_t faces_per_tile = tt::constants::TILE_HW / tt::constants::FACE_HW;
@@ -59,12 +60,25 @@ __attribute__((noinline)) void fill_ones_and_tril(DFB0& ones, DFB1& tril, uint32
         .noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = tril.get_write_ptr()};
     noc.async_read(self, tril, face_bytes, tril_source, {.offset_bytes = bottom_right_face * face_bytes});
     noc.async_read_barrier();
+    if (ones_bits != value_bits) {
+        for (uint32_t column = 0; column < face_width; ++column) {
+            ones_tile[column] = ones_bits;
+        }
+        for (uint32_t row = 1; row < face_height; ++row) {
+            noc.async_read(self, ones, row_bytes, ones_source, {.offset_bytes = row * row_bytes});
+        }
+        noc.async_read_barrier();
+        for (uint32_t face = 1; face < faces_per_tile; ++face) {
+            noc.async_read(self, ones, face_bytes, ones_source, {.offset_bytes = face * face_bytes});
+        }
+        noc.async_read_barrier();
+    }
     tril.push_back(1);
     ones.push_back(1);
 }
 
-template <typename DFB0, typename DFB1, typename DFB2, typename DFB3>
-inline void fill_constant_tiles(DFB0& eye, DFB1& tril, DFB2& ones, DFB3& block_masks) {
+// The identity and the nested inverse's block masks, which compute reads last.
+inline void fill_inverse_constants(DataflowBuffer& eye, DataflowBuffer& block_masks) {
     constexpr uint32_t fp32_one_bits = __builtin_bit_cast(uint32_t, 1.0F);
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
     constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
@@ -78,8 +92,6 @@ inline void fill_constant_tiles(DFB0& eye, DFB1& tril, DFB2& ones, DFB3& block_m
     constexpr uint32_t mask_tile_count = 3;
     constexpr uint32_t face_bytes = face_elements * sizeof(uint32_t);
 
-    fill_ones_and_tril(ones, tril, fp32_one_bits);
-
     eye.reserve_back(1);
     block_masks.reserve_back(mask_tile_count);
     Noc noc;
@@ -90,20 +102,31 @@ inline void fill_constant_tiles(DFB0& eye, DFB1& tril, DFB2& ones, DFB3& block_m
     // The nested inverse consumes one mask per level: the 4-row diagonal blocks it inverts
     // directly, the strict block-lower part that pairs those blocks into 8-row blocks, and the
     // strict block-lower part that joins the 8-row blocks.
+    // Store only the set entries, row by row: in row r the 4-row block is columns [4(r/4), 4(r/4)+4), the rest of
+    // the 8-row pair is the other 4 columns of [8(r/8), 8(r/8)+8), and the strict block-lower part is [0, 8(r/8)).
     volatile tt_l1_ptr uint32_t* masks = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(block_masks.get_write_ptr());
+    auto set_columns = [&](uint32_t mask, uint32_t row, uint32_t first, uint32_t last) {
+        const uint32_t row_base =
+            (row / face_height) * faces_per_tile_row * face_elements + (row % face_height) * face_width;
+        for (uint32_t column = first; column < last; ++column) {
+            masks[mask * tile_elements + row_base + (column / face_width) * face_elements + column % face_width] =
+                fp32_one_bits;
+        }
+    };
     for (uint32_t row = 0; row < tile_height; ++row) {
-        for (uint32_t column = 0; column < tile_width; ++column) {
-            const uint32_t face = (row / face_height) * faces_per_tile_row + column / face_width;
-            const uint32_t index = face * face_elements + (row % face_height) * face_width + column % face_width;
-            const bool same_block = row / inverse_block_size == column / inverse_block_size;
-            const bool same_pair = row / inverse_pair_size == column / inverse_pair_size;
-            if (same_block) {
-                masks[index] = fp32_one_bits;
-            } else if (same_pair) {
-                masks[tile_elements + index] = fp32_one_bits;
-            } else if (row / inverse_pair_size > column / inverse_pair_size) {
-                masks[2 * tile_elements + index] = fp32_one_bits;
-            }
+        const uint32_t block = row / inverse_block_size * inverse_block_size;
+        const uint32_t pair = row / inverse_pair_size * inverse_pair_size;
+        set_columns(0, row, block, block + inverse_block_size);
+        set_columns(1, row, pair, pair + inverse_pair_size);
+        set_columns(2, row, 0, pair);
+    }
+    // Mask 1 holds the pair minus the block: clear the block entries just written.
+    for (uint32_t row = 0; row < tile_height; ++row) {
+        const uint32_t block = row / inverse_block_size * inverse_block_size;
+        const uint32_t row_base =
+            (row / face_height) * faces_per_tile_row * face_elements + (row % face_height) * face_width;
+        for (uint32_t column = block; column < block + inverse_block_size; ++column) {
+            masks[tile_elements + row_base + (column / face_width) * face_elements + column % face_width] = 0;
         }
     }
 
@@ -129,8 +152,8 @@ inline void fill_constant_tiles(DFB0& eye, DFB1& tril, DFB2& ones, DFB3& block_m
 // (f1 or f3) to the end of the tile; below a padded top face row, f2 and f3 are all
 // padding. Inputs are BF16 or FP32, so face rows are 32 or 64 bytes and both ranges
 // start at the 16-byte alignment of the zero writes.
-template <typename DFB0>
-__attribute__((noinline)) void zero_rows_from(const Noc& noc, DFB0& buffer, uint32_t tiles, uint32_t first_row) {
+__attribute__((noinline)) void zero_rows_from(
+    const Noc& noc, DataflowBuffer& buffer, uint32_t tiles, uint32_t first_row) {
     constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
     constexpr uint32_t faces_per_tile_row = tt::constants::TILE_WIDTH / face_width;
@@ -216,7 +239,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         writer_control.push_back(1);
     }
 
-    auto enqueue_contiguous_read = [&](const auto& accessor, auto& buffer, uint32_t base, uint32_t tiles) {
+    auto enqueue_contiguous_read = [&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
         buffer.reserve_back(tiles);
         for (uint32_t tile = 0; tile < tiles; ++tile) {
             noc.async_read(
@@ -230,17 +253,22 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
     // The constants are filled while the first work item's reads are in flight.
     bool constants_pending = true;
     const auto fill_constants = [&]() {
-        fill_constant_tiles(eye, tril, ones, block_masks);
+        // In order of first use: the L2 norm's ones (and the causal mask), the gate matrices, then the inverse's.
+        constexpr uint32_t fp32_one_bits = __builtin_bit_cast(uint32_t, 1.0F);
+        fill_ones_and_tril(ones, tril, fp32_one_bits, fp32_one_bits);
         // The gate's prefix-sum (lower-triangular) and sum-broadcast (all-ones) matrices carry the gate scale, so
         // the cumulative sum applies it without a separate pass over the gate (exactly for any BF16-representable
         // scale, since the HiFi4 product of BF16 g and the scale is exact in FP32).
         static_assert(Ct == 1, "fill_ones_and_tril fills one tile per chunk matrix");
-        fill_ones_and_tril(gate_ones, gate_tril, GATE_SCALE_BITS);
+        // The sum-broadcast matrix carries half the scale: the matmul yields the anchor G_last / 2 directly (an exact
+        // power-of-two scaling of the same FP32 sums).
+        fill_ones_and_tril(gate_ones, gate_tril, GATE_SCALE_BITS, GATE_SCALE_BITS - (1u << 23));
+        fill_inverse_constants(eye, block_masks);
         constants_pending = false;
     };
 
     auto enqueue_head_chunk_read =
-        [&](const auto& accessor, auto& buffer, uint32_t head_chunk_index, uint32_t width_tiles) {
+        [&](const auto& accessor, DataflowBuffer& buffer, uint32_t head_chunk_index, uint32_t width_tiles) {
             const uint32_t head = head_chunk_index / num_chunks;
             const uint32_t chunk = head_chunk_index % num_chunks;
             const uint32_t row_stride = num_heads * width_tiles;
@@ -273,9 +301,6 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         const uint32_t chunk = head_chunk_index % num_chunks;
         enqueue_contiguous_read(
             beta_accessor, beta, chunk * beta_width_tiles + beta_offset_tiles + head / tt::constants::TILE_WIDTH, 1);
-        if (constants_pending) {
-            fill_constants();
-        }
         // All five inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
         // the complete work item atomically to compute.
         noc.async_read_barrier();
@@ -311,6 +336,10 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         v.push_back(chunk_value_tiles);
         g.push_back(chunk_key_tiles);
         beta.push_back(Ct);
+        // Compute starts on the first item while the constants are generated; it waits for each one at first use.
+        if (constants_pending) {
+            fill_constants();
+        }
     }
     if (constants_pending) {
         fill_constants();
