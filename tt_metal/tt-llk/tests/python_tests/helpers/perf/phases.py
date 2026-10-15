@@ -61,6 +61,10 @@ AVERAGED = {
 }
 
 
+# Gate test (do not merge): no start-phase average; every row runs at the canonical phase.
+AVERAGED.clear()
+
+
 def release_phases(test_name: str, run_type_name: str, speed_of_light: bool) -> tuple:
     """The start phases a row runs at: its design's in this build mode when averaged, else the canonical one."""
     source = str(test_name).rsplit("/", 1)[-1]
