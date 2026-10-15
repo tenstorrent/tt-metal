@@ -381,3 +381,19 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   <= 7.6e-8; A,B,A bit-identical.
 - OV-4: DS41-20 marked resolved by F73 (component.py:350-356: limit = swap_step_calib x component error, no cap).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_norm.py`
+
+## C.swa.router implement (attempt 1)
+- tt/router.py:TtRouter (from xing40_a4b_d_p/tt/router.py, mimo's ttnn.topk path): input ffn_norm's gathered rows
+  [1, 1, S/SP, H] fp32 (row split, TP-replicated) -> ttnn.linear with the bf16 gate as stored (HiFi4 + fp32 acc, fp32
+  out) -> softplus -> sqrt -> + (bias - mean(bias)) fp32 SFPU (K-23; bias 9.59..9.88 on layer 0, recentred at load)
+  -> ttnn.topk(6) on fp32 keys -> gather of the unbiased scores -> / ((sum + 1e-20) / 1.5) -> scatter into fp32
+  ROW_MAJOR zeros (K-4). Returns (dense, idx, weights) for dispatch. No CCL; zeros built once for chunk / SP rows.
+- The components entry's "x as bf16 hi + lo" fallback was tried and dropped: identical flips and error, 40 % slower
+  (DS41-21; tt-probe ds41_router, not kept: TtRouter(x_mode fp32 / split) on the layer-0 golden ffn_norm vs a
+  float64 _route, rows whose expert set differs and rel L2 of the weights on the rest, 10-call timing).
+- hooks.py: `_router_host_fn` (row_split_to_device(x) -> dense -> row_split_to_host), `_device_step_fn` "router",
+  DEVICE_STEPS["swa"] += router.
+- Gate: PASS. pcc 0.999779; vs CPU overlap 0.99967 (4 of 2048 rows flipped, near ties), rel 4.5e-5 on matched rows;
+  vs golden overlap 0.99902; layer24 / mixed overlap 0.99967 / 0.99943; A,B,A bit-identical.
+- OV-4: already done by C.swa.ffn_norm (DS41-20 marked resolved by F73).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_router.py`
