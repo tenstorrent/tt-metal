@@ -173,6 +173,9 @@ jobs:
           from vllm.engine.arg_utils import AsyncEngineArgs
           shutdown=make_arg_parser(FlexibleArgumentParser()).parse_args(['--model','unused','--shutdown-timeout','60'])
           assert AsyncEngineArgs.from_cli_args(shutdown).shutdown_timeout == 60
+          from projection_observer import compute_fields
+          actual_config=ttnn.BlackholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi2,math_approx_mode=False,fp32_dest_acc_en=False,packer_l1_acc=True)
+          assert compute_fields(actual_config)=={'math_fidelity':'MathFidelity.HiFi2','math_approx_mode':False,'fp32_dest_acc_en':False,'packer_l1_acc':True}
           (out/'observer-proof.json').write_text(json.dumps({'shutdown_timeout':60,'original_class_identity':True,'warmup_unarmed':True,'tt_fds':tt_fds(),'observer_sha':hashlib.sha256(Path('/tmp/observer/observer.py').read_bytes()).hexdigest(),'terminal_sha':hashlib.sha256(Path('/tmp/observer/terminal_observer.py').read_bytes()).hexdigest(),'projection_sha':hashlib.sha256(Path('/tmp/observer/projection_observer.py').read_bytes()).hexdigest(),'actual_projection_config':compute_fields(actual_config),'attention_sha':hashlib.sha256(Path('/tmp/observer/attention_observer.py').read_bytes()).hexdigest(),'attention_rows_sha':hashlib.sha256(Path('/tmp/observer/attention_rows.py').read_bytes()).hexdigest(),'block_sha':hashlib.sha256(Path('/tmp/observer/block_observer.py').read_bytes()).hexdigest(),'first_sha':hashlib.sha256(Path('/tmp/observer/first_observer.py').read_bytes()).hexdigest(),'early_sha':hashlib.sha256(Path('/tmp/observer/early_observer.py').read_bytes()).hexdigest(),'middle_sha':hashlib.sha256(Path('/tmp/observer/middle_observer.py').read_bytes()).hexdigest(),'last_sha':hashlib.sha256(Path('/tmp/observer/last_observer.py').read_bytes()).hexdigest()},indent=2))
           rc = pytest.main(['--noconftest', '-q', '/tmp/observer/test_observer.py', '/tmp/observer/test_rows.py', '/tmp/observer/test_terminal_observer.py', '/tmp/observer/test_terminal_rows.py', '/tmp/observer/test_baseline.py', '/tmp/observer/test_last_observer.py', '/tmp/observer/test_last_rows.py', '/tmp/observer/test_middle_observer.py', '/tmp/observer/test_baseline64.py', '/tmp/observer/test_early_observer.py', '/tmp/observer/test_baseline80.py', '/tmp/observer/test_projection_observer.py', '/tmp/observer/test_attention_observer.py', '/tmp/observer/test_attention_rows.py', '/tmp/observer/test_block_observer.py', '/tmp/observer/test_baseline128.py', '/tmp/observer/test_first_observer.py', '/tmp/observer/test_baseline96.py', '--junitxml='+str(out/'host.xml')])
           assert _LayerAdapter.__call__.__wrapped__ is observed_model.early.patch[2]
@@ -180,9 +183,6 @@ jobs:
           assert _PhysicalHiddenCollectiveAttention.__call__.__wrapped__ is original_attention
           assert attention_prefill.split_qkv_heads_prefill.__wrapped__ is original_split
           assert ttnn.linear.__wrapped__ is original_linear
-          from projection_observer import compute_fields
-          actual_config=ttnn.BlackholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi2,math_approx_mode=False,fp32_dest_acc_en=False,packer_l1_acc=True)
-          assert compute_fields(actual_config)=={'math_fidelity':'MathFidelity.HiFi2','math_approx_mode':False,'fp32_dest_acc_en':False,'packer_l1_acc':True}
           observed_model.projection.restore()
           assert ttnn.linear is original_linear
           observed_model.attention.restore()
