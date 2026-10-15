@@ -55,7 +55,7 @@ def state_sources(spec, layer):
 # Device steps of the hybrid model, per block type: every step listed passed its component gate on the device.
 # Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "swa": {"attn_hc"},
+    "swa": {"attn_hc", "attn_collapse"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -87,7 +87,36 @@ def _hc_host_fn(mesh, module, hidden):
     return fn
 
 
+def _collapse_host_fn(mesh, module, hidden):
+    """fn(ctx, x_host [S, 4H + 4]) -> attn_in host [S, H] fp32 (harness boundary: the streams and the pending pre in,
+    the row- and hidden-split output back)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import (
+        HC,
+        hidden_split_to_host,
+        row_split_to_device,
+        streams_to_device,
+    )
+
+    def fn(ctx, x):
+        assert x.shape[-1] == HC * hidden + HC, x.shape
+        xd = streams_to_device(mesh, x, hidden)
+        pd = row_split_to_device(mesh, x[:, HC * hidden :])
+        od = module(xd, pd)
+        out = hidden_split_to_host(mesh, od).float()
+        for t in (xd, pd, od):
+            ttnn.deallocate(t)
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _device_step_fn(mesh, spec, layer, step, ck, cfg):
+    if step == "attn_collapse":
+        from models.demos.deepseek_v41_flash_d_p.tt.collapse import build_collapse
+
+        return _collapse_host_fn(mesh, build_collapse(cfg), cfg.dim)
     if step in _HC_STEPS:
         from models.demos.deepseek_v41_flash_d_p.tt.mhc import build_hc
 
