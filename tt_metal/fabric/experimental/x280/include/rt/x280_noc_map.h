@@ -84,46 +84,37 @@ static inline bool x280_tlb_paired_slot(uint32_t slot) {
 #define X280_TLB_CORE_SYNC_BASE 157u
 #define X280_TLB_CORE_SYNC_COUNT 4u
 
+/* The relations below a compiler can check; assembly sees none of them. */
+#if defined(__cplusplus)
+#define X280_NOC_MAP_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#elif !defined(__ASSEMBLER__)
+#define X280_NOC_MAP_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#else
+#define X280_NOC_MAP_STATIC_ASSERT(cond, msg)
+#endif
+
 /* Packet-injection TLB reservations: 140 credit windows and 1 timer window. */
 #define X280_TLB_PACKET_INJECTION_CREDIT_BASE 16u
 #define X280_TLB_PACKET_INJECTION_CREDIT_COUNT 140u
 #define X280_TLB_PACKET_INJECTION_TIMER 156u
 
-#if defined(__cplusplus)
-static_assert(
+X280_NOC_MAP_STATIC_ASSERT(
     X280_TLB_PACKET_INJECTION_CREDIT_BASE + X280_TLB_PACKET_INJECTION_CREDIT_COUNT <= X280_TLB_PACKET_INJECTION_TIMER,
     "packet injection credit interval must not overlap timer slot");
-static_assert(
+X280_NOC_MAP_STATIC_ASSERT(
     X280_TLB_PACKET_INJECTION_TIMER < X280_TLB_CORE_SYNC_BASE,
     "packet injection timer slot must stay below the core-sync block");
-#elif !defined(__ASSEMBLER__)
-_Static_assert(
-    X280_TLB_PACKET_INJECTION_CREDIT_BASE + X280_TLB_PACKET_INJECTION_CREDIT_COUNT <= X280_TLB_PACKET_INJECTION_TIMER,
-    "packet injection credit interval must not overlap timer slot");
-_Static_assert(
-    X280_TLB_PACKET_INJECTION_TIMER < X280_TLB_CORE_SYNC_BASE,
-    "packet injection timer slot must stay below the core-sync block");
-#endif
 
 /* The relations in this file a compiler can check. Every other reservation
  * above overlaps by design -- one image is resident at a time -- but the host
  * block is concurrent with firmware, so an overlap there is a live collision
  * rather than a harmless one. */
-#if defined(__cplusplus)
-static_assert(
+X280_NOC_MAP_STATIC_ASSERT(
     X280_TLB_PAIRED_BASE + X280_TLB_PAIRED_COUNT <= X280_TLB_CORE_SYNC_BASE,
     "paired-case TLB range must stay below the core-sync block");
-static_assert(
+X280_NOC_MAP_STATIC_ASSERT(
     X280_TLB_CORE_SYNC_BASE + X280_TLB_CORE_SYNC_COUNT <= X280_TLB_HOST_BASE,
     "core-sync TLB range must stay below the host block");
-#elif !defined(__ASSEMBLER__)
-_Static_assert(
-    X280_TLB_PAIRED_BASE + X280_TLB_PAIRED_COUNT <= X280_TLB_CORE_SYNC_BASE,
-    "paired-case TLB range must stay below the core-sync block");
-_Static_assert(
-    X280_TLB_CORE_SYNC_BASE + X280_TLB_CORE_SYNC_COUNT <= X280_TLB_HOST_BASE,
-    "core-sync TLB range must stay below the host block");
-#endif
 
 /* eth_credit forwarder windows. Forwarder hart p owns PER_HART slots from
  * base + p * PER_HART, both onto its Ethernet tile, whose L1 E0 and E1 share:
@@ -134,25 +125,17 @@ _Static_assert(
 #define X280_TLB_ETH_CREDIT_PER_HART 2u
 #define X280_TLB_ETH_CREDIT_COUNT 8u
 
-#if defined(__cplusplus)
-static_assert(
+X280_NOC_MAP_STATIC_ASSERT(
     X280_TLB_ETH_CREDIT_BASE >= X280_TLB_CORE_SYNC_BASE + X280_TLB_CORE_SYNC_COUNT &&
         X280_TLB_CORE_SYNC_BASE > X280_TLB_PACKET_INJECTION_TIMER,
     "eth_credit forwarder windows must sit above the packet-injection and core-sync blocks");
-static_assert(
+X280_NOC_MAP_STATIC_ASSERT(
     X280_TLB_ETH_CREDIT_BASE + X280_TLB_ETH_CREDIT_COUNT <= X280_TLB_HOST_BASE,
     "eth_credit forwarder windows must stay below the host block");
-#elif !defined(__ASSEMBLER__)
-_Static_assert(
-    X280_TLB_ETH_CREDIT_BASE >= X280_TLB_CORE_SYNC_BASE + X280_TLB_CORE_SYNC_COUNT &&
-        X280_TLB_CORE_SYNC_BASE > X280_TLB_PACKET_INJECTION_TIMER,
-    "eth_credit forwarder windows must sit above the packet-injection and core-sync blocks");
-_Static_assert(
-    X280_TLB_ETH_CREDIT_BASE + X280_TLB_ETH_CREDIT_COUNT <= X280_TLB_HOST_BASE,
-    "eth_credit forwarder windows must stay below the host block");
-#endif
 
 /* A firmware-owned posted-write window, outside the host block. */
 #define X280_TLB_BENCH_WRITE 34
+
+#undef X280_NOC_MAP_STATIC_ASSERT
 
 #endif /* X280_RT_NOC_MAP_H */
