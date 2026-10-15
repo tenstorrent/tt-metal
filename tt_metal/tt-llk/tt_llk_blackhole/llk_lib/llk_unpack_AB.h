@@ -162,6 +162,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
 {
+asm volatile("nop"); // gate experiment arm bn: one NOP at the top of the init
 #if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
     asm volatile(".rept " LLK_EXP_BH_S_(LLK_EXP_NOP_UNPACK_INIT) "\n\tnop\n\t.endr"); // experiment hook (integ4)
 #endif
@@ -189,6 +190,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+asm volatile("nop"); // gate experiment arm bn: one NOP at the top of the init
 #if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
     asm volatile(".rept " LLK_EXP_BH_S_(LLK_EXP_NOP_UNPACK_INIT) "\n\tnop\n\t.endr"); // experiment hook (integ4)
 #endif
@@ -210,6 +212,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckern
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose)
 {
+asm volatile("nop"); // gate experiment arm bn: one NOP at the top of the init
 #if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
     asm volatile(".rept " LLK_EXP_BH_S_(LLK_EXP_NOP_UNPACK_INIT) "\n\tnop\n\t.endr"); // experiment hook (integ4)
 #endif
