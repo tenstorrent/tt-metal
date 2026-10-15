@@ -869,6 +869,11 @@ PLACEMENT = {
 # The legs alone and the round trips place their cores as the whole path does.
 PLACEMENT["eth_credit eth_credit_leg"] = PLACEMENT["eth_credit eth_credit"]
 PLACEMENT["eth_credit eth_credit_round_trip"] = PLACEMENT["eth_credit eth_credit"]
+# E0 sources and E1 sinks locally, so the Ethernet hop alone crosses no NoC: its table places
+# the two Ethernet tiles and shows no leg.
+PLACEMENT["eth_credit eth_credit_hop"] = Placement(
+    {}, ("tx_chip", "rx_chip", "p"), ("tx_erisc_noc0", "rx_erisc_noc0"), ()
+)
 
 
 # eth_credit's credit round trip as built, set against an on-paper estimate: the NoC

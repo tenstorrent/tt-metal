@@ -133,6 +133,9 @@ HEADS = {
     "eth_credit eth_credit placement": EC_PLACEMENT_HEADS,
     "eth_credit eth_credit_leg placement": EC_PLACEMENT_HEADS,
     "eth_credit eth_credit_round_trip placement": EC_PLACEMENT_HEADS,
+    "eth_credit eth_credit_hop placement": placement_heads(
+        ("tx_chip", "rx_chip", "p"), ("tx_erisc_noc0", "rx_erisc_noc0"), ()
+    ),
     "p2p_latency x280_same_tile": P2P_HEADS,
     "p2p_latency x280_peer_tile": P2P_HEADS | {"hw", "peer", "hops a->b", "hops b->a", "lap hops"},
     "p2p_latency tensix_peer_tile": P2P_HEADS,
@@ -381,6 +384,7 @@ EXPECTED = {
         "e1->x280 ack hops": "13",
         "x280->e1 hops": "16",
     },
+    ("eth_credit eth_credit_hop placement", 0): {"tx_erisc_noc0": "(6, 1)", "rx_erisc_noc0": "(14, 1)"},
     ("p2p_latency x280_same_tile", 0): X280_PHASE,
     ("p2p_latency x280_peer_tile", 0): dict(X280_PHASE, **{"lap hops": "10"}),
     ("p2p_latency tensix_peer_tile", 0): X280_PHASE,

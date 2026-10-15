@@ -190,7 +190,9 @@ leg's hops by the rule of `hops()` in `harness/inventory/inventory.hpp`, except
 x280_peer_tile's, which shows the recorded `hops_a_to_b` and `hops_b_to_a`. It
 counts a leg's acknowledgement on the same NoC in the opposite direction; the
 NoC documentation implies that return route but does not state it
-(tt-isa-documentation `BlackholeA0/NoC/MemoryMap.md`).
+(tt-isa-documentation `BlackholeA0/NoC/MemoryMap.md`). The `eth_credit_hop`
+table places only `tx_erisc` and `rx_erisc` and shows no leg: in the Ethernet hop
+alone E0 sources and E1 sinks locally, so no NoC write is on the path.
 
 ## Quantities that share a label
 
