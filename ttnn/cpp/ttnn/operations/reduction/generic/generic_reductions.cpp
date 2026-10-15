@@ -152,7 +152,7 @@ static Tensor reduce_impl(
     float scalar,
     const ttsl::SmallVector<int>& non_height_width_dims,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    // Sum precision chain: when active, intermediate stages stay FP32 and only
+    // Sum/Mean precision chain: when active, intermediate stages stay FP32 and only
     // the stage with is_last_in_chain=true packs the final bf16 result.
     bool chain_active = false,
     bool is_last_in_chain = false,
@@ -575,13 +575,14 @@ Tensor reduce(
     auto input_tensor =
         is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, fill_pad_value) : input_tensor_arg;
 
-    // bf16 multi-axis Sum precision chain: carry FP32 between stages and pack bf16
+    // bf16 multi-axis Sum/Mean precision chain: carry FP32 between stages and pack bf16
     // only on the final stage. Skipped for full-tensor reductions (dim covers every
     // axis) since torch's bf16 reference is itself accumulated in bf16, so the
     // legacy path already matches it there.
-    const bool chain_active = reduce_type == reduction_common::ReduceType::Sum && dim.size() > 1 &&
-                              input_tensor.dtype() == DataType::BFLOAT16 &&
-                              dim.size() < static_cast<size_t>(input_tensor.logical_shape().rank());
+    const bool chain_active =
+        (reduce_type == reduction_common::ReduceType::Sum || reduce_type == reduction_common::ReduceType::Mean) &&
+        dim.size() > 1 && input_tensor.dtype() == DataType::BFLOAT16 &&
+        dim.size() < static_cast<size_t>(input_tensor.logical_shape().rank());
 
     // fast_reduce_nc ignores `scalar` so it can't be used when scalar != 1.0f.
     if (call_fast_nc<reduce_type>(input_tensor.dtype()) && scalar == 1.0f) {

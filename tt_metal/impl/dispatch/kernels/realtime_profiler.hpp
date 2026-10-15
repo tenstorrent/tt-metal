@@ -107,6 +107,12 @@ void write_buffer_id(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uint32_t i
     record->kernel_start.id = id;
     record->kernel_end.id = id;
 }
+
+// Low 32 bits of the wall clock, for timing short waits.
+FORCE_INLINE
+uint32_t realtime_profiler_wall_clock_lo() {
+    return reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L)[WALL_CLOCK_LOW_INDEX];
+}
 #else
 FORCE_INLINE
 bool program_id_fifo_append(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t) { return false; }
@@ -122,4 +128,7 @@ uint32_t pop_program_id(volatile tt_l1_ptr realtime_profiler_msg_t*) { return 0;
 
 FORCE_INLINE
 void write_buffer_id(volatile tt_l1_ptr realtime_profiler_msg_t*, uint32_t) {}
+
+FORCE_INLINE
+uint32_t realtime_profiler_wall_clock_lo() { return 0; }
 #endif

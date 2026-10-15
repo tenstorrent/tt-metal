@@ -50,7 +50,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     const tt::tt_metal::distributed::MeshDevice& device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
