@@ -440,6 +440,28 @@ class RoutedPrefillExperts:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             ),
         }
+        # The expert op writes a fresh bf8 buffer when fed the row-major dispatch (_chunk) and leaves rows outside the
+        # occupied expert regions uninitialized. The spare tile is the one such region the combine reads (non-local
+        # pairs, weighted 0 for a token with no local expert), so it is zeroed with one tile-row insert: zeros at
+        # start[idx[0]] = spare, ceil_tile(counts[idx[0]]) = 32 rows. 16-wide uint32 rows keep the pages 64 B aligned.
+        u32_row = dict(
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        consts["spare_start"] = ttnn.from_torch(torch.full((1, 16), spare, dtype=torch.int32), **u32_row)
+        consts["spare_count"] = ttnn.from_torch(torch.full((1, 16), ttnn.TILE_SIZE, dtype=torch.int32), **u32_row)
+        consts["spare_idx"] = ttnn.from_torch(torch.zeros((1, 16), dtype=torch.int32), **u32_row)
+        consts["spare_zeros"] = ttnn.from_torch(
+            torch.zeros((ttnn.TILE_SIZE, self.hidden_size)),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
         # Region start of the non-local experts: the spare tile, [1, E] fp32 per device ((1 - local) * spare).
         nonlocal_f32 = ttnn.rsub(self.local_mask_f32, 1.0)
         consts["nonlocal_spare"] = ttnn.mul(nonlocal_f32, float(spare))
@@ -553,12 +575,14 @@ class RoutedPrefillExperts:
         x_rm = ttnn.reshape(x_rm, (C, H))
         # padding_idx=0: every row that reads token 0 (about 3/4 of the k*C buffer rows on each of the N devices are
         # unwritten and read token 0) is served from a per-core L1 copy of x[0] instead of DRAM; same values.
-        dispatched = ttnn.embedding(tok_of_row, x_rm, padding_idx=0, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        # Row-major bf16 output: the expert op tilizes and packs its regions to bf8 itself, so the gather does no
+        # tilize and the k*C-row bf8 typecast is gone.
+        dispatched = ttnn.embedding(tok_of_row, x_rm, padding_idx=0, layout=ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(tok_of_row)
         ttnn.deallocate(x_rm)
         dispatched = ttnn.reshape(dispatched, (consts["rows"], H))
 
-        # TILE bf8 buffer: the op computes every local expert on its region in place.
+        # Row-major bf16 buffer in, fresh TILE bf8 buffer out: the op computes every local expert on its region.
         expert_out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
             dispatched,
             region_offsets,
@@ -573,8 +597,17 @@ class RoutedPrefillExperts:
             up_biases=self.up_biases,
             down_biases=self.down_biases,
         )
+        ttnn.deallocate(dispatched)
         ttnn.deallocate(counts)
         ttnn.deallocate(region_offsets)
+        expert_out = ttnn.experimental.deepseek_prefill.insert(
+            expert_out,
+            consts["spare_zeros"],
+            consts["spare_start"],
+            consts["spare_count"],
+            consts["spare_idx"],
+            local_expert_id=0,
+        )
 
         # Combine: gather each pair's expert output row back to [C, k, H]; post_combine_reduce weights the slots and
         # skips the non-local ones (dispatch table -1), so the spare-tile rows they point at never contribute.
