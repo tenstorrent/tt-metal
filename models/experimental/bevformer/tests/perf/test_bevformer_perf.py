@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 """Tracy harness for the detector end to end: images to class logits, boxes, the frame's BEV and the
 3D detections, all on device; dropping the invalid boxes on the host after it is timed apart.
 
@@ -24,10 +27,8 @@ from loguru import logger
 import ttnn
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
-    assert_channels_close,
-    assert_pcc,
-    assert_topk_close,
     build_reference_bevformer,
+    check_detector_outputs,
     frame_metas,
     random_image_batch,
     signposted_trace,
@@ -42,15 +43,9 @@ PCC_THRESHOLD = 0.99
 
 def _check(expected, tt_outputs):
     """``tt_outputs`` are the detector's outputs followed by its detections."""
-    cls_scores, bbox_preds, bev = expected
     tt_cls_scores, tt_bbox_preds, tt_bev = (ttnn.to_torch(t).float() for t in tt_outputs[:3])
-    assert_pcc(bev, tt_bev.reshape(bev.shape), PCC_THRESHOLD)
-    assert_pcc(cls_scores[-1], tt_cls_scores[-1], PCC_THRESHOLD)
-    assert_channels_close(bbox_preds[-1], tt_bbox_preds[-1], PCC_THRESHOLD)
     tt_topk = tuple(ttnn.to_torch(t) for t in tt_outputs[3][:4])
-    assert_topk_close(
-        cls_scores[-1], bbox_preds[-1], tt_cls_scores[-1], tt_bbox_preds[-1], tt_topk, PCC_THRESHOLD, bottom_center=True
-    )
+    check_detector_outputs(expected, (tt_cls_scores, tt_bbox_preds, tt_bev, tt_topk), PCC_THRESHOLD)
 
 
 @torch.no_grad()

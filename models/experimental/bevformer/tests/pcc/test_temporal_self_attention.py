@@ -10,11 +10,13 @@ from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.reference.point_sampling_3d_2d import bev_reference_points
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
+    assert_finite,
     assert_pcc,
     build_reference_encoder,
-    ego_shift,
+    sample_ego_shifts,
     random_bev,
     random_encoder_inputs,
+    to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_temporal_self_attention_parameters
 from models.experimental.bevformer.tt.tt_temporal_self_attention import TTTemporalSelfAttention
@@ -30,10 +32,6 @@ CASES = [
     # Non-square, so a swapped (h, w) in the offset scale or the reference points shows.
     ("50x100-previous-bev", (50, 100), 1, True),
 ]
-
-
-def _to_device(tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
-    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
 
 
 @torch.no_grad()
@@ -52,7 +50,7 @@ def test_temporal_self_attention(device, reset_seeds, name, bev_shape, batch_siz
     if with_previous_bev:
         previous = random_bev(bev_shape, batch_size, torch.Generator().manual_seed(1)).permute(1, 0, 2)
         value = torch.stack([previous, query], 1).reshape(batch_size * 2, num_query, -1)
-        shifted = ref_2d + ego_shift(batch_size)[:, None, None, :]
+        shifted = ref_2d + sample_ego_shifts(batch_size)[:, None, None, :]
         reference_points = torch.stack([shifted, ref_2d], 1).reshape(batch_size * 2, num_query, 1, 2)
     else:
         value = None
@@ -67,20 +65,18 @@ def test_temporal_self_attention(device, reset_seeds, name, bev_shape, batch_siz
     )
 
     tt_model = TTTemporalSelfAttention(
-        device,
         create_temporal_self_attention_parameters(torch_model, device),
-        num_points=torch_model.num_points,
         spatial_shapes=[[bev_h, bev_w]],
+        num_points=torch_model.num_points,
     )
     tt_output = tt_model(
-        _to_device(query, device),
-        value=None if value is None else _to_device(value, device),
-        query_pos=_to_device(pos, device),
-        reference_points=_to_device(reference_points, device, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT),
+        to_device(query, device),
+        value=None if value is None else to_device(value, device),
+        query_pos=to_device(pos, device),
+        reference_points=to_device(reference_points, device, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT),
     )
     tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
-    # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
-    assert torch.isfinite(tt_output).all(), "non-finite values in the self-attention output"
+    assert_finite("the self-attention output", tt_output)
     assert_pcc(torch_output, tt_output, 0.999)
     # The attended part alone: the residual would carry the PCC on its own.
     assert_pcc(torch_output - query, tt_output - query, 0.999)

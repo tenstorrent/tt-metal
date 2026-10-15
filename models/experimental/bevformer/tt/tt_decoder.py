@@ -24,12 +24,10 @@ import dataclasses
 import math
 
 import ttnn
-from models.experimental.bevformer.model_config import GRID_DTYPE
+from models.experimental.bevformer.model_config import CENTERS_FIRST_CENTERS, GRID_DTYPE, INVERSE_SIGMOID_EPS
 from models.experimental.bevformer.tt.tt_common import TtFFN, layer_norm, signpost
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 
-
-INVERSE_SIGMOID_EPS = 1e-5
 # inverse_sigmoid's range: its eps clamp bounds the logits to +-log(1 / eps).
 LOGIT_BOUND = math.log(1.0 / INVERSE_SIGMOID_EPS)
 CLAMP_LOGITS = [ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -LOGIT_BOUND, LOGIT_BOUND)]
@@ -152,9 +150,8 @@ class TtDetectionTransformerDecoder:
             signpost(header="Decoder RegBranch Start")
             box_code = self._reg_branch(output, branch)
             signpost(header="Decoder RegBranch Complete")
-            # The codes come centers first (CENTERS_FIRST). The clamp (a no-op on the first
-            # layer's logit output) runs inside the add.
-            logits = ttnn.add(box_code[..., 0:3], logits, input_tensor_b_activations=CLAMP_LOGITS)
+            # The clamp (a no-op on the first layer's logit output) runs inside the add.
+            logits = ttnn.add(box_code[..., CENTERS_FIRST_CENTERS], logits, input_tensor_b_activations=CLAMP_LOGITS)
             reference_points = ttnn.sigmoid(logits)
 
             intermediate.append(output)

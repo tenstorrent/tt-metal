@@ -6,17 +6,19 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.model_config import NUM_CAMS, SPATIAL_SHAPES
+from models.experimental.bevformer.model_config import NUM_CAMS, NUM_POINTS_IN_PILLAR, SPATIAL_SHAPES
 from models.experimental.bevformer.reference.point_sampling_3d_2d import camera_geometry
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
+    assert_finite,
     assert_pcc,
     build_reference_encoder,
     camera_rows,
-    img_metas,
-    pc_range,
+    camera_img_metas,
+    preset_pc_range,
     random_bev,
     random_encoder_inputs,
+    to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_spatial_cross_attention_parameters
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import (
@@ -52,21 +54,17 @@ def _geometry(kind, bev_shape, batch_size):
     bev_h, bev_w = bev_shape
     if kind in ("nuscenes", "nuscenes-turned", "carla"):
         preset = "carla_tiny" if kind == "carla" else "nuscenes_base"
-        metas = img_metas(batch_size, preset, yaw_step_deg=40.0 if kind == "nuscenes-turned" else 0.0)
-        return camera_geometry(metas, bev_h, bev_w, 4, pc_range(preset))
+        metas = camera_img_metas(batch_size, preset, yaw_step_deg=40.0 if kind == "nuscenes-turned" else 0.0)
+        return camera_geometry(metas, bev_h, bev_w, NUM_POINTS_IN_PILLAR, preset_pc_range(preset))
     generator = torch.Generator().manual_seed(2)
     num_queries = bev_h * bev_w
-    points = torch.rand(NUM_CAMS, batch_size, num_queries, 4, 2, generator=generator)
-    mask = torch.zeros(NUM_CAMS, batch_size, num_queries, 4, dtype=torch.bool)
+    points = torch.rand(NUM_CAMS, batch_size, num_queries, NUM_POINTS_IN_PILLAR, 2, generator=generator)
+    mask = torch.zeros(NUM_CAMS, batch_size, num_queries, NUM_POINTS_IN_PILLAR, dtype=torch.bool)
     if kind == "full-plan":
         for cam in range(NUM_CAMS):
             seen = torch.randperm(num_queries, generator=generator)[:FULL_PLAN_ROWS]
             mask[cam, :, seen, : 1 + cam % 4] = True
     return points, mask
-
-
-def _to_device(tensor, device):
-    return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
 def _tt_model(torch_model, device):
@@ -95,11 +93,10 @@ def test_spatial_cross_attention(device, reset_seeds, name, bev_shape, batch_siz
     if geometry == "full-plan":
         assert plan.capacity == FULL_PLAN_ROWS
     tt_output = tt_model(
-        _to_device(query, device), _to_device(camera_rows(inputs["value"]), device), tt_model.frame_inputs(plan)
+        to_device(query, device), to_device(camera_rows(inputs["value"]), device), tt_model.frame_inputs(plan)
     )
     tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
-    # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
-    assert torch.isfinite(tt_output).all(), "non-finite values in the cross-attention output"
+    assert_finite("the cross-attention output", tt_output)
     assert_pcc(torch_output, tt_output, 0.999)
     if geometry != "empty":
         # The attended part alone: the residual would carry the PCC on its own.
@@ -114,8 +111,10 @@ def test_rebatch_plan_update(device, reset_seeds):
     torch_model = build_reference_encoder(num_layers=1).layers[0].attentions[1]
     inputs = random_encoder_inputs(bev_shape, 1)
     query = random_bev(bev_shape, 1, torch.Generator().manual_seed(1)).permute(1, 0, 2)
-    first = camera_geometry(img_metas(1), *bev_shape, 4, pc_range())
-    second = camera_geometry(img_metas(2, yaw_step_deg=25.0)[1:], *bev_shape, 4, pc_range())
+    first = camera_geometry(camera_img_metas(1), *bev_shape, NUM_POINTS_IN_PILLAR, preset_pc_range())
+    second = camera_geometry(
+        camera_img_metas(2, yaw_step_deg=25.0)[1:], *bev_shape, NUM_POINTS_IN_PILLAR, preset_pc_range()
+    )
 
     tt_model = _tt_model(torch_model, device)
     plan = build_rebatch_plan(*first, tt_model.embed_dims, device, full_capacity(bev_shape[0] * bev_shape[1]))
@@ -123,7 +122,7 @@ def test_rebatch_plan_update(device, reset_seeds):
 
     torch_output = torch_model(query, inputs["value"], *second, torch.tensor(SPATIAL_SHAPES))
     tt_output = tt_model(
-        _to_device(query, device), _to_device(camera_rows(inputs["value"]), device), tt_model.frame_inputs(plan)
+        to_device(query, device), to_device(camera_rows(inputs["value"]), device), tt_model.frame_inputs(plan)
     )
     tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
     assert_pcc(torch_output - query, tt_output - query, 0.999)

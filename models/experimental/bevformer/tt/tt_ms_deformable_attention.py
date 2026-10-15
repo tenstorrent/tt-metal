@@ -15,22 +15,11 @@ Key components:
 - TTMSDeformableAttention: Main attention class with parameter management
 """
 
-import ttnn
-
 import torch
-from ..model_config import DeformableAttentionConfig
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
-from loguru import logger
-
-# Enable/disable logging output
-ENABLE_LOGGING = False
+import ttnn
+from models.experimental.bevformer.model_config import DeformableAttentionConfig
+from models.experimental.bevformer.tt.tt_common import signpost
 
 
 def _spatial_shapes_list(spatial_shapes):
@@ -66,8 +55,7 @@ def multi_scale_deformable_attn_fused(value, reference_points, sampling_offsets,
         (bs, num_queries, num_heads*head_dim) ROW_MAJOR -- the heads are already
         concatenated by the op's writer, so no reshape/permute follows.
     """
-    if use_signpost:
-        signpost(header="fused_msda Start")
+    signpost(header="fused_msda Start")
 
     value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT)
     attention_weights = ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT)
@@ -82,8 +70,7 @@ def multi_scale_deformable_attn_fused(value, reference_points, sampling_offsets,
         reference_mode="pillar",
     )
 
-    if use_signpost:
-        signpost(header="fused_msda End")
+    signpost(header="fused_msda End")
     return output
 
 
@@ -186,8 +173,7 @@ class TTMSDeformableAttention:
         if query_pos is not None:
             query = ttnn.add(query, query_pos)
 
-        if use_signpost:
-            signpost(header=f"TT MS Deformable Attn Module Start, {query.shape[1]} - {self.total_keys}")
+        signpost(header=f"TT MS Deformable Attn Module Start, {query.shape[1]} - {self.total_keys}")
 
         # Handle batch_first format
         if not self.batch_first:
@@ -210,9 +196,6 @@ class TTMSDeformableAttention:
         # Verify spatial shapes consistency
         assert self.total_keys == num_keys, f"Inconsistent keys: {self.total_keys} != {num_keys}"
 
-        if ENABLE_LOGGING:
-            logger.info("MSDA Value Projection Start")
-
         # The fused op takes packed (B, S, H*D), which is what this Linear emits.
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
         value = ttnn.linear(value, self.params.value_proj.weight, bias=self.params.value_proj.bias)
@@ -225,9 +208,6 @@ class TTMSDeformableAttention:
 
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
 
-        if ENABLE_LOGGING:
-            logger.info("MSDA Attention Weight Generation")
-
         # Generate attention weights. The softmax is over (levels, points) jointly, so
         # (bs, Q, heads, levels*points) is both the natural shape here and exactly the
         # packed layout the op consumes -- it is never split into (levels, points).
@@ -238,9 +218,6 @@ class TTMSDeformableAttention:
             attention_weights, (bs, num_queries, self.num_heads, self.num_levels * self.num_points)
         )
         attention_weights = ttnn.softmax(attention_weights, dim=-1)
-
-        if ENABLE_LOGGING:
-            logger.info("MSDA Sampling Offset Generation")
 
         # Offsets stay in feature-map pixel units; the op forms the sampling location.
         # The Linear's channels are already (head, level, point, xy), the op's
@@ -261,16 +238,10 @@ class TTMSDeformableAttention:
             spatial_shapes=self.spatial_shapes,
         )
 
-        if ENABLE_LOGGING:
-            logger.info("MSDA Core Attention Complete")
-
         # Apply output projection
         if hasattr(self.params, "output_proj"):
             output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
             output = ttnn.linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
-
-        if ENABLE_LOGGING:
-            logger.info("MSDA Adding Residual")
 
         # Add residual connection
         if self.residual:
@@ -280,8 +251,7 @@ class TTMSDeformableAttention:
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
 
-        if use_signpost:
-            signpost(header="TT MS Deformable Attn Module End")
+        signpost(header="TT MS Deformable Attn Module End")
 
         return output
 

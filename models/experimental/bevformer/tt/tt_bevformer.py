@@ -65,7 +65,7 @@ class TtBEVFormer:
         if self.batch_size > 1:
             bev_pos = ttnn.repeat(bev_pos, ttnn.Shape((self.batch_size, 1, 1)))
         self.bev_pos = bev_pos
-        self.coder = TtNMSFreeCoder(device)
+        self.coder = TtNMSFreeCoder(device, **vars(params.coder))
 
     def prepare_frame(self, img_metas, frame=None, capacity=None):
         """See ``TtPerceptionTransformer.prepare_frame``."""

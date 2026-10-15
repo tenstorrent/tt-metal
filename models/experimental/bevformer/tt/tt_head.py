@@ -16,33 +16,10 @@ that is the decoder's refinement of its points, so its refined points (float32) 
 the center channels, scaled to metres.
 """
 
-import torch
-
 import ttnn
-from models.experimental.bevformer.model_config import (
-    CENTERS_FIRST,
-    CODE_H,
-    CODE_SIZE,
-    CODE_WL,
-    CODE_XY,
-    CODE_Z,
-    GRID_DTYPE,
-    SCORE_DTYPE,
-)
+from models.experimental.bevformer.model_config import BOX_PRED_PIECES, SCORE_DTYPE
 from models.experimental.bevformer.tt.tt_common import layer_norm, signpost
 from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
-
-# __call__ turns the decoder's centers-first box codes into the box code layout by one concat:
-# cx cy | w l | cz | h onward, which needs this order on both sides.
-_CHANNELS = [*range(CODE_SIZE)]
-if not (
-    _CHANNELS[CODE_XY] == [0, 1]
-    and _CHANNELS[CODE_WL] == [2, 3]
-    and _CHANNELS[CODE_Z] == [4]
-    and _CHANNELS[CODE_H.start :] == CENTERS_FIRST[5:]
-    and CENTERS_FIRST[3:5] == _CHANNELS[CODE_WL]
-):
-    raise ValueError("the head's box code concat expects xy | wl | z | h onward, and centers-first codes")
 
 
 class TtBEVFormerHead:
@@ -50,17 +27,9 @@ class TtBEVFormerHead:
 
     def __init__(self, params, device):
         """``params`` comes from ``create_head_parameters``, with the reference head's BEV shape
-        and the ``pc_range`` its [0, 1] reference points map to in metres."""
+        and the ``pc_range`` corner and size its [0, 1] reference points map to in metres."""
         self.params = params
         self.decoder = TtDetectionTransformerDecoder(params.decoder, device, params.bev_shape, batch_first=True)
-        pc_min = torch.tensor(params.pc_range[:3])
-        pc_size = torch.tensor(params.pc_range[3:]) - pc_min
-
-        def upload(values):
-            return ttnn.from_torch(values.view(1, 1, 1, 3), dtype=GRID_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
-
-        self.pc_min = upload(pc_min)
-        self.pc_size = upload(pc_size)
 
     @staticmethod
     def _cls_branch(x, branch):
@@ -94,11 +63,8 @@ class TtBEVFormerHead:
         signpost(header="Head ClsBranches Complete")
         signpost(header="Head BoxPreds Start")
 
-        centers = ttnn.add(ttnn.multiply(refined_points, self.pc_size), self.pc_min)
-        # The refined points and the codes' first three channels are (x, y, z).
-        all_bbox_preds = ttnn.concat(
-            [centers[..., 0:2], box_codes[..., 3:5], centers[..., 2:3], box_codes[..., 5:]], dim=-1
-        )
+        sources = {"centers": ttnn.add(ttnn.multiply(refined_points, p.pc_size), p.pc_min), "codes": box_codes}
+        all_bbox_preds = ttnn.concat([sources[source][..., channels] for source, channels in BOX_PRED_PIECES], dim=-1)
         signpost(header="Head BoxPreds Complete")
         signpost(header="TTNN Head Forward End")
         return all_cls_scores, all_bbox_preds

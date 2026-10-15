@@ -29,6 +29,7 @@ class TtConvModule:
         dealloc_act=True,
         dram_activation=False,
         dram_conv_slices=None,
+        weights_dtype=ttnn.bfloat8_b,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
     ):
@@ -36,6 +37,7 @@ class TtConvModule:
             conv_args.conv,
             conv_pth.conv,
             device=device,
+            weights_dtype=weights_dtype,
             dealloc_act=dealloc_act,
             fp32_dest_acc_en=True,
             is_blk=is_blk,
@@ -58,7 +60,8 @@ class TtFPN:
     ``dram_activation_levels`` lists the pyramid levels whose lateral and output convs
     keep their activations in DRAM, for levels too large for L1; their 3x3 convs run in
     ``dram_conv_slices`` width slices. ``block_sharded_levels`` lists the levels whose
-    output conv is block sharded with act_block_h 128.
+    output conv is block sharded, with act_block_h ``block_sharded_act_block_h``, None for
+    conv2d's own. ``weights_dtype`` is the convs' weight dtype.
     """
 
     def __init__(
@@ -70,6 +73,8 @@ class TtFPN:
         dram_activation_levels=(),
         dram_conv_slices=None,
         block_sharded_levels=(),
+        block_sharded_act_block_h=None,
+        weights_dtype=ttnn.bfloat8_b,
     ):
         assert conv_args.add_extra_convs == "on_output", f"extra convs {conv_args.add_extra_convs!r} are not supported"
         self.lateral_convs = []
@@ -90,6 +95,7 @@ class TtFPN:
                     device=device,
                     dram_activation=i in dram_activation_levels,
                     dram_conv_slices=dram_conv_slices,
+                    weights_dtype=weights_dtype,
                     input_dtype=input_dtypes[i],
                 )
             )
@@ -101,10 +107,10 @@ class TtFPN:
                     conv_pth.fpn.fpn_convs[str(i)],
                     device=device,
                     is_blk=block_sharded,
-                    # From the UniAD port, not re-tuned for 928x1600.
-                    act_block_h=128 if block_sharded else None,
+                    act_block_h=block_sharded_act_block_h if block_sharded else None,
                     dram_activation=i in dram_activation_levels,
                     dram_conv_slices=dram_conv_slices,
+                    weights_dtype=weights_dtype,
                     input_dtype=output_conv_dtypes[i],
                     input_layout=output_conv_layouts[i],
                 )
@@ -116,6 +122,7 @@ class TtFPN:
                     conv_pth.fpn.fpn_convs[str(i)],
                     device=device,
                     dealloc_act=False,
+                    weights_dtype=weights_dtype,
                     input_dtype=output_conv_dtypes[-1],
                 )
             )

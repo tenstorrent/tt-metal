@@ -20,6 +20,7 @@ Sections:
 - TTNN precision and memory
 """
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -29,11 +30,24 @@ if TYPE_CHECKING:
 # --- Cameras and images -------------------------------------------------------------------------
 
 NUM_CAMS = 6
-# The cameras' 1600x900 images, padded at the bottom to 1600x928, a multiple of IMAGE_SIZE_DIVISOR
-# (upstream's PadMultiViewImage, size_divisor=32), which the images' img_shape then reports.
+# The cameras' images, (width, height).
+RAW_IMAGE_SIZE = (1600, 900)
+# Upstream's PadMultiViewImage pads the images at the bottom and right to a multiple of this, and
+# the images' img_shape reports the padded size.
 IMAGE_SIZE_DIVISOR = 32
-IMAGE_HEIGHT = 928
-IMAGE_WIDTH = 1600
+
+
+def padded_image_size(width, height):
+    """``(width, height)`` padded up to a multiple of ``IMAGE_SIZE_DIVISOR``."""
+    return tuple(math.ceil(size / IMAGE_SIZE_DIVISOR) * IMAGE_SIZE_DIVISOR for size in (width, height))
+
+
+# The backbone's input, 1600x928.
+IMAGE_WIDTH, IMAGE_HEIGHT = padded_image_size(*RAW_IMAGE_SIZE)
+# img_norm_cfg: the images are this BGR mean subtracted and divided by this std, so they stay in
+# pixel units.
+IMAGE_MEAN_BGR = (103.530, 116.280, 123.675)
+IMAGE_STD_BGR = (1.0, 1.0, 1.0)
 
 # --- Backbone and FPN ---------------------------------------------------------------------------
 
@@ -73,8 +87,13 @@ FPN_KWARGS = dict(
     relu_before_extra_convs=True,
 )
 
-# The FPN levels' (h, w) for IMAGE_HEIGHT x IMAGE_WIDTH: strides 8 to 64, rounded up.
-SPATIAL_SHAPES = ((116, 200), (58, 100), (29, 50), (15, 25))
+
+def fpn_spatial_shapes(height, width, num_levels):
+    """The FPN levels' ``(h, w)`` for a ``height x width`` image: strides 8, 16, ..., rounded up."""
+    return tuple((-(-height // (8 << level)), -(-width // (8 << level))) for level in range(num_levels))
+
+
+SPATIAL_SHAPES = fpn_spatial_shapes(IMAGE_HEIGHT, IMAGE_WIDTH, FPN_KWARGS["num_outs"])
 
 # --- BEV grid, shared sizes and perception transformer ----------------------------------------
 
@@ -109,6 +128,8 @@ DECODER_NUM_LAYERS = 6
 DECODER_NUM_POINTS = 4
 NUM_QUERY = 900
 NUM_CLASSES = 10
+# inverse_sigmoid's clamp, which the decoder's refinement of its reference points goes through.
+INVERSE_SIGMOID_EPS = 1e-5
 
 # --- Box code and coder -------------------------------------------------------------------------
 
@@ -125,15 +146,38 @@ CODE_SIN = slice(6, 7)
 CODE_COS = slice(7, 8)
 CODE_VELOCITY = slice(8, 10)
 
-_CENTERS = [*range(CODE_SIZE)][CODE_XY] + [*range(CODE_SIZE)][CODE_Z]
+# cx, cy and cz, in the order of the reference points' (x, y, z).
+CODE_CENTERS = [*range(CODE_SIZE)][CODE_XY] + [*range(CODE_SIZE)][CODE_Z]
 # The TTNN port's channel order for box codes: the centers first, (cx, cy, cz, w, l, h, sin, cos,
-# vx, vy), so its decoder takes the center offsets in one slice. Its reg branches emit it, from
-# the last Linear's rows in this order.
-CENTERS_FIRST = _CENTERS + [channel for channel in range(CODE_SIZE) if channel not in _CENTERS]
+# vx, vy), so its decoder takes the center offsets in one slice, CENTERS_FIRST_CENTERS. Its reg
+# branches emit it, from the last Linear's rows in this order.
+CENTERS_FIRST = CODE_CENTERS + [channel for channel in range(CODE_SIZE) if channel not in CODE_CENTERS]
+CENTERS_FIRST_CENTERS = slice(0, len(CODE_CENTERS))
+
+
+def _box_pred_pieces():
+    """The TTNN head's box predictions, in box code order, as one concat of slices of its refined
+    centers ``"centers"`` (x, y, z) and its centers-first codes ``"codes"``."""
+    pieces = []
+    for channel in range(CODE_SIZE):
+        if channel in CODE_CENTERS:
+            source, index = "centers", CODE_CENTERS.index(channel)
+        else:
+            source, index = "codes", CENTERS_FIRST.index(channel)
+        if pieces and pieces[-1][0] == source and pieces[-1][1].stop == index:
+            pieces[-1] = (source, slice(pieces[-1][1].start, index + 1))
+        else:
+            pieces.append((source, slice(index, index + 1)))
+    return tuple(pieces)
+
+
+BOX_PRED_PIECES = _box_pred_pieces()
 
 # The coder's decoded box: (cx, cy, cz, w, l, h, yaw, vx, vy), cz at the box's gravity center.
 BOX_CENTER = slice(0, 3)
+BOX_Z = slice(2, 3)
 BOX_SIZE = slice(3, 6)
+BOX_H = slice(5, 6)
 BOX_YAW = slice(6, 7)
 BOX_VELOCITY = slice(7, 9)
 # Box centers outside this range are dropped by the coder.
@@ -163,12 +207,17 @@ class DeformableAttentionConfig:
 # --- TTNN precision and memory ------------------------------------------------------------------
 
 # The ttnn dtypes, by name. The PyTorch reference imports this module and must not need ttnn, so
-# ``GRID_DTYPE``, ``SCORE_DTYPE`` and ``BOX_DTYPE`` are looked up in ttnn on first access, by the
-# module ``__getattr__`` at the end of this file.
+# they are looked up in ttnn on first access, by the module ``__getattr__`` at the end of this file.
+WEIGHT_DTYPE: "ttnn.DataType"
+CONV_WEIGHT_DTYPE: "ttnn.DataType"
 GRID_DTYPE: "ttnn.DataType"
 SCORE_DTYPE: "ttnn.DataType"
 BOX_DTYPE: "ttnn.DataType"
 _TTNN_DTYPES = {
+    # The transformer's, the head's and the DCNs' weights.
+    "WEIGHT_DTYPE": "bfloat16",
+    # The backbone's and FPN's conv weights, as conv2d and the DRAM 1x1 convs' matmuls read them.
+    "CONV_WEIGHT_DTYPE": "bfloat8_b",
     # The deformable attentions' reference points, in the encoder and the decoder, which the fused
     # MSDA op samples at: in bfloat16 a point in (0.5, 1) moves in steps of 2^-8, 0.8 px on the
     # 200x200 grid.
@@ -176,10 +225,13 @@ _TTNN_DTYPES = {
     # The head's class logits, which the coder ranks: in bfloat16 many of the num_query *
     # num_classes scores tie, and the top-k order departs from the reference's.
     "SCORE_DTYPE": "float32",
-    # The head's box predictions: GRID_DTYPE's, as their centers are the decoder's refined
-    # reference points.
-    "BOX_DTYPE": "float32",
 }
+# The head's box predictions: their centers are the decoder's refined reference points.
+_TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
+
+# Candidates the coder's exact float32 top-k ranks (TtNMSFreeCoder.topk): its top-k is exact
+# unless more than CODER_NUM_CANDIDATES - MAX_NUM logits tie with the k-th one in bfloat16.
+CODER_NUM_CANDIDATES = 512
 
 
 # The backbone and FPN, for 6 cameras at 1600x928. Layer indices count the ResNet layers from 0
@@ -211,9 +263,15 @@ DRAM_ACTIVATION_LEVELS = (0, 1)
 DRAM_CONV_SLICES = 8
 
 # Layers whose downsample conv is block sharded (layer3, layer4) and FPN levels whose output
-# conv is (C3, C4). Both come from the UniAD port and are not re-tuned for 928x1600.
+# conv is (C3, C4).
 BLOCK_SHARDED_DOWNSAMPLE_STAGES = (2, 3)
 BLOCK_SHARDED_LEVELS = (0, 1)
+
+# conv2d's act_block_h overrides: the stem conv's, the non-DCN 3x3 conv2's of the bottlenecks and
+# the block-sharded FPN output convs'. None of these, nor the sharding above, is tuned for 928x1600.
+STEM_ACT_BLOCK_H = 64
+CONV2_ACT_BLOCK_H = 32
+FPN_BLOCK_SHARDED_ACT_BLOCK_H = 128
 
 
 def tt_resnet_kwargs():
@@ -225,28 +283,38 @@ def tt_resnet_kwargs():
         dram_conv_slices=DRAM_CONV_SLICES,
         block_sharded_downsample_stages=BLOCK_SHARDED_DOWNSAMPLE_STAGES,
         fp32_acc_stages=FP32_ACC_STAGES,
+        stem_act_block_h=STEM_ACT_BLOCK_H,
+        conv2_act_block_h=CONV2_ACT_BLOCK_H,
+        weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
     )
 
 
 def tt_fpn_kwargs():
-    """TtFPN's memory arguments for this configuration."""
+    """TtFPN's memory and precision arguments for this configuration."""
     return dict(
         dram_activation_levels=DRAM_ACTIVATION_LEVELS,
         dram_conv_slices=DRAM_CONV_SLICES,
         block_sharded_levels=BLOCK_SHARDED_LEVELS,
+        block_sharded_act_block_h=FPN_BLOCK_SHARDED_ACT_BLOCK_H,
+        weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
     )
 
 
-def __getattr__(name):
-    """The module attribute hook of PEP 562: resolves ``_TTNN_DTYPES`` against ttnn on first access
-    and caches the result, so ttnn is imported only by the code that uses them. Without ttnn, the
-    ``ModuleNotFoundError`` reaches the importer as is, naming the missing module."""
-    if name not in _TTNN_DTYPES:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+def _ttnn_dtype(name):
+    """``_TTNN_DTYPES[name]`` looked up in ttnn, cached as a module attribute. Without ttnn, the
+    ``ModuleNotFoundError`` reaches the caller as is, naming the missing module."""
     import ttnn
 
     value = globals()[name] = getattr(ttnn, _TTNN_DTYPES[name])
     return value
+
+
+def __getattr__(name):
+    """The module attribute hook of PEP 562: resolves ``_TTNN_DTYPES`` on first access, so ttnn is
+    imported only by the code that uses them."""
+    if name not in _TTNN_DTYPES:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return _ttnn_dtype(name)
 
 
 def __dir__():

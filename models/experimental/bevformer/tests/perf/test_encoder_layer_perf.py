@@ -25,15 +25,12 @@ from models.experimental.bevformer.tests.common import (
     camera_rows,
     random_encoder_inputs,
     signposted_trace,
+    to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_encoder_parameters
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
 
 BEV_SHAPE = (100, 100)
-
-
-def _to_device(tensor, device):
-    return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
 @torch.no_grad()
@@ -70,9 +67,9 @@ def test_encoder_layer_perf(device, reset_seeds):
     layer = encoder.layers[0]
     plan = encoder.prepare_frame(inputs["img_metas"])
     sca_frame = layer.spatial_cross_attention.frame_inputs(plan)
-    query = _to_device(inputs["bev_query"].permute(1, 0, 2), device)
-    value = _to_device(camera_rows(inputs["value"]), device)
-    bev_pos = _to_device(inputs["bev_pos"].permute(1, 0, 2), device)
+    query = to_device(inputs["bev_query"].permute(1, 0, 2), device)
+    value = to_device(camera_rows(inputs["value"]), device)
+    bev_pos = to_device(inputs["bev_pos"].permute(1, 0, 2), device)
 
     ref_2d = encoder.reference_points(1)
 
