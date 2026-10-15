@@ -85,38 +85,42 @@ def _check(output, golden_in, func, variant, label):
 # Per-TRISC device-zone timing (DeviceZoneScopedN -> profile_log_device.csv)
 #
 # The compute-kernel zone records ZONE_START/ZONE_END on all three TRISCs. We isolate one launch by
-# its (new) run-host-id and read the MATH (TRISC_1) duration; the zone brackets the whole reps-loop,
+# the rows it appends to the CSV and read the MATH (TRISC_1) duration; the zone brackets the whole reps-loop,
 # so math_ns / reps is the per-call SFPU cost. unpack/pack come back ~0 (nothing else in the zone).
 # =============================================================================
 _DEVICE_CSV = os.path.join(os.environ.get("TT_METAL_HOME", "."), "generated/profiler/.logs/profile_log_device.csv")
 _RISC_LABEL = {"TRISC_0": "unpack", "TRISC_1": "math", "TRISC_2": "pack"}
 
 
-def _read_csv_rows(path):
-    with open(path) as f:
-        lines = f.read().splitlines()
+def _csv_size(path):
+    return os.path.getsize(path) if os.path.exists(path) else 0
+
+
+def _read_csv_rows(path, offset=0):
+    """Rows appended after byte `offset` (all rows when 0). The CSV grows for the whole pytest
+    session, so re-reading it in full per launch gets slow once earlier perf tests have filled it."""
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        header = f.readline().decode()
+        f.readline()  # column names
+        if f.tell() < offset <= size:
+            f.seek(offset)
+        lines = f.read().decode().splitlines()
     freq_mhz = 1000.0
-    for part in lines[0].split(","):
+    for part in header.split(","):
         if "CHIP_FREQ" in part:
             freq_mhz = float(part.split(":")[1])
-    rows = [[x.strip() for x in ln.split(",")] for ln in lines[2:] if ln.strip()]
+    rows = [[x.strip() for x in ln.split(",")] for ln in lines if ln.strip()]
     return [r for r in rows if len(r) >= 12], (1000.0 / freq_mhz), freq_mhz
 
 
-def _all_run_ids(path):
-    if not os.path.exists(path):
-        return set()
-    rows, _, _ = _read_csv_rows(path)
-    return {r[7] for r in rows}
-
-
-def _zone_engines_for_new_run(path, seen_ids):
-    """{engine: ns} for the ZONE_NAME zone whose run-host-id is new (this launch only)."""
-    rows, ns_per_cycle, _ = _read_csv_rows(path)
+def _zone_engines_for_new_run(path, offset):
+    """{engine: ns} for the ZONE_NAME zone in rows appended after `offset` (this launch only)."""
+    rows, ns_per_cycle, _ = _read_csv_rows(path, offset)
     starts, ends = {}, {}
     for r in rows:
-        risc, cyc, run_id, zone, typ = r[3], r[5], r[7], r[10], r[11]
-        if run_id in seen_ids or zone != ZONE_NAME:
+        risc, cyc, zone, typ = r[3], r[5], r[10], r[11]
+        if zone != ZONE_NAME:
             continue
         (starts if typ == "ZONE_START" else ends).setdefault(risc, []).append(int(cyc))
     out = {}
@@ -131,16 +135,16 @@ def _zone_engines_for_new_run(path, seen_ids):
 
 def _measure_zone(device, run_fn, reps, trials):
     """Per-call ns for each engine, one sample per measured launch. Returns {engine: [ns/call,...]}."""
-    run_fn()  # warmup so its markers land under an id we then mark 'seen'
+    run_fn()  # warmup so its markers are flushed before the first measured launch
     ttnn.synchronize_device(device)
     ttnn.ReadDeviceProfiler(device)
     samples = {}
     for _ in range(trials):
-        seen = _all_run_ids(_DEVICE_CSV)
+        offset = _csv_size(_DEVICE_CSV)
         run_fn()
         ttnn.synchronize_device(device)
         ttnn.ReadDeviceProfiler(device)
-        for engine, ns in _zone_engines_for_new_run(_DEVICE_CSV, seen).items():
+        for engine, ns in _zone_engines_for_new_run(_DEVICE_CSV, offset).items():
             samples.setdefault(engine, []).append(ns / reps)
     return samples
 
@@ -162,7 +166,7 @@ def _arch_label(device):
 def _clock_mhz():
     if os.path.exists(_DEVICE_CSV):
         try:
-            _, _, freq = _read_csv_rows(_DEVICE_CSV)
+            _, _, freq = _read_csv_rows(_DEVICE_CSV, _csv_size(_DEVICE_CSV))
             return round(freq)
         except Exception:
             pass
