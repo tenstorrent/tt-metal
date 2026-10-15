@@ -67,8 +67,11 @@ using tensix_to_x280::L1Layout;
 constexpr uint32_t kDefaultWarmupCount = 128u;
 constexpr uint32_t kDefaultTransferCount = 16384u;
 
-// How long the host waits for every writer to reach the start gate.
-constexpr auto kGateTimeout = std::chrono::seconds{10};
+// How long the host waits for every writer to reach the start gate, counted
+// from the enqueue: below a writer's own wait (kGateBoundTicks, 2^31 ERISC
+// wall ticks, about 1.59 s at 1.35 GHz), so the host gives up before any
+// writer does.
+constexpr auto kGateTimeout = std::chrono::seconds{1};
 
 // INJECTION only: `writers` idle ERISCs, each issuing `transfer_size` bytes.
 struct SweepPoint {
