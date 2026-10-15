@@ -105,7 +105,7 @@ Three consequences follow from the destination being LIM rather than L1:
 ID 3 needs two complexes in live resident idle, and reset release is one-way
 (D-022), so every tile it uses must leave reset inside one chip-reset
 lifetime. The harness's session fixture boots every enabled L2CPU of a chip
-whose L2CPUs are all held in reset in one batch (README § Benchmark harness),
+whose L2CPUs are all held in reset in one batch ([harness.md](../harness.md#running-benchmarks)),
 and there is one batch per lifetime, so the placement sweep finds every pair
 live. The device cases that require a reset-held tile
 (`ColdBootRefusedWithoutOptIn`,
@@ -116,6 +116,40 @@ do not perturb the measurement — the resident idle touches no DRAM, AXI, or
 MMIO outside its own L2CPU tile (`src/lim_idle.c:20-22`) — and cost only
 power. Images, environment knobs and the full sequence are in
 `CHARACTERIZATION_RESULTS.md` § 6.
+
+## Metal peers
+
+All three Metal-peer executables consume
+`X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE`, defaulting to
+`build/x280/firmware-p2p-latency-metal-peer-tile.bin`. They compile
+`kernels/p2p_latency/metal_peer_entry.cpp` with exactly one of
+`P2P_LATENCY_TARGET_TENSIX`, `P2P_LATENCY_TARGET_IDLE_ERISC`, or
+`P2P_LATENCY_TARGET_DRISC`. The X280 backend ID is `0x10000006`;
+the Metal result retains its target-specific backend ID. The shared
+`metal_peer_args.h` cookie identifies the 16-word layout, independently of
+target selection.
+Unless `P2P_LATENCY_{TENSIX,ERISC,DRISC}_PEER_TILE_W` is set, each first runs
+an unrecorded `W=8` pilot and sizes the measured launch's warm-up to 25 ms of
+device work, so the AICLK elapsed bound stays well inside its limit
+([measurement.md](../measurement.md)); a set value is used as given.
+
+`x280_p2p_latency_erisc_peer_tile` launches only an inactive Ethernet core in
+`Eth::IDLE` mode and exchanges 4-byte tokens over same-chip NOC; it sends no
+Ethernet-link traffic. The ERISC participant reports raw wall-clock ticks with
+per-run AICLK evidence. The host reads CMFW's programmed maximum and validates
+start, end and whole-run counter rates plus throttle telemetry before publishing
+a conversion rate. It is an implementation smoke path, not a production fabric
+transition. It and `x280_p2p_latency_drisc_peer_tile` link `x280_slow_dispatch`
+([harness.md](../harness.md#running-benchmarks)).
+
+`x280_p2p_latency_drisc_peer_tile` selects bank 0's free non-endpoint DRISC and
+exchanges 4-byte tokens over NOC0 as a mechanical same-chip smoke target. Its
+kernel is launched through forced slow dispatch with the tensor prefetcher
+inactive. It requires NOC0 in the stream mode DRISC firmware sets, and switches
+no NIU. X280 addresses the DRISC mailbox by its
+untagged local offset while host reads and writes use the tagged DRISC-L1 view.
+DRISC measurements are raw `get_timestamp()` ticks carrying the same per-run
+AICLK evidence and externally usable conversion rate.
 
 ## Open questions
 

@@ -842,3 +842,60 @@ one-link benchmark does not need.
 - `BATCH`, `1 ≤ BATCH ≤ min(N_LINK, N_DELIVER)`: up to this many slots written
   per wait and per pointer update, and packets per FIFO per round-robin turn
 - Direction: one direction or both
+
+## Running it
+
+`x280_eth_credit` measures read/write-pointer credit flow control over one live
+Ethernet link between UMD chips 0 and 1: X280 forwarders on each chip, E0 on
+ERISC0 (NoC 0) and E1 on ERISC1 (NoC 1) of the linked active Ethernet core. Its
+cases run in bring-up order, from the barrier and handshake with no traffic to
+both directions, and each step carries a run that must fail. E0 and E1 are
+JIT-built per shape from `kernels/eth_credit/{e0,e1}_kernel.cpp`. An Ethernet
+kernel's only extra include root is its source directory, so they reach every
+x280 header by relative path; the `x280_eth_credit_jit` CTest compiles them the
+same way with no device. ERISC stall budgets
+scale by each chip's programmed AICLK, and every run brackets both ERISC wall
+clocks with the AICLK sampler of [measurement.md](../measurement.md); ERISC ticks convert to time
+only when that evidence is clean. Each run also writes an `eth_credit_link`
+record per chip with the base firmware's link retrain count before launch and
+after `Finish`, so a failure can be checked against a retrain, and the chip's
+ERISC clock evidence; and an `eth_credit_kernel` record per launched kernel
+with its result block: status, packets per `p`, every stall and cost site's
+count and ticks, and failure detail. The console prints raw packet counts and
+ticks and, for a failed run, the attribution line and every chip's kernel
+results; rates come from the tabulator. The manifest's `eth_credit.throughput`
+configuration runs `ThroughputBySlotBatchAndP` with every card visible
+(`TT_VISIBLE_DEVICES` empty), for the reason below. The design is above.
+
+```bash
+env -u TT_VISIBLE_DEVICES TT_METAL_RUNTIME_ROOT="$PWD" ./build/test/tt_metal/x280/x280_eth_credit
+```
+
+The suite uses L2CPU 0 of both chips; the harness boots resident idle on each
+chip whose L2CPUs are all held in reset ([harness.md](../harness.md#running-benchmarks)). It links
+`x280_slow_dispatch`, and it sets `TT_METAL_OPERATION_TIMEOUT_SECONDS=120`
+itself, which bounds each device's wait inside a slow-dispatch `Finish`,
+counted from when `Finish` starts waiting, not from launch; every E0/E1 wait's
+own stall budget bounds the kernels themselves. Finding the link asks Metal for
+each active Ethernet core's peer, and Metal refuses a peer outside the visible
+cluster, so on a host where chip 0 or 1 also links to another card, run with
+every card visible, as above.
+A Metal call that throws is recorded as
+`metal_failure` in the run's `eth_credit_link` records, and the result blocks
+are still harvested. `X280_ETH_CREDIT_KERNEL_ROOT` points the E0/E1
+sources at another x280 tree, which is how a mutation check compiles an edited
+copy.
+
+A run that ends undrained (a Metal call threw, an X280 wait expired that the
+case expected to finish, an E0/E1 left no result, or the link went down or
+retrained) may leave TT-link resends in flight: a TX queue keeps resending
+unacknowledged packets after `CMD_ONGOING` clears, and no Blackhole register
+counts them, so the idle-queue check before each run cannot rule them out. The
+suite then refuses every later run in the process. A fresh process cannot see
+that an earlier one ended undrained, so after one, or after a process killed
+mid-run, reset both chips before the next run; the next run boots their
+L2CPUs again:
+
+```bash
+env -u TT_VISIBLE_DEVICES tt-smi -r 0,1   # nothing may hold the cards
+```

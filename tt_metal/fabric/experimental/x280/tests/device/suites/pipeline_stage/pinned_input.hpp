@@ -4,7 +4,7 @@
 //
 // The pinned-input epoch the pipeline_stage members run in: the suite prepares
 // the cached Zero Device region once per process, runs its cases, then tears it
-// down (README, "Prepared pipeline inputs").
+// down (docs/runtime.md, "Prepared pipeline inputs").
 
 #ifndef X280_SUITES_PIPELINE_STAGE_PINNED_INPUT_HPP
 #define X280_SUITES_PIPELINE_STAGE_PINNED_INPUT_HPP

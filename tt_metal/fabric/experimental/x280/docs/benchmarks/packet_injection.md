@@ -972,6 +972,18 @@ one-tile broadcast does not reach an Ethernet tile.
 
 ## Running the Benchmark
 
+`x280_packet_injection_tensix_to_x280` injects fabric packet headers from
+Tensix BRISC/NCRISC producers into an X280 consumer, and
+`x280_packet_injection_erisc_to_x280_header` from 1 to 14 idle ERISCs. Both
+open the 14-way `LimLayout::PacketInjection` profile. The ERISC member links
+`x280_slow_dispatch` ([harness.md](../harness.md#running-benchmarks)). The header-ingress member, which
+runs on the packet-injection throughput image, is in
+[§ ERISC Header-Ingress Member](#erisc-header-ingress-member);
+the ID 14 contract and the removed single-writer prototype are in
+[`packet_header_ingress.md`](packet_header_ingress.md).
+Each record names the tt-metal revision the executable was built from
+(`tt_metal_sha`, `source_dirty`).
+
 The host executable build is not a Tensix kernel build. BRISC/NCRISC JIT
 compilation against Metal's device-generated configuration is verified by
 `PacketInjectionCompile.BothRiscsCompileForEveryVariant`, which compiles both
@@ -1014,8 +1026,7 @@ and RISC `w & 1` — four tiles, both NoCs, in ascending page order. Note that
 The assumption mask below remains an explicit limitation of the benchmark
 contract, not a statement about whether the benchmark runs.
 
-Build in a tt-metal tree configured with `TT_METAL_BUILD_X280` (README § Build
-targets), from the repository root:
+Build in a tt-metal tree configured with `TT_METAL_BUILD_X280` ([README](../../README.md#2-build-boot-and-run-a-benchmark)), from the repository root:
 
 ```bash
 # Images (all five variants), header checks, host tests and the executable

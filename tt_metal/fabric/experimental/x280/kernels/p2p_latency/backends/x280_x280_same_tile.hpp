@@ -181,7 +181,7 @@ inline void transmit(state_t& state, uint32_t token) {
  * (rt/x280_idle.h).
  *
  * The warm-up poll checks STOP so the host can always end the wait
- * (x280/README.md § 6, obligation 1). The timed poll checks it only under
+ * (docs/device_images.md, "The active-image contract", obligation 1). The timed poll checks it only under
  * P2P_LATENCY_POLL_CHECKS_STOP; without it the timed poll is unbounded and a
  * token that never arrives strands the hart until `tt-smi -r`. The timed poll
  * returns true once expected arrives, false on STOP.

@@ -627,7 +627,7 @@ re-enables that way only after confirmed resident idle, after the last case.
 Both operations require the 14-LIM-way partition and operator-owned exclusive
 use of the device; preparation runs only on a tile the same process booted
 from reset-held, its fresh-placement provenance. See
-[`README.md` / Prepared pipeline inputs](../README.md#prepared-pipeline-inputs-x280-only).
+[`runtime.md` / Prepared pipeline inputs](runtime.md#prepared-pipeline-inputs-x280-only).
 
 `RunSpec`'s `session::OpenConfig` marks whether the prepared profile is
 required; session opening uses 14 LIM ways and `RequireExact` when required. Pipeline configurations require it.
@@ -1410,7 +1410,7 @@ result.
   per-hart protocol — so it was already broken before the addresses went away.
   The C++ `X280Runtime` is the only supported boot and submission path.
   Reviving the Python path means rewriting it against the per-hart records, and
-  the entry points are listed in `x280/README.md` § 4.1. Application mailboxes
+  the entry points are listed in [runtime.md](runtime.md#runtime-ownership). Application mailboxes
   are not affected: the socket, migration, stress, and atomic-bench control
   blocks are those protocols' own, and stay.
 - **D-031:** Every active image runs one lifecycle harness
@@ -1422,7 +1422,8 @@ result.
   image state, and routing termination through hart 0 would make every
   worker's liveness depend on hart 0 surviving, which the fault image must not
   require. What the harness cannot enforce is five stated obligations
-  (`x280/README.md` § 6), enforced by `X280ActiveContract`.
+  ([device_images.md](device_images.md#the-active-image-contract)), enforced by
+  `X280ActiveContract`.
 - **D-032:** An active image receives host-computed values through one
   caller-owned argument block whose address and extent are told rather than derived:
   `ActiveRunRequest::args_addr` and `args_bytes`, published into
@@ -1518,6 +1519,62 @@ result.
   remain open, and are the part that needs disjoint placement.
 - Can a session target a hart subset, and what tile-health result follows when
   one selected hart fails to return?
+
+## Running benchmarks
+
+The benchmark executables share the harness under `harness/`. Its session
+fixture (`harness/session/session.hpp`) opens the mesh and the runtime with
+`LimEccPrimingPolicy::RequirePrepared` and boots resident idle itself: on every
+chip whose enabled L2CPUs are all held in reset it runs one `boot_tiles` batch
+over all of them, the one batch that chip-reset lifetime admits, then sets PLL4
+to `X280_PLL_MHZ` (default 1750). A chip with only some L2CPUs out of reset
+cannot boot the rest, so its cases skip until `tt-smi -r`. Images default to
+`build/x280/` as the tests' do; each `X280_*_FW_IMAGE` variable, and
+`X280_IDLE_FW_IMAGE` for resident idle, names another file.
+
+Every executable that launches a Metal kernel on a core-local RISC (an
+`IDLE_ETH` or `ACTIVE_ETH` Ethernet core, or a DRISC) requires
+`TT_METAL_SLOW_DISPATCH_MODE=1` in the environment before `MeshDevice` is
+constructed. Fast dispatch does not support `IDLE_ETH`: the kernel may JIT
+compile while the selected Ethernet core remains reset-held with no complete
+runtime arguments, kernel text, or `RUN_MSG_GO`. Each such executable links the
+`x280_slow_dispatch` object library (`CMakeLists.txt`), which sets the variable
+to `1` before `main`, overriding and logging any other value, so a direct
+invocation needs no setting. Each fixture that launches on a core-local RISC
+references the library, so an executable that omits it fails to link, and
+fails before opening the device, naming the missing link, when the variable is
+not `1`.
+
+`select_drisc_endpoint` (`harness/targets/drisc_endpoint.hpp`), which places the
+core_sync DRISC worker, has an offline check against the Blackhole SoC
+descriptor under Metal's runtime root (`TT_METAL_RUNTIME_ROOT`, or the
+repository root as the working directory). It needs no device and runs in the
+`x280_bench_device_offline` CTest.
+
+In short, for a caller writing its own Metal program against the X280: a Metal program on
+idle Ethernet or DRAM RISC-V cores that the X280 exchanges data with needs
+`TT_METAL_SLOW_DISPATCH_MODE=1`. Without it an `IDLE_ETH` kernel compiles but its result stays
+zero, because fast dispatch neither loads nor releases idle-ERISC kernels.
+
+### Paired Tensix/X280 cases
+
+A paired case runs its two halves on different core types: p2p_latency's
+`tensix_peer_tile` member runs `src/p2p_latency_metal_peer_tile.cpp` on an X280
+hart and `kernels/p2p_latency/metal_peer_entry.cpp` on a Tensix core. Its block
+layouts are headers both halves compile; the framework defines no wire format.
+
+What the framework supplies is three things: the opaque argument span
+(`ActiveRunRequest::args_addr` and `args_bytes`, read by the image through
+`x280_hart_args` and `x280_hart_args_bytes`,
+validated for placement only — D-032), `noc_open_window_2m`, which refuses an
+out-of-range coordinate rather than truncating it into a different real tile
+and reads back the window it programmed, and `X280_TLB_PAIRED_BASE`, the slot
+range a paired case draws its outbound window from.
+
+Both sides bound their own wait, and neither bound depends on the other side.
+The X280 side polls for STOP while it waits (`rt/x280_idle.h`), so the host's
+STOP always ends it; the Tensix side carries its own cycle deadline, because Metal's `Finish`
+has none and an unbounded kernel wait hangs the host with no way back.
 
 ## Implementation references
 

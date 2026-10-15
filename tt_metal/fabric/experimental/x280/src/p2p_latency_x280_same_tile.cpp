@@ -8,7 +8,7 @@
  * ID 2: X280 hart <-> X280 hart, same tile, no NOC. Two harts of one L2CPU
  * participate. Hart 0 is participant A, hart 1 is participant B. Harts 2 and
  * 3 return 0 immediately -- their presence is participation under the
- * lifecycle harness (x280/README.md § 6, obligation 2) but they exchange
+ * lifecycle harness (docs/device_images.md, "The active-image contract", obligation 2) but they exchange
  * nothing.
  *
  * The args block is one p2p_latency_x280_same_tile_args_block_t. Every hart is told

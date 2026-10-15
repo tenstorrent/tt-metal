@@ -464,3 +464,22 @@ reads no console capture. Earlier campaigns (including two-file attempt logs and
 schema 5 or earlier), records and console captures need the tabulator of the tree that
 wrote them. Historical captures retain their original schemas and clock metadata; they are not
 new campaign evidence.
+
+### Tabulation
+
+Tabulate current-format JSONL records of the p2p_latency, transport_bandwidth,
+pipeline_stage, packet_injection, core_sync and eth_credit members, one result
+table per member and record shape:
+
+```bash
+# Tabulate suite results to stdout:
+python3 tt_metal/fabric/x280/tools/tabulate_suites.py <path_to_jsonl>
+```
+
+A campaign's report (`--campaign DIR --report-dir NEW`) carries the same tables in
+its `MASTER_RESULTS.md`; this section describes
+both outputs and how `tools/run_characterization.py` collects a campaign from
+`characterization_manifest.json`. The tabulator reads only the current record
+format. The `x280_characterization` CTest runs the tabulator's and the
+campaign runner's tests, and `x280_record_round_trip` renders every member's
+records and reads them back with the live tabulator.

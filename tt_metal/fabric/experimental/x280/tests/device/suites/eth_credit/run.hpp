@@ -416,8 +416,8 @@ inline Attribution attribute(const Case& c, const RunResult& r) {
 }
 
 /* The first run in this process that ended undrained, and its case name.
- * Once set, no later run_case launches until the chips are reset (README,
- * "Clean slate"). */
+ * Once set, no later run_case launches until the chips are reset (docs/benchmarks/eth_credit.md,
+ * "Running it"). */
 inline Undrained g_undrained = Undrained::None;
 inline std::string g_undrained_case;
 
@@ -484,7 +484,7 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
     if (g_undrained != Undrained::None) {
         ADD_FAILURE() << "refusing to launch " << c.name << ": run " << g_undrained_case
                       << " in this process ended undrained (" << undrained_name(g_undrained)
-                      << "); reset both chips and re-prepare the X280s (README, eth_credit clean slate)";
+                      << "); reset both chips and re-prepare the X280s (docs/benchmarks/eth_credit.md, Running it)";
         return out;
     }
 
