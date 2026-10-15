@@ -1,0 +1,19 @@
+# Overseer notes (models/demos/common/bringup/overseer.py): written by the overseer, read by every agent.
+notes:
+- id: OV-1
+  tasks:
+  - '*'
+  status: open
+  t: '2026-10-15T14:46:25'
+  text: DS41-12 in bringup/known_issues.md is 614 characters, over the 600 limit, so every gate reports it as a problem;
+    it was resolved by the overseer (the scaled ladder is now 55296 / 2048, within the prompt). Shorten it to one line saying
+    that, or move the detail to known_issues_detail.md. Answer done when the entry is at most 600 characters.
+- id: OV-2
+  tasks:
+  - X.*
+  - Y.*
+  status: closed
+  t: '2026-10-15T15:39:43'
+  text: test of the repeated option, closed at once
+  closed: '2026-10-15T15:39:43'
+  why_closed: CLI test

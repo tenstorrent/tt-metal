@@ -97,3 +97,4 @@ Every intervention by the supervising session: time, task, trigger, classificati
 - 14:40 framework F69 (overseer notes and aborts, overseer files ignored by the path check, dashboards refreshed
   per gate, watch --quiet-passes) and F70 (timing breakdown, timeline, device timing log, dashboard section);
   dcf8da27d5a (local); selftests 397 pass. From now on corrections go to the agents as overseer notes.
+- 15:40 pause: S.swa.06 PASS (35beb8bf9ce): exact window attention (tt/window_exact.py; load-time masks only, device-only forward; WINDOW_SDPA / ATTN_IN_MM default exact, fast paths one setting away). Accepted. Precision bar question (1% tail after fp8 requantization vs exact kernels' cost) raised with the owner. F71 (dashboard links + DASHBOARD STALE wake, overseer CLI fix) applied; selftests 399 pass.
