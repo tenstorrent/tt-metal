@@ -151,8 +151,9 @@ inline void _llk_math_block_max8_fpu_(std::uint32_t dst_index, std::uint32_t val
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
         sfpu::_calculate_block_max8_mask_(valid_scores);
     }
-    // MOVD2B does not wait for SrcB, and MOVB2A does not wait for SrcA.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+    // MOVD2B does not wait for SrcB, and MOVB2A does not wait for SrcA. Drain math first so that a
+    // pending SETRWC(CLR_AB) bank flip lands before the bank-validity check.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
     // Keep exponent-zero BF16 bit patterns intact through the moves, as transpose_dest does.
     math::_configure_preserve_zero_flag_state_();
 
