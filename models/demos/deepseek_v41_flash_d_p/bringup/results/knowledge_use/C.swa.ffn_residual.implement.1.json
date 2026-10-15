@@ -1,0 +1,47 @@
+{
+ "used": [
+  {
+   "id": "DS41-3",
+   "how": "the packed boundary's pending pre is ffn_hc's own pre (mixes[:, 0:4]); the module returns it as a separate [S/SP, 4] device tensor, packed only in hooks._ffn_residual_host_fn",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "read the pcc-0 FAIL block before the real pass as the precompile collect pass, not a failure",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "n/a",
+   "evidence": "known_issues.md not touched by this step; DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x the step's own component error, no cap'"
+  }
+ ],
+ "cited_only": [
+  "DS41-20"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.ffn_residual",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T19:09:03",
+  "head": "7e32a964dbe",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.ffn_residual.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_residual.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/residual.py"
+  ]
+ }
+}
