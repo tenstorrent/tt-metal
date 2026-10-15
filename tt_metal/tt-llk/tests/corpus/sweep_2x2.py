@@ -283,6 +283,7 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-counted-row-formation "
     "-mno-tt-tensix-optimize-crosscall-hoist "
     "-mno-tt-tensix-optimize-crosscall-prgm "
+    "-mno-tt-tensix-optimize-repeat-residency "
     "-mno-tt-tensix-optimize-drain-exit "
     "-mno-tt-tensix-optimize-epoch-metadata "
     "-mno-tt-tensix-optimize-crossloop-hoist "
@@ -581,7 +582,10 @@ ON_FLAGS = (
     # covers it, and the cross-tile descriptor hoist steps over raw-LREG
     # markers that declare no LREG access.
     "-mtt-tensix-optimize-drain-exit "
-    "-mtt-tensix-optimize-epoch-metadata"
+    "-mtt-tensix-optimize-epoch-metadata "
+    # Coefficients an unrolled noinline body re-materializes on every row
+    # live in a PRGM register programmed once per kernel.
+    "-mtt-tensix-optimize-repeat-residency"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
