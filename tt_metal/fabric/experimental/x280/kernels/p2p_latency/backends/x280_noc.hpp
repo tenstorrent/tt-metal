@@ -129,7 +129,8 @@ inline void transmit(state_t& state, uint32_t token) {
 template <p2p_latency_poll_mode_t PollMode>
 inline bool poll(state_t& state, uint32_t expected) {
     /* Held in a register: the fence's "memory" clobber would otherwise reload
-     * it from `state`, on the uncached LIM stack, every pass. */
+     * it from `state`, on the uncached LIM stack, every pass (the timed-loop
+     * rule, transport_bandwidth_frontend_cxx.hpp). */
     volatile uint32_t* const token = state.own_inbound_token;
     for (;;) {
         x280_fence_ir();
