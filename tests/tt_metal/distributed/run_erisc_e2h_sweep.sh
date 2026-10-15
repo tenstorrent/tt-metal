@@ -9,6 +9,18 @@
 # Examples (run from anywhere; build target erisc_e2h_benchmark first):
 #   MD=1 MIB=256 BATCH=8 OUT=e2h_pr_table.md tests/tt_metal/distributed/run_erisc_e2h_sweep.sh
 #   MD=1 RAND=1 SEED=42 N=40 OUT=e2h_pr_random_42.md tests/tt_metal/distributed/run_erisc_e2h_sweep.sh
+#
+# The leg returns fabric's own ack and completion credits from retire(); nothing enables that.
+# Two env knobs exist for examining it, both passed straight through to the benchmark:
+#
+#   TT_BRIDGE_E2H_SELF_RETIRE=1   the router manufactures its own credit instead -- only valid
+#                                 where there is genuinely no far receiver.
+#   TT_BRIDGE_E2H_CREDIT_HOLD=k   the host holds k completions back, as a receiver whose buffer is
+#                                 occupied does, so the sender settles on its own threshold. With
+#                                 deadlock avoidance on it rests at free_slots=1 rather than 0 --
+#                                 the bubble declining the last slot. Needs RING=1 to be meaningful.
+#
+#   RING=1 TT_BRIDGE_E2H_CREDIT_HOLD=31 CHANS=9 MIB=64 tests/tt_metal/distributed/run_erisc_e2h_sweep.sh
 set -uo pipefail
 cd "$(dirname "$0")/../../.." || exit 2
 B=${B:-./build_Release/test/tt_metal/distributed/erisc_e2h_benchmark}

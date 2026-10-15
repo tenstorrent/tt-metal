@@ -26,6 +26,7 @@ struct E2HLeg::Impl {
         uint32_t next_slot = 0;
         uint32_t expect = 1;  // next ordering_cntr
         uint64_t drained = 0;
+        tt::tt_fabric::erisc_bridge::E2HCreditReturn credit;  // inert until Config supplies one
     };
     Config cfg{};
     uint32_t page = 0;
@@ -33,6 +34,7 @@ struct E2HLeg::Impl {
     uint64_t drained_total = 0;
     uint64_t unarmed = 0;
     uint64_t out_of_order = 0;
+    std::string credit_err;
 
     Chan* by_arena(uint32_t arena_idx) {
         auto it = std::find_if(chans.begin(), chans.end(), [&](const Chan& c) { return c.arena_idx == arena_idx; });
@@ -75,6 +77,9 @@ std::unique_ptr<E2HLeg> E2HLeg::create(
         }
         c.arena = cfg.alias_region_base +
                   bridge_segment_offset(c.arena_idx, BridgeArena::Tx, cfg.arenas, cfg.ring_pages, cfg.packet_capacity);
+        if (i < cfg.credits.size()) {
+            c.credit = cfg.credits[i];
+        }
         im.chans.push_back(std::move(c));
     }
     return leg;
@@ -133,6 +138,29 @@ void E2HLeg::retire(uint32_t arena, uint32_t pages) {
     pages = std::min(pages, c->in_flight);
     c->sock->pop(pages, /*notify_sender=*/true);  // pop, not read: read() would copy
     c->in_flight -= pages;
+    // After the pop, for the same reason the pop follows the read: a sender credited earlier may
+    // refill a page the host has not finished with.
+    if (!c->credit.give(pages, impl_->credit_err)) {
+        return;
+    }
+}
+
+const std::string& E2HLeg::credit_error() const { return impl_->credit_err; }
+
+uint64_t E2HLeg::credits_returned() const {
+    uint64_t n = 0;
+    for (const auto& c : impl_->chans) {
+        n += c.credit.completions.total - c.credit.completions.seeded;
+    }
+    return n;
+}
+
+bool E2HLeg::credits_active() const {
+    return !impl_->chans.empty() && impl_->chans.front().credit.active;
+}
+
+bool E2HLeg::credits_use_streams() const {
+    return !impl_->chans.empty() && impl_->chans.front().credit.use_streams;
 }
 
 uint32_t E2HLeg::page_size() const { return impl_->page; }

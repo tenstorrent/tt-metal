@@ -49,7 +49,7 @@ namespace {
 
 std::uint32_t g_chan = 0;  // the bridged eth channel, from TT_BRIDGE_E2H_FORCE_CHAN
 bool g_stalled = false;    // a stalled producer never finishes, so close() would wait forever
-bool g_return_credits = false;  // TT_BRIDGE_E2H_RETURN_CREDITS: host completes what the bridge took
+bool g_self_retire = false;  // TT_BRIDGE_E2H_SELF_RETIRE: escape hatch when there is no far receiver
 
 std::uint32_t env_u32(const char* n, std::uint32_t d) {
     const char* v = std::getenv(n);
@@ -178,7 +178,7 @@ bool bind_leg(const std::shared_ptr<MeshDevice>& mesh, const E2HLeg::Config& cfg
     }
     // The host is the only thing that can complete a frame the bridge took, so without this the
     // sender halts at credit_ceiling_frames() and the bubble predicate never gates anything.
-    if (g_return_credits) {
+    if (!g_self_retire) {
         const auto& rc = eb::router_config(cp);
         const auto comp_base = static_cast<std::uint32_t>(rc.to_sender_channel_remote_completion_counters_base_addr);
         const auto ack_base = static_cast<std::uint32_t>(rc.to_sender_channel_remote_ack_counters_base_addr);
@@ -221,6 +221,7 @@ bool bind_leg(const std::shared_ptr<MeshDevice>& mesh, const E2HLeg::Config& cfg
         }
     }
     E2HLeg::Config bound = cfg;
+    bound.credits = out.credit;  // the leg returns them as it retires; see E2HLeg::retire
     bound.alias_region_base = out.region.base();
     bound.packet_capacity = out.chan_slot;
     bound.arenas = out.region.arena_count();
@@ -398,14 +399,8 @@ BENCHMARK_DEFINE_F(E2HLegFixture, Bridge)(benchmark::State& state) {
             for (std::uint32_t a = 0; a < nchan; ++a) {
                 leg.retire(a, took_in[a]);
             }
-            // Fabric's own credit, after retire and for the same reason: the sender must not refill
-            // a page the host has not finished reading.
-            for (std::size_t a = 0; a < b.credit.size(); ++a) {
-                if (!b.credit[a].give(took_in[a], credit_err)) {
-                    break;
-                }
-            }
-            if (!credit_err.empty()) {
+            if (!leg.credit_error().empty()) {
+                credit_err = leg.credit_error();
                 break;
             }
         }
@@ -449,15 +444,11 @@ BENCHMARK_DEFINE_F(E2HLegFixture, Bridge)(benchmark::State& state) {
         state.counters["router_blocked_nodata"] = static_cast<double>(st1.blocked_nodata);
         state.counters["router_free_slots"] = static_cast<double>(st1.free_slots);
     }
-    state.counters["credit_return"] = b.credit.empty() ? 0.0 : 1.0;
-    if (!b.credit.empty()) {
-        double returned = 0.0;
-        for (const auto& c : b.credit) {
-            returned += static_cast<double>(c.completions.total - c.completions.seeded);
-        }
-        state.counters["credits_returned"] = returned;
-        state.counters["credit_streams"] = b.credit.front().use_streams ? 1.0 : 0.0;
-        state.counters["credit_hold"] = static_cast<double>(b.credit.front().hold_back);
+    state.counters["credit_return"] = leg.credits_active() ? 1.0 : 0.0;
+    if (leg.credits_active()) {
+        state.counters["credits_returned"] = static_cast<double>(leg.credits_returned());
+        state.counters["credit_streams"] = leg.credits_use_streams() ? 1.0 : 0.0;
+        state.counters["credit_hold"] = static_cast<double>(env_u32("TT_BRIDGE_E2H_CREDIT_HOLD", 0));
     }
     state.counters["payload_off_w"] = pay_off_known ? static_cast<double>(pay_off_w) : -1.0;
     state.counters["want"] = static_cast<double>(want);
@@ -503,12 +494,10 @@ int main(int argc, char** argv) {
     auto& rt = tt::tt_metal::MetalContext::instance().rtoptions();
     rt.set_e2h_bridge_enable(true);
     rt.set_e2h_bridge_force_chan(g_chan);
-    // Self-retire manufactures the credit locally, pinning num_free_slots and making the bubble
-    // predicate vacuous. Returning real credit from the host needs it off.
-    g_return_credits = env_u32("TT_BRIDGE_E2H_RETURN_CREDITS", 0) != 0;
-    // Settable on its own so the control case exists: neither self-retire nor host credit, which
-    // must halt at credit_ceiling_frames() and proves the credits are what carry a passing run.
-    rt.set_e2h_bridge_no_far_receiver(env_u32("TT_BRIDGE_E2H_SELF_RETIRE", g_return_credits ? 0 : 1) != 0);
+    // The TX ERISC waits on fabric's ack and completion counters as it always has, and the host
+    // supplies them from retire(). Self-retire is the escape hatch for a leg with no far receiver.
+    g_self_retire = env_u32("TT_BRIDGE_E2H_SELF_RETIRE", 0) != 0;
+    rt.set_e2h_bridge_no_far_receiver(g_self_retire);
 
     // Bubble flow control needs deadlock avoidance, which the builder enables only on a Ring/Torus
     // intra-mesh router -- so a ring descriptor AND this config, or it stays off and proves nothing.

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "tt_metal/distributed/erisc_bridge_tasks.hpp"
+#include "tt_metal/distributed/erisc_e2h_credit_return.hpp"
 
 namespace tt::tt_metal::distributed {
 class D2HSocket;
@@ -27,6 +28,9 @@ public:
         uint32_t ring_pages = 1;
         uint32_t link_idx = 0;
         uint8_t* alias_region_base = nullptr;  // where the sockets' shm is already mapped
+        // Fabric's own ack and completion counters, one per serviced channel, in socket order.
+        // retire() writes them: without it the bridged sender halts once its outbound slots go.
+        std::vector<tt::tt_fabric::erisc_bridge::E2HCreditReturn> credits;
     };
 
     // One socket per bridged sender channel, already aliased: sockets -> alias -> create().
@@ -41,8 +45,16 @@ public:
     using Sink = std::function<bool(const BridgeSendTask&)>;
     uint32_t poll(const Sink& sink);
 
-    // Pages stay owned until retired; crediting earlier lets the ERISC overwrite them.
+    // Pages stay owned until retired; crediting earlier lets the ERISC overwrite them. Retiring
+    // also returns fabric's credits for those frames -- completing a frame IS retiring it.
     void retire(uint32_t arena, uint32_t pages);
+
+    // Non-empty once a credit write has failed. The leg keeps running; the caller decides.
+    const std::string& credit_error() const;
+
+    uint64_t credits_returned() const;    // fabric completions this leg has written
+    bool credits_active() const;          // false when the caller supplied none
+    bool credits_use_streams() const;     // registers rather than counters
 
     uint32_t page_size() const;
     uint64_t unarmed() const;       // polls that found nothing landed yet
