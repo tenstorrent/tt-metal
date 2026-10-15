@@ -20,12 +20,11 @@ using namespace ckernel::math;
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
- * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param fidelity: Resolved source-format phase schedule.
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
  * @param acc_to_dest: When true, accumulate into dest even at LoFi. HiFi partial products still accumulate; without this flag the first phase overwrites.
  */
-template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
+template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_mop_config_(const MathFidelitySchedule fidelity, const TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
@@ -36,9 +35,6 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const MathFidelitySch
                                              ? p_elwise::SRCB_BCAST_COL
                                              : ((BROADCAST_TYPE == BroadcastType::ROW) ? p_elwise::SRCB_BCAST_ROW : p_elwise::SRCB_BCAST_ALL);
 
-    static_assert(
-        MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi || ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL,
-        "Math fidelity larger than LoFi only works with Eltwise MUL");
     const bool high_fidelity = fidelity.phase_count > 1;
     // The address-advancing op is a later fidelity phase when HiFi, so it accumulates.
     // LoFi accumulates only when the caller asked to fold tiles into dest.
@@ -192,9 +188,12 @@ inline void _llk_math_eltwise_binary_broadcast_init_(
         tensor_shape.total_num_faces() != NUM_FACES || tensor_shape.face_r_dim == MAX_FACE_R_DIM,
         "Eltwise binary broadcast four-face tiles require 16-row faces");
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_broadcast_init_", tensor_shape);
+    static_assert(
+        MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi || ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL,
+        "Math fidelity larger than LoFi only works with Eltwise MUL");
     const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE>(fidelity);
-    _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(fidelity, tensor_shape, acc_to_dest);
+    _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE>(fidelity, tensor_shape, acc_to_dest);
 
     // Each dest tile uses its total face rows, but takes at least one full face.
     _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));

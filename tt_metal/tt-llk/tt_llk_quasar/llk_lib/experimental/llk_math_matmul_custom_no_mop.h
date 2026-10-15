@@ -30,29 +30,23 @@ using namespace ckernel::math;
 /**
  * @brief Issues the MVMUL stream for one Tile x Tile matrix multiply directly, bypassing the MOP.
  *
- * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity.
  * @tparam ENABLE_2X_FORMAT: When true, replays the non-DI MXFP4_2x sequence (8 MVMULs per tile instead of 16).
- * @param fidelity: Resolved source-format phase schedule, matching init.
+ * @param fidelity: Phase schedule from init, see @ref math_fidelity_schedule.
  * @param reuse_a: True when SrcA is held across the reuse dimension (ct_dim >= rt_dim), so the closing MVMUL releases SrcA; otherwise it releases SrcB.
  * @note Call @ref _llk_math_matmul_init_no_mop_ with matching template args first this replays the buffer and addrmod slots it programmed.
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
+template <bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_run_no_mop_(const MathFidelitySchedule fidelity, const bool reuse_a)
 {
-    constexpr std::uint32_t max_phases     = math_fidelity_phase_count(MATH_FIDELITY_TYPE);
     constexpr std::uint32_t replay_buf_len = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
 
     constexpr std::uint8_t fidelity_phase_completion_addr_mod = ADDR_MOD_4;
     constexpr std::uint8_t tile_completion_addr_mod           = ADDR_MOD_5;
 
     // load_mode = 0 makes REPLAY issue replay_buffer[0 +: replay_buf_len] to Tensix instead of recording
-    // into it, which is what the MOP's LOOP_INSTR0 does. max_phases is constexpr, so this unrolls.
-    for (std::uint32_t phase = 1; phase < max_phases; phase++)
+    // into it, which is what the MOP's LOOP_INSTR0 does.
+    for (std::uint32_t phase = 1; phase < fidelity.phase_count; phase++)
     {
-        if (phase >= fidelity.phase_count)
-        {
-            break;
-        }
         TTI_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
         // matmul_op: close this fidelity phase, rewind dest to the start of the tile, advance the fidelity counter.
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, fidelity_phase_completion_addr_mod, 0);
@@ -139,7 +133,7 @@ inline void _llk_math_matmul_block_no_mop_(const DataFormat src_a_format, const 
     {
         for (std::uint32_t rut = 0; rut < rut_dim; rut++)
         {
-            _llk_math_matmul_run_no_mop_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(fidelity, reuse_a);
+            _llk_math_matmul_run_no_mop_<ENABLE_2X_FORMAT>(fidelity, reuse_a);
 
             // Clear srcB or srcA at end of reuse (once per u block row)
             if (rut == (rut_dim - 1))

@@ -109,23 +109,16 @@ inline void eltwise_di_binary_func(
  * @brief Sets up mop config for elementwise binary operations.
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param fidelity: Resolved source-format phase schedule.
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  * @param acc_to_dest: When true, accumulate the result into the destination register instead of overwriting
  */
-template <
-    EltwiseBinaryType ELTWISE_BINARY_TYPE,
-    ckernel::MathFidelity MATH_FIDELITY_TYPE,
-    EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
+template <EltwiseBinaryType ELTWISE_BINARY_TYPE, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_eltwise_binary_mop_config_(const MathFidelitySchedule fidelity, const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     const std::uint32_t rows_per_mop_run =
         (reuse_dest != EltwiseBinaryReuseDestType::NONE) ? _eltwise_binary_rows_per_face_(tensor_shape) : _eltwise_binary_dest_rows_per_tile_(tensor_shape);
-    static_assert(
-        MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi || ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL,
-        "Math fidelity larger than LoFi only works with Eltwise MUL");
     const bool high_fidelity = fidelity.phase_count > 1;
     // HiFi phases accumulate partial products, including with dest reuse; overwrite mode handles the first phase separately.
     const std::uint32_t EN_DST_ACC = acc_to_dest ? 1u : (high_fidelity ? 1u : 0u);
@@ -165,23 +158,19 @@ inline void _llk_math_eltwise_binary_mop_config_(const MathFidelitySchedule fide
  * @brief Sets up mop config for elementwise binary operations using the direct-indexing instruction variant.
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param fidelity: Resolved source-format phase schedule.
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  * @param acc_to_dest: When true, accumulate the result into the destination register instead of overwriting
  */
-template <EltwiseBinaryType ELTWISE_BINARY_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
+template <EltwiseBinaryType ELTWISE_BINARY_TYPE>
 inline void _llk_math_eltwise_di_binary_mop_config_(const MathFidelitySchedule fidelity, const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     const std::uint32_t total_num_rows_per_tile = _eltwise_binary_dest_rows_per_tile_(tensor_shape);
     const std::uint32_t REPLAY_BUF_LEN          = total_num_rows_per_tile >> rows_log2(ELTWISE_MATH_ROWS);
     LLK_ASSERT(REPLAY_BUF_LEN > 0, "Eltwise binary replay must consume at least one group of rows");
     const std::uint32_t MOP_INNER_LOOP = fidelity.phase_count;
-    static_assert(
-        MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi || ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL,
-        "Math fidelity larger than LoFi only works with Eltwise MUL");
-    const bool high_fidelity       = fidelity.phase_count > 1;
-    const std::uint32_t EN_DST_ACC = acc_to_dest ? 1u : static_cast<std::uint32_t>(high_fidelity);
+    const bool high_fidelity           = fidelity.phase_count > 1;
+    const std::uint32_t EN_DST_ACC     = acc_to_dest ? 1u : static_cast<std::uint32_t>(high_fidelity);
 
     load_replay_buf(
         0u,
@@ -320,6 +309,9 @@ template <
 inline void _llk_math_eltwise_binary_init_(
     const DataFormat src_a_format, const DataFormat src_b_format, const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
+    static_assert(
+        MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi || ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL,
+        "Math fidelity larger than LoFi only works with Eltwise MUL");
     const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     LLK_ASSERT(
         reuse_dest == EltwiseBinaryReuseDestType::NONE || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Eltwise binary destination reuse requires 16-row faces");
@@ -330,12 +322,12 @@ inline void _llk_math_eltwise_binary_init_(
     if constexpr (ENABLE_DIRECT_INDEXING)
     {
         _llk_math_eltwise_di_binary_addrmod_(fidelity);
-        _llk_math_eltwise_di_binary_mop_config_<ELTWISE_BINARY_TYPE, MATH_FIDELITY_TYPE>(fidelity, tensor_shape, acc_to_dest);
+        _llk_math_eltwise_di_binary_mop_config_<ELTWISE_BINARY_TYPE>(fidelity, tensor_shape, acc_to_dest);
     }
     else
     {
         _llk_math_eltwise_binary_addrmod_(fidelity);
-        _llk_math_eltwise_binary_mop_config_<ELTWISE_BINARY_TYPE, MATH_FIDELITY_TYPE, reuse_dest>(fidelity, tensor_shape, acc_to_dest);
+        _llk_math_eltwise_binary_mop_config_<ELTWISE_BINARY_TYPE, reuse_dest>(fidelity, tensor_shape, acc_to_dest);
     }
 
     if constexpr (reuse_dest != EltwiseBinaryReuseDestType::NONE)
