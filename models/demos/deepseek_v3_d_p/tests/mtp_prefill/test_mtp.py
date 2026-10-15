@@ -56,8 +56,12 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
-from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import (
+    SPARSE_KV_CACHE_FORMAT,
+    gather_cache_natural,
+    unrotate_cache_layer,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 FUSED_MTP_PCC = 0.999
@@ -212,7 +216,7 @@ def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int, 
     # KV dedup: both caches are striped across SP*TP, exactly like the runner allocates them. The
     # sparse indexer always dedups, so an SP-only index cache has no TP axis for it to gather over.
     kvpe_cache = init_mla_kv_cache(
-        cache_format=MlaKvCacheFormat.BF16_RM,
+        cache_format=SPARSE_KV_CACHE_FORMAT,
         hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len,
@@ -343,6 +347,7 @@ def test_mtp_module_pcc(
         sp_axis=SP_AXIS,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
         layer_num=1,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
 
     kvpe_cache, rope_tensors, index_kv_cache = _mtp_device_caches(config, mesh_device, seq_len, 1)
@@ -439,6 +444,7 @@ def test_mtp_predictor_pcc(
         sp_axis=SP_AXIS,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
         layer_num=num_levels,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
 
     kvpe_cache, rope_tensors, index_kv_cache = _mtp_device_caches(config, mesh_device, seq_len, num_levels)
@@ -603,6 +609,7 @@ def test_mtp_multiturn_pcc(
         max_seq_len=CACHE_LEN,
         slot_num=1,
         layer_num=num_levels,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
     kvpe_cache, rope_tensors, index_kv_cache = _mtp_device_caches(
         config, mesh_device, CACHE_LEN, num_levels, chunk_size=CHUNK
@@ -743,7 +750,7 @@ def test_mtp_multiturn_pcc(
     # Whole slots, so a row a later turn failed to overwrite fails too; nothing at or past the last tile is written.
     tail = -(-total // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
     kv_lora_rank = config.kv_lora_rank
-    kvpe, stripes = gather_cache_natural(kvpe_cache.storage, mesh_device, tp_shard_kv=True)
+    kvpe, stripes = gather_cache_natural(kvpe_cache, mesh_device, tp_shard_kv=True)
     cache_positions = blockcyclic_positions(stripes, CHUNK, kvpe.shape[1])
     for k in range(num_levels):
         cache = unrotate_cache_layer(kvpe[k], cache_positions, kvpe.shape[1])

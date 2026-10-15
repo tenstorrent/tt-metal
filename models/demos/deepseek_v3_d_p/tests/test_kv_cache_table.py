@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     populate_kv_chunk_address_table_block_cyclic,
     populate_kv_chunk_address_table_dflash,
 )
+from models.demos.deepseek_v3_d_p.utils.test_utils import SPARSE_KV_CACHE_FORMAT
 from tests.ttnn.utils_for_testing import assert_equal
 
 
@@ -771,13 +772,14 @@ def test_glm53_kv_cache_table(
         active_seq_len=chunk_size_global,
         slot_num=1,
         layer_num=1,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     rope_tensors = rope.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=chunk_size_global)
 
-    # KVPE cache: uncompressed bf16 + ROW_MAJOR (the format sparse_sdpa reads natively).
+    # KVPE cache: packed scaled-FP8 ROW_MAJOR rows (a format sparse_sdpa reads natively).
     tt_kvpe_cache = init_mla_kv_cache(
-        cache_format=MlaKvCacheFormat.BF16_RM,
+        cache_format=SPARSE_KV_CACHE_FORMAT,
         hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len,
@@ -830,10 +832,11 @@ def test_glm53_kv_cache_table(
 
     index_kbuf = tt_index_cache
     index_head_dim = mla_tt._indexer.index_args.index_head_dim  # 128
-    kvpe_head_dim = config.kv_lora_rank + config.qk_rope_head_dim  # 576
+    kvpe_row_bytes = tt_kvpe_cache.storage.shape[-1]
+    kvpe_page_bytes = tt_kvpe_cache.storage.buffer_aligned_page_size()
 
     INDEX_CHUNK_SIZE_BYTES = 4 * 1088  # [1,1,32,128] bfp8 = 4 tiles * 1088 bytes
-    KVPE_CHUNK_SIZE_BYTES = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK * kvpe_head_dim * 2  # bf16 RM contiguous
+    KVPE_CHUNK_SIZE_BYTES = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK * kvpe_page_bytes
     KVPE_CONFIG_ID, INDEX_CONFIG_ID = 0, 1
 
     def _table_config(chunk_size_bytes, n_layers):
@@ -891,16 +894,18 @@ def test_glm53_kv_cache_table(
         assert_equal(chunk_torch, index_kbuf_torch[:, :, position:pos_end, :])
     logger.info(f"[glm53] index-cache (config {INDEX_CONFIG_ID}) readback verified over {seq_len} tokens")
 
-    # --- readback the MLA KVPE cache (config 0, bf16 ROW_MAJOR) ---
-    tt_kvpe_cache_torch = _shard_major_host(tt_kvpe_cache.storage, mesh_device)[:1]
-    kvpe_chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_head_dim]
+    # --- readback the MLA KVPE cache (config 0, packed scaled-FP8 ROW_MAJOR), compared byte for byte ---
+    tt_kvpe_cache_bytes = _shard_major_host(tt_kvpe_cache.storage, mesh_device, dtype=torch.float8_e4m3fn)[:1].view(
+        torch.uint8
+    )
     for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
         raw_bytes = lookup_table.read_device_chunk(layer=0, position=position, slot=0, config_id=KVPE_CONFIG_ID)
-        chunk_tt = ttnn.experimental.disaggregation.tensor_from_bf16_bytes(raw_bytes, kvpe_chunk_shape)
-        chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
-        assert_equal(chunk_torch, tt_kvpe_cache_torch[:, :, position:pos_end, :])
-    logger.info(f"[glm53] kvpe-cache (config {KVPE_CONFIG_ID}, bf16 RM) readback verified over {seq_len} tokens")
+        chunk_rows = torch.tensor(bytearray(raw_bytes), dtype=torch.uint8).reshape(
+            NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_page_bytes
+        )[:, :kvpe_row_bytes]
+        assert torch.equal(chunk_rows, tt_kvpe_cache_bytes[0, 0, position:pos_end, :])
+    logger.info(f"[glm53] kvpe-cache (config {KVPE_CONFIG_ID}, scaled FP8 RM) readback verified over {seq_len} tokens")
 
 
 class _RecordingKvChunkAddressTable:

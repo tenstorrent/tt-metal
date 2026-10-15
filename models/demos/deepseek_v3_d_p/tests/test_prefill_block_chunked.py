@@ -46,6 +46,7 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
+    SPARSE_KV_CACHE_FORMAT,
     cache_half_pccs,
     gather_cache_tp0,
     interleave_pe,
@@ -1273,13 +1274,14 @@ def run_chunked_block_glm_indexer(
         slot_num=1,
         layer_num=1,
         routing_use_l1_small_for_semaphores=True,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
     ttnn.synchronize_device(mesh_device)
 
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=SEQ_CACHE, chunk_size_global=CHUNK)
     tt_kvpe_cache = init_mla_kv_cache(
-        cache_format=MlaKvCacheFormat.BF16_RM,
+        cache_format=SPARSE_KV_CACHE_FORMAT,
         hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_CACHE,
@@ -1345,7 +1347,7 @@ def run_chunked_block_glm_indexer(
     dev_idx = unrotate_cache_layer(
         gather_cache_tp0(tt_index_kv_cache, mesh_device)[full_indexer_rank(config, layer_idx)], p, total_len
     )
-    dev_kvpe = unrotate_cache_layer(gather_cache_tp0(tt_kvpe_cache.storage, mesh_device)[0], p, total_len)
+    dev_kvpe = unrotate_cache_layer(gather_cache_tp0(tt_kvpe_cache, mesh_device)[0], p, total_len)
     _, out_pcc = comp_pcc(ref_out, out_accum)
     idx_rope_pcc, idx_nope = cache_half_pccs(g_idx, dev_idx, idx_rope, pe_interleave=False)
     kv_nope, kv_pe = cache_half_pccs(g_post, dev_kvpe, kv_lora, pe_interleave=True)

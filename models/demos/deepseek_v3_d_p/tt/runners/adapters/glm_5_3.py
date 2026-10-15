@@ -4,7 +4,7 @@
 """GLM-5.3 prefill adapter.
 
 A DSA (sparse-attention) MLA + MoE model, so
-it subclasses ``MLAPrefillAdapter``, allocates the uncompressed bf16/ROW_MAJOR MLA KVPE cache plus the
+it subclasses ``MLAPrefillAdapter``, allocates the row-major (scaled FP8 by default) MLA KVPE cache plus the
 block-cyclic lightning-indexer KEY cache, and inherits ``build_runtime`` / ``weight_cache_path``. GLM
 diverges from the dense family two ways — a DSA indexer (resolved from the
 config's ``index_*`` attrs at model-build time) and a hand-built config (``glm_moe_dsa`` isn't
@@ -59,13 +59,21 @@ class GLM53Adapter(MLAPrefillAdapter):
         max_seq = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 8192))
         return glm_5_3_hf_config(max_seq=max_seq)
 
+    @property
+    def default_sparse_kv_cache_format(self):
+        """Scaled FP8 MLA KVPE cache by default; ``GLM53_KV_CACHE_FORMAT=bf16_rm`` restores the BF16 cache."""
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+        return MlaKvCacheFormat(os.environ.get("GLM53_KV_CACHE_FORMAT", MlaKvCacheFormat.SCALED_FP8.value))
+
     def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MlaKvCaches:
         """GLM is sparse (DSA), so it owns TWO device caches, returned as a KvCaches tuple (the runner
         hands the whole tuple to every runtime call; the runtime pulls index 0 as the primary KV cache
         and index 1 as the secondary index cache):
 
-          * index 0 — the MLA KVPE cache. sparse_sdpa reads it natively and requires it UNCOMPRESSED
-            (bf16 ROW_MAJOR), not the dense bf8/TILE cache the base MLA adapter allocates. All layers.
+          * index 0 — the MLA KVPE cache. sparse_sdpa reads it natively as row-major scaled FP8 (default)
+            or BF16 (see ``default_sparse_kv_cache_format``), not the dense bf8/TILE cache the base MLA
+            adapter allocates. All layers.
           * index 1 — the lightning-indexer's per-user block-cyclic KEY cache (bfp8 TILE, ``index_head_dim``
             wide). GLM-5.3 cross-layer reuse: only ``full`` layers own an indexer and write this cache
             (``shared`` layers reuse a prior full layer's top-k and never write), so it is sized to the
@@ -79,11 +87,7 @@ class GLM53Adapter(MLAPrefillAdapter):
         import ttnn
         from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
         from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import enable_mtp_indexer_slot
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
-            MlaKvCacheFormat,
-            init_kvpe_cache,
-            init_mla_kv_cache,
-        )
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache, init_mla_kv_cache
 
         # KV dedup: seq_len/(sp*tp) rows per device instead of seq_len/sp. Both caches must use the same
         # tp_axis as the write op and the migration table.
@@ -93,7 +97,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             enable_mtp_indexer_slot(hf_config)
 
         kvpe_cache = init_mla_kv_cache(
-            cache_format=MlaKvCacheFormat.BF16_RM,
+            cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             hf_config=hf_config,
             mesh_device=mesh_device,
             seq_len=params.max_seq_len,

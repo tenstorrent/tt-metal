@@ -13,9 +13,16 @@ from safetensors import safe_open
 
 import ttnn
 from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict as _fp8_dequantize_state_dict
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
 
 # Wormhole B0 worker-L1 override for ring MLA tests. On Blackhole we use the platform default.
 WH_WORKER_L1_SIZE = 1344544
+
+SPARSE_KV_CACHE_FORMAT = MlaKvCacheFormat.SCALED_FP8
+
+
+def mla_kv_cache_format(has_indexer: bool) -> MlaKvCacheFormat:
+    return SPARSE_KV_CACHE_FORMAT if has_indexer else MlaKvCacheFormat.BFP8_TILE
 
 
 def read_sharded_rows(tensor_dir: Path, key: str, start: int, end: int) -> torch.Tensor:
@@ -38,13 +45,47 @@ def interleave_pe(pe: torch.Tensor) -> torch.Tensor:
     return torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(-1, d)
 
 
+def _compose_cache(tt_cache, mesh_device) -> torch.Tensor:
+    """An MlaKvCache is decoded to its logical [latent || RoPE] rows; a bare tensor is returned as stored."""
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+    if isinstance(tt_cache, MlaKvCache):
+        return tt_cache.unpack_host(ttnn.to_torch(tt_cache.storage, mesh_composer=composer))
+    return ttnn.to_torch(tt_cache, mesh_composer=composer)
+
+
+def copy_logical_kvpe_to_cache(cache: MlaKvCache, logical: torch.Tensor, mesh_device, mesh_mapper) -> None:
+    """Write host logical [latent || RoPE] rows (already in the cache's physical row order and shape) into
+    ``cache.storage``, encoding them in the cache's format. Scaled FP8 is encoded on device with the same
+    pack MLA writes with, since the packed mixed-format row cannot be built as a host fp8 tensor."""
+    if cache.format != MlaKvCacheFormat.SCALED_FP8:
+        host = ttnn.from_torch(
+            logical, dtype=cache.format.storage_dtype, layout=cache.format.storage_layout, mesh_mapper=mesh_mapper
+        )
+    else:
+        latent_dim = cache.geometry.latent_dim
+        fields = [
+            ttnn.from_torch(
+                part.contiguous(),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+            for part in (logical[..., :latent_dim], logical[..., latent_dim:])
+        ]
+        packed = cache.pack(*fields)
+        for field in fields:
+            ttnn.deallocate(field)
+        host = ttnn.from_device(packed)
+        ttnn.deallocate(packed)
+    ttnn.copy_host_to_device_tensor(host, cache.storage)
+
+
 def gather_cache_tp0(tt_cache, mesh_device) -> torch.Tensor:
     """Gather a caller-owned KV/indexer cache (SP-sharded on dim 2, TP-replicated) to host float32, keeping
     TP replica 0. Returns [num_slots, seq_len_cache, head_dim] (still block-cyclic rotated)."""
-    cache_full = ttnn.to_torch(
-        tt_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)[
+    cache_full = _compose_cache(tt_cache, mesh_device).to(torch.float32)[
         :, :1
     ]  # [num_slots, 1, seq_len_cache, head_dim]
     return cache_full[:, 0]
@@ -57,12 +98,7 @@ def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False):
     TP-sharded, every tp-coord holds a distinct slice, so flatten into linear chip order (sp_coord*tp +
     tp_coord) over sp*tp stripes. Mirrors sparse_mla/test_sparse_mla.py::_cache_natural."""
     sp, tp = mesh_device.shape[0], mesh_device.shape[1]
-    cache_sr = ttnn.to_torch(
-        tt_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(
-        torch.float32
-    )  # [num_slots, tp, seq_dim, head_dim]
+    cache_sr = _compose_cache(tt_cache, mesh_device).to(torch.float32)  # [num_slots, tp, seq_dim, head_dim]
     if not tp_shard_kv:
         return cache_sr[:, 0], sp
     local = cache_sr.shape[2] // sp  # per-chip rows = seq_len_cache / (sp*tp)

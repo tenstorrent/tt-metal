@@ -43,6 +43,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import SPARSE_KV_CACHE_FORMAT
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_5K_PATH,
     create_hf_model,
@@ -773,9 +774,10 @@ def test_glm_prefill_block(
         layer_num=1,
         # the config enables fusion only for chunked prefill, so this single-shot block opts in explicitly
         use_fused_rmsnorm=True,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
     kvpe_cache = init_mla_kv_cache(
-        cache_format=MlaKvCacheFormat.BF16_RM,
+        cache_format=SPARSE_KV_CACHE_FORMAT,
         hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len,

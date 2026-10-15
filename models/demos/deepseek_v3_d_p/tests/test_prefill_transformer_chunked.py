@@ -69,9 +69,12 @@ from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summar
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
+    SPARSE_KV_CACHE_FORMAT,
     cache_half_pccs,
+    copy_logical_kvpe_to_cache,
     gather_cache_natural,
     interleave_pe,
+    mla_kv_cache_format,
     read_sharded_rows,
     token_normalized,
     unrotate_cache_layer,
@@ -404,7 +407,7 @@ def _record_kv_cache_pcc(
     drifts under bf8_b). Under tp_shard_kv the gather flattens the TP shards into linear chip order and
     the un-rotation runs over sp*tp stripes."""
     logger.info("Device KV cache vs golden kv_post_transform:")
-    cache_full, stripes = gather_cache_natural(tt_kvpe_cache.storage, mesh_device, tp_shard_kv)  # [layers, S, kvpe]
+    cache_full, stripes = gather_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv)  # [layers, S, kvpe]
     p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
     cache_min_pcc = {}
     slots = list(range(num_layers)) if slot_layer_ids is None else list(range(len(slot_layer_ids)))
@@ -526,8 +529,6 @@ def _preload_kvpe_prefix_from_trace(
     kv_lora,
     mesh_device,
     sp_axis,
-    host_dtype,
-    host_layout,
     tp_shard_kv=False,
 ):
     """Preload the first `preload_isl` tokens of each layer's prior KV into the block-cyclic device KVPE
@@ -546,7 +547,7 @@ def _preload_kvpe_prefix_from_trace(
         f"Preloading {preload_isl}-token KV prefix into {num_layers} layer slot(s) "
         f"({real_len} real from trace {trace_dir}, {rand_len} random beyond the trace)"
     )
-    # Build the replicated host cache in bf16 (the sparse KVPE cache dtype), not float32: at num_layers=78
+    # Build the replicated host cache in bf16 (logical rows; copy_logical_kvpe_to_cache encodes them), not float32: at num_layers=78
     # x SEQ_CACHE_NOPCC the float32 tensor would be ~19 GB. Per-layer transients (randn/blockcyclic) are
     # freed each iteration, so the peak is this one bf16 tensor plus a single layer's working set.
     # TP-sharded: lay the host cache out as [layers, tp, seq/tp, D] and shard SP on dim 2 + TP on dim 1 --
@@ -573,13 +574,12 @@ def _preload_kvpe_prefix_from_trace(
         else:
             cache_host[i, 0] = bc
     cache_shard_dims = _cache_shard_dims(sp_axis, tp_axis, tp_shard_kv)
-    cache_host_tt = ttnn.from_torch(
+    copy_logical_kvpe_to_cache(
+        tt_kvpe_cache,
         cache_host,
-        dtype=host_dtype,
-        layout=host_layout,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=cache_shard_dims),
+        mesh_device,
+        ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=cache_shard_dims),
     )
-    ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache.storage)
     ttnn.synchronize_device(mesh_device)
     if tp_shard_kv:
         # copy_host_to_device_tensor propagates the HOST mapper's declaration, and the folded
@@ -748,6 +748,7 @@ def run_chunked_transformer_padded(
         is_chunked=True,
         slot_num=1,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
     ttnn.synchronize_device(mesh_device)
     gc.collect()
@@ -953,6 +954,7 @@ def run_chunked_transformer(
         is_chunked=True,
         slot_num=1,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
     ttnn.synchronize_device(mesh_device)
     gc.collect()
@@ -960,11 +962,11 @@ def run_chunked_transformer(
 
     # ONE shared KV cache holding all layers' slots [num_layers, 1, seq_local, 576]; layer i uses
     # cache_layer_idx=i. The ring scratch buffer is shared across layers inside TtPrefillTransformer.
-    # Sparse (DSA) requires an UNCOMPRESSED bf16/fp8_e4m3 ROW_MAJOR KVPE cache (sparse_sdpa reads it
-    # natively; mla.forward asserts) — NOT the init_kvpe_cache bfloat8_b/TILE default that dense
+    # Sparse (DSA) requires a ROW_MAJOR KVPE cache sparse_sdpa reads natively (scaled FP8 here; mla.forward
+    # asserts it matches the transformer's sparse_kv_cache_format) — NOT the bfloat8_b/TILE cache dense
     # ring_mla wants. Match the cache format to the path.
     has_indexer = resolve_has_indexer(config)
-    cache_format = MlaKvCacheFormat.BF16_RM if has_indexer else MlaKvCacheFormat.BFP8_TILE
+    cache_format = mla_kv_cache_format(has_indexer)
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=cache_format,
         hf_config=config,
@@ -1017,8 +1019,6 @@ def run_chunked_transformer(
             config.kv_lora_rank,
             mesh_device,
             sp_axis,
-            cache_format.storage_dtype,
-            cache_format.storage_layout,
             tp_shard_kv=tp_shard_kv,
         )
         if tt_index_kv_cache is not None:
@@ -1930,6 +1930,7 @@ def run_chunked_transformer_updated(
         # there is no norm / LM-head tail with a host read anymore.)
         kv_only_last_layer=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
 
     # Production overlap qualification asks this full-model harness to prove that the requested profile
@@ -2001,11 +2002,11 @@ def run_chunked_transformer_updated(
     gc.collect()
     profiler.end("tt_transformer_creation")
 
-    # Sparse (DSA: glm_5_3) requires an UNCOMPRESSED bf16/fp8_e4m3 ROW_MAJOR KVPE cache
-    # (sparse_sdpa reads it natively; mla.forward asserts) — NOT the init_kvpe_cache bfloat8_b/TILE
-    # default that dense ring_mla wants. Match the cache format to the path (dense variants keep the
+    # Sparse (DSA: glm_5_3) requires a ROW_MAJOR KVPE cache sparse_sdpa reads natively (scaled FP8 here;
+    # mla.forward asserts it matches the transformer's sparse_kv_cache_format) — NOT the bfloat8_b/TILE
+    # cache dense ring_mla wants. Match the cache format to the path (dense variants keep the
     # default). Same distinction as run_chunked_transformer.
-    cache_format = MlaKvCacheFormat.BF16_RM if resolve_has_indexer(config) else MlaKvCacheFormat.BFP8_TILE
+    cache_format = mla_kv_cache_format(resolve_has_indexer(config))
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=cache_format,
         hf_config=config,
@@ -2059,8 +2060,6 @@ def run_chunked_transformer_updated(
             config.kv_lora_rank,
             mesh_device,
             sp_axis,
-            cache_format.storage_dtype,
-            cache_format.storage_layout,
             tp_shard_kv=tp_shard_kv,
         )
         if tt_index_kv_cache is not None:
@@ -2335,7 +2334,7 @@ def run_chunked_transformer_updated(
             # flipped element in num_layers x seq x kvpe; torch.equal does not. The cache is the right
             # surface because it is what every later chunk attends to, so a write landing out of order
             # inside the replay shows up here even when the final hidden state looks fine.
-            cache_now, _ = gather_cache_natural(tt_kvpe_cache.storage, mesh_device)
+            cache_now, _ = gather_cache_natural(tt_kvpe_cache, mesh_device)
             if det_baseline is None:
                 det_baseline = cache_now
                 logger.info(f"[determinism] iter {it} baseline KV cache {tuple(cache_now.shape)}")
@@ -3131,7 +3130,7 @@ def run_chunked_transformer_padded_trace(
         assert 0 < v <= CHUNK and v % tile == 0, f"split {v} must be tile-aligned and <= {CHUNK}"
 
     has_indexer = resolve_has_indexer(config)
-    cache_format = MlaKvCacheFormat.BF16_RM if has_indexer else MlaKvCacheFormat.BFP8_TILE
+    cache_format = mla_kv_cache_format(has_indexer)
 
     # Real-token cache, pad tail off the end (mirror run_chunked_transformer_padded).
     seq_len_cache, pad_overruns = _padded_cache_len(splits, preload_isl)
@@ -3180,6 +3179,7 @@ def run_chunked_transformer_padded_trace(
         slot_num=1,
         kv_only_last_layer=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
     ttnn.synchronize_device(mesh_device)
     gc.collect()
@@ -3227,8 +3227,6 @@ def run_chunked_transformer_padded_trace(
                 config.kv_lora_rank,
                 mesh_device,
                 sp_axis,
-                cache_format.storage_dtype,
-                cache_format.storage_layout,
                 tp_shard_kv=has_indexer,
             )
         return cache

@@ -51,9 +51,14 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
-from models.demos.deepseek_v3_d_p.utils.test_utils import token_normalized
+from models.demos.deepseek_v3_d_p.utils.test_utils import (
+    SPARSE_KV_CACHE_FORMAT,
+    gather_cache_tp0,
+    mla_kv_cache_format,
+    token_normalized,
+)
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_1K_PATH,
     ReferenceCacheKey,
@@ -425,6 +430,7 @@ def run_model(
         tp_axis=tp_axis,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
     ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)
@@ -442,7 +448,7 @@ def run_model(
 
     # --- Create external KVPE cache ---
     has_indexer = resolve_has_indexer(config)
-    cache_format = MlaKvCacheFormat.BF16_RM if has_indexer else MlaKvCacheFormat.BFP8_TILE
+    cache_format = mla_kv_cache_format(has_indexer)
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=cache_format,
         hf_config=config,
@@ -630,12 +636,7 @@ def run_model(
 
         # Per-layer KVPE PCC comparison — read back from external cache
         if do_return_kv and ref_kvpe_list is not None:
-            tt_kvpe_all = ttnn.to_torch(
-                tt_kvpe_cache.storage,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-            ).to(torch.bfloat16)
-            # Shape: [num_layers, tp_factor, seq_total, head_dim] — take first TP replica
-            tt_kvpe_all_layers = tt_kvpe_all[:, :1, :, :]
+            tt_kvpe_all_layers = gather_cache_tp0(tt_kvpe_cache, mesh_device).to(torch.bfloat16).unsqueeze(1)
             if is_balanced:
                 tt_kvpe_all_layers = reverse_reorder_tensor_chunks(tt_kvpe_all_layers, chunk_order, seq_dim=2)
             kv_lora_rank = config.kv_lora_rank

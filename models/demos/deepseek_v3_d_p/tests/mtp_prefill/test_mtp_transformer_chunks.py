@@ -39,7 +39,8 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_i
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import SPARSE_KV_CACHE_FORMAT
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -484,6 +485,7 @@ def test_mtp_transformer_chunks(
         max_seq_len=TOTAL,
         slot_num=1,
         layer_num=num_layers + NUM_LEVELS,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
 
     transformer = TtPrefillTransformer(
@@ -507,6 +509,7 @@ def test_mtp_transformer_chunks(
         is_chunked=True,
         slot_num=1,
         mtp_predictor=predictor,
+        sparse_kv_cache_format=SPARSE_KV_CACHE_FORMAT,
     )
     gc.collect()
     ttnn.synchronize_device(mesh_device)
@@ -519,7 +522,7 @@ def test_mtp_transformer_chunks(
     # KV dedup: both caches are striped across SP*TP, exactly like the runner allocates them. The
     # sparse indexer always dedups, so an SP-only index cache has no TP axis for it to gather over.
     kvpe_cache = init_mla_kv_cache(
-        cache_format=MlaKvCacheFormat.BF16_RM,
+        cache_format=SPARSE_KV_CACHE_FORMAT,
         hf_config=config,
         mesh_device=mesh_device,
         seq_len=TOTAL,
