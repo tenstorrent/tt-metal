@@ -1540,6 +1540,9 @@ class GRPOTrainer:
         # Per-device row count after sharding: correct for DDP, FSDP and single device alike.
         B_local = int(x.shape()[0])
         logits = self.model(x, build_causal_mask(Tp, device=True))
+        temperature = self.config.temperature
+        if temperature > 0 and temperature != 1.0:
+            logits = logits * (1.0 / temperature)
         tgt = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._dp_mapper)
         nlog = ttml.ops.loss.cross_entropy_loss(logits, tgt, ttml.ops.ReduceType.NONE)
         return ttml.ops.reshape.reshape(nlog, [B_local, Tp])
