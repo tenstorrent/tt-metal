@@ -125,6 +125,21 @@ void apply_vc0_trim_fast_path_link_symmetry(
 void apply_vc0_trim_fast_path_peer_info(
     Vc0TrimFastPathInfo& local_info, const Vc0TrimFastPathInfo& peer_info, bool allow_terminal_speedy_rx);
 
+// One router's VC0 fast-path choices, resolved against the router on the other end of its link.
+// Deadlock avoidance / first-level ack stay on unless info.terminal_or_source_only.
+struct Vc0LinkTrimResolution {
+    Vc0TrimFastPathInfo info;
+    bool speedy = false;
+};
+
+// Resolve a router's own row against its link peer's own row (nullopt when the peer is unresolved).
+Vc0LinkTrimResolution resolve_vc0_link_trim(
+    const Vc0TrimFastPathInfo& local_row,
+    std::optional<Vc0TrimFastPathInfo> peer_row,
+    std::size_t actual_sender_channels_vc0,
+    bool base_deadlock_avoidance,
+    bool allow_terminal_speedy_rx);
+
 // Keep the existing packet-count amortization for normal-sized packets, but cap
 // the number of packets batched so that a batch does not exceed the same byte
 // budget when a trimmed speedy path carries larger packets. Missing packet-size

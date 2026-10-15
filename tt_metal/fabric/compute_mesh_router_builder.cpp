@@ -503,32 +503,21 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     };
 
     if (local_vc0_fast_path_info.has_value()) {
-        auto peer_vc0_fast_path_info = resolve_peer_vc0_fast_path_info();
+        const auto peer_vc0_fast_path_info = resolve_peer_vc0_fast_path_info();
         const auto row_only_info = *local_vc0_fast_path_info;
-        apply_vc0_trim_fast_path_link_symmetry(*local_vc0_fast_path_info, peer_vc0_fast_path_info);
         const bool base_deadlock_avoidance =
             is_inter_mesh ? false
                           : fabric_context.need_deadlock_avoidance_support(control_plane, local_node, eth_direction);
+        const auto resolution = resolve_vc0_link_trim(
+            row_only_info,
+            peer_vc0_fast_path_info,
+            actual_sender_channels_per_vc[0],
+            base_deadlock_avoidance,
+            fabric_context.is_2D_routing_enabled() && local_node.mesh_id == location.remote_node.mesh_id &&
+                !fabric_tensix_extension_udm_mode && !location.is_dispatch_link);
+        *local_vc0_fast_path_info = resolution.info;
 
-        if (peer_vc0_fast_path_info.has_value()) {
-            // Pair against what the peer will compile to, which is its row seen through the same
-            // rule with our row as its peer, not against its row alone.
-            apply_vc0_trim_fast_path_link_symmetry(*peer_vc0_fast_path_info, row_only_info);
-            const bool local_can_use_speedy_vc0 =
-                vc0_speedy_path_enabled(
-                    actual_sender_channels_per_vc[0], base_deadlock_avoidance, *local_vc0_fast_path_info) ||
-                local_vc0_fast_path_info->terminal_only_nonforwarding;
-            if (local_can_use_speedy_vc0) {
-                apply_vc0_trim_fast_path_peer_info(
-                    *local_vc0_fast_path_info,
-                    *peer_vc0_fast_path_info,
-                    fabric_context.is_2D_routing_enabled() && local_node.mesh_id == location.remote_node.mesh_id &&
-                        !fabric_tensix_extension_udm_mode && !location.is_dispatch_link);
-            }
-        }
-
-        const bool speedy = vc0_speedy_path_enabled(
-            actual_sender_channels_per_vc[0], base_deadlock_avoidance, *local_vc0_fast_path_info);
+        const bool speedy = resolution.speedy;
         const bool changed_by_peer =
             local_vc0_fast_path_info->terminal_or_source_only != row_only_info.terminal_or_source_only ||
             local_vc0_fast_path_info->worker_only_nonforwarding != row_only_info.worker_only_nonforwarding;

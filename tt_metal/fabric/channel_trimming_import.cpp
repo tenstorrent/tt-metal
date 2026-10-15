@@ -200,6 +200,27 @@ void apply_vc0_trim_fast_path_peer_info(
         allow_terminal_speedy_rx && local_info.terminal_only_nonforwarding && peer_info.worker_only_nonforwarding;
 }
 
+Vc0LinkTrimResolution resolve_vc0_link_trim(
+    const Vc0TrimFastPathInfo& local_row,
+    std::optional<Vc0TrimFastPathInfo> peer_row,
+    std::size_t actual_sender_channels_vc0,
+    bool base_deadlock_avoidance,
+    bool allow_terminal_speedy_rx) {
+    Vc0LinkTrimResolution resolution{.info = local_row};
+    apply_vc0_trim_fast_path_link_symmetry(resolution.info, peer_row);
+    if (peer_row.has_value()) {
+        apply_vc0_trim_fast_path_link_symmetry(*peer_row, local_row);
+        const bool local_can_use_speedy_vc0 =
+            vc0_speedy_path_enabled(actual_sender_channels_vc0, base_deadlock_avoidance, resolution.info) ||
+            resolution.info.terminal_only_nonforwarding;
+        if (local_can_use_speedy_vc0) {
+            apply_vc0_trim_fast_path_peer_info(resolution.info, *peer_row, allow_terminal_speedy_rx);
+        }
+    }
+    resolution.speedy = vc0_speedy_path_enabled(actual_sender_channels_vc0, base_deadlock_avoidance, resolution.info);
+    return resolution;
+}
+
 uint32_t limit_credit_amortization_frequency_by_packet_size(
     uint32_t default_frequency,
     uint32_t reference_packet_size_bytes,
