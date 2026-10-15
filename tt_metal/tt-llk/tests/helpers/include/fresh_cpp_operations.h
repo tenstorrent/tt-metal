@@ -618,13 +618,12 @@ __attribute__((noinline)) void calculate_log_fresh_cpp()
         v_endif;
         // The polynomial reduction is finite-only.  A biased exponent of 255
         // classifies either-sign infinities and NaNs without inspecting their
-        // sign or payload; restore the original value unchanged.
-        v_if (biased_exp >= 255)
+        // sign or payload; those lanes keep their input in Dest.
+        v_if (biased_exp < 255)
         {
-            result = in;
+            sfpi::dst_reg[0] = result;
         }
         v_endif;
-        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
