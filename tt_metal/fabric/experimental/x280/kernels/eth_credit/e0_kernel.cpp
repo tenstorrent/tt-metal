@@ -337,7 +337,7 @@ private:
             *progressed = 1u;
             return true;
         }
-        if (!bounded_writes_sent(budget())) {
+        if (!metal_wait::writes_sent(noc_index, budget())) {
             fail(EC_ERROR_STALL_TIMEOUT, EC_SITE_E0_R3_SOURCE);
             return false;
         }
@@ -401,7 +401,7 @@ private:
                 return false;
             }
         }
-        if (!bounded_write_barrier(budget())) {
+        if (!metal_wait::write_barrier(noc_index, budget())) {
             fail(EC_ERROR_STALL_TIMEOUT, EC_SITE_DRAIN);
             return false;
         }

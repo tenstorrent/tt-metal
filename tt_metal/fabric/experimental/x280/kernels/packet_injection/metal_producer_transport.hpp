@@ -18,14 +18,15 @@
 
 #if defined(__riscv)
 #include "api/dataflow/dataflow_api.h"
+#include "../shared/metal_bounded_wait.hpp"
 #endif
 
 namespace packet_injection {
 
 /**
  * Producer transport operations over the tt-metal dataflow API, all static.
- * A host build has no device to reach: every write and barrier is a no-op and
- * read_cpu() reports failure.
+ * A host build has no device to reach: every write is a no-op, every barrier
+ * succeeds and read_cpu() reports failure.
  */
 struct MetalProducerTransport {
     /** Drops cached L1 lines so a peer's NoC write to this core is observed. */
@@ -35,12 +36,18 @@ struct MetalProducerTransport {
 #endif
     }
 
-    /** Blocks until every write this core issued on `noc_index` has completed. */
-    static inline void barrier(uint32_t noc_index) {
+    /**
+     * Waits until every write this core issued on `noc_index` has completed, or
+     * `budget` ticks of the core's wall clock (the clock read_timer() reads)
+     * pass. Returns false on expiry, with the writes still outstanding.
+     */
+    static inline bool barrier(uint32_t noc_index, uint64_t budget) {
 #if defined(__riscv)
-        noc_async_write_barrier(noc_index);
+        return metal_wait::write_barrier(noc_index, budget);
 #else
         (void)noc_index;
+        (void)budget;
+        return true;
 #endif
     }
 

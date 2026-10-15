@@ -1924,6 +1924,9 @@ struct MockTensixTransport {
     static inline std::function<void()> on_poll_cache = nullptr;
     static inline std::vector<std::pair<uintptr_t, std::vector<uint8_t>>> pending_sources;
     static inline uint32_t fail_timer_after_publication = UINT32_MAX;
+    // The barrier call, counted from 1, that expires instead of completing.
+    static inline uint32_t expire_barrier = UINT32_MAX;
+    static inline uint64_t last_barrier_budget = 0;
 
     static void reset() {
         produced_dst = 0;
@@ -1944,6 +1947,8 @@ struct MockTensixTransport {
         on_poll_cache = nullptr;
         pending_sources.clear();
         fail_timer_after_publication = UINT32_MAX;
+        expire_barrier = UINT32_MAX;
+        last_barrier_budget = 0;
     }
 
     static void invalidate_cache() {
@@ -1952,14 +1957,19 @@ struct MockTensixTransport {
         }
     }
 
-    static void barrier(uint32_t) {
+    static bool barrier(uint32_t, uint64_t budget) {
         barrier_count++;
+        last_barrier_budget = budget;
+        if (barrier_count == expire_barrier) {
+            return false;
+        }
         for (const auto& source : pending_sources) {
             const auto* bytes = reinterpret_cast<const uint8_t*>(source.first);
             EXPECT_EQ(std::vector<uint8_t>(bytes, bytes + source.second.size()), source.second)
                 << "NoC source changed before its completion barrier at " << source.first;
         }
         pending_sources.clear();
+        return true;
     }
 
     // The producer names its own L1 in device space; a host run holds that one
@@ -2706,6 +2716,24 @@ TEST(PacketInjectionProducerStateModel, RecordsAnUnannouncableFailureWithoutPubl
         EXPECT_NE(MockTensixTransport::last_published_ready, (uint32_t)PI_READY_FAILED);
         EXPECT_TRUE(MockTensixTransport::header_dsts.empty());
     }
+}
+
+// A write wait, bounded by the phase timeout, that expires fails the run as a
+// recorded TIMEOUT; the failure is announced once a later wait drains.
+TEST(PacketInjectionProducerStateModel, AnExpiredWriteWaitIsARecordedTimeout) {
+    ProducerTestFixture f(PI_MODE_THROUGHPUT, 0, /*S=*/2, /*B=*/1, /*W=*/0, /*N=*/4);
+    MockTensixTransport::on_poll_cache = [&]() { *f.consumed_mirror() = MockTensixTransport::last_published_produced; };
+    MockTensixTransport::expire_barrier = 2;
+    packet_injection::Producer<PI_MODE_THROUGHPUT, 0, MockTensixTransport, MockPacketSyncTransport> producer(
+        f.args, f.l1_base);
+    EXPECT_EQ(producer.run(), PI_ERROR_TIMEOUT);
+
+    const pi_producer_result_t* r = f.result();
+    EXPECT_EQ(r->failure.code, (uint32_t)PI_ERROR_TIMEOUT);
+    EXPECT_EQ(r->failure.phase, (uint32_t)PI_PHASE_MEASURE);
+    EXPECT_EQ(r->phase, (uint32_t)PI_PHASE_FAILED);
+    EXPECT_EQ(MockTensixTransport::last_barrier_budget, f.args.timeout_ticks);
+    EXPECT_EQ(MockTensixTransport::last_published_ready, (uint32_t)PI_READY_FAILED);
 }
 
 TEST(PacketInjectionProducerStateModel, AnnouncesAControlFailureOnTheReadySlot) {

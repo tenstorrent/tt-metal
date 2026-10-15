@@ -79,8 +79,9 @@ struct PacketWorkerSyncConfig {
  * - `kActor`: the pi_actor_t recorded in a failure this producer publishes.
  * - `prepare_header(header, dst_chip, dst_mesh)`: readies the staged 96-byte
  *   header before each request is issued.
- * - `invalidate_cache()`, `barrier(noc)`, `issue_header_write(...)`,
- *   `issue_u32_write(...)`: L1 visibility and NoC issue/drain.
+ * - `invalidate_cache()`, `barrier(noc, budget)`, `issue_header_write(...)`,
+ *   `issue_u32_write(...)`: L1 visibility and NoC issue/drain; `barrier`
+ *   returns false once `budget` ticks of the `read_timer` clock pass.
  * - `read_timer(max_attempts, ticks)`: the native wall counter that
  *   `timeout_ticks` and the throughput interval are measured in; returns zero
  *   when the read cannot be made.
@@ -168,26 +169,32 @@ public:
         }
 
         publish_final_results();
-        publish_ready(PI_READY_DONE);
+        if (!publish_ready(PI_READY_DONE)) {
+            record_failure(PI_ERROR_TIMEOUT, PI_PHASE_DRAIN);
+            return PI_ERROR_TIMEOUT;
+        }
         return PI_ERROR_NONE;
     }
 
-    void publish_pending() {
+    pi_error_t publish_pending() {
         if (pending_ == 0u) {
-            return;
+            return PI_ERROR_NONE;
         }
         // Orders the counter behind the batch's slot writes, so the consumer
         // cannot see produced == r_ before the data, and drains the previous
         // publication before its source word is rewritten below. That holds
         // only if the L2CPU applies accepted writes to LIM in arrival order
         // (PI_ASSUMED_INBOUND).
-        Transport::barrier(Transport::kNoc);
+        if (!drain_writes()) {
+            return PI_ERROR_TIMEOUT;
+        }
         *stable_produced_source_ = r_;
         Transport::issue_u32_write(
             worker_base_ + PI_L1_PRODUCED_SRC_OFFSET, args_.peer.x, args_.peer.y, produced_dst_, Transport::kNoc);
         p_ = r_;
         pending_ = 0u;
         counter_writes_ += 1;
+        return PI_ERROR_NONE;
     }
 
     pi_error_t observe_credit(uint32_t& next, uint32_t& jump) {
@@ -250,11 +257,14 @@ public:
             return PI_ERROR_COUNTER_DISTANCE;
         }
 
-        publish_pending();
+        pi_error_t err = publish_pending();
+        if (err != PI_ERROR_NONE) {
+            return err;
+        }
 
         uint32_t next = 0;
         uint32_t jump = 0;
-        pi_error_t err = observe_credit(next, jump);
+        err = observe_credit(next, jump);
         if (err != PI_ERROR_NONE) {
             return err;
         }
@@ -394,7 +404,10 @@ public:
             issued_ += 1u;
 
             if (pending_ == B_ || pi_counter_distance(r_, c_seen_) == S_ || issued_ == limit) {
-                publish_pending();
+                err = publish_pending();
+                if (err != PI_ERROR_NONE) {
+                    return err;
+                }
             }
 
             err = amortized_safety_check();
@@ -403,8 +416,13 @@ public:
             }
         }
 
-        publish_pending();
-        Transport::barrier(Transport::kNoc);
+        err = publish_pending();
+        if (err != PI_ERROR_NONE) {
+            return err;
+        }
+        if (!drain_writes()) {
+            return PI_ERROR_TIMEOUT;
+        }
 
         while (c_seen_ != r_) {
             uint32_t next = 0;
@@ -571,17 +589,28 @@ private:
         result_->failure = pi_failure_t{0, 0, 0, 0};
     }
 
-    void publish_ready(pi_ready_t state) {
+    /**
+     * Every wait for this producer's own NoC writes, bounded by the phase
+     * timeout so a destination that never acknowledges fails the run rather
+     * than hanging the producer. False on expiry.
+     */
+    bool drain_writes() { return Transport::barrier(Transport::kNoc, args_.timeout_ticks); }
+
+    // False when a wait expired: the word may not have been announced, and a
+    // source still in flight is never rewritten.
+    bool publish_ready(pi_ready_t state) {
         // Zero means derive_peer_spans() has not run, so there is no slot to
         // announce on; a real destination is at least the arena base plus 192.
         if (ready_dst_ == 0u) {
-            return;
+            return true;
         }
-        Transport::barrier(Transport::kNoc);
+        if (!drain_writes()) {
+            return false;
+        }
         *stable_ready_source_ = (uint32_t)state;
         Transport::issue_u32_write(
             worker_base_ + PI_L1_READY_SRC_OFFSET, args_.peer.x, args_.peer.y, ready_dst_, Transport::kNoc);
-        Transport::barrier(Transport::kNoc);
+        return drain_writes();
     }
 
     // Reads the host-owned RUN/STOP word and rejects every other value.
@@ -659,10 +688,14 @@ private:
         publish_final_results(PI_PHASE_FAILED);
     }
 
+    // A write wait that expires here leaves the failure recorded in L1 only:
+    // announcing it would rewrite a source still in flight.
     void fail_and_publish(pi_error_t err, pi_phase_t phase) {
-        Transport::barrier(Transport::kNoc);
+        const bool drained = drain_writes();
         record_failure(err, phase);
-        publish_ready(PI_READY_FAILED);
+        if (drained) {
+            (void)publish_ready(PI_READY_FAILED);
+        }
     }
 
     const pi_producer_args_t& args_;

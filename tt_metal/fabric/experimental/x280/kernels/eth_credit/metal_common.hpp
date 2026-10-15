@@ -19,6 +19,7 @@
 #include "../../include/x280_address_map.h"
 #include "../shared/core_sync_barrier.hpp"
 #include "../shared/core_sync_transport_metal.hpp"
+#include "../shared/metal_bounded_wait.hpp"
 
 #if defined(COMPILE_FOR_ERISC)
 #include "internal/ethernet/tt_eth_api.h"
@@ -57,14 +58,8 @@ inline constexpr uint32_t kUnit = EC_UNIT_BYTES;
 inline constexpr ec_bounds_t kBounds{
     MEM_AERISC_MAP_END + MEM_ERISC_KERNEL_CONFIG_SIZE, MEM_ERISC_MAX_SIZE, X280_LIM_BASE, X280_LIM_END};
 
-/** This core's stall-budget and timestamp clock, in its own raw ticks. */
-inline uint64_t now() {
-#if defined(COMPILE_FOR_ERISC)
-    return eth_read_wall_clock();
-#else
-    return get_timestamp();
-#endif
-}
+/* This core's stall-budget and timestamp clock, in its own raw ticks. */
+using metal_wait::now;
 
 /**
  * Reads an E0 or E1 argument record from its runtime-argument words: word i
@@ -86,42 +81,6 @@ inline uint32_t local_word(uint32_t addr) {
 }
 
 inline void set_local_word(uint32_t addr, uint32_t v) { *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr) = v; }
-
-/**
- * Waits until every issued non-posted write on this core's NoC is
- * acknowledged, or `budget` ticks pass. `*waited`, when given, is set to
- * whether the first poll found writes still outstanding.
- * @return false on expiry.
- */
-inline bool bounded_write_barrier(uint64_t budget, bool* waited = nullptr) {
-    const uint64_t t0 = now();
-    bool outstanding = false;
-    while (!ncrisc_noc_nonposted_writes_flushed(noc_index)) {
-        outstanding = true;
-        if (now() - t0 >= budget) {
-            return false;
-        }
-    }
-    if (waited != nullptr) {
-        *waited = outstanding;
-    }
-    invalidate_l1_cache();
-    return true;
-}
-
-/**
- * Waits until every issued write on this core's NoC has read its source, so
- * the source unit may be overwritten, or `budget` ticks pass.
- */
-inline bool bounded_writes_sent(uint64_t budget) {
-    const uint64_t t0 = now();
-    while (!ncrisc_noc_nonposted_writes_sent(noc_index)) {
-        if (now() - t0 >= budget) {
-            return false;
-        }
-    }
-    return true;
-}
 
 /** A kernel's result block in its own L1, written only by that kernel. */
 class Result {

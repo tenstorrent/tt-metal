@@ -228,7 +228,7 @@ private:
         if constexpr (!EC_E1_SINK_LOCAL) {
             const uint64_t t0 = now();
             bool waited = false;
-            if (!bounded_write_barrier(budget(), &waited)) {
+            if (!metal_wait::write_barrier(noc_index, budget(), &waited)) {
                 return timeout(p, EC_SITE_E1_NOC_BARRIER);
             }
             if (waited) {
@@ -308,7 +308,7 @@ private:
             }
         }
         uint64_t ignored = 0u;
-        if (!bounded_write_barrier(budget()) || !wait_txq(&ignored)) {
+        if (!metal_wait::write_barrier(noc_index, budget()) || !wait_txq(&ignored)) {
             fail(EC_ERROR_STALL_TIMEOUT, EC_SITE_DRAIN);
             return false;
         }

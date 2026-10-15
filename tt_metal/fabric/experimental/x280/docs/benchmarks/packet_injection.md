@@ -548,6 +548,12 @@ dump alone: it is the only launch-side rejection that yields `N < P`, so a singl
 slice among written ones narrows to it or to a producer that died mid-run, while the other
 three always yield `N == P`.
 
+Every wait a producer makes for its own NoC writes to be acknowledged is bounded by
+`timeout_ticks` on the clock the deadline uses (`kernels/shared/metal_bounded_wait.hpp`, the wait
+eth_credit's ERISC kernels use). A destination that never acknowledges fails the producer with
+`PI_ERROR_TIMEOUT` in the phase it was in, recorded in L1; the failure is announced on the ready
+slot only if a later wait drains, since a source still in flight is never rewritten.
+
 A bad `worker_index` and an out-of-range peer coordinate do carry identity but deliberately
 publish no `READY_FAILED`, because the ready slot they would announce on belongs to another
 worker. These surface as an X280 timeout, or as `PI_ERROR_STOPPED` if a host STOP arrives
