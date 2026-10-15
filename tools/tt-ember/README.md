@@ -28,8 +28,9 @@ tt-ember/
   parser.py            Analysis engine — metrics, CSV, figures
   run_all.py           Sweep runner — calls auto.py for multiple configurations
   compare_runs.py      Cross-run comparison — overlays metrics across runs
-  compare_runs2.py     Named use-case comparison — grouped bar charts per grid
+  compare_cases.py     Named use-case comparison — grouped bar charts per grid
   run_power_cases.py   POWER_CASE sweep runner — reset + auto.py per case + compare
+  common.py            Helpers shared by the scripts above (reset, run bookkeeping)
   docs/
     device-side-instrumentation.md   Per-kernel (reader/compute/writer) analysis
 ```
@@ -43,6 +44,20 @@ Activate a Python environment that has tt-metal's Python dependencies (`tt_umd`,
 ```bash
 source /path/to/tt-metal-venv/bin/activate
 ```
+
+### Measurement mode
+
+`LONG_MATMUL_MODE` selects how runs are measured and analysed, for `long_matmul` and for these
+scripts alike: `updated` (the default) or `legacy`, which reproduces how the published tt-ember
+results were measured. Every script inherits it from the environment, so to recreate those
+results run `export LONG_MATMUL_MODE=legacy` first. `parser.py` also takes `--mode`. See
+`long_matmul`'s README for what each mode changes in the workload; in the analysis, `legacy`
+keeps the idle-pause window widened by the trim, floors dynamic current at 0, and uses the
+trimmed window for pJ/FLOP.
+
+Measure power and profile kernels in separate runs: with `TT_METAL_DEVICE_PROFILER=1` the
+kernels read the timer in their inner loops and the profiler is read back during the first idle
+pause, which is the one the base current is measured in. Unset it before a power sweep.
 
 ### Built binaries
 
@@ -92,7 +107,7 @@ Manages the full measurement lifecycle: starts the telemetry binary as a backgro
 
 ### `parser.py` — Analysis Engine
 
-Can be run standalone against a previously captured telemetry log. Parses raw voltage, current, and power samples, bins them into time slots, computes per-interval metrics, writes a 30-column CSV, and produces 15 matplotlib figures (with `--program-log`; without it, only `telemetry_overview.png`).
+Can be run standalone against a previously captured telemetry log. Parses raw voltage, current, and power samples, bins them into time slots, computes per-interval metrics, writes a 29-column CSV, and produces 13 matplotlib figures (with `--program-log`; without it, only `telemetry_overview.png`). It exits with code 10 when the outputs are written but a run is unusable (a grid with no telemetry samples, or no idle pause to measure the base current in), and refuses telemetry from several devices unless `--device-id` says which one to use.
 
 ```bash
 python3 parser.py \
@@ -107,7 +122,7 @@ python3 parser.py \
 
 ### `run_all.py` — Sweep Orchestrator
 
-Runs a predefined sequence of measurements by invoking `auto.py` once per configuration. Before each run it issues a hardware reset via `tt-smi -r` and waits for the device to re-initialize, ensuring a clean thermal and electrical baseline. Stops immediately if any reset or run fails. Runs that already have a `program_intervals.csv` are skipped, so an interrupted sweep resumes; when a group is complete it runs `compare_runs.py` into `comparison_prefill/` and `comparison_fixed_tpc/`.
+Runs a predefined sequence of measurements by invoking `auto.py` once per configuration. Before each run it issues a hardware reset via `tt-smi -r` and waits for the device to re-initialize, ensuring a clean thermal and electrical baseline. Stops immediately if any reset or run fails. Complete runs (see `run_complete.json` under `run_power_cases.py` below) are skipped, so an interrupted sweep resumes; `--force` re-runs them. Whenever a group is complete it (re-)runs `compare_runs.py` into `comparison_prefill/` and `comparison_fixed_tpc/`; the overcompute charts are made only for the fixed-per-core group, where their reference applies.
 
 ```bash
 python3 run_all.py \
@@ -131,13 +146,13 @@ python3 compare_runs.py --out-root ./out --output-dir ./out/comparison
 python3 compare_runs.py --out-root ./out --filter prefill_ fixed_tpc_ --output-dir ./out/comparison
 ```
 
-### `compare_runs2.py` — Named Use-Case Comparison
+### `compare_cases.py` — Named Use-Case Comparison
 
 Compares a small, explicitly-named set of runs (e.g. the `POWER_CASE` power-experiment
 scenarios — see [`long_matmul`'s README](../../tt_metal/programming_examples/long_matmul/README.md#power-experiment-knobs))
 against each other, grouped by grid (core combination), as grouped bar charts. Unlike
 `compare_runs.py` — which auto-discovers and overlays *all* runs under a root as line plots —
-`compare_runs2.py` takes an explicit, ordered list of run subdirectories from a small text
+`compare_cases.py` takes an explicit, ordered list of run subdirectories from a small text
 file, and renders one bar per use case per grid so cases are easy to read side by side.
 
 Each named run must be a subdirectory of `--input-dir` containing a `program_intervals.csv`
@@ -154,7 +169,7 @@ Case 4: writer_amp : W+R+C active
 ```
 
 ```bash
-python3 compare_runs2.py -i ./out_new -c ./cases.txt
+python3 compare_cases.py -i ./out_new -c ./cases.txt
 ```
 
 Outputs, written to `<input-dir>/compare_runs_out/`:
@@ -177,9 +192,9 @@ to stderr — rather than failing the whole comparison.
 Automates the full `POWER_CASE` power-experiment workflow. For each requested `POWER_CASE`
 value it resets the hardware (`tt-smi -r`), runs `auto.py` with `POWER_CASE` exported into the
 application's environment and `--subdir` set to that case's canonical name, and — once every
-case has finished — writes a `compare_runs2.py` cases file and calls it to produce the
+case has finished — writes a `compare_cases.py` cases file and calls it to produce the
 comparison charts. This is the single-command equivalent of running the manual
-reset/export/`auto.py` sequence once per case and then invoking `compare_runs2.py` by hand.
+reset/export/`auto.py` sequence once per case and then invoking `compare_cases.py` by hand.
 
 ```bash
 python3 run_power_cases.py \
@@ -194,26 +209,26 @@ python3 run_power_cases.py \
 ```
 
 Notes:
-- `--app-args` must be last (same `argparse.REMAINDER` caveat as `auto.py`/`run_all.py`).
+- `--app-args` must be last, as for `auto.py`; options written after it are rejected.
 - Runs every `--ops` value (default: all seven) times every `--power-cases` value (default
   `5 1 2 4`: case 1, everything active, and the three cases that each idle one kernel against
   it), so 28 runs by default; pass `--ops matmul` for a single sweep. Runs go into
   `<output-root>/<op>/<case>/`. Pass `--power-cases 0 1 2 3 4 5` to also include case 0 (write
   amplification off) and case 3 (reader **and** compute idle).
 - For each op it writes `<output-root>/<op>/power_cases.txt` (name set by `--cases-file-name`)
-  and runs `compare_runs2.py -i <output-root>/<op>`, plus `energy_by_engine_stacked.png`,
+  and runs `compare_cases.py -i <output-root>/<op>`, plus `energy_by_engine_stacked.png`,
   `energy_per_flop_by_engine.png` and `energy_per_flop_per_core.png`. With more than one op it
   also writes `<output-root>/power_cases_cross_op.txt` and cross-op charts in
   `<output-root>/compare_runs_out/`. The cross-op pJ/FLOP charts divide every op by matmul's
   `2*M*N*K`, so they compare energy at equal data movement. With `fixed_blocks_per_core` set the
   pJ/FLOP charts are skipped, since the FLOP count then depends on the grid.
-- A run is skipped if `<output-root>/<op>/<case>/program_intervals.csv` already exists; pass
-  `--force` to re-run it anyway.
-- Pass `--dry-run` to print every `tt-smi -r` / `auto.py` / `compare_runs2.py` command that
+- A run is skipped once it is complete: `auto.py` writes `run_complete.json` into the run
+  directory only after the parser succeeded, recording the app arguments, the workload
+  environment variables and the telemetry settings. A run made with different settings stops
+  the sweep instead of being mixed in; use another `--output-root`, or `--force` to re-run.
+- Pass `--dry-run` to print every `tt-smi -r` / `auto.py` / `compare_cases.py` command that
   would run, without touching the hardware or writing anything — useful for checking the plan
   before committing to a multi-hour sweep.
-- To recreate the published results, `export LONG_MATMUL_MODE=legacy` first; every run inherits
-  it. The default (`updated`) changes how cases 1–5 load the writer; see `long_matmul`'s README.
 
 See [`long_matmul`'s README](../../tt_metal/programming_examples/long_matmul/README.md#power_case--the-six-canonical-scenarios)
 for what each `POWER_CASE` actually disables or amplifies in the kernels.
@@ -227,15 +242,14 @@ output_root/subdir/
   telemetry.txt                    raw telemetry log
   summary.txt                      application stdout
   launcher.log                     auto.py orchestration log
-  program_intervals.csv            per-interval metrics (30 columns)
+  run_complete.json                written last, once the run succeeded; its settings
+  program_intervals.csv            per-interval metrics (29 columns)
   Figures/
     telemetry_overview.png         3-panel time series: VCORE / TDC / TDP
     duration_vs_avg_current.png
     duration_vs_peak_current.png
     duration_vs_dynamic_avg_current.png
     duration_vs_dynamic_peak_current.png
-    execution_time_vs_dynamic_avg_current.png
-    execution_time_vs_dynamic_peak_current.png
     charge_avg_current.png
     charge_peak_current.png
     dynamic_charge_avg_current.png
@@ -247,7 +261,7 @@ output_root/subdir/
   profile_log_device.csv           (profiler runs only) copy of the device profiler CSV
   kernel_intervals.csv             (profiler runs only)
   kernel_utilization.csv           (profiler runs only)
-  FiguresNew/                      (profiler runs only) see docs/device-side-instrumentation.md
+  kernel_figures/                  (profiler runs only) see docs/device-side-instrumentation.md
 ```
 
 ## The Benchmark Application
