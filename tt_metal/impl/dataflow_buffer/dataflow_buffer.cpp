@@ -1524,6 +1524,9 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
     const std::optional<uint32_t> serialized_size_before =
         configs_finalized ? std::optional<uint32_t>(serialized_size()) : std::nullopt;
 
+    if (es != config.entry_size || ne != config.num_entries) {
+        ++config_generation_;
+    }
     config.entry_size = es;
     config.num_entries = ne;
 
@@ -2651,6 +2654,9 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
         }
         // Fill alloc_addr per core in each group.  All cores of a DFB get the same alloc_addr so the L1 buffer is at a
         // uniform absolute address on every physical core.
+        if (dfb->core_lookup_.empty() || dfb->uniform_alloc_addr() != alloc_addr) {
+            ++dfb->config_generation_;
+        }
         dfb->core_lookup_.clear();
         for (size_t gi = 0; gi < dfb->groups.size(); gi++) {
             for (auto& [core, addr] : dfb->groups[gi].l1_by_core) {
@@ -2663,6 +2669,9 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
         // so they share the same L1 region without an additional allocator call.
         for (uint32_t sec_id : dfb->alias_secondary_ids) {
             auto& sec = this->dataflow_buffers_[sec_id];
+            if (sec->core_lookup_.empty() || sec->uniform_alloc_addr() != alloc_addr) {
+                ++sec->config_generation_;
+            }
             sec->core_lookup_.clear();
             for (size_t gi = 0; gi < sec->groups.size(); gi++) {
                 for (auto& [core, addr] : sec->groups[gi].l1_by_core) {

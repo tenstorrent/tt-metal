@@ -476,6 +476,14 @@ unit_tests_api:
     config: 2x3_DISPATCH
     back2back: true
 
+  - filter: "UnitMeshAnyDispatchFixture.DataflowBufferSizeOverrideReenqueue"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "UnitMeshAnyDispatchFixture.BorrowedMemoryDMDM1Sx1S_UpdateAddress"
+    config: 2x3_DISPATCH
+    back2back: true
+
 unit_tests_data_movement:
   - filter: "*QuasarL1DCacheOps*"
     config: 2x3_DISPATCH
