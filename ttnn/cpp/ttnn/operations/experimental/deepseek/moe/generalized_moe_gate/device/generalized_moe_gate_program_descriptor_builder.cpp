@@ -91,6 +91,12 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     set_cb_page_size_for_tile(out_cb_desc, output_tensor);
     set_cb_page_size_for_tile(in_indices_cb_desc, input_indices_tensor);
     set_cb_page_size_for_tile(out_indices_cb_desc, output_indices_tensor);
+    // The Blackhole single-block ungrouped gate leaves its results in row 0 of face 0; one-face output CBs keep the
+    // pack off the three padding faces.
+    if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE && !operation_attrs.grouped && num_blocks == 1) {
+        out_cb_desc.format_descriptors[0].tile = tt::tt_metal::TileDescriptor(16, 16, false);
+        out_indices_cb_desc.format_descriptors[0].tile = tt::tt_metal::TileDescriptor(16, 16, false);
+    }
 
     // Build an intermediate (non-tensor) L1 CB sized for `num_tiles` tiles of fmt_tensor's format.
     auto make_run_cb = [&](uint8_t cb_id, const ttnn::Tensor& fmt_tensor, uint32_t num_tiles) {
