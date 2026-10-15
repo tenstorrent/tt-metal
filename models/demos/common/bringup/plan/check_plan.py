@@ -53,6 +53,8 @@ def main(argv=None):
         print(f"  {r['group']:60s} {r['gb']:8.2f} GB")
     if "total_gb" in res:
         print(f"  {'TOTAL per chip':60s} {res['total_gb']:8.2f} GB of {res['budget_gb']:.2f} GB budget")
+        if res.get("host_gb"):
+            print(f"  {'host memory (placement host, whole box)':60s} {res['host_gb']:8.2f} GB")
     # F58: a plan made after the serving contract must say how its layout meets it
     md = spec.bringup_dir / "serving_contract.md"
     plan_md = spec.bringup_dir / "plan.md"

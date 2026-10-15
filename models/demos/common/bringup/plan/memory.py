@@ -12,6 +12,7 @@ The plan agent writes ``<bringup_dir>/plan.yaml``:
       - {pattern: "model.layers.*.self_attn.q_proj.weight", placement: shard, dtype: bf16}
       - {pattern: "model.layers.*.experts.*", placement: expert, dtype: bfp8}
       - {pattern: "model.vision_tower.*", placement: skip, why: text only}
+      - {pattern: "model.layers.*.engram.embed.*", placement: host, dtype: uint8, why: memory-mapped lookup table}
     state:                              # per-layer state at the target context, one entry per layer group
       - {layers: "0-29", what: KV, heads_per_chip: 2, head_dim: 256, tensors: 2, dtype: bf16, window: 1024}
     extra_gb_per_chip:                  # anything else resident: second caches, trace buffers, lookup tables
@@ -20,7 +21,8 @@ The plan agent writes ``<bringup_dir>/plan.yaml``:
 
 placement: replicate (every chip holds it), shard (split over all chips), expert (an expert-stacked tensor or an
 expert's weights split over all chips), shard_rows / shard_cols (split over mesh rows / columns only), split (over the
-mesh axes of a role, ``over: <role>``; plan ``roles``, see plan/boxes.py), skip.
+mesh axes of a role, ``over: <role>``; plan ``roles``, see plan/boxes.py), skip (never loaded), host (used, but held
+in host memory, e.g. a lookup table read per chunk; needs a ``why``; not counted per chip, reported as ``host_gb``).
 dtype: fp32, bf16, bfp8 (1088 B per 1024 values), bfp4 (576 B per 1024 values), int32, uint16, uint8.
 State bytes per chip = heads_per_chip * head_dim * tensors * dtype bytes * length * users, where length is
 ceil(min(target seq, window) / seq_stride / seq_divisor) (seq_stride: tokens per stored row, e.g. pooled keys;
@@ -53,7 +55,8 @@ DTYPE_BYTES = {
     "uint16": 2.0,
     "uint8": 1.0,
 }
-PLACEMENTS = ("replicate", "shard", "expert", "shard_rows", "shard_cols", "split", "skip")
+PLACEMENTS = ("replicate", "shard", "expert", "shard_rows", "shard_cols", "split", "skip", "host")
+OFF_DEVICE = ("skip", "host")
 GB = 2**30
 # decoder layers: "layers.N.", "model.layers.N.", "model.language_model.layers.N." (not a vision tower's layers)
 LAYER_RE = re.compile(r"^(?:model\.)?(?:language_model\.)?layers\.(\d+)\.")
@@ -141,7 +144,9 @@ def check_plan(
             errs.append(
                 f"placement {p.get('pattern')!r}: split over {p.get('over')!r}, not one of roles {sorted(roles)}"
             )
-        if p.get("placement") != "skip" and p.get("dtype") not in DTYPE_BYTES:
+        if p.get("placement") == "host" and not p.get("why"):
+            errs.append(f"placement {p.get('pattern')!r}: host needs a why")
+        if p.get("placement") not in OFF_DEVICE and p.get("dtype") not in DTYPE_BYTES:
             errs.append(f"placement {p.get('pattern')!r}: unknown dtype {p.get('dtype')!r}")
     for pat, dt in (over.get("dtypes") or {}).items():
         if dt not in DTYPE_BYTES:
@@ -150,7 +155,7 @@ def check_plan(
         return {"errors": errs, "fits": False}
 
     sel = set(layers) if layers is not None else None
-    groups, rows_out, unplaced, used = {}, [], [], [0] * len(placements)
+    groups, rows_out, unplaced, used, host = {}, [], [], [0] * len(placements), 0.0
     for name, shape in sorted(tensors.items()):
         k = next((k for k, p in enumerate(placements) if fnmatch.fnmatchcase(name, p["pattern"])), None)
         if k is None:
@@ -159,6 +164,9 @@ def check_plan(
         used[k] += 1
         p = placements[k]
         if p["placement"] == "skip":
+            continue
+        if p["placement"] == "host":
+            host += _numel(shape) * DTYPE_BYTES.get(p.get("dtype"), 0)
             continue
         if sel is not None and layer_of(name) is not None and layer_of(name) not in sel:
             continue
@@ -228,6 +236,7 @@ def check_plan(
         "errors": errs,
         "rows": rows_out,
         "total_gb": total_gb,
+        "host_gb": host / GB,
         "capacity_gb": cap_gb,
         "budget_gb": budget,
         "headroom_frac": headroom,
