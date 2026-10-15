@@ -536,10 +536,13 @@ _WIDTH_SCENARIOS = {
 @torch.no_grad()
 @pytest.mark.timeout(10800)
 @parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
-def test_lane_widths(mesh_device, reset_seeds):
+def test_lane_widths(mesh_device, reset_seeds, monkeypatch):
     """Requests with different chunk widths in one step (each request keeps its width): KV vs each request alone at
     its width, then step times vs the same requests unbatched.
     """
+    # With the sync CCL ops, replaying a (4096, 4096) trace among these traces can hang at the start of a replay: one
+    # device's dispatcher waits for a worker-completion count its workers never reach. The async CCL ops do not.
+    monkeypatch.setenv("GEMMA4_CCL_ASYNC", "1")
     unit, num_slots, capacity = 2048, 3, 65536
     mesh_config, model_args, model = build_batched_model(mesh_device, unit, num_slots, capacity)
     stream = _text_token_stream(_hf_model_id())[0]
