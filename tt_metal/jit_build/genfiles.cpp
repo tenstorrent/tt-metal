@@ -386,7 +386,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // PrefetcherPipe relays bake the persistent slot into the token so the TRISC
             // constructor can O(1)-align to the durable checkpoint; CrossNode relays
             // use the single-arg form (NO_PREFETCHER_PIPE default, no align needed).
-            content << "constexpr RelayDFBBindingToken " << entry.name << "{" << entry.id;
+            // Both sides' access patterns ride on the token for compile-time specialization.
+            content << "constexpr RelayDFBBindingToken<" << dfb_access_name(entry.pap) << ", "
+                    << dfb_access_name(entry.cap) << "> " << entry.name << "{" << entry.id;
             if (entry.prefetcher_pipe_id != 0xFF) {
                 content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
             }
