@@ -18,7 +18,7 @@
 // Timing: paired native live-timer and per-RISC cycle CSR reads. Failed reads
 // publish an invalid delta for host rejection.
 //
-// See x280/CHARACTERIZATION_UBENCH_DESIGN.md § Transport bandwidth.
+// See docs/benchmarks/design.md § Transport bandwidth.
 
 #ifndef X280_TRANSPORT_BW_BACKEND_TENSIX_TO_X280_HPP
 #define X280_TRANSPORT_BW_BACKEND_TENSIX_TO_X280_HPP

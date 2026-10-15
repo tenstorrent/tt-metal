@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 /* One writer per this many bytes of LIM, taken to be one LIM ECC granule. The
- * granule is an owner assumption (item 9, MEASUREMENT.md
+ * granule is an owner assumption (item 9, docs/measurement.md
  * "Unconfirmed hardware assumptions"); a different granule would change this
  * value. */
 #define UBENCH_LIM_GRANULE_BYTES 8u

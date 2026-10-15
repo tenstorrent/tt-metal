@@ -17,7 +17,7 @@
  * the kernel unpacker agree without a shared struct; slot 0 carries
  * TB_TX2X_LAYOUT_COOKIE (ubench_layout_cookie.h).
  *
- * See x280/CHARACTERIZATION_UBENCH_DESIGN.md § Transport bandwidth for the
+ * See docs/benchmarks/design.md § Transport bandwidth for the
  * frontend/backend contract this member implements.
  */
 #ifndef X280_TRANSPORT_BW_TENSIX_TO_X280_H

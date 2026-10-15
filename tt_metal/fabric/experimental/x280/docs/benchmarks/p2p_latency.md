@@ -2,11 +2,11 @@
 
 **Status:** Measured on silicon. The numbers, the placement sweep and the run
 environment are in
-[`CHARACTERIZATION_RESULTS.md`](CHARACTERIZATION_RESULTS.md) § 3.3 and § 6.
+[`CHARACTERIZATION_RESULTS.md`](../../CHARACTERIZATION_RESULTS.md) § 3.3 and § 6.
 
 **Scope:** Phase 0 feasibility benchmark ID 3 (priority P2): hart-to-hart
 signal latency where the two harts sit on different X280 complexes. This is
-the [`ubench design`](CHARACTERIZATION_UBENCH_DESIGN.md)'s `p2p_latency`
+the [`ubench design`](design.md)'s `p2p_latency`
 ID 3 — X280 tile to X280 tile, one chip — and is implemented as that row
 rather than as a new suite.
 
@@ -14,9 +14,9 @@ rather than as a new suite.
 
 Host lifecycle, ownership, regions, deadlines, safety, clock mechanisms, and
 the common result envelope are owned by
-[`CHARACTERIZATION_HARNESS.md`](CHARACTERIZATION_HARNESS.md). Protocol loop,
+[`docs/harness.md`](../harness.md). Protocol loop,
 roles, measurement boundaries, axes, and the frontend/backend contract are
-owned by [`CHARACTERIZATION_UBENCH_DESIGN.md`](CHARACTERIZATION_UBENCH_DESIGN.md)
+owned by [`docs/benchmarks/design.md`](design.md)
 § Peer-to-peer latency. This document adds only what ID 3 needs beyond
 those two.
 

@@ -85,7 +85,7 @@
  * `main` that calls run_member is marked `hot`, or GCC lays its timed loops out
  * as run-once code.
  *
- * See x280/CHARACTERIZATION_UBENCH_DESIGN.md, § Transport bandwidth.
+ * See docs/benchmarks/design.md, § Transport bandwidth.
  */
 #ifndef X280_TRANSPORT_BANDWIDTH_FRONTEND_CXX_HPP
 #define X280_TRANSPORT_BANDWIDTH_FRONTEND_CXX_HPP

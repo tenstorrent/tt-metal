@@ -145,7 +145,7 @@ struct Backend {
 
     // A RISC's L0 data cache can serve a load from L1, and a peer NoC write does
     // not invalidate it (Tensix: BabyRISCV/MemoryOrdering.md, "L0 data cache";
-    // no Blackhole document covers ERISC or DRISC: MEASUREMENT.md "Unconfirmed
+    // no Blackhole document covers ERISC or DRISC: docs/measurement.md "Unconfirmed
     // hardware assumptions", item 13). The invalidate inside each
     // iteration is required even for a volatile load.
     // Returns true once expected arrives, false when hang_deadline_ticks

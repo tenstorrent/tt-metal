@@ -127,7 +127,7 @@ inline std::optional<std::string> multicast_refusal(
  *   rectangle (a non-loopback sender may fill one cell) and the sender can
  *   multicast on NoC 0. Translation is order-preserving and its virtual gaps
  *   are opted-out columns, so the group delivers exactly the selection, even
- *   across translated columns 8-9 (x280/CHARACTERIZATION_HARNESS.md
+ *   across translated columns 8-9 (docs/harness.md
  *   "Host-access gate").
  *   Otherwise each is an endpoint; a selection is never split into groups.
  *

@@ -24,7 +24,7 @@
  * rdcycle (at the running PLL) is the SECONDARY, published from the
  * same bracket as a cross-check between two independent clocks. rdcycle
  * does not advance while the hart stalls on memory or a BRESP
- * (MEASUREMENT.md "Unconfirmed hardware assumptions", item 5); the two
+ * (docs/measurement.md "Unconfirmed hardware assumptions", item 5); the two
  * counters have counted in lockstep on every run so far (see §4.3 in
  * x280/CHARACTERIZATION_RESULTS.md).
  *
@@ -32,7 +32,7 @@
  * supplies elapsed time.
  *
  * See rt/x280_measurement.h for the fenced helpers and
- * x280/CHARACTERIZATION_UBENCH_DESIGN.md § Transport bandwidth for the
+ * docs/benchmarks/design.md § Transport bandwidth for the
  * frontend/backend contract this file supplies.
  */
 #ifndef X280_TRANSPORT_BW_BACKEND_X280_TO_TENSIX_HPP

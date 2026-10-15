@@ -15,10 +15,10 @@
  *
  * The design's clock-solipsistic rule holds: each hart reads only its own
  * rdcycle and mtime and never sends or receives timestamps. The result region's raw
- * deltas are in this hart's cycles, which never become seconds (MEASUREMENT.md,
+ * deltas are in this hart's cycles, which never become seconds (docs/measurement.md,
  * "Native CPU cycles never become nanoseconds").
  *
- * See x280/CHARACTERIZATION_UBENCH_DESIGN.md §Roles and mailbox model,
+ * See docs/benchmarks/design.md §Roles and mailbox model,
  * §Timing and clock domains, and §Participant rows for ID 2's semantic
  * contract.
  */
@@ -209,7 +209,7 @@ inline bool poll(state_t& state, uint32_t expected) {
 
 /* Bounded poll for warm-up. `max_ticks` is in this participant's rdcycle
  * ticks, which stop while the hart stalls and so do not track wall time
- * (MEASUREMENT.md "Unconfirmed hardware assumptions",
+ * (docs/measurement.md "Unconfirmed hardware assumptions",
  * item 5). Returns true if the token arrived within the budget, false
  * otherwise or on STOP.
  *

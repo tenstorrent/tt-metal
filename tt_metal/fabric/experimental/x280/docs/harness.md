@@ -16,9 +16,9 @@ runtime gates and API blockers, clock mechanisms,
 and the common result envelope. Performance-suite membership, participant
 rows, protocol loops, measurement boundaries, axes, kernel frontend/backend
 contracts, suite payloads, validation, and interpretation are owned by
-[`CHARACTERIZATION_UBENCH_DESIGN.md`](CHARACTERIZATION_UBENCH_DESIGN.md).
+[`docs/benchmarks/design.md`](benchmarks/design.md).
 Raw X280 NOC encodings and helpers are defined in
-[`include/noc.h`](include/noc.h); the non-obvious hardware invariants the
+[`include/noc.h`](../include/noc.h); the non-obvious hardware invariants the
 harness relies on are summarized here.
 The following rules are part of the document:
 
@@ -59,7 +59,7 @@ Suite-specific experiment semantics remain in the suite that owns them.
 Candidate per-component and cross-component microbenchmarks motivate the
 required flexibility. Their catalogue and prioritization are intentionally
 tracked in
-[`CHARACTERIZATION_UBENCH_DESIGN.md`](CHARACTERIZATION_UBENCH_DESIGN.md).
+[`docs/benchmarks/design.md`](benchmarks/design.md).
 
 The harness may eventually contribute useful machinery to Fabric 2, but that is
 not a design requirement. Characterization is intended to determine the
@@ -177,7 +177,7 @@ This is centralization, not uniformization. Session ownership, restoration,
 region handling, execution, and recording are reusable services. The timed
 loop, participant roles, axes, suite directory structure, and derived
 quantities remain owned by the
-[`ubench design`](CHARACTERIZATION_UBENCH_DESIGN.md#behavior-named-suites).
+[`ubench design`](benchmarks/design.md#behavior-named-suites).
 
 ## Concrete target model
 
@@ -415,7 +415,7 @@ the following cross-source conclusions:
 - Inbound NOC traffic to an L2CPU tile passes through its L3 controller. Into a
   data-cacheable destination a partial-line write may allocate a dirty L3 line
   rather than update the backing memory; LIM is not such a destination, being
-  the uncached scratchpad (`CHARACTERIZATION_CROSS_CLUSTER_SIGNALLING.md`
+  the uncached scratchpad (`docs/benchmarks/p2p_latency.md`
   § Why the backend is NOC-shaped). The host `Cluster::write_core` full-line
   pattern is known to reach LIM; whether a Tensix NOC write has the required
   visibility must be established for the exact destination, write shape, and
@@ -490,8 +490,8 @@ implementations validate that the shared boundaries are honest.
 
 The harness is checked against the canonical participant matrix and
 implementation order in the ubench design's
-[`Participant rows`](CHARACTERIZATION_UBENCH_DESIGN.md#participant-rows) and
-[`Readiness and implementation sequence`](CHARACTERIZATION_UBENCH_DESIGN.md#readiness-and-implementation-sequence).
+[`Participant rows`](benchmarks/design.md#participant-rows) and
+[`Readiness and implementation sequence`](benchmarks/design.md#readiness-and-implementation-sequence).
 It supplies the reusable selection, region, execution, deadline, clock, and
 recording mechanisms those rows consume. Suite configuration, protocol,
 reduction, and extension rules remain in the ubench design. Current host and
@@ -510,9 +510,9 @@ Kernel loading is intentionally heterogeneous:
   X280 component's programming path.
 
 Kernel structure is suite-owned: see
-[`p2p_latency`](CHARACTERIZATION_UBENCH_DESIGN.md#kernel-frontend-and-backend)
+[`p2p_latency`](benchmarks/design.md#kernel-frontend-and-backend)
 and
-[`transport_bandwidth`](CHARACTERIZATION_UBENCH_DESIGN.md#frontend-and-backend-contract)
+[`transport_bandwidth`](benchmarks/design.md#frontend-and-backend-contract)
 in the ubench design. The harness only loads prepared artifacts and packs
 arguments according to the selected suite contract; it does not impose a
 frontend/backend split on other suites.
@@ -627,7 +627,7 @@ re-enables that way only after confirmed resident idle, after the last case.
 Both operations require the 14-LIM-way partition and operator-owned exclusive
 use of the device; preparation runs only on a tile the same process booted
 from reset-held, its fresh-placement provenance. See
-[`README.md` / Prepared pipeline inputs](README.md#prepared-pipeline-inputs-x280-only).
+[`README.md` / Prepared pipeline inputs](../README.md#prepared-pipeline-inputs-x280-only).
 
 `RunSpec`'s `session::OpenConfig` marks whether the prepared profile is
 required; session opening uses 14 LIM ways and `RequireExact` when required. Pipeline configurations require it.
@@ -836,7 +836,7 @@ With translation enabled, a NIU translates all four multicast corners before
 choosing the spans (tt-isa-documentation `BlackholeA0/NoC/MemoryMap.md`,
 `NOC_TARG_ADDR`). The L2CPU TLB window documentation does not say whether that
 holds for its windows; the renumbered-column case below observed it on a
-harvested part ([CHARACTERIZATION_RESULTS.md § 5.9](CHARACTERIZATION_RESULTS.md#59-core-synchronization-release-characterization)).
+harvested part ([CHARACTERIZATION_RESULTS.md § 5.9](../CHARACTERIZATION_RESULTS.md#59-core-synchronization-release-characterization)).
 
 Every other core-sync case sits at logical x < 6, where virtual and NOC0
 coincide on the parts in use, except
@@ -1101,13 +1101,13 @@ the posted ordering mode neither forces completion.
 Maintained performance suites use direct fenced mtime wall brackets and raw
 architectural CPU cycles. They do not convert CPU cycles to time or calibrate
 CPU frequency for reporting. Lifecycle/recovery deadlines remain separate.
-See [the measurement contract](MEASUREMENT.md) for counter identity,
+See [the measurement contract](measurement.md) for counter identity,
 clock evidence, native availability and retained reference observations.
 
 ### Suite integration boundary
 
 Canonical performance-suite requirements stay in the
-[`ubench design`](CHARACTERIZATION_UBENCH_DESIGN.md). A suite consumes the
+[`ubench design`](benchmarks/design.md). A suite consumes the
 concrete inventory, target, region, execution, artifact, clock, and result
 services defined here. Each suite validates its own path as part of its
 ordinary invocation; no separate admission workload runs before it. Adding a suite changes this LLD only when it introduces a

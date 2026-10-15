@@ -1,6 +1,6 @@
 # Packet Injection Characterization
 
-The [2026-09-23 rerun](benchmarks/campaigns/20260923-measurement-unification/MASTER_RESULTS.md)
+The [2026-09-23 rerun](../../benchmarks/campaigns/20260923-measurement-unification/MASTER_RESULTS.md)
 includes both throughput families and all four latency/backpressure variants.
 Its worker records retain native CPU measurements where the interval is local.
 Current schema-2 records retain raw wall ticks and per-run AICLK evidence for
@@ -313,7 +313,7 @@ computes from the raw samples. Empty populations contain `reason="no_samples"`. 
 nanoseconds. Each run and worker record carries the programmed maximum, four
 host-bracketed counter samples, start/end/elapsed rate bounds and CMFW throttle
 telemetry; the offline tool converts at `conversion_hz` when that evidence
-validates, and otherwise at the measured rate with a warning (`MEASUREMENT.md`
+validates, and otherwise at the measured rate with a warning (`docs/measurement.md`
 "Collection and reproduction"). RTTs describe
 only requests released by observations that end a credit stall, not all requests.
 Failed or invalid-interval throughput records preserve the raw endpoints,
@@ -322,7 +322,7 @@ offline. Per-worker throughput records carry `credit_stall_episodes`, that
 worker's `stall_count`.
 
 The elapsed rate bound narrows as the run lengthens, and the Tensix member's
-warm-up is fixed rather than calibrated; `MEASUREMENT.md` gives the margin and
+warm-up is fixed rather than calibrated; `docs/measurement.md` gives the margin and
 what calibration would need. The ERISC member calibrates its warm-up (below).
 
 Every producer counts the produced-counter writes it issues in the measured phase in
@@ -342,7 +342,7 @@ its run by `run_value`, then carries `start_event` (`release_issued`),
 headers and bytes it covers are derived offline from those. On a failed run or an invalid
 interval `aggregate_error` is `run_failed` or `invalid_interval`, and the raw endpoints are
 kept. Run records at PI schema 5 or earlier, such as the 2026-09-23 campaign's, predate the
-aggregate record; the frozen tabulator (`MEASUREMENT.md` "Collection and reproduction")
+aggregate record; the frozen tabulator (`docs/measurement.md` "Collection and reproduction")
 reads them, and the live campaign validator requires the aggregate record.
 
 Records include configuration, ordered tiles and selected prefix length, per-worker
@@ -752,7 +752,7 @@ writers. One to all available inactive `IDLE_ETH` cores, one per Ethernet tile,
 each run the shared `Producer` against their own SPSC ring into the one shared
 X280 consumer image (the throughput variant). There is no second single-writer
 implementation: `writers=1` is the same loop, protocol and result schema as every
-larger point. See [CHARACTERIZATION_PACKET_HEADER_INGRESS.md](CHARACTERIZATION_PACKET_HEADER_INGRESS.md)
+larger point. See [docs/benchmarks/packet_header_ingress.md](packet_header_ingress.md)
 for the measured operation and the prototype member it replaces.
 
 **Axes.** The GTest executable `x280_packet_injection_erisc_to_x280_header`
@@ -838,7 +838,7 @@ run result reports `P` endpoints and no group.
 **Warm-up.** With `PACKET_INJECTION_W` unset, a pilot launch at W=32 records
 nothing, and `calibrate_warmup` sizes W from writer 0's measured interval at the
 programmed AICLK so that W+N reaches the AICLK target device time
-([MEASUREMENT.md](MEASUREMENT.md)), refusing a W whose device time exceeds the
+([docs/measurement.md](../measurement.md)), refusing a W whose device time exceeds the
 host timeout. A refusal fails the case. Records carry `warmup_source`
 (`calibrated` with the pilot figures, or `explicit` for a set W, used as given).
 
@@ -860,7 +860,7 @@ record, with the fixed 50 MHz `x280_mtime` clock. Run and
 worker records are measurement schema 2 with per-run AICLK evidence (`clock`),
 taken on writer 0's own ERISC wall clock immediately before launch and after
 `Finish` and applied to every writer, on the assumption that all idle ERISCs on
-the chip share one AICLK rate; per [MEASUREMENT.md](MEASUREMENT.md) that evidence
+the chip share one AICLK rate; per [docs/measurement.md](../measurement.md) that evidence
 converts the idle ERISC's `eth_read_wall_clock()`, so writer intervals convert to
 time offline when it is clean. Worker records carry logical, virtual, translated
 and NOC0 (physical) coordinates (the virtual one is what the X280 tile table
@@ -912,7 +912,7 @@ nine points and reproduced them within 0.09%.
 
 **Scaling campaign (2026-09-30).** Card 0 as above, three runs per point through
 `run_characterization.py`; provenance and raw JSONL in
-[`benchmarks/campaigns/20260929-erisc-header-ingress-scaling/`](benchmarks/campaigns/20260929-erisc-header-ingress-scaling/VERIFICATION.md).
+[`benchmarks/campaigns/20260929-erisc-header-ingress-scaling/`](../../benchmarks/campaigns/20260929-erisc-header-ingress-scaling/VERIFICATION.md).
 Rates are X280 `mtime` aggregates, mean [min, max] over the runs; stall
 episodes, counter writes and wall ticks are per writer. W is calibrated per point.
 ERISC ticks are shown raw and convert offline under each run's clean AICLK
@@ -920,7 +920,7 @@ evidence, taken on writer 0's ERISC wall clock.
 Every figure is for inactive idle ERISCs and does not show that an ERISC doing
 live Ethernet receive and router work has the same cycles left. No target is
 asserted. The re-run C=1, K=1 table, the derivations and the Tensix cross-check
-are in [`CHARACTERIZATION_RESULTS.md` section 4.4](CHARACTERIZATION_RESULTS.md#44-erisc---x280-packet-header-ingress-96-b).
+are in [`CHARACTERIZATION_RESULTS.md` section 4.4](../../CHARACTERIZATION_RESULTS.md#44-erisc---x280-packet-header-ingress-96-b).
 
 The consumer-settings sweep (S=16, N=1024, B=1):
 

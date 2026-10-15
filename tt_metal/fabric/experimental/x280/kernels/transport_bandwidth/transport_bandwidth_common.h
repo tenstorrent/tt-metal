@@ -15,7 +15,7 @@
  * This header carries only what every member needs. Member-specific arguments
  * and identity constants live beside their kernel.
  *
- * See x280/CHARACTERIZATION_UBENCH_DESIGN.md § Transport bandwidth for the
+ * See docs/benchmarks/design.md § Transport bandwidth for the
  * semantic contract these types encode.
  */
 #ifndef X280_TRANSPORT_BANDWIDTH_COMMON_H

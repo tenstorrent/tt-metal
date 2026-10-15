@@ -13,7 +13,7 @@
  *   local staging        host seeds; source when I initiate, if needed
  *   outbound result      I write; host reads
  *
- * See x280/CHARACTERIZATION_UBENCH_DESIGN.md, §Roles and mailbox model.
+ * See docs/benchmarks/design.md, §Roles and mailbox model.
  *
  * Layout is suite-owned rather than case-owned because every member of
  * p2p_latency uses the same region layouts. A case still

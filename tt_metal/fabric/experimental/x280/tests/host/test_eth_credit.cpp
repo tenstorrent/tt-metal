@@ -234,7 +234,7 @@ TEST(EthCreditAbi, ResultBlockHasFixedSizeAndHeaderFirst) {
     EXPECT_EQ(EC_RESULT_BYTES % 16u, 0u);
 }
 
-// Spec (eth_credit_abi.h, MEASUREMENT.md checked subtraction): a stall interval
+// Spec (eth_credit_abi.h, docs/measurement.md checked subtraction): a stall interval
 // is added under measurement_delta's rule, so a wrapped counter still counts and a
 // half-range interval, or a total reaching half-range, leaves the total
 // invalid for every later addition: measurement_delta's rule, checked against it.

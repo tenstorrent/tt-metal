@@ -194,7 +194,7 @@ typedef enum {
  * Assumptions
  * --------------------------------------------------------------------------
  * Each bit names a behaviour the results depend on; the host reports the mask
- * in every run. Item numbers are those of MEASUREMENT.md "Unconfirmed hardware assumptions". */
+ * in every run. Item numbers are those of docs/measurement.md "Unconfirmed hardware assumptions". */
 /** A write issued after the data writes' acks reaches X280 loads from LIM after
  * the data, because the L2CPU applies accepted writes to LIM in arrival order:
  * owner assumption (item 2); NoC/Counters.md defines the ack for L1 and

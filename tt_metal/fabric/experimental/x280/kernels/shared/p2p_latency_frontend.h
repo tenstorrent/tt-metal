@@ -12,7 +12,7 @@
  * top of the types declared here (see p2p_latency_frontend_cxx.hpp for the
  * templated loop; this header carries only the layout).
  *
- * See x280/CHARACTERIZATION_UBENCH_DESIGN.md, §Peer-to-peer latency for the
+ * See docs/benchmarks/design.md, §Peer-to-peer latency for the
  * semantic contract these types encode.
  *
  * Layout invariants pinned by the assertions at the foot of this file:

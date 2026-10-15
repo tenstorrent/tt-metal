@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /* Shared paired-window backend for x280_peer_tile, tensix_peer_tile, erisc_peer_tile and drisc_peer_tile.
- * WAIT_FOR_DEPARTURE is unsupported; see x280/CHARACTERIZATION_UBENCH_DESIGN.md, "Transmit-mode validity". */
+ * WAIT_FOR_DEPARTURE is unsupported; see docs/benchmarks/design.md, "Transmit-mode validity". */
 #ifndef X280_P2P_LATENCY_BACKEND_X280_NOC_HPP
 #define X280_P2P_LATENCY_BACKEND_X280_NOC_HPP
 

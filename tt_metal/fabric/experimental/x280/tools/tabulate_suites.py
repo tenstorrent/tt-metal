@@ -6,7 +6,7 @@
 """Tabulate current x280 records without recomputing measurements.
 
 Reads current-format JSONL records; records and console captures from before
-the record builder are read by the frozen tabulator (MEASUREMENT.md
+the record builder are read by the frozen tabulator (docs/measurement.md
 "Collection and reproduction"). Malformed records are errors.
 """
 

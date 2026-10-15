@@ -761,7 +761,7 @@ target selection.
 Unless `P2P_LATENCY_{TENSIX,ERISC,DRISC}_PEER_TILE_W` is set, each first runs
 an unrecorded `W=8` pilot and sizes the measured launch's warm-up to 25 ms of
 device work, so the AICLK elapsed bound stays well inside its limit
-(`MEASUREMENT.md`); a set value is used as given.
+(`docs/measurement.md`); a set value is used as given.
 
 `x280_p2p_latency_erisc_peer_tile` launches only an inactive Ethernet core in
 `Eth::IDLE` mode and exchanges 4-byte tokens over same-chip NOC; it sends no
@@ -789,9 +789,9 @@ Tensix BRISC/NCRISC producers into an X280 consumer, and
 open the 14-way `LimLayout::PacketInjection` profile. The ERISC member links
 `x280_slow_dispatch` (§ Benchmark harness). The header-ingress member, which
 runs on the packet-injection throughput image, is in
-[`CHARACTERIZATION_PACKET_INJECTION.md`](CHARACTERIZATION_PACKET_INJECTION.md#erisc-header-ingress-member);
+[`docs/benchmarks/packet_injection.md`](docs/benchmarks/packet_injection.md#erisc-header-ingress-member);
 the ID 14 contract and the removed single-writer prototype are in
-[`CHARACTERIZATION_PACKET_HEADER_INGRESS.md`](CHARACTERIZATION_PACKET_HEADER_INGRESS.md).
+[`docs/benchmarks/packet_header_ingress.md`](docs/benchmarks/packet_header_ingress.md).
 Each record names the tt-metal revision the executable was built from
 (`tt_metal_sha`, `source_dirty`).
 
@@ -807,7 +807,7 @@ kernel's only extra include root is its source directory, so they reach every
 x280 header by relative path; the `x280_eth_credit_jit` CTest compiles them the
 same way with no device. ERISC stall budgets
 scale by each chip's programmed AICLK, and every run brackets both ERISC wall
-clocks with the AICLK sampler of `MEASUREMENT.md`; ERISC ticks convert to time
+clocks with the AICLK sampler of `docs/measurement.md`; ERISC ticks convert to time
 only when that evidence is clean. Each run also writes an `eth_credit_link`
 record per chip with the base firmware's link retrain count before launch and
 after `Finish`, so a failure can be checked against a retrain, and the chip's
@@ -818,7 +818,7 @@ ticks and, for a failed run, the attribution line and every chip's kernel
 results; rates come from the tabulator. The manifest's `eth_credit.throughput`
 configuration runs `ThroughputBySlotBatchAndP` with every card visible
 (`TT_VISIBLE_DEVICES` empty), for the reason below. The design is in
-[`ETH_CREDIT.md`](ETH_CREDIT.md).
+[`docs/benchmarks/eth_credit.md`](docs/benchmarks/eth_credit.md).
 
 ```bash
 env -u TT_VISIBLE_DEVICES TT_METAL_RUNTIME_ROOT="$PWD" ./build/test/tt_metal/x280/x280_eth_credit
@@ -953,7 +953,7 @@ python3 tt_metal/fabric/x280/tools/tabulate_suites.py <path_to_jsonl>
 ```
 
 A campaign's report (`--campaign DIR --report-dir NEW`) carries the same tables in
-its `MASTER_RESULTS.md`; `MEASUREMENT.md` "Collection and reproduction" describes
+its `MASTER_RESULTS.md`; `docs/measurement.md` "Collection and reproduction" describes
 both outputs and how `tools/run_characterization.py` collects a campaign from
 `characterization_manifest.json`. The tabulator reads only the current record
 format. The `x280_characterization` CTest runs the tabulator's and the

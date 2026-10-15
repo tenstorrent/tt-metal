@@ -16,7 +16,7 @@ for that packet copy to complete are preconditions outside the measured region.
 for one to all available ERISC writers and publication batch sizes, on the shared
 packet-injection producer, X280 consumer, credit protocol and host stages. Its
 axes, ABI, validation, records, reproduction and silicon results are in
-[CHARACTERIZATION_PACKET_INJECTION.md](CHARACTERIZATION_PACKET_INJECTION.md#erisc-header-ingress-member).
+[docs/benchmarks/packet_injection.md](packet_injection.md#erisc-header-ingress-member).
 Its `writers=1,B=1` point supersedes the `transport_bandwidth/erisc_to_x280_header`
 prototype described under [Prototype Member](#prototype-member-superseded),
 which has been removed.
@@ -45,7 +45,7 @@ receive or the full receive-side pipeline.
 The unified member publishes with the packet-injection ring protocol: the slot
 write, a write barrier, then the ring-tail produced counter, which X280 polls
 with a fence before the counter load and another before the slot loads (see the
-[packet-injection architectural overview](CHARACTERIZATION_PACKET_INJECTION.md#architectural-overview)).
+[packet-injection architectural overview](packet_injection.md#architectural-overview)).
 Comparing that encoding with a per-slot or in-header valid flag, such as the
 prototype's, is Fabric 2.0 ID 15.
 
@@ -60,7 +60,7 @@ prototype's `DRAINED` point took 420.17 ERISC wall ticks per header and
 header there. 992 of 1,024 measured headers entered the credit wait: the writer
 is paced by X280 service and credit return, not by its own publication code.
 Conditions, both intervals and the evidence are in
-[CHARACTERIZATION_RESULTS.md § 4.4](CHARACTERIZATION_RESULTS.md#44-erisc---x280-packet-header-ingress-96-b).
+[CHARACTERIZATION_RESULTS.md § 4.4](../../CHARACTERIZATION_RESULTS.md#44-erisc---x280-packet-header-ingress-96-b).
 
 ## Prototype Member (Superseded)
 
@@ -133,7 +133,7 @@ Both deltas use `measurement_delta()` and reject half-range or invalid samples.
 The host brackets the ERISC launch through
 `Finish` with the AICLK sampler on the selected ERISC's own wall clock and emits a
 measurement-schema-2 batch record: the raw `eth_wall_clock` and `rdcycle`
-deltas, and that evidence as `clock`. Per [MEASUREMENT.md](MEASUREMENT.md) the
+deltas, and that evidence as `clock`. Per [docs/measurement.md](../measurement.md) the
 evidence converts idle-ERISC `eth_read_wall_clock()`; the offline tool derives
 nanoseconds only when it carries no errors, and no nominal ERISC clock is
 substituted. AICLK evidence with errors fails the test after the record is

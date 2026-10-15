@@ -14,7 +14,7 @@
  * D-032: the runtime tells every hart the same args_addr. ID 2 packs TWO
  * participant sections back to back so hart 0 (participant A) and hart 1
  * (participant B) each read their own section by fixed hartid-scaled offset.
- * See x280/CHARACTERIZATION_UBENCH_DESIGN.md, §Roles and mailbox model.
+ * See docs/benchmarks/design.md, §Roles and mailbox model.
  *
  * Compiled by the host case and by the X280 image; kept out of test-headers's
  * C-only checks because it is C++-only (uses `static_assert`). The host case's

@@ -16,7 +16,7 @@
 namespace x280::suites::transport_bandwidth {
 
 // The record label of boundary `b`. `drained` names TRANSPORT_BW_BOUNDARY_DRAINED,
-// whose stop differs per member (MEASUREMENT.md "Quantities that share a label").
+// whose stop differs per member (docs/measurement.md "Quantities that share a label").
 inline const char* boundary_name(uint32_t b, const char* drained) {
     switch (b) {
         case TRANSPORT_BW_BOUNDARY_DRAINED: return drained;

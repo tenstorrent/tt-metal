@@ -216,12 +216,12 @@ private:
         }
         /* W5's headers and W6's pointer reach the forwarder's LIM on one NoC
          * and one static VC. That such writes are delivered to AXI in order is
-         * item 17 of MEASUREMENT.md "Unconfirmed hardware assumptions": stated
+         * item 17 of docs/measurement.md "Unconfirmed hardware assumptions": stated
          * by the NoC specification, not confirmed on silicon.
          * W6 still follows W5's acknowledgement, so it is issued only after W5
          * was accepted at the L2CPU: that W5 is then visible to X280 loads from
          * LIM rests on the L2CPU applying accepted writes to LIM in arrival
-         * order, an owner assumption (MEASUREMENT.md "Unconfirmed hardware
+         * order, an owner assumption (docs/measurement.md "Unconfirmed hardware
          * assumptions", item 2),
          * since NoC/Counters.md defines the ack for "L1 or register space"
          * only. */

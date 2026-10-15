@@ -4,7 +4,7 @@
 
 /*
  * Per-section argument cookies. Each suite supplies a distinct magic.
- * See x280/CHARACTERIZATION_UBENCH_DESIGN.md, "Kernel entry point".
+ * See docs/benchmarks/design.md, "Kernel entry point".
  */
 #ifndef X280_UBENCH_COOKIES_H
 #define X280_UBENCH_COOKIES_H

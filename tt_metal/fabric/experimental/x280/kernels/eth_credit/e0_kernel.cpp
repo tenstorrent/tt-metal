@@ -249,7 +249,7 @@ private:
      * send_next_data sequence: wait, data, wait, counter. E1 takes W4 as
      * proof that W3's slot is in its L1. Whether a TT-link MMIO write lands
      * only after an earlier TT-link L1 write on the same TX queue has
-     * committed is an open hardware question (MEASUREMENT.md "Unconfirmed hardware assumptions",
+     * committed is an open hardware question (docs/measurement.md "Unconfirmed hardware assumptions",
      * item 1): Wormhole orders no packets of different kinds, and Blackhole's
      * RX counters move before L1 commit (EthernetTxRx.md). */
     bool send(uint32_t p, uint32_t* progressed, uint32_t* site) {

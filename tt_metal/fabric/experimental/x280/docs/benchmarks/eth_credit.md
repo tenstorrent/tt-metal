@@ -692,7 +692,7 @@ the `packet_injection` host does.
 - The ERISC wall clock (`eth_read_wall_clock`) counts AICLK. It sits at the
   Tensix live-timer address (`ETH_RISC_REGS_START` 0xFFB10000 +
   `ETH_RISC_WALL_CLOCK_0` 0x21F0 = `TENSIX_TIMER_LOCAL_LOW_ADDR`,
-  `tt_eth_ss_regs.h`), so the AICLK sampler of `MEASUREMENT.md`
+  `tt_eth_ss_regs.h`), so the AICLK sampler of `docs/measurement.md`
   (`measurement::assess_aiclk_run`) aimed at the Ethernet core brackets it. Stall
   budgets use each chip's programmed AICLK, every run records per-chip ERISC
   clock evidence (`reference_counter: erisc_wall_clock`), and ERISC ticks

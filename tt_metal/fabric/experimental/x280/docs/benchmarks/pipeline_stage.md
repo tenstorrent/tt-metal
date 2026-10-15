@@ -10,19 +10,19 @@ compressed-route lookup design summarized under
 [Historical design and measurement boundary](#historical-design-and-measurement-boundary).
 
 Fixed-source silicon evidence for X280 is recorded in
-[`CHARACTERIZATION_RESULTS.md` § 5.7](CHARACTERIZATION_RESULTS.md#57-schema-5-fixed-source-run).
+[`CHARACTERIZATION_RESULTS.md` § 5.7](../../CHARACTERIZATION_RESULTS.md#57-schema-5-fixed-source-run).
 X280 micro-benchmark figures move with firmware code layout alone (2026-10-02
-pad probe, [§ 5.10](CHARACTERIZATION_RESULTS.md#510-tip-pass-2026-10-02)), so a
+pad probe, [§ 5.10](../../CHARACTERIZATION_RESULTS.md#510-tip-pass-2026-10-02)), so a
 figure compares only against a run of the same image.
 
 Host lifecycle, device ownership, shape admission, argument extents, STOP, and
 window cleanup are owned by
-[`CHARACTERIZATION_HARNESS.md`](CHARACTERIZATION_HARNESS.md). Exact operator
-commands are owned by [`README.md`](README.md). This document owns the pipeline
+[`docs/harness.md`](../harness.md). Exact operator
+commands are owned by [`README.md`](../../README.md). This document owns the pipeline
 subjects, fixed layouts, configuration matrix, validation, and result identity.
 How benchmarks are named — `ID <n>` from the Phase 0 table, and why that number
 stays out of paths and result records — is owned by
-[`CHARACTERIZATION_UBENCH_DESIGN.md`](CHARACTERIZATION_UBENCH_DESIGN.md)
+[`docs/benchmarks/design.md`](design.md)
 § Benchmark naming.
 
 ## Current suite
@@ -330,7 +330,7 @@ fixed sample array.
 ### Summary row identities and field mapping
 
 On X280, the lookup summary row contains exactly these base fields, then the
-record envelope (`MEASUREMENT.md` "Record contract"):
+record envelope (`docs/measurement.md` "Record contract"):
 
 ```text
 suite, member, kind, backend_id, run_nonce, packet_header_bytes,
@@ -443,7 +443,7 @@ A host build does NOT demonstrate:
 2. Device silicon correctness; or
 3. Measured timing performance on hardware.
 Silicon correctness and timing observations are recorded in
-[`CHARACTERIZATION_RESULTS.md` § 5](CHARACTERIZATION_RESULTS.md#5-pipeline_stage).
+[`CHARACTERIZATION_RESULTS.md` § 5](../../CHARACTERIZATION_RESULTS.md#5-pipeline_stage).
 
 ## Historical design and measurement boundary
 

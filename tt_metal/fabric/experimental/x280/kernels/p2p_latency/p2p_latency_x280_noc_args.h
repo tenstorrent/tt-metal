@@ -5,7 +5,7 @@
 /*
  * X280-side NoC mailbox arguments shared by x280_peer_tile, tensix_peer_tile,
  * erisc_peer_tile and drisc_peer_tile.
- * See x280/CHARACTERIZATION_UBENCH_DESIGN.md, "Roles and mailbox model".
+ * See docs/benchmarks/design.md, "Roles and mailbox model".
  */
 #ifndef X280_P2P_LATENCY_X280_NOC_ARGS_H
 #define X280_P2P_LATENCY_X280_NOC_ARGS_H

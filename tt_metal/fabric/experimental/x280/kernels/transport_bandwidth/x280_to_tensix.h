@@ -31,13 +31,13 @@
  *   PLL conversion on the host; `rdcycle` is the
  *   same-bracket secondary, published as a cross-check between two
  *   independent clocks. `rdcycle` does not advance while the hart stalls
- *   on memory or a BRESP (MEASUREMENT.md
+ *   on memory or a BRESP (docs/measurement.md
  *   "Unconfirmed hardware assumptions", item 5); the two counters have
  *   counted in lockstep on every run so far.
  *   See rt/x280_measurement.h for the fenced helpers and the design's
  *   Measurement discipline for the rule the choice satisfies.
  *
- * See x280/CHARACTERIZATION_UBENCH_DESIGN.md § Transport bandwidth.
+ * See docs/benchmarks/design.md § Transport bandwidth.
  */
 #ifndef X280_TRANSPORT_BW_X280_TO_TENSIX_H
 #define X280_TRANSPORT_BW_X280_TO_TENSIX_H

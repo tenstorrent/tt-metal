@@ -13,7 +13,7 @@
  * share one protocol loop so a source-code divergence is not mistaken for a
  * hardware difference.
  *
- * See x280/CHARACTERIZATION_UBENCH_DESIGN.md, §Kernel frontend and backend,
+ * See docs/benchmarks/design.md, §Kernel frontend and backend,
  * §Kernel entry point, and §Timed loop for the semantics this file implements.
  *
  * A backend supplies:

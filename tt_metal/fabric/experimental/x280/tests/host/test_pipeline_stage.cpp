@@ -627,7 +627,7 @@ TEST(PipelineStageBatchDelta, RefusesABackwardPairAndAcceptsAForwardWrap) {
 }
 
 // ---------------------------------------------------------------------------
-// pipeline_stage timing contract, pinned from CHARACTERIZATION_ROUTER_MICRO_OPS.md
+// pipeline_stage timing contract, pinned from docs/benchmarks/pipeline_stage.md
 // ("Timing and result contract", "Bracket overhead control and counter
 // monotonicity") and the shared frontend in
 // kernels/pipeline_stage/pipeline_stage_frontend_cxx.hpp. A scripted fake

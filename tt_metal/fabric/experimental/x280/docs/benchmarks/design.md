@@ -26,7 +26,7 @@ specification.
 
 Two design documents have distinct authority:
 
-- [`x280/CHARACTERIZATION_HARNESS.md`](CHARACTERIZATION_HARNESS.md) owns
+- [`docs/harness.md`](../harness.md) owns
   host lifecycle and ownership, claims where the hardware has a reversible
   reservation, regions and address views, execution, deadlines, safety,
   runtime gates and API blockers, clock
@@ -38,7 +38,7 @@ Two design documents have distinct authority:
   structure.
 
 Raw X280 NOC encodings and helper behavior remain defined by
-[`x280/include/noc.h`](include/noc.h). The harness LLD summarizes the
+[`x280/include/noc.h`](../../include/noc.h). The harness LLD summarizes the
 non-obvious consequences that span that header, atomic behavior, and L3/LIM
 visibility.
 
@@ -115,7 +115,7 @@ simplification cheap enough to report a cost the real logic could not achieve.
 
 The harness invokes one case at a time and owns participant lifecycle,
 per-case regions, and collision handling through its
-[`ownership model`](CHARACTERIZATION_HARNESS.md#ownership-and-lifecycle).
+[`ownership model`](../harness.md#ownership-and-lifecycle).
 For suite design, the durable rule is that one invocation receives one exact
 configuration. A case may still launch multiple participants when that
 concurrency is part of the experiment.
@@ -161,9 +161,9 @@ control for ordered sweeps.
 
 Hardware identity, ownership, usable spans, region finalization, viewer-relative
 resolution, binding, and restoration are defined by the harness
-[`Concrete target model`](CHARACTERIZATION_HARNESS.md#concrete-target-model)
+[`Concrete target model`](../harness.md#concrete-target-model)
 and
-[`Memory regions and address views`](CHARACTERIZATION_HARNESS.md#memory-regions-and-address-views).
+[`Memory regions and address views`](../harness.md#memory-regions-and-address-views).
 The host-shape pseudocode below consumes those typed services; its target and
 selection names are illustrative, not a second host API specification.
 
@@ -372,7 +372,7 @@ primitive; it does not acquire a generic remote drainer.
 ### Device and result conventions
 
 The harness
-[`Result composition`](CHARACTERIZATION_HARNESS.md#result-composition)
+[`Result composition`](../harness.md#result-composition)
 defines the common envelope, reference-type vocabulary, and the
 device/host/suite responsibility split. This document defines each suite
 payload, selects the applicable reference type, validates observations, and
@@ -387,7 +387,7 @@ The suites have different levels of maturity:
    active-image contract; cross-tile X280 boots its tiles through
    `X280Runtime::boot_tiles`. These host mechanisms
    are tracked by the harness
-   [`Current decision index`](CHARACTERIZATION_HARNESS.md#current-decision-index)
+   [`Current decision index`](../harness.md#current-decision-index)
    (D-021, D-023, and D-026). The `erisc_peer_tile` member is a landed
    mechanical smoke path to one inactive idle ERISC over same-chip NOC; it does
    not use an Ethernet link. It requires `TT_METAL_SLOW_DISPATCH_MODE=1` before
@@ -404,7 +404,7 @@ The suites have different levels of maturity:
    packet-header ingress is a `packet_injection` member. DRISC and raw-link
    ERISC members still require member-specific backend decisions.
 3. **Pipeline-stage cost** has a concrete lookup and forwarding contract in
-   `CHARACTERIZATION_ROUTER_MICRO_OPS.md`, which IDs 6 and 7 supply in full.
+   `docs/benchmarks/pipeline_stage.md`, which IDs 6 and 7 supply in full.
    The lookup is a fixed destination-to-next-hop operation; forwarding has one
    DECIDE configuration.
 4. **Client handling and composed experiments** remain roadmap items.
@@ -472,10 +472,10 @@ table and nothing more: no API, path, selector, or result record carries one.
 | — | X280 ↔ Tensix, one channel both ways | `p2p_latency` `tensix_peer_tile` for latency and both `transport_bandwidth` members for bandwidth, landed and measured |
 | — | X280 ↔ inactive idle ERISC, same-chip NOC | `p2p_latency` `erisc_peer_tile`, landed as a mechanical smoke path; raw ERISC ticks only |
 | — | X280 ↔ free non-endpoint DRISC, same-chip NOC0 | `p2p_latency` `drisc_peer_tile`, landed as a mechanical smoke path; raw DRISC ticks only |
-| 6 | X280 Routing module | `pipeline_stage` `route_compute`, landed and measured, specified in `CHARACTERIZATION_ROUTER_MICRO_OPS.md` |
-| 7 | X280 Forwarding module | `pipeline_stage` `route_forward`, landed and measured, specified in `CHARACTERIZATION_ROUTER_MICRO_OPS.md` |
-| 10 | X280 packet injection handler module (single connection) | client handling, implemented in `CHARACTERIZATION_PACKET_INJECTION.md` |
-| 11 | X280 packet injection handler (all workers) | client handling, implemented in `CHARACTERIZATION_PACKET_INJECTION.md` |
+| 6 | X280 Routing module | `pipeline_stage` `route_compute`, landed and measured, specified in `docs/benchmarks/pipeline_stage.md` |
+| 7 | X280 Forwarding module | `pipeline_stage` `route_forward`, landed and measured, specified in `docs/benchmarks/pipeline_stage.md` |
+| 10 | X280 packet injection handler module (single connection) | client handling, implemented in `docs/benchmarks/packet_injection.md` |
+| 11 | X280 packet injection handler (all workers) | client handling, implemented in `docs/benchmarks/packet_injection.md` |
 
 The three Metal-peer members share one X280 firmware source,
 `src/p2p_latency_metal_peer_tile.cpp`, and one Metal entry,
@@ -498,7 +498,7 @@ The audit of `include/`, `src/`, `kernels/`, and `tests/device/` found no
 remaining target-specific P2P entry, argument wrapper, source-local target
 definition, or one-caller Metal policy forwarding header. No member reduces
 its samples: every member records its raw populations, and the tabulator's one
-floor-index rule computes their percentiles (`MEASUREMENT.md`).
+floor-index rule computes their percentiles (`docs/measurement.md`).
 
 The unnumbered row is grouped that way because IDs 2 and 3 describe the whole
 communication path of one two-core channel rather than a single quantity, and
@@ -509,7 +509,7 @@ numbered counterpart, and its bandwidth half answers the unnumbered
 
 ID 14, X280 packet header ingress BW, is implemented by
 `packet_injection/erisc_to_x280_header`, specified in
-[`CHARACTERIZATION_PACKET_INJECTION.md`](CHARACTERIZATION_PACKET_INJECTION.md#erisc-header-ingress-member):
+[`docs/benchmarks/packet_injection.md`](packet_injection.md#erisc-header-ingress-member):
 one to all available idle ERISCs, one per Ethernet tile, publish ready 96 B
 headers through the shared packet-injection producer, credit protocol and X280
 consumer, at writer counts 1, 2, 4, 8 and all available and publication batch
@@ -522,9 +522,9 @@ that member published into successive X280 FIFO slots with a sideband
 `pkt_valid` word and never waited for its consumer. Its per-header cost against
 the unified point, the cost of the credit protocol, and its historical results
 are in
-[`CHARACTERIZATION_RESULTS.md`](CHARACTERIZATION_RESULTS.md#44-erisc---x280-packet-header-ingress-96-b);
+[`CHARACTERIZATION_RESULTS.md`](../../CHARACTERIZATION_RESULTS.md#44-erisc---x280-packet-header-ingress-96-b);
 its contract is kept in
-[`CHARACTERIZATION_PACKET_HEADER_INGRESS.md`](CHARACTERIZATION_PACKET_HEADER_INGRESS.md#prototype-member-superseded).
+[`docs/benchmarks/packet_header_ingress.md`](packet_header_ingress.md#prototype-member-superseded).
 
 `p2p_latency` participant entries 3–6 have no numbered counterpart. The IDs
 touching entries 4–6 — 4, 5, and 17–19 — are credit-flow and link-bandwidth
@@ -539,7 +539,7 @@ loops. The implementation work for these checks is issue-owned, but the
 following admissibility rules are durable:
 
 - Every invocation first satisfies the harness
-  [`Safety invariants`](CHARACTERIZATION_HARNESS.md#safety-invariants) and
+  [`Safety invariants`](../harness.md#safety-invariants) and
   current X280 runtime gates, including host access, lifecycle, memory bounds,
   window binding, and clock metadata.
 - X280-to-Tensix readiness must be established in both directions before a
@@ -781,7 +781,7 @@ Each participant records one local quantity:
 
 Counter selection, fencing, lifecycle timebases, and pre-launch versus per-run
 frequency validation follow the harness
-[`Measurement discipline`](CHARACTERIZATION_HARNESS.md#measurement-discipline).
+[`Measurement discipline`](../harness.md#measurement-discipline).
 The host converts each participant's raw deltas independently before the suite
 compares physical time. The suite uses the harness's fenced X280 bracket and
 still performs any transport completion operation required by the selected
@@ -1079,7 +1079,7 @@ selected placement.
 
 X280 device-window allocation, programming, verification, capacity, and
 aperture-offset handling follow the harness
-[`Memory regions and address views`](CHARACTERIZATION_HARNESS.md#memory-regions-and-address-views).
+[`Memory regions and address views`](../harness.md#memory-regions-and-address-views).
 For this suite, ID 2 uses a self-view and no device window. Other X280 outbound
 legs program and verify one paired-range window in `INIT` from the coordinate,
 address, slot, and ordering their directional access plans select on the host.
@@ -1129,7 +1129,7 @@ Each participant publishes two phase records. A phase record contains:
 - optional backend calibration observations.
 
 The common envelope comes from the harness
-[`Result composition`](CHARACTERIZATION_HARNESS.md#result-composition).
+[`Result composition`](../harness.md#result-composition).
 The suite rejects mismatched backend identity, unexpected sample count,
 invalid terminal state, clock disagreement, or token-interval overflow.
 
@@ -1231,7 +1231,7 @@ enum class MeasurementBoundary {
 
 - `DRAINED` takes `t1` after `drain()`. For Tensix->X280 that follows every
   write's acknowledgement; for X280->Tensix it follows one read through the
-  window, which does not prove the posted writes landed (MEASUREMENT.md). It is
+  window, which does not prove the posted writes landed (docs/measurement.md). It is
   the registered sustained-throughput baseline.
 - `INJECTION` takes `t1` after the last `issue()`, then drains outside the
   measured interval. It describes finite-batch issue rate from a warm, empty
@@ -1369,7 +1369,7 @@ inlined loops, is marked `hot`: GCC otherwise lays out loops in `main` as
 run-once code, top-tested with an extra jump per issue.
 
 X280 uses the fenced bracket defined by the harness
-[`Measurement discipline`](CHARACTERIZATION_HARNESS.md#measurement-discipline).
+[`Measurement discipline`](../harness.md#measurement-discipline).
 That bracket does not substitute for the backend's remote-completion `drain()`.
 A backend must verify that its `INJECTION` endpoint still corresponds to the
 documented `issue()` semantics on that component.
@@ -1379,7 +1379,7 @@ documented `issue()` semantics on that component.
 | Member | Primitive | Readiness |
 |---|---|---|
 | Tensix write to X280 | asynchronous NOC write into X280 LIM; passive X280 target | landed (`tensix_to_x280`) |
-| X280 write to Tensix | X280 hart 0 issues `SIZE/4` 4-byte uncached stores through paired TLB slot 120 in ordering mode 2 (posted) into a Tensix L1 buffer; passive Tensix target. `DRAINED` ends on one read through the window, so it is an issue rate, not a delivered rate, and is recorded as `RETIRED` ([MEASUREMENT.md "Quantities that share a label"](MEASUREMENT.md#quantities-that-share-a-label)) | landed (`x280_to_tensix`) |
+| X280 write to Tensix | X280 hart 0 issues `SIZE/4` 4-byte uncached stores through paired TLB slot 120 in ordering mode 2 (posted) into a Tensix L1 buffer; passive Tensix target. `DRAINED` ends on one read through the window, so it is an issue rate, not a delivered rate, and is recorded as `RETIRED` ([docs/measurement.md "Quantities that share a label"](../measurement.md#quantities-that-share-a-label)) | landed (`x280_to_tensix`) |
 | ERISC raw transmit | raw Ethernet issue and completion | peer operation, completion, and byte accounting unresolved |
 | DRISC read from Tensix | repeated NOC read from host-seeded Tensix L1 | primitive, drain, and supported depth unresolved |
 | DRISC GDDR DMA | repeated DMA read or write | direction, buffer partition, and completion mapping unresolved |
@@ -1431,7 +1431,7 @@ destination-to-next-hop direction-table lookup. `route_forward` has one
 fixed-source configuration, `decide_plain`. Exact layouts, arguments, result
 identity, prepared-input requirements, and the historical boundary are defined
 in
-[`CHARACTERIZATION_ROUTER_MICRO_OPS.md`](CHARACTERIZATION_ROUTER_MICRO_OPS.md).
+[`docs/benchmarks/pipeline_stage.md`](pipeline_stage.md).
 
 ### Stage spine
 
@@ -1617,22 +1617,22 @@ rule, participant topology, or result interpretation updates this document.
 Host-runtime and X280 window implementation references are maintained in the
 harness LLD. Suite implementations additionally rely on:
 
-- [`tt_metal/hw/inc/api/dataflow/noc.h`](../../../tt_metal/hw/inc/api/dataflow/noc.h)
+- [`tt_metal/hw/inc/api/dataflow/noc.h`](../../../../hw/inc/api/dataflow/noc.h)
   — Tensix NOC issue, flush, and barrier operations.
-- [`tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_sender.cpp`](../../../tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_sender.cpp)
+- [`tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_sender.cpp`](../../../../../tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_sender.cpp)
   and
-  [`tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_responder.cpp`](../../../tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_responder.cpp)
+  [`tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_responder.cpp`](../../../../../tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_responder.cpp)
   — production-fabric RTT prior art for cache handling and polling, not the
   p2p mailbox backend.
-- [`tt_metal/fabric/routing_table_generator.cpp`](../../../tt_metal/fabric/routing_table_generator.cpp)
+- [`tt_metal/fabric/routing_table_generator.cpp`](../../../routing_table_generator.cpp)
   and
-  [`tt_metal/fabric/control_plane.cpp`](../../../tt_metal/fabric/control_plane.cpp)
+  [`tt_metal/fabric/control_plane.cpp`](../../../control_plane.cpp)
   and
-  [`tt_metal/fabric/compressed_routing_path.cpp`](../../../tt_metal/fabric/compressed_routing_path.cpp)
+  [`tt_metal/fabric/compressed_routing_path.cpp`](../../../compressed_routing_path.cpp)
   — host routing-direction generation, compressed/source-routed forms, and
   device routing-table publication.
-- [`tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp`](../../../tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp)
+- [`tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp`](../../../hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp)
   and
-  [`tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h`](../../../tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h)
+  [`tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h`](../../../hw/inc/edm_fabric/fabric_txq_setup.h)
   — production worker/EDM buffer-slot flow control and Ethernet TXQ/RXQ plus
   packet-resend setup; these are not application-credit semantics.

@@ -182,7 +182,7 @@ inline std::string clock_json(const measurement::AiclkRunEvidence& clock) {
 //
 // record() renders a whole JSONL record from typed fields. A record carries raw
 // ticks or cycles, counts, byte counts, endpoints and clock evidence only; the
-// offline tabulator derives every converted or computed figure (MEASUREMENT.md
+// offline tabulator derives every converted or computed figure (docs/measurement.md
 // "Record contract"). The contract is enforced here: no field type holds a
 // floating-point number.
 // ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@
  * (§Measurement discipline), NOC store burst -- live in the X280 backend
  * header under kernels/transport_bandwidth/backends/.
  *
- * See x280/CHARACTERIZATION_UBENCH_DESIGN.md § Transport bandwidth and
+ * See docs/benchmarks/design.md § Transport bandwidth and
  * kernels/transport_bandwidth/transport_bandwidth_frontend_cxx.hpp for the
  * contract this image implements against.
  */

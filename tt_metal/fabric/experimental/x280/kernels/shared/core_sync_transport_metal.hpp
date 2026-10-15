@@ -280,7 +280,7 @@ struct MetalTransport {
      * Tensix or ERISC destination the value is then in its L1
      * (NoC/Counters.md); for an L2CPU destination it was accepted at the
      * L2CPU, and a write issued after the ack reaches LIM after it by owner
-     * assumption (MEASUREMENT.md "Unconfirmed hardware assumptions", item 2). Carries release traffic and
+     * assumption (docs/measurement.md "Unconfirmed hardware assumptions", item 2). Carries release traffic and
      * notify_arrival's Word arrivals. A DRISC core-sync participant is in
      * stream mode, where experimental/drisc_mode.h requires an untagged local
      * L1 address; the 0x2000000000 tag is for NOC2AXI mode. Delivery cannot

@@ -14,7 +14,7 @@
 // publication all live in the shared frontend, so this member shares one
 // implementation with the X280 -> Tensix half of the suite.
 //
-// See x280/CHARACTERIZATION_UBENCH_DESIGN.md § Transport bandwidth.
+// See docs/benchmarks/design.md § Transport bandwidth.
 
 #include <cstdint>
 
