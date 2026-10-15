@@ -28,9 +28,14 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
                    tt/rope.rope_heads) -> x 512^-0.5 (the softmax scale folded into q: the op's scale is then 1, exact;
                    K-27) -> bf16 -> all_to_all head -> seq over axis 1 (sparse_sdpa needs H % 32 == 0: 16 heads per chip
                    on 4x4; done whenever TP > 1, one path everywhere) -> [1, 64, S/(SP TP), 512]
-    attention      ttnn.bringup.sparse_sdpa(high_precision=True, attention_sink = sink / 1, scale 1): per query the 128
-                   window rows (load-time index list: row d + 1 + j of the table, a sentinel tail for positions < 0)
-    output         all_to_all back -> fp32 -> inverse RoPE + re-interleave -> fp8_qdq -> heads concatenated per group ->
+    attention      settings WINDOW_SDPA = "exact" (default; DS41-19): tt/window_exact.ExactWindow on the chip's own heads
+                   and rows (no reshard): q [1, H/TP, S/SP, 512] fp32 -> blocks of 32 queries x their 160 table rows,
+                   q and the probabilities as bf16 pieces, lane-masked keys / values (exact products), fp32 SFPU
+                   softmax with the fp32 sink, fp32 output. "high_precision" / "source": the bf16 q -> all_to_all ->
+                   ttnn.bringup / ttnn.transformer sparse_sdpa(attention_sink = sink / 1, scale 1) path: per query the
+                   128 window rows (load-time index list: row d + 1 + j of the table, a sentinel tail for positions
+                   < 0) -> all_to_all back -> fp32
+    output         inverse RoPE + re-interleave -> fp8_qdq -> heads concatenated per group ->
                    grouped wo_a (the chip's whole groups, one batched matmul) -> fp8_qdq -> wo_b (K-split: the chip's
                    groups) -> exact sum over TP (all_gather + SFPU add, K-30) -> the chip's hidden slice
 
@@ -49,6 +54,7 @@ from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, tp_sum
 from .quant import fp8_qdq
 from .rope import RopeTable, deinterleave_perm, rope_heads
 from .settings import settings
+from .window_exact import ExactWindow
 
 WINDOW = 128  # sliding window (cfg.window); the table's carry region
 SENTINEL = -1  # uploaded as int32 -1, read through uint32: 0xFFFFFFFF, sparse_sdpa's "no key"
@@ -134,6 +140,17 @@ class WindowTables:
             mesh, torch.arange(chunk, dtype=torch.float32).view(1, 1, chunk, 1), ttnn.float32, ttnn.TILE_LAYOUT
         )
         self.zero_carry = _upload(mesh, torch.zeros(1, 1, WINDOW, 512), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+        self._exact = {}
+
+    def exact(self, heads_per_chip: int, width: int, pieces: int, compute_config) -> ExactWindow:
+        """The exact window attention's load-time tables (tt/window_exact.py), one per head count / pieces, shared
+        by every window layer."""
+        key = (heads_per_chip, width, pieces)
+        if key not in self._exact:
+            self._exact[key] = ExactWindow(
+                self.mesh, self.geo.chunk, heads_per_chip, width, WINDOW, pieces, compute_config
+            )
+        return self._exact[key]
 
 
 class TtWindowCache:
@@ -314,10 +331,14 @@ class TtWindowAttention:
         assert self.heads % g.tp == 0 and self.groups % g.tp == 0, (self.heads, self.groups, g.tp)
         self.h_l, self.g_l = self.heads // g.tp, self.groups // g.tp
         self.hpg = self.heads // self.groups  # heads per wo_a group
-        assert self.heads % 32 == 0, f"sparse_sdpa needs a multiple of 32 heads per chip ({self.heads} after reshard)"
         self.ckc = compute_config(mesh)
         self.scale = self.d**-0.5
-        self.high_precision = settings.get("WINDOW_SDPA") == "high_precision"
+        self.sdpa = settings.get("WINDOW_SDPA")
+        self.high_precision = self.sdpa == "high_precision"
+        if self.sdpa != "exact":
+            assert (
+                self.heads % 32 == 0
+            ), f"sparse_sdpa needs a multiple of 32 heads per chip ({self.heads} after reshard)"
         self.o_sum = settings.get("ATTN_O_SUM")
         perm = deinterleave_perm(self.d, self.rd)
         # wq_b [heads * 512, q_lora] -> each head's rope rows de-interleaved -> [q_lora, heads * 512], columns split
@@ -338,7 +359,20 @@ class TtWindowAttention:
         self.hidden = wo_b.shape[0]
         # the sink in sparse_sdpa's units (it multiplies by the op's scale, 1 here): every head on every chip
         sink = w["attn_sink"].float().reshape(1, 1, 1, self.heads)
-        self.sink = _upload(mesh, sink, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+        if self.sdpa == "exact":
+            # fp32 sink per (head, block row) [1, H/TP, 32, 1], heads split over TP like wq_b's columns
+            col = w["attn_sink"].float().view(1, self.heads, 1, 1).expand(1, self.heads, 32, 1)
+            self.sink_col = ttnn.from_torch(
+                col.contiguous(),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=DRAM,
+                mesh_mapper=_mapper(mesh, (None, 1)),
+            )
+            self.window = tables.exact(self.h_l, self.d, int(settings.get("WINDOW_PIECES")), self.ckc)
+        else:
+            self.sink = _upload(mesh, sink, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
 
     # ------------------------------------------------------------------ parts
     def _reshard(self, t, in_dim, out_dim):
@@ -380,8 +414,8 @@ class TtWindowAttention:
         ttnn.deallocate(tt)
         return out
 
-    def _q(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """q_resid -> scaled, roped q heads [1, H, S/(SP TP), 512] bf16 ROW_MAJOR (after the reshard)."""
+    def _q_heads(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+        """q_resid -> scaled, roped q of the chip's heads [1, H/TP, S/SP, 512] fp32 (rope tail [even | odd])."""
         rows = q_resid.shape[-2]
         xq = fp8_qdq(q_resid, dtype=ttnn.bfloat16)
         qf = ttnn.linear(xq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
@@ -392,6 +426,11 @@ class TtWindowAttention:
         ttnn.deallocate(q4)
         qs = ttnn.multiply(qr, self.scale, dtype=ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(qr)
+        return qs
+
+    def _q(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+        """q_resid -> scaled, roped q heads [1, H, S/(SP TP), 512] bf16 ROW_MAJOR (after the reshard)."""
+        qs = self._q_heads(q_resid, cos, sin)
         qb = ttnn.typecast(qs, ttnn.bfloat16, memory_config=DRAM)
         ttnn.deallocate(qs)
         qa = self._reshard(qb, in_dim=1, out_dim=2)
@@ -433,9 +472,14 @@ class TtWindowAttention:
         oh = self._reshard(ot, in_dim=2, out_dim=1)  # [1, H/TP, S/SP, 512] bf16
         if oh is not ot:
             ttnn.deallocate(ot)
-        rows = oh.shape[2]
         of = ttnn.typecast(oh, ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(oh)
+        return self._out_heads(of, cos, sin)
+
+    def _out_heads(self, of: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+        """attention output of the chip's heads [1, H/TP, S/SP, 512] fp32 (rope tail [even | odd]; consumed) ->
+        attn_out [1, 1, S/SP, H/TP] fp32."""
+        rows = of.shape[2]
         ou = rope_heads(of, cos, sin, inverse=True, interleave=True)  # the reference's order again
         ttnn.deallocate(of)
         oq = fp8_qdq(ou, dtype=ttnn.bfloat16)  # groups of 32 inside each head (512 % 32 == 0)
@@ -477,6 +521,15 @@ class TtWindowAttention:
         end = start + s if end is None else int(end)
         cos, sin = self.rope.rows(start, s)
         table = self._table(kv, start, end, cache)
+        if self.sdpa == "exact":
+            qs = self._q_heads(q_resid, cos, sin)
+            o = self.window(qs, table, start, self.sink_col)
+            ttnn.deallocate(qs)
+            ttnn.deallocate(table)
+            out = self._out_heads(o, cos, sin)
+            for t in (cos, sin):
+                ttnn.deallocate(t)
+            return out
         q_rm = self._q(q_resid, cos, sin)
         o = self._sdpa(q_rm, table, self.tables.index[g.start_class(start)])
         ttnn.deallocate(q_rm)
