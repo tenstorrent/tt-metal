@@ -8,6 +8,8 @@ The DiT matmul tables are keyed on the shapes and grids the model actually
 requests and carry swept blockings (see ``_register_5b_matmul_tables``).
 """
 
+import dataclasses
+
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.utils.conv3d import _BLOCKINGS, register_conv3d_configs
@@ -163,6 +165,9 @@ _BLOCKINGS.update(
 )
 
 
+_SDPA_CHUNK_480P = (96, 512)
+
+
 class WanTI2V5BPipeline(WanPipeline):
     @classmethod
     def _config_overrides(cls) -> dict[str, object]:
@@ -202,8 +207,8 @@ class WanTI2V5BPipeline(WanPipeline):
             #   256     1837.0   1537.4   1433.0
             #
             # k=512 wins at every q, so the larger k chunk is worth more than the K-padding
-            # it wastes. Note this key is not resolution-aware: 480p (M=1024) already fits
-            # one round at either value, so it is along for the ride -- gate both resolutions.
+            # it wastes. This key is not resolution-aware; `default_config` swaps in
+            # `_SDPA_CHUNK_480P` at 480p.
             "sdpa_chunk_size_overrides": {(True, 8, 4): (160, 512)},
             # NOTE: TI2V-5B uses per-token (expanded) timesteps for true image
             # conditioning, but the tt _step path only plumbs a scalar timestep and
@@ -211,3 +216,12 @@ class WanTI2V5BPipeline(WanPipeline):
             # Keep False until 2-D timestep is plumbed through combined_step.
             "expand_timesteps": False,
         }
+
+    @classmethod
+    def default_config(cls, *, height: int = 480, config_overrides: dict[str, object] | None = None, **kwargs):
+        config = super().default_config(height=height, config_overrides=config_overrides, **kwargs)
+        # At 480p (M=1024 per device) q=160 gives 7 x 6 = 42 work items, under half the SDPA grid;
+        # q=96 gives 11 x 6 = 66. Measured on u20-42 at 160 W, mean of 3: denoise 3.520 -> 3.219 s.
+        if height <= 480 and "sdpa_chunk_size_overrides" not in (config_overrides or {}):
+            config = dataclasses.replace(config, sdpa_chunk_size_overrides={(True, 8, 4): _SDPA_CHUNK_480P})
+        return config

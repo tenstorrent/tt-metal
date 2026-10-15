@@ -27,6 +27,7 @@ from loguru import logger
 import ttnn
 from models.tt_dit.models.vae.vae_wan2_1 import WanAvgDown3D, patchify_bcthw, unpatchify_bcthw
 from models.tt_dit.models.vae.vae_wan2_1_encoder_host import AvgDown3D as HostAvgDown3D
+from models.tt_dit.utils.test import ring_params_req_exact_devices
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tests dir is not a package
 
@@ -155,9 +156,10 @@ def test_residual_encoder_vs_torch(mesh_device, h_axis, w_axis, num_links):
     )
     torch_model = TorchAutoencoderKLWan(**cfg).eval()
     height, width = 704 // 2, 1280 // 2  # patchified frame
-    pixels = torch.randn(1, 12, 1, height, width)
+    raw = torch.randn(1, 3, 1, 704, 1280)
+    pixels = patchify_bcthw(raw, 2)  # (1, 12, 1, 352, 640); diffusers patchifies inside encode()
     with torch.no_grad():
-        ref = torch_model.encode(pixels).latent_dist.mode()  # (1, 48, 1, 44, 80), unnormalized
+        ref = torch_model.encode(raw).latent_dist.mode()  # (1, 48, 1, 44, 80), unnormalized
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     parallel_config = VaeHWParallelConfig(
@@ -208,7 +210,7 @@ def test_residual_encoder_vs_torch(mesh_device, h_axis, w_axis, num_links):
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params, topology",
-    [[(4, 8), (4, 8), None, ttnn.Topology.Ring]],
+    [[(4, 8), (4, 8), {**ring_params_req_exact_devices, "trace_region_size": 150000000}, ttnn.Topology.Ring]],
     ids=["bh_4x8"],
     indirect=["mesh_device", "device_params"],
 )
