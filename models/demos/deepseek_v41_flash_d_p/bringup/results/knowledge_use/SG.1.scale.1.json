@@ -1,0 +1,29 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [
+  "plan/scale.py copies only the checkpoint's top-level files and rewrites only config.json: a reference reading a nested config (DeepSeek inference/config.json) must derive the scaled counts itself (now DS41-11)",
+  "the canonical prompt (R.1) is built to the longest real ladder rung only; a scaled ladder longer than it cannot get a golden until text.length / the prompt is raised (now DS41-12)"
+ ],
+ "cited_only": [
+  "DS41-11",
+  "DS41-12"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "SG.1",
+  "role": "scale",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T07:33:41",
+  "head": "3524eba2dd1",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/SG.1.scale.1.json",
+   "models/demos/deepseek_v41_flash_d_p/reference/ds41_ref.py",
+   "models/demos/deepseek_v41_flash_d_p/reference/hf_oracle.py"
+  ]
+ }
+}
