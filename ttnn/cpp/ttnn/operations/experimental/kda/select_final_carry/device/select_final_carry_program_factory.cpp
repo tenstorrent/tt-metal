@@ -91,7 +91,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         std::max(tt::tt_metal::hal::get_dram_alignment(), tt::tt_metal::hal::get_l1_alignment());
     const auto state_format = tt::tt_metal::datatype_to_dataformat_converter(in.prefix_final.dtype());
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = 4 * packet_pages * page_size,
+        // Two of the reader's eight-packet batches (reader_select_final_carry.cpp).
+        .total_size = 2 * 8 * packet_pages * page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = tiles_cb, .data_format = state_format, .page_size = page_size}}},
