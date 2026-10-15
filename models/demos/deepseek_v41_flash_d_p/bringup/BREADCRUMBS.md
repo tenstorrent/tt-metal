@@ -542,3 +542,18 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   <= 1.9e-4; determinism bit-identical. ttnn.linear auto config (K-51 explicit config not tried; perf step).
 - OV-4: DS41-20 already states the F73 fix; known_issues.md not touched.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_kv.py`
+
+## C.swa_engram.engram_add implement (attempt 1)
+- `tt/engram_add.py:TtEngramAdd`: streams [1, 1, S/SP, 4 x H/TP] fp32 + engram_kv [1, 1, S/SP, 5 x H/TP] fp32 (the
+  chip's hidden slice of the 4 keys and the value, tt/engram_kv.py, no reshard) + pending pre -> (new streams, pre).
+  Per stream: h * (q_w k_w) * key, h^2, key^2 (fp32 SFPU multiply) -> `ttnn.sum(dim=-1)` (fp32 + fp32 DEST = the
+  accurate SFPU reduce, DS41-27) -> concat [S/SP, 12] -> `tp_sum` (all_gather axis 1 + SFPU add, K-30) ->
+  rsqrt(ss / H + eps) products, / sqrt(H) -> copysign(sqrt(max(|d|, 1e-6)), d) via `where(ltz)` (ttnn.sign would
+  give 0 at d = 0, torch.copysign +) -> sigmoid -> per-stream `addcmul(h_n, value, gate_n)` -> concat. q_w k_w is a
+  fp32 [1, 4H] constant split chip-major over TP at load. TP from mesh.shape (H/TP 2560 / 1280, tile-aligned).
+- layout.py: `blocks_to_device` (inverse of blocks_to_host). hooks.py: `_engram_add_host_fn` (x [S, 4H + 4], kv
+  [S, 5H] in; streams + pre packed back), `_device_step_fn("engram_add")`, DEVICE_STEPS["swa_engram"] += engram_add.
+- Gate: PASS. pcc 0.999998; vs CPU rel 1.0e-7 (limit 0.0072), vs golden 0.0020 (limit 0.0092); second inputs rel
+  <= 1e-7; determinism bit-identical. Not tuned (12 slices / sums per call; a fused [R, 4, w] reduce is a perf item).
+- OV-4: DS41-20 already states the F73 fix; unchanged.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_add.py`

@@ -1,0 +1,57 @@
+{
+ "used": [
+  {
+   "id": "K-30",
+   "how": "TP partial sums exchanged by tp_sum (all_gather + SFPU add), not all_reduce; only SFPU fp32 ops on fp32 data, no FPU reads",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-3",
+   "how": "the pending pre passes through engram_add unchanged; the host fn packs streams + pre into [S, 4H + 4]",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-53",
+   "how": "ran the gate with PYTHONPATH=$PWD",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "ttnn.sum on fp32 with fp32_dest_acc_en is already the exact SFPU reduce (added as DS41-27); K-30 reads as if every TTNN reduction adds fp32 on the FPU"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "known_issues.md touched only to add DS41-27; DS41-20 already reads '(RESOLVED by the framework, F73) ... 2 x (swap_step_calib) the step's own component error, no cap', nothing to change"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "DS41-27"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa_engram.engram_add",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T19:47:17",
+  "head": "c6016736ea0",
+  "touched": [
+   "models/demos/common/bringup/knowledge/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa_engram.engram_add.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_add.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/layout.py"
+  ]
+ }
+}
