@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -28,38 +29,20 @@ class MeshDevice;
 
 namespace ttnn {
 
-// Optional per-slot stage gate (hybrid page pool). When enabled, the receiver service
-// holds each incoming transfer — after it has landed, before the receiver workers see
-// data_ready — until the gate of the slot named in the transfer's metadata is OPEN.
-// Each gate is one binary L1 word on the receiver service core of every participating
-// coord. An external agent (the KV manager, on copy-in completion) opens it with a plain
-// 32-bit store of kStageGateOpen; the receiver closes it itself when a transfer flagged
-// kStageGateFlagCloseOnTransit passes, so exactly one burst is admitted per open. No
-// writer ever does a read-modify-write, so host (PCIe) and remote (NoC/fabric) writers
-// need no atomics. Word values / flag bits are in d2d_stage_gate.hpp.
-
-// Compile-time stage-gate configuration. num_gates == 0 (the default) compiles the gate
-// out entirely: no L1 is allocated and the receiver kernel is unchanged.
-//
-// The gate reads two uint32 words of the per-transfer metadata blob (so it requires
-// metadata_size_bytes > 0): the slot id selecting the gate, and the gate_flags word. A
-// slot id >= num_gates (e.g. the -1 / -2 shutdown / warm-up sentinels) or the Bypass
-// flag lets the transfer through ungated.
+// Receiver stage gate: the receiver holds each landed transfer until the gate selected
+// by the slot id in its metadata is open. Slot ids >= num_gates and kStageGateFlagBypass
+// pass ungated.
 struct D2DStageGateConfig {
-    uint32_t num_gates = 0;
+    uint32_t num_gates = 0;  // must be > 0
     uint32_t slot_id_offset_bytes = 0;
     uint32_t gate_flags_offset_bytes = 0;
 };
 
-// Everything an external writer needs to open the gates of one coord: the chip, the
-// receiver service core, and the gate array (gate i is at gate_base_addr + i * gate_stride_bytes).
+// Location of one coord's gates: gate i is the uint32 at gate_base_addr + 4 * i.
 struct D2DStageGateDescriptor {
     tt::tt_fabric::FabricNodeId fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
-    tt::tt_metal::CoreCoord service_core_logical;
     tt::tt_metal::CoreCoord service_core_noc;  // virtual NoC coords
     tt::tt_metal::DeviceAddr gate_base_addr = 0;
-    uint32_t gate_stride_bytes = 0;
-    uint32_t num_gates = 0;
 };
 
 // Persistent device-to-device streaming service backed by a fixed device tensor
@@ -144,9 +127,8 @@ struct D2DStreamConfig {
     // link topology, so the receiver knows how many data-landed increments to await.
     uint32_t max_sender_lanes = 2;
 
-    // Optional per-slot stage gate on the receiver side (see D2DStageGateConfig).
-    // Ignored by the sender.
-    D2DStageGateConfig stage_gate;
+    // Receiver only.
+    std::optional<D2DStageGateConfig> stage_gate;
 };
 
 // Identifies the two endpoints of a MULTI-HOST D2D pair and the communicator the
@@ -298,11 +280,10 @@ public:
     void wait_for_fabric_links();
     void release_fabric_links();
 
-    // Stage gate (only when Config::stage_gate.num_gates > 0; TT_FATALs otherwise).
+    // Stage gate. get_num_stage_gates() is 0 without one; the rest TT_FATAL.
     uint32_t get_num_stage_gates() const;
     D2DStageGateDescriptor get_stage_gate_descriptor(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
-    // Host-side gate write / read (tests, bring-up before the KV manager writes gates, and
-    // force-closing a gate on request abort). Unordered PCIe L1 accesses: not CQ-ordered.
+    // Direct L1 access, not ordered with the CQ.
     void set_stage_gate(const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate, bool open);
     bool is_stage_gate_open(const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate) const;
 

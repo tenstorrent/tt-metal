@@ -40,6 +40,7 @@
 // ttnn/core/tensor/d2d_stream_service.cpp).
 constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
 constexpr uint32_t termination_semaphore_addr = get_compile_time_arg_val(1);
+constexpr uint32_t terminate_value = get_named_compile_time_arg_val("terminate_value");
 constexpr uint32_t socket_page_size = get_compile_time_arg_val(2);
 constexpr uint32_t num_socket_pages = get_compile_time_arg_val(3);
 constexpr uint32_t pages_per_chunk = get_compile_time_arg_val(4);
@@ -78,26 +79,23 @@ constexpr uint32_t num_lanes = get_compile_time_arg_val(21);
 // unchanged otherwise), but the receiver no longer reads/writes the tensor itself —
 // the sender writes it directly over fabric — so no accessor is built.
 constexpr auto output_tensor_accessor_args = TensorAccessorArgs<22>();
-// Optional per-slot stage gate (named CT args). num_stage_gates == 0 compiles it out.
-// stage_gate_addr is this service core's gate array, one word per slot.
+// Stage gate. num_stage_gates == 0 compiles it out.
 constexpr uint32_t num_stage_gates = get_named_compile_time_arg_val("num_stage_gates");
 constexpr uint32_t stage_gate_addr = get_named_compile_time_arg_val("stage_gate_addr");
-constexpr uint32_t stage_gate_slot_offset = get_named_compile_time_arg_val("stage_gate_slot_offset");
-constexpr uint32_t stage_gate_flags_offset = get_named_compile_time_arg_val("stage_gate_flags_offset");
+constexpr uint32_t stage_gate_slot_word = get_named_compile_time_arg_val("stage_gate_slot_offset") / sizeof(uint32_t);
+constexpr uint32_t stage_gate_flags_word = get_named_compile_time_arg_val("stage_gate_flags_offset") / sizeof(uint32_t);
 using ttnn::kStageGateClosed;
 using ttnn::kStageGateFlagBypass;
 using ttnn::kStageGateFlagCloseOnTransit;
 using ttnn::kStageGateOpen;
 
-// Hold a landed transfer (workers not yet signalled) until the gate of the slot named in
-// its metadata is OPEN. A CloseOnTransit transfer closes the gate before the workers are
-// released. Out-of-range slots (sentinels) and Bypass pass ungated. Returns false if
-// terminated while waiting.
+// Wait until the gate selected by the transfer's metadata is open, then close it if the
+// transfer carries CloseOnTransit. Returns false if terminated while waiting.
 FORCE_INLINE bool pass_stage_gate(uint32_t metadata_addr) {
     invalidate_l1_cache();
     volatile tt_l1_ptr uint32_t* md = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_addr);
-    const uint32_t slot = md[stage_gate_slot_offset / sizeof(uint32_t)];
-    const uint32_t flags = md[stage_gate_flags_offset / sizeof(uint32_t)];
+    const uint32_t slot = md[stage_gate_slot_word];
+    const uint32_t flags = md[stage_gate_flags_word];
     if (slot >= num_stage_gates || (flags & kStageGateFlagBypass)) {
         return true;
     }
@@ -106,7 +104,7 @@ FORCE_INLINE bool pass_stage_gate(uint32_t metadata_addr) {
     volatile tt_l1_ptr uint32_t* gate = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage_gate_addr) + slot;
     while (true) {
         invalidate_l1_cache();
-        if (termination_semaphore[0] == 1) {
+        if (termination_semaphore[0] == terminate_value) {
             return false;
         }
         if (*gate == kStageGateOpen) {
@@ -194,7 +192,7 @@ void kernel_main() {
             bool granted = false;
             while (!granted) {
                 invalidate_l1_cache();
-                if (termination_semaphore[0] == 1) {
+                if (termination_semaphore[0] == terminate_value) {
                     terminated = true;
                     break;
                 }
@@ -217,7 +215,7 @@ void kernel_main() {
         bool got_data = false;
         while (!got_data) {
             invalidate_l1_cache();
-            if (termination_semaphore[0] == 1) {
+            if (termination_semaphore[0] == terminate_value) {
                 terminated = true;
                 break;
             }
@@ -269,7 +267,7 @@ void kernel_main() {
             //    workers are running, e.g. a host-driven transfer with no consumer op).
             while (true) {
                 invalidate_l1_cache();
-                if (termination_semaphore[0] == 1) {
+                if (termination_semaphore[0] == terminate_value) {
                     terminated = true;
                     break;
                 }
