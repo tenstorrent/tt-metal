@@ -29,6 +29,7 @@ PATTERN = re.compile(
     r"gate PASS|gate FAIL|HANG|STOPPED|stopped tasks|WAITING FOR A PERSON|paused before|DEFERRED|deferral rejected"
     r"|KNOWLEDGE CONTRADICTED|Traceback|nothing left to run|complete with|ORCHESTRATOR_EXIT|attempt [2-9]\d*:"
     r"|fix attempt \d+:"  # a scripted step (golden, box, ladder) failed its gate: never routine
+    r"|ABORTED by the overseer|OVERSEER NOTE"  # F69
 )
 GATES = re.compile(r"gate PASS|gate FAIL")
 PID_FILE = "ORCHESTRATOR.pid"
@@ -44,11 +45,13 @@ def alive(run_dir: Path) -> bool:
         return False
 
 
-def events(lines: list[str], quiet_gates: bool = False) -> list[str]:
+def events(lines: list[str], quiet_gates: bool = False, quiet_passes: bool = False) -> list[str]:
     """The lines a supervisor acts on. With quiet_gates a plain gate FAIL (the check before an agent) is dropped."""
     out = [ln for ln in lines if PATTERN.search(ln)]
     if quiet_gates:
         out = [ln for ln in out if not (GATES.search(ln) and "FAIL" in ln)]
+    if quiet_passes:
+        out = [ln for ln in out if "gate PASS" not in ln]
     return out
 
 
@@ -58,7 +61,9 @@ def last_event(log: Path) -> str:
     return hits[-1][:300] if hits else "(empty log)"
 
 
-def watch(run_dir: Path, timeout: float, poll: float = 15.0, quiet_gates: bool = False, out=print) -> int:
+def watch(
+    run_dir: Path, timeout: float, poll: float = 15.0, quiet_gates: bool = False, out=print, quiet_passes=False
+) -> int:
     log = run_dir / "orchestrator.log"
     if not alive(run_dir):
         out(f"ORCHESTRATOR NOT RUNNING; last event: {last_event(log)}")
@@ -73,7 +78,7 @@ def watch(run_dir: Path, timeout: float, poll: float = 15.0, quiet_gates: bool =
                 buf += f.read()
                 pos = f.tell()
             *done, buf = buf.split("\n")
-            hits = events(done, quiet_gates)
+            hits = events(done, quiet_gates, quiet_passes)
             if hits:
                 for h in hits:
                     out(h[:300])
@@ -94,6 +99,9 @@ def main(argv=None) -> int:
     ap.add_argument("--timeout", type=float, default=6600.0, help="seconds (below the harness's 2 h limit)")
     ap.add_argument("--poll", type=float, default=15.0)
     ap.add_argument("--quiet-gates", action="store_true", help="skip a plain gate FAIL (the check before an agent)")
+    ap.add_argument(
+        "--quiet-passes", action="store_true", help="skip gate PASS lines (problems only; the timeout reports progress)"
+    )
     a = ap.parse_args(argv)
     if a.run_dir:
         run_dir = Path(a.run_dir)
@@ -104,7 +112,17 @@ def main(argv=None) -> int:
 
         spec = Spec.load(a.spec)
         run_dir = spec.run_dir(run_name(Ledger(spec.bringup_dir)))
-    return watch(run_dir, a.timeout, a.poll, a.quiet_gates)
+    rc = watch(run_dir, a.timeout, a.poll, a.quiet_gates, quiet_passes=a.quiet_passes)
+    if rc == TIMEOUT:
+        log = (
+            (run_dir / "orchestrator.log").read_text(errors="replace")
+            if (run_dir / "orchestrator.log").exists()
+            else ""
+        )
+        print(
+            f"progress: {log.count('gate PASS')} gates passed in this log; last: {last_event(run_dir / 'orchestrator.log')}"
+        )
+    return rc
 
 
 if __name__ == "__main__":

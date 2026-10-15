@@ -149,6 +149,30 @@ event. Rules:
 | someone edits the tree while an agent step runs | the step's tree diff fails it; finish or revert the edit, then rerun the task |
 | a task became DEFERRED (the agent requested an op from op-gen) | review the evidence like a gate commit; accept it and tell the owner in one line, or reject it as cheating (below); section 5 |
 
+### Steer the agents; do not do their work
+
+You oversee; the agents do the work. Every correction of the model's code, its knowledge files or the way a step is
+done reaches the agents as a note, so the fix and its lesson land where the next step and the next model find them.
+
+- **Feedback: a note.** `python -m models.demos.common.bringup.overseer note --spec <spec> --tasks '<glob>' [--roles
+  <role>] "<what is wrong; what to do or check>"`. Every open note heads the brief of every matching step; the agent
+  acts on it and answers it in its knowledge-use report (done / n/a / disagree with evidence). Your watch wakes on
+  `OVERSEER NOTE <id> DISAGREED` (read the evidence: accept it, or reword the note) and on `unanswered`. Close a note
+  once it is settled (`overseer close OV-n --why "..."`); `overseer list` shows them all. Notes are for things the
+  agents should know or do, e.g. "the spec's scaled ladder is wrong; do not work around it", "shorten DS41-12 to 600
+  characters", "check the other block sizes too", "this fork option already exists".
+- **Stop a step that goes the wrong way: abort.** `overseer abort --spec <spec> --reason "..."` ends the agent at
+  work, records the attempt as aborted (no gate, not counted against the task's attempts), and turns the reason into
+  a note for that task's next attempt. A running agent cannot take messages; abort plus a note is how one reaches it.
+  Use it for an agent working around a spec or framework error, one in a dead end, or cheating in progress; after
+  three aborts of one task it stops for a person.
+- **What you change yourself.** The owner-delegated decisions (spec, plan, approvals: edit, re-approve, regenerate
+  the ledger with ledger_gen); framework fixes (models/demos/common/bringup, at a pause, with a selftest, F-entry in
+  dev/BREADCRUMBS.md); pause, resume, and reject (revert + note). Never the model's code, its knowledge files,
+  `state.json` or `results/`: write a note and let the agent do it.
+- **Your files.** `overseer.yaml`, `supervision.md` and the dashboards are yours; the agent path check ignores them, so
+  write them at any time. Anything else in the tree only at a pause.
+
 ### Decide; do not ask
 
 You are the overseer. Use your judgement and keep the run moving; the person does not want to be asked for routine
@@ -179,12 +203,13 @@ the gate commit (`git show --stat`, then the parts that matter), not only the ve
   evidence and check it yourself (the repo map, a grep for the op).
 Accept it if the change is the honest fix, even when it touches shared code: a generic hook in the engine, a new
 branch for a new layout, a fix in a shared op with its own test. To reject: pause, revert the gate commit
-(`git revert`), add one bullet to the model's findings saying what was wrong and what the honest fix is, then
+(`git revert`), write a note for the task saying what was wrong and what the honest fix is, then
 `$B rerun --from <task>`. Log the decision either way.
 
 Never:
-- edit anything in the tree while an agent step runs. `python -m models.demos.common.bringup.orchestrator pause --spec <spec>`
-  stops it before its next task; the path check would charge your edit to the running agent;
+- edit anything in the tree while an agent step runs, except your own files (above). `python -m
+  models.demos.common.bringup.orchestrator pause --spec <spec>` stops it before its next task; the path check would
+  charge your edit to the running agent;
 - approve the intake, plan or performance picks for the person, loosen a threshold, or edit a frozen test. When the
   person delegates the picks, add each as a perf task (step `perf`, role `perf`, `brief.details` with the exact
   change, deps on X.2 or the previous pick, gate = an accuracy rung plus the profile with a time threshold below the
@@ -202,7 +227,9 @@ Never:
 - run `tt-smi -r`, or use long timeouts for a device check (the box test takes seconds).
 
 Report briefly on each gate the person would care about; say plainly what you decided, stopped or rejected, and why.
-After every gate, re-export and republish both dashboards (never switch to "problems only" watching).
+The orchestrator re-exports the dashboards after every gate; republish them (Artifact) when the person wants a
+link. When gates pass every few minutes, wait with the watch's `--quiet-passes` (problems only; its timeout prints the
+progress) and report progress at each timeout instead of every gate.
 
 ### At the end
 
@@ -220,6 +247,10 @@ Then tally what the agents used: `python -m models.demos.common.bringup.knowledg
 - a missing topic that recurs: write the entry, if the run has the evidence;
 - uses never traced to the entry's code: say so in the report (the agent may cite entries it did not apply).
 Show the owner the shared-file diff and the usage summary for approval.
+
+Report where the run's time went: `python -m models.demos.common.bringup.timing --spec <spec>` (the model, the
+agents' device runs and other tools, gates on device and on CPU, idle time by reason: waiting for a person,
+stopped, paused, not running; also on the dashboard). Use it during the run too, when a step seems slow.
 
 Besides the metrics the person asked for, report every change the agents made beyond the model's own code, one line
 each with its commit and your verdict: fork changes (ttnn/ttnn/bringup: what, why, which tests), framework, test or

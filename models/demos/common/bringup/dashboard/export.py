@@ -186,6 +186,30 @@ def knowledge_summary(spec) -> dict | None:
     }
 
 
+def runtime_summary(spec) -> dict | None:
+    """Where the run's time went (timing.py, F70): totals in hours, the slowest tasks in minutes."""
+    try:
+        from models.demos.common.bringup import timing as TL
+        from models.demos.common.bringup.core.gate import run_name
+
+        led = Ledger(spec.bringup_dir)
+        run_dir = spec.run_dir(run_name(led))
+        if not (run_dir / "agents").exists():
+            return None
+        tasks = led.tasks()
+        res = TL.breakdown(spec.bringup_dir, run_dir, tasks)
+    except Exception as e:  # never let the time section break the dashboard
+        return {"error": str(e)}
+    work = lambda v: sum(x for k, x in v.items() if k != "agent runs")  # noqa: E731
+    top = sorted(res["per_task"].items(), key=lambda kv: -work(kv[1]))[:12]
+    return {
+        "elapsed_h": None if res["elapsed"] is None else res["elapsed"] / 3600,
+        "totals_h": {k: v / 3600 for k, v in res["totals"].items()},
+        "device_log": res["device_log"],
+        "tasks_min": [{"task": t, **{k: (x / 60 if k != "agent runs" else x) for k, x in v.items()}} for t, v in top],
+    }
+
+
 def boxes_summary(spec, res: Path) -> dict | None:
     """F64: the deployment box this run stands in for, the run's box and mode, and the plan's per-box table
     (results/plan_boxes.json, plan/boxes.py) when the plan gate wrote it."""
@@ -345,6 +369,7 @@ def build(spec) -> dict:
         "final": final_tests(spec, led, state),
         "knowledge": knowledge_summary(spec),
         "boxes": boxes_summary(spec, res),
+        "runtime": runtime_summary(spec),
         "thresholds": {k: spec.threshold(k, v) for k, v in DEFAULT_THRESHOLDS.items()},
         "source": str(spec.bringup_dir.relative_to(spec.repo)),
     }

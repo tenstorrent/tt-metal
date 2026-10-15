@@ -15,7 +15,12 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 1. Read, in this order: the brief, `models/demos/common/bringup/knowledge/repo_map.md`,
    `models/demos/common/bringup/knowledge/known_issues.md`, the model's own `bringup/repo_map.md` and
    `bringup/known_issues.md` (when present), the model spec, and the files the brief lists.
-   Search the repo only for what those do not answer.
+   Search the repo only for what those do not answer. The brief's "Overseer notes" come first: the overseer reviews
+   the run and writes them for the steps they name. Act on each and answer each in your knowledge-use report
+   (`"overseer": [{"id", "answer": "done" | "n/a" | "disagree", "evidence"}]`). They rank below the owner's rules
+   only. When your evidence (a test, a probe, the reference) says a note is wrong, answer `disagree` with that
+   evidence and do what the evidence supports; never ignore a note silently. A previous attempt the overseer
+   stopped ("aborted by the overseer") was not a failure of yours: its reason is a note.
 2. Change only the paths the brief allows. The orchestrator diffs the tree after you finish, and any change outside those
    paths fails the step.
 3. Touch the device only through `scripts/run_safe_pytest.sh` or `scripts/tt-probe.sh`, in the foreground. Never run
