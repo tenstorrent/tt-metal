@@ -229,7 +229,19 @@ void MetalEnvImpl::verify_fw_capabilities() {
 
 // ─── Fabric config ────────────────────────────────────────────────────────────
 
-tt_fabric::FabricConfig MetalEnvImpl::get_fabric_config() const { return fabric_config_; }
+tt_fabric::FabricConfig MetalEnvImpl::get_fabric_config() const {
+    // One source of truth. Once the control plane exists it has resolved this process's actual fabric
+    // config from the mesh graph descriptor (the MGD's per-mesh fabric_config takes precedence over the
+    // SetFabricConfig override -- see ControlPlane::adopt_local_mesh_fabric_config). Every consumer (the
+    // firmware initializer, device setup, the test harness, ...) pulls that resolved value from here, so
+    // the device fabric is always brought up for the same config the routers were built with -- never
+    // partially initialized with the override and then overridden. Before the control plane exists, the
+    // stored value is the requested override (used only to build the control plane).
+    if (control_plane_ != nullptr) {
+        return control_plane_->get_fabric_config();
+    }
+    return fabric_config_;
+}
 
 tt_fabric::FabricReliabilityMode MetalEnvImpl::get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
 

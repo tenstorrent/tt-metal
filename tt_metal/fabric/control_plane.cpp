@@ -862,31 +862,28 @@ void validate_fabric_configs(
 
 void ControlPlane::adopt_local_mesh_fabric_config() {
     // Each rank/process (tt-run launches one MPI rank per mesh, each with its own TT_MESH_ID) owns a
-    // single mesh, so the fabric this process builds should use that mesh's resolved config, not the raw
-    // process-wide override. MeshGraph::get_fabric_config() applies the precedence MGD-declared per-mesh
-    // config > process-wide override > dim_types default; when the MGD declares no explicit per-mesh
-    // config this returns the override, so single-config runs are unchanged. This is what makes
-    // heterogeneous per-mesh configs work: the rank owning a TORUS_X mesh builds its whole FabricContext
-    // (routing mode, VC config, deadlock avoidance, bubble flow control, packet specs) for TORUS_X even
-    // when the launch set a plain FABRIC_2D override. Skipped for the single-host multi-mesh testing path
-    // (a rank owning several meshes has no single config), which keeps the process-wide override.
+    // single mesh, so build for that mesh's resolved config, not the raw process-wide override.
+    // MeshGraph::get_fabric_config() applies the precedence MGD per-mesh config > SetFabricConfig override
+    // > dim_types default, so single-config runs are unchanged. No-op when a rank owns several meshes
+    // (single-host multi-mesh testing). MetalEnvImpl aligns its runtime config to this (and warns if the
+    // two disagree), so the env and the control plane agree on exactly one config per process.
     if (this->mesh_graph_ == nullptr || this->local_mesh_binding_.mesh_ids.size() != 1) {
-        log_info(
-            tt::LogFabric,
-            "adopt_local_mesh_fabric_config: SKIP (has_mesh_graph={}, local_mesh_count={})",
-            this->mesh_graph_ != nullptr,
-            this->local_mesh_binding_.mesh_ids.size());
         return;
     }
     const auto local_mesh = this->local_mesh_binding_.mesh_ids.front();
-    const auto adopted = this->mesh_graph_->get_fabric_config(local_mesh);
-    log_info(
-        tt::LogFabric,
-        "adopt_local_mesh_fabric_config: mesh {} process-override {} -> adopted {}",
-        *local_mesh,
-        enchantum::to_string(this->fabric_config_),
-        enchantum::to_string(adopted));
-    this->fabric_config_ = adopted;
+    const auto resolved = this->mesh_graph_->get_fabric_config(local_mesh);
+    if (resolved != this->fabric_config_ && this->fabric_config_ != FabricConfig::DISABLED) {
+        log_warning(
+            tt::LogFabric,
+            "Fabric config set in two places: SetFabricConfig requested {}, but the mesh graph descriptor "
+            "declares {} for this process's mesh (mesh {}). The MGD's per-mesh fabric_config takes precedence; "
+            "using {}. Set the fabric config in only one place to avoid this.",
+            enchantum::to_string(this->fabric_config_),
+            enchantum::to_string(resolved),
+            *local_mesh,
+            enchantum::to_string(resolved));
+    }
+    this->fabric_config_ = resolved;
 }
 
 void ControlPlane::validate_fabric_config_across_ranks() {
