@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <optional>
@@ -29,6 +30,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -72,6 +74,14 @@ static bool dump_test_info = false;
 
 static bool slow_dispatch_enabled() { return std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr; }
 
+// The nodes of the kernels in a test that binds PrefetcherPipes (see PrefetcherPipes).
+enum class PrefetcherPipeKernelNodes {
+    None,       // The test binds no PrefetcherPipe.
+    Receivers,  // Exactly the pipes' receivers.
+    // The whole worker rectangle. The nodes that are not receivers are the binding's extra_nodes.
+    ReceiversAndExtraNodes,
+};
+
 struct TestInfo {
     uint32_t iterations = DEFAULT_ITERATIONS;
     uint32_t warmup_iterations = DEFAULT_WARMUP_ITERATIONS;
@@ -97,6 +107,7 @@ struct TestInfo {
     bool load_prefetcher{false};
     // Use the entire leftmost column of cores.
     bool use_left_cores{false};
+    PrefetcherPipeKernelNodes prefetcher_pipe_kernel_nodes{PrefetcherPipeKernelNodes::None};
 };
 
 // Returns the address of the last core in the last column of the mesh. Picks a configuration that works with worst-case
@@ -270,13 +281,61 @@ uint32_t get_num_kernels(const TestInfo& info) {
     return num_kernels;
 }
 
+// The PrefetcherPipes a test binds: one pipe per even row of the workers, sent from the column left of the workers to
+// the whole row. The odd rows receive nothing, like the rows a prefetcher's receiver mapping leaves inside a consumer's
+// rectangle. The pipes are carved from one space, so they share a config address and every node of a kernel binding
+// them gets the same pipe slot entry.
+struct PrefetcherPipes {
+    // Declared before `pipes`, so it is destroyed after them: a space must outlive the pipes carved from it.
+    std::optional<tt_metal::experimental::PrefetcherPipeSpace> space;
+    std::vector<tt_metal::experimental::PrefetcherPipe> pipes;
+    CoreRangeSet receivers;
+};
+
+PrefetcherPipes make_prefetcher_pipes(const TestInfo& info, MeshDevice& mesh_device) {
+    const CoreCoord& start = info.workers.start_coord;
+    const CoreCoord& end = info.workers.end_coord;
+    TT_FATAL(
+        start.x > 0,
+        "The PrefetcherPipe senders need the column left of the workers, but the workers start at column {}",
+        start.x);
+    PrefetcherPipes prefetcher_pipes;
+    CoreRangeSet senders;
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> pipe_cores;
+    for (std::size_t y = start.y; y <= end.y; y += 2) {
+        const CoreCoord sender{start.x - 1, y};
+        const CoreRangeSet row(CoreRange({start.x, y}, {end.x, y}));
+        senders = senders.merge(CoreRangeSet(CoreRange(sender)));
+        prefetcher_pipes.receivers = prefetcher_pipes.receivers.merge(row);
+        pipe_cores.emplace_back(sender, row);
+    }
+    // Kernels are nullified, so nothing moves through a ring: the smallest legal ring, one L1-aligned entry, is enough.
+    prefetcher_pipes.space = tt_metal::experimental::CreatePrefetcherPipeSpace(
+        mesh_device,
+        {.sender_cores = senders,
+         .receiver_domain = prefetcher_pipes.receivers,
+         .ring_size = tt_metal::hal::get_l1_alignment(),
+         .max_receivers_per_pipe = static_cast<uint32_t>(end.x - start.x + 1)});
+    prefetcher_pipes.pipes = prefetcher_pipes.space->create_pipes(pipe_cores);
+    return prefetcher_pipes;
+}
+
+// Builds the test's program. With `prefetcher_pipes` (null when the test binds none), the BRISC kernel binds every
+// pipe under one accessor, and the kernels run on the nodes info.prefetcher_pipe_kernel_nodes names.
 bool initialize_program(
     const TestInfo& info,
     const std::shared_ptr<MeshDevice>& mesh_device,
     tt_metal::Program& program,
-    uint32_t run_cycles) {
+    uint32_t run_cycles,
+    PrefetcherPipes* prefetcher_pipes) {
     namespace m2 = tt::tt_metal::experimental;
     TT_FATAL(get_num_kernels(info) != 0, "The program needs a kernel; enable BRISC, NCRISC, or TRISC");
+    TT_FATAL(
+        prefetcher_pipes == nullptr || (info.brisc_enabled && info.n_kgs == 1 && info.n_subdevice_ranges == 1),
+        "PrefetcherPipe tests bind the pipes from BRISC on one kernel group, so they need BRISC enabled and support "
+        "no kernel groups (n_kgs = {}) or sub-devices (n_subdevice_ranges = {})",
+        info.n_kgs,
+        info.n_subdevice_ranges);
 
     m2::KernelSpec::CompilerOptions::Defines defines;
     defines["KERNEL_BYTES"] = std::to_string(info.kernel_size);
@@ -308,6 +367,21 @@ bool initialize_program(
     }
 
     m2::ProgramRunArgs run_args;
+    m2::PrefetcherPipeBinding pipe_binding{.accessor_name = "pipe"};
+    if (prefetcher_pipes != nullptr) {
+        for (std::size_t i = 0; i < prefetcher_pipes->pipes.size(); i++) {
+            m2::PrefetcherPipe& pipe = prefetcher_pipes->pipes[i];
+            const m2::PrefetcherPipeParamName name{"pipe_" + std::to_string(i)};
+            pipe_binding.pipe_parameter_names.push_back(name);
+            spec.advanced_options.prefetcher_pipe_parameters.push_back(m2::PrefetcherPipeParameter{
+                .unique_id = name,
+                .receivers = pipe.receiver_cores(),
+                .ring_size = pipe.ring_size(),
+                .entry_size = pipe.ring_size()});
+            run_args.advanced_options.prefetcher_pipe_args.emplace(name, m2::PrefetcherPipeArgument{pipe});
+        }
+    }
+
     // first kernel group is possibly wide, remaining kernel groups are 1 column each
     CoreRange total_kg = {
         info.workers.start_coord, {info.workers.end_coord.x - info.n_kgs + 1, info.workers.end_coord.y}};
@@ -318,6 +392,12 @@ bool initialize_program(
         // Each group adds a define, so every group compiles to distinct binaries.
         defines["KG_" + std::to_string(i)] = "";
         CoreRangeSet kg = CoreRangeSet{total_kg}.intersection(subdevice_core_ranges_set);
+        if (prefetcher_pipes != nullptr) {
+            kg = info.prefetcher_pipe_kernel_nodes == PrefetcherPipeKernelNodes::ReceiversAndExtraNodes
+                     ? CoreRangeSet(info.workers)
+                     : prefetcher_pipes->receivers;
+            pipe_binding.extra_nodes = kg.subtract(prefetcher_pipes->receivers);
+        }
 
         std::vector<m2::KernelSpec> kernels;
         auto add_kernel = [&](const std::string& name, decltype(m2::KernelSpec::hw_config) hw_config) {
@@ -344,6 +424,10 @@ bool initialize_program(
         }
         if (info.trisc_enabled) {
             add_kernel("trisc", m2::ComputeHardwareConfig{});
+        }
+        if (prefetcher_pipes != nullptr) {
+            // BRISC is enabled, so it is the first kernel.
+            kernels.front().advanced_options.prefetcher_pipe_bindings.push_back(pipe_binding);
         }
 
         // Every DFB instance needs exactly one producer and one consumer. The first kernel produces and the last
@@ -566,10 +650,13 @@ CoreType dispatch_core_type_to_core_type(DispatchCoreType dispatch_core_type) {
 
 // Helper function to create standard programs
 std::array<tt_metal::Program, 2> create_standard_programs(
-    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, DispatchCoreType /*dispatch_core_type*/) {
+    const TestInfo& info,
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    DispatchCoreType /*dispatch_core_type*/,
+    PrefetcherPipes* prefetcher_pipes) {
     std::array<tt_metal::Program, 2> programs;
-    if (!initialize_program(info, mesh_device, programs[0], info.slow_kernel_cycles) ||
-        !initialize_program(info, mesh_device, programs[1], info.fast_kernel_cycles)) {
+    if (!initialize_program(info, mesh_device, programs[0], info.slow_kernel_cycles, prefetcher_pipes) ||
+        !initialize_program(info, mesh_device, programs[1], info.fast_kernel_cycles, prefetcher_pipes)) {
         throw std::runtime_error("Standard program creation failed");
     }
     return programs;
@@ -596,7 +683,7 @@ std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32
     uint32_t kernel_runtime = 2000;  // cycles - short enough to focus on dispatch time
 
     for (auto& program : programs) {
-        if (!initialize_program(info, mesh_device, program, kernel_runtime)) {
+        if (!initialize_program(info, mesh_device, program, kernel_runtime, /*prefetcher_pipes=*/nullptr)) {
             throw std::runtime_error("Program creation failed for prefetcher cache load test");
         }
     }
@@ -668,6 +755,10 @@ static int pgm_dispatch(T& state, TestInfo info) {
         auto core_count = get_core_count();
         info.workers = CoreRange({0, 0}, {0, std::get<1>(core_count)});
     }
+    if (info.prefetcher_pipe_kernel_nodes != PrefetcherPipeKernelNodes::None) {
+        // Column 0 holds the pipes' senders, which no kernel of the program runs on.
+        info.workers.start_coord.x = 1;
+    }
 
     log_test_configuration(info);
 
@@ -716,6 +807,13 @@ static int pgm_dispatch(T& state, TestInfo info) {
             mesh_device->load_sub_device_manager(manager);
         }
 
+        // Carved before any program places L1 on their cores, and declared before the workloads so the programs that
+        // bind them are destroyed first.
+        std::optional<PrefetcherPipes> prefetcher_pipes;
+        if (info.prefetcher_pipe_kernel_nodes != PrefetcherPipeKernelNodes::None) {
+            prefetcher_pipes = make_prefetcher_pipes(info, *mesh_device);
+        }
+
         // Declare program storage at function scope to ensure proper lifetime
         ProgramExecutor executor([]() {}, []() {}, 0);  // Initialize with placeholder
         std::vector<MeshWorkload> mesh_workloads;
@@ -731,7 +829,8 @@ static int pgm_dispatch(T& state, TestInfo info) {
                 }
             }
         } else {
-            auto programs = create_standard_programs(info, mesh_device, dispatch_core_type);
+            auto programs = create_standard_programs(
+                info, mesh_device, dispatch_core_type, prefetcher_pipes ? &*prefetcher_pipes : nullptr);
             executor = create_standard_executor(info, mesh_workloads, programs, mesh_cq);
         }
 
@@ -1035,6 +1134,30 @@ BENCHMARK_CAPTURE(
         // Use only the left column to allow for a single CoreRange in the kernel group.
         .use_left_cores = true})
     ->Apply(KernelCycleArgs)
+    ->UseManualTime();
+
+// PrefetcherPipes: one pipe per even row of the grid, sent from column 0 (see PrefetcherPipes). The kernels run on
+// exactly the receivers, one rectangle per receiver row, or on the whole rectangle with the odd rows as the binding's
+// extra nodes. The extra nodes get the same pipe slot entry as the receivers, so dispatch writes the rectangle once.
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    prefetcher_pipe_receivers_trace,
+    TestInfo{
+        .warmup_iterations = 5000,
+        .use_trace = true,
+        .use_all_cores = true,
+        .prefetcher_pipe_kernel_nodes = PrefetcherPipeKernelNodes::Receivers})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    prefetcher_pipe_extra_nodes_trace,
+    TestInfo{
+        .warmup_iterations = 5000,
+        .use_trace = true,
+        .use_all_cores = true,
+        .prefetcher_pipe_kernel_nodes = PrefetcherPipeKernelNodes::ReceiversAndExtraNodes})
+    ->Apply(Max8192Args)
     ->UseManualTime();
 
 // Prefetcher cache load performance test - measures dispatch time with programs 2x cache size
