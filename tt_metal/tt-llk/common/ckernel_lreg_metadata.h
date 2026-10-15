@@ -128,10 +128,16 @@ constexpr unsigned write(unsigned x) {
     }
 }
 // Raw instructions execute under externally managed lane predicates. The
-// instruction word alone cannot prove that every destination lane is written.
-// Preserve the old destination as an input, including for nominally write-only
-// operations. This is deliberately conservative when all lanes are enabled.
+// instruction word alone cannot prove that every destination lane is written,
+// so the old destination value is an input, even for nominally write-only
+// operations. A compiler defining __riscv_xtt_sfprawlreg_merge adds that input
+// itself wherever a disabled lane can keep the old value; older compilers need
+// it declared here.
+#if defined(__riscv_xtt_sfprawlreg_merge)
+constexpr unsigned inputs(unsigned x) { return read(x); }
+#else
 constexpr unsigned inputs(unsigned x) { return read(x) | write(x); }
+#endif
 // A template argument requires constant evaluation without introducing local
 // constexpr objects (whose initialization can emit stack stores at -O0).
 template <unsigned Mask> struct constant_mask { enum : unsigned { value = Mask }; };

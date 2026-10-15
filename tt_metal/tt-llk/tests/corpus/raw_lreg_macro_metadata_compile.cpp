@@ -34,9 +34,15 @@ inline void raw_lreg_marker(unsigned, unsigned) {}
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPADD(1, 2, 3, 4, 0)) == 0x0eu);
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPADD(1, 2, 3, 4, 0)) == 0x10u);
 // The macro contract includes the old destination for inactive lanes, even
-// when the opcode has no explicit destination read.
+// when the opcode has no explicit destination read, unless the compiler adds
+// it where lanes may be disabled.
+#if defined(__riscv_xtt_sfprawlreg_merge)
+static_assert(ckernel::raw_lreg_effect::inputs(TT_OP_SFPADD(1, 2, 3, 4, 0)) == 0x0eu);
+static_assert(ckernel::raw_lreg_effect::inputs(TT_OP_SFPLOADI(3, 0, 0)) == 0x00u);
+#else
 static_assert(ckernel::raw_lreg_effect::inputs(TT_OP_SFPADD(1, 2, 3, 4, 0)) == 0x1eu);
 static_assert(ckernel::raw_lreg_effect::inputs(TT_OP_SFPLOADI(3, 0, 0)) == 0x08u);
+#endif
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPMAD(1, 2, 3, 4, 4)) == 0xffu);
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPMAD(1, 2, 3, 4, 4)) == 0x10u);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPMAD(1, 2, 3, 4, 8)) == 0x8eu);

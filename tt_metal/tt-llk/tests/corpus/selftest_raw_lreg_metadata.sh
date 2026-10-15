@@ -54,7 +54,7 @@ if [[ ${1:-} == --target-cxx ]]; then
     "$target_cxx" -O2 -mcpu=tt-bh-tensix -DUSE_MACRO -S \
         "$here/raw_lreg_annotation_gap.cpp" -o "$scratch/gap.s"
     grep -Eq 'SFPLOAD[[:space:]]+L[1-7], 1, 0, 0' "$scratch/gap.s" &&
-        grep -q '# RAWLREG_EFFECT 1, 1' "$scratch/gap.s" || {
+        grep -Eq '# RAWLREG_EFFECT [01], 1$' "$scratch/gap.s" || {
         echo "FAIL: raw write must preserve its old destination for inactive lanes" >&2; exit 1;
     }
     echo "PASS: raw destination preserved across typed load/store (assembly check)"
