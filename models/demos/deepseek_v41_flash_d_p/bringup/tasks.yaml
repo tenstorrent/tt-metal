@@ -660,6 +660,14 @@ tasks:
     kind: op
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-10-15T23:51:24'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_collapse.py: 87574f9105110ddb2046f9a20b284251908b34f18f94eae47409cd3d9b1cd1dc
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.swa.09
   title: 'swa block with steps 1-9 on device (last: ffn_collapse)'
   step: implement
