@@ -10,7 +10,7 @@ drives sources/sfpu_ema_perf.cpp, whose TILE_LOOP marker under MATH_ISOLATE cove
 math pipe with no dest handshake with pack.
 
 It does still include the datacopy that feeds Dest, because that is what retires the
-SrcA valid bits unpack sets -- the same arrangement eltwise_unary_sfpu_perf.cpp uses for
+SrcA valid bits unpack sets -- the same arrangement eltwise_unary_sfpu_test.cpp uses for
 every unary SFPU op. So mean(MATH_ISOLATE) is not the standalone cost of the SFPU block;
 it is the SFPU block plus a fixed datacopy. That offset is constant across a
 before/after comparison of the kernel, so it cancels in a delta, but do not read the

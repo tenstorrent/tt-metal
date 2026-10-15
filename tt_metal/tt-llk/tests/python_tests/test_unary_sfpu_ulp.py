@@ -34,13 +34,7 @@ from helpers.golden_generators import (
     UnarySFPUGolden,
     get_golden_generator,
 )
-from helpers.llk_params import (
-    BlocksCalculationAlgorithm,
-    DestSync,
-    FastMode,
-    format_dict,
-)
-from helpers.param_config import get_num_blocks_and_num_tiles_in_block
+from helpers.llk_params import FastMode, format_dict
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
     FLUSH_SUBNORMAL_OUTPUTS,
@@ -52,19 +46,7 @@ from helpers.sfpu_domains import (
     sfpu_unary_ops,
     unpacks_to_dest,
 )
-from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    CLAMP_NEGATIVE,
-    FAST_MODE,
-    MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
-    TILE_COUNT,
-    generate_input_dim,
-)
 from helpers.ulp import ulp_distance, ulp_stats
 from helpers.ulp_sweep import (
     golden_input,
@@ -76,6 +58,7 @@ from helpers.ulp_sweep import (
     sweep_spec,
 )
 from helpers.utils import _record_ulp_measurement, passed_test
+from test_eltwise_unary_sfpu import build_eltwise_unary_sfpu_config
 
 #: `accuracy` is the marker every LLK workflow deselects; `nightly` would not do, since
 #: llk-e2e runs it.
@@ -113,42 +96,20 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
         formats.input_format,
         SWEEP_DIMENSIONS,
     )
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+    configuration = build_eltwise_unary_sfpu_config(
+        formats,
         dest_acc,
-        formats,
+        approx_mode,
+        mathop,
         SWEEP_DIMENSIONS,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(SWEEP_DIMENSIONS, SWEEP_DIMENSIONS),
-            APPROX_MODE(approx_mode),
-            # The table has no axis for either: every budget is measured with these two
-            # compiled in and holds for a kernel built that way (see the YAML header).
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
+        src_A,
+        src_B,
+        tile_cnt_A,
+        tile_cnt_B,
+        # The table has no axis for either: every budget is measured with these two
+        # compiled in and holds for a kernel built that way (see the YAML header).
+        fast_mode=FastMode.No,
+        clamp_negative=True,
         unpack_to_dest=unpacks_to_dest(formats.input_format, dest_acc),
     )
     # `sweep_cells` leaves out the cells TestConfig would promote to another Dest, so

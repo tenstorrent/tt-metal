@@ -142,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Isolates the math pipe: no dest handshake with pack, so what is left is
             // the datacopy plus the EMA kernel.
             //
-            // Same shape as eltwise_unary_sfpu_perf.cpp's MATH_ISOLATE: the datacopy
+            // Same shape as eltwise_unary_sfpu_test.cpp's MATH_ISOLATE: the datacopy
             // stays in. It is what consumes the SrcA valid bits that unpack sets, so
             // dropping it and trying to retire them with a bare TTI_CLEARDVALID hangs the
             // math thread. The datacopy is therefore a fixed cost inside this marker, the
