@@ -33,18 +33,18 @@ GATE_LOWER_BOUND = KimiK3Config.KDA_GATE_LOWER_BOUND
 CHUNK_DECAY_LIMIT = -GATE_LOWER_BOUND * KDA_CHUNK_SIZE
 EDGE_CASES = ("baseline", "short_memory", "long_memory", "short_and_long_memory", "repeated_keys", "zero_values")
 
-# (case, tokens) -> (output, state) worst-head NRMSE thresholds: 1.5x the values measured on main.
+# (case, tokens) -> (output, state) worst-head NRMSE thresholds.
 _THRESHOLDS: dict[tuple[str, int], tuple[float, float]] = {
-    ("baseline", 256): (0.019, 0.042),  # measured 1.24e-02, 2.80e-02
-    ("baseline", 2048): (0.02, 0.051),  # measured 1.28e-02, 3.38e-02
-    ("short_memory", 256): (0.019, 0.018),  # measured 1.24e-02, 1.13e-02
-    ("short_memory", 2048): (0.023, 0.016),  # measured 1.53e-02, 1.03e-02
-    ("short_and_long_memory", 256): (0.017, 0.014),  # measured 1.09e-02, 8.77e-03
-    ("short_and_long_memory", 2048): (0.018, 0.015),  # measured 1.19e-02, 9.95e-03
-    ("long_memory", 256): (0.019, 0.015),  # measured 1.21e-02, 9.92e-03
-    ("long_memory", 2048): (0.023, 0.02),  # measured 1.49e-02, 1.33e-02
-    ("repeated_keys", 256): (0.02, 0.043),  # measured 1.32e-02, 2.86e-02
-    ("repeated_keys", 2048): (0.02, 0.043),  # measured 1.30e-02, 2.83e-02
+    ("baseline", 256): (0.015, 0.04),
+    ("baseline", 2048): (0.02, 0.05),
+    ("short_memory", 256): (0.015, 0.015),
+    ("short_memory", 2048): (0.02, 0.015),
+    ("short_and_long_memory", 256): (0.015, 0.01),
+    ("short_and_long_memory", 2048): (0.015, 0.015),
+    ("long_memory", 256): (0.015, 0.015),
+    ("long_memory", 2048): (0.02, 0.02),
+    ("repeated_keys", 256): (0.02, 0.04),
+    ("repeated_keys", 2048): (0.02, 0.04),
 }
 
 

@@ -8,7 +8,7 @@ test only loads it. Error is reported and gated as NRMSE against the golden: per
 window, per 1,024-token window (drift with context), per token (the golden-wide floor from its manifest), and
 for the final recurrent state per head (one drifting head is not averaged away).
 
-Needs ``KIMI_K3_CKPT`` (layers.0 and embedding shards), ``KDA_GOLDEN_RUN`` (a prepared golden) and ``KDA_TRACE_DIR``
+Needs ``KIMI_K3_CKPT`` (layers.0 and embedding shards), ``KDA_LONG_CONTEXT_GOLDEN`` (a prepared golden) and ``KDA_TRACE_DIR``
 (the vLLM trace whose token ids the golden used); skips without them.
 """
 
@@ -50,29 +50,11 @@ _PCC = 0.999
 # main (PCC 0.9975 and NRMSE 0.16 after 1M tokens), so the state's sanity bound is looser than the output's.
 _STATE_PCC = 0.99
 
-# NRMSE thresholds per context length: 1.5x the values measured on main (call, output, window, token, state head).
+# NRMSE thresholds per context length (call, output, window, token, state head).
 _THRESHOLDS: dict[int, dict[str, float]] = {
-    5120: {
-        "call": 0.019,
-        "output": 0.019,
-        "window": 0.02,
-        "token": 0.034,
-        "state_head": 0.066,
-    },  # measured 1.26e-02, 1.26e-02, 1.30e-02, 2.21e-02, 4.37e-02
-    20480: {
-        "call": 0.021,
-        "output": 0.02,
-        "window": 0.021,
-        "token": 0.034,
-        "state_head": 0.15,
-    },  # measured 1.37e-02, 1.33e-02, 1.40e-02, 2.24e-02, 9.33e-02
-    1044480: {
-        "call": 0.028,
-        "output": 0.022,
-        "window": 0.032,
-        "token": 0.14,
-        "state_head": 0.25,
-    },  # measured 1.83e-02, 1.46e-02, 2.09e-02, 9.28e-02, 1.63e-01
+    5120: {"call": 0.015, "output": 0.015, "window": 0.02, "token": 0.03, "state_head": 0.06},
+    20480: {"call": 0.02, "output": 0.02, "window": 0.02, "token": 0.03, "state_head": 0.15},
+    1044480: {"call": 0.025, "output": 0.02, "window": 0.03, "token": 0.14, "state_head": 0.2},
 }
 
 
@@ -85,9 +67,11 @@ _THRESHOLDS: dict[int, dict[str, float]] = {
 def test_kimi_k3_layer0_long_context_accuracy(
     mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int, device_params: dict, tokens: int
 ) -> None:
-    run_dir, checkpoint, trace = (os.environ.get(name) for name in ("KDA_GOLDEN_RUN", "KIMI_K3_CKPT", "KDA_TRACE_DIR"))
+    run_dir, checkpoint, trace = (
+        os.environ.get(name) for name in ("KDA_LONG_CONTEXT_GOLDEN", "KIMI_K3_CKPT", "KDA_TRACE_DIR")
+    )
     if not (run_dir and checkpoint and trace):
-        pytest.skip("set KDA_GOLDEN_RUN (a prepared golden), KIMI_K3_CKPT and KDA_TRACE_DIR")
+        pytest.skip("set KDA_LONG_CONTEXT_GOLDEN (a prepared golden), KIMI_K3_CKPT and KDA_TRACE_DIR")
     run_dir, checkpoint, trace = Path(run_dir), Path(checkpoint), resolve_trace_dir(trace)
     manifest = json.loads((run_dir / MANIFEST).read_text(encoding="utf-8"))
     if manifest["segments"][-1]["end"] < tokens or "token_floor" not in manifest:
