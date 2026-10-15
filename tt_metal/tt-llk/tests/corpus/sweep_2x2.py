@@ -2692,6 +2692,15 @@ def load_config(path):
         lb = (row.get("issue_slot_lb") or "").strip()
         row["issue_slot_lb"] = float(lb) if lb else None
         row["pin_flags"] = (row.get("pin_flags") or "").strip()
+        # Optional on_flags column: knobs that pay on this row but not
+        # corpus-wide, appended to ON_FLAGS for both arms' ON legs.
+        row["on_flags"] = (row.get("on_flags") or "").strip()
+        for tok in row["on_flags"].split():
+            if not tok.startswith("-mtt-tensix-") or tok in ON_FLAGS.split():
+                sys.exit(
+                    f"config row {row['op']}: on_flags token '{tok}' must be "
+                    "a -mtt-tensix- flag outside ON_FLAGS"
+                )
         env = (row.get("extra_env") or "").strip()
         row["extra_env"] = dict(kv.split("=", 1) for kv in env.split(";") if kv)
         # Optional per-selector env (corpus-expansion lane): sem_extra_env /
@@ -2749,6 +2758,11 @@ def load_config(path):
                         "node or withhold the perf leg in the row note"
                     )
     return rows
+
+
+def row_on_flags(row):
+    """ON_FLAGS plus the row's own on_flags (see load_config)."""
+    return f"{ON_FLAGS} {row['on_flags']}" if row.get("on_flags") else ON_FLAGS
 
 
 def row_env(row, sel):
@@ -3577,9 +3591,8 @@ class Sweep:
         (work / "verdict.json").write_text(json.dumps(verdict, indent=2) + "\n")
         return verdict
 
-    def classify(
-        self, row, sel, legs=(("off", OFF_FLAGS), ("on", ON_FLAGS)), tag="classify"
-    ):
+    def classify(self, row, sel, legs=None, tag="classify"):
+        legs = legs or (("off", OFF_FLAGS), ("on", row_on_flags(row)))
         node = row["nodes"][sel]
         work = self.ev / row["op"] / tag / sel
         cached = self._classify_cached(work)
@@ -3802,7 +3815,7 @@ class Sweep:
         jobs_by_rowsel = {}
         legjobs = []
         for row, sel, p_legs in pending:
-            legs = p_legs or (("off", OFF_FLAGS), ("on", ON_FLAGS))
+            legs = p_legs or (("off", OFF_FLAGS), ("on", row_on_flags(row)))
             work = self.ev / row["op"] / "classify" / sel
             if self._classify_cached(work) is not None:
                 continue
@@ -4084,9 +4097,10 @@ class Sweep:
         row,
         sel,
         arch,
-        legs_spec=(("off", OFF_FLAGS), ("on", ON_FLAGS)),
+        legs_spec=None,
         tag="craq",
     ):
+        legs_spec = legs_spec or (("off", OFF_FLAGS), ("on", row_on_flags(row)))
         node = row["nodes"][sel]
         sim = self._staged_sim(arch)
         work = self.ev / row["op"] / tag / f"{sel}-{arch}"
@@ -4853,7 +4867,7 @@ exit $RC
                         sel,
                         "corr",
                         leg,
-                        OFF_FLAGS if leg == "off" else ON_FLAGS,
+                        OFF_FLAGS if leg == "off" else row_on_flags(row),
                         "corr",
                     )
                 )
@@ -4877,7 +4891,7 @@ exit $RC
                             sel,
                             f"r{r}",
                             leg,
-                            OFF_FLAGS if leg == "off" else ON_FLAGS,
+                            OFF_FLAGS if leg == "off" else row_on_flags(row),
                             "perf",
                         )
                     )
@@ -5862,7 +5876,7 @@ exit $RC
                     sel,
                     "corr",
                     leg,
-                    OFF_FLAGS if leg == "off" else ON_FLAGS,
+                    OFF_FLAGS if leg == "off" else row_on_flags(row),
                     expected_texts=self._classify_texts(row, sel, leg),
                 )
                 result["runs"][f"{sel}/corr-{leg}"] = (
@@ -5924,7 +5938,7 @@ exit $RC
                         sel,
                         f"r{r}",
                         leg,
-                        OFF_FLAGS if leg == "off" else ON_FLAGS,
+                        OFF_FLAGS if leg == "off" else row_on_flags(row),
                         expected_texts=self._classify_texts(row, sel, leg),
                     )
                     val = self._perf_value(row, sel, f"r{r}", leg)
