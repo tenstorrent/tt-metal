@@ -242,14 +242,36 @@ def _run_sfpu_binary_llk_golden(
 
 
 # ===========================================================================
-# Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd), Int32 only.
+# Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd, lcm), Int32 only.
 # Ported from test_sfpu_binary_quasar.py.
 # ===========================================================================
+# lcm contract: |a|, |b| <= 2^15 - 1.
+_LCM_MAX_OPERAND = 32767
+
+
+def _prepare_lcm_stimuli(input_dimensions):
+    """Uniform in-contract lcm operands; sfpu_int32_lcm_pairs_*.yaml cover the edge pairs."""
+    spec = StimuliSpec.uniform(
+        low=float(-_LCM_MAX_OPERAND), high=float(_LCM_MAX_OPERAND)
+    )
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+        stimuli_format_A=DataFormat.Int32,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=DataFormat.Int32,
+        input_dimensions_B=input_dimensions,
+        spec_A=spec,
+        spec_B=spec,
+    )
+    return src_A, tile_cnt_A, src_B
+
+
 def _prepare_int_stimuli(
     formats, input_dimensions, src0_idx, src1_idx, mathop, clamp_inputs
 ):
     """Integer stimuli: uniform over the dtype range, optionally clamped (int MUL
     clamps to keep the product representable). Both operands live in src_A."""
+    if mathop == MathOperation.SfpuLcm:
+        return _prepare_lcm_stimuli(input_dimensions)
     data_format = formats.input_format
     iinfo = torch.iinfo(format_dict[data_format])
     spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
@@ -287,6 +309,7 @@ INT_SWEEP = dict(
         MathOperation.SfpuElwGe,
         MathOperation.SfpuCopyDest,
         MathOperation.SfpuGcd,
+        MathOperation.SfpuLcm,
     ],
 )
 
@@ -308,7 +331,7 @@ def test_eltwise_binary_sfpu_int_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd), Int32."""
+    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd, lcm), Int32."""
     binary_op = mathop.cpp_enum_value
     # GCD excludes INT_MIN: SFPABS saturates it.
     clamp_inputs = _INT_CLAMP.get(mathop)
