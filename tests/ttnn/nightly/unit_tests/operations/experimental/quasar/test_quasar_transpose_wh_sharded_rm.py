@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sharded row-major WH transpose (TransposeWHShardedRMProgramFactory), including output rows narrower than a tile."""
+"""Sharded row-major WH transpose (TransposeWHShardedRMProgramFactory), including output rows narrower than a tile.
+
+Runs both the mainline op and its experimental/quasar copy."""
 
 import pytest
 import torch
@@ -28,7 +30,8 @@ def _height_sharded(device, num_cores, shard_shape):
     ],
     ids=["h8", "h16", "h24", "h32", "h40"],
 )
-def test_quasar_transpose_wh_sharded_rm(device, n, c, h, w):
+@pytest.mark.parametrize("transpose", [ttnn.transpose, ttnn.experimental.quasar.transpose], ids=["main", "quasar"])
+def test_quasar_transpose_wh_sharded_rm(device, transpose, n, c, h, w):
     # Shards hold a whole number of tiles' worth of elements, so the op takes the sharded factory rather than the
     # interleaved fallback. W stays at 4 tiles or fewer: wider blocks hang on Quasar in the shared compute kernel.
     is_quasar = device.arch() == ttnn.device.Arch.QUASAR
@@ -45,7 +48,7 @@ def test_quasar_transpose_wh_sharded_rm(device, n, c, h, w):
     torch.manual_seed(0)
     x = torch.randn((n, c, h, w), dtype=torch.bfloat16)
     tt_in = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mc)
-    tt_out = ttnn.experimental.quasar.transpose(tt_in, 2, 3, memory_config=out_mc)
+    tt_out = transpose(tt_in, 2, 3, memory_config=out_mc)
 
     assert tt_out.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     assert_with_ulp(expected_result=x.transpose(2, 3), actual_result=ttnn.to_torch(tt_out), ulp_threshold=0)
