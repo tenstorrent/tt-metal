@@ -22,13 +22,15 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 - **Mode**: `partial` (the first layers that cover every layer type bring up the layout; on a box smaller than the
   deployment box the run also goes scaled: heads and experts cut so each chip holds what a deployment chip holds) or
   `full` (every layer at real size, every end-to-end check; only where the full model fits, which the plan gate checks).
-- **Serving chunk**: the chunk size the server sends (`deploy.chunk`). Always ask; propose 5120. It is one fixed size on
-  every box (only the context scales with the box, F67) and never above `serving.max_chunk` (5120, the owner's limit).
-- **Target**: this run's context at real size, whole serving chunks (default 56320 = 11 x 5120).
-- **Ladder**: every rung at the serving chunk (no test at a chunk that is never served): default three rungs: 2 chunks
+- **Serving chunk**: the chunk size the server sends on the deployment box (`deploy.chunk`). Always ask; propose 4096.
+  It never grows on a bigger box (more rows, fewer tokens per row) and never exceeds `serving.max_chunk` (5120, the
+  owner's limit). A smaller box (the proxy) shrinks it by its sequence factor so each mesh row holds the deployment's
+  tokens per row (4096 on a 4x4 -> 1024 per row -> 2048 on a 2x2) (F67). Show the per-row numbers when you ask.
+- **Target**: this run's context at real size, in whole chunks of this box's chunk (e.g. 55296 = 27 x 2048).
+- **Ladder**: every rung at this box's chunk (no golden for a chunk this box never runs): default three rungs: 2 chunks
   with full dumps (they feed the component and swap tests), the last chunk after a golden prefix, then the full target.
-  A scaled run gets its own ladder (`scaled.ladder`), also at the serving chunk and at most the canonical prompt's
-  length.
+  The scaled run uses the same lengths and chunk (`scaled.ladder`), at most the canonical prompt's length. Goldens are
+  made only for this box's rungs; another box's goldens come from that box's own run.
 - **Layer subset**: in partial mode, the first layers that cover every layer type; in full mode, every layer.
 - **Owner rules** for every agent of this model (beyond the standing ones in the agent definition, such as always
   2D fabric). They go in `agents.rules` and appear in every brief.
