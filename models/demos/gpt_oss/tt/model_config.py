@@ -13,11 +13,11 @@ from pathlib import Path
 
 import torch
 from loguru import logger
-from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.demos.gpt_oss.utils.lazy_state_dict import GptOssLazyStateDict
 from models.tt_transformers.tt.common import (
     calculate_prefill_warmup_seq_lens,
     cap_seq_lens_to_max_prefill_chunk_size,
@@ -260,41 +260,33 @@ class ModelArgs:
         if dummy_weights:
             # Return dummy state dict for testing
             return {}
-        else:
-            # Load actual GPT-OSS weights directly from safetensors files.
-            #
-            # GPT-OSS ships MXFP4-quantized weights (see configs/*/config.json). On a CPU host
-            # (CI loads weights on host before pushing them to the Tenstorrent device) transformers
-            # dequantizes the MXFP4 experts during from_pretrained. With torch_dtype="auto" that
-            # dequant intermediate lands in fp32, ~doubling the resident host footprint AND forcing
-            # the bf16 conversion pass below to allocate a second full copy of the state dict --
-            # enough to OOM / hang the host for the 20B & 120B demos (#48509, #48508). Loading
-            # straight to bf16 makes dequant target bf16 and turns that pass into a no-op (the dict
-            # comprehension then rebinds references rather than copying tensors).
-            model = AutoModelForCausalLM.from_pretrained(
-                weights_path,
-                torch_dtype=torch.bfloat16,
-                low_cpu_mem_usage=True,
-            )
-            head_dim = model.config.head_dim
-            state_dict = model.state_dict()
-            # Drop the HF module graph/buffers now that we hold the weight tensors. state_dict shares
-            # storage with the params, so after this the peak host footprint is bounded by the bf16
-            # weights themselves rather than weights + a live HF model object.
-            del model
-            gc.collect()
-            # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
-            if convert_to_meta_format:
-                logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
-                state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
-            # Safety net: ensure bf16. With the bf16 load above this is a no-op for every tensor
-            # (references are reused); it only casts genuine fp32 stragglers.
-            if state_dict["model.norm.weight"].dtype != torch.bfloat16:
-                state_dict = {
-                    k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
-                    for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
-                }
-            return state_dict
+        if convert_to_meta_format and os.getenv("GPT_OSS_EAGER_HF_LOAD") != "1":
+            # Lazy view over the safetensors files: each tensor is read (and its MXFP4 experts
+            # dequantized to bf16) only when a layer is built, and is not kept afterwards. The eager
+            # from_pretrained path below holds the whole bf16 model on the host first (~234 GB for
+            # 120B), which OOMs a QuietBox 2 on a cold cache (#60193). Same keys and values as the
+            # eager path; set GPT_OSS_EAGER_HF_LOAD=1 to use the eager path instead.
+            head_dim = AutoConfig.from_pretrained(weights_path, trust_remote_code=True).head_dim
+            logger.info("Loading GPT-OSS weights lazily from safetensors (per-layer MXFP4 dequant)")
+            return GptOssLazyStateDict(weights_path, head_dim, convert_to_meta_format=True)
+
+        # Eager load: HF reference models (convert_to_meta_format=False) and GPT_OSS_EAGER_HF_LOAD=1.
+        # from_pretrained dequantizes the MXFP4 experts to bf16 (torch_dtype=bfloat16 makes every
+        # other float tensor bf16 too), so the state dict needs no further dtype pass.
+        model = AutoModelForCausalLM.from_pretrained(
+            weights_path,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+        )
+        head_dim = model.config.head_dim
+        state_dict = model.state_dict()
+        del model
+        gc.collect()
+        # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
+        if convert_to_meta_format:
+            logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
+            state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+        return state_dict
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""

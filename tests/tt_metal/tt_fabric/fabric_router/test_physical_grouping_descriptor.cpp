@@ -34,7 +34,7 @@ using namespace tt::tt_fabric;
 
 // Flatten a hierarchical PGD grouping, then enumerate the first embedding the same way SAT column
 // generation and the matcher PSD gate do.
-static std::vector<MappingResult<LogicalChipId, tt::tt_metal::AsicID>> enumerate_grouping_on_psd(
+static std::vector<MappingResult<LogicalChipId, tt::tt_metal::experimental::PhysicalNodeId>> enumerate_grouping_on_psd(
     const PhysicalGroupingDescriptor& pgd,
     const GroupingInfo& grouping,
     const tt::tt_metal::PhysicalSystemDescriptor& psd) {
@@ -2610,11 +2610,10 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Dual8x2) {
     EXPECT_EQ(tray_ref_count, 2u) << "Should reference exactly 2 trays";
 }
 
-static size_t count_distinct_hosts_for_asics(
-    const tt::tt_metal::PhysicalSystemDescriptor& psd, const std::unordered_set<tt::tt_metal::AsicID>& asics) {
+static size_t count_distinct_hosts_for_asics(const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics) {
     std::set<std::string> hosts;
     for (const auto& asic : asics) {
-        hosts.insert(psd.get_host_name_for_asic(asic));
+        hosts.insert(std::string(tt::tt_metal::experimental::cluster_id_view(asic)));
     }
     return hosts.size();
 }
@@ -2668,7 +2667,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "SAT joint placement should seat the single 4x4 mesh";
     EXPECT_EQ(placements.front().placement.asics.size(), 16u) << "the 4x4 seating should cover 16 ASICs";
-    EXPECT_EQ(count_distinct_hosts_for_asics(psd, placements.front().placement.asics), 1u)
+    EXPECT_EQ(count_distinct_hosts_for_asics(placements.front().placement.asics), 1u)
         << "host_topology [1,1] should land on a single host";
     EXPECT_EQ(placements.front().placement.mesh_node_to_asic_position.size(), 16u)
         << "Composed pinning should cover all 16 logical chips";
@@ -3326,23 +3325,27 @@ namespace {
 
 namespace utils = tt::tt_metal::experimental::tt_fabric;
 
-std::vector<std::set<uint64_t>> footprints_of(const AssignedMeshes& placements) {
+// The solve is keyed on addresses, but these tests assert on the mock's own ASIC labels, which is
+// what keeps the expectations readable. Translate back through the descriptor to keep them that way.
+std::vector<std::set<uint64_t>> footprints_of(
+    const AssignedMeshes& placements, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     std::vector<std::set<uint64_t>> footprints;
     footprints.reserve(placements.size());
     for (const auto& placed : placements) {
         std::set<uint64_t> asics;
         for (const auto& asic : placed.placement.asics) {
-            asics.insert(*asic);
+            asics.insert(*psd.get_asic_id(asic));
         }
         footprints.push_back(std::move(asics));
     }
     return footprints;
 }
 
-std::vector<std::set<uint64_t>> mapped_footprints(const utils::TopologyMappingResult& mapping) {
+std::vector<std::set<uint64_t>> mapped_footprints(
+    const utils::TopologyMappingResult& mapping, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     std::map<MeshId, std::set<uint64_t>> per_mesh;
-    for (const auto& [fabric_node, asic] : mapping.fabric_node_to_asic) {
-        per_mesh[fabric_node.mesh_id].insert(*asic);
+    for (const auto& [fabric_node, asic] : mapping.fabric_node_to_physical) {
+        per_mesh[fabric_node.mesh_id].insert(*psd.get_asic_id(asic));
     }
     std::vector<std::set<uint64_t>> footprints;
     footprints.reserve(per_mesh.size());
@@ -3352,10 +3355,11 @@ std::vector<std::set<uint64_t>> mapped_footprints(const utils::TopologyMappingRe
     return footprints;
 }
 
-std::vector<std::set<uint64_t>> mapped_footprints(const std::vector<utils::TopologyMappingResult>& mappings) {
+std::vector<std::set<uint64_t>> mapped_footprints(
+    const std::vector<utils::TopologyMappingResult>& mappings, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     std::vector<std::set<uint64_t>> footprints;
     for (const auto& mapping : mappings) {
-        auto part = mapped_footprints(mapping);
+        auto part = mapped_footprints(mapping, psd);
         footprints.insert(footprints.end(), part.begin(), part.end());
     }
     return footprints;
@@ -3582,11 +3586,11 @@ std::vector<std::set<std::pair<uint32_t, uint32_t>>> host_slots(const std::vecto
     return slots;
 }
 
-std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::AsicID> asic_by_slot(
+std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::experimental::PhysicalNodeId> asic_by_slot(
     const tt::tt_metal::PhysicalSystemDescriptor& psd) {
-    std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::AsicID> asic_at_slot;
+    std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::experimental::PhysicalNodeId> asic_at_slot;
     for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, asic_id);
+        asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, descriptor.physical_node_id);
     }
     return asic_at_slot;
 }
@@ -3618,7 +3622,7 @@ utils::TopologyMappingResult map_placement_with_declared_ranks(
     const std::vector<std::vector<LogicalChipId>>& declared_ranks) {
     utils::TopologyMappingConfig config;
     for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        config.hostname_to_asics[descriptor.host_name].insert(asic_id);
+        config.hostname_to_asics[descriptor.host_name].insert(descriptor.physical_node_id);
     }
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
@@ -3628,7 +3632,7 @@ utils::TopologyMappingResult map_placement_with_declared_ranks(
         }
     }
     return utils::map_multi_mesh_to_physical(
-        psd, pgd, mgd, config, /*pinnings=*/{}, /*asic_id_to_mesh_rank=*/{}, fabric_node_id_to_mesh_rank);
+        psd, pgd, mgd, config, /*pinnings=*/{}, /*physical_node_id_to_mesh_rank=*/{}, fabric_node_id_to_mesh_rank);
 }
 
 void expect_ranks_survive_placement(
@@ -3643,7 +3647,8 @@ void expect_ranks_survive_placement(
         std::set<std::string> hosts;
         for (LogicalChipId chip : ranks[rank]) {
             const auto& position = placements.front().placement.mesh_node_to_asic_position.at(chip);
-            hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
+            hosts.insert(
+                std::string(tt::tt_metal::experimental::cluster_id_view(asic_at_slot.at({*position.first, *position.second}))));
         }
         EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
                                     << " hosts";
@@ -3653,7 +3658,8 @@ void expect_ranks_survive_placement(
     for (std::size_t rank = 0; rank < ranks.size(); ++rank) {
         std::set<std::string> hosts;
         for (LogicalChipId chip : ranks[rank]) {
-            hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
+            hosts.insert(std::string(
+                tt::tt_metal::experimental::cluster_id_view(mapping.fabric_node_to_physical.at(FabricNodeId(MeshId{0}, chip)))));
         }
         EXPECT_EQ(hosts.size(), 1u) << "the mapper put declared rank " << rank << " on " << hosts.size() << " hosts";
     }
@@ -3730,7 +3736,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto on_line = utils::map_multi_mesh_to_physical(line, pgd, linked, no_rank_config());
     ASSERT_TRUE(on_line.success) << on_line.error_message;
     EXPECT_THAT(
-        mapped_footprints(on_line),
+        mapped_footprints(on_line, line),
         ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}));
 
     PlacementSolveStats fail_stats;
@@ -3741,7 +3747,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto on_pairs = utils::map_multi_mesh_to_physical(pairs, pgd, unlinked, no_rank_config());
     ASSERT_TRUE(on_pairs.success) << on_pairs.error_message;
     EXPECT_THAT(
-        mapped_footprints(on_pairs),
+        mapped_footprints(on_pairs, pairs),
         ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}));
 }
 
@@ -3871,7 +3877,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, mgd, no_rank_config());
     ASSERT_TRUE(mapping.success) << mapping.error_message;
     EXPECT_THAT(
-        mapped_footprints(mapping),
+        mapped_footprints(mapping, psd),
         ::testing::ElementsAre(
             std::set<uint64_t>({100, 101, 102, 103}),
             std::set<uint64_t>({107, 108, 109}),
@@ -3983,7 +3989,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
         psd, pgd, std::vector<utils::MultiMeshMappingPart>{{mgds.data()}, {mgds.data() + 1}}, config);
     ASSERT_FALSE(mapping.empty());
     ASSERT_TRUE(mapping.front().success) << mapping.front().error_message;
-    const auto footprints = mapped_footprints(mapping);
+    const auto footprints = mapped_footprints(mapping, psd);
     ASSERT_EQ(footprints.size(), 4u);
     EXPECT_EQ(channels_between(psd, footprints[0], footprints[1]), 4u);
     EXPECT_EQ(chips_in({footprints[0], footprints[1]}), std::set<uint64_t>({100, 101, 102}));
@@ -4121,7 +4127,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 
     const auto prefer = utils::map_multi_mesh_to_physical(three, pgd, relaxed_4, no_rank_config());
     ASSERT_TRUE(prefer.success) << prefer.error_message;
-    EXPECT_EQ(chips_in(mapped_footprints(prefer)), (std::set<uint64_t>{101, 102}));
+    EXPECT_EQ(chips_in(mapped_footprints(prefer, three)), (std::set<uint64_t>{101, 102}));
     EXPECT_TRUE(SatPlacementEnumerationSession(pgd, strict_8, three, nullptr, {}).next().empty());
     ASSERT_TRUE(utils::map_multi_mesh_to_physical(three, pgd, relaxed_8, no_rank_config()).success);
 
@@ -4200,16 +4206,16 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto one_place = SatPlacementEnumerationSession(pgd, one, psd, nullptr, {}).next();
     ASSERT_EQ(one_place.size(), 1u);
     EXPECT_FALSE(one_place.front().placement.mesh_node_to_asic_position.empty());
-    EXPECT_THAT(footprints_of(one_place), ::testing::ElementsAre(std::set<uint64_t>{100, 101}));
+    EXPECT_THAT(footprints_of(one_place, psd), ::testing::ElementsAre(std::set<uint64_t>{100, 101}));
     EXPECT_THAT(
-        mapped_footprints(utils::map_multi_mesh_to_physical(psd, pgd, one, no_rank_config())),
+        mapped_footprints(utils::map_multi_mesh_to_physical(psd, pgd, one, no_rank_config()), psd),
         ::testing::ElementsAre(std::set<uint64_t>{100, 101}));
 
     EXPECT_EQ(SatPlacementEnumerationSession(pgd, two, psd, nullptr, {}).next().size(), 2u);
     const auto two_map = utils::map_multi_mesh_to_physical(psd, pgd, two, no_rank_config());
     ASSERT_TRUE(two_map.success) << two_map.error_message;
     EXPECT_THAT(
-        mapped_footprints(two_map),
+        mapped_footprints(two_map, psd),
         ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}));
 }
 
@@ -4234,17 +4240,58 @@ TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, StrainManyMeshesPlacesInO
         EXPECT_TRUE(stats.master_solve_success) << label << "\n" << stats.to_string();
         EXPECT_GE(stats.master_candidates_enumerated, expected_meshes) << label << "\n" << stats.to_string();
         EXPECT_FALSE(stats.candidate_lists_complete) << label << "\n" << stats.to_string();
-        std::set<uint64_t> seen;
+        std::set<tt::tt_metal::experimental::PhysicalNodeId> seen;
         for (const auto& placed : placements) {
             EXPECT_EQ(placed.placement.asics.size(), mesh_rows * mesh_cols) << label;
             for (const auto& asic : placed.placement.asics) {
-                EXPECT_TRUE(seen.insert(*asic).second) << label << ": ASIC " << *asic << " placed twice";
+                EXPECT_TRUE(seen.insert(asic).second) << label << ": ASIC " << asic << " placed twice";
             }
         }
     };
 
     run_case(2, 2, 2, 4, "8x 2x2 meshes on 4x8");
     run_case(4, 4, 2, 2, "4x 4x4 meshes on 8x8");
+}
+
+// Each discovered host is one row of the 2x4 grouping. Either row fits that grouping, so
+// get_valid_groupings still commits the full 8-chip mesh.
+TEST(PhysicalGroupingDescriptorTests, ValidGroupings_PartialHostFitsLargerGrouping) {
+    const auto psd = build_grid_mock_psd(
+        2, 4, {"host0", "host0", "host0", "host0", "host1", "host1", "host1", "host1"});
+    const auto pgd = pinned_pgd(2, 4, {rect_host(0, 2, 0, 4)});
+    const auto mgd = single_mesh_mgd(2, 4, 2, 1);
+    const auto committed = committed_layouts(pgd.get_valid_groupings_for_mgd(mgd, psd));
+    ASSERT_FALSE(committed.empty());
+    EXPECT_EQ(committed.front().mesh_node_to_asic_position.size(), 8u);
+}
+
+// Every discovered chip sits on tray 5. The grouping only names tray 1, so nothing is committed.
+TEST(PhysicalGroupingDescriptorTests, ValidGroupings_HostOutsideGroupingCommitsNothing) {
+    const auto psd = build_mock_psd(
+        {"host0", "host0"},
+        std::vector<MockLink>{{0, 1, 2}},
+        {{5, 1}, {5, 2}});
+    const auto pgd = pinned_pgd(1, 2, {rect_host(0, 1, 0, 2)});
+    const auto mgd = single_mesh_mgd(1, 2, 1, 1);
+    const auto committed =
+        committed_layouts(pgd.get_valid_groupings_for_mgd(mgd, psd, std::nullopt, /*require_placement=*/false));
+    EXPECT_TRUE(committed.empty());
+}
+
+// The two chips sit on the grouping's slots. The link commits the 1x2 mesh. The same slots with no
+// link are containment-only, and get_valid_groupings commits nothing.
+TEST(PhysicalGroupingDescriptorTests, ValidGroupings_SlotsFitButDisconnectedCommitsNothing) {
+    const auto pgd = pinned_pgd(1, 2, {rect_host(0, 1, 0, 2)});
+    const auto mgd = single_mesh_mgd(1, 2, 1, 1);
+    const std::vector<std::pair<uint32_t, uint32_t>> positions{{1, 1}, {1, 2}};
+    const auto linked = build_mock_psd({"host0", "host0"}, std::vector<MockLink>{{0, 1, 2}}, positions);
+    const auto unlinked = build_mock_psd({"host0", "host0"}, std::vector<MockLink>{}, positions);
+    const auto linked_commit = committed_layouts(pgd.get_valid_groupings_for_mgd(mgd, linked));
+    ASSERT_FALSE(linked_commit.empty());
+    EXPECT_EQ(linked_commit.front().mesh_node_to_asic_position.size(), 2u);
+    const auto unlinked_commit =
+        committed_layouts(pgd.get_valid_groupings_for_mgd(mgd, unlinked, std::nullopt, /*require_placement=*/false));
+    EXPECT_TRUE(unlinked_commit.empty());
 }
 
 TEST(PhysicalGroupingDescriptorTestsHostSplit, SingleHostPsdColumnSplitMgdCommits) {
@@ -4366,14 +4413,14 @@ TEST(PhysicalGroupingDescriptorTestsHostSplit, AlignedSplitOnASymmetricTorusComm
     expect_ranks_survive_placement(psd, pgd, mgd, ranks);
 
     const auto asic_at_slot = asic_by_slot(psd);
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
     for (const auto& [chip, position] : phase1.front().mesh_node_to_asic_position) {
-        asic_id_to_mesh_rank[MeshId{0}][asic_at_slot.at({*position.first, *position.second})] =
+        physical_node_id_to_mesh_rank[MeshId{0}][asic_at_slot.at({*position.first, *position.second})] =
             MeshHostRankId{phase1.front().mesh_node_to_host_group.at(chip)};
     }
     utils::TopologyMappingConfig phase2_config;
     for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        phase2_config.hostname_to_asics[descriptor.host_name].insert(asic_id);
+        phase2_config.hostname_to_asics[descriptor.host_name].insert(descriptor.physical_node_id);
     }
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_ranks;
     for (std::size_t rank = 0; rank < ranks.size(); ++rank) {
@@ -4382,11 +4429,11 @@ TEST(PhysicalGroupingDescriptorTestsHostSplit, AlignedSplitOnASymmetricTorusComm
         }
     }
     const auto phase2 = utils::map_multi_mesh_to_physical(
-        psd, pgd, mgd, phase2_config, /*pinnings=*/{}, asic_id_to_mesh_rank, fabric_ranks);
+        psd, pgd, mgd, phase2_config, /*pinnings=*/{}, physical_node_id_to_mesh_rank, fabric_ranks);
     ASSERT_TRUE(phase2.success) << phase2.error_message;
     for (const auto& [chip, position] : phase1.front().mesh_node_to_asic_position) {
         EXPECT_EQ(
-            phase2.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip)),
+            phase2.fabric_node_to_physical.at(FabricNodeId(MeshId{0}, chip)),
             asic_at_slot.at({*position.first, *position.second}));
     }
 }
