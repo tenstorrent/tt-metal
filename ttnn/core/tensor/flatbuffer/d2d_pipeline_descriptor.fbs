@@ -1,0 +1,45 @@
+include "tt-metalium/serialized_descriptors/mesh_coordinate.fbs";
+
+namespace ttnn.d2d_flatbuffer;
+
+// Mirrors tt::tt_metal::distributed::PCIeCoreLocation.
+table PCIeCoreLocation {
+  pcie_device_id: uint32;
+  mesh_coord: tt.tt_metal.distributed.flatbuffer.MeshCoordinate;
+  core_x: uint32;
+  core_y: uint32;
+  virtual_core_x: uint32;
+  virtual_core_y: uint32;
+}
+
+table D2DReceiverCoord {
+  service_core: PCIeCoreLocation;
+  mesh_id: uint32;
+  chip_id: uint32;
+  sender_mesh_id: uint32;
+  sender_chip_id: uint32;
+  backing_tensor_addr: uint64;
+  stage_gate_base_addr: uint64;
+}
+
+table D2DReceiver {
+  sender_rank: int32;
+  metadata_size_bytes: uint32;
+  num_stage_gates: uint32;
+  stage_gate_slot_offset_bytes: uint32;
+  stage_gate_mode_offset_bytes: uint32;
+  coords: [D2DReceiverCoord];
+}
+
+table D2DRank {
+  rank: int32;
+  host_name: string;
+  inbound: D2DReceiver;  // absent on a rank with no inbound socket
+}
+
+table D2DPipelineDescriptor {
+  version: uint32;
+  ranks: [D2DRank];
+}
+
+root_type D2DPipelineDescriptor;
