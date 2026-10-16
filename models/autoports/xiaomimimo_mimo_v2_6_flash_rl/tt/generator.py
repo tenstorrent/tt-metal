@@ -19,6 +19,7 @@ from loguru import logger
 import ttnn
 
 from .model import TtMiMoModel
+from .moe_stream import set_dram_bank_cores
 
 
 def create_dp_submeshes(mesh_device, dp):
@@ -26,7 +27,12 @@ def create_dp_submeshes(mesh_device, dp):
     assert rows * cols % dp == 0
     if (rows, cols) != (dp, rows * cols // dp):
         mesh_device.reshape(ttnn.MeshShape(dp, rows * cols // dp))
-    return mesh_device.create_submeshes(ttnn.MeshShape(1, rows * cols // dp))
+    # Bank-reader cores of the streaming MoE kernels: the parent's assignment fits every chip (moe_stream.py).
+    bank_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    submeshes = mesh_device.create_submeshes(ttnn.MeshShape(1, rows * cols // dp))
+    for sm in submeshes:
+        set_dram_bank_cores(sm, bank_cores)
+    return submeshes
 
 
 class MiMoGalaxyGenerator:

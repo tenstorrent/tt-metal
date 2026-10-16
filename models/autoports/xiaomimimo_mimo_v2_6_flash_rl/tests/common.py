@@ -9,6 +9,7 @@ import torch
 import ttnn
 from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference.checkpoint import MiMoCheckpoint, default_model_path
 from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.reference.config import MiMoConfig
+from models.autoports.xiaomimimo_mimo_v2_6_flash_rl.tt.generator import create_dp_submeshes
 
 # CCL ops keep their semaphores for the program's lifetime. Without an L1_SMALL region they go in the
 # main L1 pool, and after enough distinct prefill shapes they fragment it badly enough to clash with
@@ -50,7 +51,7 @@ def pcc(a, b):
 def dp_submeshes(mesh_device):
     """The 4x8 Galaxy split into its four 1x8 rows: one TP=8 replica per row."""
     assert tuple(mesh_device.shape) == (DP, TP), f"expected a {DP}x{TP} mesh, got {tuple(mesh_device.shape)}"
-    subs = mesh_device.create_submeshes(ttnn.MeshShape(1, TP))
+    subs = create_dp_submeshes(mesh_device, DP)  # also registers the streaming kernels' bank cores per row
     assert len(subs) == DP
     return subs
 

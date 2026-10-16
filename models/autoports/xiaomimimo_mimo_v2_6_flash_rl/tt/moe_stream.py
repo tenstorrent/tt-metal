@@ -20,8 +20,24 @@ from .common import TILE, pad_to
 KERNEL_DIR = "models/autoports/xiaomimimo_mimo_v2_6_flash_rl/tt/kernels"
 
 
+_BANK_CORES = {}  # device ids of a (sub)mesh -> bank cores registered by set_dram_bank_cores
+
+
+def set_dram_bank_cores(device, cores):
+    """Use ``cores`` as the bank-reader cores of every chip in ``device`` (a mesh or submesh).
+
+    A mesh answers get_optimal_dram_bank_to_logical_worker_assignment for its first chip only, but chips are
+    harvested differently. On the Galaxy, row 2's first chip yields logical x = 6 for banks 4-7 where x = 7 is
+    right for the other chips of that row, and the streaming MoE kernels run 23% slower there (250 vs 204 us per
+    layer). The 4x8 parent's answer (x = 7) is fast on all 32 chips, so the generator registers it for every row."""
+    _BANK_CORES[tuple(device.get_device_ids())] = list(cores)
+
+
 def dram_bank_cores(device):
-    """One worker core per DRAM bank (NOC 0 optimal placement): core ``i`` streams bank ``i``."""
+    """One worker core per DRAM bank (NOC 0 placement): core ``i`` streams bank ``i``."""
+    cores = _BANK_CORES.get(tuple(device.get_device_ids()))
+    if cores is not None:
+        return cores
     return device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
 
 
