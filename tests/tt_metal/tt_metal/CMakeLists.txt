@@ -71,6 +71,11 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpi)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/misc)
 
+if(TT_UMD_BUILD_GRENDEL_JTAG)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dram)
+    list(APPEND METAL_TEST_TARGETS mimir_tests)
+endif()
+
 add_custom_target(
     metal_tests
     DEPENDS
