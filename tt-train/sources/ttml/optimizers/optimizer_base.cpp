@@ -85,6 +85,32 @@ std::vector<float> OptimizerBase::get_initial_group_lrs() {
     return *m_initial_lrs;
 }
 
+float OptimizerBase::get_lr() const {
+    return get_group_lrs().front();
+}
+
+void OptimizerBase::set_lr(float lr) {
+    const auto initial_lrs = get_initial_group_lrs();
+    const float first_initial_lr = initial_lrs.front();
+    const bool all_zero = std::ranges::all_of(initial_lrs, [](float value) { return value == 0.0F; });
+    if (first_initial_lr == 0.0F && !all_zero) {
+        throw std::invalid_argument(fmt::format(
+            "{}::set_lr cannot scale param groups whose first group has an initial lr of 0; set each group's lr "
+            "with set_group_lrs instead",
+            get_name()));
+    }
+    std::vector<float> lrs;
+    lrs.reserve(initial_lrs.size());
+    for (const float initial_lr : initial_lrs) {
+        lrs.push_back(all_zero ? lr : lr * (initial_lr / first_initial_lr));
+    }
+    set_group_lrs(lrs);
+}
+
+float OptimizerBase::get_initial_lr() {
+    return get_initial_group_lrs().front();
+}
+
 void OptimizerBase::save_param_groups(serialization::StateDict& dict) const {
     // If no scheduler has recorded base LRs yet, the current LRs are the base.
     const auto initial_lrs = m_initial_lrs.value_or(get_group_lrs());

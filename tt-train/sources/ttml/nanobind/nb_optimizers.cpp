@@ -88,9 +88,33 @@ public:
         NB_OVERRIDE_PURE(set_steps, steps);
     }
     std::vector<float> get_group_lrs() const override {
+        {
+            nb::detail::ticket nb_ticket(nb_trampoline, "get_group_lrs", /*pure=*/false);
+            if (!nb_ticket.key.is_valid()) {
+                nb::detail::ticket legacy(nb_trampoline, "get_lr", /*pure=*/false);
+                if (legacy.key.is_valid()) {
+                    return {nb::cast<float>(nb_trampoline.base().attr(legacy.key)())};
+                }
+            }
+        }
         NB_OVERRIDE_PURE(get_group_lrs);
     }
     void set_group_lrs(const std::vector<float>& lrs) override {
+        {
+            nb::detail::ticket nb_ticket(nb_trampoline, "set_group_lrs", /*pure=*/false);
+            if (!nb_ticket.key.is_valid()) {
+                nb::detail::ticket legacy(nb_trampoline, "set_lr", /*pure=*/false);
+                if (legacy.key.is_valid()) {
+                    if (lrs.size() != 1) {
+                        throw std::invalid_argument(
+                            "this optimizer only implements the single-LR set_lr, but got " +
+                            std::to_string(lrs.size()) + " LRs");
+                    }
+                    nb_trampoline.base().attr(legacy.key)(lrs.front());
+                    return;
+                }
+            }
+        }
         NB_OVERRIDE_PURE(set_group_lrs, lrs);
     }
     std::vector<float> get_initial_group_lrs() override {
@@ -278,6 +302,17 @@ void py_module(nb::module_& m) {
             "get_initial_group_lrs",
             &OptimizerBase::get_initial_group_lrs,
             "Per-group LRs recorded the first time this is called (PyTorch's param_group['initial_lr'])");
+        py_optimizer_base.def(
+            "get_lr", &OptimizerBase::get_lr, "Deprecated: the first param group's LR; use get_group_lrs");
+        py_optimizer_base.def(
+            "set_lr",
+            &OptimizerBase::set_lr,
+            nb::arg("lr"),
+            "Deprecated: scale every param group's LR so the first one is lr, keeping their ratios; use set_group_lrs");
+        py_optimizer_base.def(
+            "get_initial_lr",
+            &OptimizerBase::get_initial_lr,
+            "Deprecated: the first param group's initial LR; use get_initial_group_lrs");
         py_optimizer_base.def(
             "get_param_groups",
             [](const OptimizerBase& self) { return param_groups_to_py(self.get_param_groups()); },

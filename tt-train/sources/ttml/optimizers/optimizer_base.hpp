@@ -72,6 +72,14 @@ public:
     // LRs at construction.
     [[nodiscard]] virtual std::vector<float> get_initial_group_lrs();
 
+    // Deprecated single-LR API, kept for existing callers; use the per-group methods above instead. get_lr() is the
+    // first group's LR, and set_lr(lr) applies the same factor lr / initial_lr[0] to every group's initial LR, so the
+    // groups keep their ratios.
+    [[nodiscard]] float get_lr() const;
+    void set_lr(float lr);
+    // The first group's initial LR (see get_initial_group_lrs).
+    [[nodiscard]] float get_initial_lr();
+
     virtual void print_stats() const;
 
     // Every optimizer has at least one group.

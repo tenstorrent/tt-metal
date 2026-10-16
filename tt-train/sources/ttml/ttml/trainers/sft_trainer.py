@@ -10,6 +10,7 @@ import logging
 import os
 import pickle
 import sys
+import warnings
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -127,6 +128,7 @@ class SFTTrainer:
         attention_mask: Any = None,
         checkpoint_saver: Optional[Callable[["SFTTrainer", str], None]] = None,
         checkpoint_loader: Optional[Callable[["SFTTrainer", str], int]] = None,
+        lr_schedule: Optional[Callable[[int], float]] = None,
     ) -> None:
         """
         Args:
@@ -171,6 +173,9 @@ class SFTTrainer:
                 restores ``model.parameters()`` from ``path`` and returns
                 the step the checkpoint was taken at.  Called by
                 :meth:`load_checkpoint` to support resume.
+            lr_schedule: Deprecated, use ``lr_lambda``. Callable ``step -> LR``:
+                the first param group's LR, with the other groups keeping their
+                ratio to it (like the deprecated ``optimizer.set_lr``).
 
         Note:
             When ``config.gradient_checkpointing`` is ``True`` the model's
@@ -198,6 +203,19 @@ class SFTTrainer:
         self._validate_clip_grad_norm()
 
         self._optimizer = self._build_optimizer(optimizer)
+        if lr_schedule is not None:
+            if lr_lambda is not None:
+                raise ValueError("pass lr_lambda or the deprecated lr_schedule, not both")
+            warnings.warn(
+                "SFTTrainer(lr_schedule=...) is deprecated; pass lr_lambda (step -> factor of each param group's "
+                "initial LR) instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            initial_lr = self._optimizer.get_initial_lr()
+            if initial_lr == 0.0:
+                raise ValueError("lr_schedule needs a non-zero initial LR to scale from; pass lr_lambda instead")
+            lr_lambda = lambda step: lr_schedule(step) / initial_lr
         self._lr_lambda = lr_lambda if lr_lambda is not None else linear_warmup_lambda(config.warmup_steps)
         self._attention_mask = attention_mask
         self._loss_fn = self._build_loss_fn()
