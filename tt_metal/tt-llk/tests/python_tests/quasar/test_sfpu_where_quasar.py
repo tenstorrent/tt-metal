@@ -61,7 +61,6 @@ def _processed_face_mask(vector_mode: VectorMode, num_faces: int) -> torch.Tenso
 def get_valid_formats_dest_acc():
     formats = input_output_formats(
         [
-            DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Float32,
         ]
