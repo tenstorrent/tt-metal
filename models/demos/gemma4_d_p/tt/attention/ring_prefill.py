@@ -77,6 +77,15 @@ def ring_cache_capacity(max_seq_len, prefill_chunk_size):
     return max(max_seq_len, 2 * prefill_chunk_size)
 
 
+def bounded_sliding_cache_capacity(prefill_chunk_size):
+    """Global tokens in a bounded sliding cache: the chunk being written and the previous chunk.
+
+    Two chunks are enough: ring SDPA rejects a window halo that spans more than one chunk (at most ring_size hops
+    over the per-rank slab), so the window never reaches past the previous chunk. Two are also the fewest: the op
+    wraps whole chunks (chunk g lands in slab g % slabs), so the cache cannot hold just the window plus a chunk."""
+    return 2 * prefill_chunk_size
+
+
 def ring_cache_seq_len(max_seq_len, cp):
     """Per-rank cache sequence length. Each rank stores 1/cp of every chunk."""
     assert max_seq_len % cp == 0, f"max_seq_len {max_seq_len} must be divisible by CP degree {cp}"
@@ -315,8 +324,14 @@ def write_chunk_to_sliding_ring_cache(
     num_layers=1,
     slot_idx=0,
     prefill_metadata=None,
+    circular_kv_cache=False,
 ):
-    """Append one sliding-attention chunk (K and V) to its CP-local history."""
+    """Append one sliding-attention chunk (K and V) to its CP-local history.
+
+    A circular cache takes the chunk at kv_actual_global modulo its capacity, which overwrites the oldest slab.
+    """
+    if circular_kv_cache:
+        kv_actual_global %= cache_k.shape[-2] * mesh_config.cp_degree
 
     for cache, chunk in ((cache_k, tt_k), (cache_v, tt_v)):
         original_chunk = chunk
@@ -326,7 +341,9 @@ def write_chunk_to_sliding_ring_cache(
 
         if prefill_metadata is not None:
             slot_idx_t = prefill_metadata.slot_idx
-            kv_actual_global_t = prefill_metadata.kv_actual_global
+            kv_actual_global_t = (
+                prefill_metadata.wrapped_kv_actual_global if circular_kv_cache else prefill_metadata.kv_actual_global
+            )
 
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache=cache,
@@ -372,12 +389,14 @@ def sliding_ring_prefill_attention(
     layer_idx=0,
     num_layers=1,
     slot_idx=0,
+    circular_kv_cache=False,
 ):
     """Attend this rank's Q shard over the cached prefix via the CP ring, with separate K and V caches.
 
     ``logical_n`` fixes the cache capacity at capture. Device metadata supplies
     the valid prefix on each replay; ``kv_actual_global`` is the prefix before
-    this chunk when metadata is updated here.
+    this chunk when metadata is updated here. With ``circular_kv_cache`` the
+    metadata prefix stays absolute and the op finds each chunk's slab itself.
 
     Returns ``[1, num_local_q_heads, q_local, head_dim]`` — this rank's rows only, so
     the output stays CP-sharded exactly like the input.
@@ -433,5 +452,6 @@ def sliding_ring_prefill_attention(
         kv_cache_num_layers=num_layers,
         kv_cache_layer_idx=layer_idx,
         sliding_window_size=sliding_window_size,
+        circular_kv_cache=circular_kv_cache,
     )
     return out

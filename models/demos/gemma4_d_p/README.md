@@ -74,6 +74,56 @@ Global layers use tied QK projection; sliding layers use QKV. Weight caches are 
 
 Each model call prefills one user's chunk and returns post-norm hidden states. `max_batch_size` controls the number of durable user cache slots; `user_id` selects a slot. The constructor returns the ring caches, also exposed through `model.tt_kv_cache`. Physical capacity is at least two chunks so single-chunk prompts use the same ring SDPA path. External allocations accept `prefill_chunk_size`; `Gemma4KvCaches.max_seq_len` reports physical capacity for migration offsets. Callers can supply external caches and receive per-layer migration acknowledgements through callbacks, segmented traces, or a D2H socket service. Traced callers stage ring metadata and absolute RoPE positions before replay. This prefill model does not expose a logits projection API.
 
+## Bounded sliding-window cache
+
+Set `GEMMA4_D_P_BOUNDED_SWA=1` to size every sliding-layer cache at two prefill chunks instead of the full context. If it is unset or `0`, nothing changes. `create_tt_model` and the service adapter read the variable when they allocate caches. `create_tt_model(bounded_sliding_window_attention=...)` overrides it. Global layers keep their full-context caches.
+
+A sliding query attends at most 1,023 earlier tokens. Ring SDPA rejects any chunk shorter than that window, in either mode: the window halo may span at most one chunk. So the window never reaches back past the previous chunk, and two chunks are enough. Two are also the fewest, because the op wraps whole chunks: chunk `g` lands in slab `g % 2`. A cache of the window plus one chunk (9,216 tokens at chunk 8192) would need sub-chunk slabs in the op. The cache is circular. Chunk `g` overwrites the slab of chunk `g - 2`:
+
+```
+local row ((g % 2) * L + j) on CP rank r  ->  global token (g * C + r * L + j)
+```
+
+`C` is the chunk size and `L = C / CP`. The cache writer (`update_padded_kv_cache`) reads `PrefillMetadata.wrapped_kv_actual_global`, which `update()` sets to the chunk start modulo the cache capacity. Ring SDPA receives `circular_kv_cache=True` and reads the absolute `kv_actual_global`, so RoPE positions and the causal and window masks keep using absolute positions.
+
+Sliding-cache memory per device stays constant as the context grows. It is the same for 8×4 and 4×8:
+
+| Sliding cache | Per layer per user slot | 50 layers × 6 slots |
+| --- | --- | --- |
+| Unbounded, 256k context | 68 MiB | 19.9 GiB |
+| Bounded, 8192 chunk | 4.25 MiB | 1.25 GiB |
+| Bounded, 2048 chunk | 1.06 MiB | 0.31 GiB |
+
+Constraints:
+
+- Chunks must start at multiples of the chunk size, which the runtime already requires. The same chunk size must be used for capture and every replay. A partial final chunk is written whole, the same as in an unbounded cache.
+- Bounded caches cannot be migrated yet. With the toggle on, `kv_migration_stages` returns no stages and `build_kv_chunk_address_table` raises. The runner then serves single-rank without a migration table, and only with `PREFILL_ENABLE_MIGRATION=0`. The KV accuracy test (`test_prefill_migration.py`) reads through that table, so it does not run in this mode.
+
+`tests/test_bounded_swa.py` checks the bounded cache against the unbounded one. One trace replays three requests on two slots. The first request wraps the cache twice. The first two requests end in partial chunks with large padding, one inside a middle CP rank's slab and one inside rank 0's. The third request reuses the first one's slot. Every replay must match the unbounded output bit for bit and match a torch reference. The test runs on 8×4 and 4×8 Galaxies at chunks 1024, 2048 and 8192. At 8192 the window reaches one CP neighbour. At 2048 it reaches several. At 1024 it wraps onto the rank's own slab of the previous chunk:
+
+```bash
+pytest models/demos/gemma4_d_p/tests/test_bounded_swa.py -sv
+```
+
+Bounding the cache does not change prefill speed. Traced 256k prefill at chunk 8192, device time:
+
+| Mesh | Unbounded | Bounded |
+| --- | --- | --- |
+| 8×4 | 9422 ms | 9424 ms |
+| 4×8 | 11427 ms | 11415 ms |
+
+`tests/test_bounded_swa_model.py` runs the whole model both ways in one process, with shared weights: 32k context at chunk 2048 and 64k at chunk 8192, on 8×4 and 4×8. Each model is traced once and replays three requests on two slots, with partial final chunks and a reused slot. The bounded model must match the unbounded one bit for bit: hidden states for every chunk, plus the cache rows of the first and last sliding and global layers.
+
+```bash
+pytest models/demos/gemma4_d_p/tests/test_bounded_swa_model.py -sv
+```
+
+To measure prefill performance in bounded mode, run the traced prefill with the toggle on:
+
+```bash
+GEMMA4_D_P_BOUNDED_SWA=1 pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_long_context_traced[blackhole-ctx_256k-chunk8192-text-8x4] -sv
+```
+
 ## Host verification
 
 ```bash

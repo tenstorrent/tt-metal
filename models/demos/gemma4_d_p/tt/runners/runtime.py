@@ -55,6 +55,7 @@ class Gemma4PrefillRuntime:
             max_batch_size=1,
             ring_kv_caches=kv_cache,
             tt_cache_path=self.tt_cache_path,
+            bounded_sliding_window_attention=kv_cache.bounded_sliding_window_attention,
         )
         self.input_tokens = self.make_chunk_input([0] * self.config.chunk_size)
         self.positions = self.make_chunk_input(range(self.config.chunk_size))
@@ -149,6 +150,9 @@ class Gemma4PrefillRuntime:
         self._check_cache(kv_cache)
         if first_layer_idx != 0 or num_my_layers != self.config.num_layers:
             raise ValueError("Gemma4 migration requires all layers on one rank")
+        if kv_cache.bounded_sliding_window_attention:
+            # Bounded sliding caches have no chunk-table layout yet, so the runner serves without a table.
+            return []
         stages = []
         for layer_idx, cache in enumerate(kv_cache.layers):
             tensors = (cache.kv,) if hasattr(cache, "kv") else (cache.k, cache.v)

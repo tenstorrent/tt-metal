@@ -8,7 +8,11 @@ import torch
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import packed_rope_columns
-from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity, ring_sdpa_chunk_sizes
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
+    bounded_sliding_cache_capacity,
+    ring_cache_capacity,
+    ring_sdpa_chunk_sizes,
+)
 from models.demos.gemma4_d_p.tt.ccl import ccl_allgather, ccl_partition_rows
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
@@ -94,6 +98,7 @@ class Gemma4Model:
         max_local_batch_size=1,
         num_layers=None,
         ring_kv_caches=None,
+        bounded_sliding_window_attention=False,
     ):
         assert state_dict and any(
             key.startswith("model.language_model.") for key in state_dict
@@ -110,6 +115,7 @@ class Gemma4Model:
         self.hf_config = hf_config
         self.prefill_chunk_size = prefill_chunk_size
         self.ring_cache_max_seq_len = ring_cache_capacity(max_seq_len, prefill_chunk_size)
+        bounded_capacity = bounded_sliding_cache_capacity(prefill_chunk_size)
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
@@ -126,7 +132,9 @@ class Gemma4Model:
         )
 
         # When True the caller refreshes the ring metadata itself, outside any trace.
-        self.prefill_metadata = PrefillMetadata(mesh_config)
+        self.prefill_metadata = PrefillMetadata(
+            mesh_config, circular_capacity=bounded_capacity if bounded_sliding_window_attention else None
+        )
         self._prefill_metadata_external = False
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
@@ -180,6 +188,7 @@ class Gemma4Model:
         if ring_kv_caches is not None and len(ring_kv_caches) != n_layers:
             raise ValueError(f"expected {n_layers} external ring caches, got {len(ring_kv_caches)}")
         for i in range(n_layers):
+            circular = bounded_sliding_window_attention and hf_config.layer_types[i] == "sliding_attention"
             layer = Gemma4DecoderLayer(
                 mesh_config=mesh_config,
                 hf_config=hf_config,
@@ -190,9 +199,10 @@ class Gemma4Model:
                 mlp_dtype=mlp_dtype,
                 attention_dtype=attention_dtype,
                 tensor_cache_path=tensor_cache_path,
-                max_seq_len=self.ring_cache_max_seq_len,
+                max_seq_len=bounded_capacity if circular else self.ring_cache_max_seq_len,
                 max_local_batch_size=max_local_batch_size,
                 ring_kv_cache=ring_kv_caches[i] if ring_kv_caches is not None else None,
+                circular_kv_cache=circular,
             )
             self.layers.append(layer)
 
