@@ -21,6 +21,7 @@
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
@@ -38,6 +39,7 @@ const DFBSpecName A_SLICE_DFB{"A_slice"};
 const DFBSpecName B_SLICE_DFB{"B_slice"};
 const DFBSpecName C_SLICE_DFB{"C_slice"};
 const DFBSpecName C_PARTIALS_DFB{"C_partials"};
+const DFBSpecName BIAS_DFB{"bias"};
 
 // Multicast handshake semaphores. Each reader thread t has its own set, "<name>_<t>"; all
 // QUASAR_NUM_READER_THREADS sets are bound on every arch because the reader names them all, which takes the
@@ -48,6 +50,7 @@ constexpr std::array<const char*, 4> MCAST_SEMAPHORES = {
 const TensorParamName A_TENSOR{"A"};
 const TensorParamName B_TENSOR{"B"};
 const TensorParamName C_TENSOR{"C"};
+const TensorParamName BIAS_TENSOR{"bias"};
 
 const KernelSpecName READER_KERNEL{"reader"};
 const KernelSpecName COMPUTE_KERNEL{"compute"};
@@ -60,7 +63,8 @@ constexpr const char* KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/quasar
 constexpr uint64_t MAX_DFB_EXTENT_BYTES = 65535ull * 16ull;
 // Auto K chunk search (#57884): walk down from this cap through divisors of K_tiles to the first that fits
 // L1, except a C slice of at most SMALL_C_SLICE_TILES tiles is not capped (its A and B slices are cheap,
-// so a long K chunk saves partial-sum round trips). Tuning points, not hardware limits.
+// so a long K chunk saves partial-sum round trips) beyond leaving a K chunk per reader thread to overlap the
+// compute. Tuning points, not hardware limits.
 constexpr uint32_t MAX_AUTO_K_CHUNK_TILES = 8;
 constexpr uint32_t SMALL_C_SLICE_TILES = 4;
 // DM threads and buffering per core. Quasar runs up to four reader and two writer threads (its six user DM cores);
@@ -84,7 +88,8 @@ bool dfbs_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
         (uint64_t)plan.A_slice_entries * plan.A_entry_bytes,
         (uint64_t)plan.B_slice_entries * plan.B_entry_bytes,
         (uint64_t)plan.C_slice_entries * plan.C_entry_bytes,
-        (uint64_t)plan.C_partials_entries * plan.C_partials_entry_bytes};
+        (uint64_t)plan.C_partials_entries * plan.C_partials_entry_bytes,
+        (uint64_t)plan.bias_entries * plan.bias_entry_bytes};
     for (uint64_t bytes : dfb_bytes) {
         if (bytes > MAX_DFB_EXTENT_BYTES) {
             return false;
@@ -150,27 +155,28 @@ UnifiedMatmulPlan size_dfbs(
     plan.C_partials_entries = (partials_ever_written || plan.alias_C_partials_onto_C_slice)
                                   ? plan.C_entries_per_thread * plan.num_compute_threads
                                   : plan.num_compute_threads;
+    plan.bias_entries = plan.has_bias ? plan.C_slice_N_padded_tiles * plan.num_reader_threads : 0;
 
     // Borrowed DFBs are the tensors' own memory and cost nothing here.
     plan.l1_bytes =
         (plan.borrow_A ? 0 : (uint64_t)plan.A_slice_entries * plan.A_entry_bytes) +
         (plan.borrow_B ? 0 : (uint64_t)plan.B_slice_entries * plan.B_entry_bytes) +
         (plan.borrow_C ? 0 : (uint64_t)plan.C_slice_entries * plan.C_entry_bytes) +
-        (plan.alias_C_partials_onto_C_slice ? 0 : (uint64_t)plan.C_partials_entries * plan.C_partials_entry_bytes);
+        (plan.alias_C_partials_onto_C_slice ? 0 : (uint64_t)plan.C_partials_entries * plan.C_partials_entry_bytes) +
+        (uint64_t)plan.bias_entries * plan.bias_entry_bytes;
     return plan;
 }
 
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
-UnifiedMatmulPlan plan_unified_matmul(
+// must_fit: FATAL with the breakdown when nothing fits L1 or a sharded output's constraints fail; otherwise nullopt.
+std::optional<UnifiedMatmulPlan> plan_unified_matmul_impl(
     const tt::tt_metal::IDevice& device,
     const ttnn::Tensor& A,
     const ttnn::Tensor& B,
+    uint32_t bias_tile_bytes,
     const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
     const MatmulParams& attributes,
-    const std::optional<ttnn::Tensor>& output) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
+    const std::optional<ttnn::Tensor>& output,
+    bool must_fit) {
     UnifiedMatmulPlan base{};
 
     TT_FATAL(
@@ -212,6 +218,12 @@ UnifiedMatmulPlan plan_unified_matmul(
         "Batched B must match A's batch ({} vs {})",
         get_batch_size(B_shape),
         base.batch_size);
+    if (B_has_one_batch) {
+        // Every batch of A multiplies the same B, and A's and C's batches are stacked tile rows: one [batch * M x N]
+        // GEMM, whose C slices spread over the cores like any other rows.
+        base.M_tiles *= base.batch_size;
+        base.batch_size = 1;
+    }
     base.A_last_K_tile_valid_columns = A.logical_shape()[-1] % TILE_WIDTH;
 
     // ---- Cores ----
@@ -253,12 +265,19 @@ UnifiedMatmulPlan plan_unified_matmul(
     // ---- Accumulation mode, formats, L1 budget ----
     const bool fp32_dest_acc_en = get_fp32_dest_acc_en(attributes.compute_kernel_config);
     base.fp32_dest_acc_en = fp32_dest_acc_en;
+    TT_FATAL(
+        !(bias_tile_bytes > 0 && fp32_dest_acc_en),
+        "MatmulUnifiedProgramConfig fuses bias only with a 16-bit DST (fp32_dest_acc_en = false); ttnn.linear adds it "
+        "separately otherwise");
     const bool packer_l1_acc =
         std::get<3>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value()));
     const uint32_t dst_capacity_tiles = fp32_dest_acc_en ? 4 : 8;
     base.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
     base.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
     base.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
+    // Shape, layout and batch of the bias are checked by the op; it is one tile row of C's columns.
+    base.has_bias = bias_tile_bytes > 0;
+    base.bias_entry_bytes = bias_tile_bytes;
     const uint32_t l1_base = device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const uint32_t l1_ceiling = device.lowest_occupied_compute_l1_address().value_or(device.l1_size_per_core());
     TT_FATAL(l1_ceiling > l1_base, "L1 ceiling ({}) must exceed base ({})", l1_ceiling, l1_base);
@@ -336,14 +355,26 @@ UnifiedMatmulPlan plan_unified_matmul(
 
         // ---- Multicast ----
         // One C slice per core on a rectangle laid out as the C slices tile C (walked row-major): the cores of a row
-        // then need the same A slice at the same time, and the cores of a column the same B slice.
+        // then need the same A slice at the same time, and the cores of a column the same B slice. When C is a single
+        // row of C slices every core of any rectangle needs the same A slice (one column: the same B slice).
         const std::vector<CoreRange>& core_ranges = config.cores.ranges();
+        const bool one_C_slice_per_core_of_rectangle = core_ranges.size() == 1 &&
+                                                       plan.cores.size() == plan.C_slices_per_batch &&
+                                                       plan.cores.size() == core_ranges[0].size();
         const bool cores_tile_C =
-            core_ranges.size() == 1 && plan.cores.size() == plan.C_slices_per_batch &&
-            core_ranges[0].grid_size().x == C_slices_across_N && core_ranges[0].grid_size().y == C_slices_down_M &&
+            one_C_slice_per_core_of_rectangle && core_ranges[0].grid_size().x == C_slices_across_N &&
+            core_ranges[0].grid_size().y == C_slices_down_M &&
             (config.orientation == ShardOrientation::ROW_MAJOR || C_slices_across_N == 1 || C_slices_down_M == 1);
-        plan.A_mcast_num_dests = cores_tile_C && !A_shard_borrowable ? C_slices_across_N - 1 : 0;
-        plan.B_mcast_num_dests = cores_tile_C && !B_shard_borrowable ? C_slices_down_M - 1 : 0;
+        plan.A_mcast_to_all_cores = one_C_slice_per_core_of_rectangle && !cores_tile_C && C_slices_down_M == 1;
+        plan.B_mcast_to_all_cores = one_C_slice_per_core_of_rectangle && !cores_tile_C && C_slices_across_N == 1;
+        const uint32_t A_mcast_group = cores_tile_C                ? C_slices_across_N
+                                       : plan.A_mcast_to_all_cores ? plan.cores.size()
+                                                                   : 1;
+        const uint32_t B_mcast_group = cores_tile_C                ? C_slices_down_M
+                                       : plan.B_mcast_to_all_cores ? plan.cores.size()
+                                                                   : 1;
+        plan.A_mcast_num_dests = A_shard_borrowable ? 0 : A_mcast_group - 1;
+        plan.B_mcast_num_dests = B_shard_borrowable ? 0 : B_mcast_group - 1;
 
         // ---- Subblock: the C slice's tiles accumulated in DST at once ----
         // A candidate is viable when it voids no achievable borrow and its DFBs fit L1, sized at the K
@@ -412,7 +443,7 @@ UnifiedMatmulPlan plan_unified_matmul(
                 fits || !must_fit,
                 "MatmulUnifiedProgramConfig: DFBs for a {}x{}-tile C slice with K_chunk_tiles={} do not fit "
                 "(needs {} B, budget {} B, max DFB extent {} B: A slice {} B, B slice {} B, C slice {} B, C partials "
-                "{} B)",
+                "{} B, bias {} B)",
                 C_slice_M_tiles,
                 C_slice_N_tiles,
                 candidate.K_chunk_tiles,
@@ -422,7 +453,8 @@ UnifiedMatmulPlan plan_unified_matmul(
                 (uint64_t)candidate.A_slice_entries * candidate.A_entry_bytes,
                 (uint64_t)candidate.B_slice_entries * candidate.B_entry_bytes,
                 (uint64_t)candidate.C_slice_entries * candidate.C_entry_bytes,
-                (uint64_t)candidate.C_partials_entries * candidate.C_partials_entry_bytes);
+                (uint64_t)candidate.C_partials_entries * candidate.C_partials_entry_bytes,
+                (uint64_t)candidate.bias_entries * candidate.bias_entry_bytes);
             return fits ? std::optional<UnifiedMatmulPlan>(std::move(candidate)) : std::nullopt;
         }
         // A resident A shard is only borrowable with a single K chunk, so try that first (main pins
@@ -435,10 +467,13 @@ UnifiedMatmulPlan plan_unified_matmul(
             }
         }
         // Otherwise the largest divisor of K_tiles whose DFBs fit, walking down from the cap (#57884: a
-        // small C slice makes the A and B slices cheap, so it is not capped and takes all of K if it fits).
-        const uint32_t K_chunk_start = C_slice_M_tiles * C_slice_N_tiles > SMALL_C_SLICE_TILES
-                                           ? std::min<uint32_t>(plan.K_tiles, MAX_AUTO_K_CHUNK_TILES)
-                                           : plan.K_tiles;
+        // small C slice makes the A and B slices cheap, so it is not capped, but keeps the readers busy).
+        const uint32_t min_K_chunks = is_quasar ? QUASAR_NUM_READER_THREADS : MIN_OPERAND_BUFFER_DEPTH;
+        const uint32_t K_chunk_start = std::min<uint32_t>(
+            plan.K_tiles,
+            C_slice_M_tiles * C_slice_N_tiles > SMALL_C_SLICE_TILES
+                ? MAX_AUTO_K_CHUNK_TILES
+                : std::max(MAX_AUTO_K_CHUNK_TILES, plan.K_tiles / min_K_chunks));
         for (uint32_t K_chunk_tiles = K_chunk_start; K_chunk_tiles >= 1; --K_chunk_tiles) {
             if (plan.K_tiles % K_chunk_tiles != 0) {
                 continue;
@@ -485,7 +520,11 @@ UnifiedMatmulPlan plan_unified_matmul(
 
     UnifiedMatmulPlan plan;
     if (M_fixed && N_fixed) {
-        plan = *complete_plan(share_M_tiles, share_N_tiles, /*must_fit=*/true);
+        std::optional<UnifiedMatmulPlan> fixed = complete_plan(share_M_tiles, share_N_tiles, must_fit);
+        if (!fixed.has_value()) {
+            return std::nullopt;
+        }
+        plan = std::move(*fixed);
     } else {
         // Candidates are divisor pieces of the share, largest area first (ties: wider). The first that fits
         // wins, except one that fits only with K_chunk_tiles == 1 yields to a smaller piece with a longer K
@@ -528,13 +567,16 @@ UnifiedMatmulPlan plan_unified_matmul(
             }
         }
         TT_FATAL(
-            best.has_value(),
+            best.has_value() || !must_fit,
             "MatmulUnifiedProgramConfig: no piece of the {}x{}-tile per-core share of C fits L1 (budget {} B, max DFB "
             "extent {} B)",
             share_M_tiles,
             share_N_tiles,
             l1_budget,
             MAX_DFB_EXTENT_BYTES);
+        if (!best.has_value()) {
+            return std::nullopt;
+        }
         plan = std::move(*best);
     }
 
@@ -574,28 +616,57 @@ UnifiedMatmulPlan plan_unified_matmul(
 
     // ---- Sharded output: one C slice per core, batch 1, and a grid the accessor maps the same way ----
     if (attributes.output_mem_config.is_sharded()) {
+        const bool one_C_slice_per_core = plan.C_slices_per_batch == plan.cores.size();
+        const uint32_t C_slices_down_M = tt::div_up(plan.M_tiles, plan.C_slice_M_tiles);
+        const std::vector<CoreRange>& ranges = config.cores.ranges();
+        const bool block_grid_matches = plan.sharded_output_layout != tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
+                                        (ranges.size() == 1 && ranges[0].grid_size().x == plan.C_slices_across_N &&
+                                         ranges[0].grid_size().y == C_slices_down_M);
+        if (!must_fit && (plan.batch_size != 1 || !one_C_slice_per_core || !block_grid_matches)) {
+            return std::nullopt;
+        }
         TT_FATAL(plan.batch_size == 1, "Sharded output needs batch 1 (a core's C slices would not form one shard)");
         TT_FATAL(
-            plan.C_slices_per_batch == plan.cores.size(),
+            one_C_slice_per_core,
             "Sharded output needs exactly one C slice per core ({} C slices, {} active cores)",
             plan.C_slices_per_batch,
             plan.cores.size());
-        if (plan.sharded_output_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
-            const uint32_t C_slices_down_M = tt::div_up(plan.M_tiles, plan.C_slice_M_tiles);
-            const std::vector<CoreRange>& ranges = config.cores.ranges();
-            const bool one_rectangle = ranges.size() == 1;
-            const uint32_t rectangle_columns = one_rectangle ? ranges[0].grid_size().x : 0;
-            const uint32_t rectangle_rows = one_rectangle ? ranges[0].grid_size().y : 0;
-            TT_FATAL(
-                one_rectangle && rectangle_columns == plan.C_slices_across_N && rectangle_rows == C_slices_down_M,
-                "Block-sharded output needs cores to be one {}x{} rectangle (one core per C slice, laid out as "
-                "the C slices tile C), got {}",
-                plan.C_slices_across_N,
-                C_slices_down_M,
-                config.cores.str());
-        }
+        TT_FATAL(
+            block_grid_matches,
+            "Block-sharded output needs cores to be one {}x{} rectangle (one core per C slice, laid out as "
+            "the C slices tile C), got {}",
+            plan.C_slices_across_N,
+            C_slices_down_M,
+            config.cores.str());
     }
     return plan;
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+UnifiedMatmulPlan plan_unified_matmul(
+    const tt::tt_metal::IDevice& device,
+    const ttnn::Tensor& A,
+    const ttnn::Tensor& B,
+    uint32_t bias_tile_bytes,
+    const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
+    const MatmulParams& attributes,
+    const std::optional<ttnn::Tensor>& output) {
+    return CMAKE_UNIQUE_NAMESPACE::plan_unified_matmul_impl(
+               device, A, B, bias_tile_bytes, config, attributes, output, /*must_fit=*/true)
+        .value();
+}
+
+std::optional<UnifiedMatmulPlan> try_plan_unified_matmul(
+    const tt::tt_metal::IDevice& device,
+    const ttnn::Tensor& A,
+    const ttnn::Tensor& B,
+    uint32_t bias_tile_bytes,
+    const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
+    const MatmulParams& attributes) {
+    return CMAKE_UNIQUE_NAMESPACE::plan_unified_matmul_impl(
+        device, A, B, bias_tile_bytes, config, attributes, std::nullopt, /*must_fit=*/false);
 }
 
 ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_program_artifacts(
@@ -613,10 +684,20 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     const tt::tt_metal::MeshTensor& A = A_tensor.mesh_tensor();
     const tt::tt_metal::MeshTensor& B = B_tensor.mesh_tensor();
     const tt::tt_metal::MeshTensor& C = tensor_return_value.at(0).mesh_tensor();
+    const std::optional<const ttnn::Tensor>& bias_tensor = tensor_args.optional_input_tensors.at(0);
     const tt::tt_metal::IDevice& device = A.device();
 
-    const UnifiedMatmulPlan plan =
-        plan_unified_matmul(device, A_tensor, B_tensor, config, operation_attributes, tensor_return_value.at(0));
+    const tt::DataFormat bias_format = bias_tensor.has_value()
+                                           ? tt::tt_metal::datatype_to_dataformat_converter(bias_tensor->dtype())
+                                           : tt::DataFormat{};
+    const UnifiedMatmulPlan plan = plan_unified_matmul(
+        device,
+        A_tensor,
+        B_tensor,
+        bias_tensor.has_value() ? tt::tile_size(bias_format) : 0,
+        config,
+        operation_attributes,
+        tensor_return_value.at(0));
 
     // ---- Tensor parameters: the kernels' tensor accessors are generated from these specs ----
     Group<TensorParameter> tensor_parameters = {
@@ -624,6 +705,10 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         TensorParameter{.unique_id = B_TENSOR, .spec = B.tensor_spec()},
         TensorParameter{.unique_id = C_TENSOR, .spec = C.tensor_spec()},
     };
+    if (plan.has_bias) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = BIAS_TENSOR, .spec = bias_tensor->mesh_tensor().tensor_spec()});
+    }
 
     // ---- Dataflow buffers ----
     const tt::tt_metal::Tile C_tile = C.tensor_spec().tile();
@@ -710,6 +795,31 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         dataflow_buffers.push_back(std::move(B_slice_dfb));
         dataflow_buffers.push_back(std::move(C_slice_dfb));
         dataflow_buffers.push_back(std::move(C_partials_dfb));
+        if (plan.has_bias) {
+            dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = BIAS_DFB,
+                .entry_size = plan.bias_entry_bytes,
+                .num_entries = plan.bias_entries,
+                .data_format_metadata = bias_format,
+                .tile_format_metadata = bias_tensor->tensor_spec().tile(),
+            });
+        }
+    }
+    // FUSE_BIAS / the activation defines, as in the other matmul kernels: the bias DFB and tensor exist only
+    // when there is a bias.
+    std::map<std::string, std::string> reader_defines_map;
+    std::map<std::string, std::string> compute_defines_map;  // also throttle / stagger
+    if (plan.has_bias) {
+        reader_defines_map["FUSE_BIAS"] = "1";
+        compute_defines_map["FUSE_BIAS"] = "1";
+    }
+    if (config.fused_activation.has_value()) {
+        compute_defines_map.merge(ttnn::operations::unary::utils::get_defines(
+            config.fused_activation->op_type,
+            config.fused_activation->params,
+            "ACTIVATION",
+            "i",
+            operation_attributes.output_dtype.value()));
     }
 
     // ---- Reader ----
@@ -727,7 +837,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .unique_id = READER_KERNEL,
         .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_reader.cpp"),
         .num_threads = plan.num_reader_threads,
-        .compiler_options = {},
+        .compiler_options = {.defines = KernelSpec::CompilerOptions::Defines(reader_defines_map)},
         .dfb_bindings = {ProducerOf(A_SLICE_DFB, "A_slice"), ProducerOf(B_SLICE_DFB, "B_slice")},
         .semaphore_bindings = std::move(reader_semaphore_bindings),
         .tensor_bindings =
@@ -764,9 +874,11 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                   "A_mcast_sender_x",
                   "A_mcast_sender_y",
                   "A_mcast_end_x",
+                  "A_mcast_end_y",
                   "B_mcast_receiver",
                   "B_mcast_sender_x",
                   "B_mcast_sender_y",
+                  "B_mcast_end_x",
                   "B_mcast_end_y"}},
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -799,8 +911,12 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
+    if (plan.has_bias) {
+        reader.dfb_bindings.push_back(ProducerOf(BIAS_DFB, "bias"));
+        reader.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = BIAS_TENSOR, .accessor_name = "bias"});
+    }
+
     // ---- Compute ----
-    std::map<std::string, std::string> compute_defines_map;  // throttle / stagger only
     const ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
@@ -865,6 +981,9 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .runtime_arg_schema = {.runtime_arg_names = {"num_C_slices"}},
         .hw_config = compute_hw_config,
     };
+    if (plan.has_bias) {
+        compute.dfb_bindings.push_back(AllConsumerOf(BIAS_DFB, "bias"));
+    }
 
     // ---- One work unit over the active cores ----
     const CoreRangeSet active_cores(ttsl::Span<const CoreCoord>(plan.cores));
@@ -884,34 +1003,44 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     const uint32_t C_slices_per_core_floor = plan.C_slices_per_batch / num_active_cores;
     const uint32_t cores_with_extra_C_slice = plan.C_slices_per_batch % num_active_cores;
     uint32_t next_C_slice = 0;  // position in the walk of the next unassigned C slice
-    // Multicast follows a core's row (A) and column (B) of the core rectangle, each led by its first core. The reader
-    // is on NOC_0 (Quasar has one NoC), which takes a multicast rectangle from its lowest coordinates, the first
-    // core's, to its highest.
+    // A is multicast along a core's row of the core rectangle and B down its column, each led by its first core, or
+    // over the whole rectangle from its first core. The reader is on NOC_0 (Quasar has one NoC), which takes a
+    // multicast rectangle from its lowest coordinates, the first core's, to its highest.
     const CoreRange core_grid = config.cores.bounding_box();
     for (uint32_t core = 0; core < num_active_cores; ++core) {
         const uint32_t num_C_slices = C_slices_per_core_floor + (core < cores_with_extra_C_slice ? 1 : 0);
         const CoreCoord logical = plan.cores[core];
-        const CoreCoord A_sender = device.worker_core_from_logical_core({core_grid.start_coord.x, logical.y});
-        const CoreCoord A_row_end = device.worker_core_from_logical_core({core_grid.end_coord.x, logical.y});
-        const CoreCoord B_sender = device.worker_core_from_logical_core({logical.x, core_grid.start_coord.y});
-        const CoreCoord B_column_end = device.worker_core_from_logical_core({logical.x, core_grid.end_coord.y});
+        const CoreCoord A_first =
+            plan.A_mcast_to_all_cores ? core_grid.start_coord : CoreCoord{core_grid.start_coord.x, logical.y};
+        const CoreCoord A_last =
+            plan.A_mcast_to_all_cores ? core_grid.end_coord : CoreCoord{core_grid.end_coord.x, logical.y};
+        const CoreCoord B_first =
+            plan.B_mcast_to_all_cores ? core_grid.start_coord : CoreCoord{logical.x, core_grid.start_coord.y};
+        const CoreCoord B_last =
+            plan.B_mcast_to_all_cores ? core_grid.end_coord : CoreCoord{logical.x, core_grid.end_coord.y};
+        const CoreCoord A_sender = device.worker_core_from_logical_core(A_first);
+        const CoreCoord A_end = device.worker_core_from_logical_core(A_last);
+        const CoreCoord B_sender = device.worker_core_from_logical_core(B_first);
+        const CoreCoord B_end = device.worker_core_from_logical_core(B_last);
         TT_FATAL(
-            (plan.A_mcast_num_dests == 0 || A_sender.x <= A_row_end.x) &&
-                (plan.B_mcast_num_dests == 0 || B_sender.y <= B_column_end.y),
-            "Multicast needs a row's / column's first core at its lowest NoC coordinate");
+            (plan.A_mcast_num_dests == 0 || (A_sender.x <= A_end.x && A_sender.y <= A_end.y)) &&
+                (plan.B_mcast_num_dests == 0 || (B_sender.x <= B_end.x && B_sender.y <= B_end.y)),
+            "Multicast needs a group's first core at its lowest NoC coordinates");
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             logical,
             {{"first_C_slice", next_C_slice},
              {"num_C_slices", num_C_slices},
-             {"A_mcast_receiver", plan.A_mcast_num_dests > 0 && logical.x != core_grid.start_coord.x ? 1u : 0u},
+             {"A_mcast_receiver", plan.A_mcast_num_dests > 0 && logical != A_first ? 1u : 0u},
              {"A_mcast_sender_x", static_cast<uint32_t>(A_sender.x)},
              {"A_mcast_sender_y", static_cast<uint32_t>(A_sender.y)},
-             {"A_mcast_end_x", static_cast<uint32_t>(A_row_end.x)},
-             {"B_mcast_receiver", plan.B_mcast_num_dests > 0 && logical.y != core_grid.start_coord.y ? 1u : 0u},
+             {"A_mcast_end_x", static_cast<uint32_t>(A_end.x)},
+             {"A_mcast_end_y", static_cast<uint32_t>(A_end.y)},
+             {"B_mcast_receiver", plan.B_mcast_num_dests > 0 && logical != B_first ? 1u : 0u},
              {"B_mcast_sender_x", static_cast<uint32_t>(B_sender.x)},
              {"B_mcast_sender_y", static_cast<uint32_t>(B_sender.y)},
-             {"B_mcast_end_y", static_cast<uint32_t>(B_column_end.y)}});
+             {"B_mcast_end_x", static_cast<uint32_t>(B_end.x)},
+             {"B_mcast_end_y", static_cast<uint32_t>(B_end.y)}});
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             logical,
@@ -936,6 +1065,9 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .kernel_run_args = {std::move(reader_run_args), std::move(compute_run_args), std::move(writer_run_args)},
         .tensor_args = {{A_TENSOR, A}, {B_TENSOR, B}, {C_TENSOR, C}},
     };
+    if (plan.has_bias) {
+        run_args.tensor_args.emplace(BIAS_TENSOR, std::cref(bias_tensor->mesh_tensor()));
+    }
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 

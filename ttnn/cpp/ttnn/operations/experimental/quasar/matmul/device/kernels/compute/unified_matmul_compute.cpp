@@ -9,11 +9,15 @@
 // Compute threads (Quasar NEOs; one thread elsewhere) take the subblocks round-robin in walk order
 // and all see the whole A and B slices; a thread's subblocks sit back to back in its share of
 // C_slice / C_partials (C_entries_per_thread entries), reserved and pushed once per K chunk.
+// FUSE_BIAS: K chunk 0 starts DST at the bias row instead of zero, so the partials carry it and the sum gets it
+// once. SFPU_OP_*_ACTIVATION: the activation runs on the finished sum in DST before the last K chunk's pack.
 // Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <cstdint>
 
+#include "api/compute/bcast.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
@@ -52,6 +56,9 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
     DataflowBuffer B_slice(dfb::B_slice);
     DataflowBuffer C_slice(dfb::C_slice);
     DataflowBuffer C_partials(dfb::C_partials);
+#ifdef FUSE_BIAS
+    DataflowBuffer bias_row(dfb::bias);
+#endif
 
     matmul_block_init(dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_chunk_tiles);
 
@@ -77,6 +84,11 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 const uint32_t pack_target_id = last_K_chunk ? uint32_t(dfb::C_slice) : uint32_t(dfb::C_partials);
                 A_slice.wait_front(A_slice_tiles);
                 B_slice.wait_front(B_slice_tiles);
+#ifdef FUSE_BIAS
+                if (K_chunk == 0) {
+                    bias_row.wait_front(C_slice_N_padded_tiles);
+                }
+#endif
 
                 // With packer L1 accumulation, K chunk 0 overwrites the partials, later K chunks add DST
                 // onto them, and the finished sum is packed without accumulation.
@@ -136,6 +148,27 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                                 subblock_M_tiles,
                                 K_chunk_tiles);
                         }
+#ifdef FUSE_BIAS
+                        if (K_chunk == 0) {
+                            // Bias tile (0, n_tile + n) broadcast down every row of DST tile (m, n); it is
+                            // unpacked through SrcB, where the A slice's tiles go.
+                            reconfig_data_format_srcb(dfb::A_slice, dfb::bias);
+                            unary_bcast_init<BroadcastType::ROW>(dfb::bias);
+                            for (uint32_t m = 0; m < subblock_M_tiles; ++m) {
+                                for (uint32_t n = 0; n < subblock_N_tiles; ++n) {
+                                    unary_bcast<BroadcastType::ROW>(dfb::bias, n_tile + n, m * subblock_N_tiles + n);
+                                }
+                            }
+                            reconfig_data_format_srcb(dfb::bias, dfb::A_slice);
+                            matmul_block_init(
+                                dfb::A_slice,
+                                dfb::B_slice,
+                                /*transpose=*/0,
+                                subblock_N_tiles,
+                                subblock_M_tiles,
+                                K_chunk_tiles);
+                        }
+#endif
 
                         // One matmul_block call per K tile (the LLK has no multi-K-tile call; kt_dim is
                         // only the A-slice row stride).
@@ -155,6 +188,21 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                             A_slice_tile += 1;                       // next K tile along the A slice row
                             B_slice_tile += C_slice_N_padded_tiles;  // next K row of the B slice
                         }
+#ifdef SFPU_OP_INIT_ACTIVATION
+                        if (last_K_chunk) {
+                            SFPU_OP_INIT_ACTIVATION
+                            for (uint32_t i = 0; i < subblock_tiles; ++i) {
+                                SFPU_OP_FUNC_ACTIVATION
+                            }
+                            matmul_block_init(
+                                dfb::A_slice,
+                                dfb::B_slice,
+                                /*transpose=*/0,
+                                subblock_N_tiles,
+                                subblock_M_tiles,
+                                K_chunk_tiles);
+                        }
+#endif
                         tile_regs_commit();
 
                         // Packs continue where the previous subblock's pack left off in the share.
@@ -169,10 +217,20 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                     dummy_pack(pack_target_id);
                     dummy_unpack(dfb::A_slice);
                     dummy_unpack(dfb::B_slice);
+#ifdef FUSE_BIAS
+                    if (K_chunk == 0) {
+                        dummy_unpack(dfb::bias);
+                    }
+#endif
                 }
                 pack_target.push_back(C_entries_per_thread);
                 A_slice.pop_front(A_slice_tiles);
                 B_slice.pop_front(B_slice_tiles);
+#ifdef FUSE_BIAS
+                if (K_chunk == 0) {
+                    bias_row.pop_front(C_slice_N_padded_tiles);
+                }
+#endif
             }
         }
     }

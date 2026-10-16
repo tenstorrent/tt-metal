@@ -8,6 +8,7 @@
 
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_auto_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include "tt-metalium/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
@@ -1862,13 +1863,13 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 // Any memory layout on any operand: the kernels address tiles by page id through the
                 // tensor accessor. Geometry, blocking, buffer fit and sharded-output constraints are
                 // all checked by the plan (shared with the factory and compute_output_specs).
-                TT_FATAL(
-                    !optional_bias.has_value(),
-                    "MatmulUnifiedProgramConfig does not fuse bias; ttnn::matmul applies it as a separate add");
                 (void)plan_unified_matmul(
                     *input_tensor_a.device(),
                     input_tensor_a,
                     input_tensor_b,
+                    optional_bias.has_value()
+                        ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(optional_bias->dtype()))
+                        : 0,
                     program_config,
                     attributes,
                     optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
@@ -2217,6 +2218,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         *input_tensor_a.device(),
                         input_tensor_a,
                         input_tensor_b,
+                        bias_single_tile_size,
                         program_config,
                         attributes,
                         std::nullopt);
@@ -2425,6 +2427,33 @@ MatmulParams create_matmul_attributes(
         parameters.sub_device_id};
 }
 
+namespace {
+// A MatmulUnifiedProgramConfig without cores asks for its placement to be chosen; every later step plans the
+// chosen one.
+void resolve_unified_placement(
+    MatmulParams& attributes, const Tensor& input_tensor_a, const Tensor& input_tensor_b, uint32_t bias_tile_bytes) {
+    using operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig;
+    const MatmulUnifiedProgramConfig* requested = std::get_if<MatmulUnifiedProgramConfig>(&*attributes.program_config);
+    if (requested == nullptr || requested->cores.num_cores() > 0) {
+        return;
+    }
+    std::optional<MatmulUnifiedProgramConfig> chosen =
+        operations::experimental::quasar::matmul::choose_unified_matmul_program_config(
+            input_tensor_a,
+            input_tensor_b,
+            attributes.transpose_a,
+            attributes.transpose_b,
+            bias_tile_bytes,
+            attributes,
+            *requested);
+    TT_FATAL(
+        chosen.has_value(),
+        "MatmulUnifiedProgramConfig: no placement of this matmul fits L1 or the unified matmul does not support it "
+        "(transposed operands, untilized output, tiles other than 32x32)");
+    attributes.program_config = std::move(chosen.value());
+}
+}  // namespace
+
 MatmulDeviceOperation::tensor_return_value_t matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -2447,6 +2476,11 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
             bias_single_tile_size,
             normalized_attributes);
     }
+    resolve_unified_placement(
+        normalized_attributes,
+        input_tensor_a,
+        input_tensor_b,
+        bias.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(bias->dtype())) : 0);
     operations::experimental::quasar::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensor_a.device()->compute_with_storage_grid_size());
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
@@ -2469,6 +2503,7 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
             bias_single_tile_size,
             normalized_attributes);
     }
+    resolve_unified_placement(normalized_attributes, input_tensors.at(0), input_tensors.at(1), 0);
     operations::experimental::quasar::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensors.at(0).device()->compute_with_storage_grid_size());
     // validate requires optional_input_tensors.size() == 1; this path has no bias.

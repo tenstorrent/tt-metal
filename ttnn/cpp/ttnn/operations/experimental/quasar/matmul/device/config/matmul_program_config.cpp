@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_auto_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
 #include <ranges>
@@ -996,6 +997,16 @@ MatmulProgramConfig get_program_config(
     const ttnn::prim::qsr::MatmulParams& attributes) {
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
+    }
+    // Quasar takes the Quasar-native matmul wherever it runs; the legacy picker covers the rest.
+    if (input_tensor_a.device()->arch() == tt::ARCH::QUASAR) {
+        MatmulUnifiedProgramConfig requested{};
+        requested.fused_activation = attributes.user_fused_activation;
+        std::optional<MatmulUnifiedProgramConfig> unified = choose_unified_matmul_program_config(
+            input_tensor_a, input_tensor_b, transpose_a, transpose_b, bias_single_tile_size, attributes, requested);
+        if (unified.has_value()) {
+            return unified.value();
+        }
     }
     auto config = generate_matmul_program_config(
         input_tensor_a,
