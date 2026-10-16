@@ -1,4 +1,6 @@
-supported_archs: [wormhole, quasar]
+# Quasar keeps its own copy on Float16 (quasar/hifi_elwmul_overwrite.yaml): Quasar allows HiFi
+# fidelities only for a Float16 input.
+supported_archs: [wormhole]
 
 operands:
   - {name: seed, dims: [32, 32], format: Float16_b}

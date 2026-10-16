@@ -2,6 +2,9 @@
 # and pack pipelines to reconfigure between every stage. Goes from Float16_b
 # through Bfp8_b to Float32.
 
+# Bfp8_b does not exist on Quasar, which runs its own Float16 copy (quasar/reconfigure.yaml).
+supported_archs: [wormhole, blackhole]
+
 dest_acc: true
 
 operands:
