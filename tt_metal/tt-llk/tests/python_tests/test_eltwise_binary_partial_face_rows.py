@@ -13,7 +13,6 @@ MOP the same way.
 """
 
 import torch
-from conftest import wormhole_only
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestSync,
@@ -42,7 +41,6 @@ def _apply(math_op, src_a, src_b):
     return (src_a + src_b) if math_op == MathOperation.Elwadd else (src_a - src_b)
 
 
-@wormhole_only
 @parametrize(
     math_op=[MathOperation.Elwadd, MathOperation.Elwsub],
     reuse_dest_type=[
