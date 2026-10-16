@@ -244,6 +244,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t tile = 0; tile < CT_DIM * RT_DIM; tile++)
                 {
                     const std::uint32_t tile_index = tile % MAX_TILES_DEST;
+#if defined(ARCH_BLACKHOLE)
+                    if constexpr (pack_block_en)
+                    {
+                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index), CT_DIM * RT_DIM);
+                        break;
+                    }
+#endif
                     LLK_ASSERT(
                         (tile_index < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles for matmul");
@@ -267,6 +274,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[i])), "pack result real-buffer address is outside L1");
                     }
+#if defined(ARCH_BLACKHOLE)
+                    if constexpr (pack_block_en)
+                    {
+                        if (LOOP_FACTOR == 1)
+                        {
+                            LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[CT_DIM * RT_DIM - 1])), "pack result real-buffer address is outside L1");
+                        }
+                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, addr, CT_DIM * RT_DIM);
+                        break;
+                    }
+#endif
                     _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, addr);
                 }
                 _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

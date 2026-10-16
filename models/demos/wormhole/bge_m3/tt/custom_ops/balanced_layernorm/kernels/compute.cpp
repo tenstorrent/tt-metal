@@ -57,9 +57,13 @@ FORCE_INLINE void pre_add(uint32_t n, uint32_t cb_dst) {
         cb_pop_front(CB_B, blk);
         cb_reserve_back(cb_dst, blk);
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, cb_dst, blk);
+#else
         for (uint32_t i = 0; i < blk; ++i) {
             pack_tile(i, cb_dst);
         }
+#endif
         tile_regs_release();
         cb_push_back(cb_dst, blk);
     }
@@ -108,9 +112,13 @@ FORCE_INLINE void center(uint32_t cb_x, uint32_t cb_xmm, uint32_t n) {
         tile_regs_commit();
         cb_pop_front(cb_x, blk);
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, cb_xmm, blk);
+#else
         for (uint32_t i = 0; i < blk; ++i) {
             pack_tile(i, cb_xmm);
         }
+#endif
         tile_regs_release();
         cb_push_back(cb_xmm, blk);
     }
@@ -132,9 +140,13 @@ FORCE_INLINE void square(uint32_t cb_src, uint32_t cb_dst, uint32_t n) {
         tile_regs_commit();
         cb_reserve_back(cb_dst, blk);
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, cb_dst, blk);
+#else
         for (uint32_t i = 0; i < blk; ++i) {
             pack_tile(i, cb_dst);
         }
+#endif
         tile_regs_release();
         cb_push_back(cb_dst, blk);
     }
@@ -209,9 +221,13 @@ FORCE_INLINE void normalize() {
         tile_regs_commit();
         cb_reserve_back(CB_OUT, blk);
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, CB_OUT, blk);
+#else
         for (uint32_t i = 0; i < blk; ++i) {
             pack_tile(i, CB_OUT);
         }
+#endif
         tile_regs_release();
         cb_push_back(CB_OUT, blk);
     }
