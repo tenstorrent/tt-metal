@@ -92,14 +92,14 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     // With the exchange, every convolution core, all of the grid but the exchange core, stages its share of the rows.
     const auto grid = mesh->compute_with_storage_grid_size();
     const uint32_t work_items = (attrs.sequence / tt::constants::TILE_HEIGHT) * (channels / attrs.channel_chunk_size);
-    const uint32_t max_staged_ct =
-        in.exchange_buffer.has_value()
-            ? qkv_causal_conv1d_silu_staged_ct(
-                  channels / tt::constants::TILE_WIDTH,
-                  kda_factory_detail::distribute_prep(grid, work_items, grid.x * grid.y - 1).cores.size())
-            : 0;
+    const uint32_t max_staged_ct = in.exchange_buffer.has_value()
+                                       ? qkv_causal_conv1d_silu_staged_ct(
+                                             channels / tt::constants::TILE_WIDTH,
+                                             qkv_causal_conv1d_silu_distribution(grid, work_items, true).cores.size())
+                                       : 0;
     const uint64_t required_l1_bytes = qkv_causal_conv1d_silu_l1_bytes(
         attrs.channel_chunk_size / tt::constants::TILE_WIDTH,
+        qkv_conv::dest_tile_limit(attrs.compute_kernel_config.fp32_dest_acc_en),
         tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(in.input.dtype())),
         max_staged_ct);
     const uint64_t available_l1_bytes =
@@ -166,11 +166,6 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !attrs.compute_kernel_config.math_approx_mode,
         "qkv_causal_conv1d_silu: math_approx_mode=true is unsupported because the fused SiLU uses the precise sigmoid");
-    TT_FATAL(
-        !attrs.compute_kernel_config.fp32_dest_acc_en,
-        "qkv_causal_conv1d_silu: fp32_dest_acc_en=true is unsupported because each destination acquire holds up to {} "
-        "BFLOAT16 tiles",
-        qkv_conv::max_dest_tiles);
 }
 
 QkvCausalConv1dSiluOperation::spec_return_value_t QkvCausalConv1dSiluOperation::compute_output_specs(
