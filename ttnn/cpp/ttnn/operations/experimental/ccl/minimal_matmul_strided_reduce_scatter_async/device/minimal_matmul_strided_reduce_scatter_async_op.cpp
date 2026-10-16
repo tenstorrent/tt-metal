@@ -7,6 +7,8 @@
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 using matmul_device_operation_t = ttnn::experimental::prim::MinimalMatmulDeviceOperation;
 
@@ -343,6 +345,58 @@ MinimalMatmulStridedReduceScatterAsync::create_output_tensors(
                                         : create_device_tensor(tensor_specs[2], tensor_args.input_tensor.device());
 
     return {mm_output_tensor, rs_intermediate_tensor, rs_output_tensor};
+}
+
+std::vector<tt::tt_metal::TensorTopology> MinimalMatmulStridedReduceScatterAsync::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    // {mm, rs_intermediate, rs_output}. The matmul output takes the union-default label of its operands (input,
+    // weight, bias and the optional second in0 source). The reduce_scatter consumes the matmul output: its
+    // intermediate is scratch over that tensor and keeps its label (reduce_scatter_minimal_async convention); its
+    // output is the reduce_scatter of the matmul LABEL along `cluster_axis` for `dim`. Without a cluster_axis the
+    // program ranks the whole-mesh ring by `input_tensor`'s device-storage coordinates
+    // (get_linearized_index_from_physical_coord), so that label is spelled over those coordinates
+    // (over_storage_ring_order, as the helper's Tensor overload does for a plain reduce_scatter) rather than over the
+    // matmul label's. Caller-supplied persistent buffers are those tensors and take the same labels. The fused
+    // addcmul, addcmul_input_tensor1 + scalar * rs + addcmul_input_tensor2, is applied at the reduce_scatter's final
+    // write, so the rs_output is also a function of those two operands: its label is the union of the reduce_scatter
+    // label (first, so its Shard{dim} on the scattered axis wins and its rank is the result's: a collapsed
+    // whole-mesh {N},[Shard{dim}] is not dropped against N-D addcmul operands, see union_topology) and theirs, what
+    // launch() gives an elementwise op over the three; a ternary operand sharded on a mesh axis the reduce_scatter
+    // result replicates makes the result Shard there, and validation does not constrain the ternary tensors' labels.
+    // No honest label (nullopt, already reported): the rs_output keeps the matmul label -- the label of the tensor it
+    // scatters -- before the addcmul union, so the fallback is a function of the inputs alone (returning {} would hand
+    // the framework the union over every tensor argument, the caller's persistent buffers and their stale labels
+    // included).
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    std::vector<std::reference_wrapper<const TensorTopology>> operands{
+        std::cref(input_topology), std::cref(tensor_args.weight_tensor.tensor_topology())};
+    if (tensor_args.bias.has_value()) {
+        operands.emplace_back(tensor_args.bias->tensor_topology());
+    }
+    if (tensor_args.mm_optional_input_tensor.has_value()) {
+        operands.emplace_back(tensor_args.mm_optional_input_tensor->tensor_topology());
+    }
+    TensorTopology mm_topology = ttnn::device_operation::detail::union_topology(operands, input_topology.mesh_coords());
+
+    TensorTopology rs_output_topology = ttnn::operations::ccl::common::over_storage_ring_order(
+                                            ttnn::operations::ccl::common::reduce_scatter_output_topology(
+                                                mm_topology,
+                                                attributes.cluster_axis,
+                                                tensor_args.input_tensor.device()->shape(),
+                                                static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank()),
+                                                static_cast<int32_t>(attributes.dim)),
+                                            tensor_args.input_tensor,
+                                            attributes.cluster_axis)
+                                            .value_or(mm_topology);
+    if (tensor_args.addcmul_input_tensor1.has_value() && tensor_args.addcmul_input_tensor2.has_value()) {
+        rs_output_topology = ttnn::device_operation::detail::union_topology(
+            {std::cref(rs_output_topology),
+             std::cref(tensor_args.addcmul_input_tensor1->tensor_topology()),
+             std::cref(tensor_args.addcmul_input_tensor2->tensor_topology())},
+            rs_output_topology.mesh_coords());
+    }
+    return {mm_topology, mm_topology, std::move(rs_output_topology)};
 }
 
 }  // namespace ttnn::experimental::prim

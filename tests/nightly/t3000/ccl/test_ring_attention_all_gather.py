@@ -215,6 +215,22 @@ def run_ring_attention_all_gather_impl(
         torch_ag_out_tensors = ag_output_tensor_list[i if not enable_trace else 0]
 
         for j in range(ag_num_inputs):
+            # Output TensorTopology: each input is ShardTensor2dMesh dims=input_dims on the (ring, ulysses) submesh;
+            # gathering the sequence along the ring axis makes that axis Replicate and leaves the other axis's
+            # placement alone -- the layout ConcatMesh2dToTensor dims=output_dims composes below. Before the op had a
+            # compute_output_topologies the outputs kept the inputs' Shard(sequence) on the ring axis.
+            expected_placements = [
+                (
+                    "PlacementReplicate()"
+                    if axis == rp_axis or input_dims[axis] is None
+                    else f"PlacementShard({input_dims[axis]})"
+                )
+                for axis in range(2)
+            ]
+            assert [repr(p) for p in tt_ag_out_tensors[j].tensor_topology().placements()] == expected_placements
+            assert tuple(int(d) for d in tt_ag_out_tensors[j].tensor_topology().distribution_shape()) == tuple(
+                mesh_device.shape
+            )
             tt_ag_out = ttnn.to_torch(
                 tt_ag_out_tensors[j],
                 mesh_composer=ttnn.ConcatMesh2dToTensor(

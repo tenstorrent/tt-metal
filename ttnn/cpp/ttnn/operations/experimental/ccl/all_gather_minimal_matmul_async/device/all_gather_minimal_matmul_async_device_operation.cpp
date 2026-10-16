@@ -11,6 +11,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 #include <tt-metalium/hal.hpp>
 
@@ -428,6 +430,59 @@ AllGatherMinimalMatmulAsyncOp::tensor_return_value_t AllGatherMinimalMatmulAsync
     }
 
     return output_tensors;
+}
+
+std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    // Slot layout follows compute_output_specs: [0] the activation gather buffer (the caller's persistent buffer when
+    // given), [1] with FSDP the gathered weight buffer, then one matmul chunk per remaining spec. The activation is
+    // gathered along its last dim on `cluster_axis`, the FSDP weight along its second-to-last (K) dim on
+    // `fsdp_cluster_axis`: Replicate on that axis, the tensor's placements elsewhere. Every chunk is a column slice of
+    // the matmul of the gathered activation by the (gathered) weight, so each takes the union-default label of
+    // {gathered activation, (gathered) weight, bias, and the fused addcmul's two ternary operands when present} (what
+    // launch() gives a plain matmul over those operands). The addcmul, fused_ternary_input_a + scalar * matmul *
+    // fused_ternary_input_b, is elementwise on the matmul result, so a ternary operand sharded on a mesh axis the
+    // matmul result replicates makes the result Shard there -- validation does not constrain the ternary tensors'
+    // labels, so they have to be in the union; SwiGLU acts on the result alone and adds nothing. No honest gather
+    // label (nullopt, already reported): that slot keeps the label of the tensor it gathers (the activation's, the
+    // weight's) and the chunks take the union over those, so the fallback is a function of the inputs alone.
+    // Returning {} would instead hand the framework the union over every tensor argument, the caller's persistent
+    // output buffer and its stale label included.
+    const TensorTopology activation_topology =
+        ttnn::operations::ccl::common::all_gather_output_topology(
+            tensor_args.input_tensor, attributes.cluster_axis, /*gathered_dim=*/-1)
+            .value_or(tensor_args.input_tensor.tensor_topology());
+    const bool fsdp_fused = attributes.fsdp_cluster_axis.has_value();
+    const TensorTopology weight_topology =
+        fsdp_fused ? ttnn::operations::ccl::common::all_gather_output_topology(
+                         tensor_args.weight_tensor, attributes.fsdp_cluster_axis, /*gathered_dim=*/-2)
+                         .value_or(tensor_args.weight_tensor.tensor_topology())
+                   : tensor_args.weight_tensor.tensor_topology();
+
+    std::vector<std::reference_wrapper<const TensorTopology>> operands{
+        std::cref(activation_topology), std::cref(weight_topology)};
+    if (tensor_args.bias_tensor.has_value()) {
+        operands.emplace_back(tensor_args.bias_tensor->tensor_topology());
+    }
+    if (tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value()) {
+        operands.emplace_back(tensor_args.fused_ternary_input_a->tensor_topology());
+        operands.emplace_back(tensor_args.fused_ternary_input_b->tensor_topology());
+    }
+    const TensorTopology matmul_topology = ttnn::device_operation::detail::union_topology(
+        operands, tensor_args.input_tensor.tensor_topology().mesh_coords());
+
+    const size_t num_outputs = compute_output_specs(attributes, tensor_args).size();
+    std::vector<TensorTopology> topologies;
+    topologies.reserve(num_outputs);
+    topologies.push_back(activation_topology);
+    if (fsdp_fused) {
+        topologies.push_back(weight_topology);
+    }
+    while (topologies.size() < num_outputs) {
+        topologies.push_back(matmul_topology);
+    }
+    return topologies;
 }
 
 }  // namespace ttnn::experimental::prim

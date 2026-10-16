@@ -18,6 +18,10 @@ namespace ttnn {
 class Tensor;
 }  // namespace ttnn
 
+namespace tt::tt_metal {
+class TensorTopology;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::distributed {
 class MeshDevice;
 }  // namespace tt::tt_metal::distributed
@@ -37,6 +41,41 @@ std::pair<
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
 compute_output_placements_and_shape(const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors);
+
+/**
+ * The same union over TensorTopology labels instead of tensors. The tensor overload above is this function
+ * applied to each tensor's tensor_topology(); it exists so a device operation that knows what one of its
+ * operands WILL be labelled (a collective's result feeding a fused matmul) can take the union of that label
+ * with the labels of its other operands, rather than re-implementing the rule. Semantics: among the labels of
+ * the highest distribution rank, the first Shard seen on a mesh axis wins and a tensor dim already claimed by
+ * another axis reads Replicate; the distribution shape is the per-axis maximum; lower-rank sharded labels are
+ * dropped; fully-replicated labels only decide the rank when nothing is sharded.
+ */
+std::pair<
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+    tt::tt_metal::distributed::MeshShape>
+compute_output_placements_and_shape(
+    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& topologies);
+
+/**
+ * The label of an output that is a function of several labelled operands -- a fused matmul of a collective's result
+ * by a weight, an elementwise op on a reduce_scatter result -- as a TensorTopology over `mesh_coords`: the union
+ * above, with `operands.front()` the label the operation computed itself (the collective's result, or the matmul
+ * label a fused reduce_scatter consumes) and the rest the other operands' labels. This is what every fused
+ * experimental CCL hook spells, so a rule for how such unions behave has one home.
+ *
+ * The one rule beyond the union's: the first operand's distribution rank is the result's whenever that operand is
+ * sharded, and sharded operands of another rank are left out. The union keeps only the labels of the highest rank
+ * among the sharded ones, so a collapsed {N},[Shard{d}] reduce_scatter result unioned with N-D [Replicate, Shard{d}]
+ * elementwise operands would otherwise read [Replicate, Shard{d}]: Replicate on an axis whose devices hold different
+ * pieces, data loss when serialised (uncollapsing it first, [Shard{d}, Shard{d}], reads [Shard{d}, Replicate]: the same
+ * over-claim on the other axis). A collapsed label already says every device holds a distinct piece, which no other
+ * operand can make less distinct; an N-D first operand drops exactly the operands the union would have dropped. A
+ * fully replicated first operand decides nothing, as in the union.
+ */
+tt::tt_metal::TensorTopology union_topology(
+    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& operands,
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords);
 
 /**
  * Non-template implementation of tensor coordinate extraction.

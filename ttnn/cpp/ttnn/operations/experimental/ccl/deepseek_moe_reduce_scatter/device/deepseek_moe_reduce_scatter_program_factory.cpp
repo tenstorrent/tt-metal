@@ -109,8 +109,13 @@ DeepseekMoEReduceScatterProgramArtifacts build_deepseek_moe_reduce_scatter_progr
     uint32_t num_links) {
     auto* mesh_device = input_tensors.at(0).device();
 
-    // hardcoded constants
-    const uint32_t ring_size = 8;
+    // hardcoded constants; the intermediate CBs below index slices 0..7 by hand, one per ring position
+    TT_FATAL(
+        intermediate_slice_tensors.size() == ttnn::experimental::prim::kNumIntermediateSlices,
+        "deepseek_moe_reduce_scatter expects {} intermediate slice tensors, got {}",
+        ttnn::experimental::prim::kNumIntermediateSlices,
+        intermediate_slice_tensors.size());
+    const uint32_t ring_size = ttnn::experimental::prim::kNumIntermediateSlices;
     const uint32_t num_directions_per_link = 2;
     const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
 

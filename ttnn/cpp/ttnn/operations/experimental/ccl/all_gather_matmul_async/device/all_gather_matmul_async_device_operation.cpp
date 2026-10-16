@@ -10,6 +10,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 /* All Gather Matmul fusion includes */
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
@@ -111,6 +112,27 @@ AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t AllGatherMatmulAsyncD
          .optional_output_tensors = {}})[0];
 
     return {all_gather_output_tensor, matmul_output_tensor};
+}
+
+std::vector<tt::tt_metal::TensorTopology> AllGatherMatmulAsyncDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    // {all_gather output, matmul output}. The all_gather label is delegated to AllGatherAsyncDeviceOperation over
+    // the attributes and inputs it is created from: exactly one label, the input's when it has no honest all_gather
+    // label (already reported), so the fallback is a function of the inputs alone. The matmul of the gathered
+    // activation by the weight takes the union-default label of {gathered activation, weight, bias} (what launch()
+    // gives a plain matmul).
+    const auto gathered = AllGatherAsyncDeviceOperation::compute_output_topologies(
+        operation_attributes.all_gather_async_attributes, operation_attributes.all_gather_async_tensor_args);
+    std::vector<std::reference_wrapper<const TensorTopology>> operands{
+        std::cref(gathered.front()), std::cref(tensor_args.weight_tensor.tensor_topology())};
+    if (tensor_args.bias.has_value()) {
+        operands.emplace_back(tensor_args.bias->tensor_topology());
+    }
+    return {
+        gathered.front(),
+        ttnn::device_operation::detail::union_topology(
+            operands, tensor_args.input_tensor.tensor_topology().mesh_coords())};
 }
 
 ttsl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(

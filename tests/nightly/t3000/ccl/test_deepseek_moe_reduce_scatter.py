@@ -87,6 +87,24 @@ def run_deepseek_moe_reduce_scatter_impl(
             cluster_axis=rs_cluster_axis,
         )
 
+        # Output TensorTopology: the inputs carry [Replicate, Shard(rs_dim)] on (1, N) through
+        # deepseek_moe_fast_reduce_nc; ring position d keeps the reduced slice d, so the output is the reduce_scatter
+        # label -- the collapsed {N}, [Shard(rs_dim)] for a whole-mesh ring, Shard(rs_dim) on the cluster axis
+        # otherwise -- which ConcatMeshToTensor(dim=rs_dim) composes below. Before the op had a
+        # compute_output_topologies the output kept the union default of its 8 inputs.
+        if rs_cluster_axis is None:
+            expected_placements = [f"PlacementShard({rs_dim})"]
+            expected_shape = (num_devices,)
+        else:
+            expected_placements = ["PlacementReplicate()", "PlacementReplicate()"]
+            expected_placements[rs_cluster_axis] = f"PlacementShard({rs_dim})"
+            expected_shape = tuple(mesh_device.shape)
+        assert [repr(p) for p in tt_reduce_scatter_output_tensor.tensor_topology().placements()] == expected_placements
+        assert (
+            tuple(int(d) for d in tt_reduce_scatter_output_tensor.tensor_topology().distribution_shape())
+            == expected_shape
+        )
+
         return tt_reduce_scatter_output_tensor
 
     if enable_trace:
@@ -145,7 +163,7 @@ def run_deepseek_moe_reduce_scatter_impl(
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT)])
-@pytest.mark.parametrize("pre_rs_reduction_dim", [(0)])
+@pytest.mark.parametrize("pre_rs_reduction_dim", [0])
 @pytest.mark.parametrize(
     "pre_rs_reduction_input_shape, sum_input_memory_config, rs_input_memory_config, rs_output_memory_config, rs_dim, rs_num_links",
     [
