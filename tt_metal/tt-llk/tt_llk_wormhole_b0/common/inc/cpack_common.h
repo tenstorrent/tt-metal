@@ -117,6 +117,26 @@ typedef union
     dest_rd_ctrl_t f;
 } dest_rd_ctrl_u;
 
+// RMW mask over every non-reserved field of dest_rd_ctrl_t. A packer data-format reconfig writes the
+// whole field set with it, as the full configure does with a word write.
+constexpr std::uint32_t PCK_DEST_RD_CTRL_FIELDS_MASK =
+    PCK_DEST_RD_CTRL_Read_32b_data_MASK | PCK_DEST_RD_CTRL_Read_unsigned_MASK | PCK_DEST_RD_CTRL_Read_int8_MASK | PCK_DEST_RD_CTRL_Round_10b_mant_MASK;
+static_assert(
+    PCK_DEST_RD_CTRL_FIELDS_MASK == __builtin_bit_cast(
+                                        std::uint32_t,
+                                        dest_rd_ctrl_t {
+                                            .PCK_DEST_RD_CTRL_Read_32b_data  = 1,
+                                            .PCK_DEST_RD_CTRL_Read_unsigned  = 1,
+                                            .PCK_DEST_RD_CTRL_Read_int8      = 1,
+                                            .PCK_DEST_RD_CTRL_Round_10b_mant = 1,
+                                            .PCK_DEST_RD_CTRL_Reserved       = 0}),
+    "PCK_DEST_RD_CTRL_FIELDS_MASK must cover every non-reserved field of dest_rd_ctrl_t");
+static_assert(
+    PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_unsigned_ADDR32 &&
+        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_int8_ADDR32 &&
+        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Round_10b_mant_ADDR32,
+    "PCK_DEST_RD_CTRL fields must share one ADDR32 for a combined RMW");
+
 // PACK_EDGE_OFFSET_SEC[0:3] register structure
 //
 // Lower 16b represent a mask that is applied on a single row of one face on the packer output
@@ -686,23 +706,10 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
-    // Every field assigned in dest_rd_ctrl above must be in the RMW mask; Read_int8 is what makes an
-    // Int8/UInt8 pack read 16-bit Dest datums as 8-bit integers, so a reconfig onto or away from
-    // Int8/UInt8 must write it like the full configure does.
-    static_assert(
-        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_unsigned_ADDR32,
-        "PCK_DEST_RD_CTRL_Read_32b_data and Read_unsigned must share ADDR32 for combined RMW");
-    static_assert(
-        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_int8_ADDR32,
-        "PCK_DEST_RD_CTRL_Read_32b_data and Read_int8 must share ADDR32 for combined RMW");
-    static_assert(
-        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Round_10b_mant_ADDR32,
-        "PCK_DEST_RD_CTRL_Read_32b_data and Round_10b_mant must share ADDR32 for combined RMW");
-    cfg_reg_rmw_tensix<
-        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32,
-        PCK_DEST_RD_CTRL_Read_32b_data_SHAMT,
-        PCK_DEST_RD_CTRL_Read_32b_data_MASK | PCK_DEST_RD_CTRL_Read_unsigned_MASK | PCK_DEST_RD_CTRL_Read_int8_MASK | PCK_DEST_RD_CTRL_Round_10b_mant_MASK>(
-        dest_rd_ctrl.val);
+    // Read_int8 is what makes an Int8/UInt8 pack read 16-bit Dest datums as 8-bit integers, so a
+    // reconfig onto or away from Int8/UInt8 must write it like the full configure does: the RMW
+    // covers every dest_rd_ctrl field.
+    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, PCK_DEST_RD_CTRL_Read_32b_data_SHAMT, PCK_DEST_RD_CTRL_FIELDS_MASK>(dest_rd_ctrl.val);
 
     if (IS_BFP_FORMAT(pack_dst_format))
     {
