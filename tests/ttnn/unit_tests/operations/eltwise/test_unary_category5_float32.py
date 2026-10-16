@@ -45,6 +45,7 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 |        | -88.5 <= B <= -87.5 | exactly 0                  |
 |        | elsewhere           | ULP ≤ 3                    |
 | geglu  | all                 | bit-identical to ttnn.gelu |
+|        |                     | (sign of zero ignored)     |
 """
 
 
@@ -153,7 +154,12 @@ def test_geglu(device, dim, variant):
     | Input range (B) | Check                          | Reason                               |
     |-----------------|--------------------------------|--------------------------------------|
     | all             | bit-identical to ttnn.gelu     | same gate kernel, so ttnn.gelu's own |
-    |                 | with the same variant          | accuracy tests carry over            |
+    |                 | with the same variant, with    | accuracy tests carry over            |
+    |                 | -0.0 read as +0.0              |                                      |
+
+    geglu is ttnn.gelu(B) followed by ttnn.multiply(A, gelu(B)). On Blackhole that
+    multiply returns +0.0 for 1.0 * -0.0, and Accurate gelu returns -0.0 for
+    -2^-125 < B <= -2^-126, so the sign of zero is not compared.
 
     With variant=None, geglu must resolve to Accurate, on the device and in the golden.
     """
@@ -168,8 +174,8 @@ def test_geglu(device, dim, variant):
     expected = ttnn.to_torch(ttnn.gelu(gate_in, variant=expected_variant))
     result = ttnn.to_torch(ttnn.geglu(tt_in, dim=dim, **geglu_kwargs))
 
-    result_bits = result.view(torch.int32)
-    expected_bits = expected.view(torch.int32)
+    result_bits = torch.where(result == 0, torch.zeros_like(result), result).view(torch.int32)
+    expected_bits = torch.where(expected == 0, torch.zeros_like(expected), expected).view(torch.int32)
     assert torch.equal(result_bits, expected_bits), (
         f"geglu gate diverged from ttnn.gelu(variant={expected_variant}) for "
         f"{int((result_bits != expected_bits).sum().item())} of {result.numel()} elements"
