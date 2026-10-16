@@ -1167,3 +1167,22 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   0.037 vs 2 x the nudge 0.015): the official compressor rounds to bf16 inside, and the fp32 step with those roundings
   emulated reproduces it bit for bit (the agent's evidence). The check now passes a step over calib x its nudge only
   with an `explained` entry in official_taps.yaml (the official arithmetic is then its floor; the overseer reviews).
+
+## F81 (2026-10-16): gate the rel error, not PCC
+
+- Owner (DeepSeek-V4.1 run1): switch the gated accuracy metrics from PCC to rel L2. PCC is blind to a scale or an
+  offset (a 2 % scale keeps PCC at 1; the hc mixes' -4e-4 bias), and 1 - pcc ~ rel^2 / 2 squashes the scale.
+- Component tests gate `err_<step>_L<layer>` (rel L2 vs the golden for float outputs, the missed fraction 1 - overlap
+  or match for integer ones) `<= limit` (calib x the floor's rel vs the golden: the input nudge, the official
+  arithmetic, one bf16 rounding). Swap tests gate `err_swap_out` (the block out's rel vs the golden, calib x the
+  nudged block's) and every swapped float step's `_vs_golden_err`; vs the CPU step the per-statistic checks (rel, row,
+  ratio, bias, flips) already gate. PCC is still recorded (pcc_<step>_L.., pcc_swap_out, the trail) as a diagnostic.
+  A frozen test's literal THRESHOLD still gates its PCC too. component_error reads err_ (the rel itself) first.
+- Swap tests' CPU time: the floor reruns every swapped step; noise_floor.swap_seeds (1) for the earlier steps and the
+  nudged block, the full seeds for the newly swapped step (DeepSeek-V4.1 S.swa.15 on CPU: 35 s before F80, > 300 s
+  with 3 seeds everywhere, 148 s now).
+- Not yet: the end-to-end gates (pcc_layer, pcc_state_min, top5, the contract's pcc_producer_kv_*), with their floor.
+- Observation for the precision work: downstream of a router, the nudged block's vs-golden rel is dominated by routing
+  flips (S.swa.15: router 0.185, experts 0.154, block out 0.023), so those vs-golden limits are loose; the same-input
+  checks (explained flips, matched-row rel) are the tight gate there.
+- Selftests: test_component_checks.py (a 2 % scale: PCC 1, err over its limit), test_swap_checks.py.

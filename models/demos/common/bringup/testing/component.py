@@ -172,6 +172,7 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     want = want.float() if want.is_floating_point() else want
     # F76: thr None = the noise floor (CC.Expect: calib x the precision model's miss vs the golden); a literal is kept
     name = metric or f"pcc_{step}_L{layer:02d}"
+    err_name = f"err_{step}_L{layer:02d}"  # F81: the gated metric (rel L2, or the missed fraction)
     if impl_mode() == "device" and (s.block_type_of(layer), step) in deferred_steps(s):
         print(f"FAIL {step}: deferred to op-gen (task DEFERRED); it runs on the CPU until the op is delivered")
         return False
@@ -180,7 +181,7 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     if ex is None or ex.ref is not ref:  # the CPU side is the same for every module run on this reference object
         ex = _EXPECT[key] = CC.Expect(s, ref, layer, st, g, c, want, thr, compare_mode)
     if impl_mode() == "mutations":
-        return CC.sweep(ex, name)
+        return CC.sweep(ex, err_name)
     fn = module_under_test(s, ref, mesh, layer, step)
     if getattr(fn, "cpu_bridge", False):
         print(f"FAIL {step}: device_component returned a CPU bridge; a deferred step is not on the device")
@@ -194,7 +195,11 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
                 raise
             outs[case.name] = e
     print(ex.describe())
-    ok = CC.golden_gate(name, outs["golden"], want, ex.kind, compare_mode, ex.thr, ex.thr_how)
+    ok = CC.error_gate(err_name, outs["golden"], want, ex)
+    if ex.thr_literal:  # a frozen test's literal THRESHOLD still gates too
+        ok = CC.golden_gate(name, outs["golden"], want, ex.kind, compare_mode, ex.thr, ex.thr_how) and ok
+    elif outs["golden"].numel() == want.numel():
+        metrics.record(name, CC.gate_value(outs["golden"], want, ex.kind, compare_mode))  # PCC: a diagnostic only
     ok = not ex.evaluate(outs) and ok
     # A, B, A: the second inputs above already ran after the golden (B); run the golden again and compare its bytes
     gold = next(x for x in ex.cases if x.name == "golden")
@@ -241,6 +246,9 @@ def component_error(s, block_type: str, step: str, layer: int) -> float | None:
     as a relative L2: sqrt(2 (1 - pcc)) (equal to rel L2 for an unbiased error on a zero-mean output, larger
     otherwise). None when that gate has not recorded it."""
     m = metrics.load(f"C.{block_type}.{step}", s.bringup_dir / "results")
+    e = (m.get(f"err_{step}_L{layer:02d}") or {}).get("value")  # F81: the rel error itself
+    if isinstance(e, (int, float)) and math.isfinite(e):
+        return float(e)
     v = (m.get(f"pcc_{step}_L{layer:02d}") or {}).get("value")
     return math.sqrt(2 * max(0.0, 1 - float(v))) if isinstance(v, (int, float)) else None
 
@@ -290,7 +298,16 @@ def _isolated(ctx):
 
 
 def _capturing(
-    st, mut, cpu, dctx, into: dict, snapshot: dict | None = None, ref=None, models: dict | None = None, dtypes=None
+    st,
+    mut,
+    cpu,
+    dctx,
+    into: dict,
+    snapshot: dict | None = None,
+    ref=None,
+    models: dict | None = None,
+    dtypes=None,
+    seeds: int | None = None,
 ):
     """Override for a swapped step that first runs the CPU step on the same inputs (into[step]). With ``snapshot``,
     the context as the steps after this one see it is kept too (snapshot["ctx"], its state a deep copy). With ``ref``
@@ -314,7 +331,7 @@ def _capturing(
                 d = list(dtypes or ["bf16"] * len(xs))
                 _, sc, kk = NF.tapped(run, xs)
                 outs, nsc = [], []
-                for k_ in range(NF.SEEDS):
+                for k_ in range(seeds or NF.SEEDS):
                     o, ns, _ = NF.tapped(run, [NF.nudge(t, 1000 * k_ + j, dj) for j, (t, dj) in enumerate(zip(xs, d))])
                     outs.append(o)
                     nsc.append(ns)
@@ -381,10 +398,33 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         metrics.record(f"{name}_limit", v)
         return v
 
-    ok = compare(f"{tag}_vs_cpu", got, cpu, mode, lim(f"{tag}_vs_cpu", outs, cpu, res_dtype=out_dtype))[1] and ok
-    if golden is not None:
-        ag = (ar.get("vs_golden") or {}).get("pcc_vs_golden")
-        ok = compare(f"{tag}_vs_golden", got, golden, mode, lim(f"{tag}_vs_golden", chain, golden, ag))[1] and ok
+    if thr is not None or not cpu.is_floating_point():  # a literal THRESHOLD, or an integer output (match / overlap)
+        ok = compare(f"{tag}_vs_cpu", got, cpu, mode, lim(f"{tag}_vs_cpu", outs, cpu, res_dtype=out_dtype))[1] and ok
+        if golden is not None:
+            ag = (ar.get("vs_golden") or {}).get("pcc_vs_golden")
+            ok = compare(f"{tag}_vs_golden", got, golden, mode, lim(f"{tag}_vs_golden", chain, golden, ag))[1] and ok
+    else:
+        # F81: a float output is gated by its rel error (PCC is blind to a scale or an offset): vs the CPU step by
+        # the per-statistic checks below, vs the golden here (calib x the nudged block's rel vs the golden)
+        from models.demos.common.bringup.testing import component_checks as CC
+
+        if got.numel() == cpu.numel():
+            metrics.record(f"{tag}_vs_cpu", NF.value(mode, got, cpu))  # PCC: diagnostics only
+        if golden is not None and got.numel() == golden.numel():
+            metrics.record(f"{tag}_vs_golden", NF.value(mode, got, golden))
+            e = CC.rel(got, golden)
+            if chain:
+                fl = max(CC.rel(cc, golden) for cc in chain)
+                ag = (ar.get("vs_golden") or {}).get("rel") or 0.0
+                gl_lim = k * max(fl, ag, CC.rel(NF.round_to(cpu, "bf16"), cpu))
+                how = f"{k} x the nudged block's rel vs the golden {max(fl, ag):.3g}"
+            else:
+                gl_lim, how = math.inf, "no noise floor: not gated"
+            metrics.record(f"{tag}_vs_golden_err", e)
+            metrics.record(f"{tag}_vs_golden_err_limit", gl_lim)
+            good = e <= gl_lim
+            print(f"{'ok  ' if good else 'FAIL'} {tag}_vs_golden_err: rel={e:.6f} (<= {gl_lim:.6f}, {how})")
+            ok = good and ok
     if not cpu.is_floating_point():
         return ok
     if got.numel() != cpu.numel():
@@ -521,7 +561,7 @@ def _model_chain(s, ref, hooks, steps, layer: int, g, c: int, swapped, block_typ
     from models.demos.common.bringup.testing import noise_floor as NF
 
     runs = []
-    for seed in range(NF.SEEDS):
+    for seed in range(NF.SWAP_SEEDS):
         saved = {k: (dict(v) if isinstance(v, dict) else v) for k, v in vars(ref).items()}
         try:
             rctx, dctx = reference_ctx(ref, layer, g, c, s), device_ctx(layer, g, c, s)
@@ -586,8 +626,9 @@ def run_swap_test(
             from models.demos.common.bringup.testing import noise_floor as NF
 
             dtypes = NF.input_dtypes(s, block_type, name, len(st.inputs))  # F80: the official dtypes of its inputs
+            seeds = NF.SEEDS if st.name == last.name else NF.SWAP_SEEDS  # the earlier steps had theirs in their own
             overrides[name] = _capturing(
-                st, mut, ref.component(layer, name), dctx, same_input, snap, ref, models, dtypes
+                st, mut, ref.component(layer, name), dctx, same_input, snap, ref, models, dtypes, seeds
             )
         else:
             overrides[name] = lambda ctx, *x, mut=mut: mut(ctx, dctx, *x)
@@ -604,24 +645,33 @@ def run_swap_test(
     for n, t in seen.items():
         if n not in ("in", "out") and n in gl:
             compare(f"pcc_swap_{n}", t, gl[n], default_mode(gl[n]), 0.0)  # the trail, for diagnosis; not gated
-    chain = _model_chain(s, ref, hooks, steps, layer, g, c, swapped, block_type) if thr is None else None
-    if thr is None and chain:  # F80: the noise floor of the same block with its swapped steps nudged
-        from models.demos.common.bringup.testing import noise_floor as NF
+    literal_thr = thr is not None
+    chain = _model_chain(s, ref, hooks, steps, layer, g, c, swapped, block_type)
+    gout = gl["out"].float()
+    if literal_thr:  # a frozen test's literal THRESHOLD still gates the PCC
+        metrics.record("pcc_swap_out_limit", thr)
+        _, ok = compare("pcc_swap_out", seen["out"], gl["out"], "pcc", thr)
+    else:
+        compare("pcc_swap_out", seen["out"], gl["out"], "pcc", 0.0)  # PCC: a diagnostic only
+        ok = True
+    # F81: the gated metric is the block out's rel error vs the golden, against calib x the nudged block's
+    from models.demos.common.bringup.testing import component_checks as CC
 
+    if chain:
         k = max(_calib(s, _step(ref, layer, n).kind) for n in swapped) if swapped else _calib(s, None)
-        # resolution: one bf16 rounding of an fp32 block out (the golden's is 0): the CPU last step on the same
-        # inputs when it writes the block out, else a nudged block's out (fp32 after a CPU last step)
         fp32_out = same_input.get(last.name) if last is not None and last.output == "out" else None
         fp32_out = fp32_out if isinstance(fp32_out, torch.Tensor) else chain[0]["out"]
-        mv = min(NF.value("pcc", r["out"], gl["out"].float()) for r in chain)
-        rv = NF.bf16_res("pcc", fp32_out.float())
-        thr = NF.gate_limit("pcc", mv, rv, k, gl["out"].numel())
-        print(f"note pcc_swap_out: limit {thr:.6f} = {k} x the noise floor's miss {1 - mv:.3g} (bf16 {1 - rv:.3g})")
-    elif thr is None:
-        thr = threshold(s, "block")
-        print(f"note pcc_swap_out: no noise-floor block; limit {thr} (spec thresholds.block)")
-    metrics.record("pcc_swap_out_limit", thr)
-    _, ok = compare("pcc_swap_out", seen["out"], gl["out"], "pcc", thr)
+        fl = max(CC.rel(r["out"], gout) for r in chain)
+        res = CC.rel(fp32_out.float().to(torch.bfloat16).float(), fp32_out.float())
+        elim, how = k * max(fl, res), f"{k} x the nudged block's rel vs the golden {fl:.3g} (bf16 {res:.3g})"
+    else:
+        elim = math.sqrt(2 * (1 - threshold(s, "block")))
+        how = f"no noise-floor block: the rel of spec thresholds.block ({threshold(s, 'block')})"
+    e = CC.rel(seen["out"], gout) if seen["out"].numel() == gout.numel() else math.inf
+    metrics.record("err_swap_out", e)
+    metrics.record("err_swap_out_limit", elim)
+    print(f"{'ok  ' if e <= elim else 'FAIL'} err_swap_out: rel={e:.6f} (<= {elim:.6f}, {how})")
+    ok = e <= elim and ok
     if checks == "steps":
         _STEP_CTX.clear()
         for name in swapped:
