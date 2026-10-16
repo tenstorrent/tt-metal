@@ -229,9 +229,8 @@ void MetalContext::initialize(
                 rank = *world_context->rank();
             }
         }
-        inspector_data_ = Inspector::initialize(rank, get_context_id());
-        // Set fw_compile_hash for Inspector RPC build environment info
-        Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
+        // The fw_compile_hash is reported by the Inspector RPC build environment info
+        inspector_data_ = Inspector::initialize(*this, rank, fw_compile_hash);
     }
     // Reset timeout detection state
     dispatch_timeout_detection_processed_ = false;
@@ -376,9 +375,8 @@ void MetalContext::teardown() {
 
     teardown_dispatch_state();
 
-    // Clear dispatch, dispatch_s and prefetcher core info in inspector data
-    Inspector::clear_all_core_info();
-    // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
+    // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster. This also drops the
+    // dispatch, dispatch_s and prefetcher core info it holds.
     inspector_data_.reset();
 
     noc_debug_state_.reset();
@@ -810,7 +808,7 @@ void MetalContext::on_dispatch_timeout_detected() {
         // Serialize Inspector RPC data if enabled
         if (rtoptions().get_serialize_inspector_on_dispatch_timeout()) {
             log_info(tt::LogMetal, "Serializing Inspector RPC data");
-            Inspector::serialize_rpc();
+            Inspector::serialize_rpc(*this);
         }
 
         // Execute command if specified (mostly used to call tt-triage when a timeout occurs)

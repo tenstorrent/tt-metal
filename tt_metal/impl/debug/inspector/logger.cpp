@@ -5,7 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/types.hpp"
-#include "impl/context/metal_context.hpp"
+#include <llrt/rtoptions.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -14,7 +14,9 @@
 
 namespace tt::tt_metal::inspector {
 
-Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> rank) : logging_path(logging_path) {
+Logger::Logger(
+    const std::filesystem::path& logging_path, std::optional<int> rank, const llrt::RunTimeOptions& rtoptions) :
+    logging_path(logging_path) {
     constexpr std::string_view additional_text =
         "\nYou can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment "
         "variables. Note that this will not throw an exception, but will log a warning instead. Running without "
@@ -98,7 +100,7 @@ Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> ran
             additional_text);
     }
 
-    if (MetalContext::instance().rtoptions().get_inspector_log_mesh_buffers()) {
+    if (rtoptions.get_inspector_log_mesh_buffers()) {
         mesh_buffers_ostream.open(this->logging_path / "mesh_buffers_log.yaml", std::ios::trunc);
         if (!mesh_buffers_ostream.is_open()) {
             TT_INSPECTOR_THROW(
@@ -108,7 +110,7 @@ Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> ran
         }
     }
 
-    if (MetalContext::instance().rtoptions().get_inspector_log_mesh_sockets()) {
+    if (rtoptions.get_inspector_log_mesh_sockets()) {
         mesh_sockets_ostream.open(this->logging_path / "mesh_sockets_log.yaml", std::ios::trunc);
         if (!mesh_sockets_ostream.is_open()) {
             TT_INSPECTOR_THROW(
