@@ -112,12 +112,18 @@ Model-level device test of the RoPE fix (`tests/test_decode_batch_sensitivity.py
 - **The plain-decode RoPE fix is verified bit-exact on a 4-layer model** (24 of 24 steps on 7 batch compositions, `tests/test_decode_batch_sensitivity.py`); the same test on the full 40-layer model in this tree still shows differences between runs of the identical batch composition (max logit difference 2.4-3.3, deterministic), so independence from the other users of a mesh row is not shown at 40 layers on this tree. Speculative decoding (all shipped configurations) does not use the plain-decode path.
 - Full GSM8K was not run on the 4-user 524,288-token configuration.
 
+## Tests still to run
+
+- **Decode speed at deep context.** The benchmarks above use prompts of about 700 tokens. TPOT with 32k, 100k and 200k tokens already in the context (262,144-token and 1M servers) has not been measured. The needle tests check retrieval, not speed.
+- **A prompt close to the context limit.** The longest prompt run is 100,020 tokens. A prompt of about 1,000,000 tokens (4 users, 1,048,576 context) and one of about 250,000 tokens (16 users, 262,144 context) have not been run. The 1M prefill is estimated at about 12 minutes.
+- **Request controls under speculation.** `min_p`, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens`, `logprobs` and structured output have not all been tested on a live server. The platform code says `logprobs`, structured output, `logit_bias`, `bad_words`, `allowed_token_ids` and `min_tokens` are refused with HTTP 400 and `min_p` and the penalties are served without speculation. The earlier guide said `min_p` is refused. The tables of this document follow the live tests where they exist.
+
 ## Not in this release
 
 - Prefix caching (APC) and chunked-prefill alignment: implemented on branch `ssinghal/dsv4p1-apc` (TTFT 5.2 -> 2.1 s on a shared-prefix burst), not merged.
 - fp8 prefill kv table, sharding the prefill kv table over the mesh columns.
 - 8 users at 1,048,576 tokens (does not fit).
-- `logprobs`, structured output, `min_p`, `logit_bias` with speculative decoding (rejected with HTTP 400).
+- `logprobs`, structured output, `logit_bias`, `bad_words`, `allowed_token_ids` and `min_tokens` with speculative decoding (refused with HTTP 400, because the model-owned device sampler of the speculative round does not apply them; answering without them would silently change the request).
 
 ## Upgrade notes
 
