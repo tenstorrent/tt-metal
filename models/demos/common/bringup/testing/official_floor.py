@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 
 import torch
 
@@ -118,7 +119,7 @@ def main(argv=None) -> int:
     from models.demos.common.bringup.core.spec import Spec
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--spec")
+    ap.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"), help="default: BRINGUP_SPEC (set by the gate)")
     ap.add_argument("--check", action="store_true", help="check the tap map only; do not write official_floor.json")
     a = ap.parse_args(argv)
     doc = generate(Spec.load(a.spec), write=not a.check)

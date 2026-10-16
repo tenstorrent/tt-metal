@@ -158,3 +158,13 @@ def test_the_official_floor_is_generated_and_checks_the_tap_map(gspec, monkeypat
     assert OF.generate(s, write=False)["errors"], "a mis-mapped output fails the check"
     monkeypatch.setattr(hooks, "official_taps", _fake_official(s, skip=steps[0]))
     assert OF.generate(s, write=False)["unmapped"]
+
+
+def test_the_official_floor_command_reads_the_spec_from_the_gate_env(gspec, monkeypatch):  # noqa: F811
+    """F80: the R.5 gate command has no --spec; the gate runner sets BRINGUP_SPEC."""
+    from models.demos.common.bringup.testing import official_floor as OF
+
+    s = gspec()
+    monkeypatch.setattr(s.hooks(), "official_taps", _fake_official(s), raising=False)
+    monkeypatch.setenv("BRINGUP_SPEC", str(s.path))
+    assert OF.main([]) == 0
