@@ -75,3 +75,19 @@ def build_mm_prefill_masks(block_ids: torch.Tensor, seq_len: int, sliding_window
         "full_attention": full.view(1, 1, seq_len, seq_len),
         "sliding_attention": sliding.view(1, 1, seq_len, seq_len),
     }
+
+
+def vision_block_spans(block_ids: torch.Tensor):
+    """``[(start, end), ...]`` half-open spans of the vision blocks in ``block_ids`` (a cache key for the masks)."""
+    b = torch.as_tensor(block_ids).reshape(-1).tolist()
+    spans, i, n = [], 0, len(b)
+    while i < n:
+        if b[i] >= 0:
+            j = i
+            while j < n and b[j] == b[i]:
+                j += 1
+            spans.append((i, j))
+            i = j
+        else:
+            i += 1
+    return tuple(spans)

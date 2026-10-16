@@ -4,7 +4,12 @@
 import pytest
 import torch
 
-from models.demos.gemma4.tt.mm_attention_mask import build_mm_prefill_masks, mm_allowed_matrix, vision_block_ids
+from models.demos.gemma4.tt.mm_attention_mask import (
+    build_mm_prefill_masks,
+    mm_allowed_matrix,
+    vision_block_ids,
+    vision_block_spans,
+)
 
 IMG, VID, AUD, TXT = 1000, 1001, 1002, 7
 
@@ -79,3 +84,9 @@ def test_additive_masks_and_padding():
     # every row keeps at least its own position
     assert bool((full[0, 0].diagonal() == 0).all())
     assert build_mm_prefill_masks(vision_block_ids(_prompt([(TXT, 5)]), IMG), 8, 4) is None
+
+
+def test_block_spans_key():
+    ids = _prompt([(TXT, 2), (IMG, 3), (TXT, 1), (IMG, 2), (TXT, 1)])
+    assert vision_block_spans(vision_block_ids(ids, IMG)) == ((2, 5), (6, 8))
+    assert vision_block_spans(vision_block_ids(_prompt([(TXT, 4)]), IMG)) == ()
