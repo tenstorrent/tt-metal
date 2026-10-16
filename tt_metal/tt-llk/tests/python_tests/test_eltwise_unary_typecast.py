@@ -102,11 +102,10 @@ def _is_block_float(fmt: DataFormat) -> bool:
 def _whole_number_float_spec(high: int) -> StimuliSpec:
     """Float stimuli restricted to whole numbers in ``[0, high)``.
 
-    Whole numbers make float->int conversions exact regardless of whether the
-    kernel truncates (int32/uint32) or rounds (uint16/uint8), and keep the
-    values inside the range each format represents exactly so the golden is
-    lossless. A small ``high`` is used when a block-float format is involved so
-    the shared-exponent quantization is (near-)exact within each 16-elem block.
+    Whole numbers make float->int conversions exact and keep the values inside
+    the range each format represents exactly so the golden is lossless. A small
+    ``high`` is used when a block-float format is involved so the
+    shared-exponent quantization is (near-)exact within each 16-elem block.
     """
 
     def dist(size, dtype, generator):
@@ -331,6 +330,105 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     assert not mismatches, (
         f"{len(mismatches)} fp32->uint8 mismatches at unbiased exponents "
         f"{failing_exponents}; first (input bits, expected, got): "
+        f"{[(hex(b), g, r) for b, g, r in mismatches[:16]]}"
+    )
+
+
+def _fp32_bits_of(value: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _fractional_to_uint16_bits(input_format: DataFormat) -> list[int]:
+    """fp32 bit patterns for float -> uint16: fractions, zeros, denormals and the uint16
+    limit. A Float16_b source keeps the patterns that are exact in bfloat16."""
+    values = [k / 4 for k in range(-64, 256)]  # quarter steps, exact in bfloat16
+    values += [n + 0.5 for n in range(64, 128)]  # half steps, exact in bfloat16
+    values += [2.0**-25, 2.0**-30, -(2.0**-25), -(2.0**-30)]
+    values += [65280.0, 65536.0, 70144.0, 2.0**31]  # bfloat16 around the uint16 limit
+    values += [255.5, 1023.5, 32767.5, 65533.5, 65534.25, 65534.5, 65534.75]
+    values += [65535.0, 65535.25, 65535.5, 65535.75, 65536.5]
+    patterns = [_fp32_bits_of(v) for v in values]
+    patterns += [0x00000000, 0x80000000]  # +0.0, -0.0
+    patterns += [0x00010000, 0x007F0000, 0x80010000]  # bfloat16 denormals
+    patterns += [0x00800000, 0x80800000]  # smallest normals
+    patterns += [0x00000001, 0x007FFFFF, 0x80000001]  # fp32-only denormals
+    # 1 - 2**-23, 1 - 2**-24 and 2 - 2**-23 truncate to 0, 0 and 1.
+    patterns += [0x3F7FFFFE, 0x3F7FFFFF, 0x3FFFFFFF]
+    if input_format == DataFormat.Float16_b:
+        patterns = [p for p in patterns if p & 0xFFFF == 0]
+    return patterns
+
+
+@parametrize(
+    formats=[
+        pair
+        for pair in TYPECAST_PAIRS
+        if pair.input_format in (DataFormat.Float16_b, DataFormat.Float32)
+        and pair.output_format == DataFormat.UInt16
+    ],
+    dest_acc=_production_dest_acc,
+    input_dimensions=[[32, 32]],
+)
+def test_eltwise_unary_typecast_fractional_to_uint16(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    # Float -> uint16 truncates toward zero and saturates at 65535, like every other
+    # integer destination. Half-integers tell truncation from rounding; zeros, denormals
+    # and tiny values pin the clamp after the -0.5 bias. The Float16_b source runs the
+    # 16-bit Dest (SFPLOADMACRO) path of the kernel and the Float32 source the 32-bit one.
+    patterns = _fractional_to_uint16_bits(formats.input_format)
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    assert len(patterns) <= src_A.numel()
+    # Fill the rest of the operand with quarter steps.
+    bits = patterns + [
+        _fp32_bits_of((k % 256) / 4) for k in range(src_A.numel() - len(patterns))
+    ]
+    src_A = (
+        torch.tensor(
+            [b - _UINT32_WRAP if b & _FP32_SIGN_BIT else b for b in bits],
+            dtype=torch.int32,
+        )
+        .view(torch.float32)
+        .to(src_A.dtype)
+    )
+    src_bits = [
+        b & 0xFFFFFFFF for b in src_A.to(torch.float32).view(torch.int32).tolist()
+    ]
+    assert src_bits == bits, "stimulus is not exact in the input format"
+
+    golden = [
+        int(v)
+        for v in get_golden_generator(TypecastGolden)(
+            src_A, formats.input_format, formats.output_format, input_dimensions
+        ).tolist()
+    ]
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        input_dimensions,
+        src_A,
+        tile_cnt_A,
+        src_B,
+        tile_cnt_B,
+    )
+    result = [int(v) & 0xFFFF for v in configuration.run().result]
+    assert len(result) == len(
+        golden
+    ), f"expected {len(golden)} result elements, got {len(result)}"
+
+    mismatches = [(b, g, r) for b, g, r in zip(src_bits, golden, result) if g != r]
+    assert not mismatches, (
+        f"{len(mismatches)} float->uint16 mismatches; first (input bits, expected, got): "
         f"{[(hex(b), g, r) for b, g, r in mismatches[:16]]}"
     )
 
