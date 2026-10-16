@@ -4,10 +4,10 @@
 set -euo pipefail
 
 MODEL="${1:?usage: run_multirank_pcc.sh <model-key> [config]}"
-# First entry is the default; membership is the validation. mistral4 is PP4-only, so sc1 only.
+# First entry is the default; membership is the validation. These models support sc1 only.
 case "${MODEL}" in
-  mistral4) MODEL_CONFIGS="sc1" ;;
-  *)        MODEL_CONFIGS="sc4 sc1" ;;
+  mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
+  *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
 case " ${MODEL_CONFIGS} " in
