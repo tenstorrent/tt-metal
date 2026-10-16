@@ -15,6 +15,14 @@ Each entry says how sure it is: **verified** means reproduced or read in code du
 - **Caveat:** earlier unfiltered runs of the same binary passed (50 tests). Something on the host changed in between (a reboot is the leading guess).
 - **Workaround:** `unit_tests_device --gtest_filter=-DeviceInitFabric.RejectsSingleHost1ChipMesh`.
 
+### `CommandList*` tests segfault in the device profiler on close (verified)
+
+- **Symptom:** on this single-chip Wormhole host, `distributed_unit_tests --gtest_filter='CommandList*'` (for example `CommandListTest.BuildsIndependentSnapshotsAndReplaysBlockingAndNonBlocking` and `CommandListMultiCQTest.EnforcesTheCommandQueueUsedAtBuildTime`, in `tests/tt_metal/distributed/test_mesh_command_list.cpp`) dies with a segfault, so the rest of the binary does not run.
+- **Where:** a null dereference in `DeviceProfiler::getTraceIdAndCount`, reached from `MeshDevice::close()` through `ReadMeshDeviceProfilerResults`. It has nothing to do with ownership.
+- **Not caused by the ownership work.** It reproduces at the commit before step 0 (`68d5754a1e4`) and at the step-5 tip.
+- **Workaround:** `--gtest_filter='-*Fabric*:CommandList*'` runs the other 206 tests.
+- **Output hazard:** if two runs of the binary write to the same log file, their output interleaves and the crash looks like it happened twice.
+
 ### Opening a device twice gives an unhelpful error (verified)
 
 Opening a device while another handle already holds it surfaces as a `TT_FATAL` about a garbage `context_id`, not as "device already open". Found when a new test opened a device next to an autouse `device` fixture. Fixing the error message would save time for the next person who writes such a test.
