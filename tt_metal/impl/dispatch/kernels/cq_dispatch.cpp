@@ -149,9 +149,8 @@ constexpr uint32_t downstream_cb_end = downstream_cb_base + downstream_cb_size;
 constexpr uint32_t programmable_core_type_idx = static_cast<uint32_t>(programmable_core_type);
 
 constexpr bool dispatch_s_enabled = dispatch_d_shutdown_sem_id != 0;
-#ifdef ARCH_QUASAR
-constexpr bool publish_noc_count = false;
-#else
+// Quasar's NoC barriers don't use the software counters, so there is no write count to hand over to dispatch_s.
+#ifndef ARCH_QUASAR
 constexpr bool publish_noc_count = !distributed_dispatcher && dispatch_s_enabled;
 #endif
 
@@ -1513,6 +1512,7 @@ static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
     return done;
 }
 
+#ifndef ARCH_QUASAR
 struct NocCounterSnapshot {
     uint32_t reads_num_issued;
     uint32_t nonposted_writes_num_issued;
@@ -1565,6 +1565,7 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
 
     Semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id).set(1);
 }
+#endif
 
 void kernel_main() {
 #if defined(NOC_ATT_ENABLED)
@@ -1589,10 +1590,12 @@ void kernel_main() {
         noc_local_state_init(upstream_noc_index);
     }
 
+#ifndef ARCH_QUASAR
     [[maybe_unused]] NocCounterSnapshot dispatch_d_noc_counter_start = {};
     if constexpr (publish_noc_count) {
         dispatch_d_noc_counter_start = snapshot_dispatch_d_noc_counters<upstream_noc_index>();
     }
+#endif
 
     for (size_t i = 0; i < max_num_worker_sems; i++) {
         const uint32_t index = i + first_stream_used;
@@ -1691,9 +1694,11 @@ void kernel_main() {
 
     noc_async_full_barrier();
 
+#ifndef ARCH_QUASAR
     if constexpr (publish_noc_count) {
         publish_dispatch_d_noc_count(dispatch_d_noc_counter_start);
     }
+#endif
 
     if (is_h_variant && !is_d_variant) {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();

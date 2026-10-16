@@ -759,6 +759,7 @@ void set_num_worker_sems() {
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
+#ifndef ARCH_QUASAR
 // When dispatch_d runs on the same core, it issues transactions on dispatch_s's dedicated NOC
 // that we never count locally. This function will wait for dispatch_d to publish its NOC 1 deltas into dispatch_d's
 // normal counter slots, then merge any non-zero deltas into our local counters before the barrier.
@@ -804,6 +805,7 @@ void merge_dispatch_d_noc_counter_deltas() {
         noc_posted_writes_num_issued[my_noc_index] += posted_writes_delta;
     }
 }
+#endif
 
 void kernel_main() {
 #if defined(NOC_ATT_ENABLED)
