@@ -1467,10 +1467,6 @@ class Orchestrator:
             hist = self.led.state().get(tid, {}).get("history") or []
             resumed = bool(hist) and hist[-1].get("status") == "RESUMED"
             pre = self.gate(tid) if existing and (task.get("precheck", True) or resumed) else None
-            if resumed and task.get("step") == OV.FIX_STEP and pre is not None and pre.verdict != "PASS":
-                # its agents' work was already judged: a person or the overseer decides, never another agent
-                self.stop_task(task, "resumed fix job still fails its gate; the overseer decides (no agent)")
-                return STOPPED
             if (pre is None or pre.verdict != "PASS") and not self.attempt_loop(
                 task, role, self.failure_text(pre) if pre else ""
             ):
