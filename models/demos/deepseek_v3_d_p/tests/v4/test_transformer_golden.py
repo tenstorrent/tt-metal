@@ -21,12 +21,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.hf_config import v4_hf_c
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tests.v4 import golden
-from models.demos.deepseek_v3_d_p.tests.v4.test_transformer import (
-    layer_floor,
-    mesh_params,
-    streams_to_host,
-    upload_tokens,
-)
+from models.demos.deepseek_v3_d_p.tests.v4.helpers import layer_floor, mesh_params, streams_to_host, upload_tokens
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Transformer
 from models.demos.deepseek_v3_d_p.tt.v4.weights import V4CheckpointLayers, v4_model_from_checkpoint

@@ -23,7 +23,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.model import (
 )
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.tests.v4.test_transformer import (
+from models.demos.deepseek_v3_d_p.tests.v4.helpers import (
     assert_layers_and_output,
     hidden_to_host,
     mesh_params,
