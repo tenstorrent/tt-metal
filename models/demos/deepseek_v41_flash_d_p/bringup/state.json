@@ -304,6 +304,27 @@
   "started": "2026-10-16T06:38:30",
   "status": "PASS"
  },
+ "C.enc_source.attn_residual": {
+  "attempts": 0,
+  "duration_s": 94.4,
+  "history": [
+   {
+    "s": 94.4,
+    "status": "PASS",
+    "t": "2026-10-16T22:05:50"
+   }
+  ],
+  "last_run": "2026-10-16T22:05:50",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/C.enc_source.attn_residual.log",
+  "metrics": {
+   "err_attn_residual_L02": 0.002528329147025943,
+   "err_attn_residual_L02_limit": 0.08468915522098541
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-16T22:04:16",
+  "status": "PASS"
+ },
  "C.enc_source.compressor": {
   "agent": {
    "defs": {
