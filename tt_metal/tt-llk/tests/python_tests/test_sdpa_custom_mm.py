@@ -70,6 +70,8 @@ from ttexalens.tt_exalens_lib import write_to_device
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
+SEMAPHORE_MAX_VALUE = 15
+
 # ttsim functional gap (NOT a golden/driver defect).
 #
 # sdpa_custom_mm drives the L1 -> SrcB counter-overflow walk in the promoted header
@@ -170,7 +172,8 @@ def _pack_in1(
     (llk_unpack_AB_sdpa_custom_mm.h ``_llk_unpack_AB_sdpa_custom_mm_``):
       * read_transposed=False: contiguous read (block_increment == inner_increment ==
         tile_size), i.e. the walk reads tile linear-index ``k*ct + c`` -> pack K-MAJOR.
-      * read_transposed=True: block_increment = row_stride*tile_size, inner_increment =
+      * read_transposed=True: block_increment = row_stride*tile_size (tile_size for ct_dim == 1),
+        inner_increment =
         -(((ct-1)*row_stride)-1)*tile_size, so the walk reads ``c*row_stride + k``
         -> pack C-MAJOR (outer c, inner k) so the transposed read reconstructs the exact
         same [K,N] matrix and the golden stays A@B. (The buffer, not the golden, absorbs
@@ -231,6 +234,11 @@ def _run(
     assert (
         ct % signal_granularity == 0
     ), "ct_dim must be divisible by signal_granularity"
+    if ct // signal_granularity > SEMAPHORE_MAX_VALUE:
+        raise ValueError(
+            f"ct_dim / signal_granularity = {ct // signal_granularity} FPU->SFPU posts per call exceed the "
+            f"4-bit Tensix semaphore ({SEMAPHORE_MAX_VALUE}); the core would hang"
+        )
 
     if operands is None:
         torch.manual_seed(0)
@@ -355,18 +363,6 @@ def test_sdpa_custom_mm_read_transposed(request, shape):
     """
     _skip_on_simulator(request)
     (M, K, N) = shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape
-    # read_transposed on a single output c-tile is a semantic no-op (nothing to reorder),
-    # and this experimental LLK's ct_dim==1 MOP fast path is written for the canonical
-    # contiguous read (block_increment == inner_increment); read_transposed makes
-    # block_increment = kt*tile, which that fast path is not shaped for. The LLK is correct
-    # for its real (model-level) usage -- ct_dim==1 + read_transposed simply isn't a
-    # combination the standalone unit test can drive, so skip it; ct>=2 shapes give the
-    # real read_transposed coverage.
-    if N // DEFAULT_TILE_C_DIM == 1:
-        pytest.skip(
-            "read_transposed is a no-op for ct_dim==1 and the LLK's ct==1 fast path is "
-            "shaped for the canonical contiguous read; not drivable standalone"
-        )
     _run(M, K, N, signal_granularity=1, read_transposed=True, mm_transpose=False)
 
 
@@ -377,6 +373,8 @@ def test_sdpa_custom_mm_read_transposed(request, shape):
         ((2, 64, 64), 2),  # sg == ct : fast path
         ((8, 256, 128), 2),  # sg = 2, ct = 4 : per-2-c-tile cadence
         ((8, 256, 128), 4),  # sg == ct : fast path
+        ((8, 256, 480), 1),  # ct = 15, the semaphore limit
+        ((8, 256, 512), 2),  # ct = 16
     ],
 )
 def test_sdpa_custom_mm_signal_granularity(request, shape_sg):
@@ -391,6 +389,15 @@ def test_sdpa_custom_mm_signal_granularity(request, shape_sg):
     )
     M, K, N = shape
     _run(M, K, N, signal_granularity=sg, read_transposed=False, mm_transpose=False)
+
+
+def test_sdpa_custom_mm_rejects_semaphore_overflow():
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="posts per call exceed"
+    ):
+        _run(
+            8, 256, 512, signal_granularity=1, read_transposed=False, mm_transpose=False
+        )
 
 
 @dataclass
@@ -436,9 +443,7 @@ def test_sdpa_custom_mm_row_stride(
 @parametrize(
     M=[1, 8],
     ct=[1, 3, 8],
-    # The ct==1 fast path requires contiguous reads, as in the existing
-    # test_sdpa_custom_mm_read_transposed contract above.
-    read_transposed=lambda ct: [False, True] if ct > 1 else [False],
+    read_transposed=[False, True],
     padded_stride=lambda read_transposed: (
         [False, True] if read_transposed else [False]
     ),

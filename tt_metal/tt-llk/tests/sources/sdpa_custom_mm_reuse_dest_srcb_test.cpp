@@ -24,12 +24,10 @@
 // (_llk_math_sdpa_custom_mm_reuse_dest_srcb_):
 //   * src_index  = DEST base of the P operand (mm1_dst_offset in sdpa.h)
 //   * dst_index  = DEST base of the O accumulator (mm2_dst_offset in sdpa.h)
-//   * for each K iteration i in [0, kt_dim):
-//       - DEST target reg is set to (src_index + i*8*2) = src_index + i*16 rows,
-//         so K-chunk i of P lives in the i-th 16-row DEST region;
-//       - four MOVD2B(MOV_4_ROWS) calls copy those 16 rows of P from DEST into
-//         SrcB (SRC_ZERO_OFFSET + {0,4,8,12});
-//       - DEST target reg is set back to dst_index;
+//   * the DEST target reg is set once, to dst_index; for each K iteration i in [0, kt_dim):
+//       - four MOVD2B(MOV_4_ROWS) calls copy the 16 rows of K-chunk i of P into
+//         SrcB (SRC_ZERO_OFFSET + {0,4,8,12}), reaching src_index + i*16 rows
+//         through the MOVD2B row field (modulo the 1024 DEST rows);
 //       - the 4-MVMUL replay buffer is issued nt_dim times, each producing /
 //         accumulating one 32-wide output tile (addr_mods ADDR_MOD_0/1/3 walk
 //         SrcA by 16, SrcB by 8, DEST by 8, returning to tile base between the
@@ -64,6 +62,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "params.h"
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -72,24 +71,27 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 
-// DEST addressing: the reuse matmul writes src_index/dst_index straight into the
-// math DEST_TARGET_REG "Offset" field (TT_SETC16 DEST_TARGET_REG_CFG_MATH_Offset).
-// That field is NOT a 32-row tile index: it counts DEST in half-tile (64-datum)
-// units, so physical_tile = index / 64. The K-chunk stride src_index + i*8*2 puts
-// chunk i at 16-datum granularity (chunk 0 at datum 0, chunk 1 at datum 16), i.e.
-// both KT_DIM=2 chunks live inside physical tile 0 -- exactly one datacopy tile.
-// The pack/datacopy LLKs, by contrast, address DEST in whole 32x32 TILE units.
-// SRC_INDEX/DST_INDEX are the DEST_TARGET_REG offsets the matmul consumes;
-// SRC_TILE/DST_TILE are the matching datacopy/pack tile bases (= offset / 64).
+// DEST addressing: the reuse matmul sets DEST_TARGET once, to dst_index (TT_SETC16
+// DEST_TARGET_REG_CFG_MATH_Offset), and reaches P chunk i through the MOVD2B row field,
+// src_index - dst_index + i*16 rows from there. The indices count DEST rows, so
+// physical_tile = index / 64 and one 32x32 tile holds four 16-row P chunks; the
+// pack/datacopy LLKs, by contrast, address DEST in whole 32x32 TILE units.
+// SRC_INDEX/DST_INDEX are the row bases the matmul takes; SRC_TILE/DST_TILE are the
+// matching datacopy/pack tile bases (= index / 64).
 //
 // The DST_TILE=2 (from DST_INDEX=128 -> tile 2) mapping was pinned on ttsim by
 // packing all of DEST and finding the O accumulator at physical tile 2 (a
 // tile-0 preload of P plus a tile-2 O accumulator, non-overlapping). Confirm the
 // 64-datum offset unit on a BH p100a before trusting the exact placement.
-constexpr std::uint32_t SRC_INDEX = 0;      // P DEST_TARGET offset (SrcB source) -> tile 0
-constexpr std::uint32_t SRC_TILE  = 0;      // P tile base for datacopy preload
-constexpr std::uint32_t DST_INDEX = 64 * 2; // O DEST_TARGET offset -> physical tile 2
-constexpr std::uint32_t DST_TILE  = 2;      // O tile base for pack (= DST_INDEX / 64)
+// DST_FIRST swaps the two: O at tile 0 and P at tile 2, the placement compute_sdpa_chunk uses.
+#ifndef DST_FIRST
+#define DST_FIRST false
+#endif
+constexpr std::uint32_t SRC_INDEX = DST_FIRST ? 64 * 2 : 0; // P DEST row base (SrcB source)
+constexpr std::uint32_t SRC_TILE  = DST_FIRST ? 2 : 0;      // P tile base for datacopy preload
+constexpr std::uint32_t DST_INDEX = DST_FIRST ? 0 : 64 * 2; // O DEST row base
+constexpr std::uint32_t DST_TILE  = DST_FIRST ? 0 : 2;      // O tile base for pack (= DST_INDEX / 64)
+static_assert(!DST_FIRST || (KT_DIM + 3) / 4 + SRC_TILE <= 8, "P tiles above O must stay inside the DEST half");
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -97,7 +99,6 @@ constexpr std::uint32_t DST_TILE  = 2;      // O tile base for pack (= DST_INDEX
 #include "experimental/llk_unpack_A_sdpa.h"
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
-#include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -122,10 +123,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // -- P (=B) preload into DEST: the reuse matmul reads SrcB from DEST, so the
     // math thread first datacopies P into DEST. That datacopy needs its own SrcA
     // stream, unpacked here with the plain unpack_A LLK. One datacopy tile holds
-    // two 16-row P K-chunks, so ceil(KT_DIM/2) P tiles cover all KT_DIM chunks.
+    // four 16-row P K-chunks, so ceil(KT_DIM/4) P tiles cover all KT_DIM chunks.
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
-    for (std::uint32_t k = 0; k < (KT_DIM + 1) / 2; ++k)
+    for (std::uint32_t k = 0; k < (KT_DIM + 3) / 4; ++k)
     {
         _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
             L1_ADDRESS(params.buffer_B[k]), formats.unpack_A_src, formats.unpack_A_dst);
@@ -158,7 +159,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -170,11 +170,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
     // -- P (=B) preload: datacopy the P stimulus into DEST at tile base SRC_TILE.
-    // dst_index here is a TILE index (datacopy writes 32x32 tiles), so ceil(KT_DIM/2)
+    // dst_index here is a TILE index (datacopy writes 32x32 tiles), so ceil(KT_DIM/4)
     // tiles hold all KT_DIM 16-row P chunks the matmul reads at (SRC_INDEX + i*16).
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
-    for (std::uint32_t k = 0; k < (KT_DIM + 1) / 2; ++k)
+    for (std::uint32_t k = 0; k < (KT_DIM + 3) / 4; ++k)
     {
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
             SRC_TILE + k, formats.math, formats.math);
@@ -198,7 +198,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
-#include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {

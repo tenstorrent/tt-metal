@@ -93,6 +93,11 @@ constexpr std::uint32_t SDPA_INPUT_ROW_STRIDE = KT_DIM;
 #endif
 constexpr std::uint32_t SDPA_MASK_TILE_INDEX = SDPA_INPUT_TILE_OFFSET + SDPA_INPUT_ROW_STRIDE * CT_DIM;
 
+// PACK takes its tokens only after the matmul, so every post of a call must fit the semaphore.
+static_assert(
+    CT_DIM / SIGNAL_GRANULARITY <= ckernel::semaphore::SEMAPHORE_MAX_VALUE,
+    "CT_DIM / SIGNAL_GRANULARITY FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (at most 15)");
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "experimental/llk_unpack_AB_sdpa_custom_mm.h"

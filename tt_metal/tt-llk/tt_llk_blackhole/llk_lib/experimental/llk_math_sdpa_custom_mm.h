@@ -161,6 +161,10 @@ inline void _llk_math_sdpa_custom_mm_(
         "sdpa_custom_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
         "this call left it at keep, so denormal Src operands would not be flushed");
     LLK_ASSERT(ct_dim % signal_granularity == 0, "ct_dim must be divisible by signal_granularity for FPU->SFPU signal counts to balance");
+    // A consumer drains only after the matmul, so every post of a call must fit the semaphore.
+    LLK_ASSERT(
+        ct_dim / signal_granularity <= semaphore::SEMAPHORE_MAX_VALUE,
+        "ct_dim / signal_granularity FPU->SFPU posts per call must fit the 4-bit Tensix semaphore (at most 15)");
     // dst offset initialized by _llk_math_sdpa_custom_mm_mask_dest_
     _llk_math_sdpa_custom_mm_mask_dest_(dst_index, ct_dim, mask_chunk);
 

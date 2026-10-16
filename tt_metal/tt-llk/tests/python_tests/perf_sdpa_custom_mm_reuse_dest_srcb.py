@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""sdpa_custom_mm_reuse_dest_srcb perf sweep; the figures are per V (in1) tile."""
+
+from dataclasses import dataclass
+
+import pytest
+from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.llk_params import DestAccumulation, MathFidelity, PerfRunType
+from helpers.param_config import parametrize
+from helpers.perf.core import PerfConfig
+from helpers.stimuli_config import StimuliConfig
+from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
+    MATH_FIDELITY,
+    SDPA_CUSTOM_MM_REUSE_DEST,
+    SDPA_REUSE_DEST_LAYOUT,
+    TILE_COUNT,
+    TemplateParameter,
+)
+
+pytestmark = [skip_for_wormhole, skip_for_quasar]
+
+
+@dataclass
+class SDPA_REUSE_V_STRIDE(TemplateParameter):
+    in1_k_stride: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t IN1_K_STRIDE = {self.in1_k_stride};"
+
+
+BF16 = DataFormat.Float16_b
+
+# (kt, nt, V stride); stride 18 is the production head_dim 576.
+CALL_SHAPES = (
+    [(kt, nt, 1) for kt in (2, 4) for nt in (1, 4, 8, 16)]
+    + [(8, 1, 1), (8, 4, 1)]
+    + [(4, 16, 18), (8, 16, 18)]
+)
+
+
+@pytest.mark.perf
+@parametrize(
+    in1_format=[DataFormat.Float16_b, DataFormat.Bfp8_b],
+    call_shape=CALL_SHAPES,
+    dst_first=[True, False],
+)
+def test_perf_sdpa_custom_mm_reuse_dest_srcb(
+    perf_report, in1_format, call_shape, dst_first
+):
+    kt, nt, in1_k_stride = call_shape
+    configuration = PerfConfig(
+        "sources/sdpa_custom_mm_reuse_dest_srcb_perf.cpp",
+        InputOutputFormat(in1_format, BF16),
+        run_types=[
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+        ],
+        templates=[
+            MATH_FIDELITY(MathFidelity.LoFi),
+            SDPA_CUSTOM_MM_REUSE_DEST(kt_dim=kt, nt_dim=nt),
+            SDPA_REUSE_DEST_LAYOUT(dst_first=dst_first),
+            SDPA_REUSE_V_STRIDE(in1_k_stride=in1_k_stride),
+        ],
+        runtimes=[
+            TILE_COUNT(kt * nt),
+            LOOP_FACTOR(256 if kt * nt < 8 else 64),
+        ],
+        variant_stimuli=StimuliConfig(
+            None,
+            in1_format,
+            None,
+            in1_format,
+            BF16,
+            tile_count_A=(kt - 1) * in1_k_stride + nt,
+            tile_count_B=(kt + 3) // 4,
+            tile_count_res=nt,
+        ),
+        dest_acc=DestAccumulation.No,
+    )
+    configuration.run(perf_report)

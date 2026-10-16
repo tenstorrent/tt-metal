@@ -20,6 +20,7 @@
  * llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h as the low-level implementation.
  *************************************************************************/
 
+template <bool load_replay = true>
 __attribute__((always_inline)) inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(
     const std::uint32_t operand0,
     const std::uint32_t operand1,
@@ -30,7 +31,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_sdpa_custom_mm_reuse_de
     const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
     const std::uint32_t unpA_num_faces = get_operand_num_faces(operandA_id);
 
-    _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(nt_dim, unpA_face_r_dim, unpA_num_faces);
+    _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_<load_replay>(nt_dim, unpA_face_r_dim, unpA_num_faces);
 }
 
 inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
