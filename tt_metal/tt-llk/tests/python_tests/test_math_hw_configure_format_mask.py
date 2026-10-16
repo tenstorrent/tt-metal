@@ -26,13 +26,16 @@ pytestmark = [wormhole_only]
 # Must match sources/math_hw_configure_format_mask_test.cpp
 RESULT_MAGIC = 0x414C5546
 HEADER_WORDS = 3
+WORDS_PER_RECORD = 4
+NUM_PAIRS = 7
+WRITER_RECONFIG_SKIP_INT8 = 2
 WRITERS = {
     0: "_llk_math_hw_configure_",
     1: "_llk_math_reconfig_data_format_",
-    2: "_llk_math_reconfig_data_format_<skip_int8>",
+    WRITER_RECONFIG_SKIP_INT8: "_llk_math_reconfig_data_format_<skip_int8>",
 }
 
-# tt_llk_wormhole_b0 cfg_defines.h
+# tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h
 SRCA_SHAMT, SRCA_MASK = 17, 0x1E0000
 SRCB_SHAMT, SRCB_MASK = 21, 0x1E00000
 INT8_MATH_SHAMT, INT8_MATH_MASK = 31, 0x80000000
@@ -77,9 +80,20 @@ def test_math_alu_format_writers_mask_to_field_width():
 
     magic, num_records, words_per_record = words[:HEADER_WORDS]
     assert magic == RESULT_MAGIC, f"no result written (magic {magic:#x})"
-    assert words_per_record == 4
+    assert words_per_record == WORDS_PER_RECORD
     assert len(words) >= HEADER_WORDS + num_records * words_per_record
-    assert num_records == len(WRITERS) * 7, f"unexpected record count {num_records}"
+    assert (
+        num_records == len(WRITERS) * NUM_PAIRS
+    ), f"unexpected record count {num_records}"
+
+    # The pair table must keep at least one SrcA whose value does not fit the field, or the
+    # spill this test exists for is never exercised.
+    srca_values = [
+        words[HEADER_WORDS + r * words_per_record + 1] for r in range(num_records)
+    ]
+    assert any(
+        srca > FIELD_WIDTH_MASK for srca in srca_values
+    ), f"no SrcA format wider than the field in the pair table: {srca_values}"
 
     failures = []
     for r in range(num_records):
@@ -95,7 +109,7 @@ def test_math_alu_format_writers_mask_to_field_width():
         # The skip_int8 writer leaves the INT8 bit as seeded (Float32 x Float32 -> 0).
         want_int8 = (
             0
-            if writer == 2
+            if writer == WRITER_RECONFIG_SKIP_INT8
             else int(_int8_math_enabled(srca) or _int8_math_enabled(srcb))
         )
 

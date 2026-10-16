@@ -53,14 +53,19 @@ enum class Writer : std::uint32_t
 };
 constexpr std::uint32_t NUM_WRITERS = 3;
 
+// Int8/UInt8/Int32 formats are only accepted with FP32 dest accumulation enabled; the harness
+// constant is_fp32_dest_acc_en (params.h) is false for this test, so the writers get this instead.
+constexpr bool FP32_DEST_ACC = true;
+
 struct FormatPair
 {
     DataFormat srca;
     DataFormat srcb;
 };
 
-// Every SrcB here has bit 0 clear, so a spill from SrcA is visible as SrcB | 1. The last two pairs
-// have no spill and only show that the readback tracks the write.
+// The first five pairs carry a SrcA value with bit 4 set (UInt8 = 30, UInt32 = 24) and a SrcB value
+// with bit 0 clear, so a spill from SrcA is visible as SrcB | 1. The last two pairs have no spill
+// (Int8 = 14 and Float16_b = 5 fit the field) and only show that the readback tracks the write.
 constexpr FormatPair PAIRS[] = {
     {DataFormat::UInt8, DataFormat::Int8},
     {DataFormat::UInt8, DataFormat::Int32},
@@ -81,7 +86,7 @@ inline std::uint32_t read_alu_format_word()
 
 inline void seed_float32()
 {
-    _llk_math_hw_configure_<true>(to_underlying(DataFormat::Float32), to_underlying(DataFormat::Float32));
+    _llk_math_hw_configure_<FP32_DEST_ACC>(to_underlying(DataFormat::Float32), to_underlying(DataFormat::Float32));
 }
 
 inline void program(const Writer writer, const std::uint32_t srca, const std::uint32_t srcb)
@@ -89,13 +94,13 @@ inline void program(const Writer writer, const std::uint32_t srca, const std::ui
     switch (writer)
     {
         case Writer::HwConfigure:
-            _llk_math_hw_configure_<true>(srca, srcb);
+            _llk_math_hw_configure_<FP32_DEST_ACC>(srca, srcb);
             break;
         case Writer::Reconfig:
-            _llk_math_reconfig_data_format_<true>(srca, srcb);
+            _llk_math_reconfig_data_format_<FP32_DEST_ACC>(srca, srcb);
             break;
         case Writer::ReconfigSkipInt8:
-            _llk_math_reconfig_data_format_<true, true>(srca, srcb);
+            _llk_math_reconfig_data_format_<FP32_DEST_ACC, true /*skip_int8*/>(srca, srcb);
             break;
     }
 }
