@@ -290,6 +290,7 @@ _CSV_BASE_COLUMNS = (
     "max_completion_len",
     "lr",
     "step_time_s",
+    "generation_time_s",
 )
 
 
@@ -876,14 +877,14 @@ class GRPOTrainer:
         # Model handle — bound in ``_setup`` from ``completer.model``.
         self.model: Any = None
 
-        # Per-step accumulator rebuilt every optimizer step by
-        # ``_reset_step_metrics``. Callbacks can inject additional keys here
+        # Per-step accumulator, reset at the start of each rollout and of each
+        # later mini-epoch. Callbacks can inject additional keys here
         # (e.g. an eval callback writing ``trainer.metrics["eval_similarity"]``)
         # and later callbacks (notably ``GRPOMonitor``) read the merged view.
         self.metrics: dict = {}
 
-        # Transient timing state used to bracket ``step_time_s`` — only touched
-        # by ``_reset_step_metrics`` (write) and ``_publish_step_metrics`` (read).
+        # Transient timing state used to bracket ``step_time_s`` — written by
+        # ``train()``, read by ``_publish_step_metrics``.
         self._step_start_time: float = 0.0
 
         # Resolved-at-setup state. Pre-declared with ``None`` sentinels so the
@@ -1202,7 +1203,7 @@ class GRPOTrainer:
 
     # -- phase helpers -------------------------------------------------------
     #
-    # Each helper maps to one phase of GRPO training. They take 1-3 raw args,
+    # Each helper maps to one phase of GRPO training. They take a few raw args,
     # return one primitive or nothing, and write any metrics they produce
     # directly into ``self.metrics``. ``train()`` composes them.
 
@@ -1298,25 +1299,21 @@ class GRPOTrainer:
         prompts_x: List[List[int]],
         completions: List[List[int]],
         advantages_np: np.ndarray,
+        ref_logprobs: List[Tuple[Any, Any]],
     ) -> None:
-        """Reference log-probs (once) + per-micro-batch forward-with-grad + GRPO
-        loss + backward. Accumulates gradients across the whole generation
+        """Per-micro-batch forward-with-grad + GRPO loss + backward against
+        ``ref_logprobs``. Accumulates gradients across the whole generation
         batch; does NOT call ``optimizer.step()`` — that is ``_apply_gradients``.
         """
-        ref_logprobs = self._compute_ref_logprobs(prompts_x, completions)
-        try:
-            self.model.train()
-            self._optimizer.zero_grad()
-            global_len = len(prompts_x)
-            mb = self._completions_per_microbatch
-            for i, (p, c, ref_nlog, ref_mask) in enumerate(
-                self._iter_micro_batches(prompts_x, completions, ref_logprobs),
-            ):
-                adv_slice = advantages_np[i * mb : i * mb + len(c)]
-                self._compute_loss_and_backward(p, c, adv_slice, ref_nlog, ref_mask, global_len)
-        finally:
-            for nlog, mask in ref_logprobs:
-                _deallocate_tensors([nlog, mask])
+        self.model.train()
+        self._optimizer.zero_grad()
+        global_len = len(prompts_x)
+        mb = self._completions_per_microbatch
+        for i, (p, c, ref_nlog, ref_mask) in enumerate(
+            self._iter_micro_batches(prompts_x, completions, ref_logprobs),
+        ):
+            adv_slice = advantages_np[i * mb : i * mb + len(c)]
+            self._compute_loss_and_backward(p, c, adv_slice, ref_nlog, ref_mask, global_len)
 
     def _compute_ref_logprobs(
         self,
@@ -1325,7 +1322,7 @@ class GRPOTrainer:
     ) -> List[Tuple[Any, Any]]:
         """Eval-mode + ``no_grad`` forward pass: ratio-denominator log-probs
         for every micro-batch of the current generation batch. Reused across
-        every mini-epoch of ``_optimize``; freed on ``_optimize`` exit.
+        every mini-epoch of ``_optimize``; freed after the last mini-epoch.
         """
         out: List[Tuple[Any, Any]] = []
         self.model.eval()
@@ -1439,8 +1436,8 @@ class GRPOTrainer:
 
     def _publish_step_metrics(self) -> None:
         """Fire ``on_step_end`` for every non-monitor callback (their timings
-        fold into ``self.metrics`` via ``_time_callback``), seal
-        ``step_time_s``, and finally fire the monitor callback's
+        fold into ``self.metrics`` via ``_time_callback``), save a checkpoint
+        if due, seal ``step_time_s``, and finally fire the monitor callback's
         ``on_step_end`` OUTSIDE the ``step_time_s`` window.
 
         Reads step from ``self.metrics["step"]`` and passes it positionally to
@@ -1462,10 +1459,12 @@ class GRPOTrainer:
                 continue
             self._time_callback(cb, "on_step_end", self, step, **_step_kwargs())
 
+        self._maybe_checkpoint()
+
         # Seal step_time_s after all non-monitor work is done, so it covers
         # the full per-step wall time (rollout, host post-gen, reference
-        # log-probs, training loop, non-monitor callbacks). GRPOMonitor's own
-        # cost is deliberately outside this window.
+        # log-probs, training loop, non-monitor callbacks, checkpoint).
+        # GRPOMonitor's own cost is deliberately outside this window.
         self.metrics["step_time_s"] = time.perf_counter() - self._step_start_time
 
         if monitor_cb is not None:
@@ -1496,45 +1495,44 @@ class GRPOTrainer:
                 continue
             self._time_callback(cb, "on_save", self, step, ckpt_dir)
 
-    def _reset_step_metrics(self) -> None:
-        """Start-of-step reset: preserve ``step``, reseed NaN reward-component
-        keys so GRPOMonitor freezes them into the CSV header, and reseed
-        ``self._step_start_time`` (the timer used to bracket ``step_time_s``).
-        This is the ONLY method that writes ``self._step_start_time``.
-        """
-        step = self.metrics.get("step", 0)
-        seed = {f"{name}_mean": float("nan") for name in self._reward_func_names} if len(self.reward_funcs) > 1 else {}
-        self.metrics = {"step": step, **seed}
-        self._step_start_time = time.perf_counter()
-
     # -- training loop -------------------------------------------------------
 
     def train(self) -> None:
         """Synchronous GRPO training loop.
 
-        Walks the phase helpers above once per generation batch, then per
-        mini-epoch runs ``_optimize`` (ref logprobs + fwd-grad + loss +
-        backward), ``_apply_gradients``, and the metrics/checkpoint bookkeeping.
+        Walks the phase helpers above once per generation batch, computes the
+        reference log-probs once, then per mini-epoch runs ``_optimize``
+        (fwd-grad + loss + backward), ``_apply_gradients``, and the
+        metrics/checkpoint bookkeeping.
         """
         self._setup()
         for cb in self.callbacks:
             cb.on_train_begin(self)
         self.metrics = {"step": 0}
-        self._reset_step_metrics()
 
         for prompts, extra_cols in self._iter_prompt_batches():
+            self.metrics = {"step": self.metrics["step"]}
+            self._step_start_time = time.perf_counter()
             completions = self._rollout(prompts)
             prompts_x, cols_x = self._expand_prompts_and_columns(prompts, extra_cols)
             rewards_np = self._compute_rewards(prompts_x, completions, cols_x)
             advantages_np = self._compute_advantages(rewards_np)
-
-            for _ in range(self.config.num_iterations):
-                self._optimize(prompts_x, completions, advantages_np)
-                self._apply_gradients()
-                self.metrics["step"] += 1
-                self._publish_step_metrics()
-                self._maybe_checkpoint()
-                self._reset_step_metrics()
+            ref_logprobs = self._compute_ref_logprobs(prompts_x, completions)
+            try:
+                for mini_epoch in range(self.config.num_iterations):
+                    if mini_epoch > 0:
+                        # Metrics are averaged over steps; later mini-epochs don't generate, so they report 0.
+                        self.metrics["generation_time_s"] = 0.0
+                        for cb in self.callbacks:
+                            self.metrics.pop(f"{type(cb).__name__}_time_s", None)
+                        self._step_start_time = time.perf_counter()
+                    self._optimize(prompts_x, completions, advantages_np, ref_logprobs)
+                    self._apply_gradients()
+                    self.metrics["step"] += 1
+                    self._publish_step_metrics()
+            finally:
+                for nlog, mask in ref_logprobs:
+                    _deallocate_tensors([nlog, mask])
 
         for cb in self.callbacks:
             cb.on_train_end(self)
