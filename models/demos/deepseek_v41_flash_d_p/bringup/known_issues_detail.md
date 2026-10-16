@@ -48,6 +48,12 @@ fp32 q + fp32 probability sparse_sdpa (fork extension; ~+0.0035 in emulation, es
 today's 0.9887 and exact's 0.9927) would be a slower path than the default, chosen only to clear a fixed PCC: left to
 the owner / overseer.
 
+S.swa_engram.14.test.1 (layer 1, scaled): the fp32 CPU reference from the golden block input already fails the
+0.99 PCC (0.984586; reselected 0.1245 vs the golden). Golden boundaries are bf16, and layer 1's input is a rounded
+fp32 stream, so the chain's fp8 q-dq steps flip (DS41-1): q_resid 0.999985, kv 0.99989, attn_out 0.99944, ffn_norm
+0.99985 on the CPU. The swap test now splits the router vs golden by routing (DS41-32): device 0.9845 / 0.1284
+reselected / rel 0.0053 on the same-expert rows, the CPU 0.9846 / 0.1245 / 0.0051.
+
 ## The FPU truncates fp32 operands to TF32: round them to nearest first
 S.swa.11 attempt 3. The window attention's sparse_sdpa (high_precision, fp32_output) still packed the scores and the
 softmax probabilities to a bf16 CB (`cb_qk_im`), and every fp32 value an FPU op reads (srcA / srcB) loses its low 13
