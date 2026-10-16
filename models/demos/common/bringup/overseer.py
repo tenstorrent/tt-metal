@@ -22,6 +22,16 @@ next attempt with the note in its brief. A running agent cannot take messages; a
     python -m models.demos.common.bringup.overseer close --spec S OV-1 [--why "..."]
     python -m models.demos.common.bringup.overseer list --spec S
     python -m models.demos.common.bringup.overseer abort --spec S --reason "..." [--tasks GLOB ...]
+    python -m models.demos.common.bringup.overseer fix --spec S --gate TASK [--gate TASK ...] [--title T] [--hold WHY] "text"
+    python -m models.demos.common.bringup.overseer release --spec S FIX.n
+
+`fix` (F77) queues a change for an agent to make now, when no failing test would start one (the code passes today:
+a per-chunk weight rebuild, a precision raise a fixed limit forced). At its next task boundary the orchestrator turns
+it into task FIX.<n> (step overseer_fix, role overseer: a bring-up engineer, the normal attempts) placed before the
+first unpassed task. Its gate reruns the gates of the --gate tasks (the passed steps whose code the change touches;
+their frozen tests must all still pass) and its paths are theirs. Fix tasks keep the plan approval; a fix that stops
+stops the run. A fix that must wait for something (a framework change) is queued at once with --hold: it is on record
+(`list`, the dashboard) and is placed only after `release`. A decision is queued when it is made, never only planned.
 """
 
 from __future__ import annotations
@@ -52,15 +62,101 @@ def path(bringup_dir: Path) -> Path:
     return Path(bringup_dir) / FILE
 
 
-def load(bringup_dir: Path) -> list[dict]:
+def _read(bringup_dir: Path) -> dict:
     p = path(bringup_dir)
-    data = yaml.safe_load(p.read_text()) if p.exists() else None
-    return list((data or {}).get("notes") or [])
+    return (yaml.safe_load(p.read_text()) if p.exists() else None) or {}
+
+
+def _write(bringup_dir: Path, data: dict) -> None:
+    head = "# Overseer notes (models/demos/common/bringup/overseer.py): written by the overseer, read by every agent.\n"
+    keep = {k: v for k, v in data.items() if v}
+    path(bringup_dir).write_text(head + yaml.safe_dump({"notes": [], **keep}, sort_keys=False, width=118))
+
+
+def load(bringup_dir: Path) -> list[dict]:
+    return list(_read(bringup_dir).get("notes") or [])
 
 
 def save(bringup_dir: Path, notes: list[dict]) -> None:
-    head = "# Overseer notes (models/demos/common/bringup/overseer.py): written by the overseer, read by every agent.\n"
-    path(bringup_dir).write_text(head + yaml.safe_dump({"notes": notes}, sort_keys=False, width=118))
+    _write(bringup_dir, {**_read(bringup_dir), "notes": notes})
+
+
+# ---- fix jobs (F77): a change an agent makes now, gated by the passed steps it touches
+FIX_STEP, FIX_ROLE = "overseer_fix", "overseer"
+
+
+def fixes(bringup_dir: Path) -> list[dict]:
+    return list(_read(bringup_dir).get("fixes") or [])
+
+
+def queue_fix(
+    bringup_dir: Path, text: str, gate_tasks: list[str], title: str = "", tasks: dict | None = None, hold: str = ""
+) -> dict:
+    """Queue a fix; ``tasks`` (the ledger's tasks by id), when given, validates the gate tasks."""
+    if not gate_tasks:
+        raise SystemExit("a fix needs at least one --gate task: the passed steps whose frozen tests must still pass")
+    missing = [t for t in gate_tasks if tasks is not None and t not in tasks]
+    if missing:
+        raise SystemExit(f"no such tasks: {missing}")
+    data = _read(bringup_dir)
+    have = [int(str(x["id"]).split(".")[-1]) for x in data.get("fixes") or []]
+    have += [int(t.split(".")[-1]) for t in (tasks or {}) if t.startswith("FIX.") and t.split(".")[-1].isdigit()]
+    job = {
+        "id": f"FIX.{max(have + [0]) + 1}",
+        "title": title or text.strip().split(". ")[0][:100],
+        "gate": list(gate_tasks),
+        "status": "held" if hold else "queued",
+        "t": now(),
+        "text": text.strip(),
+        **({"hold": hold} if hold else {}),
+    }
+    data["fixes"] = list(data.get("fixes") or []) + [job]
+    _write(bringup_dir, data)
+    return job
+
+
+def release(bringup_dir: Path, fix_id: str) -> dict:
+    data = _read(bringup_dir)
+    for x in data.get("fixes") or []:
+        if x["id"] == fix_id:
+            if x.get("status") != "held":
+                raise SystemExit(f"{fix_id} is {x.get('status')}, not held")
+            x.update(status="queued", released=now())
+            _write(bringup_dir, data)
+            return x
+    raise SystemExit(f"no fix {fix_id} in {path(bringup_dir)}")
+
+
+def fix_task(job: dict, tasks: dict) -> dict:
+    """The ledger task of a queued fix: the --gate tasks' gate commands chained, their metrics and paths merged."""
+    gates = [tasks[t] for t in job["gate"]]
+    metrics, paths = {}, []
+    for g in gates:
+        metrics.update(g["gate"].get("metrics") or {})
+        paths += [p for p in g.get("paths") or [] if p not in paths]
+    return {
+        "id": job["id"],
+        "title": job["title"],
+        "step": FIX_STEP,
+        "role": FIX_ROLE,
+        "precheck": False,
+        "deps": list(job["gate"]),
+        "gate": {"cmd": " && ".join(g["gate"]["cmd"] for g in gates), "metrics": metrics},
+        "device": any(g.get("device") for g in gates),
+        "paths": paths,
+        "brief": {"details": job["text"], "gate_tasks": list(job["gate"])},
+    }
+
+
+def take_fixes(bringup_dir: Path) -> list[dict]:
+    """The queued fixes, marked as placed (the orchestrator puts them in the ledger)."""
+    data = _read(bringup_dir)
+    out = [x for x in data.get("fixes") or [] if x.get("status") == "queued"]
+    for x in out:
+        x.update(status="placed", placed=now())
+    if out:
+        _write(bringup_dir, data)
+    return out
 
 
 def _globs(v) -> list[str]:
@@ -179,7 +275,7 @@ def _dirs(spec_path: str):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("note", "close", "list", "abort"):
+    for name in ("note", "close", "list", "abort", "fix", "release"):
         p = sub.add_parser(name)
         p.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"))
         if name in ("note", "abort"):
@@ -196,6 +292,13 @@ def main(argv=None) -> int:
             p.add_argument("--why", default="")
         if name == "abort":
             p.add_argument("--reason", required=True)
+        if name == "fix":
+            p.add_argument("--gate", action="append", required=True, help="a passed task whose gate must still pass")
+            p.add_argument("--title", default="")
+            p.add_argument("--hold", default="", help="queue it now, place it only after `release` (what it waits for)")
+            p.add_argument("text")
+        if name == "release":
+            p.add_argument("id")
     a = ap.parse_args(argv)
     bdir, rdir = _dirs(a.spec)
     if a.cmd == "note":
@@ -206,6 +309,16 @@ def main(argv=None) -> int:
     elif a.cmd == "list":
         for x in load(bdir):
             print(f"{x['id']} {x.get('status', 'open'):6} {x.get('tasks')} {x['text'][:100]}")
+        for x in fixes(bdir):
+            held = f" (held: {x['hold']})" if x.get("status") == "held" else ""
+            print(f"{x['id']} {x.get('status'):6} gate {x.get('gate')}{held} {x['text'][:100]}")
+    elif a.cmd == "fix":
+        led_tasks = {t["id"]: t for t in (yaml.safe_load((bdir / "tasks.yaml").read_text()) or {}).get("tasks", [])}
+        x = queue_fix(bdir, a.text, a.gate, a.title, led_tasks, a.hold)
+        when = f"held until `release` ({a.hold})" if a.hold else "the orchestrator starts it at its next task boundary"
+        print(f"queued {x['id']} (gate {x['gate']}): {when}")
+    elif a.cmd == "release":
+        print(f"released {release(bdir, a.id)['id']}: placed at the orchestrator's next task boundary")
     else:
         r = abort(bdir, rdir, a.reason, a.tasks)
         print(f"aborted {r['task']} {r['role']} attempt {r['attempt']} (pid {r['pid']}); note {r['note']}")

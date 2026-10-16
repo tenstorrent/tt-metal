@@ -44,8 +44,9 @@ def _files(spec, point: str) -> list[str]:
 
 
 def ledger_signature(spec) -> str:
-    # Picked performance items (step: perf) are approved at the perf point, so adding one keeps the plan approval.
-    tasks = [t for t in Ledger(spec.bringup_dir).tasks().values() if t.get("step") != "perf"]
+    # Picked performance items (step: perf) are approved at the perf point, and the overseer's fixes (F77) are
+    # reviewed like any gate commit, so adding either keeps the plan approval.
+    tasks = [t for t in Ledger(spec.bringup_dir).tasks().values() if t.get("step") not in ("perf", "overseer_fix")]
     keep = [{k: t.get(k) for k in ("id", "title", "deps", "gate", "paths", "tests", "device")} for t in tasks]
     return hashlib.sha256(json.dumps(keep, sort_keys=True).encode()).hexdigest()
 

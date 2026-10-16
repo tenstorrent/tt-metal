@@ -1071,3 +1071,53 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   run; a config-only change does not re-cut the weights). It never rewrites a file in place: a hard link to the real
   checkpoint (an agent had linked DeepSeek's inference/ files) is broken first. Why: the frozen serving-contract tests
   read inference/config.json directly and failed on the scaled checkpoint (C.swa.attention). Selftests: 2 more.
+
+## F76 (2026-10-16): every component and swap limit from the noise floor
+
+- Owner: "we should really not have fixed thresholds like 1% … they should be derived from the noise floor coming from
+  using the exact dtype with the particular cpu torch op". F72/F73 moved two limits (the swap tail, the swap step's
+  rel) onto the noise floor; the rest stayed fixed, and S.swa.11 (DeepSeek-V4.1 run1) failed only a fixed PCC 0.99 of
+  the router vs the golden (0.9887 after 10 device steps; its noise-floor checks passed with 10x margin). The agents
+  then raised the attention precision above the reference (fp32 scores, TF32-rounded q) to clear it.
+- testing/noise_floor.py: value / gate_limit / bf16_res. A limit = calib x the precision model's miss on the same
+  comparison (calib squared for 1 - pcc), never below one bf16 rounding of the output or one element of an integer
+  output.
+- Component tests (component_checks.Expect): the precision model runs on every input for every output kind. The golden
+  gate's limit (THRESHOLD None) is the noise floor vs the golden, recorded as `<metric>_limit`; float rel / row /
+  ratio / bias / per-column limits are calib x the model's statistic (vs the golden: the model's own vs the golden)
+  with no cap and no floor; selection (overlap, matched-row rel, row sums) and index (overlap, worst row) limits
+  likewise. The second-input probe floors stay: they only loosen (structural probes on synthetic scales).
+- Swap tests: every swapped step's precision model on its own inputs gives its vs-CPU PCC limit and its rel / row /
+  ratio / bias / reselect limits (rel never below its component-gate error); the block run again with its swapped
+  steps as their precision models from the golden input gives each step's vs-golden limit and pcc_swap_out's
+  (`pcc_swap_out_limit`).
+- core/gate.check_metrics: a condition `>= limit` compares the metric with the `<metric>_limit` the test recorded.
+  ledger_gen writes it for C.* and S.*. The spec's fixed thresholds remain only as the fallback when the precision
+  model cannot run (printed). The end-to-end bars (pcc_layer, pcc_state_min, top5) are still fixed: next.
+- Selftests: test_swap_checks.py (test_every_swap_limit_comes_from_the_noise_floor), test_component_checks.py.
+
+## F77 (2026-10-16): fix jobs; the implement brief shows a task's details; an abort is not charged as state.json
+
+- Owner: a fix must not wait for a failing test or the run's end ("a fixing step can't be injected on the next pause,
+  what the fuck"). DeepSeek-V4.1 run1: the overseer's note to store the experts as bfp8 at load never reached an agent,
+  because every later experts step passed without one.
+- `overseer fix --gate TASK ... "text"` queues FIX.<n> in overseer.yaml; at its next task boundary the orchestrator
+  places it before the first unpassed task (step overseer_fix, role overseer: a bring-up engineer, no precheck), its
+  gate = the --gate tasks' gates chained, paths = theirs; a stopped fix stops the run; fix tasks keep the plan approval
+  (approvals.ledger_signature skips them). Role text `overseer` in briefs/roles.yaml.
+- The implement and fix roles now show the task's `brief.details` (FIX.1, injected by hand as an implement task,
+  started without its instructions).
+- run_agent took the tree diff after recording an abort, so the orchestrator's own state.json write was charged to
+  the aborted agent ("changed files outside the allowed paths (revert them): state.json" in the next brief).
+- Selftests: test_overseer.py.
+
+## F78 (2026-10-16): the noise floor at the reference's own dtypes, per step
+
+- Owner: "match the reference precision, that's the general guidance". F76's precision model rounded every intermediate
+  to bf16; the official code computes some steps in fp32 (DeepSeek-V4.1's router: linear(x.float(), w.float()),
+  softplus, top-k, weights all fp32), so their limits were far too loose (router vs CPU PCC limit 0.27, reselect 1.67).
+- `<bringup_dir>/precision.yaml` (component_checks.step_precision): per step (or `<block type>.<step>`) `compute: fp32 |
+  bf16`, `out: fp32 | bf16`; precision_model runs fp32 steps without intermediate rounding and keeps an fp32 output.
+  The reference role writes it from the official code; only the reference and overseer roles may change it (it sets
+  how strict every limit is); gates commit it. A step mixing both (fp32 scores, bf16 probabilities) stays bf16.
+- Selftests: test_component_checks.py::test_the_precision_model_follows_the_references_dtypes.

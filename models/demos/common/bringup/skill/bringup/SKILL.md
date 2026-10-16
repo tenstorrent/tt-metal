@@ -180,6 +180,17 @@ done reaches the agents as a note, so the fix and its lesson land where the next
   once it is settled (`overseer close OV-n --why "..."`); `overseer list` shows them all. Notes are for things the
   agents should know or do, e.g. "the spec's scaled ladder is wrong; do not work around it", "shorten DS41-12 to 600
   characters", "check the other block sizes too", "this fork option already exists".
+- **Change code that passes today: a fix job, at once.** When something must change and no failing test will start
+  an agent for it (a per-chunk weight rebuild, a precision raise that a wrong limit forced, a slow path the owner
+  rejects), never wait for a later step or the end of the run: `python -m models.demos.common.bringup.overseer fix
+  --spec <spec> --gate <passed task> [--gate ...] "<the change, the evidence, what to measure>"`. At its next task
+  boundary the orchestrator places task FIX.<n> before everything else and starts a bring-up engineer on it (no
+  precheck); its gate reruns the frozen tests of every --gate task (name each passed step whose code the change
+  touches, plus the swap tests through whole blocks), and a fix that stops stops the run. It keeps the plan approval.
+  A note is for an agent that will run anyway; a fix job is for a change that must happen now. Queue every decision
+  the moment you make it, never only in your plan or the log: one that must wait (for a framework fix you are about
+  to install) is queued with `--hold "<what it waits for>"` and released (`overseer release FIX.<n>`) when that lands.
+  A decision that lives only in your head is lost with the session.
 - **Stop a step that goes the wrong way: abort.** `overseer abort --spec <spec> --reason "..."` ends the agent at
   work, records the attempt as aborted (no gate, not counted against the task's attempts), and turns the reason into
   a note for that task's next attempt. A running agent cannot take messages; abort plus a note is how one reaches it.
@@ -191,6 +202,18 @@ done reaches the agents as a note, so the fix and its lesson land where the next
   `state.json` or `results/`: write a note and let the agent do it.
 - **Your files.** `overseer.yaml`, `supervision.md` and the dashboards are yours; the agent path check ignores them, so
   write them at any time. Anything else in the tree only at a pause.
+
+### Accuracy limits come from the noise floor, never a fixed bar
+
+Owner rule (DeepSeek-V4.1 run1). Every accuracy limit of the component and swap tests is calib (2.0; 3.5 for the low
+precision kinds) x what the same step does with the reference's dtypes on the CPU (the precision model: bf16
+inputs, intermediates and output at the official code's dtypes per step, `precision.yaml`, written by the reference
+role; testing/noise_floor.py), on the same comparison, and
+never below one bf16 rounding of the output. The gate metrics read `>= limit` (the `<metric>_limit` the test
+records). A fixed bar either lets real errors through or, when the reference's own dtypes cannot meet it, makes the
+agents raise the device precision above the reference to clear it, which the owner rejects: match the reference's
+precision, never exceed it to pass a test. When a gate fails on a fixed number, the number is the bug: fix the
+framework (a pause, a selftest), then queue a fix job that takes back any precision raise it forced.
 
 ### Decide; do not ask
 
