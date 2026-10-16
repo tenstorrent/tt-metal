@@ -32,8 +32,9 @@ from models.experimental.bevformer.config.head_config import (
 )
 from models.experimental.bevformer.tt.tt_head import SCORE_DTYPE
 
-# Candidates the exact float32 top-k ranks; see TtNMSFreeCoder.topk.
-NUM_CANDIDATES = 512
+# Bisection steps that narrow the k-th logit's bracket around the bfloat16 pivot, 2^-5 of the
+# pivot wide, down to one float32 value; 19 suffice, the rest is margin. See TtNMSFreeCoder.topk.
+PIVOT_BISECTION_STEPS = 22
 
 
 def denormalize_bbox(normalized_bboxes):
@@ -89,6 +90,29 @@ class TtNMSFreeCoder:
         )
         self.max_num = max_num
         self.num_classes = num_classes
+        # The bisection's counts reach num_query * num_classes, which bfloat16 accumulation would
+        # round; float32 holds them exactly.
+        self._count_config = ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        )
+
+    def _kth_logit(self, logits):
+        """The exact k-th largest of ``logits`` ``(bs, 1, 1, n)``, ``(bs, 1, 1, 1)`` float32. A
+        bfloat16 top-k gives it rounded, the pivot, as rounding is monotonic; within the pivot's
+        bracket a bisection keeps the largest value with at least k logits at or above it."""
+        k = self.max_num
+        pivot, _ = ttnn.topk(ttnn.typecast(logits, ttnn.bfloat16), k=k, dim=-1)
+        pivot = ttnn.typecast(pivot[..., k - 1 : k], SCORE_DTYPE)
+        # Wider than the pivot's bfloat16 rounding step on either side; the floor covers a pivot of 0.
+        half_width = ttnn.add(ttnn.multiply(ttnn.abs(pivot), 2.0**-6), 1e-30)
+        low, high = ttnn.subtract(pivot, half_width), ttnn.add(pivot, half_width)
+        for _ in range(PIVOT_BISECTION_STEPS):
+            middle = ttnn.multiply(ttnn.add(low, high), 0.5)
+            count = ttnn.sum(ttnn.ge(logits, middle), dim=-1, keepdim=True, compute_kernel_config=self._count_config)
+            enough = ttnn.ge(count, float(k))
+            low = ttnn.where(enough, middle, low)
+            high = ttnn.where(enough, high, middle)
+        return low
 
     def topk(self, cls_scores, bbox_preds):
         """``(bs, num_query, num_classes)`` ``SCORE_DTYPE`` logits and ``(bs, num_query, code_size)``
@@ -100,32 +124,26 @@ class TtNMSFreeCoder:
         a multi-core route on Blackhole; bfloat16 alone ties many scores. So the logits, which
         rank as their sigmoid scores do, are ranked in three steps:
 
-        1. A bfloat16 top-k: as rounding is monotonic, its k-th value is the true k-th logit
-           rounded, the pivot.
-        2. A bfloat16 top-``NUM_CANDIDATES`` of the logits minus the pivot: near the k-th logit
-           the differences are small, where bfloat16 resolves them finely.
-        3. A float32 top-k of the candidates' own logits, returning their original indexes.
-
-        The result is exact unless more than ``NUM_CANDIDATES - max_num`` logits tie with the
-        k-th one after the pivot shift in bfloat16.
+        1. The exact k-th logit, ``_kth_logit``.
+        2. A bfloat16 top-k of the logits minus it: larger logits stay positive, smaller ones
+           negative and equal ones zero, so it selects exactly the top-k set; it ties only
+           logits equal in float32.
+        3. A float32 top-k of those k logits, which sorts them and returns their indexes.
         """
         if cls_scores.dtype != SCORE_DTYPE:
             raise ValueError(f"cls_scores must be {SCORE_DTYPE}, got {cls_scores.dtype}")
         bs, num_query, num_classes = cls_scores.shape
         if num_classes != self.num_classes:
             raise ValueError(f"{num_classes} class logits, the coder has {self.num_classes} classes")
-        num_candidates = min(NUM_CANDIDATES, num_query * num_classes)
-        if num_candidates < self.max_num:
+        if num_query * num_classes < self.max_num:
             raise ValueError(f"{num_query * num_classes} scores for a top-{self.max_num}")
         logits = ttnn.reshape(cls_scores, (bs, 1, 1, num_query * num_classes))
-        pivot, _ = ttnn.topk(ttnn.typecast(logits, ttnn.bfloat16), k=self.max_num, dim=-1)
-        pivot = ttnn.typecast(pivot[..., self.max_num - 1 : self.max_num], SCORE_DTYPE)
-        shifted = ttnn.typecast(ttnn.subtract(logits, pivot), ttnn.bfloat16)
-        _, candidates = ttnn.topk(shifted, k=num_candidates, dim=-1)
+        shifted = ttnn.typecast(ttnn.subtract(logits, self._kth_logit(logits)), ttnn.bfloat16)
+        _, selected = ttnn.topk(shifted, k=self.max_num, dim=-1)
         # A float32 top-k takes uint32 indexes.
-        candidates = ttnn.typecast(candidates, ttnn.uint32)
+        selected = ttnn.typecast(selected, ttnn.uint32)
         top_logits, indexes = ttnn.topk(
-            ttnn.gather(logits, -1, candidates), k=self.max_num, dim=-1, indices_tensor=candidates
+            ttnn.gather(logits, -1, selected), k=self.max_num, dim=-1, indices_tensor=selected
         )
         scores = ttnn.sigmoid(top_logits)
         labels = ttnn.remainder(indexes, num_classes)

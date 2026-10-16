@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.experimental.bevformer.config.decoder_config import CODE_SIZE, CODE_XY, CODE_Z
-from models.experimental.bevformer.config.head_config import NUM_CLASSES, POST_CENTER_RANGE
+from models.experimental.bevformer.config.head_config import MAX_NUM, NUM_CLASSES, POST_CENTER_RANGE
 from models.experimental.bevformer.reference.nms_free_coder import NMSFreeCoder
 from models.experimental.bevformer.tests.backbone_common import assert_pcc
 from models.experimental.bevformer.tests.decoder_common import NUM_LAYERS, NUM_QUERY
@@ -20,7 +20,7 @@ NUM_FOREGROUND = 50
 # The scores' relative tolerance: the device sigmoid stays within about two float32 ulps of
 # torch's on these logits; twice that.
 SCORE_RTOL = 4 * torch.finfo(torch.float32).eps
-# All distinct in float32, shuffled into the class logits.
+# Shuffled into the class logits; the top 300 of each are distinct in float32.
 LOGITS = {
     # Spread evenly over [-4, 4].
     "spread": torch.linspace(-4.0, 4.0, NUM_SCORES),
@@ -29,6 +29,16 @@ LOGITS = {
     # value, -7.96875, so bfloat16 ties it unless the coder shifts it by its pivot first.
     "background": torch.cat(
         [torch.linspace(-7.983, -7.955, NUM_SCORES - NUM_FOREGROUND), torch.linspace(1.0, 3.0, NUM_FOREGROUND)]
+    ),
+    # The 300th logit alone just above a band of equal ones, all of which round to its bfloat16
+    # value, also after a shift by the bfloat16 pivot: a ranking that keeps a fixed number of
+    # bfloat16 candidates past the pivot can lose it.
+    "cutoff-collision": torch.cat(
+        [
+            torch.linspace(1.0, 3.0, MAX_NUM - 1),
+            torch.tensor([-7.98002]),
+            torch.full((NUM_SCORES - MAX_NUM,), -7.98003),
+        ]
     ),
 }
 
@@ -56,6 +66,7 @@ def _head_outputs(logits, batch_size, generator):
         ("spread", 1, None),
         ("spread", 2, None),
         ("background", 2, None),
+        ("cutoff-collision", 2, None),
         # Some of the top-k scores, 0.977 to 0.982, pass the threshold.
         ("spread", 1, 0.98),
         # Some of the 50 foreground scores, 0.73 to 0.95, pass the threshold.
@@ -68,6 +79,7 @@ def _head_outputs(logits, batch_size, generator):
         "spread-bs1",
         "spread-bs2",
         "background-bs2",
+        "cutoff-collision-bs2",
         "spread-bs1-threshold",
         "background-bs2-threshold",
         "background-bs2-threshold-fallback",

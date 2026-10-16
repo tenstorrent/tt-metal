@@ -70,9 +70,11 @@ and, per decoder layer, the classification branch.
 layer by score, their box predictions decoded to `(cx, cy, cz, w, l, h, yaw, vx, vy)`, and the
 range and score filters.
 
-- The top-k and the decoding run on device. On Blackhole a float32 top-k over all 9000 scores is
-  far slower than a bfloat16 one, so the logits are ranked in bfloat16 against a pivot, the
-  bfloat16 k-th logit, and the 512 candidates are re-ranked exactly in float32.
+- The top-k and the decoding run on device, and the top-k is exact. On Blackhole a float32
+  top-k over all 9000 scores is far slower than a bfloat16 one, so the exact k-th logit is found
+  first: a bfloat16 top-k gives it rounded, and a bisection on counts narrows that to the float32
+  value. A bfloat16 top-k of the logits minus it then selects exactly the top 300, and a float32
+  top-k sorts them.
 - The range and score tests, upstream's lowering of the score threshold when no score passes it
   included, run on device as a validity mask over the 300 boxes. Only dropping the invalid boxes
   runs on host: it leaves a data-dependent number of boxes and ends the pipeline.
