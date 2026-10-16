@@ -487,11 +487,11 @@ def get_batch(data_loader, resolution=224):
         img = transform(img)
         
         # 2. OPTIMIZATION: Instantly append the image tensor to the list (Zero memory copies)
-        image_list.append(img)
+        images.append(img)
         
     # 3. OPTIMIZATION: Stack the entire list into one continuous block of memory exactly ONCE
     # This completely eliminates the slow O(n^2) memory re-allocation loop.
-    image = torch.stack(image_list, dim=0)
+    images = torch.stack(images, dim=0)
     return images, labels
 
 
