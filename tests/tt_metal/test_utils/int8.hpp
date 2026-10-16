@@ -25,6 +25,7 @@ inline uint32_t pack_four_int8_into_uint32(int8_t a, int8_t b, int8_t c, int8_t 
 inline std::vector<uint32_t> create_random_vector_of_int8(size_t num_bytes, int seed) {
     TT_FATAL(num_bytes % 4 == 0, "num_bytes must be divisible by 4, got {}", num_bytes);
     std::mt19937 rng(seed);
+    // Int8 uses sign-magnitude, so -128 (0x80) would encode -0; the range is -127..127.
     std::uniform_int_distribution<int> dist(-127, 127);
 
     size_t num_words = num_bytes / 4;
