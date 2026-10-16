@@ -2114,8 +2114,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # user's merged prompt embeddings for the text prefill below, which runs
         # per user and eagerly (the lane router and batched prefill decline it).
         mm_users = 0
+        mm_stage_ms = 0.0
         if self.is_multimodal and _gemma4_has_mm_inputs(kwargs):
+            mm_t0 = time.perf_counter()
             mm_users = self._stage_multimodal_prefill(tokens, kwargs, prompt_lens)
+            mm_stage_ms = (time.perf_counter() - mm_t0) * 1000.0
             enable_trace = False
 
         t0 = time.perf_counter()
@@ -2298,7 +2301,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         chunk = getattr(self.model_args[0], "max_prefill_chunk_size", None)
         logger.info(
             "[gemma4-vllm-perf] prefill TTFT={:.1f} ms | prefill_tok/s={:.2f} | "
-            "seq_len={} | max_prefill_chunk_size={} | bounded_sliding={} | batch={} | multimodal_users={}",
+            "seq_len={} | max_prefill_chunk_size={} | bounded_sliding={} | batch={} | multimodal_users={} | "
+            "mm_stage_ms={:.1f}",
             ttft_ms,
             prefill_tok_s,
             seq_len,
@@ -2306,6 +2310,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             self._bounded_sliding_kv_cache,
             batch_size,
             mm_users,
+            mm_stage_ms,
         )
         # Reset decode accumulators at the start of each new generate.
         self._perf_decode_tokens = 0
