@@ -21,19 +21,9 @@ inline void rand_prng() {
     TTI_SFPMOV(0, prng_source, DEST, sfpmov_mod1_from_special);
 }
 
-// rand_row stores every SFPU row under ADDR_MOD_6 with dest incr 2 (even columns, then odd columns, of
-// each group of four Dst rows). Any op whose init rewrites ADDR_MOD_6 (e.g. topk_tile_init, dest incr 32)
-// leaves rand writing the wrong rows, so a caller that keeps the PRNG stream (no reseed) must still
-// re-program the slot before rand.
-template <bool APPROXIMATION_MODE>
-inline void rand_addrmod_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
-
 template <bool APPROXIMATION_MODE>
 inline void rand_init(std::uint32_t seed) {
-    rand_addrmod_init<APPROXIMATION_MODE>();
+    math::reset_counters(p_setrwc::SET_ABD_F);
     // The all-ones state is the lock-up state of the hardware XNOR LFSR.
     if (seed == 0xFFFFFFFF) {
         seed = 0xFFFFFFFE;
@@ -146,6 +136,14 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     if (!normalize_per_row) {
         scale -= normalization_exponent << exponent_shift;
     }
+
+    // rand_row stores under ADDR_MOD_2, which the unary SFPU addr-mod base maps to physical slot 6.
+    // Program that slot here rather than in rand_init: the slot persists across programs and other
+    // inits rewrite it (topk_tile_init sets dest incr 32), so a rand_tile not preceded by rand_tile_init
+    // in the same kernel (the seedless ttnn.sampling path after ttnn.manual_seed) would otherwise store
+    // under the previous launch's value. Address mode only -- no counter reset, which would move the
+    // face base this call is given. The rewrite is the same value on every face.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 
     make_lane_salt();
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_SHORT, 10);
