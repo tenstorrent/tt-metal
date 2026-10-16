@@ -124,17 +124,26 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     if (use_chunked_processing) {
         const uint32_t chunk_cap = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
         const uint32_t row_bytes = num_tiles_per_block * weights_single_tile_size;
-        // A full row costs one staging buffer plus, for an interleaved output, an output buffer of the
-        // same size. Both have to fit in the L1 left after the buffers that are always present.
+        const uint32_t output_row_bytes = num_tiles_per_block * output_single_tile_size;
+        // A full row costs one staging buffer plus the output: an output buffer of one row when the
+        // output is interleaved, or the whole output shard when it is sharded. The shard is borrowed
+        // rather than allocated as a buffer, but it still occupies L1 that the staging buffer must not
+        // overlap. The shard size comes from the tensor spec, so the decision is stable across
+        // program-cache hits. Everything has to fit in the L1 left after the buffers that are always present.
         const uint32_t l1_alignment = device->allocator()->get_alignment(BufferType::L1);
-        const uint64_t other_dfb_bytes =
-            round_up(TILE_HEIGHT * input_element_size_bytes, l1_alignment) +
-            (use_local_cache ? round_up(cache_entries * round_up_to_mul32(weight_page_size), l1_alignment) : 0);
+        // The index scratch and weight cache are scratchpads stacked after the DFBs, each start aligned
+        // to the DRAM alignment (ProgramImpl::allocate_scratchpads).
+        const uint32_t sp_alignment = device->allocator()->get_alignment(BufferType::DRAM);
+        const uint64_t other_l1_bytes =
+            sp_alignment +  // gap from the end of the DFBs to the first scratchpad
+            round_up(TILE_HEIGHT * input_element_size_bytes, sp_alignment) +
+            (use_local_cache ? round_up(cache_entries * round_up_to_mul32(weight_page_size), sp_alignment) : 0);
         const uint64_t l1_capacity =
             device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
-        const uint64_t full_row_dfb_bytes =
-            round_up(row_bytes, l1_alignment) + (output_sharded ? 0 : round_up(row_bytes, l1_alignment));
-        if (full_row_dfb_bytes + other_dfb_bytes <= l1_capacity) {
+        const uint64_t output_bytes =
+            output_sharded ? output.buffer()->aligned_size_per_bank() : round_up(output_row_bytes, l1_alignment);
+        const uint64_t full_row_dfb_bytes = round_up(row_bytes, l1_alignment) + output_bytes;
+        if (full_row_dfb_bytes + other_l1_bytes <= l1_capacity) {
             // One buffer holds the row, so the short last chunk lands on the end.
             tiles_per_chunk = std::min(chunk_cap, num_tiles_per_block);
             num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
