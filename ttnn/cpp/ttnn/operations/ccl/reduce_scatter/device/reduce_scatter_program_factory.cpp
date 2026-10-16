@@ -34,8 +34,13 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     // create semaphores
     // 3 semaphores used for within op synchronizations
-    auto sem_buffer_type = operation_attributes.use_l1_small_for_semaphores ? tt::tt_metal::BufferType::L1_SMALL
-                                                                            : tt::tt_metal::BufferType::L1;
+    // They live as long as the cached program. Prefer L1_SMALL whenever the device has that region (as
+    // all_gather does): a program first compiled after a trace capture would otherwise place them in
+    // worker L1, where the replay's intermediates land and overwrite them.
+    const bool have_l1_small = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL) > 0;
+    auto sem_buffer_type = (operation_attributes.use_l1_small_for_semaphores || have_l1_small)
+                               ? tt::tt_metal::BufferType::L1_SMALL
+                               : tt::tt_metal::BufferType::L1;
     std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores = {
         ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
         ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),

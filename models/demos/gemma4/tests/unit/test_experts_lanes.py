@@ -135,3 +135,78 @@ def test_decode_rows_after_owner_prefill(mesh_device, reset_seeds, request):
                 request,
                 f"decode row lane {lane} after owner {owner}",
             )
+
+
+DECODE_ROWS = 32  # one tile of decode rows per lane (the served B=32 per lane)
+
+
+def _read_lanes(out, mesh_device, hidden_dim):
+    tp = mesh_device.shape[1]
+    return [
+        ttnn.to_torch(ttnn.get_device_tensors(out)[lane * tp]).reshape(-1, hidden_dim).float()
+        for lane in range(mesh_device.shape[0])
+    ]
+
+
+@skip_if_not_moe
+@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4)], device_params_extra={"trace_region_size": 64_000_000})
+def test_traced_decode_rows_around_eager_prefill(mesh_device, reset_seeds, request):
+    """Served order with a captured decode trace: capture the decode-row graph once (as warmup does),
+    replay it, run an eager owner prefill, replay with reloaded rows, run an eager lane-parallel prefill,
+    replay again. Every replay and every prefill is checked against the HF experts."""
+    hf_config, hf_experts, mesh_config, experts = _build(mesh_device)
+    lanes = mesh_device.shape[0]
+    hidden_dim = hf_config.hidden_size
+    mapper = mesh_config.lane_shard_mapper(mesh_device, tensor_dim=2)
+
+    def _dev(t):
+        return ttnn.from_torch(t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper)
+
+    def _host(t):
+        return ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper)
+
+    hidden_d, routing_d, idx_d, wts_d = _inputs(hf_config, lanes, DECODE_ROWS, seed=5)
+    x_in, r_in = _dev(hidden_d), _dev(routing_d)
+    mesh_config._g4_single_lane_prefill_owner = None
+
+    def _decode_graph():
+        # the model hands the experts an intermediate activation, never the bound trace input itself
+        return experts(ttnn.clone(x_in), ttnn.clone(r_in))
+
+    _decode_graph().deallocate(True)  # compile
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out_t = _decode_graph()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    def _replay(hidden, routing, idx, wts, what):
+        ttnn.copy_host_to_device_tensor(_host(hidden), x_in)
+        ttnn.copy_host_to_device_tensor(_host(routing), r_in)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        got = _read_lanes(out_t, mesh_device, hidden_dim)
+        for lane in range(lanes):
+            _check(got[lane], _ref(hf_experts, hidden, idx, wts, lane, DECODE_ROWS), request, f"{what} lane {lane}")
+
+    _replay(hidden_d, routing_d, idx_d, wts_d, "replay 0")
+
+    hidden_p, routing_p, idx_p, wts_p = _inputs(hf_config, lanes, ROWS, seed=6)
+    for owner in range(lanes):
+        mesh_config._g4_single_lane_prefill_owner = owner
+        per_lane = _run(experts, mesh_device, mesh_config, hidden_p, routing_p)
+        _check(
+            per_lane[owner], _ref(hf_experts, hidden_p, idx_p, wts_p, owner, ROWS), request, f"owner {owner} prefill"
+        )
+        mesh_config._g4_single_lane_prefill_owner = None
+        hidden_n, routing_n, idx_n, wts_n = _inputs(hf_config, lanes, DECODE_ROWS, seed=10 + owner)
+        _replay(hidden_n, routing_n, idx_n, wts_n, f"replay after owner {owner} prefill")
+
+    per_lane = _run(experts, mesh_device, mesh_config, hidden_p, routing_p)
+    for lane in range(lanes):
+        _check(
+            per_lane[lane],
+            _ref(hf_experts, hidden_p, idx_p, wts_p, lane, ROWS),
+            request,
+            f"lane-parallel prefill lane {lane}",
+        )
+    _replay(hidden_d, routing_d, idx_d, wts_d, "replay after lane-parallel prefill")
+    ttnn.release_trace(mesh_device, trace_id)
