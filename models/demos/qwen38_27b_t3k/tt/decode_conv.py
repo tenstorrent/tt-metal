@@ -22,12 +22,14 @@ def make_actual_start(device):
 def row_selector(device, batch):
     """One-hot reading row 4*i+3 of a packed convolution result into row 0 of user i's tile.
 
-    Every other row is zero, matching what tilizing a single live row per user produced.
-    bfloat16 keeps the product exact: each output row is one input row scaled by 1.0.
+    The matrix is [batch*32, batch*4]: users stacked along rows, so the matmul's M is the whole
+    user stack and its output is read back as one [batch, 32, width] tile tensor per projection.
+    Carrying the users as a batch dimension instead measures slower on this mesh.
 
-    The users are stacked along rows rather than carried as a batch dimension. A batched
-    matmul splits over N tiles and walks the batch serially, which caps it at width/32 cores;
-    stacked, the same work fills the grid.
+    The selector's 1.0 and 0.0 are exact in bfloat16 and each output row sums one input row with
+    zeros, so a finite result is exact at any fidelity at or above the bf16 default. Non-finite
+    values do not survive: the rows this discards are convolved across user boundaries, and
+    0 * inf is NaN, so one overflow anywhere in the packed result reaches every user.
     """
     import torch
 
@@ -44,7 +46,7 @@ def row_selector(device, batch):
     )
 
 
-def packed_decode_conv(row_qkv, history, taps, widths, actual_start, selector, compute_kernel_config=None):
+def packed_decode_conv(row_qkv, history, taps, widths, actual_start, selector):
     """Return [B,32,C] Q/K/V; only the first time row is live.
 
     B must be a multiple of eight. Each four-row group contains that user's
@@ -53,7 +55,9 @@ def packed_decode_conv(row_qkv, history, taps, widths, actual_start, selector, c
     outputs may cross user boundaries and are discarded. Padding rows are zero;
     the caller's zero beta/log-decay makes their GDN recurrence an identity.
 
-    `selector` must be `row_selector(device, batch)`.
+    `selector` is `row_selector(device, batch)`. The caller owns it because it is a persistent
+    buffer: built once per batch width before any trace is captured, and read by every layer on
+    every step. Building it here would allocate beside a live trace.
     """
     batch, _, channels = row_qkv.shape
     joined = ttnn.concat([history, row_qkv[:, :1, :]], dim=1)
@@ -67,17 +71,13 @@ def packed_decode_conv(row_qkv, history, taps, widths, actual_start, selector, c
         actual_start=actual_start,
         predecessor_carry=history[:1],
     )
-    # The one-hot read never leaves tile layout. Reaching the live rows through row-major
-    # instead costs a tilize per output, and tilize splits work by tile row, so eight users
-    # mean eight cores however wide the projection is. Both reshapes are views: the row count
-    # is tile-aligned and the width never changes.
+    # Rows 1..31 of each user's tile stay zero; the chunk-32 scan downstream reads the whole
+    # tile. No compute config: multiplying by exactly 1.0 gains nothing above the bf16 default.
+    # Both reshapes are metadata only — the first keeps its last two dimensions, the second
+    # splits a tile-aligned row count.
     return [
         ttnn.reshape(
-            ttnn.matmul(
-                selector,
-                ttnn.reshape(output, [batch * 4, width]),
-                compute_kernel_config=compute_kernel_config,
-            ),
+            ttnn.matmul(selector, ttnn.reshape(output, [batch * 4, width])),
             [batch, 32, width],
         )
         for output, width in zip(outputs, widths)

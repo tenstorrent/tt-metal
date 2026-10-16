@@ -12,11 +12,11 @@ from models.demos.qwen38_27b_t3k.tt.decode_conv import make_actual_start, packed
 from models.demos.qwen38_27b_t3k.tt.model import Checkpoint, checkpoint_path
 
 
-def first_tp_shard_conv_taps(widths):
+def first_tp_shard_conv_taps(widths, tp):
     """Load one TP rank's Q/K/V convolution taps from the pinned checkpoint."""
     conv = Checkpoint(checkpoint_path()).layer(0)["linear_attn.conv1d.weight"]
-    projections = conv.split([4 * width for width in widths])
-    local = torch.cat([projection.chunk(4, dim=0)[0] for projection in projections])
+    projections = conv.split([tp * width for width in widths])
+    local = torch.cat([projection.chunk(tp, dim=0)[0] for projection in projections])
     return tuple(local[:, 0, tap].reshape(1, 1, -1).bfloat16() for tap in range(4))
 
 
@@ -27,11 +27,14 @@ def torch_conv_reference(row, history, taps, widths):
     return F.silu(convolved).split(widths, dim=-1)
 
 
+# T3K is the only supported mesh and runs at TP=8; TP=4 is the QB2 shard. The one-hot read's
+# N changes with the width, so the shipped shard has to be the one under test.
+@pytest.mark.parametrize("tp", [8, 4])
 @pytest.mark.parametrize("batch", [8, 16, 24, 32])
 @pytest.mark.parametrize("seed", [0, 17])
-def test_packed_decode_conv_matches_independent_users(device, batch, seed):
+def test_packed_decode_conv_matches_independent_users(device, batch, seed, tp):
     torch.manual_seed(seed)
-    widths = (512, 512, 1536)
+    widths = (2048 // tp, 2048 // tp, 6144 // tp)
     channels = sum(widths)
 
     def upload(tensor, layout=ttnn.ROW_MAJOR_LAYOUT):
@@ -39,7 +42,7 @@ def test_packed_decode_conv_matches_independent_users(device, batch, seed):
 
     row_host = torch.randn(batch, 32, channels).bfloat16()
     history_host = torch.randn(batch, 3, channels).bfloat16()
-    taps_host = first_tp_shard_conv_taps(widths)
+    taps_host = first_tp_shard_conv_taps(widths, tp)
     row = upload(row_host)
     history = upload(history_host)
     taps = [upload(tap, ttnn.TILE_LAYOUT) for tap in taps_host]
