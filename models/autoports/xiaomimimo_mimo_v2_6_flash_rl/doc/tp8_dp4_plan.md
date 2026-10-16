@@ -104,3 +104,24 @@ tracked separately and do not change the plan above:
 - Global-layer KV layout for B=4 @ 1M (replicated KV heads, V padding), device sampling,
   speculative decoding, performance tuning: #60809.
 - vLLM data-parallel serving over the four rows: vllm-tt-plugin#216.
+
+## Decode performance (traced, one TP=8 row unless noted)
+
+Measured with `test_model_traced_tp8_dp4.py` (2 users per row) and `test_decode_perf_tp8.py` (device
+profile of 6 layers). Every step kept the accuracy checks above passing.
+
+| Change | Step (1 row) | 4 rows, aggregate |
+|---|---|---|
+| First traced decode | 163 ms | 233 ms, 34 tok/s |
+| MoE decode computes only the selected (user, top-k) pairs: indexed `sparse_matmul`, fused gate/up weight, `in0_block_w` 64; RMSNorm over 32 cores instead of 1 | 64.5 ms | 131 ms, 61 tok/s |
+| Per-chip top-k of the LM head on device; the host reads 8 x 32 candidates instead of full logits | 52.5 ms | 62.5 ms, 128 tok/s |
+| DRAM-sharded qkv and router matmuls; `sparse_matmul` indexed mode skips its output zero-fill | 46.5 ms | 57.6 ms, 139 tok/s |
+
+With B=4 x 1M allocated (`test_capacity_1m_tp8_dp4.py`, 16 users): 261 ms/step at 4K positions,
+278 ms at 128K and 449 ms at ~1M; those runs predate the last two rows above.
+
+Where one MoE decode layer's ~650 us go (device, per chip): expert `sparse_matmul` gate|up 282 us
+(16 cores) and down 118 us, fp32 top-k 44 us and gather 33 us, row all-reduce 34 us, the rest in
+small ops. The expert matmuls read ~57 MB of BFP4 weights per call, so they run at about half of the
+bandwidth a DRAM-sharded matmul reaches. `tests/perf/kagent_moe_decode_{bench,check}.py` are the
+tt-kernel-agent perf and correctness commands for this layer (baseline 653 us, spread 0.04 %).
