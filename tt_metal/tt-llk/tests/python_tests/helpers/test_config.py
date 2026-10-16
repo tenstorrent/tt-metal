@@ -33,7 +33,7 @@ from . import golden_generators as golden_generators_module
 from .chip_architecture import (
     ChipArchitecture,
     get_chip_architecture,
-    quasar_arch_variant,
+    quasar_variant,
 )
 from .data_format_inference import data_formats, effective_dest_acc
 from .device import (
@@ -373,7 +373,7 @@ class TestConfig:
 
     @staticmethod
     def _quasar_variant_suffix() -> str:
-        variant = quasar_arch_variant()
+        variant = quasar_variant()
         return f"-{variant}" if variant else ""
 
     @staticmethod
@@ -739,7 +739,7 @@ class TestConfig:
         ]
         if root.name == "tt_llk_quasar":
             roots.append(root)
-            variant = quasar_arch_variant()
+            variant = quasar_variant()
             if variant:
                 # First, so the variant's headers shadow the base Quasar ones.
                 roots.insert(0, root / "arch" / variant)
