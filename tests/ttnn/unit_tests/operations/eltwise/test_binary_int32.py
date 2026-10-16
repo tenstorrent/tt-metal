@@ -924,8 +924,12 @@ def test_div_edge_cases(rounding_mode, device):
         (1073741824, -2147483647),
         (-2147483648, 2),  # INT32_MIN numerator
         (5, -2147483648),  # INT32_MIN denominator
-        (-2147483648, -2147483648),  # INT32_MIN / INT32_MIN (equal operands short-circuit to 1.0)
-        (-2147483647, -2147483648),  # INT32_MIN divisor through the conversion path; both round to -2^31 in fp32
+        # INT32_MIN / INT32_MIN (rounding_mode=None: equal operands short-circuit to 1.0; trunc/floor go
+        # through div_int32_floor.h and the exact int64 golden, 1)
+        (-2147483648, -2147483648),
+        # INT32_MIN divisor (rounding_mode=None: through the conversion path, both operands round to -2^31
+        # in fp32 and the quotient is 1.0; trunc/floor: exact int64 golden, 0)
+        (-2147483647, -2147483648),
     ]
 
     numerators, denominators = zip(*pairs)
