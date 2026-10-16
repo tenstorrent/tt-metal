@@ -348,13 +348,13 @@ void compute_sdpa_chunk(
         chunk_size % qk_signal_granularity == 0,
         "compute_sdpa_chunk: chunk_size must be divisible by qk_signal_granularity");
     // OV supports one tile row via direct replay, or an even number via the paired-row MOP.
-    // QK still requires an even contraction dimension to avoid underflowing its MOP count.
+    // Keep QK within the validated even contraction dimensions (at least two tiles).
     static_assert(
         chunk_size == 1 || (chunk_size >= 2 && chunk_size % 2 == 0),
         "compute_sdpa_chunk: chunk_size (OV-matmul kt_dim) must be 1 or even and >= 2");
     static_assert(
         qk_kt >= 2 && qk_kt % 2 == 0,
-        "compute_sdpa_chunk: QK contraction must be even and >= 2 for the custom-MM unpack");
+        "compute_sdpa_chunk: QK contraction must be even and >= 2 (validated dimensions)");
     static_assert(qk_kt <= num_tiles_k, "compute_sdpa_chunk: QK contraction must fit inside the K row");
     static_assert(
         separate_v ? v_tile_offset == 0 : v_tile_offset <= num_tiles_k && num_tiles_v <= num_tiles_k - v_tile_offset,
@@ -467,7 +467,7 @@ void compute_sdpa_chunk(
         UNPACK((llk_unpack_A_sdpa_set_srcb_dummy_valid()));
         UNPACK((llk_unpack_A_sdpa_custom_mm_single_row(ov_cb, v_tile_offset, num_tiles_v)));
         MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb<MATH_FIDELITY, output_granularity, exp_signal_granularity>(
-            mm1_dst_offset, mm2_dst_offset, transpose_v, ov_kt_dim, num_tiles_v, last_chunk)));
+            mm1_dst_offset, mm2_dst_offset, transpose_v, 1 /*kt_dim*/, num_tiles_v, last_chunk)));
     } else {
         sdpa_custom_mm_reuse_dest_srcb_block<output_granularity, exp_signal_granularity>(
             cb_q,

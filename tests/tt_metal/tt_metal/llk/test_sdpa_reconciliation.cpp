@@ -583,10 +583,10 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkCorrectionFidelityOverride) {
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, SdpaChunk32LayoutsAndReplayWidths) {
-    // Single-tile, even, odd, and wider OV replay windows. Repeated chunks and
+    // Single-tile, even, odd, and overlapping OV replay windows. Repeated chunks and
     // invocations check the direct replay's context/counter reset before QK.
     for (const auto layout : {0u, 1u, 2u}) {
-        for (const auto v_tiles : {1u, 2u, 3u, 8u}) {
+        for (const auto v_tiles : {1u, 2u, 3u, 8u, 11u, 16u}) {
             if (layout == 0 && v_tiles > 2) {
                 continue;  // Shared K/V must fit inside the two-tile K row.
             }
@@ -606,6 +606,7 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunk32CompileLimits) {
     for (const auto chunk_tiles : {0u, 1u, 2u, 3u, 4u}) {
         for (const auto qk_tiles : {1u, 2u, 3u}) {
             SCOPED_TRACE(::testing::Message() << "chunk_tiles=" << chunk_tiles << ", qk_tiles=" << qk_tiles);
+            // Args: chunk, qk_gran, exp_gran, row_tiles, v_tiles, v_offset, qk_tiles, separate_v.
             auto program = make_sdpa_chunk_compile_program({chunk_tiles, 1, 1, 6, 2, 3, qk_tiles, 0});
             if ((chunk_tiles == 1 || (chunk_tiles >= 2 && chunk_tiles % 2 == 0)) && qk_tiles == 2) {
                 EXPECT_NO_THROW(program.impl().compile(&this->device()));
