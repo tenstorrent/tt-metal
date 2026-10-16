@@ -43,7 +43,7 @@ all of them, the indexer "full" on 0, 1, 5, 9, ..., 77 (21 layers) and "shared" 
     past_key_values.layers.{i}.keys                        [1, 1, N, 512]     bf16  all   cached latent c_kv, after
                                                                                     kv_a_layernorm
     past_key_values.layers.{i}.values                      [1, 1, N, 64]      bf16  all   cached k_pe, after RoPE
-                                                                                    (half-split), one head
+                                                                                    (interleaved), one head
     past_key_values.layers.{i}.indexer_keys                [1, N, 128]        bf16  full  indexer keys: wk -> k_norm
                                                                                     -> RoPE on the LAST 64 dims
     model.layers.{i}.self_attn.indexer.output              [1, N, k]          int32 full  top-k key indices per
@@ -65,9 +65,9 @@ What is model-specific, and why it is handled here:
     gives 64 heads of [nope 192 | rope 64]; kv_a_proj_with_mqa gives the latent [c_kv 512 | k_pe 64]; the HF cache
     stores the latent itself (keys = kv_a_layernorm(c_kv), values = k_pe after RoPE, both one head), and kv_b_proj
     expands it to 64 heads of [k_nope 192 | v 256] after the cache. config.json's num_key_value_heads = 8 is
-    overwritten by HYV4Config to num_attention_heads (MLA never groups keys). RoPE is "default" (theta 1e7, plain
-    half-split rotate_half, NOT interleaved) on the 64 rope dims; yarn_apply_mscale is a no-op for default RoPE, so
-    the scale is 256 ** -0.5.
+    overwritten by HYV4Config to num_attention_heads (MLA never groups keys). RoPE is "default" (theta 1e7) on the 64 rope dims,
+    INTERLEAVED pairs as DeepSeek lays them out, not transformers' hy_v4 half-split (interleaved_mla_rope: ppl 199
+    -> 3.91); yarn_apply_mscale is a no-op for default RoPE, so the scale is 256 ** -0.5.
   * DSA: a "full" layer's indexer (32 heads x 128, q from the shared q_resid, k = LayerNorm(wk(x)) kept fp32, RoPE on
     the last 64 dims) keeps index_topk = 2048 keys per query; a "shared" layer reuses the previous full layer's top-k,
     which the layer returns and the next layer is handed (prev_topk_indices), as HYV4Model.forward does. The top-k
@@ -102,6 +102,7 @@ What is model-specific, and why it is handled here:
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -155,8 +156,8 @@ NOTES = {
         "per-head [k_nope | v] after the cache."
     ),
     "past_key_values.layers.{i}.values": (
-        "The cached k_pe [1, 1, N, qk_rope_head_dim] after RoPE: default RoPE (theta from rope_parameters), half-split "
-        "rotate_half layout, not interleaved; one head shared by all query heads. With keys: the latent cache."
+        "The cached k_pe [1, 1, N, qk_rope_head_dim] after RoPE: default RoPE (theta from rope_parameters), interleaved "
+        "pairs (x0, x1), (x2, x3), ... (see interleaved_mla_rope); one head shared by all query heads. With keys: the latent cache."
     ),
     "past_key_values.layers.{i}.indexer_keys": (
         "DSA indexer keys [1, N, index_head_dim]: wk -> k_norm (LayerNorm with bias, fp32) -> cast to the compute "
@@ -201,6 +202,118 @@ class HyperHeadNorm(torch.nn.Module):
         return self.norm(self.hc_head(streams))
 
 
+def chunked_indexer_forward(chunk: int):
+    """HYV4Indexer.forward with its [B, S, heads, T] fp32 scores built ``chunk`` query rows at a time (~406 GB whole
+    at N = 56320). The body is upstream's; the projections, k_norm, RoPE and weights_proj still run on the whole
+    sequence, since a bf16 linear rounds differently by row count (see the DeepSeek-V4 script). What is sliced reads
+    only its own query row: the fp32 score matmul, the head sum, the mask and top-k. check_chunked_indexer compares
+    with the installed upstream at startup."""
+    import torch.nn.functional as F
+    from transformers.models.hy_v4.modeling_hy_v4 import apply_rotary_pos_emb
+
+    def forward(self, hidden_states, q_resid, position_embeddings, attention_mask, position_ids, past_key_values=None):
+        batch_size, seq_len, _ = hidden_states.shape
+        cos, sin = position_embeddings
+        q = self.wq_b(q_resid).view(batch_size, seq_len, self.n_heads, self.head_dim)
+        q_pass, q_rot = torch.split(q, [self.head_dim - self.qk_rope_head_dim, self.qk_rope_head_dim], dim=-1)
+        k = self.k_norm(self.wk(hidden_states).to(self.k_norm.weight.dtype)).to(hidden_states.dtype).unsqueeze(2)
+        k_pass, k_rot = torch.split(k, [self.head_dim - self.qk_rope_head_dim, self.qk_rope_head_dim], dim=-1)
+        q_rot, k_rot = apply_rotary_pos_emb(q_rot, k_rot, cos, sin, unsqueeze_dim=2)
+        q = torch.cat([q_pass, q_rot], dim=-1)
+        k = torch.cat([k_pass, k_rot], dim=-1).squeeze(2)
+        if past_key_values is not None:
+            k = past_key_values.update_indexer(k, self.layer_idx)
+        k_t = k.transpose(-1, -2).float().unsqueeze(1)
+        weights = (
+            self.weights_proj(hidden_states.to(self.weights_proj.weight.dtype)).float()
+            * (self.n_heads**-0.5)
+            * self.softmax_scale
+        )
+        topk = min(self.index_topk, k.shape[-2])
+        out = []
+        for s in range(0, seq_len, chunk):
+            e = min(s + chunk, seq_len)
+            scores = F.relu(torch.matmul(q[:, s:e].float(), k_t))
+            index_scores = torch.matmul(weights[:, s:e].unsqueeze(-2), scores).squeeze(-2)
+            del scores
+            mask = attention_mask[..., s:e, :] if attention_mask.shape[-2] == seq_len else attention_mask
+            if mask.dtype == torch.bool:
+                index_scores = index_scores.masked_fill(~mask, float("-inf"))
+            else:
+                index_scores = index_scores + mask
+            out.append(index_scores.topk(topk, dim=-1).indices.to(torch.int32))
+        return torch.cat(out, dim=-2)
+
+    forward.chunk = chunk
+    return forward
+
+
+def check_chunked_indexer(upstream, device) -> None:
+    """chunked_indexer_forward copies upstream's body; exit if the installed transformers has changed it. Real index
+    widths (32 heads x 128 from q LoRA 2048 / hidden 6144, RoPE on 64), 3000 rows against a causal additive mask so
+    top-2048 is really sparse, chunk sizes that do and do not divide them; on ``device``, since kernel choice is
+    what this guards."""
+    from transformers import HYV4Config
+    from transformers.models.hy_v4.modeling_hy_v4 import HYV4Indexer
+
+    cfg = HYV4Config(hidden_size=6144, q_lora_rank=2048, index_n_heads=32, index_head_dim=128, qk_rope_head_dim=64)
+    gen = torch.Generator().manual_seed(0)
+    indexer = HYV4Indexer(cfg, 0)
+    for p in indexer.parameters():
+        p.data = torch.randn(p.shape, generator=gen) * (0.02 if p.dim() == 2 else 0.5) + (1 if p.dim() == 1 else 0)
+    indexer = indexer.to(device, torch.bfloat16)
+    indexer.k_norm.float()  # the checkpoint keeps it fp32, as from_pretrained does
+    n = 3000
+    h = torch.randn(1, n, 6144, generator=gen).to(device, torch.bfloat16)
+    q_resid = torch.randn(1, n, 2048, generator=gen).to(device, torch.bfloat16)
+    pos = torch.arange(n, device=device)[None]
+    inv = 1.0 / (1e7 ** (torch.arange(0, 64, 2, device=device).float() / 64))
+    freqs = pos[..., None].float() * inv
+    emb = torch.cat([freqs, freqs], dim=-1)
+    rope = (emb.cos().to(torch.bfloat16), emb.sin().to(torch.bfloat16))
+    causal = torch.ones(n, n, dtype=torch.bool, device=device).tril()
+    mask = torch.zeros(1, 1, n, n, device=device, dtype=torch.bfloat16).masked_fill(~causal, torch.finfo(torch.bfloat16).min)
+    with torch.no_grad():
+        ref = upstream(indexer, h, q_resid, rope, mask, pos)
+        for chunk in (256, 1000, 4096):
+            got = chunked_indexer_forward(chunk)(indexer, h, q_resid, rope, mask, pos)
+            # top-k among equal (masked) scores comes in any order: compare each row as a set
+            if not torch.equal(got.sort(dim=-1).values, ref.sort(dim=-1).values):
+                raise SystemExit(
+                    f"chunked indexer (chunk {chunk}) differs from this transformers' HYV4Indexer.forward: upstream "
+                    "changed; update chunked_indexer_forward"
+                )
+
+
+def interleaved_mla_rope(modeling) -> None:
+    """Rotate the MLA's q / k rope dims as interleaved pairs (x0, x1), (x2, x3), ... (DeepSeek's layout), keeping the
+    indexer's half-split rotation.
+
+    transformers' hy_v4 (5.17 - 5.19) rotates both half-split. The checkpoint expects interleaved MLA rope: SGLang,
+    which Tencent's model card points to, runs HYV4Attention through DeepseekV2AttentionMLA, whose rope is
+    interleaved unless config.rope_interleave is false, and Hy4's config has no such key; its indexer is half-split
+    (indexer_rope_interleave unset). Measured: wikitext ppl at isl 10240 is 199 (top-1 18%) half-split, 3.91 (top-1
+    66.8%) interleaved. Both call sites use the module-level apply_rotary_pos_emb, the MLA with the default
+    unsqueeze_dim=1 and the indexer with unsqueeze_dim=2; check that before rebinding it."""
+    import inspect
+
+    from transformers.models.deepseek_v3.modeling_deepseek_v3 import apply_rotary_pos_emb_interleave
+
+    attn = inspect.getsource(modeling.HYV4Attention.forward)
+    index = inspect.getsource(modeling.HYV4Indexer.forward)
+    if "apply_rotary_pos_emb(q_rot, k_rot, cos, sin)" not in attn or "unsqueeze_dim=2" not in index:
+        raise SystemExit("hy_v4's rope call sites changed: re-check interleaved_mla_rope against this transformers")
+    half = getattr(modeling.apply_rotary_pos_emb, "half_split", modeling.apply_rotary_pos_emb)
+
+    def rope(q, k, cos, sin, unsqueeze_dim=1):
+        if unsqueeze_dim == 1:  # HYV4Attention: the MLA rope dims
+            return apply_rotary_pos_emb_interleave(q, k, cos, sin, unsqueeze_dim=1)
+        return half(q, k, cos, sin, unsqueeze_dim=unsqueeze_dim)  # HYV4Indexer
+
+    rope.half_split = half
+    modeling.apply_rotary_pos_emb = rope
+
+
 def check_transformers() -> None:
     import transformers
 
@@ -215,6 +328,9 @@ def check_transformers() -> None:
 
 class Hy4Golden(LayerwiseGolden):
     hf_repo = "tencent/Hy4-preview"
+    # No prefix: wikitext ppl over the same 10100 tokens at isl 10240 is 3.914 raw (top-1 66.8%), 3.927 after the
+    # BOS token "<｜hy_start:opensource｜>", 3.927 under its chat template (no_think).
+    prefix = ""
     attn, attn_choices = "eager", ("eager",)  # the sinks exist only in the eager kernel (_supports_sdpa = False)
     recipe = Recipe(
         modules=("self_attn.kv_a_proj_with_mqa", "self_attn.indexer", "mlp.gate"),
@@ -268,6 +384,18 @@ class Hy4Golden(LayerwiseGolden):
 
     def main(self, argv=None) -> int:
         check_transformers()
+        from transformers.models.hy_v4 import modeling_hy_v4
+
+        interleaved_mla_rope(modeling_hy_v4)  # before any forward, the selftest's reference included
+        # HF_GOLDEN_INDEXER_CHUNK=<rows>: DSA indexer scores that many query rows at a time (chunked_indexer_forward).
+        if chunk := int(os.environ.get("HF_GOLDEN_INDEXER_CHUNK", "0")):
+            from transformers.models.hy_v4.modeling_hy_v4 import HYV4Indexer
+
+            upstream = getattr(HYV4Indexer.forward, "upstream", HYV4Indexer.forward)
+            check_chunked_indexer(upstream, "cuda" if torch.cuda.is_available() else "cpu")
+            HYV4Indexer.forward = chunked_indexer_forward(chunk)
+            HYV4Indexer.forward.upstream = upstream
+            print(f"[indexer] scores built {chunk} query rows at a time", flush=True)
         return super().main(argv)
 
     # ---- the checkpoint ------------------------------------------------------------------------------------------

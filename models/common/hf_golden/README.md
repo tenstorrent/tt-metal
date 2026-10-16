@@ -79,6 +79,15 @@ min from cached weights, 89 GB GPU peak, 117 GB on disk (70 GB trimmed to 15 hid
 template). isl 56320 on one H200 with `--attn-chunk 4096`: 2.1 min from cached weights, 40 GB GPU peak, 56 GB on disk.
 Run from a cache downloaded by commit with `--revision <commit>`: offline, `main` has no ref to resolve.
 
+**Hy4-preview:** transformers' hy_v4 (5.17 - 5.19) rotates the MLA's rope dims half-split, but the checkpoint
+expects them interleaved, as SGLang (which Tencent's model card points to) runs it: wikitext ppl at isl 10240 is 199
+half-split, 3.91 interleaved. The script rebinds the MLA's rope to interleaved and checks upstream's call sites at
+startup (`interleaved_mla_rope`). Its DSA indexer builds [N, 32, N] fp32 scores (~406 GB at isl 56320):
+`HF_GOLDEN_INDEXER_CHUNK=2048` scores 2048 query rows at a time, bit-identical (layers 0-3 at isl 10240, all 30
+tensors). No prefix (3.914 raw, 3.927 BOS, 3.927 chat). Use the BF16 checkpoint: Hy4-preview-FP8 is a post-hoc
+MXFP8 quantization with ~3% weight error per matmul. isl 56320 with `--attn-chunk 1024`: 11.1 min from cached
+weights, 123 GB GPU peak, 226 GB on disk (73 GB trimmed to 17 hidden layers).
+
 **`--device cuda` under torch 2.11:** `torch.cuda.set_device` rejects a device without an index; pass `cuda:0`.
 
 `generate_golden_whole_model.py` is the original script behind the Qwen, Llama and Mistral traces. It loads the whole
