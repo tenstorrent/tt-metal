@@ -1542,12 +1542,12 @@ inline void calculate_reduce_max_min_int32_col() {
  *        - Stores final maximum/minimum values to row 0 (32 datums across faces 0 and 1)
  *
  * @tparam pool_type The PoolType enum value (MAX or MIN). MIN uses inverted swap direction for minimum reduction.
- * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (MAX and MIN).
+ * @tparam reduce_dim The reduction dimension: only REDUCE_COL (row MAX/MIN goes straight to
+ * perform_reduce_row_max_min from calculate_reduce).
  * @tparam INSTRUCTION_MODE The instruction mode for the float/unsigned formats that reach here: DEFAULT (FP32,
  * FP16B) or LO16. Int32 and UInt32 MAX/MIN use the dedicated two's-complement path
  * (calculate_reduce_max_min_int32_col / perform_reduce_row_max_min_int32), and UInt16 in a 32-bit Dest the manual
  * column path (calculate_reduce_max_min_uint16), instead.
- * @param block_ct_dim Number of tiles along x axis (column tiles, default 1).
  * @param block_rt_dim Number of tiles along y axis (row tiles, default 1).
  */
 template <
@@ -1556,41 +1556,42 @@ template <
     InstrModLoadStore INSTRUCTION_MODE,
     bool clear_high_bits,
     bool pack_low16>
-inline void calculate_reduce_max_min(
-    [[maybe_unused]] const std::uint32_t block_ct_dim = 1, [[maybe_unused]] const std::uint32_t block_rt_dim = 1) {
+inline void calculate_reduce_max_min([[maybe_unused]] const std::uint32_t block_rt_dim = 1) {
     static_assert(
-        reduce_dim == ReduceDim::REDUCE_COL ||
-            ((pool_type == PoolType::MAX || pool_type == PoolType::MIN) && reduce_dim == ReduceDim::REDUCE_ROW),
-        "Only column reduction (REDUCE_COL) and row MAX/MIN reduction (REDUCE_ROW with MAX/MIN) are supported");
+        reduce_dim == ReduceDim::REDUCE_COL,
+        "Only column reduction (REDUCE_COL) is supported here; row MAX/MIN dispatches to perform_reduce_row_max_min");
 
 #ifdef DISABLE_SFPLOADMACRO
-    if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
-        // LOADMACRO-disabled builds use the manual load/swap column reducer instead of recording
-        // SFPLOADMACRO instructions in the generic column MAX/MIN path.
-        calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
-        return;
-    }
+    // LOADMACRO-disabled builds use the manual load/swap column reducer instead of recording
+    // SFPLOADMACRO instructions in the generic column MAX/MIN path.
+    calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
+    return;
 #endif
 
-    if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
-        static_assert(
-            pool_type == PoolType::MAX || pool_type == PoolType::MIN,
-            "Row MAX/MIN reduction (REDUCE_ROW) only supports MAX and MIN pool types here");
-        perform_reduce_row_max_min<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16>(
-            block_ct_dim, block_rt_dim);
-    } else {
-        // The recorded replay buffer in init_reduce_max_min has two extra SFPAND ops when clearing
-        // high bits, so the per-face-pair replay window grows accordingly.
-        constexpr std::uint32_t replay_buffer_offset = clear_high_bits ? 9 : 7;
-        constexpr std::uint32_t replay_buffer_next_face = clear_high_bits ? 10 : 8;
+    // The recorded replay buffer in init_reduce_max_min has two extra SFPAND ops when clearing
+    // high bits, so the per-face-pair replay window grows accordingly.
+    constexpr std::uint32_t replay_buffer_offset = clear_high_bits ? 9 : 7;
+    constexpr std::uint32_t replay_buffer_next_face = clear_high_bits ? 10 : 8;
 
-        // Initial loads: LREG4-7 will hold maximum values across F0 and F1
-        TTI_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, 0);
-        TTI_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, 2);
-        TTI_SFPLOAD(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_3, 16);
-        TTI_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, 18);
+    // Initial loads: LREG4-7 will hold maximum values across F0 and F1
+    TTI_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, 0);
+    TTI_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, 2);
+    TTI_SFPLOAD(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_3, 16);
+    TTI_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, 18);
 
-        // First tile processing (F0, F1, F2, F3)
+    // First tile processing (F0, F1, F2, F3)
+    lltt::replay(0, replay_buffer_offset);
+    lltt::replay(0, replay_buffer_offset);
+    lltt::replay(0, replay_buffer_next_face);
+
+    lltt::replay(0, replay_buffer_offset);
+    lltt::replay(0, replay_buffer_offset);
+    lltt::replay(0, replay_buffer_offset);
+    lltt::replay(0, replay_buffer_next_face + 1);
+
+    // Remaining tiles
+    for (std::uint32_t i = 0; i < block_rt_dim - 1; i++) {
+        lltt::replay(0, replay_buffer_offset);
         lltt::replay(0, replay_buffer_offset);
         lltt::replay(0, replay_buffer_offset);
         lltt::replay(0, replay_buffer_next_face);
@@ -1599,41 +1600,28 @@ inline void calculate_reduce_max_min(
         lltt::replay(0, replay_buffer_offset);
         lltt::replay(0, replay_buffer_offset);
         lltt::replay(0, replay_buffer_next_face + 1);
-
-        // Remaining tiles
-        for (std::uint32_t i = 0; i < block_rt_dim - 1; i++) {
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_next_face);
-
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_offset);
-            lltt::replay(0, replay_buffer_next_face + 1);
-        }
-
-        // Reset dest RWC counter
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-        // Finalize: Sort and store maximum/minimum values to row 0
-        TTI_SFPTRANSP(0, 0, 0, 0);
-        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, 1);
-        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG6, 1);
-        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
-        TTI_SFPTRANSP(0, 0, 0, 0);
-
-        // Store results to first row.
-        // For UInt16 OUTPUT in a 32-bit dest the reduced value lives in the low 16 bits of the LREG, but
-        // the packer reads the high 16 bits of the dest word. SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16)
-        // writes the low 16 bits into the half the packer consumes; a 32-bit output keeps the plain store.
-        constexpr std::uint32_t STORE_MODE =
-            pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
-        TTI_SFPSTORE(p_sfpu::LREG4, STORE_MODE, ADDR_MOD_3, 0);
-        TTI_SFPSTORE(p_sfpu::LREG5, STORE_MODE, ADDR_MOD_3, 2);
-        TTI_SFPSTORE(p_sfpu::LREG6, STORE_MODE, ADDR_MOD_3, 16);
-        TTI_SFPSTORE(p_sfpu::LREG7, STORE_MODE, ADDR_MOD_3, 18);
     }
+
+    // Reset dest RWC counter
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // Finalize: Sort and store maximum/minimum values to row 0
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, 1);
+    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG6, 1);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    // Store results to first row.
+    // For UInt16 OUTPUT in a 32-bit dest the reduced value lives in the low 16 bits of the LREG, but
+    // the packer reads the high 16 bits of the dest word. SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16)
+    // writes the low 16 bits into the half the packer consumes; a 32-bit output keeps the plain store.
+    constexpr std::uint32_t STORE_MODE =
+        pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
+    TTI_SFPSTORE(p_sfpu::LREG4, STORE_MODE, ADDR_MOD_3, 0);
+    TTI_SFPSTORE(p_sfpu::LREG5, STORE_MODE, ADDR_MOD_3, 2);
+    TTI_SFPSTORE(p_sfpu::LREG6, STORE_MODE, ADDR_MOD_3, 16);
+    TTI_SFPSTORE(p_sfpu::LREG7, STORE_MODE, ADDR_MOD_3, 18);
 }
 
 /**
@@ -1882,8 +1870,7 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
             // UInt16 in 32-bit dest: manual load/mask/swap path (LOADMACRO cannot mask between load and swap).
             calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
         } else {
-            calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>(
-                block_ct_dim, block_rt_dim);
+            calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>(block_rt_dim);
         }
     } else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG) {
         calculate_reduce_sum_avg<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int>(
