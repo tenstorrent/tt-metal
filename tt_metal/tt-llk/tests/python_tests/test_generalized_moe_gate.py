@@ -1342,21 +1342,32 @@ def test_generalized_moe_gate_merge4_top8():
         stored_elsewhere, 12, 14
     ), "the store pair did not move the run"
 
-    # A merge may drop a candidate but never invent one, and a score has to come back still
-    # attached to the id it arrived with. The concat is where that can break: erratum TEN-2932
-    # corrupts SFPU results written to LREG4-7 while index tracking is enabled, and the concat
-    # lives there.
+    # A merge may drop a candidate but never invent one, and every key it keeps has to come back
+    # with the id and score that arrived with it. The idx|score concat rides in LREG4-7 and follows
+    # the key swaps only while SFPU index tracking is on; a merge that never turned it on (the
+    # harness's topk_init clears it) stores its keys merged over a concat still in load order, so
+    # every stored pair is from the window and on the wrong key. Keys are distinct, so each stored
+    # key names exactly one companion pair.
     #
     # Only rows 0-7 are in read_base 0's window, so restricting the source to those makes this a
     # claim about the window too: a candidate from outside it is as invented as one from nowhere.
-    source = {int(ids[r, c]): float(scores[r, c]) for r in range(8) for c in range(16)}
-    for stored_id, stored_score in run:
-        assert (
-            stored_id in source
-        ), f"the run holds id {stored_id}, which was not in the read window"
-        assert (
-            stored_score == source[stored_id]
-        ), f"id {stored_id} came back carrying {stored_score}, not {source[stored_id]}"
+    companion = {
+        float(keys[r, c]): (int(ids[r, c]), float(scores[r, c]))
+        for r in range(8)
+        for c in range(16)
+    }
+    got_keys = _from_dst(at_zero[KEYS])
+    got_scores = _from_dst(at_zero[SCORES])
+    for instance in range(8):
+        for r, c in _run_slots(8, 10, instance):
+            stored_key = float(got_keys[r, c])
+            assert (
+                stored_key in companion
+            ), f"instance {instance} stored key {stored_key}, which was not in the read window"
+            stored = (int(at_zero[IDS][r, c]), float(got_scores[r, c]))
+            assert (
+                stored == companion[stored_key]
+            ), f"instance {instance} key {stored_key} came back with {stored}, not {companion[stored_key]}"
 
 
 @parametrize(
