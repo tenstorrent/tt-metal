@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"  // get_where_data_format_for_bf16_input
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"  // FillScalar
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
@@ -17,9 +18,8 @@
 
 namespace ckl = compute_kernel_lib;
 
-// The input is bf16 but the Dest width follows the output: a float32 output enables the 32-bit Dest, and
-// a Float16_b where would then load and store 16-bit halves of each 32-bit Dest word.
-constexpr auto kWhereDF = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
+// The input is bf16 but the Dest width follows the output (a float32 output enables the 32-bit Dest).
+constexpr auto kWhereDF = ckl::get_where_data_format_for_bf16_input();
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
