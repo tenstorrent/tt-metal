@@ -92,8 +92,7 @@ std::tuple<Tensor, Tensor> apply_twiddles(
     // Resolved here rather than in the factory so the tables are reachable
     // from tensor_args; the lookup is a hit on everything but the first call
     // for a given (device, N1, N2).
-    auto tw_plan =
-        ttnn::experimental::prim::apply_twiddles_host::get_or_create(input_real.device()->shared_from_this(), N1, N2);
+    auto tw_plan = ttnn::experimental::prim::apply_twiddles_host::get_or_create(input_real.device(), N1, N2);
 
     OperationType::tensor_args_t args{
         .input_real = input_real,

@@ -143,7 +143,7 @@ std::tuple<Tensor, Tensor> fft_radix_pass(
     for (int d = 0; d < static_cast<int>(shape.size()) - 1; ++d) {
         B *= static_cast<uint32_t>(shape[d]);
     }
-    auto md = input_real.device()->shared_from_this();
+    auto* md = input_real.device();
     auto twiddles = fft_stockham::get_cached_batch_plan(md, P);
     auto zeros = input_imag.has_value() ? nullptr : fft_stockham::get_cached_zero_imag(md, input_real.dtype(), B);
     auto post_twiddles =

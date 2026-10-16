@@ -26,6 +26,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <utility>
 
 namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
 
@@ -317,7 +318,7 @@ void MeshBuffer::initialize_device_buffers() {
     };
 
     for (auto& [coord, device_buffer] : buffers_) {
-        if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr) {
+        if (auto* mesh_device = live_device(); mesh_device != nullptr) {
             if (mesh_device->impl().is_local(coord)) {
                 device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(init_device_buffer_at_address(coord));
             }
@@ -329,7 +330,7 @@ void MeshBuffer::initialize_device_buffers() {
     // Only L1 buffers need mirroring — DRAM buffers use a separate address space.
     // Note: we check HYBRID via rtoptions rather than mesh_device->allocator_impl() because
     // allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
-    if (auto mesh_device = mesh_device_.lock();
+    if (auto* mesh_device = live_device();
         mesh_device != nullptr && std::holds_alternative<OwnedBufferState>(state_) &&
         device_local_config_.buffer_type == BufferType::L1 &&
         mesh_device->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid()) {
@@ -348,7 +349,7 @@ bool MeshBuffer::is_allocated() const {
     if (std::holds_alternative<DeallocatedState>(state_)) {
         return false;
     }
-    if (mesh_device_.lock() == nullptr) {
+    if (live_device() == nullptr) {
         return false;
     }
     return true;
@@ -359,7 +360,8 @@ MeshBuffer::~MeshBuffer() { deallocate(); }
 MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     config_((Inspector::mesh_buffer_deallocated(&other), other.config_)),
     device_local_config_(std::move(other.device_local_config_)),
-    mesh_device_(std::move(other.mesh_device_)),
+    mesh_device_(std::exchange(other.mesh_device_, nullptr)),
+    device_alive_(std::move(other.device_alive_)),
     address_(other.address_),
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
@@ -376,7 +378,8 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         Inspector::mesh_buffer_deallocated(&other);
         config_ = other.config_;
         device_local_config_ = std::move(other.device_local_config_);
-        mesh_device_ = std::move(other.mesh_device_);
+        mesh_device_ = std::exchange(other.mesh_device_, nullptr);
+        device_alive_ = std::move(other.device_alive_);
         address_ = other.address_;
         device_local_size_ = other.device_local_size_;
         buffers_ = std::move(other.buffers_);
@@ -397,7 +400,7 @@ void MeshBuffer::deallocate() {
         Inspector::mesh_buffer_deallocated(this);
     }
 
-    auto mesh_device = mesh_device_.lock();
+    auto* mesh_device = live_device();
     if (mesh_device) {
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
         // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
@@ -442,9 +445,9 @@ void MeshBuffer::deallocate() {
 }
 
 MeshDevice* MeshBuffer::device() const {
-    auto device = mesh_device_.lock();
+    auto* device = live_device();
     TT_FATAL(device, "Can't get device from mesh buffer, already deallocated");
-    return device.get();
+    return device;
 }
 
 Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {

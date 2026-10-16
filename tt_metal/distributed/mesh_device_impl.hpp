@@ -139,6 +139,9 @@ private:
     // Set when ~MeshDevice starts. Declared early so it is still valid while the members below are destroyed (e.g.
     // while the program cache frees buffers); see is_being_destroyed().
     std::atomic<bool> being_destroyed_ = false;
+    // Liveness token handed out through MeshDevice::liveness_token(). Released as soon as destruction starts, so
+    // holders that only observe this mesh (e.g. MeshBuffer) can tell that it is gone without owning it.
+    std::shared_ptr<void> liveness_ = std::make_shared<char>();
     bool command_list_builder_active_ = false;
     // Traces and command lists may both be used on a MeshDevice, but never at the same time.
     // Traces are the legacy pre-recorded dispatch path (supported today, slated for deprecation);
@@ -290,7 +293,11 @@ public:
     // torn down (e.g. buffers freed by the program cache) uses this to avoid querying a half-destroyed mesh.
     // Returns the same moments in which shared_from_this() on the owning MeshDevice would throw bad_weak_ptr.
     bool is_being_destroyed() const { return being_destroyed_.load(std::memory_order_acquire); }
-    void mark_being_destroyed() { being_destroyed_.store(true, std::memory_order_release); }
+    void mark_being_destroyed() {
+        being_destroyed_.store(true, std::memory_order_release);
+        liveness_.reset();
+    }
+    std::weak_ptr<void> liveness_token() const { return liveness_; }
     MetalContext& metal_context() const;
     MetalEnvImpl& metal_env() const;
     // The MeshDevice will call MetalContext::destroy_instance on close when this is set to true.

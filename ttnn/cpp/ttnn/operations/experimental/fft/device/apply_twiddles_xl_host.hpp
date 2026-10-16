@@ -79,16 +79,17 @@ inline std::unordered_map<uint64_t, std::shared_ptr<DeltaPlan>>& cache() {
 
 inline void clear_cache() { cache().clear(); }
 
-inline uint64_t make_key(tt::tt_metal::distributed::MeshDevice* md, uint32_t big_modulus, uint32_t full_N) {
-    return reinterpret_cast<uint64_t>(md) ^ (static_cast<uint64_t>(big_modulus) * 0x9E3779B97F4A7C15ull) ^
+// Keyed on MeshDevice::id(), which is unique for the life of the process (a device's address can be reused).
+inline uint64_t make_key(const tt::tt_metal::distributed::MeshDevice* md, uint32_t big_modulus, uint32_t full_N) {
+    return static_cast<uint64_t>(md->id()) ^ (static_cast<uint64_t>(big_modulus) * 0x9E3779B97F4A7C15ull) ^
            (static_cast<uint64_t>(full_N) * 0xBF58476D1CE4E5B9ull);
 }
 
 inline std::shared_ptr<DeltaPlan> get_or_create(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md, uint32_t big_modulus, uint32_t full_N) {
+    tt::tt_metal::distributed::MeshDevice* md, uint32_t big_modulus, uint32_t full_N) {
     using namespace tt::tt_metal::distributed;
 
-    const uint64_t key = make_key(md.get(), big_modulus, full_N);
+    const uint64_t key = make_key(md, big_modulus, full_N);
     auto& c = cache();
     auto it = c.find(key);
     if (it != c.end()) {
@@ -108,8 +109,8 @@ inline std::shared_ptr<DeltaPlan> get_or_create(
     using namespace tt::tt_metal;
     const ttnn::Shape shape{ttsl::SmallVector<uint32_t>{padded / kTileElems, kTileElems}};
     const TensorSpec spec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
-    plan->dr = Tensor::from_vector(std::move(r), spec, md.get());
-    plan->di = Tensor::from_vector(std::move(i), spec, md.get());
+    plan->dr = Tensor::from_vector(std::move(r), spec, md);
+    plan->di = Tensor::from_vector(std::move(i), spec, md);
 
     c.emplace(key, plan);
     return plan;

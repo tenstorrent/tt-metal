@@ -337,6 +337,10 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
+    // Internal. A token that expires when this MeshDevice starts being destroyed. Lets an object that merely refers to
+    // a MeshDevice (for example a MeshBuffer) tell that the device is gone without owning it.
+    std::weak_ptr<void> liveness_token() const;
+
     // Only for internal and testing purposes
     const MeshDeviceImpl& impl() const { return *pimpl_; }
     MeshDeviceImpl& impl() { return *pimpl_; }

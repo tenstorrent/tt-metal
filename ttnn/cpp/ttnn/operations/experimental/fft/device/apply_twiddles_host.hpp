@@ -47,10 +47,6 @@ struct TwiddlePlan {
     // them as tensor parameters instead of smuggling addresses through RTAs.
     ttnn::Tensor tw_r;
     ttnn::Tensor tw_i;
-    // Weak reference to the owning device.  lock() returns nullptr once the
-    // device is fully destroyed, correctly detecting stale entries even when
-    // the heap allocator reuses the same raw MeshDevice* address.
-    std::weak_ptr<tt::tt_metal::distributed::MeshDevice> device_weak;
 };
 
 // Build T[n2, k1] = (cos, sin) for n2 ∈ [0, N2), k1 ∈ [0, N1).
@@ -81,39 +77,36 @@ inline std::unordered_map<uint64_t, std::shared_ptr<TwiddlePlan>>& cache() {
 
 inline void clear_cache() { cache().clear(); }
 
-// Cache key combines (device ptr, N1, N2).  Twiddle math is dtype-
-// independent (always fp32) so dtype is NOT part of the key.
-inline uint64_t make_key(tt::tt_metal::distributed::MeshDevice* md, uint32_t N1, uint32_t N2) {
-    return reinterpret_cast<uint64_t>(md) ^ (static_cast<uint64_t>(N1) * 0x9E3779B97F4A7C15ull) ^
+// Cache key combines (device id, N1, N2).  Twiddle math is dtype-
+// independent (always fp32) so dtype is NOT part of the key.  MeshDevice::id() is unique for the life of the
+// process, so an entry can never be mistaken for one belonging to a different device (unlike the device's address,
+// which can be reused).
+inline uint64_t make_key(const tt::tt_metal::distributed::MeshDevice* md, uint32_t N1, uint32_t N2) {
+    return static_cast<uint64_t>(md->id()) ^ (static_cast<uint64_t>(N1) * 0x9E3779B97F4A7C15ull) ^
            (static_cast<uint64_t>(N2) * 0xBF58476D1CE4E5B9ull);
 }
 
-inline std::shared_ptr<TwiddlePlan> get_or_create(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md, uint32_t N1, uint32_t N2) {
+inline std::shared_ptr<TwiddlePlan> get_or_create(tt::tt_metal::distributed::MeshDevice* md, uint32_t N1, uint32_t N2) {
     using namespace tt::tt_metal::distributed;
 
-    const uint64_t key = make_key(md.get(), N1, N2);
+    const uint64_t key = make_key(md, N1, N2);
     auto& c = cache();
     auto it = c.find(key);
     if (it != c.end()) {
-        if (it->second->device_weak.lock()) {
-            return it->second;
-        }
-        c.erase(it);  // stale: device was destroyed (and ptr may be reused)
+        return it->second;
     }
 
     auto plan = std::make_shared<TwiddlePlan>();
     plan->N1 = N1;
     plan->N2 = N2;
-    plan->device_weak = md;
 
     auto [r, i] = build_twiddle_table(N1, N2);
 
     using namespace tt::tt_metal;
     const ttnn::Shape shape{ttsl::SmallVector<uint32_t>{N2, kTileElems_at}};
     const TensorSpec spec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
-    plan->tw_r = Tensor::from_vector(std::move(r), spec, md.get());
-    plan->tw_i = Tensor::from_vector(std::move(i), spec, md.get());
+    plan->tw_r = Tensor::from_vector(std::move(r), spec, md);
+    plan->tw_i = Tensor::from_vector(std::move(i), spec, md);
 
     c.emplace(key, plan);
     return plan;

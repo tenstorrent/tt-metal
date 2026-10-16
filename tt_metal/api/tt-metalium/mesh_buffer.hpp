@@ -155,7 +155,8 @@ private:
         std::shared_ptr<Buffer> backing_buffer) :
         config_(config),
         device_local_config_(device_local_config),
-        mesh_device_(mesh_device->shared_from_this()),
+        mesh_device_(mesh_device),
+        device_alive_(mesh_device->liveness_token()),
         address_(backing_buffer->address()),
         device_local_size_(device_local_size),
         buffers_(MeshShape(mesh_device->shape())),
@@ -170,7 +171,8 @@ private:
         MeshDevice* mesh_device) :
         config_(config),
         device_local_config_(device_local_config),
-        mesh_device_(mesh_device->shared_from_this()),
+        mesh_device_(mesh_device),
+        device_alive_(mesh_device->liveness_token()),
         address_(address),
         device_local_size_(device_local_size),
         buffers_(MeshShape(mesh_device->shape())),
@@ -179,7 +181,12 @@ private:
     void initialize_device_buffers();
     MeshBufferConfig config_;
     DeviceLocalBufferConfig device_local_config_;
-    std::weak_ptr<MeshDevice> mesh_device_;
+    // The device is observed, not owned: it is only valid to use while device_alive_ has not expired. See
+    // live_device().
+    MeshDevice* mesh_device_ = nullptr;
+    std::weak_ptr<void> device_alive_;
+    // The device, or nullptr once it has been destroyed (or has started being destroyed).
+    MeshDevice* live_device() const { return device_alive_.expired() ? nullptr : mesh_device_; }
     DeviceAddr address_ = 0;
     DeviceAddr device_local_size_ = 0;
 

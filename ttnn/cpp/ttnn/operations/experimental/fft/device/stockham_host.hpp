@@ -61,12 +61,10 @@ inline bool is_pow2(uint32_t n) { return n != 0 && (n & (n - 1)) == 0; }
 struct BatchFFTPlan {
     ttnn::Tensor tw_r;
     ttnn::Tensor tw_i;
-    std::weak_ptr<MeshDevice> device_weak;
 };
 
 struct ZeroImagPlan {
     ttnn::Tensor zero;
-    std::weak_ptr<MeshDevice> device_weak;
 };
 
 inline std::pair<uint32_t, uint32_t> pick_batch_grid(uint32_t num_cores, uint32_t grid_x) {
@@ -127,20 +125,19 @@ inline std::pair<std::vector<float>, std::vector<float>> batch_twiddles(uint32_t
 // Upload the twiddle table for `sub_N` to two DRAM Tensors on `md`.
 // Fp32 internally; the reader kernel expands to bf16 downstream when the
 // caller's input is bf16.
-inline std::shared_ptr<BatchFFTPlan> make_batch_plan(const std::shared_ptr<MeshDevice>& md, uint32_t sub_N) {
+inline std::shared_ptr<BatchFFTPlan> make_batch_plan(MeshDevice* md, uint32_t sub_N) {
     using namespace tt::tt_metal;
     assert(sub_N <= kTileElems && "batch path requires sub_N <= 1024 (single tile per sub-FFT)");
     assert(is_pow2(sub_N) && sub_N >= 2);
 
     auto bp = std::make_shared<BatchFFTPlan>();
-    bp->device_weak = md;
     const uint32_t log2_sub_N = log2u(sub_N);
 
     auto [tw_r_data, tw_i_data] = batch_twiddles(sub_N, log2_sub_N);
     const ttnn::Shape shape{ttsl::SmallVector<uint32_t>{log2_sub_N, kTileElems}};
     const TensorSpec spec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
-    bp->tw_r = ttnn::Tensor::from_vector(std::move(tw_r_data), spec, md.get());
-    bp->tw_i = ttnn::Tensor::from_vector(std::move(tw_i_data), spec, md.get());
+    bp->tw_r = ttnn::Tensor::from_vector(std::move(tw_r_data), spec, md);
+    bp->tw_i = ttnn::Tensor::from_vector(std::move(tw_i_data), spec, md);
     return bp;
 }
 
@@ -156,11 +153,14 @@ inline std::unordered_map<uint64_t, std::shared_ptr<ZeroImagPlan>>& zero_imag_ca
 // Twiddle table is a function of sub_N only.  Batch size does not affect
 // the cache identity (it never did — the old key hashed batch but every
 // caller passed batch=1).
-inline uint64_t batch_plan_key(MeshDevice* md, uint32_t sub_N) {
-    return reinterpret_cast<uint64_t>(md) ^ (uint64_t{sub_N} * 0x9E3779B97F4A7C15ull);
+//
+// Entries are keyed on MeshDevice::id(), which is unique for the life of the process, so an entry can never be
+// mistaken for one belonging to a different device (unlike the device's address, which can be reused).
+inline uint64_t batch_plan_key(const MeshDevice* md, uint32_t sub_N) {
+    return static_cast<uint64_t>(md->id()) ^ (uint64_t{sub_N} * 0x9E3779B97F4A7C15ull);
 }
-inline uint64_t zero_imag_key(MeshDevice* md, tt::tt_metal::DataType dtype, uint32_t batch) {
-    return reinterpret_cast<uint64_t>(md) ^ (static_cast<uint64_t>(dtype) * 0x9E3779B97F4A7C15ull) ^
+inline uint64_t zero_imag_key(const MeshDevice* md, tt::tt_metal::DataType dtype, uint32_t batch) {
+    return static_cast<uint64_t>(md->id()) ^ (static_cast<uint64_t>(dtype) * 0x9E3779B97F4A7C15ull) ^
            (static_cast<uint64_t>(batch) * 0xBF58476D1CE4E5B9ull);
 }
 }  // namespace detail
@@ -168,16 +168,12 @@ inline uint64_t zero_imag_key(MeshDevice* md, tt::tt_metal::DataType dtype, uint
 // Public API preserved for call-site compatibility.  `batch` is accepted
 // for source-level compatibility with older factory code but is not part
 // of the cache key (the twiddle table only depends on sub_N).
-inline std::shared_ptr<BatchFFTPlan> get_cached_batch_plan(
-    const std::shared_ptr<MeshDevice>& md, uint32_t sub_N, uint32_t /*batch*/ = 1u) {
-    const uint64_t key = detail::batch_plan_key(md.get(), sub_N);
+inline std::shared_ptr<BatchFFTPlan> get_cached_batch_plan(MeshDevice* md, uint32_t sub_N, uint32_t /*batch*/ = 1u) {
+    const uint64_t key = detail::batch_plan_key(md, sub_N);
     auto& cache = detail::batch_plan_cache();
     auto it = cache.find(key);
     if (it != cache.end()) {
-        if (it->second->device_weak.lock()) {
-            return it->second;
-        }
-        cache.erase(it);
+        return it->second;
     }
     auto bp = make_batch_plan(md, sub_N);
     cache.emplace(key, bp);
@@ -185,27 +181,24 @@ inline std::shared_ptr<BatchFFTPlan> get_cached_batch_plan(
 }
 
 inline std::shared_ptr<ZeroImagPlan> get_cached_zero_imag(
-    const std::shared_ptr<MeshDevice>& md, tt::tt_metal::DataType dtype, uint32_t batch) {
+    MeshDevice* md, tt::tt_metal::DataType dtype, uint32_t batch) {
     using namespace tt::tt_metal;
-    const uint64_t key = detail::zero_imag_key(md.get(), dtype, batch);
+    const uint64_t key = detail::zero_imag_key(md, dtype, batch);
     auto& cache = detail::zero_imag_cache();
     auto it = cache.find(key);
     if (it != cache.end()) {
-        if (it->second->device_weak.lock()) {
-            return it->second;
-        }
-        cache.erase(it);
+        return it->second;
     }
 
     auto plan = std::make_shared<ZeroImagPlan>();
-    plan->device_weak = md;
     const ttnn::Shape shape{ttsl::SmallVector<uint32_t>{batch, kTileElems}};
     const TensorSpec spec(shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     if (dtype == DataType::BFLOAT16) {
         plan->zero = ttnn::Tensor::from_vector(
-            std::vector<bfloat16>(static_cast<size_t>(batch) * kTileElems, bfloat16(0.0f)), spec, md.get());
+            std::vector<bfloat16>(static_cast<size_t>(batch) * kTileElems, bfloat16(0.0f)), spec, md);
     } else {
-        plan->zero = ttnn::Tensor::from_vector(std::vector<float>(static_cast<size_t>(batch) * kTileElems, 0.0f), spec, md.get());
+        plan->zero =
+            ttnn::Tensor::from_vector(std::vector<float>(static_cast<size_t>(batch) * kTileElems, 0.0f), spec, md);
     }
     cache.emplace(key, plan);
     return plan;
