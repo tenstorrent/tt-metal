@@ -71,15 +71,16 @@ def test_second_inputs(gspec):
     assert "chunk0" not in [x.name for x in CC.cases(s, ref, 0, names["mlp"], g, c, "float")]
 
 
-def test_a_mistake_below_the_steps_precision_fails_the_sweep(gspec, monkeypatch, capsys):
-    # the fixture attention (tiny head dim) has a bf16 error of ~0.6 %: 1 % noise is within its whole-output limit
-    # (the per-column limits, switched off here, catch it), so the sweep fails and the test goes to a review
+def test_the_input_nudge_floor_catches_what_the_bf16_model_let_through(gspec, monkeypatch, capsys):
+    # F80: the fixture attention's bf16-everywhere model had an error of ~0.6 %, so 1 % noise slipped through its
+    # whole-output limits; its input-nudge floor (the fp32 step on inputs moved inside their bf16 cells) is far
+    # lower, and the same sweep catches the noise while a correct step (a fresh nudge, a bf16 output) passes
     s = gspec()
     monkeypatch.setenv(IMPL_ENV, "mutations")
     monkeypatch.setattr(CC, "col_errors", lambda got, want: None)  # the whole-output limits only
-    assert not run_component_test(s, "attention", 0, checks="auto")
+    assert run_component_test(s, "attention", 0, checks="auto")
     out = capsys.readouterr().out
-    assert "noise1e-2                    SLIPPED" in out and "bf16 everywhere              pass" in out
+    assert "noise1e-2                    caught" in out and "input nudge (new seed)       pass" in out
 
 
 @pytest.mark.parametrize("step", [s for s in STEPS if s != "attention"])
@@ -263,32 +264,3 @@ def test_every_column_is_checked_against_its_own_limit():
     # a column the precision model finds noisy gets a looser limit on its own terms
     noisy = CC.rel_limit(lim, torch.tensor([0.0, 0.01]), False, res[:2])
     assert noisy[0] == pytest.approx(2 * 2.0**-9) and noisy[1] == pytest.approx(0.02), "per column: 2 x e, no cap"
-
-
-def test_the_precision_model_follows_the_references_dtypes(tmp_path):
-    """F78: a step the reference computes in fp32 (a router's linear(x.float(), w.float())) gets an fp32 model."""
-
-    class Ref:
-        pass
-
-    class S:
-        bringup_dir = tmp_path
-
-    g = torch.Generator().manual_seed(0)
-    x, w = torch.randn(64, 256, generator=g), torch.randn(256, 96, generator=g)
-    cpu = lambda ctx, a: (a @ w).softmax(-1)  # noqa: E731
-    case = CC.Case("golden", [x], 0, lambda: None, None)
-    exact = cpu(None, MU.bf16(x))
-    bf = CC.precision_model(Ref(), cpu, case)
-    f32 = CC.precision_model(Ref(), cpu, case, {"compute": "fp32", "out": "fp32"})
-    assert CC.rel(f32, exact) == 0 and CC.rel(bf, exact) > 1e-3
-    assert CC.step_precision(S, "swa", "router") == {"compute": "bf16", "out": "bf16"}
-    (tmp_path / CC.PRECISION_FILE).write_text(
-        "steps:\n  router: {compute: fp32, out: fp32}\n  swa.attn_norm: {compute: fp32}\n"
-    )
-    assert CC.step_precision(S, "swa", "router") == {"compute": "fp32", "out": "fp32"}
-    assert CC.step_precision(S, "swa", "attn_norm") == {"compute": "fp32", "out": "bf16"}
-    assert CC.step_precision(S, "mla", "attn_norm") == {"compute": "bf16", "out": "bf16"}
-    (tmp_path / CC.PRECISION_FILE).write_text("steps:\n  router: {compute: fp16}\n")
-    with pytest.raises(ValueError):
-        CC.step_precision(S, "swa", "router")

@@ -104,7 +104,7 @@ from models.demos.common.bringup.plan import op_request as OR
 from models.demos.common.bringup.testing import accuracy_guard
 from models.demos.common.bringup.testing import serving as SV
 from models.demos.common.bringup.testing import settings_lint
-from models.demos.common.bringup.testing.component_checks import PRECISION_FILE as CC_PRECISION_FILE
+from models.demos.common.bringup.testing.noise_floor import TAPS_FILE
 
 HERE = Path(__file__).resolve().parent
 AGENT_DEF = HERE / "agents" / "bringup-engineer.md"
@@ -460,8 +460,8 @@ class Orchestrator:
             extra.append(CONTRACT_SHARED)  # the engine's producer and registry learn each new model's layout
             extra.append(f"{b}/hooks.py")  # contract_state_pcc (fixed-size state read-back) is a hook
         extra.append(BRINGUP_OPS)
-        if role in ("reference", OV.FIX_ROLE):  # F78: the reference's dtypes; never an implement agent's to loosen
-            extra.append(f"{b}/{CC_PRECISION_FILE}")
+        if role in ("reference", OV.FIX_ROLE):  # F80: the official dtypes of every step's inputs; it sets the floors
+            extra.append(f"{b}/{TAPS_FILE}")
         if role == "implement" and OR.deferrable(task):
             extra.append(rel(self.spec, OR.root(self.spec)))  # an op request, if the agent defers the step (F46)
         # F55: the files this task's gate writes are the agent's to change too (one list: core.gate.gate_outputs), so

@@ -18,10 +18,16 @@ reference: |
   full model (the HF sanity gate: smoke and next-token accuracy), so keep what does not fit packed and dequantize it
   when it runs. For a layer subset, task R.4 trims the checkpoint once R.2 passes (only layers up to the last subset
   layer stay; mixed shards become `subset-<shard>`): read every tensor through `model.safetensors.index.json`, never
-  by a shard file name. Record the official implementation's precision per block step in `$bringup_dir/precision.yaml`
-  (schema: testing/component_checks.step_precision): `compute: fp32` for a step it computes in fp32 from its bf16
-  inputs (e.g. a router doing `linear(x.float(), w.float())`), `out: fp32` when it hands on fp32; every accuracy
-  limit of the device steps derives from these dtypes (the owner's rule: match the reference precision, never more).
+  by a shard file name. Every accuracy limit of the device steps derives from a noise floor
+  (testing/noise_floor.py; the owner's rule: match the reference precision, never more). For it, task R.5 needs from
+  you (a) `$bringup_dir/official_taps.yaml`: the dtype the official implementation holds each block step's inputs and
+  output in, `steps: {<step>: {inputs: [bf16 | fp32 | fixed], out: bf16 | fp32}}` (`fixed` for a quantizer's output,
+  e.g. an fp8-valued kv; `<block type>.<step>` where block types differ), and (b) the hook `official_taps(spec,
+  layers, tokens, chunk, chunk_size)` in hooks.py: the official modeling code at its shipped dtypes (hf_model) run
+  over the first chunk + 1 chunks, tapped with forward hooks or wrapped methods, returning for that chunk `{layer:
+  {step: {"inputs": [...in the step's input order, as the official code held them], "output": ...}}}` for every
+  step of every layer (testing/official_floor.py checks the map: the fp32 step on the tapped inputs must give the
+  official output within its input-nudge floor).
 plan: |
   Role: plan. Map every component to TTNN and shard the model over the $mesh mesh ($chips chips, $dram GB each). Write
   `$bringup_dir/plan.yaml` (schema in `models/demos/common/bringup/plan/memory.py`), `$bringup_dir/plan.md`, and

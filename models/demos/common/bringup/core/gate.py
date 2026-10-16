@@ -229,7 +229,7 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
         "supervision.md",
         "serving_contract.md",  # F58: the serving contract (SC.1) and its test list
         "contract_tests.yaml",
-        "precision.yaml",  # F78: the reference's dtypes per step (testing/component_checks.step_precision)
+        "official_taps.yaml",  # F80: the official code mapped onto the steps (testing/noise_floor.py)
         "results/knowledge_use",  # the agents' knowledge-use reports (knowledge/usage.py)
     ):
         if (ledger.dir / extra).exists():

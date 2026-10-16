@@ -206,10 +206,10 @@ done reaches the agents as a note, so the fix and its lesson land where the next
 ### Accuracy limits come from the noise floor, never a fixed bar
 
 Owner rule (DeepSeek-V4.1 run1). Every accuracy limit of the component and swap tests is calib (2.0; 3.5 for the low
-precision kinds) x what the same step does with the reference's dtypes on the CPU (the precision model: bf16
-inputs, intermediates and output at the official code's dtypes per step, `precision.yaml`, written by the reference
-role; testing/noise_floor.py), on the same comparison, and
-never below one bf16 rounding of the output. The gate metrics read `>= limit` (the `<metric>_limit` the test
+precision kinds) x the step's noise floor on the same comparison: the larger of the official code's own arithmetic
+on the same inputs (task R.5 taps it per step; the reference role writes the hook and `official_taps.yaml`) and the
+input nudge (the fp32 step on its inputs moved inside their official dtype's rounding cell; testing/noise_floor.py),
+and never below one rounding of the output to its official dtype. A selection flip must be explained by the nudge. The gate metrics read `>= limit` (the `<metric>_limit` the test
 records). A fixed bar either lets real errors through or, when the reference's own dtypes cannot meet it, makes the
 agents raise the device precision above the reference to clear it, which the owner rejects: match the reference's
 precision, never exceed it to pass a test. When a gate fails on a fixed number, the number is the bug: fix the
