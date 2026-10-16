@@ -2100,7 +2100,8 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs
 # Both operands of the across-zero pair cycle through the same small signed range.
 _ACROSS_ZERO_SPAN = 16  # distinct values per operand
 _ACROSS_ZERO_OFFSET = _ACROSS_ZERO_SPAN // 2  # shifts 0..15 to -8..7
-_ACROSS_ZERO_STRIDE = 4  # tile 1 advances once per four lanes, so pairs do not repeat
+# Tile 1 advances once per four lanes, so pairs do not repeat within a face.
+_ACROSS_ZERO_STRIDE = 4
 
 
 def _build_add_top_row_int32_across_zero_src():
@@ -2111,9 +2112,9 @@ def _build_add_top_row_int32_across_zero_src():
     distinct (a, b) pairs and 31 distinct sums spanning [-16, 14]: 16 pairs are both
     negative, 26 are of opposite sign (3 of them summing to zero), 6 pair a zero with a
     negative and 16 are both non-negative. Magnitudes stay small so nothing overflows:
-    the sign is the point. The
-    default sweep draws Int32 from [0, 2**30), where sign-magnitude and two's complement
-    are the same bits, so it cannot tell which one the kernel assumes.
+    the sign is the point. The default sweep draws Int32 from [0, 2**30), where
+    sign-magnitude and two's complement are the same bits, so it cannot tell which one
+    the kernel assumes.
     """
     positions = torch.arange(_ELEMENTS_PER_TILE, dtype=torch.int64)
     tile_0 = (positions % _ACROSS_ZERO_SPAN) - _ACROSS_ZERO_OFFSET
@@ -2138,8 +2139,10 @@ def test_eltwise_binary_sfpu_add_top_row_int32_across_zero(formats, dest_acc, ma
     A native Int32 tile is two's complement in L1, and unpack-to-dest moves its bits to
     Dst unchanged, so the kernel must load and store the raw word. A kernel that applied
     the sign-magnitude conversion on the way in and out would pass the sweep and fail
-    here on every lane with a negative operand or sum. twos_complement=True is required
-    for the same reason as in test_eltwise_binary_sfpu_int_extremes.
+    here on every lane where an operand is negative and neither is zero (84 of the 128
+    written lanes; the conversion leaves zero unchanged, so a zero-with-negative pair
+    round-trips). twos_complement=True is required for the same reason as in
+    test_eltwise_binary_sfpu_int_extremes.
     """
     _run_sfpu_add_top_row(
         formats,
