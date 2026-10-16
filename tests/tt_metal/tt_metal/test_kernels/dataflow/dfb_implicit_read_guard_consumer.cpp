@@ -34,6 +34,9 @@ void kernel_main() {
 
     // Each consumer thread owns one tile counter. Preload every counter, then let
     // thread 0 be the only writer of consumer_ready so the increment cannot be lost.
+    // Preload ACKED only after the producer's POSTED preload: acking unposted tiles wraps the
+    // counter's occupancy past its capacity, which the counter flags as an error.
+    producer_ready.wait_min(1);
     if (preload_acked != 0) {
         preload_acked_counter(dfb, preload_acked);
     }
@@ -46,7 +49,6 @@ void kernel_main() {
         }
         consumer_ready.up(1);
     }
-    producer_ready.wait_min(1);
 
     if (get_my_thread_id() != 0) {
         second_returned.wait_min(1);
