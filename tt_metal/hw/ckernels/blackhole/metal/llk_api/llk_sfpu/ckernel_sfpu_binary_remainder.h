@@ -16,6 +16,9 @@ namespace ckernel::sfpu {
 // 2^31 as float (used for INT32 sign-magnitude conversion edge cases)
 constexpr float TWO_POW_31 = 2147483648.0f;
 
+// IEEE-754 +inf; abs bits == kInfBits is +-inf, abs bits > kInfBits is NaN.
+constexpr int32_t kInfBits = 0x7F800000;
+
 // Computes 1/|b| for the unsigned remainder (single Newton–Raphson refinement). Split recip and
 // remainder computation so that the tensor-scalar path can hoist this loop-invariant work above its
 // element loop, since a scalar divisor is identical for every lane and iteration.
@@ -281,12 +284,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     // Infinite divisor: the reciprocal of +-inf is exactly 0, so floor_div * b is 0 * inf = NaN
     // above. For finite a, remainder(a, +-inf) is a when a is zero or has the sign of b, else b
     // (torch.remainder). Classify on the bit pattern, as ckernel_sfpu_isclose.h does, so a NaN
-    // divisor is excluded. An infinite or NaN a keeps the NaN: mask the sign bit instead of
-    // bit-casting sfpi::abs(a), because SFPABS leaves -NaN sign-set and it would read as a
-    // negative integer below kInfBits.
-    constexpr int32_t kInfBits = 0x7F800000;
-    constexpr int32_t kMagnitudeMask = 0x7FFFFFFF;
-    sfpi::vInt a_magnitude_bits = sfpi::as<sfpi::vInt>(a) & kMagnitudeMask;
+    // divisor is excluded. An infinite or NaN a keeps the NaN: clear the sign with setsgn rather
+    // than sfpi::abs, because SFPABS leaves -NaN sign-set and it would read as a negative integer
+    // below kInfBits.
+    sfpi::vInt a_magnitude_bits = sfpi::as<sfpi::vInt>(sfpi::setsgn(a, 0));
     v_if(sfpi::as<sfpi::vInt>(sfpi::abs(b)) == kInfBits && a_magnitude_bits < kInfBits) {
         result = a;
         v_if(a_magnitude_bits != 0 && (sfpi::as<sfpi::vInt>(a) ^ sfpi::as<sfpi::vInt>(b)) < 0) { result = b; }

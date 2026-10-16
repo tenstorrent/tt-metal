@@ -106,13 +106,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     // Infinite divisor: the reciprocal of +-inf is exactly 0, so trunc_div * b is 0 * inf = NaN
     // above. fmod(a, +-inf) is a for finite a and NaN for an infinite a (which the a == b case
     // would otherwise zero for inf/inf). Classify on the bit pattern, as ckernel_sfpu_isclose.h
-    // does, so a NaN divisor is excluded. Mask the sign bit of a instead of bit-casting
-    // sfpi::abs(a): SFPABS leaves -NaN sign-set, which would read as a negative integer.
-    constexpr int32_t kInfBits = 0x7F800000;
-    constexpr int32_t kMagnitudeMask = 0x7FFFFFFF;
+    // does, so a NaN divisor is excluded. Clear the sign of a with setsgn rather than sfpi::abs:
+    // SFPABS leaves -NaN sign-set, which would read as a negative integer.
     v_if(sfpi::as<sfpi::vInt>(b_abs) == kInfBits) {
         result = a;
-        v_if((sfpi::as<sfpi::vInt>(a) & kMagnitudeMask) >= kInfBits) {
+        v_if(sfpi::as<sfpi::vInt>(sfpi::setsgn(a, 0)) >= kInfBits) {
             result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN());
         }
         v_endif;
