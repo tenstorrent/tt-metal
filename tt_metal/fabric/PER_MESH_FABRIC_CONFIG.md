@@ -98,6 +98,19 @@ The per-mesh heterogeneous-config feature this PR delivers is fully proven by th
 (3-mesh, 4-config incl. mesh↔torus, and the 2×4 multi-host split). Fixing multi-host 4×4 torus routing-plane
 allocation is a separate fabric-router effort, tracked outside this PR.
 
+### Traffic utilization (benchmark_mode telemetry, 3-mesh TORUS_Y/X/Y, 100k packets × 4 KB, neighbor exchange)
+Beyond the 0-failed data-correctness runs, a `benchmark_mode: true` run gives real per-link bandwidth:
+- **Intra-mesh**: every mesh coordinate on all three meshes sustains **~14.7–17.0 GB/s per link**
+  (telemetry-manager summary: min 15.13 / avg 15.74 / max 17.02 GB/s on one mesh; CSV per-core ~14.7 GB/s),
+  at ~3.6–4.1 M packets/s, ~100k packets/core — i.e. genuine, uniformly high utilization, not a trickle.
+  Results land in `generated/fabric/bandwidth_results_blackhole.csv`.
+- **Inter-mesh**: the traffic runs and the test reports *Finished* (correctness already shown at 0-failed /
+  100k packets), but the **BW profiler cannot read inter-mesh eth cores**: after the run it TT_FATALs in
+  `tt_cluster.cpp:1434` (*"Chip N logical eth core … connects to a remote mmio device"*) because an
+  inter-mesh eth core is not in `ethernet_connections_within_cluster`. This is a **telemetry-tooling gap**
+  for cross-boundary links (the data moved correctly), not a fabric or per-mesh-config defect; quantifying
+  inter-mesh BW needs the telemetry manager to handle remote-mmio eth cores (follow-up, outside this PR).
+
 ### The `topology: Mesh` sanity cases are a TEST-HARNESS mismatch, not a fabric bug
 `test_tt_fabric` computes `is_torus_2d_unicast` from the **yaml** `topology` (`tt_fabric_test_device_setup.cpp:482`),
 so `topology: Mesh` routes packets **mesh-style into a torus fabric** → deadlock. A per-mesh-**torus** MGD
