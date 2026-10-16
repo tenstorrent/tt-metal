@@ -14,7 +14,7 @@ import torch
 
 from ..config import load_config
 from .manifest import load_manifest, materialize_snapshot, sha256_file
-from .metrics import compare_tensors
+from .metrics import affine_diagnostics, compare_tensors
 
 COMPONENTS = (
     "base_lm.forward",
@@ -36,25 +36,47 @@ COMPONENTS = (
 
 def checkpoint_state(checkpoint, manifest, *, codec=False):
     """Verify content against the oracle before preparing any device weights."""
-    for name, record in manifest["checkpoint"]["files"].items():
+    files = manifest["checkpoint"]["files"]
+    for name, record in files.items():
         path = checkpoint / name
-        if (
-            path.parent.resolve() != checkpoint.resolve()
-            or sha256_file(path) != record["sha256"]
-        ):
+        if path.parent.resolve() != checkpoint.resolve() or sha256_file(path) != record["sha256"]:
             raise ValueError(f"Checkpoint differs from CUDA oracle: {name}")
-    safetensors = checkpoint / (
-        "audiovae.safetensors" if codec else "model.safetensors"
-    )
-    if safetensors.exists():
+    safetensors_name = "audiovae.safetensors" if codec else "model.safetensors"
+    binary_name = "audiovae.pth" if codec else "pytorch_model.bin"
+    # Directory contents are not provenance: only the files recorded and
+    # verified above may supply the replay weights.
+    if safetensors_name in files:
         from safetensors.torch import load_file
 
-        return load_file(str(safetensors), device="cpu")
-    binary = checkpoint / ("audiovae.pth" if codec else "pytorch_model.bin")
-    if not binary.exists():
-        raise FileNotFoundError(f"Missing weights: {safetensors.name} or {binary.name}")
-    state = torch.load(binary, map_location="cpu", weights_only=True)
+        return load_file(str(checkpoint / safetensors_name), device="cpu")
+    if binary_name not in files:
+        raise ValueError(f"CUDA oracle records no supported weights: {safetensors_name} or {binary_name}")
+    state = torch.load(checkpoint / binary_name, map_location="cpu", weights_only=True)
     return state.get("state_dict", state)
+
+
+def runtime_version():
+    """Source-tree installs need not expose installed distribution metadata."""
+    try:
+        return importlib.metadata.version("ttnn")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def implementation_hashes():
+    """Identify the exact Python source measured, including uncommitted work."""
+    root = Path(__file__).resolve().parents[1]
+    names = (
+        "config.py",
+        "tt/ops.py",
+        "tt/minicpm.py",
+        "tt/local.py",
+        "tt/audio_vae.py",
+        "validation/replay_component.py",
+        "validation/metrics.py",
+        "validation/cases.py",
+    )
+    return {name: sha256_file(root / name) for name in names}
 
 
 def build_component(name, config, state, device, dtype):
@@ -90,14 +112,10 @@ def build_component(name, config, state, device, dtype):
         return TtMiniCPMModel(lm, state, prefix, device, dtype)
     if prefix == "feat_encoder":
         local_config = make_local_config(config["lm_config"], config["encoder_config"])
-        return TtLocalEncoder(
-            local_config, state, prefix, device, dtype, input_dim=config["feat_dim"]
-        )
+        return TtLocalEncoder(local_config, state, prefix, device, dtype, input_dim=config["feat_dim"])
     if prefix == "feat_decoder.estimator":
         local_config = make_local_config(config["lm_config"], config["dit_config"])
-        return TtLocalDiT(
-            local_config, state, prefix, device, dtype, in_channels=config["feat_dim"]
-        )
+        return TtLocalDiT(local_config, state, prefix, device, dtype, in_channels=config["feat_dim"])
     if prefix == "fsq_layer":
         return TtScalarQuantization(
             state,
@@ -111,15 +129,13 @@ def build_component(name, config, state, device, dtype):
     return TtLinear(state, prefix, device, dtype)
 
 
-def replay(args):
+def replay(args, *, device=None):
     from loguru import logger
 
     manifest = load_manifest(args.reference)
     events = [e for e in manifest["events"] if e["component"] == args.component]
     if args.event_index < 0 or args.event_index >= len(events):
-        raise ValueError(
-            f"{args.component}: event index outside captured range (count={len(events)})"
-        )
+        raise ValueError(f"{args.component}: event index outside captured range (count={len(events)})")
     event = events[args.event_index]
     inputs = materialize_snapshot(args.reference, manifest, event["args"])
     kwargs = materialize_snapshot(args.reference, manifest, event["kwargs"])
@@ -138,9 +154,9 @@ def replay(args):
     from ..tt.ops import upload
 
     dtype = {"bfloat16": ttnn.bfloat16, "float32": ttnn.float32}[args.dtype]
-    device = ttnn.open_device(
-        device_id=args.device_id, l1_small_size=getattr(args, "l1_small_size", 262144)
-    )
+    owns_device = device is None
+    if owns_device:
+        device = ttnn.open_device(device_id=args.device_id, l1_small_size=getattr(args, "l1_small_size", 262144))
     try:
         component = build_component(args.component, config, state, device, dtype)
 
@@ -177,15 +193,9 @@ def replay(args):
                 if rate is not None:
                     flat = rate.flatten()
                     if not torch.all(flat == flat[0]):
-                        raise NotImplementedError(
-                            "Per-item codec sample rates are pending"
-                        )
+                        raise NotImplementedError("Per-item codec sample rates are pending")
                     kwargs["sample_rate"] = int(flat[0])
-            component = (
-                component.encode
-                if args.component.endswith("encode")
-                else component.decode
-            )
+            component = component.encode if args.component.endswith("encode") else component.decode
         inputs, kwargs = transfer(tuple(inputs)), transfer(kwargs)
         # CUDA calls the embedding argument inputs_embeds; shared TT callable
         # names it hidden. Preserve is_causal and input position exactly.
@@ -208,22 +218,31 @@ def replay(args):
             max_relative_rms=args.max_relative_rms,
             max_abs=args.max_abs,
         )
+        try:
+            diagnostics = affine_diagnostics(expected, actual)
+        except ValueError as error:
+            diagnostics = {"error": str(error)}
         report = {
             "mode": "component_replay",
             "component": args.component,
             "event": event["key"],
             "checkpoint": manifest["checkpoint"],
             "dtype": args.dtype,
+            "conv_operand_dtype": "bfloat16" if codec else None,
+            "codec_pointwise_dtype": args.dtype if codec else None,
             "device_id": args.device_id,
             "arch": str(device.arch()),
             "visible_devices": os.environ.get("TT_VISIBLE_DEVICES"),
             "l1_small_size": getattr(args, "l1_small_size", 262144),
-            "ttnn_version": importlib.metadata.version("ttnn"),
+            "ttnn_version": runtime_version(),
+            "ttnn_module": str(ttnn.__file__),
+            "implementation_sha256": implementation_hashes(),
             "torch_version": torch.__version__,
             "math_fidelity": "HiFi4",
             "fp32_dest_acc": True,
             "cold_launch_seconds": elapsed,
             "metrics": result.to_dict(),
+            "affine_diagnostics": diagnostics,
             "limitations": [
                 "Compilation may be included; not steady-state performance",
                 "Captured CUDA input; not integrated TT generation",
@@ -235,7 +254,8 @@ def replay(args):
         logger.info("{}: {}", event["key"], result)
         return 0 if result.passed else 1
     finally:
-        ttnn.close_device(device)
+        if owns_device:
+            ttnn.close_device(device)
 
 
 def main(argv=None):

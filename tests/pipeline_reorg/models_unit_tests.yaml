@@ -2206,3 +2206,23 @@
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   budget_type: unit
+
+# Component qualification only; integrated TT speech synthesis remains pending.
+# Requires the two pinned CUDA captures and checkpoint under /mnt/MLPerf;
+# provisioning those assets and assigning a notification owner are maintainer tasks.
+- name: VoxCPM2 component accuracy tests
+  cmd: |
+    set -e
+    export TT_METAL_WATCHER=30
+    export VOXCPM2_REQUIRE_DEVICE_TESTS=1
+    uv pip install -r models/experimental/voxcpm2/requirements.txt
+    pytest models/experimental/voxcpm2/tests --timeout=600
+  model: voxcpm2
+  model_family: VoxCPM
+  skus:
+    bh_p150:
+      timeout: 10
+      tier: 3
+  owner_id: "" # Pending maintainer assignment; do not notify an unrelated owner.
+  team: models
+  budget_type: unit

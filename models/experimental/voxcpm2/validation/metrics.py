@@ -18,9 +18,48 @@ class TensorMetrics:
         return asdict(self)
 
 
-def compare_tensors(
-    reference, actual, *, min_pcc=0.99, max_relative_rms=None, max_abs=None
-):
+def affine_diagnostics(reference, actual):
+    """Fit ``actual = gain * reference + offset`` without changing pass criteria.
+
+    Residual RMS is normalized by the original reference RMS. A constant
+    reference cannot identify gain separately from offset, so all three
+    diagnostics are None in that case. Invalid inputs raise ValueError.
+    """
+    reference, actual = torch.as_tensor(reference), torch.as_tensor(actual)
+    if reference.shape != actual.shape:
+        raise ValueError("shape mismatch")
+    if reference.numel() == 0:
+        raise ValueError("empty tensor")
+    if reference.is_complex() or actual.is_complex():
+        raise ValueError("complex tensors are unsupported")
+    ref = reference.detach().cpu().double().flatten()
+    out = actual.detach().cpu().double().flatten()
+    if not torch.isfinite(ref).all() or not torch.isfinite(out).all():
+        raise ValueError("nonfinite tensor")
+    # Normalize independently to avoid overflow in the covariance calculation.
+    ref_scale = ref.abs().max().item() or 1.0
+    out_scale = out.abs().max().item() or 1.0
+    x, y = ref / ref_scale, out / out_scale
+    x_mean, y_mean = x.mean(), y.mean()
+    centered = x - x_mean
+    variance = centered.square().sum().item()
+    if variance == 0:
+        return {"gain": None, "offset": None, "residual_relative_rms": None}
+    gain_scaled = torch.dot(centered, y - y_mean).item() / variance
+    offset_scaled = y_mean.item() - gain_scaled * x_mean.item()
+    residual_rms = (y - gain_scaled * x - offset_scaled).square().mean().sqrt().item()
+    scale_ratio = out_scale / ref_scale
+    result = {
+        "gain": gain_scaled * scale_ratio,
+        "offset": offset_scaled * out_scale,
+        "residual_relative_rms": residual_rms / x.square().mean().sqrt().item() * scale_ratio,
+    }
+    if not all(math.isfinite(value) for value in result.values()):
+        raise ValueError("affine diagnostics exceed float64 range")
+    return result
+
+
+def compare_tensors(reference, actual, *, min_pcc=0.99, max_relative_rms=None, max_abs=None):
     """Compare all elements; invalid/empty/shape-mismatched tensors always fail.
 
     Equal constants have PCC 1; unequal constants have PCC 0, even when both
@@ -49,23 +88,15 @@ def compare_tensors(
     error = out_scaled - ref_scaled
     abs_error = error.abs().max().item() * scale
     if not math.isfinite(abs_error):
-        return TensorMetrics(
-            False, None, None, None, "error magnitude exceeds float64 range"
-        )
+        return TensorMetrics(False, None, None, None, "error magnitude exceeds float64 range")
     ref_rms = ref_scaled.square().mean().sqrt().item()
     error_rms = error.square().mean().sqrt().item()
     relative = error_rms / ref_rms if ref_rms else (0.0 if error_rms == 0 else None)
     x, y = ref_scaled - ref_scaled.mean(), out_scaled - out_scaled.mean()
     norm = x.norm().item() * y.norm().item()
-    pcc = (
-        max(-1.0, min(1.0, torch.dot(x, y).item() / norm))
-        if norm
-        else (1.0 if torch.equal(ref, out) else 0.0)
-    )
+    pcc = max(-1.0, min(1.0, torch.dot(x, y).item() / norm)) if norm else (1.0 if torch.equal(ref, out) else 0.0)
     if relative is not None and not math.isfinite(relative):
-        return TensorMetrics(
-            False, pcc, None, abs_error, "relative RMS exceeds float64 range"
-        )
+        return TensorMetrics(False, pcc, None, abs_error, "relative RMS exceeds float64 range")
     passed = pcc >= min_pcc
     if max_relative_rms is not None:
         passed &= relative is not None and relative <= max_relative_rms

@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: Copyright OpenBMB
 # SPDX-License-Identifier: Apache-2.0
 """Checkpoint contracts; architecture dimensions always come from config.json."""
 
@@ -39,34 +40,21 @@ def validate_minicpm_config(config):
     channels = config.get("kv_channels")
     if channels is None:
         if config["hidden_size"] % heads:
-            raise ValueError(
-                "hidden_size must be divisible by query heads without kv_channels"
-            )
+            raise ValueError("hidden_size must be divisible by query heads without kv_channels")
         channels = config["hidden_size"] // heads
-    if (
-        not isinstance(channels, int)
-        or isinstance(channels, bool)
-        or channels <= 0
-        or channels % 2
-    ):
+    if not isinstance(channels, int) or isinstance(channels, bool) or channels <= 0 or channels % 2:
         raise ValueError("Attention head dimension must be a positive even integer")
     if not config.get("no_rope", False):
         rope = config.get("rope_scaling", {})
         original = rope.get("original_max_position_embeddings", 0)
         if original <= 1 or config["max_position_embeddings"] < original:
-            raise ValueError(
-                "LongRoPE requires max_position_embeddings >= original > 1"
-            )
+            raise ValueError("LongRoPE requires max_position_embeddings >= original > 1")
         if config.get("rope_theta", 0) <= 0:
             raise ValueError("rope_theta must be positive")
         for key in ("long_factor", "short_factor"):
             factors = rope.get(key, [])
-            if len(factors) != channels // 2 or any(
-                not math.isfinite(x) or x <= 0 for x in factors
-            ):
-                raise ValueError(
-                    f"LongRoPE {key} must contain head_dim/2 positive finite factors"
-                )
+            if len(factors) != channels // 2 or any(not math.isfinite(x) or x <= 0 for x in factors):
+                raise ValueError(f"LongRoPE {key} must contain head_dim/2 positive finite factors")
     return channels
 
 
@@ -75,10 +63,6 @@ def load_config(checkpoint):
     config = json.loads((path / "config.json").read_text())
     validate_minicpm_config(config["lm_config"])
     for key in ("patch_size", "feat_dim", "residual_lm_num_layers"):
-        if (
-            not isinstance(config.get(key), int)
-            or not math.isfinite(config[key])
-            or config[key] <= 0
-        ):
+        if not isinstance(config.get(key), int) or not math.isfinite(config[key]) or config[key] <= 0:
             raise ValueError(f"Missing or invalid VoxCPM2 {key}")
     return config
