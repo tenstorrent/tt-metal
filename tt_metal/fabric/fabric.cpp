@@ -758,12 +758,9 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
     return defines;
 }
 
-// Compute fabric connection RT args without any PD mutation.
-// The two per-connection semaphore values are copied through verbatim; sem_args_are_l1_addresses
-// only says what they are, so they can be validated here.
-// Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
-size_t fabric_connection_rt_args_size(size_t num_connections) {
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+namespace {
+
+size_t fabric_connection_rt_args_size(const tt::tt_fabric::FabricContext& fabric_context, size_t num_connections) {
     // RoutingPlaneConnectionManager consumes four words per connection: direction,
     // ethernet channel, teardown semaphore, and producer cursor. 2D routing also has
     // two shared header words and two destination words per connection. No template
@@ -777,6 +774,19 @@ size_t fabric_connection_rt_args_size(size_t num_connections) {
                 : 0);
 }
 
+}  // namespace
+
+size_t fabric_connection_rt_args_size(size_t num_connections) {
+    // TODO(#52020): resolves the default context, because this tt-blaze API has no device or env
+    // parameter to resolve from.
+    return fabric_connection_rt_args_size(
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context(), num_connections);
+}
+
+// Compute fabric connection RT args without any PD mutation.
+// The two per-connection semaphore values are copied through verbatim; sem_args_are_l1_addresses
+// only says what they are, so they can be validated here.
+// Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
@@ -800,8 +810,8 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
         "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
 
     // TODO(#52020): resolves the default context, because this tt-blaze API has no device or env
-    // parameter to resolve from. Read the HAL and routing from this control plane below, not through
-    // the public queries, which each do their own lookup.
+    // parameter to resolve from. Read the HAL, routing and RT-arg size from this control plane below,
+    // not through the public queries, which each do their own lookup.
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
 
@@ -859,7 +869,8 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     }
 
     std::vector<uint32_t> worker_args;
-    worker_args.reserve(fabric_connection_rt_args_size(dst_nodes.size()));
+    const size_t expected_size = fabric_connection_rt_args_size(fabric_context, dst_nodes.size());
+    worker_args.reserve(expected_size);
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
@@ -908,10 +919,10 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     }
 
     TT_FATAL(
-        worker_args.size() == fabric_connection_rt_args_size(dst_nodes.size()),
+        worker_args.size() == expected_size,
         "Fabric connection RT-arg layout emitted {} words, expected {} for {} connections",
         worker_args.size(),
-        fabric_connection_rt_args_size(dst_nodes.size()),
+        expected_size,
         dst_nodes.size());
 
     return worker_args;
