@@ -46,3 +46,34 @@ def test_lgamma_bridge_boundary_is_no_worse_than_the_bridge(device, z, inside):
         f"{err_inside:.4e} ({err_boundary / err_inside:.1f}x). The boundary is being sent to "
         f"the Stirling arm instead of the bridge it belongs to."
     )
+
+
+def test_lgamma_bf16_input_fp32_output(device):
+    """A preallocated float32 output puts Dest in 32-bit mode while the kernel is still the bf16 one.
+    Every element of its chain must then address full 32-bit Dest words; the where in the chain used
+    to address 16-bit halves, which under a 32-bit Dest land on the Stirling tile instead, so the
+    lower half of every tile came back corrupted. The tensor is dense so every row is checked."""
+    # bf16 non-integers on a 1/16 grid in [-4.5, 10), keeping 2/16 away from every integer (poles for
+    # x <= 0, and lgamma is exactly 0 at 1 and 2), repeated to fill the tensor.
+    grid = torch.arange(-4.5, 10.0, 1.0 / 16, dtype=torch.float32)
+    grid = grid[(grid - torch.round(grid)).abs() >= 2.0 / 16]
+    shape = (1, 1, 64, 128)
+    x = grid.repeat(torch.Size(shape).numel() // grid.numel() + 1)[: torch.Size(shape).numel()].reshape(shape)
+    bf16_in = x.to(torch.bfloat16)
+    assert torch.equal(bf16_in.float(), x), "inputs must be exact in bf16"
+
+    ref = torch.lgamma(x)
+    tt_in = ttnn.from_torch(bf16_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.from_torch(torch.zeros_like(x), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.lgamma(tt_in, output_tensor=tt_out)
+    got = ttnn.to_torch(tt_out)
+
+    assert got.dtype == torch.float32
+    # The bf16 kernel evaluates Stirling plus a reflection; a bf16-grade result is a few bf16 ulps
+    # (|ref| < 16 here, so one bf16 ulp is at most 1/16).
+    err = (got - ref).abs()
+    worst = err.view(-1).argmax()
+    assert torch.all(err <= 0.05 + 0.02 * ref.abs()), (
+        f"{(err > 0.05 + 0.02 * ref.abs()).sum().item()} of {err.numel()} lanes off; worst at "
+        f"x={x.view(-1)[worst].item()}: got {got.view(-1)[worst].item():.4f}, ref {ref.view(-1)[worst].item():.4f}"
+    )

@@ -17,6 +17,10 @@
 
 namespace ckl = compute_kernel_lib;
 
+// The input is bf16 but the Dest width follows the output: a float32 output enables the 32-bit Dest, and
+// a Float16_b where would then load and store 16-bit halves of each 32-bit Dest word.
+constexpr auto kWhereDF = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
+
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
 
@@ -53,7 +57,7 @@ void kernel_main() {
         ckl::EqBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
         // D3 = 0 ; D1 = where(cond=D2, a=0, b=sin) -> 0 at integers else sin
         ckl::FillScalar<ckl::Dst::D3>{0.0f},
-        ckl::Where<DataFormat::Float16_b, ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D1>{},
+        ckl::Where<kWhereDF, ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D1>{},
         // D1 = log|D1|
         ckl::Abs<ckl::Dst::D1>{},
         ckl::Log<ckl::Approx::Exact, ckl::Dst::D1>{},
