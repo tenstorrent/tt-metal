@@ -511,13 +511,12 @@ inline void mcast_prune_axis(
 // row. The last step lets an N/S/Z-facing router deliver and branch into X from one nonzero Y action;
 // subsequent E/W-facing routers consume the X map directly.
 //
-// A chordless axis requested in only one direction from a same-chip source skips that prune and
-// walks the requested way instead. On an even ring, axis/2 hops against the canonical tie-break
-// (north or west) includes the opposite chip, whose tree parent is the other cardinal, so the root
-// action becomes N|S or E|W. fabric_set_mcast_route injects one connection and rejects that. Both
-// directions, any axis that contains a Z edge, and any off-anchor encode (such as an intermesh
-// landing, where the trees are rooted at the landing chip rather than the anchor) stay on the tree.
-template <typename EdgeReader = McastTreeEdgeByteReader, bool AnchorIsEncodeRoot = false>
+// A chordless axis requested in only one direction skips that prune and walks the requested way
+// instead. On an even ring, axis/2 hops against the canonical tie-break (north or west) includes the
+// opposite chip, whose tree parent is the other cardinal, so the root action becomes N|S or E|W.
+// fabric_set_mcast_route injects one connection and rejects that. Both directions, and any axis that
+// contains a Z edge, stay on the tree: a transit chord is a real second output.
+template <typename EdgeReader = McastTreeEdgeByteReader>
 inline void encode_2d_mcast_maps(
     std::uint8_t* route_buffer,
     const std::uint8_t* mcast_trees,
@@ -550,10 +549,10 @@ inline void encode_2d_mcast_maps(
     const std::uint8_t* tree_x = mcast_trees + Routing2DCodec::mcast_tree_x_offset(y_size);
     const bool y_one_direction = (n_hops == 0) != (s_hops == 0);
     const bool x_one_direction = (e_hops == 0) != (w_hops == 0);
-    const bool y_directional = AnchorIsEncodeRoot && y_one_direction && y_size > 1 &&
-                               !mcast_axis_has_transit_chord<EdgeReader>(tree_y, y_size, /*is_y_axis=*/true);
-    const bool x_directional = AnchorIsEncodeRoot && x_one_direction && x_size > 1 &&
-                               !mcast_axis_has_transit_chord<EdgeReader>(tree_x, x_size, /*is_y_axis=*/false);
+    const bool y_directional =
+        y_one_direction && y_size > 1 && !mcast_axis_has_transit_chord<EdgeReader>(tree_y, y_size, /*is_y_axis=*/true);
+    const bool x_directional =
+        x_one_direction && x_size > 1 && !mcast_axis_has_transit_chord<EdgeReader>(tree_x, x_size, /*is_y_axis=*/false);
 
     if (n_hops == 0 && s_hops == 0) {
         mcast_set_row_bit(y_targets, root_y);
@@ -635,7 +634,7 @@ inline void encode_2d_mcast_maps(
     std::uint32_t s_hops,
     std::uint32_t e_hops,
     std::uint32_t w_hops) {
-    encode_2d_mcast_maps<EdgeReader, /*AnchorIsEncodeRoot=*/true>(
+    encode_2d_mcast_maps<EdgeReader>(
         route_buffer, mcast_trees, y_size, x_size, root_y, root_x, root_x, n_hops, s_hops, e_hops, w_hops);
 }
 
