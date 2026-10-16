@@ -6907,19 +6907,22 @@ def test_multihost_graph_report(request):
 
     db_path = report_path / "db.sqlite"
     assert db_path.exists(), f"no db.sqlite written under {report_path}"
-    op_names = ("relu", "add", "multiply")
+    op_names = ("ttnn.relu", "ttnn.add", "ttnn.multiply")
     conn = sqlite3.connect(db_path)
     try:
         cursor = conn.cursor()
-        op_ranks = {}
+        op_counts = {}
         for op_name in op_names:
-            cursor.execute("SELECT DISTINCT rank FROM operations WHERE name LIKE ? ORDER BY rank", (f"%{op_name}%",))
-            op_ranks[op_name] = [row[0] for row in cursor.fetchall()]
-        cursor.execute("SELECT DISTINCT rank FROM devices ORDER BY rank")
-        device_ranks = [row[0] for row in cursor.fetchall()]
+            cursor.execute("SELECT rank, COUNT(*) FROM operations WHERE name = ? GROUP BY rank", (op_name,))
+            op_counts[op_name] = dict(cursor.fetchall())
+        cursor.execute("SELECT rank, COUNT(*) FROM devices GROUP BY rank")
+        device_counts = dict(cursor.fetchall())
     finally:
         conn.close()
-    all_ranks = list(range(world_size))
+    # Exact counts rather than presence, so an op recorded more than once or a rank missing devices is caught.
     for op_name in op_names:
-        assert op_ranks[op_name] == all_ranks, f"{op_name} recorded for ranks {op_ranks[op_name]}, expected {all_ranks}"
-    assert device_ranks == all_ranks, f"devices recorded for ranks {device_ranks}, expected {all_ranks}"
+        expected = {r: 1 for r in range(world_size)}
+        assert op_counts[op_name] == expected, f"{op_name} count per rank {op_counts[op_name]}, expected {expected}"
+    # Assumes every rank opens the same number of devices, as each half of the T3K two-rank binding does.
+    expected = {r: mesh_device.get_num_devices() for r in range(world_size)}
+    assert device_counts == expected, f"device count per rank {device_counts}, expected {expected}"
