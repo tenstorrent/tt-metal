@@ -1192,6 +1192,8 @@ class Qwen38Generator:
         if len(cache.layers) != len(self.model.layers):
             raise ValueError("Cache must cover every model layer")
         for layer, state in zip(self.model.layers, cache.layers):
+            # Persistent buffers are allocated here, before the first trace exists.
+            layer.prime_conv_selectors(cache.batch_size)
             # The layer owns the geometry, which narrows with the tensor-parallel width.
             shapes = layer.state_shapes(batch_size=cache.batch_size, num_pages=cache.num_pages)
             if layer.kind == "full_attention":

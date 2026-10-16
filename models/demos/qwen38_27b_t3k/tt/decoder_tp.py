@@ -340,6 +340,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
                 )
         else:
             self.conv_actual_start = make_actual_start(mesh_device)
+            self.conv_selectors = {}
             c = hf_config
             q, k, v = state_dict["linear_attn.in_proj_qkv.weight"].split(
                 [c.linear_num_key_heads * 128, c.linear_num_key_heads * 128, c.linear_num_value_heads * 128]
