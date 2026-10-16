@@ -526,6 +526,90 @@ TEST_P(MeshWorkloadTestSuiteSubmeshFixture, QuiesceSubmeshesAllowsAlternatingWor
 
 INSTANTIATE_TEST_SUITE_P(QuiesceSubmeshIndex, MeshWorkloadTestSuiteSubmeshFixture, ::testing::Values(0, 1));
 
+// A parent mesh and its submesh drive the same chips' dispatchers and workers, so each switch between them hands the
+// workers' go and launch state from one mesh command queue to the other through a quiesce. Alternate several times
+// with varying numbers of programs per phase and check that every core on every chip ran each program exactly once:
+// state the new owner gets wrong shows up as a hang (a go the workers never see) or as extra runs (stale launch
+// messages replayed).
+TEST_F(MeshWorkloadTestSuite, SubmeshAndParentAlternationRunsEveryProgramOnce) {
+    if (mesh_device_->num_devices() < 2 || mesh_device_->shape().dims() != 2) {
+        GTEST_SKIP() << "Requires a 2D mesh of at least 2 devices";
+    }
+    auto submesh = mesh_device_->create_submesh(MeshShape(1, 1));
+
+    // One counter page per core: a height-sharded L1 buffer with one page per core gives every core the counter at
+    // the same address.
+    const CoreRange cores({0, 0}, {1, 1});
+    const uint32_t num_cores = cores.size();
+    const uint32_t page_size = hal::get_l1_alignment();
+    const uint32_t page_words = page_size / sizeof(uint32_t);
+    ShardSpecBuffer shard_spec(
+        CoreRangeSet(cores),
+        /*shard_shape=*/{1, page_words},
+        ShardOrientation::ROW_MAJOR,
+        /*page_shape=*/{1, page_words},
+        /*tensor2d_shape_in_pages=*/{num_cores, 1});
+    auto counters = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = num_cores * page_size},
+        DeviceLocalBufferConfig{
+            .page_size = page_size,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED)},
+        mesh_device_.get());
+    const uint32_t counter_addr = counters->address();
+    EnqueueWriteMeshBuffer(
+        mesh_device_->mesh_command_queue(),
+        counters,
+        std::vector<uint32_t>(num_cores * page_words, 0),
+        /*blocking=*/true);
+
+    auto make_counter_workload = [&](const MeshShape& shape) {
+        Program program = CreateProgram();
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/local_counter_increment.cpp",
+            cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {counter_addr}});
+        MeshWorkload workload;
+        workload.add_program(MeshCoordinateRange(shape), std::move(program));
+        return workload;
+    };
+    auto submesh_workload = make_counter_workload(submesh->shape());
+    auto parent_workload = make_counter_workload(mesh_device_->shape());
+
+    // Round r runs r + 1 programs per phase, so the workers' launch slots are at a different position at each switch.
+    // After one program the workers sit on the slot that the quiesce's reset returns them to.
+    constexpr uint32_t k_rounds = 3;
+    uint32_t runs_per_mesh = 0;
+    for (uint32_t round = 0; round < k_rounds; ++round) {
+        const uint32_t runs = round + 1;
+        runs_per_mesh += runs;
+        for (uint32_t i = 0; i < runs; ++i) {
+            EnqueueMeshWorkload(submesh->mesh_command_queue(), submesh_workload, /*blocking=*/false);
+        }
+        mesh_device_->quiesce_devices();
+        for (uint32_t i = 0; i < runs; ++i) {
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), parent_workload, /*blocking=*/false);
+        }
+        mesh_device_->quiesce_devices();
+    }
+
+    // The submesh is the 1x1 at the parent's origin; every chip runs the parent workload.
+    const MeshCoordinate submesh_coord(0, 0);
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        const uint32_t expected = runs_per_mesh * (coord == submesh_coord ? 2 : 1);
+        std::vector<uint32_t> pages;
+        ReadShard(mesh_device_->mesh_command_queue(), pages, counters, coord);
+        ASSERT_EQ(pages.size(), num_cores * page_words);
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            EXPECT_EQ(pages[i * page_words], expected) << "chip " << coord << " counter page " << i;
+        }
+    }
+}
+
 TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
     GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     uint32_t num_workloads = 10;
