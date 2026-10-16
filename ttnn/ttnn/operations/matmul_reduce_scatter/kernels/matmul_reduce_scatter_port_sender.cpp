@@ -48,9 +48,9 @@ void kernel_main() {
     constexpr uint32_t group = get_compile_time_arg_val(3);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
-    constexpr uint32_t chunks_per_core = (P + chunk_tiles - 1) / chunk_tiles;
     constexpr uint32_t num_headers = group;
     constexpr uint32_t slot_bytes = P * tile_bytes;
+    constexpr uint32_t num_waves = get_compile_time_arg_val(8);  // entry e is wave e mod num_waves
 
     size_t arg = 0;
     const uint32_t zone_base = get_arg_val<uint32_t>(arg++);     // downstream zone of this direction (staging + offset)
@@ -63,7 +63,8 @@ void kernel_main() {
     const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
     const uint32_t num_cores = get_arg_val<uint32_t>(arg++);
     const uint32_t num_units = get_arg_val<uint32_t>(arg++);
-    const uint32_t cores_idx = arg;
+    const uint32_t wave_tiles_idx = arg;  // per wave: tiles one core sends (<= P), dense at the front of its slot
+    const uint32_t cores_idx = arg + num_waves;
     const uint32_t units_idx = cores_idx + num_cores;
     arg = units_idx + num_units;  // fabric connection args follow
 
@@ -109,6 +110,8 @@ void kernel_main() {
         const uint32_t slot0 = (unit >> 16) & 0xFF;
         const uint32_t slot1 = (unit >> 24) & 0xFF;
         const uint32_t first_half = (unit >> 10) & 0x1;
+        const uint32_t tiles = get_arg_val<uint32_t>(wave_tiles_idx + (unit & 0xFF) % num_waves);
+        const uint32_t chunks_per_core = (tiles + chunk_tiles - 1) / chunk_tiles;
         for (uint32_t walk = 0; walk < 2 * num_cores; ++walk) {  // the reader's walk: first_half's cores first
             const uint32_t hh = first_half ^ (walk >= num_cores ? 1u : 0u);
             const uint32_t i = walk >= num_cores ? walk - num_cores : walk;
@@ -126,7 +129,7 @@ void kernel_main() {
                     cb_wait_front(cb_port_chunks, chunk_tiles * (u + 1));
                 }
                 const uint32_t src = get_read_ptr(cb_port_chunks) + u * chunk_bytes;
-                const uint32_t n = (P - ci * chunk_tiles) < chunk_tiles ? (P - ci * chunk_tiles) : chunk_tiles;
+                const uint32_t n = (tiles - ci * chunk_tiles) < chunk_tiles ? (tiles - ci * chunk_tiles) : chunk_tiles;
                 const uint32_t bytes = n * tile_bytes;
                 const uint64_t dst = get_noc_addr(x, y, dst_base + ci * chunk_bytes);
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];

@@ -3,8 +3,10 @@
 
 // matmul_reduce_scatter — matmul-core compute (TRISCs). fp32 DEST + full sync (8-tile subblocks).
 //
-// Per entry: matmul_block_entry — core_m x core_n x Kt through matmul_block, K-blocks of kb, packer L1 accumulation
-// into ONE caller-reserved fp32 slot of cb_partial_hold (TileRowMajor + Interm + caller_owns_pack_target).
+// Per entry (one wave of a block): matmul_block_entry — the wave's rows x cols x Kt through matmul_block, K-blocks of
+// kb, packer L1 accumulation into ONE caller-reserved fp32 slot of cb_partial_hold (TileRowMajor + Interm +
+// caller_owns_pack_target). The wave's tiles are dense at the front of the P-tile slot (out_row_width = cols); the W
+// window keeps its nominal row stride (in1_per_core_w), so a ragged last wave reads and pops the nominal window.
 // Then finish_block for the lagged entry (or this one): copy (chain start), hold + arrival (relay / fin with one
 // upstream), or hold + fwd + bwd (fin with two upstreams). FIN_ADD_FPU: FPU adds (hold + arrival, then the second
 // arrival through DEST reuse); else SFPU fp32 adds (FPU fwd+bwd into D1, SFPU D0 += D1).
@@ -71,24 +73,26 @@ void kernel_main() {
     constexpr uint32_t cb_finished = get_compile_time_arg_val(3);
     constexpr uint32_t cb_arrivals_fwd = get_compile_time_arg_val(4);
     constexpr uint32_t cb_arrivals_bwd = get_compile_time_arg_val(5);
-    constexpr uint32_t core_m = get_compile_time_arg_val(6);
-    constexpr uint32_t core_n = get_compile_time_arg_val(7);
-    constexpr uint32_t kb = get_compile_time_arg_val(8);
-    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(9);
-    constexpr uint32_t sb_h = get_compile_time_arg_val(10);
-    constexpr uint32_t sb_w = get_compile_time_arg_val(11);
-    constexpr uint32_t P = get_compile_time_arg_val(12);
-    constexpr uint32_t num_entries = get_compile_time_arg_val(13);
-    constexpr bool fin_add_fpu = get_compile_time_arg_val(14) != 0;  // finish adds on the FPU (else SFPU fp32 adds)
-    static_assert(P == core_m * core_n, "P is the per-core sub-block");
+    constexpr uint32_t win_n = get_compile_time_arg_val(6);  // W window row stride (tiles): one wave's nominal width
+    constexpr uint32_t kb = get_compile_time_arg_val(7);
+    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(8);
+    constexpr uint32_t P = get_compile_time_arg_val(9);              // slot tiles (the largest wave)
+    constexpr uint32_t num_entries = get_compile_time_arg_val(10);   // G x num_waves
+    constexpr bool fin_add_fpu = get_compile_time_arg_val(11) != 0;  // finish adds on the FPU (else SFPU fp32 adds)
+    constexpr uint32_t num_waves = get_compile_time_arg_val(12);
+    // runtime args: per wave rows | cols << 8 | sb_h << 16 | sb_w << 24, then per entry role | lag << 8
+    constexpr uint32_t roles_idx = num_waves;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_k_window, cb_weight_k_window, cb_partial_hold);
 
     CircularBuffer act_buf(cb_act_k_window), weight_buf(cb_weight_k_window), hold_buf(cb_partial_hold);
-    constexpr auto mm_shape = ckl::MatmulBlockShape::of(core_m / sb_h, core_n / sb_w, sb_h, sb_w, kb, num_k_blocks);
 
-    auto matmul_block_entry = [&]() {
+    auto matmul_block_entry = [&](uint32_t e) {
         MRS_ZONE("MM");
+        const uint32_t wave = get_arg_val<uint32_t>(e % num_waves);
+        const uint32_t rows = wave & 0xFF, cols = (wave >> 8) & 0xFF;
+        const uint32_t sb_h = (wave >> 16) & 0xFF, sb_w = wave >> 24;
+        const auto mm_shape = ckl::MatmulBlockShape::of(rows / sb_h, cols / sb_w, sb_h, sb_w, kb, num_k_blocks);
         hold_buf.reserve_back(P);  // caller-owned pack target: one fp32 slot per entry
         ckl::matmul_block<
             /*transpose=*/false,
@@ -113,8 +117,8 @@ void kernel_main() {
             mm_shape,
             {},
             {},
-            /*in1_per_core_w=*/core_n,
-            /*out_row_width=*/core_n);
+            /*in1_per_core_w=*/win_n,
+            /*out_row_width=*/cols);
         hold_buf.push_back(P);
         // matmul_block leaves packer L1 accumulation on after its last K-block; the finish chains pack plainly.
         PACK((llk_pack_reconfig_l1_acc(0)));
@@ -123,14 +127,15 @@ void kernel_main() {
     constexpr uint32_t NONE = 0xFFFFFFFF;
     uint32_t pending = NONE;
     for (uint32_t e = 0; e < num_entries; ++e) {
-        matmul_block_entry();
+        matmul_block_entry(e);
         if (pending != NONE) {
             finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P, fin_add_fpu>(
-                get_arg_val<uint32_t>(pending) & 0xFF);
+                get_arg_val<uint32_t>(roles_idx + pending) & 0xFF);
             pending = NONE;
         }
-        const uint32_t role = get_arg_val<uint32_t>(e) & 0xFF;
-        const bool lag = (get_arg_val<uint32_t>(e) >> 8) & 1;  // host: arrival expected late -> finish later
+        const uint32_t role = get_arg_val<uint32_t>(roles_idx + e) & 0xFF;
+        const bool lag =
+            (get_arg_val<uint32_t>(roles_idx + e) >> 8) & 1;  // host: arrival expected late -> finish later
         if (lag) {
             pending = e;  // the add waits for its arrival behind the next entry's matmul
         } else {

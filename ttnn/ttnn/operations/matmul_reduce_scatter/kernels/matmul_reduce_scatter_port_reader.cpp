@@ -5,11 +5,11 @@
 //
 // Port (direction d, link l) forwards, in entry order, the units (entry, core halves) whose role on this chip is
 // start(d) or relay(d), restricted to its cores (link(k) == l). Per core of a unit: wait the core's mailbox slot (one
-// increment per (core, unit)), NoC-read its finished sub-block (P tiles, slot entry mod depth_handoff of the core's
-// cb_finished) in chunks of chunk_tiles into cb_port_chunks, then ack the core (consumed_d) once the read barrier
-// covering its last chunk returned. A batch ends at a multiple of `group` chunks in the CB (2 group chunks, so a
-// reservation never wraps), at the end of a unit, and before any blocking mailbox wait (no ack is held while waiting).
-// At the end every mailbox slot is restored to 0 (all increments of this call have landed).
+// increment per (core, unit)), NoC-read its finished sub-block (the wave tiles of the entry, dense at the front of slot
+// entry mod depth_handoff of the core's cb_finished) in chunks of chunk_tiles into cb_port_chunks, then ack the core
+// (consumed_d) once the read barrier covering its last chunk returned. A batch ends at a multiple of `group` chunks in
+// the CB (2 group chunks, so a reservation never wraps), at the end of a unit, and before any blocking mailbox wait (no
+// ack is held while waiting). At the end every mailbox slot is restored to 0 (all increments of this call have landed).
 //
 // Raw-API note (design "Helpers considered and rejected"): a pull with per-producer acks; no helper expresses it.
 
@@ -30,9 +30,9 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t depth_handoff = get_compile_time_arg_val(5);
     constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
-    constexpr uint32_t chunks_per_core = (P + chunk_tiles - 1) / chunk_tiles;
     constexpr uint32_t mailbox_stride = get_compile_time_arg_val(6);  // bytes per matmul core in the mailbox
     constexpr uint32_t max_cores = get_compile_time_arg_val(7);       // matmul cores this port serves (upper bound)
+    constexpr uint32_t num_waves = get_compile_time_arg_val(8);       // entry e is wave e mod num_waves
 
     uint32_t arg = 0;
     const uint32_t finished_base = get_arg_val<uint32_t>(arg++);  // staging address (cb_finished slot 0) on every core
@@ -40,7 +40,8 @@ void kernel_main() {
     const uint32_t consumed_id = get_arg_val<uint32_t>(arg++);
     const uint32_t num_cores = get_arg_val<uint32_t>(arg++);
     const uint32_t num_units = get_arg_val<uint32_t>(arg++);
-    const uint32_t cores_idx = arg;                    // per core: x | y << 8 | half << 16 | k << 20
+    const uint32_t wave_tiles_idx = arg;               // per wave: tiles one core sends (<= P)
+    const uint32_t cores_idx = arg + num_waves;        // per core: x | y << 8 | half << 16 | k << 20
     const uint32_t units_idx = cores_idx + num_cores;  // per unit: entry | half_mask << 8 | slots (sender side)
     const uint32_t consumed_addr = get_semaphore(consumed_id);
     ASSERT(num_cores <= max_cores);
@@ -74,6 +75,8 @@ void kernel_main() {
         const uint32_t half_mask = (unit >> 8) & 0x3;
         const uint32_t first_half = (unit >> 10) & 0x1;
         const uint32_t slot_off = (entry % depth_handoff) * P * tile_bytes;
+        const uint32_t tiles = get_arg_val<uint32_t>(wave_tiles_idx + entry % num_waves);
+        const uint32_t chunks_per_core = (tiles + chunk_tiles - 1) / chunk_tiles;
         for (uint32_t walk = 0; walk < 2 * num_cores; ++walk) {  // halves in unit order (first_half first)
             const uint32_t hh = first_half ^ (walk >= num_cores ? 1u : 0u);
             const uint32_t i = walk >= num_cores ? walk - num_cores : walk;
@@ -100,7 +103,7 @@ void kernel_main() {
                     cb_reserve_back(cb_port_chunks, need * chunk_tiles);
                     wptr = get_write_ptr(cb_port_chunks);
                 }
-                const uint32_t n = (P - ci * chunk_tiles) < chunk_tiles ? (P - ci * chunk_tiles) : chunk_tiles;
+                const uint32_t n = (tiles - ci * chunk_tiles) < chunk_tiles ? (tiles - ci * chunk_tiles) : chunk_tiles;
                 noc_async_read(src + ci * chunk_bytes, wptr + c * chunk_bytes, n * tile_bytes);
                 if (ci + 1 == chunks_per_core) {
                     acks[num_acks++] = cw;

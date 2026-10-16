@@ -35,6 +35,8 @@ void kernel_main() {
     constexpr uint32_t cb_weight_k_window = get_compile_time_arg_val(1);
     constexpr uint32_t cb_arrivals_fwd = get_compile_time_arg_val(2);
     constexpr uint32_t cb_arrivals_bwd = get_compile_time_arg_val(3);
+    // streamed windows of one wave: A core_m x kb, W kb x core_n (with waves, the split axis is a wave's extent; the
+    // resident operand's axis is never split)
     constexpr uint32_t core_m = get_compile_time_arg_val(4);
     constexpr uint32_t core_n = get_compile_time_arg_val(5);
     constexpr uint32_t kb = get_compile_time_arg_val(6);
@@ -46,7 +48,7 @@ void kernel_main() {
     constexpr bool resident_a = get_compile_time_arg_val(12) != 0;
     constexpr bool resident_w = get_compile_time_arg_val(13) != 0;
     constexpr uint32_t P = get_compile_time_arg_val(14);
-    constexpr uint32_t num_entries = get_compile_time_arg_val(15);
+    constexpr uint32_t num_entries = get_compile_time_arg_val(15);  // G x num_waves
     constexpr uint32_t a_tile_bytes = get_compile_time_arg_val(16);
     constexpr uint32_t w_tile_bytes = get_compile_time_arg_val(17);
     constexpr uint32_t a_cap_windows = get_compile_time_arg_val(18);  // CB capacity in K-block windows
@@ -61,7 +63,8 @@ void kernel_main() {
     constexpr uint8_t a_read_noc = get_compile_time_arg_val(24);
     constexpr uint8_t w_read_noc = get_compile_time_arg_val(25);
     constexpr bool two_read_nocs = a_read_noc != w_read_noc || a_read_noc != noc_index;
-    constexpr auto a_args = TensorAccessorArgs<26>();
+    constexpr uint32_t num_waves = get_compile_time_arg_val(26);  // entries per block (entry e is wave e mod num_waves)
+    constexpr auto a_args = TensorAccessorArgs<27>();
     constexpr auto w_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     constexpr auto mc_a =
         McastArgs<get_named_compile_time_arg_val("a_ct_offset"), get_named_compile_time_arg_val("a_rt_offset")>();
@@ -95,9 +98,11 @@ void kernel_main() {
     const uint32_t arr_bwd_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t total_fwd = get_arg_val<uint32_t>(arg++);  // arrival increments my counters receive this call
     const uint32_t total_bwd = get_arg_val<uint32_t>(arg++);
+    // per wave: row_off | col_off << 8 | rows << 16 | cols << 24 inside my per-core block
+    const uint32_t waves_idx = arg;
     // per entry: [block | arrival_mask << 16 | lag << 20, thr_fwd | thr_bwd << 16]; an arrival has landed once my
     // counter of its direction reaches its threshold (one fused increment per (core, unit), in the upstream's order)
-    const uint32_t entries_idx = arg;
+    const uint32_t entries_idx = waves_idx + num_waves;
     constexpr uint32_t ENTRY_WORDS = 2;
 
     const auto a_acc = TensorAccessor(a_args, a_addr, a_tile_bytes);
@@ -125,6 +130,11 @@ void kernel_main() {
     auto block_of = [&](uint32_t step) {
         return get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * (step / num_k_blocks)) & 0xFFFF;
     };
+    auto wave_of = [&](uint32_t step) { return get_arg_val<uint32_t>(waves_idx + (step / num_k_blocks) % num_waves); };
+    // valid extent of a wave along one axis: my valid tiles past the wave's offset, capped at its extent
+    auto wave_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
+        return valid <= off ? 0u : (valid - off < ext ? valid - off : ext);
+    };
     // the resident operand moves only in entry 0 (later entries re-credit the same windows)
     auto a_moves = [&](uint32_t step) { return !(resident_a && step >= num_k_blocks); };
     auto w_moves = [&](uint32_t step) { return !(resident_w && step >= num_k_blocks); };
@@ -132,14 +142,17 @@ void kernel_main() {
     auto issue_a = [&](uint32_t step, uint32_t dst) {
 #ifndef MRS_SKIP_DRAM  // perf ablation only
         MRS_ZONE("RD_DRAM");
-        const uint32_t page0 = (block_of(step) * a_row_per_block + row0) * Kt + (step % num_k_blocks) * kb;
+        const uint32_t wave = wave_of(step);
+        const uint32_t row_off = wave & 0xFF;
+        const uint32_t m_valid_w = wave_valid(m_valid, row_off, (wave >> 16) & 0xFF);
+        const uint32_t page0 = (block_of(step) * a_row_per_block + row0 + row_off) * Kt + (step % num_k_blocks) * kb;
         for (uint32_t part = 0; part < 2; ++part) {
             if (!a_sends[part]) {
                 continue;
             }
             const uint32_t i0 = part == 0 ? 0 : a_split;
             const uint32_t i1_nom = part == 0 ? a_split : core_m;
-            const uint32_t i1 = i1_nom < m_valid ? i1_nom : m_valid;
+            const uint32_t i1 = i1_nom < m_valid_w ? i1_nom : m_valid_w;
             for (uint32_t i = i0; i < i1; ++i) {
                 for (uint32_t kk = 0; kk < kb; ++kk) {
                     noc_async_read(
@@ -155,7 +168,10 @@ void kernel_main() {
     auto issue_w = [&](uint32_t step, uint32_t dst) {
 #ifndef MRS_SKIP_DRAM  // perf ablation only
         MRS_ZONE("RD_DRAM");
-        const uint32_t page0 = (step % num_k_blocks) * kb * Nt + block_of(step) * w_col_per_block + col0;
+        const uint32_t wave = wave_of(step);
+        const uint32_t col_off = (wave >> 8) & 0xFF;
+        const uint32_t n_valid_w = wave_valid(n_valid, col_off, wave >> 24);
+        const uint32_t page0 = (step % num_k_blocks) * kb * Nt + block_of(step) * w_col_per_block + col0 + col_off;
         for (uint32_t part = 0; part < 2; ++part) {
             if (!w_sends[part]) {
                 continue;
@@ -163,7 +179,7 @@ void kernel_main() {
             const uint32_t k0 = part == 0 ? 0 : w_split;
             const uint32_t k1 = part == 0 ? w_split : kb;
             for (uint32_t kk = k0; kk < k1; ++kk) {
-                for (uint32_t j = 0; j < n_valid; ++j) {
+                for (uint32_t j = 0; j < n_valid_w; ++j) {
                     noc_async_read(
                         w_acc.get_noc_addr(page0 + kk * Nt + j, 0, w_read_noc),
                         dst + (kk * core_n + j) * w_tile_bytes,

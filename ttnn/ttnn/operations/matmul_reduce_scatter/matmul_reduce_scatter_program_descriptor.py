@@ -59,7 +59,12 @@ PORT_GROUP = 4  # chunks per port batch (cb_port_chunks holds 2 batches); <= 8 (
 MIRROR_HALF_ORDERS = 1  # ring_balanced + a resident cross-block operand: halves split along the streamed operand's
 # multicast lines and walk the equal-distance blocks in mirrored orders (build_schedule), so each entry sends half a
 # block each way. 0: one shared order (each of the middle entries sends a whole block one way)
-ENTRIES_PER_BLOCK = 1  # entries per scatter block (overlap lamp; only 1 is built)
+# waves per scatter block (Refinement 4, overlap). Each per-core block is split into this many waves along the streamed
+# operand's own axis (resident A, scatter -1: n; resident W, scatter -2: m, only when the waves divide core_m), and
+# every wave is one entry: a full-K matmul of the wave, then its finish and send, so the first send waits for one
+# wave instead of a whole block. 1: one entry per block. The stream regime always runs 1 (a wave would re-stream the
+# cross-block operand once per wave). env: perf experiments only
+ENTRIES_PER_BLOCK = int(os.environ.get("MRS_WAVES", 1))
 KB_MIN_RESIDENT = 8  # smallest K-block the resident regime accepts (min(Kt, this))
 # largest K-block: the streamed operand needs several K-blocks per entry to overlap read / mcast / math (focus case,
 # diagonal senders: kb 64 -> 212 us, 32 -> 160 us, 16 -> 159 us, 8 -> 164 us on the fastest chip; Refinement 2,
@@ -162,13 +167,25 @@ def build_schedule(p, G, kind, mirror=False):
     return roles, entries
 
 
-def plan_transport(G, kind, mirror=False):
+def expand_waves(roles, entries, waves):
+    """The wave-split schedule: every block b becomes `waves` consecutive virtual blocks v = b * waves + w with b's
+    roles, in b's place of each half's order. Deadlock freedom carries over: a relay (b, w) at position
+    i * waves + w waits for the upstream's (b, w) at position j * waves + w, and j < i (the per-block argument), so the
+    wave's arrival is still produced at a strictly earlier entry index."""
+    if waves == 1:
+        return roles, entries
+    roles_v = {(b * waves + w, h): r for (b, h), r in roles.items() for w in range(waves)}
+    entries_v = {h: [b * waves + w for b in order for w in range(waves)] for h, order in entries.items()}
+    return roles_v, entries_v
+
+
+def plan_transport(G, kind, mirror=False, waves=1):
     """Per chip position: roles, entries[h], per (half, direction) arrival list (this chip's half-h entry order), and
     the arrival thresholds (position in the upstream's half-h send order). slots[d] = zone slots per direction (max over
-    chips and halves, so every chip shares one staging layout)."""
+    chips and halves, so every chip shares one staging layout). Block ids are virtual (b * waves + w)."""
     ring = kind != "line"
     mirror = mirror and kind == "ring_balanced"
-    sch = {p: build_schedule(p, G, kind, mirror) for p in range(G)}
+    sch = {p: expand_waves(*build_schedule(p, G, kind, mirror), waves) for p in range(G)}
 
     def up(p, d):
         q = p - 1 if d == "fwd" else p + 1
@@ -197,9 +214,9 @@ def plan_transport(G, kind, mirror=False):
                 thresholds[(h, d)] = {b: i + 1 for i, b in enumerate(seq)}
                 # the upstream's entry index that produces each arrival (drives the per-entry lag decision)
                 produced_at[(h, d)] = {b: sch[u][1][h].index(b) for b in seq}
-                # deadlock freedom (mirrored orders): a relay waits only for an arrival produced at an earlier
-                # upstream entry index
-                for b in lst if mirror else []:
+                # deadlock freedom (mirrored orders, wave splits): a relay waits only for an arrival produced at an
+                # earlier upstream entry index
+                for b in lst if (mirror or waves > 1) else []:
                     if roles[(b, h)][0] != "fin":
                         assert produced_at[(h, d)][b] < entries[h].index(b), (p, b, h, d)
         chips[p] = dict(roles=roles, entries=entries, arrivals=arrivals, thresholds=thresholds, produced_at=produced_at)
@@ -323,20 +340,57 @@ def window_depths(resident, depth):
     return (depth, depth) if resident else (DEPTH_IN0, DEPTH_IN1)
 
 
+def wave_plan(resident, scatter_dim, core_m, core_n, waves=None):
+    """The per-core block's waves: dict(n=waves, win_m, win_n, P (= slot tiles, the largest wave), descs). descs[w] =
+    (row_off, col_off, rows, cols) inside the per-core block; a wave's tiles are dense (rows x cols, TileRowMajor) at
+    the front of its nominal P-tile slot. Waves run along the streamed operand's axis (resident A: n, ragged last wave
+    allowed; resident W: m, only when they divide core_m, since matmul_block pops in0 by its shape), so the resident
+    operand is shared by every wave unchanged and the streamed one still crosses DRAM once."""
+    waves = ENTRIES_PER_BLOCK if waves is None else waves
+    W, win_m, win_n = 1, core_m, core_n
+    if resident and waves > 1:
+        if scatter_dim == -1 and core_n >= 2:
+            win_n = -(-core_n // min(waves, core_n))
+            W = -(-core_n // win_n)
+        elif scatter_dim == -2 and core_m % waves == 0 and core_m >= waves:
+            W, win_m = waves, core_m // waves
+    descs = []
+    for w in range(W):  # only one axis is split, so the other offset is 0
+        r0, c0 = (w * win_m if win_m < core_m else 0), (w * win_n if win_n < core_n else 0)
+        descs.append((r0, c0, min(win_m, core_m - r0), min(win_n, core_n - c0)))
+    return dict(n=W, win_m=win_m, win_n=win_n, P=win_m * win_n, descs=descs)
+
+
 def footprint(
-    kb, resident, *, depth=None, Kt, core_m, core_n, tA, tW, scatter_dim, slots, hold_depths, staging_floor_tiles=0
+    kb,
+    resident,
+    *,
+    depth=None,
+    Kt,
+    core_m,
+    core_n,
+    tA,
+    tW,
+    scatter_dim,
+    slots,
+    hold_depths,
+    waves_of,
+    staging_floor_tiles=0,
 ):
     """Per matmul core L1 bytes (l1_ledger.md): operand windows + fp32 hold + the staging slice. The staging tensor is
     cached grow-only per mesh, so it is counted at max(what this call needs, what is already allocated).
-    hold_depths[resident]: the regime's fp32 hold slots (hold_depth() of the schedule that regime runs)."""
-    P = core_m * core_n
+    Per regime (keyed by `resident`): hold_depths (hold_depth() of the schedule that regime runs), slots (its zone
+    slots per direction) and waves_of (its wave_plan: the streamed window and the slot size are a wave's)."""
+    wv = waves_of[resident]
+    P = wv["P"]
     rA = resident and scatter_dim == -1
     rW = resident and scatter_dim == -2
     dA, dW = window_depths(resident, depth if depth is not None else RESIDENT_STREAM_DEPTHS[0])
-    a = tA * (core_m * Kt if rA else dA * core_m * kb)
-    w = tW * (Kt * core_n if rW else dW * kb * core_n)
+    a = tA * (core_m * Kt if rA else dA * wv["win_m"] * kb)
+    w = tW * (Kt * core_n if rW else dW * kb * wv["win_n"])
     hold = HOLD_TILE_BYTES * hold_depths[resident] * P
-    staging = STAGE_TILE_BYTES * max(staging_floor_tiles, (DEPTH_HANDOFF + slots["fwd"] + slots["bwd"]) * P)
+    sl = slots[resident]
+    staging = STAGE_TILE_BYTES * max(staging_floor_tiles, (DEPTH_HANDOFF + sl["fwd"] + sl["bwd"]) * P)
     return a + w + hold + staging
 
 
@@ -577,7 +631,6 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
     n_cores = gd["grid_m"] * gd["grid_n"]
     if kind == "ring_balanced" and n_cores < 2:
         raise ValueError("matmul_reduce_scatter: a balanced ring needs >= 2 matmul cores (two halves)")
-    assert ENTRIES_PER_BLOCK == 1, "entries_per_block > 1 (overlap lamp) is not built"
 
     # halves: with a resident cross-block operand, split along the streamed operand's multicast lines (W lines = fixed
     # gn for scatter -1, A lines = fixed gm for scatter -2), so the two halves may compute different blocks and walk
@@ -589,10 +642,11 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
             mirror_split = "n"
         elif scatter_dim == -2 and gd["grid_m"] >= 2:
             mirror_split = "m"
-    sched_of = {False: plan_transport(G, kind)}
-    sched_of[True] = plan_transport(G, kind, mirror=True) if mirror_split != "k" else sched_of[False]
-    slots = sched_of[False][1]
-    assert sched_of[True][1] == slots, (sched_of[True][1], slots)  # arrival counts do not depend on the order
+    waves_of = {r: wave_plan(r, scatter_dim, core_m, core_n) for r in (False, True)}
+    sched_of = {
+        r: plan_transport(G, kind, mirror=r and mirror_split != "k", waves=waves_of[r]["n"]) for r in (False, True)
+    }
+    slots_of = {r: sched_of[r][1] for r in (False, True)}
     hold_depths = {r: hold_depth(sched_of[r][0]) for r in (False, True)}
     tA = int(a.buffer_aligned_page_size())
     tW = int(w.buffer_aligned_page_size())
@@ -604,17 +658,18 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         tA=tA,
         tW=tW,
         scatter_dim=scatter_dim,
-        slots=slots,
+        slots=slots_of,
         hold_depths=hold_depths,
+        waves_of=waves_of,
         staging_floor_tiles=staging_floor,
     )
     resident, kb, depth = choose_k_block(Kt, _l1_budget(mesh), getattr(hooks, "_FORCE_XBLOCK_RESIDENCY", None), **geo)
     if os.environ.get("MRS_KB"):  # perf experiments only: cap the K-block (largest divisor of Kt <= MRS_KB)
         kb = max(d for d in range(1, kb + 1) if Kt % d == 0 and d <= int(os.environ["MRS_KB"]))
-    if os.environ.get("MRS_SB_TALL"):  # perf experiments only: prefer taller subblocks on ties
-        gd["sb"] = _subblock(core_m, core_n, prefer_tall=True)
     half_split = mirror_split if resident else "k"
-    chips_sched = sched_of[resident][0]
+    chips_sched, slots = sched_of[resident]
+    waves = waves_of[resident]
+    P = waves["P"]  # slot tiles: every hold / finished / zone slot holds one wave
     hooks._LAST_PLAN = {
         "xblock": "resident" if resident else "stream",
         "schedule": kind,
@@ -624,6 +679,7 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         "grid": (gd["grid_m"], gd["grid_n"]),
         "strip": gd["strip"],
         "half_split": half_split,
+        "waves": waves["n"],
     }
 
     staging_tiles = (DEPTH_HANDOFF + slots["fwd"] + slots["bwd"]) * P
@@ -664,6 +720,7 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         slots=slots,
         sched=chips_sched,
         half_split=half_split,
+        waves=waves,
         compute_kernel_config=compute_kernel_config,
         gx=gx,
         gy=gy,
@@ -683,6 +740,19 @@ def create_mesh_program_descriptor(ctx):
     gd = ctx["gd"]
     gx, gy = ctx["gx"], ctx["gy"]
     core_m, core_n, kb, Kt, Nt = gd["core_m"], gd["core_n"], ctx["kb"], ctx["Kt"], ctx["Nt"]
+    waves = ctx["waves"]
+    W = waves["n"]
+    win_m, win_n = waves["win_m"], waves["win_n"]  # streamed windows: A win_m x kb, W kb x win_n (one wave)
+    num_entries = G * W
+    # per wave: reader / writer (offsets + dense extents), compute (extents + subblock), ports (tiles)
+    wave_words = [r0 | (c0 << 8) | (rows << 16) | (cols << 24) for r0, c0, rows, cols in waves["descs"]]
+    tall = bool(os.environ.get("MRS_SB_TALL"))  # perf experiments only: prefer taller subblocks on ties
+    wave_subblocks = [_subblock(rows, cols, prefer_tall=tall) for _, _, rows, cols in waves["descs"]]
+    wave_mm_words = [
+        rows | (cols << 8) | (h << 16) | (w_ << 24)
+        for (_, _, rows, cols), (h, w_) in zip(waves["descs"], wave_subblocks)
+    ]
+    wave_tiles = [rows * cols for _, _, rows, cols in waves["descs"]]
     grid_m, grid_n = gd["grid_m"], gd["grid_n"]
     block_m, block_n = ctx["block_m"], ctx["block_n"]
     scatter_dim, resident, slots = ctx["scatter_dim"], ctx["resident"], ctx["slots"]
@@ -729,14 +799,13 @@ def create_mesh_program_descriptor(ctx):
     nkb = Kt // kb
     regime = "resident" if resident else "stream"
     senders = int(os.environ.get("MRS_SENDERS", SENDERS_PER_LINE[regime]))  # env: perf experiments only
-    a_split = -(-core_m // 2) if senders >= 2 and core_m >= 2 else core_m  # m rows of A part 0
+    a_split = -(-win_m // 2) if senders >= 2 and win_m >= 2 else win_m  # m rows of A part 0
     w_split = -(-kb // 2) if senders >= 2 and kb >= 2 else kb  # k rows of W part 0
-    sb_h, sb_w = gd["sb"]
     rA = int(resident and scatter_dim == -1)
     rW = int(resident and scatter_dim == -2)
     depth_a, depth_w = ctx["depths"]
-    a_pages = core_m * Kt if rA else depth_a * core_m * kb
-    w_pages = Kt * core_n if rW else depth_w * kb * core_n
+    a_pages = core_m * Kt if rA else depth_a * win_m * kb
+    w_pages = Kt * core_n if rW else depth_w * kb * win_n
     tA = int(a.buffer_aligned_page_size())
     tW = int(w.buffer_aligned_page_size())
     out_nt = block_n  # output tile columns (Nt for scatter -2, Nt / G for scatter -1)
@@ -770,8 +839,8 @@ def create_mesh_program_descriptor(ctx):
             CB_WEIGHT_K_WINDOW,
             CB_ARRIVALS_FWD,
             CB_ARRIVALS_BWD,
-            core_m,
-            core_n,
+            win_m,
+            win_n,
             kb,
             nkb,
             Kt,
@@ -781,17 +850,18 @@ def create_mesh_program_descriptor(ctx):
             rA,
             rW,
             P,
-            G,
+            num_entries,
             tA,
             tW,
-            a_pages // (core_m * kb),  # CB capacity in K-block windows
-            w_pages // (kb * core_n),
+            a_pages // (win_m * kb),  # CB capacity in K-block windows
+            w_pages // (kb * win_n),
             a_split,
             w_split,
             int(os.environ.get("MRS_PREFETCH", PREFETCH_STEPS)),  # env: perf experiments only
             int(os.environ.get("MRS_LOOKAHEAD_AFTER_BARRIER", LOOKAHEAD_AFTER_BARRIER[regime])),  # env: perf only
             int(os.environ.get("MRS_A_READ_NOC", READ_NOCS[regime][0])),  # env: perf experiments only
             int(os.environ.get("MRS_W_READ_NOC", READ_NOCS[regime][1])),  # env: perf experiments only
+            W,
         ]
         + a_ct
         + w_ct
@@ -803,17 +873,15 @@ def create_mesh_program_descriptor(ctx):
         CB_FINISHED,
         CB_ARRIVALS_FWD,
         CB_ARRIVALS_BWD,
-        core_m,
-        core_n,
+        win_n,  # in1 window row stride (the W window of one wave)
         kb,
         nkb,
-        sb_h,
-        sb_w,
         P,
-        G,
+        num_entries,
         int(os.environ.get("MRS_FIN_ADD_FPU", FIN_ADD_FPU)),  # env: perf experiments only
+        W,
     ]
-    writer_ct = [CB_FINISHED, P, core_n, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, G] + o_ct
+    writer_ct = [CB_FINISHED, P, W, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, num_entries] + o_ct
     max_port_cores = -(-n_cores // L)  # matmul cores one port serves (link(k) = k mod L)
     port_ct = [
         CB_PORT_CHUNKS,
@@ -824,6 +892,7 @@ def create_mesh_program_descriptor(ctx):
         DEPTH_HANDOFF,
         MAILBOX_STRIDE,
         max_port_cores,
+        W,
     ]
 
     src = ttnn.KernelDescriptor.SourceType.FILE_PATH
@@ -858,7 +927,7 @@ def create_mesh_program_descriptor(ctx):
         os.environ.get("MRS_SENDER_PLACEMENT", MCAST_SENDER_PLACEMENT[regime]),  # env: perf experiments only
         grid_m,
         grid_n,
-        a_split < core_m,
+        a_split < win_m,
         w_split < kb,
         a_shape_1d,
         w_shape_1d,
@@ -896,34 +965,43 @@ def create_mesh_program_descriptor(ctx):
                     r = roles[(b, h)]
                     thr_f = thresholds[(h, "fwd")].get(b, 0) if mask & 1 else 0
                     thr_b = thresholds[(h, "bwd")].get(b, 0) if mask & 2 else 0
-                    ent_words += [b | (mask << 16) | (lag << 20), thr_f | (thr_b << 16)]
+                    # b is the virtual block (b * W + wave): the reader addresses the real block's operand slice
+                    ent_words += [(b // W) | (mask << 16) | (lag << 20), thr_f | (thr_b << 16)]
                     roles_k.append([ROLE_COPY, ROLE_ADD_FWD, ROLE_ADD_BWD, ROLE_ADD_BOTH][mask] | (lag << 8))
                     kinds_k.append(KIND_FIN if r[0] == "fin" else (KIND_FWD if r[0] == "fwd" else KIND_BWD))
-                r_rt[core.x][core.y] = [
-                    a_addr,
-                    w_addr,
-                    gm * core_m,
-                    gn * core_n,
-                    m_valid,
-                    n_valid,
-                    arr_fwd_addr,
-                    arr_bwd_addr,
-                    len(arrivals[(h, "fwd")]),  # arrival increments my counters receive this call
-                    len(arrivals[(h, "bwd")]),
-                ] + ent_words
-                c_rt[core.x][core.y] = roles_k
+                r_rt[core.x][core.y] = (
+                    [
+                        a_addr,
+                        w_addr,
+                        gm * core_m,
+                        gn * core_n,
+                        m_valid,
+                        n_valid,
+                        arr_fwd_addr,
+                        arr_bwd_addr,
+                        len(arrivals[(h, "fwd")]),  # arrival increments my counters receive this call
+                        len(arrivals[(h, "bwd")]),
+                    ]
+                    + wave_words
+                    + ent_words
+                )
+                c_rt[core.x][core.y] = wave_mm_words + roles_k
                 pf = port_vcore.get(("fwd", l)) if peers["fwd"] is not None else None
                 pb = port_vcore.get(("bwd", l)) if peers["bwd"] is not None else None
-                w_rt[core.x][core.y] = [
-                    o_addr,
-                    gm * core_m,
-                    gn * core_n,
-                    m_valid,
-                    n_valid,
-                    (pf.x | (pf.y << 16)) if pf is not None else 0,
-                    (pb.x | (pb.y << 16)) if pb is not None else 0,
-                    mailbox_addr + k * MAILBOX_STRIDE,
-                ] + kinds_k
+                w_rt[core.x][core.y] = (
+                    [
+                        o_addr,
+                        gm * core_m,
+                        gn * core_n,
+                        m_valid,
+                        n_valid,
+                        (pf.x | (pf.y << 16)) if pf is not None else 0,
+                        (pb.x | (pb.y << 16)) if pb is not None else 0,
+                        mailbox_addr + k * MAILBOX_STRIDE,
+                    ]
+                    + wave_words
+                    + kinds_k
+                )
 
             reader = ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_reader.cpp"),
@@ -984,12 +1062,14 @@ def create_mesh_program_descriptor(ctx):
                     units.append(e | (mask << 8) | (h1_first << 10) | (s0 << 16) | (s1 << 24))
                 consumed_id = 0 if d == "fwd" else 1
                 pr_rt[pcore.x][pcore.y] = [staging_addr, mailbox_addr, consumed_id, len(core_words), len(units)] + (
-                    core_words + units
+                    wave_tiles + core_words + units
                 )
                 # ready fence: the peer's opposite port sends into this chip; tell it this chip has started
                 peer_sched = ctx["sched"][q]
                 opp = "bwd" if d == "fwd" else "fwd"
-                send_ready = int(any(peer_sched["roles"][(b, h)][0] == opp for b in range(G) for h in link_halves[l]))
+                send_ready = int(
+                    any(peer_sched["roles"][(b, h)][0] == opp for b in range(num_entries) for h in link_halves[l])
+                )
                 rv = port_vcore_of[peer][(opp, l)]  # the peer chip's port that writes into this chip
                 pn = node(peer)
                 zone = zone_fwd_off if d == "fwd" else zone_bwd_off
@@ -1007,6 +1087,7 @@ def create_mesh_program_descriptor(ctx):
                         len(core_words),
                         len(units),
                     ]
+                    + wave_tiles
                     + core_words
                     + units
                 )

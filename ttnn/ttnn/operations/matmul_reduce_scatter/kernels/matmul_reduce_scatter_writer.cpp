@@ -4,10 +4,10 @@
 // matmul_reduce_scatter — matmul-core writer (BRISC, NoC1): handoff_or_store_block per finished entry, in order.
 //
 // cb_finished is backed by the staging tensor (same L1 address on every core and chip); entry e of this core sits in
-// slot e mod depth_handoff. start / relay: one mailbox increment to the port (direction, link of this core); the slot
-// is popped (FIFO) once that port acks (program-local consumed_fwd / consumed_bwd). fin: the valid tiles go to the
-// output with one write barrier. Signalling never waits on consumption: a pop is forced only when every slot is
-// outstanding.
+// slot e mod depth_handoff. An entry is one wave of a block: its rows x cols tiles are dense at the front of the slot.
+// start / relay: one mailbox increment to the port (direction, link of this core); the slot is popped (FIFO) once that
+// port acks (program-local consumed_fwd / consumed_bwd). fin: the valid tiles go to the output with one write barrier.
+// Signalling never waits on consumption: a pop is forced only when every slot is outstanding.
 //
 // Raw-API note (design "Helpers considered and rejected"): the handoff is many-to-one with per-producer acks; no
 // helper expresses it.
@@ -24,11 +24,11 @@
 void kernel_main() {
     constexpr uint32_t cb_finished = get_compile_time_arg_val(0);
     constexpr uint32_t P = get_compile_time_arg_val(1);
-    constexpr uint32_t core_n = get_compile_time_arg_val(2);
+    constexpr uint32_t num_waves = get_compile_time_arg_val(2);  // entry e is wave e mod num_waves
     constexpr uint32_t out_n_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t depth_handoff = get_compile_time_arg_val(4);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t num_entries = get_compile_time_arg_val(6);
+    constexpr uint32_t num_entries = get_compile_time_arg_val(6);  // G x num_waves
     constexpr auto out_args = TensorAccessorArgs<7>();
     constexpr uint32_t KIND_FWD = 0, KIND_BWD = 1, KIND_FIN = 2;
     constexpr uint32_t consumed_fwd_id = 0, consumed_bwd_id = 1;
@@ -42,7 +42,11 @@ void kernel_main() {
     const uint32_t fwd_port_xy = get_arg_val<uint32_t>(arg++);
     const uint32_t bwd_port_xy = get_arg_val<uint32_t>(arg++);
     const uint32_t mailbox_slot_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t kinds_idx = arg;
+    const uint32_t waves_idx = arg;  // per wave: row_off | col_off << 8 | rows << 16 | cols << 24
+    const uint32_t kinds_idx = waves_idx + num_waves;
+    auto wave_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
+        return valid <= off ? 0u : (valid - off < ext ? valid - off : ext);
+    };
 
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
     volatile tt_l1_ptr uint32_t* consumed_fwd =
@@ -74,14 +78,18 @@ void kernel_main() {
         if (kind == KIND_FIN) {
             // stream the output: write each valid tile as soon as the finish has packed it, so the DRAM writes of
             // every core overlap the finish adds instead of all landing after them (the call's tail)
-            for (uint32_t i = 0; i < m_valid; ++i) {
-                const uint32_t page = (row0 + i) * out_n_tiles + col0;
+            const uint32_t wave = get_arg_val<uint32_t>(waves_idx + e % num_waves);
+            const uint32_t row_off = wave & 0xFF, col_off = (wave >> 8) & 0xFF, cols = wave >> 24;
+            const uint32_t m_valid_w = wave_valid(m_valid, row_off, (wave >> 16) & 0xFF);
+            const uint32_t n_valid_w = wave_valid(n_valid, col_off, cols);
+            for (uint32_t i = 0; i < m_valid_w; ++i) {
+                const uint32_t page = (row0 + row_off + i) * out_n_tiles + col0 + col_off;
                 {
                     MRS_ZONE("FIN_WAIT");
-                    cb_wait_front(cb_finished, outstanding * P + i * core_n + n_valid);
+                    cb_wait_front(cb_finished, outstanding * P + i * cols + n_valid_w);
                 }
-                for (uint32_t j = 0; j < n_valid; ++j) {
-                    noc_async_write(slot + (i * core_n + j) * tile_bytes, out.get_noc_addr(page + j), tile_bytes);
+                for (uint32_t j = 0; j < n_valid_w; ++j) {
+                    noc_async_write(slot + (i * cols + j) * tile_bytes, out.get_noc_addr(page + j), tile_bytes);
                 }
             }
             cb_wait_front(cb_finished, (outstanding + 1) * P);
