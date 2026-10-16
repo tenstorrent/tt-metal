@@ -259,11 +259,12 @@
   budget_type: e2e
 
 - id: bh-qb2-disaggregated-prefill-perf
-  name: Disaggregated prefill Kimi-K3 MLA perf tests (QuietBox)
+  name: Disaggregated prefill Kimi-K3 MLA and KDA perf tests (QuietBox)
   model-name: disaggregated_prefill
   cmd: |
     exit_code=0
     pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_mla_perf.py -m perf -vvv --tb=short || exit_code=$?
+    KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP2xTP2" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_quietbox_2:
