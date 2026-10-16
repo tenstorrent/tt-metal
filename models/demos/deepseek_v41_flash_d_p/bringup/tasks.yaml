@@ -2507,6 +2507,7 @@ tasks:
       official_taps_errors: == 0
       official_taps_unmapped: == 0
   paths: *id001
+  precheck: false
 - id: S.enc_source.03
   title: 'enc_source block with steps 1-3 on device (last: attn_norm)'
   step: implement
