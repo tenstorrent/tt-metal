@@ -18,6 +18,7 @@ import statistics
 import pytest
 import torch
 from loguru import logger
+from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, port_luts
 from ttnn.bringup.combine_rf.sparse_combine_l1 import route
 from ttnn.bringup.combine_rf.sparse_combine_rf import sparse_combine_rf_prepare
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
@@ -134,6 +135,7 @@ def _routing(name, seed=0):
             seen[e] += 1
         counts[ci, 0, ci * EPC : (ci + 1) * EPC] = torch.tensor(cnt, dtype=torch.int32)
         regions[ci, 0, ci * EPC : (ci + 1) * EPC] = torch.tensor(reg, dtype=torch.int32)
+    _routing.last = (ids, gates)  # (the device planner's inputs)
     return rows, counts, regions, max(n_rows, 32), max(load.values(), default=0)
 
 
@@ -173,8 +175,56 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
     rm = lambda t, d: ttnn.from_torch(  # noqa: E731
         t, dtype=d, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=dram, mesh_mapper=shard
     )
-    x = rm((torch.randn(N, n_rows, H) * 0.3).to(torch.bfloat16), ttnn.bfloat16)
-    cd, rd = rm(counts, ttnn.uint32), rm(regions, ttnn.uint32)
+    DEVPLAN = os.environ.get("FC_DEVPLAN") == "1"  # (with FC_L1: every per-call table from the device planner)
+    tidx = None
+    if DEVPLAN:
+        ids, gates = _routing.last
+        rows_cap = (n_rows + 31) // 32 * 32
+        rep = ttnn.ReplicateTensorToMesh(mesh_device)
+        ids_t = ttnn.from_torch(
+            ids.reshape(1, -1).to(torch.int32),
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=dram,
+            mesh_mapper=rep,
+        )
+        w_t = ttnn.from_torch(
+            gates.reshape(1, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=dram,
+            mesh_mapper=rep,
+        )
+        luts, nps = port_luts(mesh_device, L)
+        planner = combine_planner_prepare(
+            mesh_device,
+            S=S,
+            K=K,
+            EPC=EPC,
+            A=int(os.environ.get("FC_NACC", "15")),
+            L=L,
+            port_luts=luts,
+            n_ports=nps,
+            rows_cap=rows_cap,
+        )
+        pl = planner(ids_t, w_t)
+        ttnn.synchronize_device(mesh_device)
+        # x: the gathered tokens (every chip's 320, replicated); flat row r reads x row token_index[r]
+        x = ttnn.from_torch(
+            (torch.randn(N * S, H) * 0.3).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=dram,
+            mesh_mapper=rep,
+        )
+        cd, rd, tidx = pl["counts"], pl["regions"], pl["token_index"]
+        n_rows = rows_cap
+    else:
+        x = rm((torch.randn(N, n_rows, H) * 0.3).to(torch.bfloat16), ttnn.bfloat16)
+        cd, rd = rm(counts, ttnn.uint32), rm(regions, ttnn.uint32)
     y = rm(torch.zeros(N, n_rows, H, dtype=torch.bfloat16), ttnn.bfloat16)
     out = rm(torch.zeros(N, 1, S, H, dtype=torch.bfloat16), ttnn.bfloat16)
     # the arena: every worker core, zero at creation, kept for the test (the combine's state lives in it)
@@ -213,7 +263,12 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         l1 = dict(writers=wcores, words=int(words_t.buffer_address()))
-    fused = sparse_combine_rf_prepare(mesh_device, S, H, rows, writers=writers, l1=l1, **common)
+    devplan = dict(plan=pl["plan"], table=pl["table"]) if DEVPLAN else None
+    if DEVPLAN:
+        assert (
+            l1 is not None and int(os.environ.get("FC_NACC", "15")) == 15
+        ), "FC_DEVPLAN needs FC_L1 (and 15 accumulators)"
+    fused = sparse_combine_rf_prepare(mesh_device, S, H, rows, writers=writers, l1=l1, devplan=devplan, **common)
     alone = sparse_combine_rf_prepare(mesh_device, S, H, rows, writers=0, **common)
     coll = fused.collector
     logger.info(
@@ -254,6 +309,7 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
             writers=writers,
             activation=op.act,
             pin=1,
+            token_index=tidx,
             down_fp32=True,
             l1_args=st["l1a"],
         )
@@ -279,6 +335,19 @@ def test_flat_combine_rf(mesh_device, device_params, routing):
     run_fused()
     ttnn.synchronize_device(mesh_device)
     ys = ys_ref if L1 else [ttnn.to_torch(t).reshape(n_rows, H).float() for t in ttnn.get_device_tensors(y)]
+    if DEVPLAN:  # (rows as the planner placed them: its table gives home, token, weight per flat row)
+        tabs = [ttnn.to_torch(t).to(torch.int64).reshape(-1) & 0xFFFFFFFF for t in ttnn.get_device_tensors(pl["table"])]
+        cnts = [ttnn.to_torch(t).to(torch.int64).reshape(-1) for t in ttnn.get_device_tensors(pl["counts"])]
+        regs = [ttnn.to_torch(t).to(torch.int64).reshape(-1) for t in ttnn.get_device_tensors(pl["regions"])]
+        rows = {}
+        for ci in range(N):
+            ch = (ci // C, ci % C)
+            rows[ch] = []
+            for gid in range(ci * EPC, (ci + 1) * EPC):
+                for r_ in range(int(regs[ci][gid]), int(regs[ci][gid] + cnts[ci][gid])):
+                    w0, hdr = int(tabs[ci][2 * r_]), int(tabs[ci][2 * r_ + 1])
+                    o, t_ = hdr & 0xFF, (hdr >> 8) & 0xFFFF
+                    rows[ch].append((r_, (o // C, o % C), t_, 0, 0, w0 >> 16))
     outs = [ttnn.to_torch(t).reshape(S, H).float() for t in ttnn.get_device_tensors(out)]
     chips = [(r_, c_) for r_ in range(R) for c_ in range(C)]
     ref = torch.zeros(N, S, H)

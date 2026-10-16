@@ -156,8 +156,18 @@ constexpr uint32_t GRANT_B = 8;  // grants go out in batches of this many slots 
 // port's rows before this call).
 void kernel_main() {
     size_t a = 0;
-    const uint32_t area = get_arg_val<uint32_t>(a++), n = get_arg_val<uint32_t>(a++), W = get_arg_val<uint32_t>(a++);
+    const uint32_t area = get_arg_val<uint32_t>(a++);
+    uint32_t n = get_arg_val<uint32_t>(a++);
+    const uint32_t W = get_arg_val<uint32_t>(a++);
     const uint32_t did = get_arg_val<uint32_t>(a++), Q = get_arg_val<uint32_t>(a++), words = get_arg_val<uint32_t>(a++);
+    if constexpr (__DEVPLAN__) {  // (device plan: n is the plan's address)
+        cb_reserve_back(__CBTAB__, 1);
+        const uint32_t sc = (get_write_ptr(__CBTAB__) + 63) & ~63u;
+        const InterleavedAddrGen<true> pg = {.bank_base_address = n, .page_size = 4096};
+        noc_async_read(get_noc_addr(0, pg), sc, 64);
+        noc_async_read_barrier();
+        n = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[did];
+    }
     const uint32_t tdbg = get_arg_val<uint32_t>(a++), tpage = get_arg_val<uint32_t>(a++);
     uint32_t wx[32], wy[32];
     for (uint32_t w = 0; w < W; ++w) {
@@ -209,6 +219,15 @@ void kernel_main() {
 # DEST (fp32), packed onto the token's fp32 sum with packer L1 accumulation (scratch_l1acc_precision.py: exact)
 _ACC_COMPUTE_W = (
     _ACC_COMPUTE.replace(
+        "        const uint32_t t = read_tile_value(cb_meta, 0, 0);\n        cb_pop_front(cb_meta, 1);",
+        "        const uint32_t t = read_tile_value(cb_meta, 0, 0);\n        cb_pop_front(cb_meta, 1);\n"
+        "        if (__DEVPLAN__ && t == 0xFFFFFFFF) break;  // (device plan: the reader's end marker)",
+    )
+    .replace(
+        "    for (uint32_t r = 0; r < n_rows; ++r) {",
+        "    for (uint32_t r = 0; __DEVPLAN__ || r < n_rows; ++r) {",
+    )
+    .replace(
         '#include "api/compute/reconfig_data_format.h"',
         '#include "api/compute/reconfig_data_format.h"\n#include "api/compute/bcast.h"',
     )
@@ -234,6 +253,7 @@ _ACC_COMPUTE_W = (
     )
 )
 assert _ACC_COMPUTE_W.count("cb_pop_front(cb_w, 1)") == 2 and "mul_tiles_bcast_scalar" in _ACC_COMPUTE_W
+assert "end marker" in _ACC_COMPUTE_W and "__DEVPLAN__ || r < n_rows" in _ACC_COMPUTE_W
 
 # per-core L1 area: counters (cumulative), headers, then the accumulators' rings
 CRED, USED, RET, MISC, HDRS, RINGS = 0, 1024, 2048, 4096, 5120, 22528
@@ -273,7 +293,15 @@ void kernel_main() {
     const uint32_t area = get_arg_val<uint32_t>(a++);
     const uint16_t mesh = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     const uint32_t me = get_arg_val<uint32_t>(a++), lnk = get_arg_val<uint32_t>(a++);
-    const uint32_t n_inj = get_arg_val<uint32_t>(a++), n_ret = get_arg_val<uint32_t>(a++);
+    uint32_t n_inj = get_arg_val<uint32_t>(a++), n_ret = get_arg_val<uint32_t>(a++);
+    if constexpr (__DEVPLAN__) {  // (device plan: the args are the plan's address and this port's id)
+        const uint32_t sc = (area + __MISC__ + 832 + 63) & ~63u, pid = n_ret;
+        const InterleavedAddrGen<true> pg = {.bank_base_address = n_inj, .page_size = 4096};
+        noc_async_read(get_noc_addr(0, pg), sc, 64);  // n_inj[8], n_ret[8]
+        noc_async_read_barrier();
+        n_inj = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[pid];
+        n_ret = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[8 + pid];
+    }
     uint16_t chip_id[N];
     for (uint32_t i = 0; i < N; ++i) chip_id[i] = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     uint32_t ax[A], ay[A];
@@ -463,21 +491,31 @@ void kernel_main() {
     const uint32_t area = get_arg_val<uint32_t>(a++);
     const uint32_t y_addr = get_arg_val<uint32_t>(a++), tab_addr = get_arg_val<uint32_t>(a++);
     const uint32_t tab_bytes = get_arg_val<uint32_t>(a++), off = get_arg_val<uint32_t>(a++);
-    const uint32_t n_local = get_arg_val<uint32_t>(a++), me = get_arg_val<uint32_t>(a++);
+    uint32_t n_local = get_arg_val<uint32_t>(a++);
+    const uint32_t me = get_arg_val<uint32_t>(a++);
     const uint32_t cx = get_arg_val<uint32_t>(a++), cy = get_arg_val<uint32_t>(a++);
     const uint32_t counts_addr = get_arg_val<uint32_t>(a++), W = get_arg_val<uint32_t>(a++);
     uint32_t want[N * L], px[N * L], py[N * L];
-    uint32_t n_rows = n_local;
     for (uint32_t k = 0; k < N * L; ++k) {
         want[k] = get_arg_val<uint32_t>(a++);
         px[k] = get_arg_val<uint32_t>(a++);
         py[k] = get_arg_val<uint32_t>(a++);
-        n_rows += want[k];
     }
     const auto y = TensorAccessor(y_args, y_addr, row_bytes);
     const auto tab = TensorAccessor(t_args, tab_addr, tab_bytes);
     cb_reserve_back(cb_tab, 1);
     const uint32_t tl = get_write_ptr(cb_tab);
+    if constexpr (__DEVPLAN__) {  // (device plan: n_local is the plan's address; want[] from it too)
+        const uint32_t sc = (tl + 63) & ~63u;
+        const InterleavedAddrGen<true> pg = {.bank_base_address = n_local, .page_size = 4096};
+        noc_async_read(get_noc_addr(0, pg) + 64, sc, 64);  // n_local[16]
+        noc_async_read(get_noc_addr(0, pg) + (32 + me * 32) * 4, sc + 64, 128);  // want[me][32]
+        noc_async_read_barrier();
+        n_local = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc)[me];
+        for (uint32_t k = 0; k < N * L; ++k) want[k] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc + 64)[k];
+    }
+    uint32_t n_rows = n_local;
+    for (uint32_t k = 0; k < N * L; ++k) n_rows += want[k];
     constexpr uint32_t TCH = 256;
     volatile tt_l1_ptr uint32_t* misc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC);
     volatile tt_l1_ptr uint32_t* taken = misc + 64;  // per ring, cumulative
@@ -615,6 +653,11 @@ void kernel_main() {
             }
         }
     }
+    if constexpr (__DEVPLAN__) {  // (the compute's end marker: it does not know the row count)
+        cb_reserve_back(cb_meta, 1);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_meta))[0] = 0xFFFFFFFF;
+        cb_push_back(cb_meta, 1);
+    }
     const uint32_t p_total = get_timestamp_32b() - p0;
     if (L1M) misc[101] = lbase + n_local;
     noc_async_atomic_barrier();
@@ -659,6 +702,7 @@ def sparse_combine_rf_prepare(
     writers=0,
     counts_off=None,
     l1=None,
+    devplan=None,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -668,7 +712,9 @@ def sparse_combine_rf_prepare(
     collector (the first accumulator, counts at area + counts_off): rows of expert e are read once it is reported.
     l1: dict(writers=[logical (x, y) of the flat y writers], words=address of their L1 words): the L1 hand-off (no y
     in DRAM; flat_routed_expert_with_program l1_args = run.l1_args). Returns run(y, out) (standalone) with
-    run.build(y, out) -> the MeshProgramDescriptor and run.collector."""
+    run.build(y, out) -> the MeshProgramDescriptor and run.collector. devplan (with l1): dict(plan=, table=) from
+    combine_plan (the planner's per-call counts and hand-off table, on the device): the kernels read their counts from
+    the plan, rows_by_chip only places the cores."""
     R, C = tuple(mesh_device.shape)
     N, L, A0 = R * C, num_links, n_acc
     row_bytes = W * 2
@@ -810,6 +856,7 @@ def sparse_combine_rf_prepare(
         "__L1__": str(int(l1 is not None)),
         "__CBTAB__": str(CB_TAB),
         "__CBW__": str(CB_W),
+        "__DEVPLAN__": str(int(devplan is not None)),
         "__NOYREAD__": os.environ.get("SPC_NOYREAD", "0"),  # (probe: rows not read from y: garbage)
         "__PD__": str(PD),
         "__PS__": str(PS),
@@ -914,7 +961,8 @@ def sparse_combine_rf_prepare(
             program.cbs = cbs
             if l1 is not None:
                 pids = port_ids[ch]
-                la = [len(pids) + A, ISLOT, int(l1_tab.buffer_address()), int(l1["words"]), 0, 0, 0, 0]
+                tab_dev = devplan["table"] if devplan is not None else l1_tab
+                la = [len(pids) + A, ISLOT, int(tab_dev.buffer_address()), int(l1["words"]), 0, 0, 0, 0]
                 for k in sorted(pids, key=pids.get):
                     v = virt(port_core[k])
                     la += [v.x, v.y, area + RINGS, QP, area + MISC + 512]
@@ -928,7 +976,7 @@ def sparse_combine_rf_prepare(
                 if l1 is not None:
                     pr_rt[core.x][core.y] = [
                         area,
-                        len(inj[k]),
+                        int(devplan["plan"].buffer_address()) if devplan is not None else len(inj[k]),
                         len(wv),
                         port_ids[ch][k],
                         QP,
@@ -952,7 +1000,12 @@ def sparse_combine_rf_prepare(
                         DIRS.index(d) * 2 + li,
                     ]
                 peer = ports[d]["peer"]
-                args = [area, mesh_id, idx(ch), li, len(inj[k]), n_ret[k]] + chip_ids + acc_xy
+                cnt_args = (
+                    [int(devplan["plan"].buffer_address()), port_ids[ch][k]]
+                    if devplan is not None
+                    else [len(inj[k]), n_ret[k]]
+                )
+                args = [area, mesh_id, idx(ch), li] + cnt_args + chip_ids + acc_xy
                 for i in range(N):
                     s = (i // C, i % C)
                     if s != ch and fh(ch, s) == d:
@@ -974,7 +1027,7 @@ def sparse_combine_rf_prepare(
                     int(tab_t.buffer_address()),
                     tab_bytes,
                     offs[("a", ch, i)],
-                    len(loc[(ch, i)]),
+                    int(devplan["plan"].buffer_address()) if devplan is not None else len(loc[(ch, i)]),
                     i,
                     coll_v.x,
                     coll_v.y,
@@ -984,7 +1037,10 @@ def sparse_combine_rf_prepare(
                 for kk in range(N * L):
                     s, li = (kk // L // C, kk // L % C), kk % L
                     w = want[(ch, i)][kk]
-                    if w:
+                    if devplan is not None and s != ch:  # (the plan decides the counts: every ring's producer port)
+                        v = virt(port_core[(ch, fh(ch, s), li)])
+                        args += [0, v.x, v.y]
+                    elif w:
                         v = virt(port_core[(ch, fh(ch, s), li)])
                         args += [w, v.x, v.y]
                     else:
@@ -996,7 +1052,7 @@ def sparse_combine_rf_prepare(
                     args += [0, 0, 0, 0, 0]
                 ar_rt[core.x][core.y] = args
                 n_rows = len(loc[(ch, i)]) + sum(want[(ch, i)])
-                ac_rt[core.x][core.y] = [n_rows, n_tok]
+                ac_rt[core.x][core.y] = [0 if devplan is not None else n_rows, n_tok]
                 aw_rt[core.x][core.y] = [int(out.buffer_address()), n_tok, i]
             program.kernels = [
                 ttnn.KernelDescriptor(

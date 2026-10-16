@@ -721,3 +721,18 @@ Test: softmax gates over each token's 16 experts, bf16; reference = sum of bf16(
 | Zipf spread 1.2 | 2667 | 2671 | 1.75e-3 |
 | Zipf packed 1.2 | 5888 | 5896 | 1.75e-3 |
 No measurable cost (the accumulators had headroom).
+
+### Device-side tables (2026-10-16)
+`ttnn/ttnn/bringup/combine_rf/combine_plan.py`: a planner kernel (one core per chip, generic_op) builds, from the
+replicated routing (top-16 ids uint16 + gate weights bf16 for all N x S tokens), the flat expert's counts / regions /
+token index (indexed x: the gathered tokens, row home * S + t) and the combine's hand-off table and per-call counts
+(n_inj / n_ret per port, n_local / want per accumulator) -- the same rules as the host builder (plan_reference: the
+host model; scratch_combine_plan.py: bit-exact on all 8 chips, uniform / spread / packed). The combine kernels read
+their counts from the plan (__DEVPLAN__: the count args carry the plan's address; the compute stops at the reader's end
+marker). Overlap test FC_DEVPLAN=1 (with FC_L1): every per-call table from the device.
+| routing | fused, host tables | fused, device tables | worst token |
+| uniform | 2427 | 2431 | 2.19e-3 |
+| Zipf spread 1.2 | 2671 | 2706 | 2.18e-3 |
+| Zipf packed 1.2 | 5896 | 5889 | 2.18e-3 |
+(Rows within an expert are now in (home, token) order; spread +35 us.) Planner: 1.45-1.66 ms on one core (~24 cycles per
+routing entry, two passes over 40960) -- must be split over cores; it can overlap the shared expert.
