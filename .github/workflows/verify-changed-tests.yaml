@@ -73,8 +73,8 @@ env:
   #                                  before pytest starts.
   #   llk_sfpu_accuracy_tests.yaml   runs only through llk-sfpu-ulp-sweep.yaml, which
   #                                  supplies the LLK CI image, SFPI and the tt-llk
-  #                                  working directory its cmd is relative to. PR Gate
-  #                                  runs that sweep whenever this file changes.
+  #                                  working directory its cmd is relative to. It runs
+  #                                  nightly; dispatch it to run this file on a branch.
   #
   # This is not an exemption: the legs still block the PR until an owner approves.
   UNSUPPORTED_YAMLS: >-

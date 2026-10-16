@@ -43,8 +43,8 @@ MEASURED_ARCH = "WORMHOLE"
 #: A cell identity: the op plus whichever key dimensions the row pins.
 Cell = Tuple[str, Tuple[Tuple[str, str], ...]]
 
-#: Each report section shows this many rows and says how many it withheld: a PR
-#: comment has a size limit, and a report that lists every cell is one nobody reads.
+#: An informational section (other budget changes, headroom, slack) shows this many
+#: rows and says how many it withheld. A list of what failed or loosened is never cut.
 _MAX_ROWS = 40
 
 #: Below this fraction of its budget a cell carries slack the sweep cannot justify. Not
@@ -430,7 +430,7 @@ def _classify(was: _Held, now: _Held) -> Optional[str]:
             return "tightened"
         return None
     # Neither side gates, but the cell is still held to something: the eltwise drivers
-    # compare it with the declared atol/rtol, and PR Gate's headroom report with the
+    # compare it with the declared atol/rtol, and the nightly headroom report with the
     # measurement and the non-finite count its row records. Loosening either needs the
     # same re-measurement a raised budget does.
     if _widened(was.declared, now.declared):
@@ -528,11 +528,14 @@ def _describe(c: Change) -> str:
     return row.describe() + (f" ×{c.variants}" if c.variants > 1 else "")
 
 
-def _md_table(header: Sequence[str], lines: List[str]) -> List[str]:
-    """A markdown table of at most ``_MAX_ROWS`` rows, then one row saying how many were
-    withheld. The column count comes from *header*, so the filler row cannot drift."""
+def _md_table(
+    header: Sequence[str], lines: List[str], *, capped: bool = False
+) -> List[str]:
+    """A markdown table; when *capped*, of at most ``_MAX_ROWS`` rows, then one row
+    saying how many were withheld. The column count comes from *header*, so the filler
+    row cannot drift."""
     withheld = len(lines) - _MAX_ROWS
-    if withheld > 0:
+    if capped and withheld > 0:
         lines = lines[:_MAX_ROWS] + [
             f"| _… {withheld} more_ |" + " |" * (len(header) - 1)
         ]
@@ -582,6 +585,7 @@ def render_budget_diff(changes: List[Change]) -> str:
             *_md_table(
                 ("cell", "change", "before", "after"),
                 [_change_row(c, with_provenance=False) for c in improvements],
+                capped=True,
             ),
             "",
             "</details>",
@@ -604,11 +608,7 @@ def _allowed_note(regressions: List[Change]) -> str:
             "provenance comment is unchanged, so the budget was edited rather than "
             "re-measured:\n\n"
         )
-        note += "".join(
-            f"- `{(c.after or c.before).describe()}`\n" for c in unmeasured[:_MAX_ROWS]
-        )
-        if len(unmeasured) > _MAX_ROWS:
-            note += f"- _… {len(unmeasured) - _MAX_ROWS} more_\n"
+        note += "".join(f"- `{(c.after or c.before).describe()}`\n" for c in unmeasured)
     return note
 
 
@@ -680,7 +680,7 @@ def _headroom_line(cell: Cell, worst: int, reference: int, verdict: str) -> str:
 _SWEEP_ID = re.compile(r"\[(\w+)-in:(\w+)-out:(\w+)-approx:(\w+)-dest_acc:(\w+)\]$")
 
 #: A failure message longer than this is cut: the first line of an assertion already
-#: names the cell and the figure, and a PR comment has a size limit.
+#: names the cell and the figure, and the rest of a long message buries the next one.
 _MESSAGE_CHARS = 300
 
 
@@ -851,7 +851,7 @@ def render_headroom(
         out += [
             f"<details><summary>{heading}</summary>" if collapsed else f"**{heading}**",
             "",
-            *_md_table(("cell", "measured", reference, ""), lines),
+            *_md_table(("cell", "measured", reference, ""), lines, capped=collapsed),
             "",
         ]
         if collapsed:

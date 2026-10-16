@@ -12,14 +12,13 @@ One device run per variant covers the whole format: 65,279 finite bfloat16 value
 63,487 float16 ones, in 64 tiles. ``Bfp8_b`` is swept in bfloat16 and packed on the way
 in; a ``Float32`` input has 2**32 values, so it is walked with a stride instead.
 Marked ``accuracy``, which llk-e2e and the other marker-selected LLK workflows deselect;
-PR Gate runs it by path when an SFPU kernel changes (llk-sfpu-ulp-sweep.yaml). Run it as
-a gate::
+llk-e2e runs it by path every night (llk-sfpu-ulp-sweep.yaml). Run it as a gate::
 
     pytest test_unary_sfpu_ulp.py
 
 which fails a gated cell over its budget and skips a tolerance cell with its measured
 maximum in the reason. To hold the tolerance cells to the figures their rows record, as
-PR Gate does, measure and compare::
+the nightly sweep does, measure and compare::
 
     pytest test_unary_sfpu_ulp.py --ulp-measure=ulp.jsonl
     python3 helpers/ulp_budget_diff.py headroom \\
@@ -86,7 +85,7 @@ from helpers.ulp_sweep import (
 from helpers.utils import _record_ulp_measurement, passed_test
 
 #: `accuracy` is the marker llk-e2e and the other marker-selected LLK workflows deselect;
-#: `nightly` would not do, since llk-e2e runs it. PR Gate runs this file by path.
+#: `nightly` would not do, since llk-e2e runs it. The nightly sweep runs this file by path.
 pytestmark = [
     pytest.mark.accuracy,
     # Every unkeyed budget is a Wormhole measurement and binds nowhere else
@@ -191,13 +190,7 @@ def _sweep_ops():
     emitting. The key line is the enrolment (SFPU_ULP.md, step 2) and the measurement
     fills it in; an op without one has nowhere to be written, and `sfpu_unary_ops()`
     admits every newly registered op, so a wider set would turn a whole-table emit red
-    the day anyone adds an op.
-
-    The gate run used to take only the ops with a step budget somewhere. Since every
-    cell is measured, gated or not, and the headroom report holds a tolerance cell to
-    the figure its row records, that left the ops on tolerance everywhere -- Digamma,
-    Erfc, Expm1Cw, GeluAppx, Lgamma, Polygamma, SigmoidAppx, Softplus, 333 rows -- with
-    recorded figures and no run behind them."""
+    the day anyone adds an op."""
     unary = sfpu_unary_ops()
     ops = {op for op in _SFPU_ACCURACY_BUDGET if op in unary} - set(
         _UNARY_OPS_NOT_SWEPT
@@ -234,9 +227,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         dest_acc=dest_acc,
         arch=get_chip_architecture(),
     )
-    # A tolerance cell has no budget to gate, but is measured anyway: its row records the
-    # last sweep's worst lane, and PR Gate's headroom report fails a run that exceeds
-    # it. Skipping it made a demoted cell's regressions and recoveries invisible.
+    # A tolerance cell is measured too: the headroom report holds it to its row's figure.
     gated = contract.metric == Metric.ULP
 
     # No OverflowError skip. cosh/sinh were the last goldens that could raise on a finite
@@ -281,14 +272,9 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     lanes = int(mask.sum())
     key = (in_fmt.name, out_fmt.name, approx_mode.name, dest_acc.name)
 
-    # Before the emit return: an empty mask reports `max: 0` and would be recorded as
-    # bit-exact. A gated cell fails, since an unmeasurable budget is a gate not running.
-    # An emit run records the reason as the cell's verdict, so the op's grid stays
-    # whole; a tolerance cell skips, having no budget to hold.
-    # The overflow first: it is the reason that carries the lane count the headroom
-    # report reads back, and a cell whose every judged lane went non-finite also has
-    # `lanes == 0`. Written the other way round, its row recorded no count, so the
-    # report flagged the cell every night and a re-emit could not clear it.
+    # Before the emit return, or an empty mask is recorded as bit-exact `max: 0`. The
+    # overflow first: an all-non-finite cell also has `lanes == 0`, and only this
+    # reason carries the lane count the headroom report reads back.
     if overflowed.any():
         reason = nonfinite_reason(overflowed, src, golden, result, stats, lanes)
         unmeasurable = (
@@ -307,7 +293,6 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         if not gated:
             # Skipped, but on the record: the row names how many lanes went non-finite,
             # and the headroom report fails a run where that count appears or grows.
-            # Without this a re-emitted overflow was a permanent, silent skip.
             _record_ulp_measurement(
                 distance,
                 mask=mask,
