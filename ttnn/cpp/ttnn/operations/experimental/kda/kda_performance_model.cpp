@@ -97,7 +97,12 @@ KdaProfilerModel make_profiler_model(
         "KDA performance model requires allocated device input tensors");
 
     auto* device = first_input.device();
-    TT_FATAL(device->arch() == tt::ARCH::BLACKHOLE, "KDA performance model supports Blackhole only");
+    // The cycle model below is calibrated against Blackhole alone, so anywhere else the estimate
+    // would be fiction. A default model is how the profiler spells "this op has no performance
+    // model", and it leaves every measured column untouched, so KDA ops stay profileable.
+    if (device->arch() != tt::ARCH::BLACKHOLE) {
+        return KdaProfilerModel{};
+    }
 
     KdaProfilerModel result;
     const double total_dram_bytes = mandatory_dram_bytes(inputs, *device, "input", result.inputs_bytes) +
