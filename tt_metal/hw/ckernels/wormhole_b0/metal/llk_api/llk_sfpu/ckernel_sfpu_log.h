@@ -42,12 +42,16 @@ namespace sfpu {
 
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
-    if constexpr (!FAST_APPROX) {
-        // normalise a (-0.0 and subnormals become +0.0). This must run before
-        // the exponent read below so that -0.0 follows the same path as +0.0
-        // and log(±0.0) returns -inf, matching torch.
-        a = a * 1.0f + 0.0f;
-    }
+    // Normalise a (-0.0 and subnormals become +0.0: SFPMAD treats subnormal
+    // inputs as zero and flushes a -0.0 result to +0.0). This must run before
+    // the exponent read below so that -0.0 follows the same path as +0.0 and
+    // log(±0.0) returns -inf, matching torch. It runs in the fast path too:
+    // without it the sign test below excludes the -0.0 lane, which then keeps
+    // the NaN that result is initialised with, and a positive subnormal reaches
+    // addexp(a, -1) with a zero exponent field and a non-zero mantissa, where
+    // the wrap to exponent 255 makes a NaN instead of the +inf the special-case
+    // handling relies on.
+    a = a * 1.0f + 0.0f;
 
     sfpi::vFloat three_quarters = 0.75f;
     sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
@@ -89,9 +93,9 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
         //   input +inf -> +inf
         //   input NaN  -> NaN
         //
-        // In the non-fast path, earlier normalisation maps -0.0 and subnormals
-        // to +0.0. addexp(a, -1) wraps exponent 0 to 255, so zero becomes
-        // +inf; exponent 255 values (Inf/NaN) are left unchanged.
+        // The normalisation at the top maps -0.0 and subnormals to +0.0.
+        // addexp(a, -1) wraps exponent 0 to 255, so zero becomes +inf;
+        // exponent 255 values (Inf/NaN) are left unchanged.
         a = sfpi::addexp(a, -1);
 
         r = r * s + m;
