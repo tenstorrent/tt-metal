@@ -492,9 +492,7 @@ def test_reduce_scatter_nd_same_dim_outer_axis_is_refused(mesh_device, strict_cc
 # consumed, which is one refusal more than reduce_scatter has: neither the partitioned axis nor, for a whole-mesh
 # partition, any non-trivial axis may already shard another dim. The op needs no fabric, so these tests take no
 # device_params. Besides the label and the bytes it composes to, each test checks that device (r, c) holds its own
-# chunk. These cases lived in tests/nightly/t3000/ccl/test_mesh_partition_topology.py until the op's owners asked
-# for them to sit with the other label tests; the device-free twin is
-# tests/ttnn/unit_tests/gtests/ccl/test_mesh_partition_topology_rules.cpp.
+# chunk. The device-free twin is tests/ttnn/unit_tests/gtests/ccl/test_mesh_partition_topology_rules.cpp.
 
 _LINE_MESHES = [2, 8]
 _LINE_MESH_IDS = ["1x2", "1x8"]
@@ -537,8 +535,7 @@ def _assert_partition_slices(tt_output, tt_input, dim, cluster_axis, mesh_device
 def test_mesh_partition_nd_label(mesh_device, input_dims, dim, cluster_axis, expected, strict_ccl_topology):
     """A ShardTensor2dMesh input partitioned along one axis: Shard(dim) on that axis, the input's placement on the
     other, over the input's coordinates. Composing by the label reassembles the input. The label is computed on the
-    host launch path, so a program-cache hit must carry the same one. Negative control: before mesh_partition had a
-    hook the output kept the input's label."""
+    host launch path, so a program-cache hit must carry the same one."""
     torch.manual_seed(15)
     rows, cols, _ = _mesh(mesh_device)
     full = _integers([1, 8, 32 * rows, 32 * cols])
@@ -565,8 +562,7 @@ def test_mesh_partition_nd_same_dim_inner_axis_collapses(mesh_device, dim, stric
     """ShardTensor2dMesh dims=(3, None): row r holds coarse slice r of dim 3; partitioning dim 3 along the columns
     cuts each into fine slices, so device (r, c) holds slice r * cols + c -- row-major hierarchical sharding, which
     only the collapsed {N}, [Shard(3)] states (reduce_scatter's same-dim inner-axis collapse). With dim=-1 the input
-    label carries Shard(-1) and the same-dim match normalises first. Negative control: the first version of the hook
-    emitted [Shard(3), Shard(3)]."""
+    label carries Shard(-1) and the same-dim match normalises first."""
     torch.manual_seed(16)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * num_devices])
@@ -585,8 +581,7 @@ def test_mesh_partition_nd_same_dim_inner_axis_collapses(mesh_device, dim, stric
 def test_mesh_partition_nd_same_dim_on_a_size_1_axis_replicates(mesh_device, strict_ccl_topology):
     """ShardTensor2dMesh dims=(3, None) on a 1xN mesh labels the size-1 row axis Shard(3): one chunk, the whole
     extent. Partitioning dim 3 across the columns turns that axis into Replicate rather than leaving a second
-    Shard(3): [Replicate, Shard(3)]. Negative controls: the first hook version emitted [Shard(3), Shard(3)]; before
-    the hook the label stayed [Shard(3), Replicate]."""
+    Shard(3): [Replicate, Shard(3)]."""
     torch.manual_seed(17)
     _, cols, _ = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * cols])
@@ -629,8 +624,7 @@ def test_mesh_partition_nd_whole_mesh_same_dim_shard_is_overwritten(mesh_device,
     collapsed {N}, [Shard(3)]. Unlike the replicated input, the label is not exact against the input: device (r, c)
     holds chunk r * cols + c of its own row's slice, so the N pieces concatenate to each row's own pieces, 1/rows of
     the input's extent. A label says how the outputs assemble, not that they tile the input (the reduce_scatter
-    stance); a Shard of another dim is refused instead (test_mesh_partition_refused_labels). Negative control: before
-    the hook the label stayed [Shard(3), Replicate]."""
+    stance); a Shard of another dim is refused instead (test_mesh_partition_refused_labels)."""
     torch.manual_seed(19)
     rows, cols, num_devices = _mesh(mesh_device)
     full = _integers([1, 1, 32, 32 * num_devices * rows])
@@ -653,8 +647,8 @@ def test_mesh_partition_nd_whole_mesh_same_dim_shard_is_overwritten(mesh_device,
 @pytest.mark.parametrize("dim", [1, 3, -1])
 def test_mesh_partition_collapsed_replicate_whole_mesh(mesh_device, dim, strict_ccl_topology):
     """ReplicateTensorToMesh gives {N}, [Replicate]; a whole-mesh partition yields {N}, [Shard(dim)] (the normalised
-    dim) over the same coordinates. Negative control: before the hook the output kept [Replicate], which the
-    serialiser dedups, dropping every piece but one."""
+    dim) over the same coordinates. A [Replicate] label here would be data loss: the serialiser dedups a Replicate
+    axis to one shard."""
     torch.manual_seed(20)
     _, _, num_devices = _mesh(mesh_device)
     full = _integers([1, num_devices, 32, 32 * num_devices])
@@ -694,7 +688,7 @@ def test_mesh_partition_collapsed_shard_along_the_line_is_overwritten(mesh_devic
     relabels it {N}, [Shard(3)]: the partitioned axis takes the new placement whatever it held (the reduce_scatter
     stance, which tt-train relies on). Composing by the label gives the output bytes: device k's chunk k along dim 3
     of its own dim-1 slice. On a multi-axis mesh the same input is read per axis and refused instead
-    (test_mesh_partition_refused_labels). Negative control: before the hook the label stayed [Shard(1)]."""
+    (test_mesh_partition_refused_labels)."""
     torch.manual_seed(22)
     _, _, num_devices = _mesh(mesh_device)
     full = _integers([1, num_devices, 32, 32 * num_devices])
@@ -805,9 +799,7 @@ _REFUSED_PARTITIONS = [
 def test_mesh_partition_refused_labels(mesh_device, scenario, strict_ccl_topology, expect_error):
     """Partitions with no honest label (see _refused_partition): the partitioned axis, or any non-trivial axis of a
     whole-mesh partition, already shards another dim (kept, not consumed as a reduction would consume it), or a
-    same-dim Shard sits on the inner axis. Strict mode makes each an error. Negative controls: before the hook the
-    output kept the input's label in every case; the first hook version emitted [Shard(3), Shard(3)] for the same-dim
-    cases."""
+    same-dim Shard sits on the inner axis. Strict mode makes each an error."""
     tt_input, dim, cluster_axis, message = _refused_partition(mesh_device, scenario)
 
     with expect_error(RuntimeError, message):
@@ -870,8 +862,7 @@ def test_mesh_partition_label_not_covering_the_devices_is_refused(
     label can describe the output. {C}, [Shard(2)] with cluster_axis=1: the label's N equals the axis size by
     coincidence and the line rule must not fire; whole mesh: the rule must not emit {C}, [Shard(3)] for an R * C-piece
     output (a serialiser would save one row's pieces). The 1 x C sub-mesh label with cluster_axis=0 (the groups reach
-    row 1) or over the whole mesh (the block holds C of R * C pieces) is refused for the same reason. Negative
-    controls: earlier hook versions emitted {C}, [Shard(3)] in the first three cases."""
+    row 1) or over the whole mesh (the block holds C of R * C pieces) is refused for the same reason."""
     torch.manual_seed(25)
     tt_input = _forged_label(mesh_device, kind)
 
@@ -901,7 +892,7 @@ def test_mesh_partition_label_not_covering_the_devices_warn_only_keeps_the_input
 def test_mesh_partition_sub_mesh_label_is_partitioned_within_its_block(mesh_device, strict_ccl_topology):
     """The 1 x C [Replicate, Replicate] label over row 0 with cluster_axis=1: the axis spans the mesh, so row 0 is a
     complete partition group and the output is labelled within the block, 1 x C [Replicate, Shard(3)] over the same C
-    coordinates. Negative control: an earlier hook version fell back to the input label here."""
+    coordinates."""
     torch.manual_seed(25)
     _, cols, _ = _mesh(mesh_device)
     tt_input = _forged_label(mesh_device, "sub_mesh")
