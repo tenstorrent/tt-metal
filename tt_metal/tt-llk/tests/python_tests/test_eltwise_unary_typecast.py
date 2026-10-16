@@ -136,6 +136,23 @@ def _matrix_spec(formats: InputOutputFormat) -> StimuliSpec:
     return _whole_number_float_spec(16 if bfp_involved else 201)
 
 
+def _uint16_full_range_spec() -> StimuliSpec:
+    """Every UInt16 value, with the bf16-inexact boundary and the extremes pinned.
+
+    256 is the last integer bfloat16 holds exactly; 257, 0x8000 and 0xFFFF have to
+    be rounded, so the int -> bf16 rounding is exercised and not just the load. (The
+    matrix caps integer inputs at 255 for the sake of its integer outputs.)
+    """
+    pinned = torch.tensor([256, 257, 0x8000, 0xFFFF])
+
+    def dist(size, dtype, generator):
+        values = torch.randint(0, 1 << 16, (size,), generator=generator)
+        values[: len(pinned)] = pinned
+        return values.to(dtype)
+
+    return StimuliSpec(distribution=dist, seed=0)
+
+
 def _preserve_fp32_precision(formats: InputOutputFormat) -> bool:
     """preserve_fp32_precision exactly as ttnn.typecast computes it.
 
@@ -212,9 +229,16 @@ def test_eltwise_unary_typecast_uint16_to_fp16b_32bit_dest(
     # Dest the UInt16 datum occupies the low half of the 32-bit word, so a 16-bit
     # Dest load reads the other half; the kernel has to load the whole word and
     # mask it, as every other UInt16-input typecast does.
-    _run_typecast(
-        formats, dest_acc, approx_mode, input_dimensions, _matrix_spec(formats)
+    #
+    # Float16_b output takes the full UInt16 range so the bf16 rounding of values
+    # above 256 is exercised too; the block-float outputs keep the matrix's small
+    # ints (large ints would differ from the golden by more than 1 bfp ULP).
+    spec_A = (
+        _uint16_full_range_spec()
+        if formats.output_format == DataFormat.Float16_b
+        else _matrix_spec(formats)
     )
+    _run_typecast(formats, dest_acc, approx_mode, input_dimensions, spec_A)
 
 
 @parametrize(
