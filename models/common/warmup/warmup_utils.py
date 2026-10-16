@@ -23,6 +23,12 @@ class WarmupForwardMixin:
     - self.decode_forward(): method to perform decode forward pass
     """
 
+    def _warmup_tt_sampler(self):
+        """The on-device sampler of the first model, or None (host sampling / no sampler)."""
+        models = getattr(self, "model", None)
+        model = models[0] if isinstance(models, (list, tuple)) and models else models
+        return getattr(getattr(model, "sampling", None), "tt_sampling", None)
+
     def _create_sampling_params(self, can_sample_on_device, batch_size, greedy_only: bool = False):
         """
         greedy_only: when True, warmup only covers greedy decoding on device (temperature=0.0,
@@ -45,10 +51,22 @@ class WarmupForwardMixin:
             # exercises — trading a one-time runtime capture for the rarer
             # penalty/logprob request shapes in exchange for a much smaller trace
             # region. Greedy and ``None`` are still captured below.
+            # Meshes whose sampler opts out of the penalty / top-k programs (e.g. 2-D fractured
+            # weights: per-chip vocab sharding breaks them) reject those request shapes, so the
+            # sweep must not ask for them -- the sampler's own precompile skips them the same way.
+            sampler = self._warmup_tt_sampler()
+            allow_penalties = bool(getattr(sampler, "_allow_penalties_sampling", True))
+            allow_topk = bool(getattr(sampler, "_allow_topk_sampling", True))
             if os.environ.get("TT_LEAN_DECODE_WARMUP"):
                 penalty_logprob_combos = [(False, False)]
             else:
                 penalty_logprob_combos = list(product([True, False], repeat=2))
+            if not allow_penalties:
+                penalty_logprob_combos = [(p, lp) for p, lp in penalty_logprob_combos if not p]
+            if not allow_topk:
+                # Non-greedy on-device sampling needs the top-k/top-p program; only greedy (below) is
+                # capturable on this mesh.
+                penalty_logprob_combos = []
 
             for penalties, log_probs in penalty_logprob_combos:
                 presence_penalty, frequency_penalty, repetition_penalty = None, None, None
