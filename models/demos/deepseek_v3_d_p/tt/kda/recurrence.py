@@ -450,6 +450,7 @@ def _scan_sp_grouped_chunks(
     gather_buffer: ttnn.Tensor | None = None,
     ring_relay: RingRelayPrefix | None = None,
     final_carry: "_RelayFinalCarry | None" = None,
+    prefix_companion=None,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
@@ -468,7 +469,9 @@ def _scan_sp_grouped_chunks(
             packed_head=True,
         )
         if ring_relay is not None:
-            group_entry_states, prefix_final_state = ring_relay(packed, initial_state, actual_start)
+            group_entry_states, prefix_final_state = ring_relay(
+                packed, initial_state, actual_start, companion=prefix_companion
+            )
         else:
             group_entry_states, prefix_final_state = distributed_prefix(
                 packed,
@@ -783,14 +786,18 @@ class KDARecurrence:
         initial_state: ttnn.Tensor,
         beta_logits_column_offset: int,
         release_gate: bool = False,
+        prefix_companion=None,
     ) -> RecurrenceResult:
         """Execute the constructed graph using caller-owned state and chronology.
 
         ``beta`` is a token-major BF16 tensor whose ``heads`` columns from ``beta_logits_column_offset`` hold beta's
         pre-sigmoid logits, such as the fused input projection; chunk preparation applies the sigmoid.
         With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
-        read it.
+        read it. ``prefix_companion`` returns (io_tensors, MeshProgramDescriptor) of a program on the worker cores the
+        SP ring relay leaves idle (``ring_relay_cores``), built and dispatched together with the relay.
         """
+        if prefix_companion is not None and not self.uses_ring_relay:
+            raise ValueError("a prefix companion program needs the SP ring relay")
         prepared, state, geometry = self._prepare(
             q=q,
             k=k,
@@ -803,7 +810,10 @@ class KDARecurrence:
             beta_logits_column_offset=beta_logits_column_offset,
             release_gate=release_gate,
         )
-        result = self._execute(prepared, state, actual_start, actual_end)
+        if prefix_companion is not None:
+            result = self._run_sp(prepared, state, actual_start, actual_end, prefix_companion)
+        else:
+            result = self._execute(prepared, state, actual_start, actual_end)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory.
         for tensor in prepared.as_kernel_args():
             ttnn.deallocate(tensor)
@@ -846,12 +856,22 @@ class KDARecurrence:
             sequence_parallel_axis=self._sequence_parallel_axis,
         )
 
+    @property
+    def uses_ring_relay(self) -> bool:
+        return self._ring_relay is not None
+
+    @property
+    def ring_relay_cores(self) -> list[ttnn.CoreCoord]:
+        """Worker cores the SP ring relay runs on (one per head, then one per link)."""
+        return list(self._ring_relay.head_cores) + list(self._ring_relay.sender_cores)
+
     def _run_sp(
         self,
         prepared: _PreparedChunks,
         state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None,
+        prefix_companion=None,
     ) -> RecurrenceResult:
         return _scan_sp_grouped_chunks(
             prepared,
@@ -867,4 +887,5 @@ class KDARecurrence:
             gather_buffer=self._gather_buffer,
             ring_relay=self._ring_relay,
             final_carry=self._relay_final_carry,
+            prefix_companion=prefix_companion,
         )

@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     l1_when_it_fits,
     tuned_projection_matmul_configs,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.gate_matmul_program import GateMatmulProgram
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -239,6 +240,46 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self.recurrence = KDARecurrence(
+            mesh_device,
+            program_config.recurrence,
+            sequence_parallel_axis=self.sequence_parallel_axis,
+            local_rows=self.active_seq_len_local,
+            heads=self.config.num_heads,
+            key_dim=self.config.head_k_dim,
+            value_dim=self.config.head_v_dim,
+            # The bounded gate's lower-bound scale is applied by chunk preparation.
+            gate_scale=config.gate_lower_bound if self._bounded_gate else 1.0,
+        )
+        # The output gate's columns become their own projection (GateMatmulProgram), run on the worker rows below
+        # the SP prefix relay's cores while the relay runs; the input projection keeps Q, K, V, the decay rank and
+        # beta. Split once on device from the fused weight.
+        self.overlap_output_gate = program_config.overlap_output_gate and self.recurrence.uses_ring_relay
+        self.output_gate_weight = None
+        self._output_gate_program = None
+        if self.overlap_output_gate:
+            fused = self.weights.input_projection
+            hidden, width = tuple(fused.shape)[-2:]
+            gate_start = self._convolution_width + self.config.head_k_dim
+            gate_end = gate_start + self.config.v_dim
+            self.output_gate_weight = ttnn.slice(fused, [0, gate_start], [hidden, gate_end])
+            leading = ttnn.slice(fused, [0, 0], [hidden, gate_start])
+            trailing = ttnn.slice(fused, [0, gate_end], [hidden, width])
+            # Both pieces are whole tiles of the fused weight; concat widens to BF16, and casting back requantizes
+            # each tile with its original block exponents, so the projection weight is unchanged.
+            joined = ttnn.concat([leading, trailing], dim=-1)
+            object.__setattr__(self.weights, "input_projection", ttnn.typecast(joined, fused.dtype))
+            for tensor in (joined, leading, trailing, fused):
+                ttnn.deallocate(tensor)
+            grid = mesh_device.compute_with_storage_grid_size()
+            first_row = max(c.y for c in self.recurrence.ring_relay_cores) + 1
+            self._output_gate_program = GateMatmulProgram(
+                mesh_device,
+                rows=(first_row, grid.y - 1),
+                cols=(0, grid.x - 1),
+                k_block=8,
+                math_fidelity=program_config.input_projection_math_fidelity,
+            )
         self.input_projection_program_config, self.output_projection_program_config = (
             tuned_projection_matmul_configs(
                 mesh_device.compute_with_storage_grid_size(),
@@ -270,17 +311,6 @@ class ttKDA:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
-        )
-        self.recurrence = KDARecurrence(
-            mesh_device,
-            program_config.recurrence,
-            sequence_parallel_axis=self.sequence_parallel_axis,
-            local_rows=self.active_seq_len_local,
-            heads=self.config.num_heads,
-            key_dim=self.config.head_k_dim,
-            value_dim=self.config.head_v_dim,
-            # The bounded gate's lower-bound scale is applied by chunk preparation.
-            gate_scale=config.gate_lower_bound if self._bounded_gate else 1.0,
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -381,11 +411,13 @@ class ttKDA:
             compute_kernel_config=self.input_projection_compute_config,
         )
         auxiliary_start = self._convolution_width
+        # With overlap_output_gate the projection has no output-gate columns.
+        gate_width = 0 if self.overlap_output_gate else config.v_dim
         return _ProjectedInputs(
             projected=projected,
             decay_rank_offset=auxiliary_start,
             output_gate_offset=auxiliary_start + config.head_k_dim,
-            beta_offset=auxiliary_start + config.head_k_dim + config.v_dim,
+            beta_offset=auxiliary_start + config.head_k_dim + gate_width,
         )
 
     def _compute_decay(self, projected: ttnn.Tensor, decay_rank_offset: int) -> ttnn.Tensor:
@@ -512,6 +544,23 @@ class ttKDA:
             memory_config=self.qkv_memory_config,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
+        companion = None
+        output_gates = []
+        if self.overlap_output_gate:
+
+            def companion():
+                # Built when the relay dispatches, so its L1 output is not live during chunk preparation.
+                output_gate = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, self.active_seq_len_local, self.config.v_dim]),
+                    ttnn.bfloat16,
+                    ttnn.TILE_LAYOUT,
+                    self.device,
+                    ttnn.L1_MEMORY_CONFIG,
+                )
+                output_gates.append(output_gate)
+                io, program = self._output_gate_program(hidden_states, self.output_gate_weight, output_gate)
+                return io, program
+
         result = self.recurrence(
             q=q,
             k=k,
@@ -523,8 +572,14 @@ class ttKDA:
             actual_start=actual_start,
             actual_end=actual_end,
             release_gate=True,
+            prefix_companion=companion,
         )
-        output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
+        if companion is not None:
+            (output_gate,) = output_gates
+            output = self._kda_rms_norm(result.output, output_gate, 0)
+            ttnn.deallocate(output_gate)
+        else:
+            output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
         # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
         output = self._project_output(output)
