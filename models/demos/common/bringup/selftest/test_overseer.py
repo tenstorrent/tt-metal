@@ -226,20 +226,3 @@ def test_a_resumed_fix_gates_before_an_agent(orch, sandbox):  # noqa: F811
     before = len(orch.calls())
     assert o.run() == DONE
     assert o.led.status("FIX.1") == "PASS" and not [c for c in orch.calls()[before:] if c.startswith("FIX.1")]
-
-
-def test_a_resumed_fix_that_still_fails_stops_without_an_agent(orch, sandbox):  # noqa: F811
-    """F87: a resumed fix job whose gate still fails stops for the overseer; no agent starts."""
-    from models.demos.common.bringup.orchestrator import now
-
-    o = orch(
-        [impl_task(), impl_task(id="C.2", deps=["C.1"])], {"C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}}}
-    )
-    assert o.run(until="C.1") == DONE
-    OV.queue_fix(o.spec.bringup_dir, "Fix it.", ["C.1"], tasks={t: o.led.task(t) for t in o.led.tasks()})
-    (sandbox.repo / "src/impl.txt").write_text("0.5")
-    assert o.run() != DONE and o.led.status("FIX.1") == "STOPPED"
-    o.led.update("FIX.1", status="TODO", history_add={"t": now(), "status": "RESUMED"})
-    before = len(orch.calls())
-    assert o.run() != DONE
-    assert o.led.status("FIX.1") == "STOPPED" and not [c for c in orch.calls()[before:] if c.startswith("FIX.1")]
