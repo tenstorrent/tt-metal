@@ -36,10 +36,10 @@ from models.demos.deepseek_v3_d_p.tests.v4.helpers import (
     hidden_to_host,
     layer_floor,
     mesh_params,
+    pack_streams,
     streams_to_host,
     upload_tokens,
 )
-from models.demos.deepseek_v3_d_p.tests.v4.test_block import _pack_streams
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Transformer
 from models.demos.deepseek_v3_d_p.tt.v4.weights import (
@@ -75,7 +75,7 @@ def _upload_streams(mesh_device, streams):
     """Host streams ``[1, S, n, D]`` -> the packed fp32 device streams a non-first rank takes."""
     ms = tuple(mesh_device.shape)
     return ttnn.from_torch(
-        _pack_streams(streams, ms[1]),
+        pack_streams(streams, ms[1]),
         device=mesh_device,
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,

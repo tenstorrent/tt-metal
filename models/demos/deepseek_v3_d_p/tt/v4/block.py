@@ -55,7 +55,7 @@ class TtV4Block(LightweightModule):
     ``[1, 1, seq/sp, hidden/tp]``. Hidden is never gathered across the block. Within a chip the columns
     hold its own hidden slice of every stream, which is what ``mhc_expand`` and this block's own
     output already produce -- chaining layers needs no repacking. Only a host upload has to permute
-    into that order, since a mesh mapper splits the last dim globally (``_pack_streams`` in the test).
+    into that order, since a mesh mapper splits the last dim globally (``pack_streams`` in tests/v4/helpers.py).
 
     The MoE comes from ``TtPrefillBlock._build_moe``: the same TtMoe off the same model config,
     reading ``state_dict["hash_table"]`` for V4's hash-routed layers.
