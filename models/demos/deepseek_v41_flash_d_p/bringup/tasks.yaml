@@ -3253,6 +3253,14 @@ tasks:
     kind: moe
     layer: 2
     stateful: false
+  frozen:
+    at: '2026-10-16T22:59:03'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_experts.py: f8061c6aa272fdd8af916c700995c6a948bba99ec79904aa1139204cbe9a78a6
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.enc_source.14
   title: 'enc_source block with steps 1-14 on device (last: experts)'
   step: implement
