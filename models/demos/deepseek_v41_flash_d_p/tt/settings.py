@@ -46,7 +46,7 @@ TABLE = {
         "high_precision",
         ("high_precision", "exact", "source"),
         "the window attention: high_precision = ttnn.bringup.sparse_sdpa(high_precision=True, attention_sink=...) "
-        "(bf16 q, scores, probabilities and output; rel 0.021 vs the CPU step, DS41-18); exact = tt/window_exact.py "
+        "at the dtypes WINDOW_SDPA_SCORES / _PROBS / _OUT pick (defaults: the reference kernel's, FIX.2); exact = tt/window_exact.py "
         "(q and the probabilities as fp32 bf16-piece sums, every in-tile dot one exact product by lane masks on the "
         "keys / values, fp32 SFPU softmax and sink, fp32 output; 32x the matmul work, 64 ms per layer on 2x2; "
         "DS41-19); source = ttnn.transformer.sparse_sdpa (bf16 running state, approximate exp), a perf pick. Owner "
@@ -54,21 +54,27 @@ TABLE = {
         "default and the max-precision value; exact stays selectable for comparison only",
     ),
     "WINDOW_SDPA_OUT": Setting(
-        "fp32",
-        ("fp32", "bf16"),
-        "the output of the high_precision sparse_sdpa: fp32 = ttnn.bringup.sparse_sdpa(fp32_output=True), the "
-        "normalized fp32 DEST value, untilized exactly (DS41-29); bf16 = rounded to bf16 in the op (the fork's previous "
-        "output; DS41-18: S.swa.06 attention vs the CPU step worst row 0.052 > 0.05)",
+        "bf16",
+        ("bf16", "fp32"),
+        "the output of the high_precision sparse_sdpa: bf16 = the normalized fp32 DEST value rounded to bf16 by the "
+        "packer, the reference kernel's output dtype (inference/kernel.py sparse_attn: o bf16; FIX.2); fp32 = "
+        "ttnn.bringup.sparse_sdpa(fp32_output=True), untilized exactly (DS41-29), above the reference: comparison only",
     ),
     "WINDOW_SDPA_SCORES": Setting(
         "fp32",
         ("fp32", "bf16"),
-        "the scores, softmax probabilities and q of the high_precision sparse_sdpa: fp32 = "
-        "ttnn.bringup.sparse_sdpa(fp32_scores=True) with q rounded to TF32 (nearest, tt/quant.round_tf32) and kept "
-        "fp32 through the head -> seq reshard; the op keeps scores / probabilities in Float32 and rounds every value "
-        "its FPU reads to TF32 to nearest (the FPU truncates); attention vs the CPU step rel 0.0143, +2.1 ms per layer "
-        "(28.6 vs 26.5 ms, 2x2, chunk 2048); bf16 = q and the scores / probabilities in bf16 (the fork's previous "
-        "program, rel 0.0189), a perf pick. DS41-31: S.swa.11 router vs golden 0.9917 (bf16: 0.9887 < 0.99)",
+        "the scores of the high_precision sparse_sdpa: fp32 = ttnn.bringup.sparse_sdpa(fp32_scores=True), Float32 "
+        "scores rounded to TF32 to nearest in DEST (the FPU reads them at TF32; the reference kernel keeps them fp32); "
+        "bf16 = the scores rounded to bf16 (the fork's earlier program, below the reference: a perf pick). DS41-31",
+    ),
+    "WINDOW_SDPA_PROBS": Setting(
+        "bf16",
+        ("bf16", "fp32"),
+        "WINDOW_SDPA_SCORES=fp32 only: the softmax probabilities and q. bf16 = the reference kernel's: bf16 q, "
+        "ttnn.bringup.sparse_sdpa(bf16_probs=True): the running max Float32, the row-sum from the TF32 probabilities, "
+        "then the probabilities rounded to bf16 (nearest) before P.V (FIX.2); fp32 = DS41-31's variant: q rounded to "
+        "TF32 (tt/quant.round_tf32) and kept fp32 through the head -> seq reshard, Float32 (TF32) probabilities, the "
+        "running max bf16; above the reference, comparison only (needs WINDOW_SDPA_OUT=fp32)",
     ),
     "WINDOW_PIECES": Setting(
         3,
@@ -135,8 +141,9 @@ MAX_PRECISION = {
     "FP32_WEIGHT_ROUND": "rne",
     "ATTN_IN_MM": "fpu",  # owner 2026-10-15 (OV-3): accuracy against the noise floor, not exactness
     "WINDOW_SDPA": "high_precision",  # owner 2026-10-15 (OV-3); "exact" only for comparison
-    "WINDOW_SDPA_OUT": "fp32",
+    "WINDOW_SDPA_OUT": "bf16",  # FIX.2: the reference kernel's dtypes (owner rule: never above the reference)
     "WINDOW_SDPA_SCORES": "fp32",
+    "WINDOW_SDPA_PROBS": "bf16",
     "WINDOW_PIECES": 3,
     "ATTN_O_SUM": "gather_add",
     "EXPERTS_SUM": "gather_add",

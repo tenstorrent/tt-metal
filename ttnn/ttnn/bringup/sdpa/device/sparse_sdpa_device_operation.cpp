@@ -135,8 +135,11 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     }
     TT_FATAL(!attrs.fp32_output || attrs.high_precision, "sparse_sdpa fp32_output requires high_precision=true");
     TT_FATAL(
-        !attrs.fp32_scores || (attrs.high_precision && attrs.fp32_output),
-        "sparse_sdpa fp32_scores requires high_precision=true and fp32_output=true");
+        !attrs.fp32_scores || (attrs.high_precision && (attrs.fp32_output || attrs.bf16_probs)),
+        "sparse_sdpa fp32_scores requires high_precision=true and fp32_output=true (or bf16_probs=true)");
+    TT_FATAL(
+        !attrs.bf16_probs || (attrs.fp32_scores && q.dtype() == DataType::BFLOAT16),
+        "sparse_sdpa bf16_probs requires fp32_scores=true and a bf16 q");
 
     const auto qs = q.logical_shape();
     const auto is = idx.logical_shape();
@@ -287,7 +290,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.attention_sink,
         attrs.high_precision,
         attrs.fp32_output,
-        attrs.fp32_scores);
+        attrs.fp32_scores,
+        attrs.bf16_probs);
 }
 
 Tensor sparse_sdpa(
@@ -304,7 +308,8 @@ Tensor sparse_sdpa(
     const std::optional<Tensor>& attention_sink,
     bool high_precision,
     bool fp32_output,
-    bool fp32_scores) {
+    bool fp32_scores,
+    bool bf16_probs) {
     using OperationType = ttnn::prim::bringup::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -318,6 +323,7 @@ Tensor sparse_sdpa(
             .high_precision = high_precision,
             .fp32_output = fp32_output,
             .fp32_scores = fp32_scores,
+            .bf16_probs = bf16_probs,
         },
         OperationType::tensor_args_t{
             .q = q,

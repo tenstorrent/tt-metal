@@ -26,7 +26,8 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
     q              tt/quant.fp8_qdq -> ttnn.linear wq_b (the chip's heads, bf16 weights with each head's rope rows
                    de-interleaved, HiFi4 + fp32 acc, fp32 out) -> heads [1, H/TP, S/SP, 512] -> RoPE (fp32 SFPU,
                    tt/rope.rope_heads) -> x 512^-0.5 (the softmax scale folded into q: the op's scale is then 1, exact;
-                   K-27) -> bf16 (stays fp32 with WINDOW_SDPA_SCORES=fp32, DS41-31) -> all_to_all head -> seq over
+                   K-27) -> bf16 (the reference kernel's q; fp32 rounded to TF32 only with the comparison setting
+                   WINDOW_SDPA_PROBS=fp32, DS41-31) -> all_to_all head -> seq over
                    axis 1 (sparse_sdpa needs H % 32 == 0: 16 heads per chip on 4x4; done whenever TP > 1, one path
                    everywhere) -> [1, 64, S/(SP TP), 512]
     attention      settings WINDOW_SDPA = "high_precision" (default, owner 2026-10-15): the sparse_sdpa path below.
@@ -36,7 +37,10 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
                    softmax with the fp32 sink, fp32 output. "high_precision" / "source": the q -> all_to_all ->
                    ttnn.bringup / ttnn.transformer sparse_sdpa(attention_sink = sink / 1, scale 1) path: per query the
                    128 window rows (load-time index list: row d + 1 + j of the table, a sentinel tail for positions
-                   < 0) -> all_to_all back -> fp32 (high_precision: the op's own fp32 output, WINDOW_SDPA_OUT)
+                   < 0); high_precision at the reference kernel's dtypes (inference/kernel.py sparse_attn; FIX.2):
+                   Float32 scores (TF32-nearest in DEST), Float32 running max and row-sum, the probabilities rounded
+                   to bf16 before P.V (bf16_probs), fp32 accumulation, a bf16 output (WINDOW_SDPA_SCORES / _PROBS /
+                   _OUT) -> all_to_all back -> fp32
     output         inverse RoPE + re-interleave -> fp8_qdq -> heads concatenated per group ->
                    grouped wo_a (the chip's whole groups, one batched matmul) -> fp8_qdq -> wo_b (K-split: the chip's
                    groups) -> exact sum over TP (all_gather + SFPU add, K-30) -> the chip's hidden slice
@@ -338,8 +342,12 @@ class TtWindowAttention:
         self.sdpa = settings.get("WINDOW_SDPA")
         self.high_precision = self.sdpa == "high_precision"
         self.fp32_out = self.high_precision and settings.get("WINDOW_SDPA_OUT") == "fp32"
-        # fp32 q and Float32 scores / probabilities in the op (DS41-31); needs the fp32 output
-        self.fp32_scores = self.fp32_out and settings.get("WINDOW_SDPA_SCORES") == "fp32"
+        # Float32 scores in the op (DS41-31); with bf16_probs the reference kernel's softmax (Float32 max and row-sum,
+        # bf16 probabilities, bf16 q; FIX.2), else DS41-31's comparison variant (TF32 q and probabilities)
+        self.fp32_scores = self.high_precision and settings.get("WINDOW_SDPA_SCORES") == "fp32"
+        self.bf16_probs = self.fp32_scores and settings.get("WINDOW_SDPA_PROBS") == "bf16"
+        self.fp32_q = self.fp32_scores and not self.bf16_probs
+        assert self.fp32_out or not self.fp32_q, "WINDOW_SDPA_PROBS=fp32 (a float32 q) needs WINDOW_SDPA_OUT=fp32"
         if self.sdpa != "exact":
             assert (
                 self.heads % 32 == 0
@@ -434,10 +442,10 @@ class TtWindowAttention:
         return qs
 
     def _q(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """q_resid -> scaled, roped q heads [1, H, S/(SP TP), 512] ROW_MAJOR (after the reshard): fp32 with
-        WINDOW_SDPA_SCORES=fp32, else bf16."""
+        """q_resid -> scaled, roped q heads [1, H, S/(SP TP), 512] ROW_MAJOR (after the reshard): bf16 (the
+        reference kernel's q), fp32 only with WINDOW_SDPA_PROBS=fp32."""
         qs = self._q_heads(q_resid, cos, sin)
-        if self.fp32_scores:
+        if self.fp32_q:
             qb = round_tf32(qs)  # the op's FPU reads q at TF32: rounded to nearest here, not truncated there
             ttnn.deallocate(qs)
         else:
@@ -465,6 +473,7 @@ class TtWindowAttention:
                 high_precision=True,
                 fp32_output=self.fp32_out,
                 fp32_scores=self.fp32_scores,
+                bf16_probs=self.bf16_probs,
             )
         return ttnn.transformer.sparse_sdpa(
             q_rm,
@@ -479,8 +488,8 @@ class TtWindowAttention:
         )
 
     def _out(self, o_rm: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """sparse_sdpa output [1, H, S/(SP TP), 512] ROW_MAJOR (fp32, or bf16 with WINDOW_SDPA_OUT=bf16 / the source
-        op) -> attn_out [1, 1, S/SP, H/TP] fp32."""
+        """sparse_sdpa output [1, H, S/(SP TP), 512] ROW_MAJOR (bf16, the reference kernel's; fp32 with the comparison
+        setting WINDOW_SDPA_OUT=fp32) -> attn_out [1, 1, S/SP, H/TP] fp32."""
         ot = ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT, memory_config=DRAM)
         oh = self._reshard(ot, in_dim=2, out_dim=1)  # [1, H/TP, S/SP, 512]
         if oh is not ot:

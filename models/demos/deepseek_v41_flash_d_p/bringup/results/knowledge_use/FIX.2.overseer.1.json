@@ -1,0 +1,117 @@
+{
+ "used": [
+  {
+   "id": "K-27",
+   "how": "kept 512^-0.5 folded into q with the op's scale 1 (exact sink / exp scale): one bf16 rounding of q, as the reference's",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "kept the scores TF32-nearest in DEST (the FPU reads them at TF32) and explained the TF32-precise score - max subtraction as the op's limit",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-31",
+   "how": "built bf16_probs on the fp32_scores kernel path; every new SFPU step (bf16 rounding of P) on the pack thread per its gotcha; rewritten to what holds now",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-16",
+   "how": "the PV in-tile rounding noise explains the two programs' 6e-4 output difference, so the fork test reads P back exactly through one-hot keys instead",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-29",
+   "how": "bf16 output now default; fp32_output (its explicit pack reconfig) kept only behind WINDOW_SDPA_OUT=fp32",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-18",
+   "how": "rewritten: the reference kernel's dtypes pass the noise-floor limits (rel 0.0221 <= 0.0526)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-19",
+   "how": "rewritten: exact window attention stays a comparison path (above the reference)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-30",
+   "how": "rewritten: router vs golden 0.9862 judged by the F76 limit 0.254, no precision raise",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-31",
+   "evidence": "ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py::test_bf16_probs_values[tf32_probs] (FIX.2): with fp32_scores and one-hot keys the probabilities read back exactly equal rne_tf32(exp(score)) only 0.495 of the time and the 0.263 on the bf16 grid are the truncated values: P reaches P@V with ~9 bits, not TF32 (the claim 'every value its FPU reads rounded to TF32' does not hold for P in P@V). Entry updated.",
+   "cited": true
+  },
+  {
+   "id": "DS41-18",
+   "evidence": "FIX.2: the fp32 output (DS41-29) is no longer needed or the default; WINDOW_SDPA_OUT=bf16 (the reference kernel's) passes C.swa.attention: rel vs CPU 0.0221 <= 0.0526 (noise-floor limit, F76). Entry updated.",
+   "cited": true
+  },
+  {
+   "id": "DS41-30",
+   "evidence": "F76 (19be31aaa26) removed the fixed PCC 0.99; S.swa.11 records swap_router_vs_golden 0.986165 >= 0.2535. Entry updated.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "sparse_sdpa's FPU score - max subtraction is TF32-precise (truncating): probability error up to |s - m| 2^-11, mean -2.6e-4 (probe, FIX.2)",
+  "sparse_sdpa's bf16 running max puts the max score's probability exp(s_max - m_bf16) off 1, so a later bf16 rounding of P adds error the reference (fp32 max, p_max = 1) never has",
+  "a FIX gate composed of C.<type>.attention gates runs the contract test with BRINGUP_TASK=FIX.<n>, which selects every spec layer (DS41-36)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.2",
+   "answer": "done",
+   "evidence": "fork sparse_sdpa bf16_probs (Float32 scores TF32-nearest, Float32 max and row-sum, P rounded to bf16 before P.V, bf16 output); settings WINDOW_SDPA_SCORES=fp32 / WINDOW_SDPA_PROBS=bf16 / WINDOW_SDPA_OUT=bf16 default and MAX_PRECISION, DS41-31's variant only as WINDOW_SDPA_PROBS=fp32 + OUT=fp32; FP32_WEIGHT_ROUND=rne kept. Attention 28.76 -> 26.13 ms per layer (tt/perf_attention.py). Every precision check passes at the reference's dtypes: C.swa.attention rel 0.0221 <= 0.0526, C.swa_engram.attention 0.0253 <= 0.0581, S.swa.11 router vs golden 0.9862 >= 0.254, pcc_swap_out 0.99982 / 0.99982 / 0.99976. The gate as composed has two pre-existing failures independent of the change (DS41-36 contract layers under BRINGUP_TASK=FIX.2, 4/4 pass under the owning tasks; DS41-37 S.swa_engram.18's frozen _checked signature vs F76). DS41-18/19/30/31 updated."
+  }
+ ],
+ "cited_only": [
+  "DS41-36",
+  "DS41-37"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.2",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T08:47:04",
+  "head": "89ae455c9bf",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.2.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
+   "ttnn/ttnn/bringup/sdpa/device/kernels/compute/compute_streaming.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/kernels/compute/sparse_sdpa_compute.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_program_factory.cpp",
+   "ttnn/ttnn/bringup/sdpa/sdpa_nanobind.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.hpp",
+   "ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py"
+  ]
+ }
+}

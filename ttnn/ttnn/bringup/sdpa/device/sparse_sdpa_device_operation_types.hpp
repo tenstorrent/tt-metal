@@ -37,6 +37,10 @@ struct SparseSDPAParams {
     // Float32 value the FPU reads later rounded to TF32 (nearest) in DEST before its pack, and a FLOAT32 q accepted
     // (Float32 Q CBs). Compile-time (define SPARSE_SDPA_FP32_SCORES); hashed.
     bool fp32_scores = false;
+    // Fork option (needs fp32_scores and a bf16 q): a Float32 running max, and the probabilities rounded to bf16
+    // (nearest) in DEST after the row-sum, before P@V (DeepSeek's sparse_attn: fp32 scores / max / sum, bf16 P);
+    // fp32_output may then be false (bf16 output). Compile-time (define SPARSE_SDPA_BF16_PROBS); hashed.
+    bool bf16_probs = false;
     bool has_scaled_kv() const { return kv_format == transformer::bringup::SparseKVFormat::SCALED_FP8; }
 };
 

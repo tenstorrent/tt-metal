@@ -157,8 +157,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // bf16).
     const tt::DataFormat qk_df = attrs.fp32_scores ? fp32 : bf;
     cb(cb_qk_im, tt::tile_size(qk_df), Sqt * Skt, qk_df);
-    cb(cb_max_a, tile_bytes, Sqt, bf);
-    cb(cb_max_b, tile_bytes, Sqt, bf);
+    // bf16_probs (fork option): the running max in Float32 (DeepSeek's kernel; the max score's probability is then
+    // exp(0) = 1, on the bf16 grid), default bf16.
+    const tt::DataFormat max_df = attrs.bf16_probs ? fp32 : bf;
+    cb(cb_max_a, tt::tile_size(max_df), Sqt, max_df);
+    cb(cb_max_b, tt::tile_size(max_df), Sqt, max_df);
     // high_precision (fork option): the L1-accumulated running output / row-sum in Float32 (default bf16); the
     // SPARSE_SDPA_HIGH_PRECISION define also switches the softmax exp to the exact one.
     const tt::DataFormat state_df = attrs.high_precision ? fp32 : bf;
@@ -336,6 +339,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     }
     if (attrs.fp32_scores) {
         compute_desc.defines.emplace_back("SPARSE_SDPA_FP32_SCORES", "1");
+    }
+    if (attrs.bf16_probs) {
+        compute_desc.defines.emplace_back("SPARSE_SDPA_BF16_PROBS", "1");
     }
     // fp8 inputs must unpack into a 32-bit dest (fp8 -> fp32 in DEST, then packed to bfp8 cb_*_in).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
