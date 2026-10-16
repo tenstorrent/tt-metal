@@ -133,9 +133,12 @@ token feedback and position update inside the trace; its tokens match the host l
 | tt-kernel-agent `mimo_moe_stream` round 2: bank-local streaming gate|up with the routing selection inside the program (MoE layer 283 us) | 23.7 ms, 29.5 % | 25.8 ms, 27.1 % | 28.7 ms |
 | tt-kernel-agent final (4 rounds): bank-local streaming down with the pair sum in dest (MoE layer 204 us) | 20.1 ms, 34.7 % | 24.1 ms, 29.0 % | 24.6 ms |
 | Bank-reader cores from the 4x8 parent: row 2's own answer (x = 6 for banks 4-7) slowed six of its chips | 20.1 ms, 34.7 % | 21.95 ms, 31.8 % | 24.8 ms |
+| tt-kernel-agent `mimo_attn_decode` round 2: L1 hand-offs around the projections and the all-reduce; SWA o projection without the V padding rows (attention block 174.7 -> 156.9 us) | 18.5 ms, 37.7 % | 21.1 ms, 33.1 % | 22.3 ms |
+| tt-kernel-agent `mimo_moe_stream2`: compact 4-row all-gather + fixed-order fp32 reduce, earlier streaming start (MoE layer 204 -> 181 us) | 18.07 ms, 38.6 % | 20.15 ms, 34.6 % | 22.4 ms |
+| tt-kernel-agent `mimo_attn_decode` final: wide-K-block 1D matmuls for qkv / o on unpadded weights (attention block -> 147.4 us) | 17.68 ms, 39.5 % | 19.75 ms, 35.3 % | 22.0 ms |
 
-Accuracy after the MoE rows: teacher-forced top-1 vs the fp32 reference 0.975, logits PCC min 0.9693 / mean
-0.9925 (`test_model_tp8_dp4.py`). The GDDR6 of this Galaxy runs at 14 Gbps on every chip (tt-smi), so the
+Accuracy after the last row: teacher-forced top-1 vs the fp32 reference 0.950, logits PCC min 0.9642 / mean
+0.9927 (`test_model_tp8_dp4.py`; before this table: 0.950, 0.9693 / 0.9926). The GDDR6 of this Galaxy runs at 14 Gbps on every chip (tt-smi), so the
 attainable peak is ~448 GB/s; the table keeps the 512 GB/s spec peak as the denominator.
 
 With B=4 x 1M allocated (`test_capacity_1m_tp8_dp4.py`, 16 users, 4 per row), after the first table's rows:
