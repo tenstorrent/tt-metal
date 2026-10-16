@@ -695,3 +695,24 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - OV-4: DS41-20 already states the F73 fix; nothing to change.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py`
   (sweep: `BRINGUP_IMPL=mutations` in front).
+
+## S.swa_engram.14 test review (layer 1, scaled, attempt 1)
+- Freeze failed: with BRINGUP_IMPL=reference only `swap_router_vs_golden` failed, PCC 0.984586 < 0.99 (the router
+  component test's default). The fp32 CPU chain from the bf16 golden block input drifts at the fp8 q-dq steps
+  (DS41-1): ffn_norm 0.99985, then 12.4 % of rows pick another top-6 set (K-39). DS41-30 had predicted 0.9847.
+- Test change (only the router's checks; everything else is run_swap_test as rendered): `_check_step` is patched
+  inside the test (mock.patch.object) so the router's framework check runs without its golden PCC, and
+  `_router_checks` adds (a) vs golden split by routing via `step_errors`: PCC >= 0.97, reselected <= 0.25, rel <=
+  0.0103, worst row <= 0.05, ratio 1 +- 0.02, bias 0.01; (b) vs the CPU step, same-expert rows, rel <= 0.004.
+- (b) because the framework's router rel limit is 2 x the component error 0.0493 = 0.0987 (that error is from the
+  router's PCC on golden inputs, mostly flips) and noise1e-2 (rel 0.0097 vs CPU) passed every framework check
+  (DS41-32). Golden rel alone caught it with only 7 % margin (0.01099 vs 0.0103).
+- Measured: reference PASS (0.9846, reselected 0.1245, rel 0.00513); mutate:bf16 control PASS (cpu rel 0.00156);
+  device gate PASS (pcc_swap_out 0.999781; router 0.9845 / 0.1284 / 0.00528, vs CPU rel 0.00012); stub FAIL;
+  mutate:{noise1e-2, scale1.02, scale0.98, halfswap, rowshift, quarterzero, sign} with BRINGUP_MUTATE_STEP=router
+  all FAIL. Table in the test docstring.
+- BRINGUP_IMPL=mutations (the component sweep) does not apply to swap tests: run_swap_test takes the device path
+  with mesh None (AttributeError in tt/engram_kv.py:42); the rendered test does the same.
+- OV-4: DS41-20 already states the F73 fix; nothing to change.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_14_router.py`
+  (CPU: `BRINGUP_IMPL=reference` / `stub` / `mutate:<kind> BRINGUP_MUTATE_STEP=router` in front).
