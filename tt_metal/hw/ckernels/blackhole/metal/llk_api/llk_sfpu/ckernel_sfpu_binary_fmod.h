@@ -99,6 +99,20 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
     v_endif;
 
+    // Infinite divisor: the reciprocal of +-inf is exactly 0, so trunc_div * b is 0 * inf = NaN
+    // above. fmod(a, +-inf) is a for finite a and NaN for an infinite a (which the a == b case
+    // would otherwise zero for inf/inf). Classify on the bit pattern, as ckernel_sfpu_isclose.h
+    // does, so a NaN divisor is excluded.
+    constexpr int32_t kInfBits = 0x7F800000;
+    v_if(sfpi::as<sfpi::vInt>(b_abs) == kInfBits) {
+        result = a;
+        v_if(sfpi::as<sfpi::vInt>(sfpi::abs(a)) >= kInfBits) {
+            result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN());
+        }
+        v_endif;
+    }
+    v_endif;
+
     if constexpr (!is_fp32_dest_acc_en) {
         result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
     }
