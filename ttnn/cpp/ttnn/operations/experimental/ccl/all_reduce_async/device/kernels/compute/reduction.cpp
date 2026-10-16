@@ -56,9 +56,13 @@ void kernel_main() {
 
         // Pack output tiles
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, cb_out0, num_tiles_to_pack);
+#else
         for (uint32_t i = 0; i < num_tiles_to_pack; ++i) {
             pack_tile(i, cb_out0, p * max_dst_tiles + i);
         }
+#endif
         tile_regs_release();
 
         block_num_tiles_cnt += num_tiles_to_pack;

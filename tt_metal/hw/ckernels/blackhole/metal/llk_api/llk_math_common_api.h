@@ -13,6 +13,7 @@
 #include "api/debug/waypoint.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_dest_clear_api.h"
 #include "llk_fp32_dest_acc.h"
 #include "llk_math_common.h"
 #include "llk_operands.h"
@@ -52,10 +53,27 @@ inline void llk_math_reconfig_remap(const bool remap_enable) {
     _llk_math_reconfig_remap_(remap_enable);
 }
 
+// math_clears_dest: the pack released this section without clearing it, so the math thread clears it here.
+template <bool math_clears_dest = false>
 inline void llk_math_wait_for_dest_available() {
+    static_assert(
+        !math_clears_dest || !llk_unpack_may_write_dest(),
+        "math_clears_dest needs the math thread as DEST's only writer: no 32-bit unpack source in the kernel");
     WAYPOINT("MWDW");
     _llk_math_wait_for_dest_available_<DST_SYNC_MODE>();
+    if constexpr (math_clears_dest) {
+        _llk_math_clear_dest_section_<DST_SYNC_MODE, DST_ACCUM_MODE>();
+    }
     WAYPOINT("MWDD");
+}
+
+// Ends a run of math-cleared sections: once the pack has released the last one, all of DEST is clear again, as the
+// default acquire expects.
+inline void llk_math_dest_clear_region_end() {
+    tensix_sync();
+    while (semaphore_read(semaphore::MATH_PACK) > 0) {
+    }
+    _llk_math_clear_dest_section_<DstSync::SyncFull, DST_ACCUM_MODE>();
 }
 
 template <bool is_fp32_dest_acc_en>
