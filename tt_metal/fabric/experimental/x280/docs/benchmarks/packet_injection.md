@@ -894,97 +894,12 @@ env TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD" \
   --gtest_filter='Axes/PacketInjectionEriscToX280Header.Run/writers2_b1'
 ```
 
-**Silicon.** A Blackhole p150b, tile 0 at
-1750 MHz with 14 LIM ways, exposes 8 inactive IDLE_ETH cores, so `writers_all`
-is 8 there and `writers8` duplicates it. Every point passed at N=1024, S=16, C=1,
-K=1 with W calibrated, every resident slot and guard byte intact, and clean AICLK
-evidence at 1350 MHz on writer 0's ERISC wall clock.
-
-| Point | B | P | W | Aggregate mtime ticks | M headers/s | Per-writer wall ticks | Stall episodes per writer | Empty visits | Resident slots / mismatches |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `writers1` | 1 | 1 | 33,680 | 36,898 | 1.388 | 995,898 | 992 | 0 | 16 / 0 |
-| `writers2` | 1 | 2 | 16,543 | 72,894 | 1.405 | 1,967,523..1,967,616 | 1003 | 0 | 32 / 0 |
-| `writers4` | 1 | 4 | 7,809 | 144,969 | 1.413 | 3,913,017..3,913,394 | 1006 | 0 | 64 / 0 |
-| `writers8` | 1 | 8 | 3,404 | 289,171 | 1.416 | 7,805,486..7,806,391 | 1007..1008 | 0 | 128 / 0 |
-| `writers_all` | 1 | 8 | 3,404 | 289,143 | 1.417 | 7,804,725..7,805,631 | 1007 | 0 | 128 / 0 |
-| `writers1` | 4 | 1 | 33,618 | 36,957 | 1.385 | 997,772 | 1004 | 1 | 16 / 0 |
-| `writers1` | 8 | 1 | 33,607 | 36,966 | 1.385 | 997,958 | 1006 | 3 | 16 / 0 |
-| `writers4` | 4 | 4 | 7,807 | 144,990 | 1.413 | 3,913,609..3,914,037 | 1008 | 0 | 64 / 0 |
-| `writers4` | 8 | 4 | 7,807 | 144,990 | 1.413 | 3,913,588..3,913,989 | 1008 | 0 | 64 / 0 |
-
-Aggregate ingress does not scale with writers at this consumer configuration:
-the X280 interval grows in proportion to P and stays at about 1.4 M headers/s.
-Empty visits stay at zero while almost every header enters the credit wait,
-which is the X280-service signature (many stall episodes, no empty visits; § Throughput
-Measurement); batching
-does not move it at C=1/K=1. ERISC wall and `rdcycle` deltas agree within two
-ticks, and one writer's wall delta over the aggregate interval implies about
-1.35 GHz, matching the AICLK evidence. The scaling campaign below re-ran these
-nine points and reproduced them within 0.09%.
-
-**Scaling campaign.** The same p150b, three runs per point through
-`run_characterization.py`.
-Rates are X280 `mtime` aggregates, mean [min, max] over the runs; stall
-episodes, counter writes and wall ticks are per writer. W is calibrated per point.
-ERISC ticks are shown raw and convert offline under each run's clean AICLK
-evidence, taken on writer 0's ERISC wall clock.
-Every figure is for inactive idle ERISCs and does not show that an ERISC doing
-live Ethernet receive and router work has the same cycles left. No target is
-asserted.
-
-The consumer-settings sweep (S=16, N=1024, B=1):
-
-| C | K | writers1 M headers/s | writers1 stalls | writers1 empty | writers_all M headers/s | writers_all stalls per writer | writers_all empty |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 1 | 1.386 [1.386, 1.386] | 992 | 0 | 1.417 [1.416, 1.417] | 1,007 | 0 |
-| 1 | 8 | 1.965 [1.965, 1.965] | 963..964 | 0 | 1.976 [1.976, 1.976] | 999..1,008 | 0 |
-| 1 | 16 | 2.017 [2.016, 2.017] | 958..959 | 0 | 2.033 [2.033, 2.033] | 994..1,008 | 0 |
-| 4 | 8 | 2.550 [2.550, 2.551] | 0 | 0 | 3.810 [3.809, 3.810] | 125..126 | 0 |
-| 4 | 16 | 2.549 [2.548, 2.551] | 0 | 0 | 4.029 [4.029, 4.030] | 63 | 0 |
-| 8 | 8 | 2.548 [2.548, 2.548] | 0 | 0 | 4.516 [4.515, 4.516] | 126 | 0 |
-| 8 | 16 | 2.548 [2.548, 2.548] | 0 | 0 | 4.824 [4.823, 4.824] | 63..64 | 0 |
-
-At C=8, K=16, the highest `writers_all` aggregate (6.8% above C=8, K=8; spreads
-at most 0.14%), speedup is against `writers1` at the same B and efficiency is
-speedup/P:
-
-| Point | P | B | M headers/s | Logical MB/s | Publication MB/s | Speedup | Efficiency | Slowest/fastest writer | Empty visits | Stall episodes per writer | Counter writes per writer | Per-writer ERISC wall ticks |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `writers1` | 1 | 1 | 2.548 [2.548, 2.548] | 244.6 | 254.8 | 1.00 | 1.00 | 1.0000 | 0 | 0 | 1,024 | 542,457..542,633 |
-| `writers2` | 2 | 1 | 4.532 [4.527, 4.534] | 435.0 | 453.2 | 1.78 | 0.89 | 1.0018 | 0 | 76 | 1,024 | 608,595..610,561 |
-| `writers4` | 4 | 1 | 4.817 [4.816, 4.818] | 462.4 | 481.7 | 1.89 | 0.47 | 1.0073 | 0 | 63 | 1,024 | 1,140,090..1,148,696 |
-| `writers8` | 8 | 1 | 4.824 [4.823, 4.824] | 463.1 | 482.4 | 1.89 | 0.24 | 1.0129 | 0 | 63..64 | 1,024 | 2,268,123..2,297,678 |
-| `writers_all` | 8 | 1 | 4.824 [4.823, 4.824] | 463.1 | 482.4 | 1.89 | 0.24 | 1.0129 | 0 | 63..64 | 1,024 | 2,267,865..2,297,441 |
-| `writers1` | 1 | 4 | 4.459 [4.459, 4.460] | 428.1 | 432.6 | 1.00 | 1.00 | 1.0000 | 1 | 125..126 | 256 | 309,818..310,052 |
-| `writers4` | 4 | 4 | 4.813 [4.812, 4.813] | 462.0 | 466.9 | 1.08 | 0.27 | 1.0100 | 0 | 126 | 256 | 1,139,394..1,151,031 |
-| `writers1` | 1 | 8 | 4.459 [4.459, 4.460] | 428.1 | 430.3 | 1.00 | 1.00 | 1.0000 | 3 | 126 | 128 | 309,863..309,869 |
-| `writers4` | 4 | 8 | 4.814 [4.813, 4.814] | 462.1 | 464.5 | 1.08 | 0.27 | 1.0096 | 0 | 126 | 128 | 1,137,499..1,148,473 |
-
-`writers_all` agrees between N=1024 (4.8238 M headers/s) and N=4096 (4.8273), a
-0.07% difference.
-
-Reading, by the empty-visit versus stall-episode check, with the credit
-returned through a mode-1 (strict) window, which the shipped build does not use: at C=1, K=1 every point
-is X280-service bound (about 1,000 stall episodes per 1,024 headers, empty
-visits at most 3), and that service time is mostly credit writes -- at K=16 the
-X280 cost per header falls linearly with credits per header, about 570 X280
-cycles per credit. At C=8, K=16 four or more writers plateau at 4.82 M
-headers/s, still X280-service bound (about one stall episode per ring, no empty
-visit), and B=4 or 8 does not move it. One writer at B=1 enters neither wait;
-batching it to B=4 lifts it from 2.55 to 4.46 M headers/s, so its own per-header
-publication paces it, an attribution from the response to B rather than from
-the counters. C=8, K=16 is the edge of the S=16 grid, so where larger visits and
-credit batches stop helping is not measured.
-
-With the credit posted through the counter window (mode 2), as the shipped build
-does, the same S=16, B=1 grid reads differently: the
-visit cap K is the lever and C is nearly flat at fixed K. Across all writers,
-(C, K) = (1, 16), (4, 16) and (8, 16) run 19.622, 19.660 and 19.580 M headers/s,
-within 0.4%, and (1, 8), (4, 8) and (8, 8) run 16.137, 16.458 and 16.362, within
-2%. At C=1, K=1 all writers are X280-bound at 4.357 M headers/s, about 229.5 ns
-per visit, while one writer runs 2.576 M headers/s with no stall episode, so it
-is writer-bound. C=1, K=16 still writes one credit per header and costs 51.0 ns
-per header, so a posted credit costs at most about 89 X280 cycles.
+**Silicon.** On a Blackhole p150b with tile 0 at 1750 MHz and 14 LIM ways, 8 inactive
+IDLE_ETH cores are available, so `writers_all` is 8 there and `writers8` duplicates it. The
+published rates are in [results.md](../results.md#packet_injection). With every writer and the
+credit posted through the counter window, as the shipped build does, the visit cap K is the lever
+and C is nearly flat at fixed K; the tabulator's `erisc_to_x280_header` table reproduces every
+`c<C>k<K>` point from the records.
 
 X280 releases every Ethernet writer by its own endpoint, and the suite fails a
 run whose release used a group: a broadcast, even a one-tile one, does not reach
@@ -1019,9 +934,9 @@ with a fence before the counter load and another before the slot loads (see
 
 ### Credit wait
 
-`writers1_b1` (S=16, C=1, K=1) costs 973.4 ERISC wall ticks per header, and 992 of
-1,024 measured headers entered the credit wait: the writer is paced by X280 service
-and credit return, not by its own publication code.
+At S=16, C=1, K=1, `writers1_b1` records no credit-stall episode: one writer is paced by its own
+publication, not by X280 service. With every writer, each enters the credit wait on almost every
+header, so X280 service binds.
 
 ## Running the Benchmark
 
