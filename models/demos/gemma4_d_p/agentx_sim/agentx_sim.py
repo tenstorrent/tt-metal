@@ -41,7 +41,6 @@ import json
 import math
 import multiprocessing as mp
 import os
-import pickle
 import random
 import sys
 import time
@@ -57,12 +56,88 @@ BUCKETS = [(-1, 1024, "<=1K"), (1024, 4096, "1-4K"), (4096, 16384, "4-16K"), (16
 
 
 # ---- workload ----
+# The parse is cached next to the traces as raw arrays (numbers only, nothing is executed on load): ~1 s to load
+# against ~8 s to parse. (field, array typecode); hash_off / dep_off / sess_off index the flat hashes / deps / nodes.
+CACHE_FIELDS = (
+    ("in", "q"),
+    ("out", "q"),
+    ("t", "d"),
+    ("end", "d"),
+    ("hashes", "l"),
+    ("hash_off", "q"),
+    ("deps", "q"),
+    ("dep_off", "q"),
+    ("sess_off", "q"),
+)
+
+
 def load_sessions(path):
-    """Parse traces.jsonl into sessions of nodes; cached as a pickle next to the traces."""
-    cache = path + ".sim.pkl"
-    if os.path.exists(cache) and os.path.getmtime(cache) > os.path.getmtime(path):
-        with open(cache, "rb") as f:
-            return pickle.load(f)
+    """Sessions of nodes for traces.jsonl, from the cache in <path>.simcache/ when it matches the file."""
+    cache = path + ".simcache"
+    stamp = f"{os.path.getsize(path)} {os.path.getmtime(path)}"
+    try:
+        with open(os.path.join(cache, "source")) as f:
+            if f.read() == stamp:
+                return _read_cache(cache)
+    except OSError:
+        pass
+    sessions = parse_sessions(path)
+    try:
+        _write_cache(cache, sessions, stamp)
+    except OSError:
+        pass  # e.g. a read-only dataset directory: parse every run
+    return sessions
+
+
+def _write_cache(cache, sessions, stamp):
+    cols = {name: array.array(code) for name, code in CACHE_FIELDS}
+    for col in ("hash_off", "dep_off", "sess_off"):
+        cols[col].append(0)
+    for nodes in sessions:
+        for n in nodes:
+            for name in ("in", "out", "t", "end"):
+                cols[name].append(n[name])
+            cols["hashes"].extend(n["hashes"])
+            cols["hash_off"].append(len(cols["hashes"]))
+            cols["deps"].extend(n["deps"])
+            cols["dep_off"].append(len(cols["deps"]))
+        cols["sess_off"].append(len(cols["in"]))
+    os.makedirs(cache, exist_ok=True)
+    for name, col in cols.items():
+        with open(os.path.join(cache, name + ".bin"), "wb") as f:
+            col.tofile(f)
+    with open(os.path.join(cache, "source"), "w") as f:  # last, so a partial cache is never used
+        f.write(stamp)
+
+
+def _read_cache(cache):
+    cols = {}
+    for name, code in CACHE_FIELDS:
+        col = array.array(code)
+        file = os.path.join(cache, name + ".bin")
+        with open(file, "rb") as f:
+            col.fromfile(f, os.path.getsize(file) // col.itemsize)
+        cols[name] = col
+    hashes, hash_off, deps, dep_off = memoryview(cols["hashes"]), cols["hash_off"], cols["deps"], cols["dep_off"]
+    sess_off = cols["sess_off"]
+    return [
+        [
+            {
+                "in": cols["in"][i],
+                "out": cols["out"][i],
+                "t": cols["t"][i],
+                "end": cols["end"][i],
+                "hashes": hashes[hash_off[i] : hash_off[i + 1]],
+                "deps": list(deps[dep_off[i] : dep_off[i + 1]]),
+            }
+            for i in range(sess_off[k], sess_off[k + 1])
+        ]
+        for k in range(len(sess_off) - 1)
+    ]
+
+
+def parse_sessions(path):
+    """Parse traces.jsonl into sessions of nodes."""
     sessions = []
     with open(path) as f:
         for line in f:
@@ -110,8 +185,6 @@ def load_sessions(path):
                 prev = add(m, deps)
                 launch(prev, by_trigger.get(i, []))
             sessions.append(nodes)
-    with open(cache, "wb") as f:
-        pickle.dump(sessions, f, protocol=pickle.HIGHEST_PROTOCOL)
     return sessions
 
 
@@ -296,6 +369,11 @@ def run(
         busy += dt
         steps += 1
         step_log.append((t, dt, sum(k for _, k in run_list) * C))
+        # Requests sent during the step look up the cache as it was when they were sent, before this step's
+        # completions are inserted; they still wait for the next step.
+        while arrivals and arrivals[0][0] < t:
+            send, g = heapq.heappop(arrivals)
+            admit(g, send)
         for g, k in run_list:
             r = req[g]
             r[1] += k * C
@@ -377,7 +455,7 @@ def summarize(stats, makespan, busy, steps, rows):
     for lo, hi, name in BUCKETS:
         b = [x.done - x.send for x in stats if lo < x.n_in - x.cached <= hi]
         out[f"n_{name}"] = len(b)
-        out[f"p50_{name}"], out[f"p99_{name}"] = pct(b, 50), pct(b, 99)
+        out[f"p50_{name}"], out[f"p90_{name}"], out[f"p99_{name}"] = pct(b, 50), pct(b, 90), pct(b, 99)
     return out
 
 
