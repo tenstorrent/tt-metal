@@ -1308,7 +1308,6 @@ The LLK is correct, but the test harness never exercises the parameter point the
 - tt_metal/tt-llk/tests/sources/matmul_test.cpp:111 — calls _llk_unpack_AB_matmul_ with TILE_SIZE_UNPACK_A, TILE_SIZE_UNPACK_B, the opposite order from math_matmul_test/unpack_matmul_test/tilize_polluter_tiny_matmul_test (B, A). Latent while it uses full tiles and one input format; wrong for a tiny in0 or mixed formats.
 - tt_metal/tt-llk/tests/sources/matmul_test.cpp:62 — the init call here also passes A, B (the siblings pass B, A at init), so it is the same latent swap on the init path.
 - tt_metal/tt-llk/tests/sources/matmul_custom_test.cpp:38 — init and run (line 58) both pass TILE_SIZE_UNPACK_A, TILE_SIZE_UNPACK_B, the opposite of the tiny-tile siblings. Full tiles only, so there is no current exposure.
-- tt_metal/tt-llk/tests/sources/matmul_and_unary_sfpu_test.cpp:46 — the _llk_unpack_AB_matmul_ call passes TILE_SIZE_UNPACK_A, TILE_SIZE_UNPACK_B: the same latent operand-order inconsistency.
 - tt_metal/tt-llk/tests/python_tests/test_eltwise_unary_sfpu.py:207 — _sweep_params always crosses dest_acc [No, Yes] with BROAD_FORMATS (Float16_b/Bfp8_b -> Float16) and FORMATS_BFP4_B (Bfp4_b -> Float16), with no distinct_dest_accumulation_modes filter. On WH, TestConfig (helpers/test_config.py:997) promotes the dest_acc:No case to Yes, so it reruns the Yes kernel under a misleading ID. On BH, _skip_bh_unless_fp32 / _skip_bh_unsupported_float_combo skip only some of these combinations.
 
 
