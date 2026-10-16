@@ -183,8 +183,8 @@ Devices::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
 
 Devices::~Devices() = default;
 
-std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    context_id_ = mesh_device->impl().get_context_id();
+std::vector<CapturedDevice> Devices::boot(distributed::MeshDevice& mesh_device) {
+    context_id_ = mesh_device.impl().get_context_id();
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const auto& hal = MetalContext::instance(context_id_).hal();
     const auto& rtopts = MetalContext::instance(context_id_).rtoptions();
@@ -220,12 +220,12 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
     TT_FATAL(l1_.stop + kernel_profiler::kRelayCtrlWordStride <= l1_.cfg, "DRISC L1 layout overlaps the socket config");
 
     std::vector<CapturedDevice> out;
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        if (!mesh_device->is_local(coord)) {
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
+        if (!mesh_device.is_local(coord)) {
             continue;
         }
         DeviceCtx ctx;
-        ctx.device = mesh_device->get_device(coord);
+        ctx.device = mesh_device.get_device(coord);
         ctx.chip_id = static_cast<uint32_t>(ctx.device->id());
         if (!boot_device(mesh_device, ctx, coord)) {
             log_warning(
@@ -252,9 +252,7 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
 }
 
 bool Devices::boot_device(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    DeviceCtx& ctx,
-    const distributed::MeshCoordinate& coord) {
+    distributed::MeshDevice& mesh_device, DeviceCtx& ctx, const distributed::MeshCoordinate& coord) {
     enumerate_worker_grid(mesh_device, ctx);
     if (!choose_relay_cores(mesh_device, ctx)) {
         return false;
@@ -284,12 +282,12 @@ void Devices::write_ctrl_word(const DeviceCtx& ctx, const CoreCoord& virt, uint3
 
 // Core identity is not in the packets: the relay stamps each frame with the NoC coordinate the host seeded it with,
 // and core_xy resolves it to the core index the lanes are numbered by.
-void Devices::enumerate_worker_grid(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx) {
+void Devices::enumerate_worker_grid(distributed::MeshDevice& mesh_device, DeviceCtx& ctx) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const uint32_t chip = ctx.chip_id;
     // The poll list defines the drained set; a producer outside it fills its ring, blocks forever, and takes the
     // host down in wait_until_cores_done. The relay lives on a DRAM core, so the full grid is polled.
-    const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
+    const CoreCoord grid = mesh_device.compute_with_storage_grid_size();
     const std::vector<uint8_t> zero_ctrl(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, 0);
     CaptureContext::Device& cap = ctx.out.ctx;
     for (uint32_t ly = 0; ly < grid.y; ly++) {
@@ -329,7 +327,7 @@ void Devices::enumerate_worker_grid(const std::shared_ptr<distributed::MeshDevic
     }
 }
 
-bool Devices::choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx) {
+bool Devices::choose_relay_cores(distributed::MeshDevice& mesh_device, DeviceCtx& ctx) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const uint32_t chip = ctx.chip_id;
     const auto& soc = cluster.get_soc_desc(chip);
@@ -363,7 +361,7 @@ bool Devices::choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>&
 
     std::vector<CoreCoord> relay_cores;
     for (uint32_t d = 0; d < ctx.n_relays; d++) {
-        ctx.relays[d].logical = mesh_device->impl().pick_unused_dram_logical_core(ctx.device, banks[d]);
+        ctx.relays[d].logical = mesh_device.impl().pick_unused_dram_logical_core(ctx.device, banks[d]);
         relay_cores.push_back(ctx.relays[d].logical);
     }
     // pick_unused_dram_logical_core() reserves per view and cannot see two views resolving to one physical port
@@ -423,12 +421,8 @@ void Devices::reserve_spool() {
     spool_bytes_ = bytes;
 }
 
-
 bool Devices::launch_relay(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    DeviceCtx& ctx,
-    const distributed::MeshCoordinate& coord,
-    uint32_t d) {
+    distributed::MeshDevice& mesh_device, DeviceCtx& ctx, const distributed::MeshCoordinate& coord, uint32_t d) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const auto& hal = MetalContext::instance(context_id_).hal();
     const auto& rtopts = MetalContext::instance(context_id_).rtoptions();

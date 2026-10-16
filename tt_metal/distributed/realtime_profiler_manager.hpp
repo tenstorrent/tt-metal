@@ -48,7 +48,7 @@ struct RealtimeProfilerCoreL1Addrs {
 // host-device sync handshake (sharded across a small worker pool, with a 60s per-chip throttle).
 class RealtimeProfilerManager : private tt::RealtimeProfilerCallbackListener {
 public:
-    explicit RealtimeProfilerManager(const std::shared_ptr<MeshDevice>& mesh_device);
+    explicit RealtimeProfilerManager(MeshDevice& mesh_device);
     ~RealtimeProfilerManager() override;
 
     RealtimeProfilerManager(const RealtimeProfilerManager&) = delete;
@@ -128,7 +128,7 @@ private:
 
     // Set up the D2H socket and launch the BRISC/NCRISC kernels on each eligible local device. Devices failing the
     // eligibility gate or socket creation are skipped.
-    void initialize_devices(const std::shared_ptr<MeshDevice>& mesh_device);
+    void initialize_devices(MeshDevice& mesh_device);
     void run_sync(DeviceState& dev_state, uint32_t num_samples);
     void run_init_sync();
 

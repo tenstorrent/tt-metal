@@ -77,7 +77,7 @@ Receiver::Receiver(std::unique_ptr<Devices> relays, std::vector<CapturedDevice> 
     }
 }
 
-std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+std::unique_ptr<Receiver> Receiver::create(distributed::MeshDevice& mesh_device) {
     auto relays = std::make_unique<Devices>();
     std::vector<CapturedDevice> devices;
     try {
@@ -91,7 +91,7 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
         return nullptr;
     }
     std::unique_ptr<Receiver> receiver(new Receiver(std::move(relays), std::move(devices)));
-    service().register_builtin_consumers(MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions());
+    service().register_builtin_consumers(MetalContext::instance(mesh_device.impl().get_context_id()).rtoptions());
     service().attach_producer(*receiver);
     for (uint32_t d = 0; d < receiver->devices_.size(); d++) {
         std::vector<Stream*> owned;

@@ -529,8 +529,8 @@ void RealtimeProfilerManager::service_finish_sync(std::chrono::steady_clock::tim
     }
 }
 
-RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevice>& mesh_device) :
-    context_id_(mesh_device->impl().get_context_id()) {
+RealtimeProfilerManager::RealtimeProfilerManager(MeshDevice& mesh_device) :
+    context_id_(mesh_device.impl().get_context_id()) {
     initialize_devices(mesh_device);
 
     if (devices_.empty()) {
@@ -561,7 +561,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     receiver_thread_ = std::thread(&RealtimeProfilerManager::run_receiver, this);
 }
 
-void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevice>& mesh_device) {
+void RealtimeProfilerManager::initialize_devices(MeshDevice& mesh_device) {
     // HAL offsets are the same for all devices (same arch).
     const auto& hal = MetalContext::instance(context_id_).hal();
     const auto& factory = hal.get_realtime_profiler_msgs_factory(HalProgrammableCoreType::TENSIX);
@@ -598,12 +598,12 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
     const std::string realtime_profiler_push_kernel_path =
         "tt_metal/impl/dispatch/kernels/cq_realtime_profiler_push.cpp";
 
-    for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
-        if (!mesh_device->is_local(coord)) {
+    for (const auto& coord : MeshCoordinateRange(mesh_device.shape())) {
+        if (!mesh_device.is_local(coord)) {
             continue;
         }
 
-        IDevice* device = mesh_device->get_device(coord);
+        IDevice* device = mesh_device.get_device(coord);
         auto device_id = device->id();
 
         auto eligibility = evaluate_realtime_profiler_eligibility(device, context_id_);
@@ -634,7 +634,7 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             tt::LogMetal,
             "[Real-time profiler] Initializing real-time profiler D2H socket for device {} on MeshDevice {}",
             device_id,
-            mesh_device->id());
+            mesh_device.id());
 
         // D2H socket construction (host pinning / hugepage / UMD) is fragile, so catch and skip this device rather than
         // abort the run.

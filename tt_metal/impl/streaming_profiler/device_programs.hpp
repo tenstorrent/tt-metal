@@ -56,7 +56,7 @@ public:
 
     // Brings the relays up on every eligible local Blackhole device and syncs each clock. A device that fails is
     // logged and left unarmed, so its markers are overwritten rather than blocked on.
-    std::vector<CapturedDevice> boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+    std::vector<CapturedDevice> boot(distributed::MeshDevice& mesh_device);
     // Stops every relay through its stop word (1 = quiesce, then 2 = release the NIU once it is done), reporting
     // each relay's states through `on_state` (may be empty), then disarms the device's producers. A relay that does
     // not finish within 10 s is a fault. The resident idle FW is left alone.
@@ -96,22 +96,16 @@ private:
         uint32_t stage_base = 0, n_stage = 0, core_records = 0, done = 0, stop = 0, cfg = 0;
     };
 
-    bool boot_device(
-        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-        DeviceCtx& ctx,
-        const distributed::MeshCoordinate& coord);
-    void enumerate_worker_grid(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
+    bool boot_device(distributed::MeshDevice& mesh_device, DeviceCtx& ctx, const distributed::MeshCoordinate& coord);
+    void enumerate_worker_grid(distributed::MeshDevice& mesh_device, DeviceCtx& ctx);
     // Relay count, each relay's DRAM view and core, and a check that firmware left that core's NIUs in stream
     // mode. False: no relay can run on this device.
-    bool choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
+    bool choose_relay_cores(distributed::MeshDevice& mesh_device, DeviceCtx& ctx);
     void reserve_spool();
     // Configures the relay's TLB window, builds its socket, launches it and confirms its heartbeat. False means
     // capture must be abandoned for this device.
     bool launch_relay(
-        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-        DeviceCtx& ctx,
-        const distributed::MeshCoordinate& coord,
-        uint32_t d);
+        distributed::MeshDevice& mesh_device, DeviceCtx& ctx, const distributed::MeshCoordinate& coord, uint32_t d);
     // PROFILER_ARMED on every core the relays drain: set once they are up (producers boot unarmed and never block on
     // a full ring until then), cleared once every relay is done so a producer blocked on a full ring is released.
     void set_producers_armed(const DeviceCtx& ctx, bool armed);

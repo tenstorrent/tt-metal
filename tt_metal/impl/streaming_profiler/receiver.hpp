@@ -28,7 +28,7 @@ namespace streaming_profiler {
 
 class Receiver : public Producer {
 public:
-    static std::unique_ptr<Receiver> create(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+    static std::unique_ptr<Receiver> create(distributed::MeshDevice& mesh_device);
     ~Receiver() override;
 
     Receiver(const Receiver&) = delete;

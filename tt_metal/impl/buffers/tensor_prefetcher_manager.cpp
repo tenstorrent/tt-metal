@@ -731,7 +731,6 @@ void TensorPrefetcherManager::allocate_sockets() {
     sockets_.clear();
     sockets_.reserve(devices_.size() * num_senders_);
 
-    auto mesh_device_sp = mesh_device_->shared_from_this();
     const uint64_t dram_l1_noc_offset = hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
 
     for (auto* device : devices_) {
@@ -742,7 +741,7 @@ void TensorPrefetcherManager::allocate_sockets() {
             // (the one for that core's own sender). Use the same offsets carved by
             // start() — socket_config_l1_addr_ then socket_data_l1_addr_.
             auto socket = experimental::detail::create_h2d_socket_for_dram_recv(
-                mesh_device_sp,
+                *mesh_device_,
                 MeshCoreCoord(device_coord, sender_logical),
                 fifo_size,
                 socket_config_l1_addr_,

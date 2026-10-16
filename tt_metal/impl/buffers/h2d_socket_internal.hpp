@@ -37,7 +37,7 @@ inline bool try_write(distributed::H2DSocket& socket, void* data, uint32_t num_p
 // data buffers.
 struct H2DSocketDramRecvAccess {
     static std::unique_ptr<distributed::H2DSocket> create(
-        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        distributed::MeshDevice& mesh_device,
         const distributed::MeshCoreCoord& recv_core,
         uint32_t fifo_size,
         uint32_t config_l1_local_addr,
@@ -51,7 +51,7 @@ struct H2DSocketDramRecvAccess {
 // alignment slack). Host writes go via cluster.write_core with
 // dram_l1_noc_offset added to the local address. Always uses HOST_PUSH mode.
 inline std::unique_ptr<distributed::H2DSocket> create_h2d_socket_for_dram_recv(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const distributed::MeshCoreCoord& recv_core,
     uint32_t fifo_size,
     uint32_t config_l1_local_addr,

@@ -409,8 +409,8 @@ public:
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
-    void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
-    void init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_realtime_profiler_socket(MeshDevice& mesh_device);
+    void init_streaming_profiler(MeshDevice& mesh_device);
     void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
 

@@ -78,7 +78,7 @@ void advance_d2h_simulator_socket_device(MeshDevice* mesh_device, const MeshCoor
 }  // namespace
 
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
-    const std::shared_ptr<MeshDevice>& mesh_device,
+    MeshDevice& mesh_device,
     const MeshCoordinateRangeSet& device_range,
     uint32_t pcie_alignment,
     const std::string& shm_name) {
@@ -107,8 +107,8 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
             bind_memory_to_numa_node(
                 p,
                 alloc_size,
-                static_cast<int>(mesh_device->impl().metal_env().get_cluster().get_numa_node_for_device(
-                    mesh_device->get_device(sender_core_.device_coord)->id())));
+                static_cast<int>(mesh_device.impl().metal_env().get_cluster().get_numa_node_for_device(
+                    mesh_device.get_device(sender_core_.device_coord)->id())));
         }
         aligned_ptr = p;
         host_buffer_ = std::shared_ptr<uint32_t[]>(
@@ -127,12 +127,12 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     tt::tt_metal::HostBuffer host_buffer_view(
         ttsl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
     pinned_memory_ =
-        tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
+        tt::tt_metal::experimental::PinnedMemory::Create(mesh_device, device_range, host_buffer_view, true);
 
-    const auto& noc_addr = pinned_memory_->get_noc_addr(mesh_device->get_device(sender_core_.device_coord)->id());
+    const auto& noc_addr = pinned_memory_->get_noc_addr(mesh_device.get_device(sender_core_.device_coord)->id());
     TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for D2H socket pinned memory.");
     TT_FATAL(
-        noc_addr.value().device_id == mesh_device->get_device(sender_core_.device_coord)->id(),
+        noc_addr.value().device_id == mesh_device.get_device(sender_core_.device_coord)->id(),
         "Pinned Memory used for D2H sockets must be mapped to the same device as the sender core. D2H Sockets cannot "
         "communicate with remote devices.");
 
@@ -142,7 +142,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
         .addr_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32)};
 }
 
-D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device) {
+D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(MeshDevice& mesh_device) {
 #if !defined(__x86_64__) && !defined(__i386__)
     // Cache management for WB + non-snooped PCIe DMA is x86-specific (clflush + lfence).
     // WH — the only architecture that takes this hugepage path — is x86-only, so this
@@ -152,7 +152,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
 #endif
     using_hugepage_ = true;
 
-    auto* device = mesh_device->get_device(sender_core_.device_coord);
+    auto* device = mesh_device.get_device(sender_core_.device_coord);
     auto device_id = device->id();
     auto& sysmem_mgr = device->sysmem_manager();
 
@@ -160,7 +160,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
     hugepage_data_host_ptr_ = static_cast<uint32_t*>(data_host_ptr);
     std::memset(hugepage_data_host_ptr_, 0, fifo_size_);
 
-    auto& env = mesh_device->impl().metal_env();
+    auto& env = mesh_device.impl().metal_env();
     const auto& cluster = env.get_cluster();
     const auto& hal = env.get_hal();
     ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
@@ -185,9 +185,9 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
     return PinnedBufferInfo{.pcie_xy_enc = pcie_xy_enc, .addr_lo = data_dev_addr, .addr_hi = 0};
 }
 
-void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device) {
-    validate_host_socket_allocation(*mesh_device, sender_core_);
-    const SocketSenderSize sender_size(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
+void D2HSocket::init_config_buffer(MeshDevice& mesh_device) {
+    validate_host_socket_allocation(mesh_device, sender_core_);
+    const SocketSenderSize sender_size(mesh_device.impl().metal_env().get_hal().get_alignment(HalMemType::L1));
     uint32_t config_buffer_size = sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
 
     auto shard_params = ShardSpecBuffer(
@@ -206,24 +206,21 @@ void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
     };
 
     std::optional<DeviceAddr> preallocated_addr;
-    auto& svc = mesh_device->impl().metal_context().get_service_core_manager();
+    auto& svc = mesh_device.impl().metal_context().get_service_core_manager();
     auto* sender_device =
-        mesh_device->is_local(sender_core_.device_coord) ? mesh_device->get_device(sender_core_.device_coord) : nullptr;
+        mesh_device.is_local(sender_core_.device_coord) ? mesh_device.get_device(sender_core_.device_coord) : nullptr;
     if (sender_device && svc.claimed_cores(sender_device->id()).contains(sender_core_.core_coord)) {
         svc_config_l1_addr_ = svc.allocate_l1(sender_device, sender_core_.core_coord, config_buffer_size);
         preallocated_addr = svc_config_l1_addr_;
     }
 
-    config_buffer_ =
-        MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get(), preallocated_addr);
+    config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, &mesh_device, preallocated_addr);
     config_buffer_address_ = config_buffer_->address();
 }
 
 void D2HSocket::write_socket_metadata(
-    const std::shared_ptr<MeshDevice>& mesh_device,
-    const PinnedBufferInfo& data_info,
-    const PinnedBufferInfo& bytes_sent_info) const {
-    const SocketSenderSize sender_size(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
+    MeshDevice& mesh_device, const PinnedBufferInfo& data_info, const PinnedBufferInfo& bytes_sent_info) const {
+    const SocketSenderSize sender_size(mesh_device.impl().metal_env().get_hal().get_alignment(HalMemType::L1));
     const uint32_t total_config_bytes =
         sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
 
@@ -244,8 +241,8 @@ void D2HSocket::write_socket_metadata(
     if (is_l2cpu_) {
         // L2CPU has no MeshBuffer-backed config and no fast-dispatch path; write the
         // blob directly to the caller-provided LIM address.
-        const auto& cluster = mesh_device->impl().metal_env().get_cluster();
-        const uint32_t device_id = mesh_device->get_device(sender_core_.device_coord)->id();
+        const auto& cluster = mesh_device.impl().metal_env().get_cluster();
+        const uint32_t device_id = mesh_device.get_device(sender_core_.device_coord)->id();
         cluster.write_core(
             config_data.data(),
             total_config_bytes,
@@ -258,17 +255,17 @@ void D2HSocket::write_socket_metadata(
     // ctor owns config_buffer_; use fast-dispatch WriteShard like pre-RT-profiler path.
     if (config_buffer_) {
         distributed::WriteShard(
-            mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
+            mesh_device.mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
     } else if (sender_core_type_ != HalProgrammableCoreType::TENSIX) {
-        auto& env = mesh_device->impl().metal_env();
-        const ChipId device_id = mesh_device->get_device(sender_core_.device_coord)->id();
+        auto& env = mesh_device.impl().metal_env();
+        const ChipId device_id = mesh_device.get_device(sender_core_.device_coord)->id();
         env.get_cluster().write_core(
             config_data.data(),
             total_config_bytes,
-            tt_cxy_pair(device_id, sender_virtual_core(*mesh_device, device_id)),
+            tt_cxy_pair(device_id, sender_virtual_core(mesh_device, device_id)),
             config_buffer_address_ + env.get_hal().get_l1_noc_offset(sender_core_type_));
     } else {
-        IDevice* device = mesh_device->get_device(sender_core_.device_coord);
+        IDevice* device = mesh_device.get_device(sender_core_.device_coord);
         tt::tt_metal::detail::WriteToDeviceL1(
             device, sender_core_.core_coord, config_buffer_address_, config_data, CoreType::WORKER);
     }
@@ -282,12 +279,10 @@ CoreCoord D2HSocket::sender_virtual_core(const MeshDevice& mesh_device, ChipId d
         device_id, sender_core_.core_coord);
 }
 
-void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) {
-    TT_FATAL(mesh_device, "init_sender_tlb requires a MeshDevice (owner path only; connectors use PCIeCoreWriter).");
-
-    auto& env = mesh_device->impl().metal_env();
+void D2HSocket::init_sender_tlb(MeshDevice& mesh_device) {
+    auto& env = mesh_device.impl().metal_env();
     auto& cluster = env.get_cluster();
-    const uint32_t sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
+    const uint32_t sender_device_id = mesh_device.get_device(sender_core_.device_coord)->id();
     CoreCoord sender_virtual_core_coord;
 
     // Mock/emulated chips have no device to map, so they skip the window creation below (guarded by
@@ -309,7 +304,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
                 {.size = ll_api::kL2cpuLimTlbSize});
         }
     } else {
-        sender_virtual_core_coord = this->sender_virtual_core(*mesh_device, sender_device_id);
+        sender_virtual_core_coord = this->sender_virtual_core(mesh_device, sender_device_id);
     }
 
     if (is_l2cpu_ && !cluster.is_mock_or_emulated()) {
@@ -347,7 +342,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
     }
 }
 
-void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
+void D2HSocket::init_common(MeshDevice& mesh_device) {
     MeshCoordinateRangeSet sender_device_range_set;
     sender_device_range_set.merge(MeshCoordinateRange(sender_core_.device_coord));
 
@@ -355,7 +350,7 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
     // The hugepage fallback segfaults on mock (sysmem is stubbed); force the pinned path.
-    auto& ctx = mesh_device->impl().metal_context();
+    auto& ctx = mesh_device.impl().metal_context();
     bool can_use_pinned_memory =
         !d2h_uses_hugepage_fallback(ctx) || ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
@@ -385,7 +380,7 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     } else {
         data_info = init_host_buffer_hugepage(mesh_device);
 
-        auto* device = mesh_device->get_device(sender_core_.device_coord);
+        auto* device = mesh_device.get_device(sender_core_.device_coord);
         auto& sysmem_mgr = device->sysmem_manager();
         auto [bs_host_ptr, bs_dev_addr] = sysmem_mgr.allocate_region(sizeof(uint32_t));
         hugepage_bytes_sent_host_ptr_ = static_cast<volatile uint32_t*>(bs_host_ptr);
@@ -399,10 +394,10 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     write_socket_metadata(mesh_device, data_info, bytes_sent_info);
     init_sender_tlb(mesh_device);
 
-    const SocketSenderSize sender_size(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
+    const SocketSenderSize sender_size(mesh_device.impl().metal_env().get_hal().get_alignment(HalMemType::L1));
     bytes_acked_device_offset_ = sender_size.md_size_bytes;
 
-    enable_mock_flow_control(*mesh_device);
+    enable_mock_flow_control(mesh_device);
 }
 
 D2HSocket::D2HSocket(
@@ -410,12 +405,16 @@ D2HSocket::D2HSocket(
     const MeshCoreCoord& sender_core,
     uint32_t fifo_size,
     ProcessScope scope) :
+    D2HSocket(*mesh_device, sender_core, fifo_size, scope) {}
+
+D2HSocket::D2HSocket(
+    MeshDevice& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size, ProcessScope scope) :
     sender_core_(sender_core),
     fifo_size_(fifo_size),
-    pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
+    pcie_alignment_(mesh_device.impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     process_scope_(scope),
-    mesh_device_(mesh_device.get()),
-    rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), sender_core)) {
+    mesh_device_(&mesh_device),
+    rank_owns_endpoint_(rank_owns_host_socket_endpoint(&mesh_device, sender_core)) {
     // Checked on every rank before the collective allocation so co-owners fail together.
     TT_FATAL(fifo_size_ % pcie_alignment_ == 0, "FIFO size must be PCIe-aligned.");
     init_config_buffer(mesh_device);
@@ -432,14 +431,22 @@ D2HSocket::D2HSocket(
     uint32_t fifo_size,
     ExternalConfigBuffer external_config,
     ProcessScope scope) :
+    D2HSocket(*mesh_device, sender_core, fifo_size, external_config, scope) {}
+
+D2HSocket::D2HSocket(
+    MeshDevice& mesh_device,
+    const MeshCoreCoord& sender_core,
+    uint32_t fifo_size,
+    ExternalConfigBuffer external_config,
+    ProcessScope scope) :
     sender_core_(sender_core),
     fifo_size_(fifo_size),
-    pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
+    pcie_alignment_(mesh_device.impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     process_scope_(scope),
-    mesh_device_(mesh_device.get()),
-    rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), sender_core)) {
+    mesh_device_(&mesh_device),
+    rank_owns_endpoint_(rank_owns_host_socket_endpoint(&mesh_device, sender_core)) {
     TT_FATAL(external_config.address != 0, "External config buffer address must be non-zero.");
-    const uint32_t l1_alignment = mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1);
+    const uint32_t l1_alignment = mesh_device.impl().metal_env().get_hal().get_alignment(HalMemType::L1);
     TT_FATAL(
         external_config.address % l1_alignment == 0,
         "External config buffer address 0x{:x} must be L1-aligned ({} B).",
@@ -458,9 +465,6 @@ D2HSocket::D2HSocket(
     mesh_device_(&mesh_device),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(&mesh_device, sender_l2cpu)),
     is_l2cpu_(true) {
-    // Helpers below still take a shared_ptr; the socket itself stores only a raw
-    // MeshDevice* and does not extend the device's lifetime.
-    const auto mesh_device_ptr = mesh_device.shared_from_this();
     TT_FATAL(
         mesh_device.impl().metal_env().get_hal().get_arch() == tt::ARCH::BLACKHOLE,
         "L2CPU D2H sockets are only supported on Blackhole architectures.");
@@ -478,7 +482,7 @@ D2HSocket::D2HSocket(
     // core and pick up that core's TLB base. Check membership rather than trust it.
     {
         const auto& cluster = mesh_device.impl().metal_env().get_cluster();
-        const uint32_t device_id = mesh_device_ptr->get_device(sender_core_.device_coord)->id();
+        const uint32_t device_id = mesh_device.get_device(sender_core_.device_coord)->id();
         const auto l2cpu_cores =
             cluster.get_soc_desc(device_id).get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED);
         const bool is_l2cpu_core = std::any_of(l2cpu_cores.begin(), l2cpu_cores.end(), [this](const auto& c) {
@@ -510,7 +514,7 @@ D2HSocket::D2HSocket(
     TT_FATAL(fifo_size_ > 0 && fifo_size_ % pcie_alignment_ == 0, "FIFO size must be non-zero and PCIe-aligned.");
 
     config_buffer_address_ = config_buffer_address;
-    init_common(mesh_device_ptr);
+    init_common(mesh_device);
 }
 
 uint32_t D2HSocket::required_config_buffer_size(uint32_t l1_alignment) {

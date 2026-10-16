@@ -113,6 +113,13 @@ public:
      * @throws TT_FATAL if pinned memory allocation fails or addresses are invalid.
      */
     D2HSocket(
+        MeshDevice& mesh_device,
+        const MeshCoreCoord& sender_core,
+        uint32_t fifo_size,
+        ProcessScope scope = ProcessScope::CrossProcess);
+
+    /// Same as above, taking the device as a shared_ptr. The socket does not extend the device's lifetime.
+    D2HSocket(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoreCoord& sender_core,
         uint32_t fifo_size,
@@ -154,6 +161,14 @@ public:
      * on the sender core. Intended for callers that need their sender-core L1 to
      * be off-allocator (e.g. cores not present in the L1 bank table).
      */
+    D2HSocket(
+        MeshDevice& mesh_device,
+        const MeshCoreCoord& sender_core,
+        uint32_t fifo_size,
+        ExternalConfigBuffer external_config,
+        ProcessScope scope = ProcessScope::CrossProcess);
+
+    /// Same as above, taking the device as a shared_ptr. The socket does not extend the device's lifetime.
     D2HSocket(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoreCoord& sender_core,
@@ -398,17 +413,15 @@ private:
     };
 
     PinnedBufferInfo init_host_buffer(
-        const std::shared_ptr<MeshDevice>& mesh_device,
+        MeshDevice& mesh_device,
         const MeshCoordinateRangeSet& device_range,
         uint32_t pcie_alignment,
         const std::string& shm_name);
-    PinnedBufferInfo init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device);
-    void init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device);
+    PinnedBufferInfo init_host_buffer_hugepage(MeshDevice& mesh_device);
+    void init_config_buffer(MeshDevice& mesh_device);
     void write_socket_metadata(
-        const std::shared_ptr<MeshDevice>& mesh_device,
-        const PinnedBufferInfo& data_info,
-        const PinnedBufferInfo& bytes_sent_info) const;
-    void init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device);
+        MeshDevice& mesh_device, const PinnedBufferInfo& data_info, const PinnedBufferInfo& bytes_sent_info) const;
+    void init_sender_tlb(MeshDevice& mesh_device);
     CoreCoord sender_virtual_core(const MeshDevice& mesh_device, ChipId device_id) const;
 
     void wait_for_bytes(uint32_t num_bytes);
@@ -425,7 +438,7 @@ private:
     // Shared host-side init: pins host memory (or hugepage fallback), writes socket metadata
     // into `config_buffer_address_`, and configures the sender-side TLB. The caller must
     // populate `config_buffer_address_` (and own the backing L1 reservation) first.
-    void init_common(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_common(MeshDevice& mesh_device);
 
     // Owned only by the standard ctor. The external-config ctor leaves this null
     // and points `config_buffer_address_` at caller-owned L1.

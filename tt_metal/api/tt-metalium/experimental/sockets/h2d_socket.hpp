@@ -106,6 +106,16 @@ public:
      * @param h2d_mode Transfer mode: HOST_PUSH or DEVICE_PULL.
      */
     H2DSocket(
+        MeshDevice& mesh_device,
+        const MeshCoreCoord& recv_core,
+        BufferType buffer_type,
+        uint32_t fifo_size,
+        H2DMode h2d_mode);
+
+    /**
+     * @brief Same as above, taking the device as a shared_ptr. The socket does not extend the device's lifetime.
+     */
+    H2DSocket(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoreCoord& recv_core,
         BufferType buffer_type,
@@ -255,7 +265,7 @@ private:
     // pre-allocated DRISC-L1 offsets for the config and data buffers, plus the
     // DRAM-L1 NOC offset that host writes need to add on top.
     H2DSocket(
-        const std::shared_ptr<MeshDevice>& mesh_device,
+        MeshDevice& mesh_device,
         const MeshCoreCoord& recv_core,
         uint32_t fifo_size,
         uint32_t config_l1_local_addr,
@@ -269,24 +279,22 @@ private:
     };
 
     PinnedBufferInfo init_bytes_acked_buffer(
-        const std::shared_ptr<MeshDevice>& mesh_device,
+        MeshDevice& mesh_device,
         const MeshCoordinateRangeSet& device_range,
         uint32_t pcie_alignment,
         const std::string& shm_name);
 
     PinnedBufferInfo init_host_data_buffer(
-        const std::shared_ptr<MeshDevice>& mesh_device,
+        MeshDevice& mesh_device,
         const MeshCoordinateRangeSet& device_range,
         uint32_t pcie_alignment,
         const std::string& shm_name);
 
-    void init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device);
-    void init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment);
+    void init_config_buffer(MeshDevice& mesh_device);
+    void init_data_buffer(MeshDevice& mesh_device, uint32_t pcie_alignment);
     void write_socket_metadata(
-        const std::shared_ptr<MeshDevice>& mesh_device,
-        const PinnedBufferInfo& bytes_acked_info,
-        const PinnedBufferInfo& data_info);
-    void init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device);
+        MeshDevice& mesh_device, const PinnedBufferInfo& bytes_acked_info, const PinnedBufferInfo& data_info);
+    void init_receiver_tlb(MeshDevice& mesh_device);
 
     // Mock owner only: alias bytes_acked_ptr_ to bytes_sent_ so the FIFO reads as drained.
     // Connectors remain context-free and do not use this path.
