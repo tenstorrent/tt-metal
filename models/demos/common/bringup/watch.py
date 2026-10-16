@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Block until the run needs the supervisor: the one wait a supervising session uses between events.
 
-    python -m models.demos.common.bringup.watch --spec S [--timeout 6600] [--quiet-gates]
+    python -m models.demos.common.bringup.watch --spec S [--timeout 1800] [--quiet-gates]
 
 Reads ``runs/<run>/orchestrator.log`` from its current end and returns on the first line the supervisor acts on (a
 gate result, a second or later attempt, STOPPED, WAITING FOR A PERSON, paused, DEFERRED, KNOWLEDGE CONTRADICTED, a
@@ -107,7 +107,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"))
     ap.add_argument("--run-dir", help="instead of --spec: runs/<run>")
-    ap.add_argument("--timeout", type=float, default=6600.0, help="seconds (below the harness's 2 h limit)")
+    ap.add_argument("--timeout", type=float, default=1800.0, help="seconds: the heartbeat, at most 30 min (owner)")
     ap.add_argument("--poll", type=float, default=15.0)
     ap.add_argument("--quiet-gates", action="store_true", help="skip a plain gate FAIL (the check before an agent)")
     ap.add_argument(

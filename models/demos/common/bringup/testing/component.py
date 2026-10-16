@@ -577,9 +577,10 @@ def _check_tail(s, ref, layer: int, steps, last, seen: dict, cpu, snapshot: dict
     how = "fixed"
     model = snapshot.get("model")
     model = [model] if isinstance(model, torch.Tensor) else model
-    if model and all(isinstance(m, torch.Tensor) and m.is_floating_point() for m in model):
+    # an int step output (a top-k) too: the nudged fp32 step's own selection flips are its floor (DS41-50)
+    if model and all(isinstance(m, torch.Tensor) for m in model):
         try:
-            em = max(CC.rel(run_tail(m.float()), want) for m in model)
+            em = max(CC.rel(run_tail(m.float() if m.is_floating_point() else m), want) for m in model)
             res = CC.rel(want.to(torch.bfloat16).float(), want)  # the smallest difference a bf16 output can show
             metrics.record(f"{tag}_model_rel", em)
             k = CC.limits(s)["component_calib"]  # one margin over the noise floor; no fixed floor or cap (owner)

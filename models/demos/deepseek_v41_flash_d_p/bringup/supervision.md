@@ -183,3 +183,9 @@ Every intervention by the supervising session: time, task, trigger, classificati
 - Owner: no circling on small excesses. F89: own-floor row / column / bias checks warn, never gate. F87: a resumed
   task gates first; a resumed fix job that still fails stops for the overseer, never another agent. F88: dashboard red
   bug fixed + self-check. Commit 775ff4eff70. Resume: FIX.4 gates once, no agent.
+
+## 2026-10-16 21:00 S.enc_source.07 (stopped 20:33, 6 attempts)
+- Trigger: swap_indexer_out rel 0.0230 > fixed 0.01; every other check passed. Class: framework (DS41-50: the tail
+  check had no noise floor for int outputs; the CPU's own nudged indexer gives 0.026). Agents correctly changed no code.
+- Action: F92 (tail floor for int outputs), F91 (sweep: within-limit mistakes do not slip; owner OK), F93 (30-min
+  heartbeat; the stop went unseen for ~25 min). Selftests 430 passed. Resume S.enc_source.07 (gates first, F87).

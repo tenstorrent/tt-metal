@@ -141,15 +141,21 @@ While a run is live, a watch is always armed: the run must never sit at a stop (
 a crash) with nobody told. The one wait is
 
 ```
-python -m models.demos.common.bringup.watch --spec <spec>      # Bash, run_in_background, timeout 7200000
+python -m models.demos.common.bringup.watch --spec <spec>      # Bash, run_in_background, timeout 2400000
 ```
 
 It returns on the next event (gate result, a second attempt, STOPPED, WAITING FOR A PERSON, paused, DEFERRED,
-KNOWLEDGE CONTRADICTED, a traceback, the end), with exit 2 after 110 minutes with nothing to act on, and with exit 3
+KNOWLEDGE CONTRADICTED, a traceback, the end), with exit 2 after 30 minutes with nothing to act on, and with exit 3
 at once when the orchestrator is not running (it reads the pid file `run` / `resume` write), printing the log's last
 event. Rules:
-- Re-arm it in the same turn you handle its result, every time: after an event, after exit 2 (only re-arm), after
-  your own resume or relaunch. Never end a turn with a live run and no watch armed; never write your own grep loop.
+- Re-arm it in the same turn you handle its result, every time: after an event (a DASHBOARD STALE / RED one too),
+  after exit 2, after your own resume or relaunch. Never end a turn with a live run and no watch armed; never write
+  your own grep loop.
+- Heartbeat (owner, 2026-10-16): the watch is the heartbeat; never wait longer than 30 minutes (`--timeout 1800`, its
+  default). On every wake, an event or not, check the run yourself before re-arming: the orchestrator is alive, the
+  log's last line is recent, the running step is making progress (not the same failure again). Never sit waiting for
+  a signal: a run that stopped unseen for hours is the overseer's failure (DeepSeek-V4.1: a stop at 20:33 went unseen
+  because a watch that woke on DASHBOARD STALE was not re-armed).
 - Exit 3 means act now: WAITING FOR A PERSON is an approval (yours if the owner delegated it, else tell the owner at
   once and say what they must decide); STOPPED and a crash are classified below. A run you paused yourself is the one
   exit 3 you expect: do the work, then resume and re-arm.

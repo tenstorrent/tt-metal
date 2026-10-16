@@ -753,9 +753,14 @@ def sweep(ex: Expect, gate_name: str) -> bool:
 
     control("reference", ex.cpu)
     for k in [k for k in MU.KINDS if MU.applies(k, ex.want)]:
-        f = verdict({n: MU.mutate(o, k) for n, o in ex.cpu.items()}, True)
-        rows.append((k, "caught" if f else "SLIPPED", ", ".join(f)))
-        ok &= bool(f)
+        mut = {n: MU.mutate(o, k) for n, o in ex.cpu.items()}
+        f = verdict(mut, True)
+        # F91 (owner): a mistake no larger than the step's own limit on every input is one a correct step may make
+        size = {x.name: rel(mut[x.name], ex.cpu[x.name]) for x in ex.cases} if ex.kind == "float" else {}
+        within = bool(size) and all(v <= ex.rel_lim.get(n, 0.0) for n, v in size.items())
+        how = f"size {max(size.values()):.3g} <= the step's limit" if within else ", ".join(f)
+        rows.append((k, "caught" if f else "within limit" if within else "SLIPPED", how))
+        ok &= bool(f) or within
     # F80: a correct step at the noise floor passes: inputs nudged with a seed the floor did not use, output in bf16
     nudged = {
         x.name: run_cpu(
