@@ -49,7 +49,7 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
 
         auto grads = ttml::metal::rmsnorm_bw(tensor->get_value(), gamma->get_value(), rms_a, dL_dout);
 
-        if (grads.size() != 2U) {
+        if (grads.size() != 3U) {
             throw std::runtime_error("rmsnorm_bw returned unexpected number of gradients");
         }
         if (grads[0].has_value()) {
@@ -61,6 +61,43 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma));
+
+    return out;
+}
+
+autograd::TensorPtr gated_rmsnorm(
+    const autograd::TensorPtr &input,
+    const autograd::TensorPtr &gate,
+    const autograd::TensorPtr &gamma,
+    float epsilon) {
+    // The kernels read an fp32 input as is, so it is not cast to bf16 first.
+    auto rmsnorm_fw_result = ttml::metal::rmsnorm_fw(
+        input->get_value(autograd::PreferredPrecision::NATIVE),
+        gamma->get_value(),
+        /* return_intermediates */ true,
+        epsilon,
+        gate->get_value());
+
+    auto rms = rmsnorm_fw_result[1].value();
+    auto out = autograd::create_tensor(rmsnorm_fw_result[0].value());
+
+    autograd::GradFunction grad = [input, gate, gamma, out, rms]() {
+        auto grads = ttml::metal::rmsnorm_bw(
+            input->get_value(autograd::PreferredPrecision::NATIVE),
+            gamma->get_value(),
+            rms,
+            out->get_grad(),
+            /* compute_dgamma */ gamma->get_requires_grad(),
+            gate->get_value());
+
+        input->add_grad(grads[0].value());
+        if (grads[1].has_value()) {
+            gamma->add_grad(grads[1].value());
+        }
+        gate->add_grad(grads[2].value());
+    };
+
+    out->set_node(autograd::add_backward_node(std::move(grad), out, input, gate, gamma));
 
     return out;
 }
