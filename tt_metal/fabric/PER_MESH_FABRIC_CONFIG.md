@@ -223,6 +223,45 @@ A matching CPU/multi-rank gtest, `MultiHost.BHDualGalaxyNonUniformFabricEnvAcros
 (`test_multi_host.cpp`), exercises the same path in CI alongside the existing
 `BHDualGalaxyFabricConfigMismatchAcrossRanksFatal` (both skip below 2 ranks).
 
+### Guards reference — everything a user can set wrong (and what now catches it)
+
+All guards run at fabric bring-up via an MPI `all_gather` of a trivially-copyable
+`MeshFabricConfigObservation` struct (`ControlPlane::validate_fabric_config_across_ranks` →
+`validate_fabric_configs`, `control_plane.cpp`), then `TT_FATAL` **consistently on every rank** (no
+partial-rank MPI deadlock) with a message naming the offending rank, the exact knob, and the fix. The
+dimensionality guard (#5) is the one exception — it is a structural MGD rule caught earlier, at graph build.
+
+**(A) Process-wide ENV knobs — must be _globally identical on every rank_.** These are the genuine
+"set it wrong by accident" cases: the launcher does **not** force them uniform, so exporting one in a
+shell that spawns only some ranks diverges the per-VC buffer-slot table / channel buffer size at the two
+ends of an inter-mesh link → **silent credit stall**. Now a loud startup error instead.
+
+| # | Setting | Env var / source | Why a cross-rank mismatch hangs |
+|---|---------|------------------|---------------------------------|
+| 1 | `enable_fabric_vc2` | `TT_METAL_ENABLE_FABRIC_VC2` | Selects the per-VC buffer-slot table (adds VC2 slots). One end expects VC2 slots, the other doesn't → credit mismatch. |
+| 2 | `enable_fabric_mesh_pass_through` | `TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH` | Changes slot layout / pass-through routing. Asymmetric across a link → stall. |
+| 3 | `max_packet_payload_size` override | fabric router config (`max_packet_payload_size_bytes`) | Sets the channel buffer size. Different payload sizing on each end → buffers don't match → stall. |
+
+**(B) Per-mesh CONFIG — must be _identical within a mesh_, may differ _between_ meshes** (that difference is
+the whole point of this PR).
+
+| # | Setting | Source (precedence) | Rule enforced |
+|---|---------|---------------------|---------------|
+| 4 | `fabric_config` | MGD `fabric_config:` field > `SetFabricConfig()` override > `dim_types` default | Every rank owning the **same** mesh must report the **same** config; different meshes may differ. |
+
+**(C) Structural MGD invariant — caught at graph build** (`MeshGraph`, not the cross-rank collective).
+
+| # | Setting | Source | Rule enforced |
+|---|---------|--------|---------------|
+| 5 | inter-mesh config **dimensionality** | MGD per-mesh configs + inter-mesh connections | All 2D configs (FABRIC_2D / TORUS_X / TORUS_Y / TORUS_XY) are mutually linkable; a **1D** config cannot be inter-mesh-linked (1D is single-mesh-only). |
+
+**What exercises each guard:**
+- #1–#3 → `MultiHost.BHDualGalaxyNonUniformFabricEnvAcrossRanksFatal` (CI ≥2 ranks; registered in
+  `run_fabric_cpu_only_unit_tests.sh`) + HW-validated on the BH galaxy (above). Live run: rank0 `vc2=true`,
+  rank1 `vc2=false` → both ranks `TT_FATAL` → test passes.
+- #4 → `MultiHost.BHDualGalaxyFabricConfigMismatchAcrossRanksFatal`.
+- #5 → `InterMeshAllFourTwoDConfigsAreCompatible` / `FabricConfigResolutionMultiMesh` (CPU, `fabric_unit_tests`).
+
 ---
 
 ## 0. TL;DR (original framing — see RESOLUTION above for the correction)
