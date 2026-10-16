@@ -1267,7 +1267,7 @@ TEST(McastReverseTreeTest, OffAnchorEncode4x32) {
 TEST(McastReverseTreeTest, ExhaustiveOffAnchorWalk4x4) {
     constexpr int y_size = 4;
     constexpr int x_size = 4;
-    const auto descriptor = R"(
+    const auto* const descriptor = R"(
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
