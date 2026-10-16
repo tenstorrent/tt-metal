@@ -487,13 +487,6 @@ public:
     }
 
     /**
-     * @brief Zero-link tolerance (#56762): target edges become soft and the SAT engine maximizes the realized
-     * ones (best effort); unrealized edges validate with a warning. Inter-mesh (mesh-level) solves only.
-     */
-    void set_allow_unmatched_target_edges(bool enable) { allow_unmatched_target_edges_ = enable; }
-    bool allow_unmatched_target_edges() const { return allow_unmatched_target_edges_; }
-
-    /**
      * @brief Get forbidden (target, global) pairs that are invalid even when no required constraints exist
      *
      * Used when add_forbidden_constraint is called for a target with no valid_mappings_ entry.
@@ -555,8 +548,6 @@ private:
 
     // Opt-in objective: minimize number of distinct same-rank global groups (host partitions) used.
     bool minimize_same_rank_groups_used_ = false;
-
-    bool allow_unmatched_target_edges_ = false;
 
     // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
     std::size_t max_same_rank_groups_used_ = 0;
@@ -907,8 +898,6 @@ struct ConstraintIndexData {
     // Footprint resources, indexed by global_idx. Empty when no add_resource_constraint was set.
     std::vector<std::vector<uint32_t>> global_to_resource_indices;
     uint32_t resource_count = 0;
-    // Zero-link tolerance (#56762): target edges are soft; see MappingConstraints::set_allow_unmatched_target_edges.
-    bool allow_unmatched_target_edges = false;
 
     /**
      * @brief Construct ConstraintIndexData from MappingConstraints and GraphIndexData
@@ -996,11 +985,6 @@ struct TopologySatHardEncoding {
     std::string trivial_reason;
     std::vector<std::vector<size_t>> allowed_global_idx;
     std::vector<std::vector<int>> assign_lit;
-    // Soft target edges: realized literal per edge (empty when edges are hard) and its (t1, t2) endpoints.
-    std::vector<int> edge_realized_lits;
-    std::vector<std::pair<size_t, size_t>> edge_realized_edges;
-    // Soft-capable encoding: assumed => every (target, global) pair that degree/AC-3 pruning removes is false.
-    int prune_active_lit = 0;
 };
 
 /**
@@ -1049,7 +1033,6 @@ struct TopologySatConstraintView {
     std::size_t max_same_rank_groups_used = 0;
     const std::vector<std::vector<uint32_t>>& global_to_resource_indices;
     uint32_t resource_count = 0;
-    bool allow_unmatched_target_edges = false;
 
     template <typename TargetNode, typename GlobalNode>
     explicit TopologySatConstraintView(const ConstraintIndexData<TargetNode, GlobalNode>& c) :
@@ -1063,8 +1046,7 @@ struct TopologySatConstraintView {
         minimize_same_rank_groups_used(c.minimize_same_rank_groups_used),
         max_same_rank_groups_used(c.max_same_rank_groups_used),
         global_to_resource_indices(c.global_to_resource_indices),
-        resource_count(c.resource_count),
-        allow_unmatched_target_edges(c.allow_unmatched_target_edges) {}
+        resource_count(c.resource_count) {}
 
     bool is_valid_mapping(size_t target_idx, size_t global_idx) const {
         if (target_idx < forbidden_global_indices.size() && !forbidden_global_indices[target_idx].empty()) {
@@ -1666,9 +1648,6 @@ public:
     bool add_forbidden_constraint(const std::set<TargetNode>& targets, const std::set<GlobalNode>& globals);
     bool add_required_constraint(TargetNode target, GlobalNode global);
     bool add_required_constraint(TargetNode target, const std::set<GlobalNode>& globals);
-    /** In-session seam toggle (#56762): a session started with soft edges flips to hard seams and back without
-     *  re-encoding. False => the change needs a new session (the session was encoded with hard edges). */
-    bool set_allow_unmatched_target_edges(bool enable);
 
     bool exclude_mappings(const std::vector<std::map<TargetNode, GlobalNode>>& additional_excluded);
     bool exclude_mapping(const std::map<TargetNode, GlobalNode>& mapping);
