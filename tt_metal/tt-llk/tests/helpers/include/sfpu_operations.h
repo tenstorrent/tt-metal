@@ -926,8 +926,9 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     // exp_with_base, approximate clamp path: run as Exp's is, EXP_APPROX_CLAMP_ITERATIONS
     // per face over all four faces. Through one ITERATIONS call it processed 8 of a
     // tile's 32 rows and left the other 24 holding their input. This path takes its scale
-    // from exp_init's constants (above), not from the call; the call's is passed only
-    // because the adapter's signature carries it.
+    // from exp_init's constants (above), not from the call: calculate_exponential ignores
+    // the runtime scale on the approximate clamp path because exp_init bakes it into the
+    // constants. The call still passes it, as every SCALE_EN call does.
     else if constexpr (OPERATION == SfpuType::exp_with_base && APPROX_MODE && CLAMP_NEGATIVE)
     {
         const std::uint32_t exp_base_scale_factor = exp_with_base_runtime_scale();
@@ -935,7 +936,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_exponential,
-            (APPROX_MODE, is_fp32_dest_acc_en, true /* scale_en */, EXP_APPROX_CLAMP_ITERATIONS, CLAMP_NEGATIVE),
+            (APPROX_MODE, is_fp32_dest_acc_en, true /*SCALE_EN*/, EXP_APPROX_CLAMP_ITERATIONS, CLAMP_NEGATIVE),
             dst_index,
             VectorMode::RC,
             exp_base_scale_factor);
@@ -955,7 +956,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_exponential,
-            (APPROX_MODE, is_fp32_dest_acc_en, true /* scale_en */, ITERATIONS, CLAMP_NEGATIVE),
+            (APPROX_MODE, is_fp32_dest_acc_en, true /*SCALE_EN*/, ITERATIONS, CLAMP_NEGATIVE),
             dst_index,
             vector_mode,
             exp_base_scale_factor);
