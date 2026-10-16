@@ -199,6 +199,23 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
 
 ---
 
+### Batched forwards
+
+`PREFILL_MAX_CHUNKS_PER_BATCH=K` (up to 16) packs up to K chunks into one push. Record k of the metadata
+(`batch_metadata.py`) describes chunk k of the payload, laid out as `prefill_entry.pack_forward_tokens` builds
+it. A slot's chunks are one contiguous run, as `prefill_entry.validate_entries` checks.
+
+By default the runner calls `prefill_chunk` once per entry, so each entry gets its own layer completions. A
+runtime built for `PrefillRunParams.max_chunks_per_batch` entries can take the whole forward instead:
+
+```python
+def prefill_forward(self, input_tensor, kv_cache, entries, *, request_id, d2h_service, metadata_msg):
+    # entries: K PrefillEntry, empty ones at the tail. Returns the activation in the same layout, or None on
+    # the last rank. One layer completion per layer per non-empty entry.
+```
+
+K above 1 is not supported with MTP, trace or DFlash.
+
 ## 3. Register it
 
 Add one line to `ADAPTER_PATHS` in `models/demos/common/prefill/adapter.py`, mapping
