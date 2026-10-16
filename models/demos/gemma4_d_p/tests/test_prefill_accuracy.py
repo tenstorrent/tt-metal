@@ -241,7 +241,7 @@ def test_prefill_accuracy(mesh_device, context_len, tmp_path, request, monkeypat
         pytest.skip(f"No selected dataset holds {context_len} tokens")
     output_root = tmp_path
     if summaries := os.getenv("PREFILL_SUMMARIES"):
-        output_root = Path(summaries) / "gemma4_prefill_accuracy" / request.node.name
+        output_root = Path(summaries) / "gemma4_d_p_prefill_accuracy" / request.node.name
     print(f"Accuracy test results: {output_root}", flush=True)
 
     params = run_params(adapter)
