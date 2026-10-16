@@ -63,6 +63,7 @@ from models.demos.molmo2.tt.image_projector import TtMolmo2ImageProjector
 from models.demos.molmo2.tt.mlp import TtMolmo2TextMLP
 from models.demos.molmo2.tt.prefill_mask import build_causal_mask, build_molmo2_prefill_mask
 from models.demos.molmo2.tt.vision_encoder import TtMolmo2ViTEncoder
+from models.tt_transformers.tt.ccl import tt_all_gather
 from models.tt_transformers.tt.common import Mode, precompute_freqs
 
 
@@ -140,13 +141,22 @@ class TtMolmo2DecoderBlock(LightweightModule):
             configuration=configuration,
         )
 
-    _NORM_GRID = (4, 4)  # decode RMSNorm cores: one 32x4096 row spread over 16 cores instead of 1
+    # Decode RMSNorm cores (x, y): one 32x4096 row spread over 8 cores instead of 1. Do NOT widen to 16 cores
+    # ((4,4) or (8,2)): with the decode trace captured before the first long prefill (as the server does at warm-up),
+    # later prefill logits then differ from request to request (tests/test_repeat_determinism.py); 8 cores repeat exactly.
+    _NORM_GRID = (4, 2)
 
     def _norm(self, norm, x, mode):
         """RMSNorm; in decode the single token row is width-sharded over several cores (1 core takes ~82 us)."""
         if mode == "prefill":
             return norm(x, mode=Mode.PREFILL)
-        gx, gy = self._NORM_GRID
+        if os.environ.get("MOLMO2_DECODE_NORM_SHARDED", "1") != "1":
+            return norm(x, mode=Mode.DECODE)
+        gx, gy = (
+            (int(v) for v in os.environ["MOLMO2_NORM_GRID"].split(","))
+            if "MOLMO2_NORM_GRID" in os.environ
+            else self._NORM_GRID
+        )
         dim = self.configuration.dim
         if not hasattr(self, "_norm_cfgs"):
             block_w = dim // (gx * gy) // 32
@@ -400,8 +410,10 @@ class TtMolmo2Model(LightweightModule):
             compute_kernel_config=self.configuration.compute_kernel_config_hifi2_fp16,
         )
         if self._lm_head_sharded:
-            gathered = ttnn.all_gather(logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(logits)
+            # Same semaphore-managed async gather as the MLP all-reduce (the legacy ttnn.all_gather raced with them).
+            gathered = tt_all_gather(logits, self.mesh_device, self.tt_ccl, cluster_axis=None, dim=3)
+            if gathered is not logits:
+                ttnn.deallocate(logits)
             if gathered.shape[-1] != self._vocab_size:
                 n = gathered.shape[2]
                 logits = ttnn.slice(gathered, (0, 0, 0, 0), (1, 1, n, self._vocab_size))

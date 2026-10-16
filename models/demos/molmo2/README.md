@@ -273,6 +273,13 @@ The goldens in `reference/golden/` are not checked in; generate them first with
 pytest models/demos/molmo2/tests/test_tt_text_decoder.py -v
 ```
 
+Request-to-request repeatability (the same long request must give identical prefill logits and tokens; the decode trace is
+captured first, as the server does at warm-up):
+
+```bash
+MOLMO2_REPEAT_VIDEO=/abs/path/long_video.mp4 MOLMO2_REPEAT_N=5 pytest models/demos/molmo2/tests/test_repeat_determinism.py -s
+```
+
 Expected results (Galaxy 1×8 slice):
 
 | Test | PCC |

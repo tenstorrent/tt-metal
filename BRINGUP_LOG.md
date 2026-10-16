@@ -513,10 +513,28 @@ Each step must keep PCC > 0.99, HF teacher-forced agreement, and the 105-suite a
   read at op-creation time, so the decode warm-up + trace capture run with it removed (`_decode_matmul_throttle_off`
   in `tt/model.py`; `MOLMO2_DECODE_THROTTLE=1` keeps it). Prefill is still throttled.
 - Decode step (bench_decode, one 1x8 slice): 26.5 -> 24.9 ms (MLP sharded) -> 22.9 ms (+wqkv/wo; per-op kernel total
-  21.8 ms, matmuls 11.8 ms, wo still ~129 us/layer = ~138 GB/s) -> **21.0 ms = 47.7 tok/s** (throttle off in decode).
+  21.8 ms, matmuls 11.8 ms, wo still ~129 us/layer = ~138 GB/s) -> 21.0 ms (throttle off in decode, 16-core norm; see
+  the determinism bug below) -> **22.3 ms = 44.8 tok/s** with the final 8-core decode norm (no sharded norm: 26.5 ms).
 - Validation: PCC tests (adapter, text decoder, tp_mlp) 11 passed; HF teacher-forced unchanged (text 100%, image 97%,
   video 100%, two-images 97%; 30-video suite 95.9% (was 95.8%); 34k-token long video per-100-token [0.94,0.95,0.86,0.95]
   traced).
 - Server (4 slices): 105-suite 98/100, 0 errors, 54 s wall; single server sequential: mean **1.82 s** / median 1.23 /
   p90 3.83 (GPU baseline 3.61 s mean); 8/8 concurrent heavy requests (34k video 56 s, 20 images 25 s) OK, 0 timeouts.
 - Next: step 2, row-parallel `wo` (wo is now the largest single matmul: 16 MB/chip replicated).
+
+### Session 16 bug: prefill not repeatable in the server (found while testing the Docker image)
+- Symptom: the same 34k-token video request gave different output on the 2nd+ request (prefill logits differed, max|diff| up
+  to 3.1), on single-slice servers and on the DP=4 instance; the 1st request was always the same on every server. Short
+  prompts (<5k tokens) and text were unaffected, so the 105-suite never showed it. `logprobs=true` requests also crash the
+  engine (vLLM `gather_logprobs` index error; unrelated, still open).
+- Bisect: pre-perf code (3626d79f6c1) repeats exactly; 7bf9523ba70 (vocab-parallel lm_head + 16-core decode RMSNorm) does
+  not. New `tests/test_repeat_determinism.py` reproduces it in-process when the decode trace is captured BEFORE the first long
+  prefill (the server's order; the old adapter test captured after it, so it hid the bug).
+- Cause: the 16-core width-sharded decode RMSNorm (grid (4,4) or (8,2)). With the trace-first order the decode replays
+  corrupt state that later prefills use; 8 cores ((4,2)) repeat exactly (6 repeats, S=34455, max|diff| 0.0), no sharded
+  norm also repeats. Mechanism not pinned down further. Fix: `_NORM_GRID = (4, 2)`; env `MOLMO2_NORM_GRID=x,y` and
+  `MOLMO2_DECODE_NORM_SHARDED=0` for experiments. Earlier numbers measured with the 16-core norm (1.82 s suite mean,
+  21.0 ms/step) are superseded by the final ones below.
+- Verified after the fix: test_repeat_determinism identical x6; 4 slice servers x4 repeats of the 34k video (300 tokens)
+  identical on every server and across servers; suite 98/100 (4 servers, 55 s); HF teacher-forced unchanged (text 100%,
+  image 97%, video 100%, 30-video suite 95.3%, long video [0.92, 0.97, 0.88, 0.95]).
