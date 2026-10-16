@@ -536,6 +536,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam is_int_fpu_en: Enable integer FPU datapath.
  * @tparam pack_mode: Packing layout, values = <Default/Tilize>
+ * @tparam whole_tile: A2D only: copy all faces from one SrcA bank, as unpacked by the whole_tile @ref _llk_unpack_A_init_.
  * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
  * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ (copy/transpose), @ref _llk_unpack_tilize_init_ (tilize) or @ref _llk_unpack_untilize_init_
@@ -547,13 +548,16 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en             = false,
-    PackMode pack_mode             = PackMode::Default>
+    PackMode pack_mode             = PackMode::Default,
+    bool whole_tile                = false>
 inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole _llk_math_eltwise_unary_datacopy_init_ supports only PackMode::Default and PackMode::Tilize");
-    constexpr bool tilize = (pack_mode == PackMode::Tilize);
+    static_assert(!whole_tile || (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE), "whole_tile is a plain A2D copy");
+    // A tilized tile also arrives in one SrcA bank, so both take the same MOP.
+    constexpr bool tilize = (pack_mode == PackMode::Tilize) || whole_tile;
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 

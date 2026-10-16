@@ -18,6 +18,9 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
+// From 16 rows per tile the rope runs long enough for the unpacker to refill both SrcA banks with whole tiles; shorter
+// ones are bound by the per-tile unpack call, where the face by face copy reads the same.
+static constexpr bool ROPE_WHOLE_TILE = ROPE_TILE_H >= 16;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -32,7 +35,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
 
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest, ROPE_WHOLE_TILE>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
@@ -63,7 +66,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default, ROPE_WHOLE_TILE>(
         TILE_NUM_FACES, formats.math);
 
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
