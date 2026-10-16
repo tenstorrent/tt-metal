@@ -55,4 +55,20 @@ void throttle_mm_perf(
     std::map<std::string, std::string>& mm_kernel_defines,
     ThrottleLevel throttle_level = ThrottleLevel::NO_THROTTLE);
 
+/*
+ * The same NOP-insertion throttle as throttle_mm_perf, on its own switch so the attention kernels can be
+ * slowed without touching matmul -- which is what isolates attention as a di/dt source rather than just
+ * mitigating the whole model. The define emitted is still MM_THROTTLE, because that is what the matmul
+ * LLK API (compute/matmul.h, compute/experimental/matmul_custom.h) reads; only the control knob differs.
+ *
+ * Enabled by setting env var TT_SDPA_THROTTLE_PERF to a value in range {1,2,3,4,5}, with the same
+ * level-to-throughput mapping as throttle_mm_perf. If that env var is not set, the throttle_level
+ * parameter is used. TT_MM_THROTTLE_PERF has no effect here, and this has no effect on matmul ops.
+ */
+void throttle_sdpa_perf(
+    tt::ARCH arch,
+    int num_cores,
+    std::map<std::string, std::string>& kernel_defines,
+    ThrottleLevel throttle_level = ThrottleLevel::NO_THROTTLE);
+
 }  // namespace ttnn::operations::compute_throttle_utils

@@ -5,10 +5,12 @@
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
 
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <cmath>
 #include <string>
@@ -1551,6 +1553,17 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     compute_kernel.core_ranges = CoreRangeSet(sdpa_grid_range);
     compute_kernel.compile_time_args = compute_compile_time_args;
     compute_kernel.defines = kernel_defines;
+    // Attention-only di/dt throttle. TT_SDPA_THROTTLE_PERF={1..5} inserts NOPs between the MVMULs of
+    // this kernel's QK^T and P@V matmuls, independently of TT_MM_THROTTLE_PERF, so attention can be
+    // slowed while matmul runs full tilt. Compute kernel only: the reader and writer never include the
+    // matmul API, so handing them MM_THROTTLE would only churn their binaries.
+    {
+        std::map<std::string, std::string> sdpa_throttle_defines;
+        ttnn::operations::compute_throttle_utils::throttle_sdpa_perf(
+            mesh_device->arch(), sdpa_grid.x * sdpa_grid.y, sdpa_throttle_defines);
+        compute_kernel.defines.insert(
+            compute_kernel.defines.end(), sdpa_throttle_defines.begin(), sdpa_throttle_defines.end());
+    }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
