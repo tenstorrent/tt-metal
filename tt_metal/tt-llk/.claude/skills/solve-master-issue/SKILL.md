@@ -134,6 +134,10 @@ step; the ledger holds the operational detail (run ids, counters) that the file 
 4. Key → location: strip any worktree prefix; the key is stable across checkouts. Two audit items
    that are one defect (`duplicate_of`, `also_at … (arch-copy|same-defect)`) are **one item** with all
    the sites listed; the mark propagates to the duplicates automatically.
+5. **The file's line numbers are from the tree the audit ran on; you work on current `origin/main`**
+   (`mkwt.sh` fetches it). Locate each finding by its `evidence` snippet, not the line. If main has
+   already changed that code, re-check the claim there: still present → proceed (note the new line in
+   the ledger); gone → `mark --state skipped --note 'fixed on main by <sha>'`, no issue, no PR.
 
 ## 1. Split into items and triage
 
