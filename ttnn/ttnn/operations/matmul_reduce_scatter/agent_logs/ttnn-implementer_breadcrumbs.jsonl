@@ -14,3 +14,4 @@
 {"event":"test_run","status":"pass","detail":"R2: W reads on NoC1 + senders 2 (resident only), per-regime fill levers. Traced focus 124.2-125.8 (base 136.5-141), GLM 198.5 (base 206-207), MiMo 244-262 (base 245-276). acceptance 38+24, precision 6/6","ts":"2026-10-16T09:34:08+00:00"}
 {"event":"test_run","status":"pass","detail":"R3: MiMo resident-xblock (kb8, d3, hold 1 via hold_depth()). Traced MiMo 243-256 -> 218.4-218.9 us; focus 124.1-125.8, GLM ~198 unchanged. acceptance 38+24, precision 6/6, golden slice 99, regression 6, fabric 24, ring_mock 72","ts":"2026-10-16T12:35:25+00:00"}
 {"event":"test_run","what":"R4 waves=2 traced perf","result":"correct; focus 124.5->128.5, GLM 198.5->214, MiMo 218.7->222 us","ts":"2026-10-16T13:11:51+00:00"}
+{"event":"test_run","what":"R4 final","result":"waves parked at 1; focus best W2 -0.5us, GLM neutral, MiMo +3-11us; all acceptance/golden slices green","ts":"2026-10-16T13:37:36+00:00"}

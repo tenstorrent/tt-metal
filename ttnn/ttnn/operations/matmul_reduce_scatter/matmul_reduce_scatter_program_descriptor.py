@@ -55,7 +55,8 @@ DEPTH_HANDOFF = 2  # finished slots (a port gathers entry e while compute finish
 PREFER_PORT_ROW_STRIP = True  # ports in logical row 0, right under the Ethernet row (focus case: 150-160 us with
 # the column strip -> 137-145 us with the row strip, despite 14 vs 12 tiles per core: the transport tail shrinks)
 PORT_PLACEMENT = "eth"  # "eth": each port nearest its link's Ethernet core | "spread": evenly along the strip
-PORT_GROUP = 4  # chunks per port batch (cb_port_chunks holds 2 batches); <= 8 (header pool)
+PORT_GROUP = int(os.environ.get("MRS_PORT_GROUP", 4))  # chunks per port batch (cb_port_chunks holds 2 batches); <= 8
+# (header pool). env: perf experiments only
 MIRROR_HALF_ORDERS = 1  # ring_balanced + a resident cross-block operand: halves split along the streamed operand's
 # multicast lines and walk the equal-distance blocks in mirrored orders (build_schedule), so each entry sends half a
 # block each way. 0: one shared order (each of the middle entries sends a whole block one way)
@@ -65,6 +66,14 @@ MIRROR_HALF_ORDERS = 1  # ring_balanced + a resident cross-block operand: halves
 # wave instead of a whole block. 1: one entry per block. The stream regime always runs 1 (a wave would re-stream the
 # cross-block operand once per wave). env: perf experiments only
 ENTRIES_PER_BLOCK = int(os.environ.get("MRS_WAVES", 1))
+# with waves: 1 = one increment per (core, wave), the default: the per-wave arrival lets a relay / fin consume wave 0
+# right after its own wave-0 matmul. 0 = every wave's data is sent as soon as it is finished, but only a core's LAST wave of a block carries
+# the fused arrival increment (its flush covers the earlier waves' writes to the same core, exactly like the earlier
+# chunks of one sub-block), and a receiver consumes any wave of a block once the block's increment landed. Each fused
+# increment stalls the receiving router (~0.3 us measured), so per-wave increments make the transport, not the
+# matmul, the binding stage. Measured (focus, 2 waves): the send units did not get faster (the ports are per-packet
+# bound, not increment bound) while wave-0 relays / fins waited for their block's second wave: +5 us. env: perf only
+ARRIVAL_INC_PER_WAVE = int(os.environ.get("MRS_INC_PER_WAVE", 1))
 KB_MIN_RESIDENT = 8  # smallest K-block the resident regime accepts (min(Kt, this))
 # largest K-block: the streamed operand needs several K-blocks per entry to overlap read / mcast / math (focus case,
 # diagonal senders: kb 64 -> 212 us, 32 -> 160 us, 16 -> 159 us, 8 -> 164 us on the fastest chip; Refinement 2,
@@ -72,7 +81,8 @@ KB_MIN_RESIDENT = 8  # smallest K-block the resident regime accepts (min(Kt, thi
 KB_MAX = int(os.environ.get("MRS_KB_MAX", 16))
 L1_HEADROOM = 64 * 1024  # bytes kept free per core beyond the op's own footprint
 LAG_POLICY = os.environ.get("MRS_LAG", "auto")  # "auto": lag a relay finish only when its arrival is produced late
-# upstream; "always": the design's original rule (every add waits behind the next matmul). env: perf experiments only
+# upstream; "always": the design's original rule (every add waits behind the next matmul); "fin": auto, plus every
+# fin wave but the last waits behind the next wave's matmul. env: perf experiments only
 PREFETCH_STEPS = 1  # K-block windows a sender keeps reserved with DRAM reads in flight ahead of its multicast
 # Fill levers, per regime ("resident" | "stream"). The resident regime moves both operands only in entry 0, so its
 # first entry is DRAM-bound (the fill); the stream regime streams an operand every entry (Refinement 3 tunes it).
@@ -179,6 +189,12 @@ def expand_waves(roles, entries, waves):
     return roles_v, entries_v
 
 
+def inc_unit(v, waves):
+    """The virtual block whose unit carries the fused arrival increment covering virtual block v (itself, or its
+    block's last wave when ARRIVAL_INC_PER_WAVE is 0)."""
+    return v if ARRIVAL_INC_PER_WAVE else v - v % waves + waves - 1
+
+
 def plan_transport(G, kind, mirror=False, waves=1):
     """Per chip position: roles, entries[h], per (half, direction) arrival list (this chip's half-h entry order), and
     the arrival thresholds (position in the upstream's half-h send order). slots[d] = zone slots per direction (max over
@@ -211,12 +227,14 @@ def plan_transport(G, kind, mirror=False, waves=1):
                 seq = [b for b in sch[u][1][h] if sch[u][0][(b, h)][0] == d] if u is not None else []
                 assert sorted(seq) == sorted(lst), (p, h, d, seq, lst)
                 arrivals[(h, d)] = lst
-                thresholds[(h, d)] = {b: i + 1 for i, b in enumerate(seq)}
-                # the upstream's entry index that produces each arrival (drives the per-entry lag decision)
-                produced_at[(h, d)] = {b: sch[u][1][h].index(b) for b in seq}
-                # deadlock freedom (mirrored orders, wave splits): a relay waits only for an arrival produced at an
-                # earlier upstream entry index
-                for b in lst if (mirror or waves > 1) else []:
+                incs = [b for b in seq if inc_unit(b, waves) == b]  # the upstream's units carrying an increment
+                thresholds[(h, d)] = {b: incs.index(inc_unit(b, waves)) + 1 for b in seq}
+                # the upstream's entry index that produces each arrival's increment (drives the per-entry lag
+                # decision)
+                produced_at[(h, d)] = {b: sch[u][1][h].index(inc_unit(b, waves)) for b in seq}
+                # deadlock freedom (mirrored orders): a relay waits only for an arrival produced at an earlier
+                # upstream entry index (the shared descending-key order instead lags such a finish, see op_design)
+                for b in lst if mirror else []:
                     if roles[(b, h)][0] != "fin":
                         assert produced_at[(h, d)][b] < entries[h].index(b), (p, b, h, d)
         chips[p] = dict(roles=roles, entries=entries, arrivals=arrivals, thresholds=thresholds, produced_at=produced_at)
@@ -239,6 +257,7 @@ def entry_finish_plan(sc, h):
         elif r[0] == "fin":
             mask = (1 if b in arrivals[(h, "fwd")] else 0) | (2 if b in arrivals[(h, "bwd")] else 0)
         lag = LAG_POLICY == "always" and mask != 0
+        lag = lag or (LAG_POLICY == "fin" and r[0] == "fin" and mask != 0)  # a fin wave behind the next wave's matmul
         lag = lag or any(sc["produced_at"][(h, d)][b] >= e_idx for d, bit in (("fwd", 1), ("bwd", 2)) if mask & bit)
         out.append((mask, int(lag and e_idx + 1 < len(entries))))
     return out
@@ -398,20 +417,25 @@ def choose_k_block(Kt, budget, force_resident, **geo):
     """(resident, kb, depth): resident with the preferred kb | Kt (largest <= KB_MAX, then smaller, then larger), kb >=
     min(Kt, KB_MIN_RESIDENT), at the first RESIDENT_STREAM_DEPTHS depth where any such kb fits; else stream with the
     preferred kb | Kt that fits (depth: None, the stream regime's DEPTH_IN0 / DEPTH_IN1). force_resident (test hook)
-    replaces the residency decision."""
-    # preference order: the largest divisor <= KB_MAX first, then smaller ones, then (no fit below the cap) larger ones
-    divisors = [d for d in range(min(Kt, KB_MAX), 0, -1) if Kt % d == 0]
-    divisors += [d for d in range(KB_MAX + 1, Kt + 1) if Kt % d == 0]
+    replaces the residency decision. The resident regime's cap is KB_MAX x its wave count, so a wave's streamed window
+    keeps the bytes (and the multicast rounds per block) of an unsplit one (focus / GLM, 2 waves: kb 16 -> 128.5 /
+    214 us, kb 32 -> 126.6 / 197 us)."""
+
+    def divisors(cap):
+        # preference order: the largest divisor <= cap first, then smaller ones, then (no fit below the cap) larger
+        out = [d for d in range(min(Kt, cap), 0, -1) if Kt % d == 0]
+        return out + [d for d in range(cap + 1, Kt + 1) if Kt % d == 0]
+
     if force_resident is not False:
         for depth in RESIDENT_STREAM_DEPTHS:
-            for kb in divisors:
+            for kb in divisors(KB_MAX * geo["waves_of"][True]["n"]):
                 if kb < min(Kt, KB_MIN_RESIDENT):
                     continue
                 if footprint(kb, True, depth=depth, Kt=Kt, **geo) <= budget:
                     return True, kb, depth
         if force_resident is True:
             raise ValueError("matmul_reduce_scatter: the resident cross-block operand does not fit L1 for this shape")
-    for kb in divisors:
+    for kb in divisors(KB_MAX):
         if footprint(kb, False, Kt=Kt, **geo) <= budget:
             return False, kb, None
     raise NotImplementedError(
@@ -893,6 +917,7 @@ def create_mesh_program_descriptor(ctx):
         MAILBOX_STRIDE,
         max_port_cores,
         W,
+        int(ARRIVAL_INC_PER_WAVE or W == 1),  # every wave's unit carries the increment (else only the last)
     ]
 
     src = ttnn.KernelDescriptor.SourceType.FILE_PATH
@@ -979,8 +1004,9 @@ def create_mesh_program_descriptor(ctx):
                         n_valid,
                         arr_fwd_addr,
                         arr_bwd_addr,
-                        len(arrivals[(h, "fwd")]),  # arrival increments my counters receive this call
-                        len(arrivals[(h, "bwd")]),
+                        # arrival increments my counters receive this call
+                        sum(inc_unit(b, W) == b for b in arrivals[(h, "fwd")]),
+                        sum(inc_unit(b, W) == b for b in arrivals[(h, "bwd")]),
                     ]
                     + wave_words
                     + ent_words

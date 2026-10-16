@@ -51,6 +51,9 @@ void kernel_main() {
     constexpr uint32_t num_headers = group;
     constexpr uint32_t slot_bytes = P * tile_bytes;
     constexpr uint32_t num_waves = get_compile_time_arg_val(8);  // entry e is wave e mod num_waves
+    // 1: every unit's last chunk per core carries the arrival increment; 0: only the block's last wave does (its
+    // flush covers the earlier waves' chunks to the same core)
+    constexpr bool inc_every_wave = get_compile_time_arg_val(9) != 0;
 
     size_t arg = 0;
     const uint32_t zone_base = get_arg_val<uint32_t>(arg++);     // downstream zone of this direction (staging + offset)
@@ -112,6 +115,7 @@ void kernel_main() {
         const uint32_t first_half = (unit >> 10) & 0x1;
         const uint32_t tiles = get_arg_val<uint32_t>(wave_tiles_idx + (unit & 0xFF) % num_waves);
         const uint32_t chunks_per_core = (tiles + chunk_tiles - 1) / chunk_tiles;
+        const bool carries_inc = inc_every_wave || (unit & 0xFF) % num_waves == num_waves - 1;
         for (uint32_t walk = 0; walk < 2 * num_cores; ++walk) {  // the reader's walk: first_half's cores first
             const uint32_t hh = first_half ^ (walk >= num_cores ? 1u : 0u);
             const uint32_t i = walk >= num_cores ? walk - num_cores : walk;
@@ -134,7 +138,7 @@ void kernel_main() {
                 const uint64_t dst = get_noc_addr(x, y, dst_base + ci * chunk_bytes);
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
                 h = (h + 1 == num_headers) ? 0 : h + 1;
-                if (ci + 1 == chunks_per_core) {  // a core's last chunk carries its arrival increment
+                if (carries_inc && ci + 1 == chunks_per_core) {  // a core's last chunk carries its arrival increment
                     hdr->to_noc_fused_unicast_write_atomic_inc(
                         NocUnicastAtomicIncFusedCommandHeader{dst, ctr, 1, true}, bytes);
                 } else {

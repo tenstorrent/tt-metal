@@ -387,8 +387,26 @@ def test_every_partial_exactly_once(line_mesh, scatter_dim):
     """A = ones on the first 32 K columns; W[r, c] = constant rank (r*C + c + 1) on those rows. Every partial
     element is exactly 32*rank and every relay / final sum is an exact bf16 integer. A dropped, doubled or
     foreign partial is a wrong integer."""
+    _check_every_partial_exactly_once(line_mesh, scatter_dim, (1, 1, 256, 64), (64, 512))
+
+
+# scatter -1 splits n (3 waves: ragged last wave); scatter -2 splits m, only when the waves divide core_m (2 here)
+@pytest.mark.parametrize("scatter_dim, waves", [(-1, 2), (-1, 3), (-2, 2)])
+def test_every_partial_exactly_once_waves(line_mesh, monkeypatch, scatter_dim, waves):
+    """Refinement 4 wave-split schedule (ENTRIES_PER_BLOCK, a parked perf knob): every block is computed, finished
+    and sent as `waves` entries (ragged last wave for scatter -1). Same exactness check on a shape whose per-core
+    block is wide / tall enough for the split to engage."""
+    desc = importlib.import_module("ttnn.operations.matmul_reduce_scatter.matmul_reduce_scatter_program_descriptor")
+    monkeypatch.setattr(desc, "ENTRIES_PER_BLOCK", waves)
+    plans = _check_every_partial_exactly_once(line_mesh, scatter_dim, (1, 1, 1408, 64), (64, 4096))
+    assert any(plan["waves"] > 1 for plan in plans), plans
+
+
+def _check_every_partial_exactly_once(line_mesh, scatter_dim, a_shape, w_shape):
+    """Returns the _LAST_PLAN of every call."""
+    pkg = importlib.import_module("ttnn.operations.matmul_reduce_scatter")
     rows, cols = tuple(line_mesh.shape)
-    a_shape, w_shape = (1, 1, 256, 64), (64, 512)
+    plans = []
     for cluster_axis in _axes_with_groups(line_mesh):
         g = _group_size(line_mesh, cluster_axis)
         if not _split_ok(a_shape, w_shape, scatter_dim, g):
@@ -413,6 +431,8 @@ def test_every_partial_exactly_once(line_mesh, scatter_dim):
             actual = ttnn.to_torch(dev).float()
             bad = (actual != expected[r][c]).sum().item()
             assert bad == 0, f"axis {cluster_axis} device ({r},{c}): {bad}/{actual.numel()} elements differ"
+        plans.append(dict(pkg._LAST_PLAN))
+    return plans
 
 
 def test_repeated_calls_deterministic(line_mesh):

@@ -126,7 +126,7 @@ What I would try next, and why I did not:
 - **Refinement 4's sub-block sends** to overlap the fill.
 - **Using the 11 idle cores.** That needs a ragged `core_m` (2 / 1 rows) split, which is a grid-model change.
 
-### [ ] Refinement 4 — Shrink the fill term: first send before a whole block is finished (overlap)
+### [x] Refinement 4 — Shrink the fill term: first send before a whole block is finished (overlap)
 
 **Type**: perf
 
@@ -135,3 +135,22 @@ What I would try next, and why I did not:
 **Verifier notes**: do this after Refinements 2 and 3. They settle the per-core block `P` and the regime, and the wave split divides `core_n` (or `core_m`), so it should split the tuned block, not today's. The deadlock-freedom argument (descending key per half) must be re-proved for the wave-split entry order. Write it in `op_design.md` next to the schedule tables before coding. `test_every_partial_exactly_once` and `test_regression.py` are the exactness guards for a schedule change.
 
 **Done when**: measured device-ns on the focus case (and MiMo) improves over the post-Refinement-2/3 numbers with the golden suite green (0 loud categories), every exactness test green (acceptance `test_every_partial_exactly_once`, golden `test_regression.py`), and no regression across the config-spanning guard set.
+
+**Outcome**: The wave split is built as a live knob, `ENTRIES_PER_BLOCK` (`MRS_WAVES`), and parked at 1, because no default beats today's across the profile. Traced, max over 4 chips:
+
+| Case | W 1 (default) | Best W 2 (kb 32) |
+|---|---|---|
+| Focus | 124.0-125.1 µs | 123.4-123.8 µs with fin waves lagged (−0.5) |
+| GLM | 198 µs | neutral (198-202) |
+| MiMo | 218.7 µs | 222-230 µs (regression) |
+
+The wave path is exact (W 2 / 3, both scatter dims, line and ring) and pinned by `test_every_partial_exactly_once_waves`.
+
+What binds now:
+- **The "fill" is not one block of matmul before the first send. It is the resident operand's DRAM load, which wave 0 needs whole.** The first send does move earlier (focus 37 → 28 µs, GLM 60 → 42 µs), but the transport was never critical at the start. MiMo's wave 0 waits for all 8.9 MB of resident W (+14 µs).
+- **On focus, waves add packets.** core_n 7 splits 4 + 3, so each core-block sends 3 packets instead of 2. The ports are per-packet bound (~0.17 µs per packet, not increment bound: per-block increments measured no faster), so a block's send (~24 µs) overtakes its 23.7 µs compute, and fin-wave arrivals straggle.
+
+What I would try next, and why I did not:
+- **Re-measure W 2 on a link-bound shape** (the design's shared-expert-down lamp: links 35.5 µs vs compute 17 µs), where the first send *is* critical. None of the LOOSE cases is link-bound.
+- **A grid whose per-wave tile count fits whole packets** (e.g. P 12 → 6 + 6 on the column strip). That strip's port-to-Ethernet distance cost +25 µs in Refinement 2.
+- **Shrinking the real fill:** stream the resident operand's first entry in smaller K-blocks. kb is one CB-window constant today, so this is a reader / compute schedule change and outside this heading.
