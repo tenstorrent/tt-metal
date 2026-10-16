@@ -1,0 +1,26 @@
+{
+ "expected": {
+  "chat": 2,
+  "code": 32,
+  "document": 12,
+  "fact": 15,
+  "json": null,
+  "list": 56,
+  "math": 61,
+  "multilingual": 9,
+  "prose": 13,
+  "refactor": 24,
+  "sky": 19,
+  "story": 6,
+  "summary": 75
+ },
+ "pin": "A3/slab2048-32k/divergence_index",
+ "schema": "qwen38-ci-baseline/v1",
+ "source": {
+  "date": "2026-09-25",
+  "evidence": "chat server startup replay with --prefill-slab 2048 (the slab's routed experts in one moe_compute call per layer, QWEN38_MOE_SLAB_ONE_CALL / QWEN38_MOE_SLAB_RINGS unset), three idle runs on a 1x4 p150 line, 2026-09-25; the twelve records are 37-434 prompt tokens (prefill_slabs 0 on every record: the slab is exercised by the corpus long part and the long-prompt probes, which were identical to the 16 x 128-row form and across the runs), so this table equals the same head's chunked table; chat 2 against the 2026-09-06 chunked-32k table's 43 is the head's numerics class (BF8 dense weights, compact expert layout), not the slab; runs quality-20260925T182216Z, quality-20260925T191226Z, quality-20260925T191728Z; the slab record 'document' (2228 prompt tokens, one slab) added 2026-09-27 from the same head's plain --prefill-slab 2048 replay (hold rb-serve1, head e60ad5151037), the twelve values unchanged",
+  "head": "e399fe2a99d3f890aec774016ec8a74deb95eb8e",
+  "sku": "p150x4"
+ },
+ "status": "proposal"
+}

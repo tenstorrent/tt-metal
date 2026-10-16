@@ -1,0 +1,4705 @@
+{
+ "first_token_top5_indices": [
+  760,
+  33519,
+  46435,
+  6503,
+  61445
+ ],
+ "first_token_top5_values": [
+  25.125,
+  17.75,
+  17.625,
+  16.625,
+  15.5625
+ ],
+ "generated_text": "The capital of Australia is **Canberra**. It was chosen as a compromise between the two largest and most rival cities, Sydney and Melbourne, to resolve their long-standing dispute over which should serve as the national capital. By selecting a neutral site located between the two cities, the government aimed to prevent either city from gaining undue political dominance.<|im_end|>",
+ "generated_token_ids": [
+  760,
+  6511,
+  314,
+  8071,
+  369,
+  2972,
+  6503,
+  60241,
+  159034,
+  1049,
+  557,
+  11543,
+  430,
+  264,
+  28425,
+  1881,
+  279,
+  1330,
+  7526,
+  321,
+  1379,
+  20129,
+  9432,
+  11,
+  20620,
+  321,
+  25592,
+  11,
+  310,
+  8563,
+  836,
+  1248,
+  53736,
+  24240,
+  888,
+  864,
+  1220,
+  8418,
+  430,
+  279,
+  5145,
+  6511,
+  13,
+  3113,
+  25460,
+  264,
+  20002,
+  2660,
+  7172,
+  1881,
+  279,
+  1330,
+  9432,
+  11,
+  279,
+  2936,
+  18877,
+  310,
+  5190,
+  2892,
+  3177,
+  494,
+  28187,
+  87426,
+  4788,
+  42054,
+  13,
+  248046
+ ],
+ "mode": "greedy",
+ "mtp_chain_seconds": {
+  "max": 0.065,
+  "mean": 0.061,
+  "median": 0.061,
+  "n": 68
+ },
+ "mtp_prefill_seconds": 0.386,
+ "prefill_mode": "serial",
+ "prefill_seconds": 18.761,
+ "prompt": "fact",
+ "prompt_length": 46,
+ "prompt_token_ids": [
+  248045,
+  8678,
+  198,
+  2523,
+  513,
+  264,
+  10631,
+  17313,
+  13,
+  248046,
+  198,
+  248045,
+  846,
+  198,
+  3710,
+  369,
+  279,
+  6511,
+  314,
+  8071,
+  11,
+  321,
+  3069,
+  557,
+  424,
+  11543,
+  888,
+  20620,
+  321,
+  25592,
+  30,
+  21134,
+  303,
+  264,
+  2342,
+  22157,
+  13,
+  248046,
+  198,
+  248045,
+  74455,
+  198,
+  248068,
+  271,
+  248069,
+  271
+ ],
+ "steps": [
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     6511,
+     93964,
+     5145,
+     3813,
+     89798
+    ],
+    [
+     314,
+     3177,
+     1020,
+     57719,
+     321
+    ],
+    [
+     8071,
+     12982,
+     109440,
+     46435,
+     20620
+    ]
+   ],
+   "drafts": [
+    6511,
+    314,
+    8071
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 760,
+   "mtp_chain_seconds": 0.057,
+   "position": 45,
+   "step": 0,
+   "target_step_seconds": 0.391,
+   "target_top5": [
+    6511,
+    2972,
+    5145,
+    1428,
+    17828
+   ],
+   "target_top5_values": [
+    27.375,
+    15.0625,
+    14.9375,
+    14.0,
+    13.5625
+   ],
+   "truths": [
+    6511,
+    314,
+    8071
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     314,
+     3177,
+     9432,
+     1020,
+     51539
+    ],
+    [
+     8071,
+     46435,
+     109440,
+     12982,
+     20620
+    ],
+    [
+     369,
+     284,
+     11,
+     579,
+     557
+    ]
+   ],
+   "drafts": [
+    314,
+    8071,
+    369
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 6511,
+   "mtp_chain_seconds": 0.06,
+   "position": 46,
+   "step": 1,
+   "target_step_seconds": 0.409,
+   "target_top5": [
+    314,
+    3177,
+    8071,
+    321,
+    369
+   ],
+   "target_top5_values": [
+    27.625,
+    17.0,
+    13.625,
+    13.3125,
+    12.1875
+   ],
+   "truths": [
+    314,
+    8071,
+    369
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     8071,
+     46435,
+     12982,
+     6650,
+     279
+    ],
+    [
+     369,
+     11,
+     579,
+     284,
+     5810
+    ],
+    [
+     2972,
+     66463,
+     20620,
+     279,
+     25592
+    ]
+   ],
+   "drafts": [
+    8071,
+    369,
+    2972
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 314,
+   "mtp_chain_seconds": 0.062,
+   "position": 47,
+   "step": 2,
+   "target_step_seconds": 0.4,
+   "target_top5": [
+    8071,
+    2972,
+    46435,
+    12982,
+    109440
+   ],
+   "target_top5_values": [
+    29.0,
+    17.625,
+    16.375,
+    15.6875,
+    15.375
+   ],
+   "truths": [
+    8071,
+    369,
+    2972
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     369,
+     557,
+     579,
+     11,
+     321
+    ],
+    [
+     2972,
+     279,
+     20620,
+     66463,
+     25592
+    ],
+    [
+     6503,
+     33519,
+     66463,
+     37853,
+     50524
+    ]
+   ],
+   "drafts": [
+    369,
+    2972,
+    6503
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 8071,
+   "mtp_chain_seconds": 0.06,
+   "position": 48,
+   "step": 3,
+   "target_step_seconds": 0.4,
+   "target_top5": [
+    369,
+    628,
+    66463,
+    557,
+    2972
+   ],
+   "target_top5_values": [
+    27.25,
+    16.375,
+    15.9375,
+    15.6875,
+    15.25
+   ],
+   "truths": [
+    369,
+    2972,
+    6503
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     2972,
+     66463,
+     279,
+     20620,
+     332
+    ],
+    [
+     6503,
+     66463,
+     33519,
+     34,
+     24601
+    ],
+    [
+     60241,
+     455,
+     278,
+     640,
+     519
+    ]
+   ],
+   "drafts": [
+    2972,
+    6503,
+    60241
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 369,
+   "mtp_chain_seconds": 0.06,
+   "position": 49,
+   "step": 4,
+   "target_step_seconds": 0.406,
+   "target_top5": [
+    2972,
+    66463,
+    2885,
+    20620,
+    628
+   ],
+   "target_top5_values": [
+    21.625,
+    21.375,
+    14.0,
+    13.25,
+    12.6875
+   ],
+   "truths": [
+    2972,
+    6503,
+    60241
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     6503,
+     34,
+     24601,
+     66463,
+     4660
+    ],
+    [
+     60241,
+     455,
+     634,
+     1516,
+     65
+    ],
+    [
+     159034,
+     93868,
+     332,
+     190632,
+     221794
+    ]
+   ],
+   "drafts": [
+    6503,
+    60241,
+    159034
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 2972,
+   "mtp_chain_seconds": 0.062,
+   "position": 50,
+   "step": 5,
+   "target_step_seconds": 0.456,
+   "target_top5": [
+    6503,
+    66463,
+    88343,
+    33519,
+    32736
+   ],
+   "target_top5_values": [
+    30.5,
+    23.0,
+    19.875,
+    19.5,
+    18.75
+   ],
+   "truths": [
+    6503,
+    60241,
+    159034
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     60241,
+     455,
+     634,
+     278,
+     65
+    ],
+    [
+     159034,
+     93868,
+     332,
+     221794,
+     19315
+    ],
+    [
+     1049,
+     561,
+     25215,
+     271,
+     5788
+    ]
+   ],
+   "drafts": [
+    60241,
+    159034,
+    1049
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 6503,
+   "mtp_chain_seconds": 0.063,
+   "position": 51,
+   "step": 6,
+   "target_step_seconds": 0.415,
+   "target_top5": [
+    60241,
+    634,
+    65,
+    14911,
+    13487
+   ],
+   "target_top5_values": [
+    30.25,
+    16.375,
+    15.375,
+    14.6875,
+    14.4375
+   ],
+   "truths": [
+    60241,
+    159034,
+    1049
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     159034,
+     93868,
+     332,
+     221794,
+     27653
+    ],
+    [
+     1049,
+     561,
+     1061,
+     11116,
+     271
+    ],
+    [
+     557,
+     369,
+     5532,
+     15648,
+     14135
+    ]
+   ],
+   "drafts": [
+    159034,
+    1049,
+    557
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 60241,
+   "mtp_chain_seconds": 0.06,
+   "position": 52,
+   "step": 7,
+   "target_step_seconds": 0.403,
+   "target_top5": [
+    159034,
+    93868,
+    332,
+    190632,
+    221794
+   ],
+   "target_top5_values": [
+    25.75,
+    21.375,
+    17.5,
+    15.0625,
+    15.0
+   ],
+   "truths": [
+    159034,
+    1049,
+    557
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     1049,
+     271,
+     561,
+     11116,
+     1061
+    ],
+    [
+     557,
+     369,
+     5532,
+     14135,
+     15648
+    ],
+    [
+     11543,
+     3955,
+     12830,
+     264,
+     15048
+    ]
+   ],
+   "drafts": [
+    1049,
+    557,
+    11543
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 159034,
+   "mtp_chain_seconds": 0.062,
+   "position": 53,
+   "step": 8,
+   "target_step_seconds": 0.411,
+   "target_top5": [
+    1049,
+    271,
+    11116,
+    561,
+    733
+   ],
+   "target_top5_values": [
+    24.375,
+    18.25,
+    15.8125,
+    15.5,
+    15.125
+   ],
+   "truths": [
+    1049,
+    557,
+    11543
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     557,
+     369,
+     15648,
+     14135,
+     15048
+    ],
+    [
+     11543,
+     3955,
+     524,
+     11352,
+     15048
+    ],
+    [
+     430,
+     310,
+     11352,
+     303,
+     2261
+    ]
+   ],
+   "drafts": [
+    557,
+    11543,
+    430
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 1049,
+   "mtp_chain_seconds": 0.06,
+   "position": 54,
+   "step": 9,
+   "target_step_seconds": 0.397,
+   "target_top5": [
+    557,
+    998,
+    369,
+    11543,
+    15648
+   ],
+   "target_top5_values": [
+    28.25,
+    14.625,
+    14.5,
+    14.25,
+    14.1875
+   ],
+   "truths": [
+    557,
+    11543,
+    430
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     11543,
+     3955,
+     33931,
+     11352,
+     35007
+    ],
+    [
+     430,
+     11352,
+     303,
+     310,
+     15048
+    ],
+    [
+     264,
+     279,
+     449,
+     919,
+     799
+    ]
+   ],
+   "drafts": [
+    11543,
+    430,
+    264
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 557,
+   "mtp_chain_seconds": 0.061,
+   "position": 55,
+   "step": 10,
+   "target_step_seconds": 0.394,
+   "target_top5": [
+    11543,
+    3955,
+    9272,
+    33931,
+    11352
+   ],
+   "target_top5_values": [
+    25.125,
+    22.625,
+    19.625,
+    19.5,
+    18.375
+   ],
+   "truths": [
+    11543,
+    430,
+    264
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     430,
+     303,
+     310,
+     1521,
+     11352
+    ],
+    [
+     264,
+     279,
+     449,
+     411,
+     799
+    ],
+    [
+     28425,
+     13831,
+     88297,
+     72447,
+     43472
+    ]
+   ],
+   "drafts": [
+    430,
+    264,
+    28425
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 11543,
+   "mtp_chain_seconds": 0.059,
+   "position": 56,
+   "step": 11,
+   "target_step_seconds": 0.391,
+   "target_top5": [
+    430,
+    303,
+    15048,
+    888,
+    1521
+   ],
+   "target_top5_values": [
+    24.75,
+    23.875,
+    21.375,
+    20.625,
+    19.25
+   ],
+   "truths": [
+    430,
+    264,
+    28425
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     264,
+     449,
+     279,
+     919,
+     799
+    ],
+    [
+     28425,
+     5956,
+     88297,
+     16576,
+     19252
+    ],
+    [
+     1881,
+     310,
+     303,
+     948,
+     364
+    ]
+   ],
+   "drafts": [
+    264,
+    28425,
+    1881
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 430,
+   "mtp_chain_seconds": 0.059,
+   "position": 57,
+   "step": 12,
+   "target_step_seconds": 0.396,
+   "target_top5": [
+    264,
+    279,
+    449,
+    919,
+    1141
+   ],
+   "target_top5_values": [
+    25.5,
+    18.875,
+    18.5,
+    15.0625,
+    11.5
+   ],
+   "truths": [
+    264,
+    28425,
+    1881
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     28425,
+     43472,
+     4788,
+     20002,
+     18021
+    ],
+    [
+     1881,
+     310,
+     303,
+     364,
+     11
+    ],
+    [
+     20620,
+     279,
+     25592,
+     118025,
+     73301
+    ]
+   ],
+   "drafts": [
+    28425,
+    1881,
+    20620
+   ],
+   "hits": [
+    true,
+    true,
+    false
+   ],
+   "input_token": 264,
+   "mtp_chain_seconds": 0.06,
+   "position": 58,
+   "step": 13,
+   "target_step_seconds": 0.399,
+   "target_top5": [
+    28425,
+    4788,
+    43472,
+    43534,
+    20002
+   ],
+   "target_top5_values": [
+    22.625,
+    21.375,
+    17.5,
+    16.75,
+    16.625
+   ],
+   "truths": [
+    28425,
+    1881,
+    279
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     1881,
+     310,
+     303,
+     6093,
+     314
+    ],
+    [
+     20620,
+     279,
+     25592,
+     118025,
+     5540
+    ],
+    [
+     321,
+     579,
+     318,
+     725,
+     95793
+    ]
+   ],
+   "drafts": [
+    1881,
+    20620,
+    321
+   ],
+   "hits": [
+    true,
+    false,
+    false
+   ],
+   "input_token": 28425,
+   "mtp_chain_seconds": 0.059,
+   "position": 59,
+   "step": 14,
+   "target_step_seconds": 0.427,
+   "target_top5": [
+    1881,
+    310,
+    303,
+    6093,
+    3602
+   ],
+   "target_top5_values": [
+    22.625,
+    22.375,
+    21.75,
+    20.25,
+    19.625
+   ],
+   "truths": [
+    1881,
+    279,
+    1330
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     20620,
+     279,
+     2972,
+     25592,
+     5540
+    ],
+    [
+     321,
+     46152,
+     7347,
+     95793,
+     25592
+    ],
+    [
+     25592,
+     10657,
+     37853,
+     128162,
+     66463
+    ]
+   ],
+   "drafts": [
+    20620,
+    321,
+    25592
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 1881,
+   "mtp_chain_seconds": 0.059,
+   "position": 60,
+   "step": 15,
+   "target_step_seconds": 0.402,
+   "target_top5": [
+    279,
+    20620,
+    20129,
+    8071,
+    2972
+   ],
+   "target_top5_values": [
+    21.125,
+    21.0,
+    18.5,
+    18.375,
+    17.5
+   ],
+   "truths": [
+    279,
+    1330,
+    7526
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     1330,
+     3046,
+     7526,
+     2250,
+     6777
+    ],
+    [
+     7526,
+     1379,
+     3478,
+     8276,
+     20129
+    ],
+    [
+     9432,
+     20129,
+     33683,
+     25333,
+     321
+    ]
+   ],
+   "drafts": [
+    1330,
+    7526,
+    9432
+   ],
+   "hits": [
+    true,
+    true,
+    false
+   ],
+   "input_token": 279,
+   "mtp_chain_seconds": 0.061,
+   "position": 61,
+   "step": 16,
+   "target_step_seconds": 0.391,
+   "target_top5": [
+    1330,
+    20129,
+    3046,
+    6777,
+    7526
+   ],
+   "target_top5_values": [
+    22.875,
+    22.0,
+    20.625,
+    19.0,
+    18.375
+   ],
+   "truths": [
+    1330,
+    7526,
+    321
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     7526,
+     20129,
+     1379,
+     3478,
+     25333
+    ],
+    [
+     20129,
+     25333,
+     321,
+     9432,
+     33683
+    ],
+    [
+     9432,
+     5656,
+     51229,
+     16185,
+     3177
+    ]
+   ],
+   "drafts": [
+    7526,
+    20129,
+    9432
+   ],
+   "hits": [
+    true,
+    false,
+    false
+   ],
+   "input_token": 1330,
+   "mtp_chain_seconds": 0.059,
+   "position": 62,
+   "step": 17,
+   "target_step_seconds": 0.385,
+   "target_top5": [
+    7526,
+    20129,
+    3478,
+    8276,
+    1379
+   ],
+   "target_top5_values": [
+    24.75,
+    22.0,
+    19.625,
+    17.0,
+    17.0
+   ],
+   "truths": [
+    7526,
+    321,
+    1379
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     321,
+     11,
+     9432,
+     20129,
+     694
+    ],
+    [
+     1379,
+     20129,
+     777,
+     25333,
+     33649
+    ],
+    [
+     14257,
+     20129,
+     30415,
+     7737,
+     19845
+    ]
+   ],
+   "drafts": [
+    321,
+    1379,
+    14257
+   ],
+   "hits": [
+    true,
+    true,
+    false
+   ],
+   "input_token": 7526,
+   "mtp_chain_seconds": 0.061,
+   "position": 63,
+   "step": 18,
+   "target_step_seconds": 0.396,
+   "target_top5": [
+    321,
+    9432,
+    20129,
+    33683,
+    57900
+   ],
+   "target_top5_values": [
+    23.25,
+    22.25,
+    19.75,
+    17.25,
+    14.4375
+   ],
+   "truths": [
+    321,
+    1379,
+    20129
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     1379,
+     20129,
+     3428,
+     7526,
+     28928
+    ],
+    [
+     20129,
+     14257,
+     19845,
+     7737,
+     30415
+    ],
+    [
+     9432,
+     3177,
+     286,
+     51229,
+     5656
+    ]
+   ],
+   "drafts": [
+    1379,
+    20129,
+    9432
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 321,
+   "mtp_chain_seconds": 0.058,
+   "position": 64,
+   "step": 19,
+   "target_step_seconds": 0.411,
+   "target_top5": [
+    1379,
+    20129,
+    88845,
+    21354,
+    33649
+   ],
+   "target_top5_values": [
+    23.125,
+    21.0,
+    16.625,
+    16.5,
+    16.375
+   ],
+   "truths": [
+    1379,
+    20129,
+    9432
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": false,
+   "d1_truth_rank": 5,
+   "draft_top5": [
+    [
+     19845,
+     14257,
+     7737,
+     30415,
+     38952
+    ],
+    [
+     9432,
+     20129,
+     33683,
+     18090,
+     3177
+    ],
+    [
+     11,
+     314,
+     303,
+     2218,
+     310
+    ]
+   ],
+   "drafts": [
+    19845,
+    9432,
+    11
+   ],
+   "hits": [
+    false,
+    true,
+    true
+   ],
+   "input_token": 1379,
+   "mtp_chain_seconds": 0.059,
+   "position": 65,
+   "step": 20,
+   "target_step_seconds": 0.411,
+   "target_top5": [
+    20129,
+    30415,
+    14257,
+    91188,
+    57900
+   ],
+   "target_top5_values": [
+    22.25,
+    20.125,
+    19.375,
+    18.875,
+    18.375
+   ],
+   "truths": [
+    20129,
+    9432,
+    11
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     286,
+     9432,
+     4384,
+     25674,
+     4694
+    ],
+    [
+     9432,
+     3177,
+     5656,
+     24039,
+     18090
+    ],
+    [
+     11,
+     2218,
+     314,
+     310,
+     1040
+    ]
+   ],
+   "drafts": [
+    286,
+    9432,
+    11
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 20129,
+   "mtp_chain_seconds": 0.059,
+   "position": 66,
+   "step": 21,
+   "target_step_seconds": 0.416,
+   "target_top5": [
+    9432,
+    25674,
+    286,
+    806,
+    3177
+   ],
+   "target_top5_values": [
+    21.0,
+    19.375,
+    16.125,
+    14.5,
+    14.0
+   ],
+   "truths": [
+    9432,
+    11,
+    20620
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     11,
+     2218,
+     314,
+     506,
+     25
+    ],
+    [
+     20620,
+     2972,
+     1478,
+     25592,
+     5540
+    ],
+    [
+     321,
+     11,
+     46152,
+     7347,
+     429
+    ]
+   ],
+   "drafts": [
+    11,
+    20620,
+    321
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 9432,
+   "mtp_chain_seconds": 0.061,
+   "position": 67,
+   "step": 22,
+   "target_step_seconds": 0.392,
+   "target_top5": [
+    11,
+    506,
+    314,
+    303,
+    20620
+   ],
+   "target_top5_values": [
+    26.625,
+    19.625,
+    16.5,
+    16.25,
+    15.0625
+   ],
+   "truths": [
+    11,
+    20620,
+    321
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     2972,
+     20620,
+     25592,
+     348,
+     5540
+    ],
+    [
+     33519,
+     3446,
+     37853,
+     27006,
+     65371
+    ],
+    [
+     18220,
+     67,
+     337,
+     5018,
+     47204
+    ]
+   ],
+   "drafts": [
+    2972,
+    33519,
+    18220
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 11,
+   "mtp_chain_seconds": 0.061,
+   "position": 68,
+   "step": 23,
+   "target_step_seconds": 0.404,
+   "target_top5": [
+    20620,
+    2972,
+    25592,
+    118025,
+    73301
+   ],
+   "target_top5_values": [
+    22.125,
+    20.375,
+    13.6875,
+    13.625,
+    13.25
+   ],
+   "truths": [
+    20620,
+    321,
+    25592
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     321,
+     11,
+     46152,
+     318,
+     7347
+    ],
+    [
+     25592,
+     10657,
+     1478,
+     128162,
+     37853
+    ],
+    [
+     11,
+     66459,
+     26,
+     2218,
+     27090
+    ]
+   ],
+   "drafts": [
+    321,
+    25592,
+    11
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 20620,
+   "mtp_chain_seconds": 0.06,
+   "position": 69,
+   "step": 24,
+   "target_step_seconds": 0.402,
+   "target_top5": [
+    321,
+    318,
+    11,
+    25592,
+    429
+   ],
+   "target_top5_values": [
+    26.5,
+    19.625,
+    15.75,
+    14.8125,
+    14.3125
+   ],
+   "truths": [
+    321,
+    25592,
+    11
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     25592,
+     10657,
+     21719,
+     1478,
+     279
+    ],
+    [
+     11,
+     66459,
+     318,
+     26,
+     2218
+    ],
+    [
+     310,
+     303,
+     864,
+     2261,
+     1521
+    ]
+   ],
+   "drafts": [
+    25592,
+    11,
+    310
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 321,
+   "mtp_chain_seconds": 0.061,
+   "position": 70,
+   "step": 25,
+   "target_step_seconds": 0.413,
+   "target_top5": [
+    25592,
+    1478,
+    128162,
+    2972,
+    66463
+   ],
+   "target_top5_values": [
+    25.125,
+    17.25,
+    15.6875,
+    15.5625,
+    15.1875
+   ],
+   "truths": [
+    25592,
+    11,
+    310
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     11,
+     35967,
+     6953,
+     13,
+     1478
+    ],
+    [
+     310,
+     430,
+     864,
+     303,
+     852
+    ],
+    [
+     5790,
+     5471,
+     8418,
+     13057,
+     2070
+    ]
+   ],
+   "drafts": [
+    11,
+    310,
+    5790
+   ],
+   "hits": [
+    true,
+    true,
+    false
+   ],
+   "input_token": 25592,
+   "mtp_chain_seconds": 0.063,
+   "position": 71,
+   "step": 26,
+   "target_step_seconds": 0.396,
+   "target_top5": [
+    11,
+    13,
+    26,
+    318,
+    310
+   ],
+   "target_top5_values": [
+    24.875,
+    15.6875,
+    15.3125,
+    14.625,
+    14.4375
+   ],
+   "truths": [
+    11,
+    310,
+    8563
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 2,
+   "draft_top5": [
+    [
+     852,
+     430,
+     310,
+     864,
+     6483
+    ],
+    [
+     998,
+     995,
+     2107,
+     1754,
+     1362
+    ],
+    [
+     2107,
+     4862,
+     1754,
+     279,
+     25333
+    ]
+   ],
+   "drafts": [
+    852,
+    998,
+    2107
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 11,
+   "mtp_chain_seconds": 0.061,
+   "position": 72,
+   "step": 27,
+   "target_step_seconds": 0.405,
+   "target_top5": [
+    310,
+    13468,
+    864,
+    2107,
+    1238
+   ],
+   "target_top5_values": [
+    22.875,
+    22.0,
+    21.375,
+    19.625,
+    18.5
+   ],
+   "truths": [
+    310,
+    8563,
+    836
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     5471,
+     8563,
+     5790,
+     5190,
+     1438
+    ],
+    [
+     279,
+     866,
+     24979,
+     264,
+     11712
+    ],
+    [
+     4788,
+     11712,
+     18324,
+     13789,
+     4499
+    ]
+   ],
+   "drafts": [
+    5471,
+    279,
+    4788
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 310,
+   "mtp_chain_seconds": 0.062,
+   "position": 73,
+   "step": 28,
+   "target_step_seconds": 0.424,
+   "target_top5": [
+    8563,
+    23950,
+    5471,
+    809,
+    5190
+   ],
+   "target_top5_values": [
+    23.0,
+    22.0,
+    20.625,
+    20.375,
+    19.375
+   ],
+   "truths": [
+    8563,
+    836,
+    1248
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     279,
+     836,
+     39795,
+     264,
+     37135
+    ],
+    [
+     13789,
+     4788,
+     24240,
+     57900,
+     18324
+    ],
+    [
+     57900,
+     24240,
+     11712,
+     4788,
+     49653
+    ]
+   ],
+   "drafts": [
+    279,
+    13789,
+    57900
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 8563,
+   "mtp_chain_seconds": 0.06,
+   "position": 74,
+   "step": 29,
+   "target_step_seconds": 0.416,
+   "target_top5": [
+    836,
+    279,
+    264,
+    4788,
+    18324
+   ],
+   "target_top5_values": [
+    21.875,
+    21.625,
+    21.125,
+    19.5,
+    18.875
+   ],
+   "truths": [
+    836,
+    1248,
+    53736
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 2,
+   "draft_top5": [
+    [
+     13789,
+     25896,
+     1248,
+     18919,
+     57900
+    ],
+    [
+     57900,
+     24240,
+     39795,
+     10682,
+     4788
+    ],
+    [
+     321,
+     888,
+     8559,
+     2261,
+     430
+    ]
+   ],
+   "drafts": [
+    13789,
+    57900,
+    321
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 836,
+   "mtp_chain_seconds": 0.063,
+   "position": 75,
+   "step": 30,
+   "target_step_seconds": 0.412,
+   "target_top5": [
+    1248,
+    18324,
+    24240,
+    39976,
+    4788
+   ],
+   "target_top5_values": [
+    22.25,
+    21.875,
+    21.375,
+    20.75,
+    18.75
+   ],
+   "truths": [
+    1248,
+    53736,
+    24240
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     53736,
+     51695,
+     9773,
+     9375,
+     55580
+    ],
+    [
+     24240,
+     10682,
+     57900,
+     10391,
+     5515
+    ],
+    [
+     888,
+     883,
+     8559,
+     321,
+     430
+    ]
+   ],
+   "drafts": [
+    53736,
+    24240,
+    888
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 1248,
+   "mtp_chain_seconds": 0.065,
+   "position": 76,
+   "step": 31,
+   "target_step_seconds": 0.405,
+   "target_top5": [
+    53736,
+    51695,
+    10162,
+    24240,
+    9773
+   ],
+   "target_top5_values": [
+    25.625,
+    18.625,
+    15.0,
+    14.9375,
+    14.9375
+   ],
+   "truths": [
+    53736,
+    24240,
+    888
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     24240,
+     10682,
+     57900,
+     10391,
+     4788
+    ],
+    [
+     888,
+     883,
+     8559,
+     1881,
+     321
+    ],
+    [
+     864,
+     836,
+     852,
+     279,
+     1332
+    ]
+   ],
+   "drafts": [
+    24240,
+    888,
+    864
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 53736,
+   "mtp_chain_seconds": 0.06,
+   "position": 77,
+   "step": 32,
+   "target_step_seconds": 0.401,
+   "target_top5": [
+    24240,
+    10391,
+    4788,
+    10682,
+    59469
+   ],
+   "target_top5_values": [
+    23.75,
+    20.125,
+    19.75,
+    19.0,
+    18.875
+   ],
+   "truths": [
+    24240,
+    888,
+    864
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     888,
+     883,
+     8559,
+     383,
+     364
+    ],
+    [
+     864,
+     852,
+     836,
+     279,
+     6483
+    ],
+    [
+     3177,
+     799,
+     1528,
+     6092,
+     9014
+    ]
+   ],
+   "drafts": [
+    888,
+    864,
+    3177
+   ],
+   "hits": [
+    true,
+    true,
+    false
+   ],
+   "input_token": 24240,
+   "mtp_chain_seconds": 0.061,
+   "position": 78,
+   "step": 33,
+   "target_step_seconds": 0.406,
+   "target_top5": [
+    888,
+    321,
+    2261,
+    364,
+    13
+   ],
+   "target_top5_values": [
+    24.5,
+    15.5,
+    14.75,
+    14.5,
+    14.375
+   ],
+   "truths": [
+    888,
+    864,
+    1220
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     852,
+     864,
+     3315,
+     279,
+     1332
+    ],
+    [
+     1000,
+     1220,
+     557,
+     995,
+     42970
+    ],
+    [
+     3512,
+     8418,
+     381,
+     599,
+     9297
+    ]
+   ],
+   "drafts": [
+    852,
+    1000,
+    3512
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 888,
+   "mtp_chain_seconds": 0.06,
+   "position": 79,
+   "step": 34,
+   "target_step_seconds": 0.398,
+   "target_top5": [
+    864,
+    852,
+    279,
+    6511,
+    6562
+   ],
+   "target_top5_values": [
+    25.0,
+    19.5,
+    17.625,
+    16.5,
+    15.5625
+   ],
+   "truths": [
+    864,
+    1220,
+    8418
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 2,
+   "draft_top5": [
+    [
+     3177,
+     799,
+     1220,
+     1000,
+     1528
+    ],
+    [
+     1220,
+     1000,
+     557,
+     42970,
+     995
+    ],
+    [
+     381,
+     8418,
+     599,
+     3512,
+     5091
+    ]
+   ],
+   "drafts": [
+    3177,
+    1220,
+    381
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 864,
+   "mtp_chain_seconds": 0.061,
+   "position": 80,
+   "step": 35,
+   "target_step_seconds": 0.405,
+   "target_top5": [
+    1220,
+    3177,
+    3602,
+    1000,
+    799
+   ],
+   "target_top5_values": [
+    24.125,
+    22.25,
+    18.25,
+    17.5,
+    17.125
+   ],
+   "truths": [
+    1220,
+    8418,
+    430
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     381,
+     8418,
+     3357,
+     5091,
+     599
+    ],
+    [
+     279,
+     22471,
+     2046,
+     75952,
+     24249
+    ],
+    [
+     3813,
+     3357,
+     10407,
+     6511,
+     24249
+    ]
+   ],
+   "drafts": [
+    381,
+    279,
+    3813
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 1220,
+   "mtp_chain_seconds": 0.06,
+   "position": 81,
+   "step": 36,
+   "target_step_seconds": 0.399,
+   "target_top5": [
+    8418,
+    381,
+    3222,
+    3512,
+    3357
+   ],
+   "target_top5_values": [
+    22.25,
+    21.5,
+    21.125,
+    20.5,
+    19.125
+   ],
+   "truths": [
+    8418,
+    430,
+    279
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     430,
+     97698,
+     279,
+     299,
+     303
+    ],
+    [
+     279,
+     836,
+     6511,
+     2046,
+     24249
+    ],
+    [
+     6511,
+     6777,
+     5145,
+     1528,
+     22001
+    ]
+   ],
+   "drafts": [
+    430,
+    279,
+    6511
+   ],
+   "hits": [
+    true,
+    true,
+    false
+   ],
+   "input_token": 8418,
+   "mtp_chain_seconds": 0.061,
+   "position": 82,
+   "step": 37,
+   "target_step_seconds": 0.41,
+   "target_top5": [
+    430,
+    279,
+    303,
+    506,
+    15048
+   ],
+   "target_top5_values": [
+    25.625,
+    15.5625,
+    13.25,
+    12.125,
+    11.8125
+   ],
+   "truths": [
+    430,
+    279,
+    5145
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     279,
+     836,
+     678,
+     780,
+     264
+    ],
+    [
+     6511,
+     5145,
+     6777,
+     3046,
+     1528
+    ],
+    [
+     13,
+     11,
+     26,
+     321,
+     318
+    ]
+   ],
+   "drafts": [
+    279,
+    6511,
+    13
+   ],
+   "hits": [
+    true,
+    false,
+    false
+   ],
+   "input_token": 430,
+   "mtp_chain_seconds": 0.06,
+   "position": 83,
+   "step": 38,
+   "target_step_seconds": 0.387,
+   "target_top5": [
+    279,
+    6511,
+    5145,
+    264,
+    6562
+   ],
+   "target_top5_values": [
+    26.625,
+    16.375,
+    16.125,
+    14.625,
+    14.5
+   ],
+   "truths": [
+    279,
+    5145,
+    6511
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     6511,
+     5145,
+     6777,
+     6562,
+     10407
+    ],
+    [
+     13,
+     579,
+     303,
+     26,
+     314
+    ],
+    [
+     733,
+     11746,
+     561,
+     5788,
+     10022
+    ]
+   ],
+   "drafts": [
+    6511,
+    13,
+    561
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 279,
+   "mtp_chain_seconds": 0.06,
+   "position": 84,
+   "step": 39,
+   "target_step_seconds": 0.401,
+   "target_top5": [
+    5145,
+    6777,
+    6511,
+    10407,
+    6562
+   ],
+   "target_top5_values": [
+    23.75,
+    23.0,
+    22.75,
+    21.125,
+    21.125
+   ],
+   "truths": [
+    5145,
+    6511,
+    13
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     6511,
+     10407,
+     7410,
+     1994,
+     12872
+    ],
+    [
+     13,
+     1238,
+     2261,
+     11,
+     948
+    ],
+    [
+     561,
+     1049,
+     10022,
+     11396,
+     5788
+    ]
+   ],
+   "drafts": [
+    6511,
+    13,
+    561
+   ],
+   "hits": [
+    true,
+    true,
+    false
+   ],
+   "input_token": 5145,
+   "mtp_chain_seconds": 0.062,
+   "position": 85,
+   "step": 40,
+   "target_step_seconds": 0.417,
+   "target_top5": [
+    6511,
+    10407,
+    3990,
+    24249,
+    18156
+   ],
+   "target_top5_values": [
+    24.5,
+    21.625,
+    18.875,
+    18.125,
+    15.9375
+   ],
+   "truths": [
+    6511,
+    13,
+    3113
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     13,
+     303,
+     948,
+     2261,
+     1345
+    ],
+    [
+     561,
+     1049,
+     733,
+     11746,
+     1061
+    ],
+    [
+     5307,
+     3177,
+     5576,
+     6381,
+     1330
+    ]
+   ],
+   "drafts": [
+    13,
+    561,
+    5307
+   ],
+   "hits": [
+    true,
+    false,
+    false
+   ],
+   "input_token": 6511,
+   "mtp_chain_seconds": 0.062,
+   "position": 86,
+   "step": 41,
+   "target_step_seconds": 0.399,
+   "target_top5": [
+    13,
+    11,
+    26,
+    2261,
+    1238
+   ],
+   "target_top5_values": [
+    23.75,
+    19.625,
+    19.5,
+    19.25,
+    18.25
+   ],
+   "truths": [
+    13,
+    3113,
+    25460
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     3113,
+     561,
+     1061,
+     1577,
+     248046
+    ],
+    [
+     25460,
+     18207,
+     23294,
+     29593,
+     3154
+    ],
+    [
+     66463,
+     2885,
+     264,
+     36855,
+     279
+    ]
+   ],
+   "drafts": [
+    3113,
+    25460,
+    66463
+   ],
+   "hits": [
+    true,
+    true,
+    false
+   ],
+   "input_token": 13,
+   "mtp_chain_seconds": 0.064,
+   "position": 87,
+   "step": 42,
+   "target_step_seconds": 0.412,
+   "target_top5": [
+    3113,
+    1061,
+    561,
+    40388,
+    1577
+   ],
+   "target_top5_values": [
+    19.5,
+    18.375,
+    18.25,
+    17.625,
+    17.25
+   ],
+   "truths": [
+    3113,
+    25460,
+    264
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     25460,
+     29593,
+     23294,
+     18207,
+     2790
+    ],
+    [
+     66463,
+     2885,
+     36855,
+     264,
+     95535
+    ],
+    [
+     303,
+     11,
+     11352,
+     66463,
+     430
+    ]
+   ],
+   "drafts": [
+    25460,
+    66463,
+    11
+   ],
+   "hits": [
+    true,
+    false,
+    false
+   ],
+   "input_token": 3113,
+   "mtp_chain_seconds": 0.062,
+   "position": 88,
+   "step": 43,
+   "target_step_seconds": 0.414,
+   "target_top5": [
+    25460,
+    29593,
+    6611,
+    47692,
+    4599
+   ],
+   "target_top5_values": [
+    21.375,
+    20.5,
+    19.25,
+    18.0,
+    17.875
+   ],
+   "truths": [
+    25460,
+    264,
+    20002
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     264,
+     449,
+     279,
+     66463,
+     321
+    ],
+    [
+     491,
+     20002,
+     7193,
+     11697,
+     4688
+    ],
+    [
+     11,
+     3177,
+     3602,
+     15203,
+     9014
+    ]
+   ],
+   "drafts": [
+    264,
+    491,
+    11
+   ],
+   "hits": [
+    true,
+    false,
+    false
+   ],
+   "input_token": 25460,
+   "mtp_chain_seconds": 0.061,
+   "position": 89,
+   "step": 44,
+   "target_step_seconds": 0.411,
+   "target_top5": [
+    264,
+    66463,
+    449,
+    279,
+    411
+   ],
+   "target_top5_values": [
+    22.125,
+    18.625,
+    17.5,
+    15.0,
+    14.8125
+   ],
+   "truths": [
+    264,
+    20002,
+    2660
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     20002,
+     491,
+     3602,
+     2660,
+     13238
+    ],
+    [
+     11,
+     3602,
+     2660,
+     3177,
+     2982
+    ],
+    [
+     2660,
+     3602,
+     4937,
+     81402,
+     4688
+    ]
+   ],
+   "drafts": [
+    20002,
+    11,
+    2660
+   ],
+   "hits": [
+    true,
+    false,
+    false
+   ],
+   "input_token": 264,
+   "mtp_chain_seconds": 0.064,
+   "position": 90,
+   "step": 45,
+   "target_step_seconds": 0.412,
+   "target_top5": [
+    20002,
+    491,
+    2660,
+    3602,
+    12539
+   ],
+   "target_top5_values": [
+    21.125,
+    20.875,
+    20.625,
+    19.5,
+    19.125
+   ],
+   "truths": [
+    20002,
+    2660,
+    7172
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     11,
+     2660,
+     3602,
+     3177,
+     43534
+    ],
+    [
+     7193,
+     1575,
+     2660,
+     4688,
+     491
+    ],
+    [
+     49875,
+     26015,
+     66526,
+     18336,
+     54087
+    ]
+   ],
+   "drafts": [
+    11,
+    7193,
+    49875
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 20002,
+   "mtp_chain_seconds": 0.063,
+   "position": 91,
+   "step": 46,
+   "target_step_seconds": 0.4,
+   "target_top5": [
+    2660,
+    3602,
+    11,
+    73582,
+    17435
+   ],
+   "target_top5_values": [
+    22.875,
+    21.25,
+    20.125,
+    18.125,
+    18.0
+   ],
+   "truths": [
+    2660,
+    7172,
+    1881
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     303,
+     7172,
+     2785,
+     421,
+     11
+    ],
+    [
+     279,
+     264,
+     1881,
+     66463,
+     1478
+    ],
+    [
+     14362,
+     5956,
+     3990,
+     9514,
+     8358
+    ]
+   ],
+   "drafts": [
+    303,
+    279,
+    14362
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 2660,
+   "mtp_chain_seconds": 0.062,
+   "position": 92,
+   "step": 47,
+   "target_step_seconds": 0.401,
+   "target_top5": [
+    7172,
+    303,
+    2785,
+    11,
+    421
+   ],
+   "target_top5_values": [
+    20.75,
+    20.5,
+    19.875,
+    19.75,
+    18.875
+   ],
+   "truths": [
+    7172,
+    1881,
+    279
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     303,
+     2785,
+     1881,
+     11352,
+     11040
+    ],
+    [
+     279,
+     264,
+     66463,
+     1478,
+     1881
+    ],
+    [
+     5956,
+     14362,
+     3990,
+     12230,
+     4688
+    ]
+   ],
+   "drafts": [
+    303,
+    279,
+    5956
+   ],
+   "hits": [
+    false,
+    true,
+    false
+   ],
+   "input_token": 7172,
+   "mtp_chain_seconds": 0.062,
+   "position": 93,
+   "step": 48,
+   "target_step_seconds": 0.409,
+   "target_top5": [
+    16757,
+    1881,
+    2785,
+    303,
+    79317
+   ],
+   "target_top5_values": [
+    21.0,
+    21.0,
+    20.625,
+    20.125,
+    17.875
+   ],
+   "truths": [
+    1881,
+    279,
+    1330
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     279,
+     1439,
+     1070,
+     1330,
+     2107
+    ],
+    [
+     1330,
+     19186,
+     9432,
+     5656,
+     96177
+    ],
+    [
+     9432,
+     5656,
+     16185,
+     11,
+     5134
+    ]
+   ],
+   "drafts": [
+    279,
+    1330,
+    9432
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 1881,
+   "mtp_chain_seconds": 0.062,
+   "position": 94,
+   "step": 49,
+   "target_step_seconds": 0.402,
+   "target_top5": [
+    279,
+    1070,
+    1439,
+    2107,
+    20620
+   ],
+   "target_top5_values": [
+    24.125,
+    21.125,
+    18.875,
+    17.125,
+    16.5
+   ],
+   "truths": [
+    279,
+    1330,
+    9432
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    true
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     1330,
+     19186,
+     975,
+     2250,
+     24739
+    ],
+    [
+     9432,
+     11,
+     5134,
+     303,
+     38597
+    ],
+    [
+     11,
+     303,
+     318,
+     321,
+     694
+    ]
+   ],
+   "drafts": [
+    1330,
+    9432,
+    11
+   ],
+   "hits": [
+    true,
+    true,
+    true
+   ],
+   "input_token": 279,
+   "mtp_chain_seconds": 0.062,
+   "position": 95,
+   "step": 50,
+   "target_step_seconds": 0.401,
+   "target_top5": [
+    1330,
+    1528,
+    3478,
+    975,
+    9432
+   ],
+   "target_top5_values": [
+    25.25,
+    14.3125,
+    14.125,
+    13.375,
+    13.25
+   ],
+   "truths": [
+    1330,
+    9432,
+    11
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     11,
+     9432,
+     303,
+     318,
+     5134
+    ],
+    [
+     279,
+     424,
+     264,
+     781,
+     449
+    ],
+    [
+     6562,
+     3177,
+     491,
+     5307,
+     12982
+    ]
+   ],
+   "drafts": [
+    11,
+    279,
+    3177
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 1330,
+   "mtp_chain_seconds": 0.061,
+   "position": 96,
+   "step": 51,
+   "target_step_seconds": 0.391,
+   "target_top5": [
+    9432,
+    11,
+    3478,
+    5134,
+    2197
+   ],
+   "target_top5_values": [
+    21.5,
+    20.125,
+    18.625,
+    17.375,
+    17.125
+   ],
+   "truths": [
+    9432,
+    11,
+    279
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    true,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     11,
+     303,
+     318,
+     2785,
+     694
+    ],
+    [
+     279,
+     66463,
+     424,
+     264,
+     2885
+    ],
+    [
+     3177,
+     491,
+     5307,
+     6562,
+     1330
+    ]
+   ],
+   "drafts": [
+    11,
+    279,
+    3177
+   ],
+   "hits": [
+    true,
+    true,
+    false
+   ],
+   "input_token": 9432,
+   "mtp_chain_seconds": 0.062,
+   "position": 97,
+   "step": 52,
+   "target_step_seconds": 0.4,
+   "target_top5": [
+    11,
+    303,
+    318,
+    694,
+    2785
+   ],
+   "target_top5_values": [
+    24.25,
+    21.75,
+    20.25,
+    19.125,
+    18.75
+   ],
+   "truths": [
+    11,
+    279,
+    2936
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     279,
+     781,
+     424,
+     8071,
+     66463
+    ],
+    [
+     6562,
+     491,
+     12982,
+     2936,
+     5307
+    ],
+    [
+     2936,
+     9908,
+     96960,
+     44087,
+     83767
+    ]
+   ],
+   "drafts": [
+    279,
+    6562,
+    2936
+   ],
+   "hits": [
+    true,
+    false,
+    false
+   ],
+   "input_token": 11,
+   "mtp_chain_seconds": 0.062,
+   "position": 98,
+   "step": 53,
+   "target_step_seconds": 0.403,
+   "target_top5": [
+    279,
+    8071,
+    6562,
+    67512,
+    24286
+   ],
+   "target_top5_values": [
+    22.125,
+    19.125,
+    18.375,
+    18.0,
+    17.875
+   ],
+   "truths": [
+    279,
+    2936,
+    18877
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 4,
+   "draft_top5": [
+    [
+     6562,
+     491,
+     12982,
+     76555,
+     2936
+    ],
+    [
+     2936,
+     96960,
+     9908,
+     10949,
+     16146
+    ],
+    [
+     56672,
+     1362,
+     557,
+     29784,
+     18877
+    ]
+   ],
+   "drafts": [
+    6562,
+    2936,
+    56672
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 279,
+   "mtp_chain_seconds": 0.063,
+   "position": 99,
+   "step": 54,
+   "target_step_seconds": 0.398,
+   "target_top5": [
+    2936,
+    6562,
+    46039,
+    491,
+    12982
+   ],
+   "target_top5_values": [
+    21.625,
+    20.75,
+    19.75,
+    19.75,
+    19.5
+   ],
+   "truths": [
+    2936,
+    18877,
+    310
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 3,
+   "draft_top5": [
+    [
+     29784,
+     1362,
+     557,
+     18877,
+     56672
+    ],
+    [
+     279,
+     264,
+     6611,
+     23294,
+     866
+    ],
+    [
+     4499,
+     11712,
+     5515,
+     4788,
+     10682
+    ]
+   ],
+   "drafts": [
+    29784,
+    279,
+    4499
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 2936,
+   "mtp_chain_seconds": 0.061,
+   "position": 100,
+   "step": 55,
+   "target_step_seconds": 0.404,
+   "target_top5": [
+    18877,
+    29784,
+    56672,
+    15631,
+    24389
+   ],
+   "target_top5_values": [
+    23.125,
+    20.875,
+    20.625,
+    18.0,
+    17.125
+   ],
+   "truths": [
+    18877,
+    310,
+    5190
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     310,
+     364,
+     524,
+     539,
+     5471
+    ],
+    [
+     5471,
+     13813,
+     5190,
+     7915,
+     1791
+    ],
+    [
+     279,
+     866,
+     264,
+     4788,
+     24979
+    ]
+   ],
+   "drafts": [
+    310,
+    5471,
+    279
+   ],
+   "hits": [
+    true,
+    false,
+    false
+   ],
+   "input_token": 18877,
+   "mtp_chain_seconds": 0.063,
+   "position": 101,
+   "step": 56,
+   "target_step_seconds": 0.395,
+   "target_top5": [
+    310,
+    29008,
+    364,
+    5190,
+    687
+   ],
+   "target_top5_values": [
+    26.0,
+    13.875,
+    13.5625,
+    13.4375,
+    12.3125
+   ],
+   "truths": [
+    310,
+    5190,
+    2892
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     5471,
+     5190,
+     11587,
+     13813,
+     5790
+    ],
+    [
+     4788,
+     279,
+     866,
+     24979,
+     11712
+    ],
+    [
+     37135,
+     11712,
+     57900,
+     24979,
+     22770
+    ]
+   ],
+   "drafts": [
+    5471,
+    4788,
+    37135
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 310,
+   "mtp_chain_seconds": 0.062,
+   "position": 102,
+   "step": 57,
+   "target_step_seconds": 0.402,
+   "target_top5": [
+    5190,
+    29008,
+    5471,
+    7915,
+    10000
+   ],
+   "target_top5_values": [
+    21.375,
+    21.25,
+    20.125,
+    19.625,
+    19.5
+   ],
+   "truths": [
+    5190,
+    2892,
+    3177
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": false,
+   "d1_truth_rank": 10,
+   "draft_top5": [
+    [
+     279,
+     14689,
+     4788,
+     866,
+     264
+    ],
+    [
+     57900,
+     4788,
+     11712,
+     20129,
+     42054
+    ],
+    [
+     1881,
+     321,
+     421,
+     494,
+     11
+    ]
+   ],
+   "drafts": [
+    279,
+    57900,
+    1881
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 5190,
+   "mtp_chain_seconds": 0.061,
+   "position": 103,
+   "step": 58,
+   "target_step_seconds": 0.393,
+   "target_top5": [
+    2892,
+    14689,
+    866,
+    279,
+    4788
+   ],
+   "target_top5_values": [
+    21.0,
+    18.375,
+    18.25,
+    17.5,
+    17.5
+   ],
+   "truths": [
+    2892,
+    3177,
+    494
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     3008,
+     3177,
+     4464,
+     35177,
+     3602
+    ],
+    [
+     494,
+     314,
+     579,
+     1602,
+     28187
+    ],
+    [
+     28187,
+     10141,
+     8008,
+     1602,
+     64998
+    ]
+   ],
+   "drafts": [
+    3008,
+    494,
+    28187
+   ],
+   "hits": [
+    false,
+    true,
+    true
+   ],
+   "input_token": 2892,
+   "mtp_chain_seconds": 0.065,
+   "position": 104,
+   "step": 59,
+   "target_step_seconds": 0.4,
+   "target_top5": [
+    3177,
+    1528,
+    494,
+    3478,
+    20620
+   ],
+   "target_top5_values": [
+    20.375,
+    19.375,
+    19.375,
+    19.0,
+    18.0
+   ],
+   "truths": [
+    3177,
+    494,
+    28187
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     494,
+     579,
+     466,
+     725,
+     3478
+    ],
+    [
+     64998,
+     28187,
+     19787,
+     1602,
+     10141
+    ],
+    [
+     279,
+     303,
+     466,
+     1141,
+     494
+    ]
+   ],
+   "drafts": [
+    494,
+    64998,
+    279
+   ],
+   "hits": [
+    true,
+    false,
+    false
+   ],
+   "input_token": 3177,
+   "mtp_chain_seconds": 0.062,
+   "position": 105,
+   "step": 60,
+   "target_step_seconds": 0.39,
+   "target_top5": [
+    494,
+    579,
+    725,
+    28187,
+    64998
+   ],
+   "target_top5_values": [
+    23.625,
+    16.125,
+    15.4375,
+    14.125,
+    13.0625
+   ],
+   "truths": [
+    494,
+    28187,
+    87426
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     28187,
+     64998,
+     3322,
+     10141,
+     1602
+    ],
+    [
+     279,
+     42054,
+     2166,
+     87426,
+     25693
+    ],
+    [
+     8156,
+     9144,
+     24738,
+     62922,
+     21459
+    ]
+   ],
+   "drafts": [
+    28187,
+    279,
+    8156
+   ],
+   "hits": [
+    true,
+    false,
+    false
+   ],
+   "input_token": 494,
+   "mtp_chain_seconds": 0.064,
+   "position": 106,
+   "step": 61,
+   "target_step_seconds": 0.396,
+   "target_top5": [
+    28187,
+    64998,
+    9668,
+    3322,
+    19787
+   ],
+   "target_top5_values": [
+    22.75,
+    20.75,
+    20.25,
+    20.125,
+    18.875
+   ],
+   "truths": [
+    28187,
+    87426,
+    4788
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 4,
+   "draft_top5": [
+    [
+     264,
+     42054,
+     4788,
+     279,
+     87426
+    ],
+    [
+     23681,
+     4927,
+     18021,
+     14257,
+     76346
+    ],
+    [
+     2234,
+     2552,
+     9084,
+     4788,
+     9144
+    ]
+   ],
+   "drafts": [
+    264,
+    23681,
+    2234
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 28187,
+   "mtp_chain_seconds": 0.06,
+   "position": 107,
+   "step": 62,
+   "target_step_seconds": 0.395,
+   "target_top5": [
+    87426,
+    4788,
+    264,
+    449,
+    25693
+   ],
+   "target_top5_values": [
+    21.25,
+    20.625,
+    20.25,
+    19.625,
+    19.5
+   ],
+   "truths": [
+    87426,
+    4788,
+    42054
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     4788,
+     9870,
+     62922,
+     67726,
+     9144
+    ],
+    [
+     9870,
+     9144,
+     2279,
+     42054,
+     4542
+    ],
+    [
+     321,
+     11,
+     888,
+     466,
+     13
+    ]
+   ],
+   "drafts": [
+    4788,
+    9870,
+    321
+   ],
+   "hits": [
+    true,
+    false,
+    false
+   ],
+   "input_token": 87426,
+   "mtp_chain_seconds": 0.062,
+   "position": 108,
+   "step": 63,
+   "target_step_seconds": 0.399,
+   "target_top5": [
+    4788,
+    42054,
+    62922,
+    9144,
+    9870
+   ],
+   "target_top5_values": [
+    24.0,
+    20.375,
+    19.375,
+    19.25,
+    19.125
+   ],
+   "truths": [
+    4788,
+    42054,
+    13
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    false
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     466,
+     42054,
+     9870,
+     9144,
+     2279
+    ],
+    [
+     6739,
+     5713,
+     3471,
+     12387,
+     22001
+    ],
+    [
+     42054,
+     9144,
+     21459,
+     63418,
+     9870
+    ]
+   ],
+   "drafts": [
+    466,
+    6739,
+    42054
+   ],
+   "hits": [
+    false,
+    false,
+    false
+   ],
+   "input_token": 4788,
+   "mtp_chain_seconds": 0.061,
+   "position": 109,
+   "step": 64,
+   "target_step_seconds": 0.456,
+   "target_top5": [
+    42054,
+    9144,
+    466,
+    9870,
+    62922
+   ],
+   "target_top5_values": [
+    22.25,
+    21.5,
+    21.0,
+    20.5,
+    20.25
+   ],
+   "truths": [
+    42054,
+    13,
+    248046
+   ]
+  },
+  {
+   "chain_accepted": [
+    false,
+    false,
+    null
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 1,
+   "draft_top5": [
+    [
+     321,
+     13,
+     888,
+     11,
+     466
+    ],
+    [
+     29008,
+     10000,
+     310,
+     9272,
+     56672
+    ],
+    [
+     264,
+     290,
+     449,
+     29337,
+     24479
+    ]
+   ],
+   "drafts": [
+    321,
+    29008,
+    264
+   ],
+   "hits": [
+    false,
+    false,
+    null
+   ],
+   "input_token": 42054,
+   "mtp_chain_seconds": 0.063,
+   "position": 110,
+   "step": 65,
+   "target_step_seconds": 0.421,
+   "target_top5": [
+    13,
+    321,
+    11,
+    1345,
+    888
+   ],
+   "target_top5_values": [
+    23.75,
+    23.0,
+    22.375,
+    20.625,
+    20.25
+   ],
+   "truths": [
+    13,
+    248046,
+    null
+   ]
+  },
+  {
+   "chain_accepted": [
+    true,
+    null,
+    null
+   ],
+   "d1_truth_in_top5": true,
+   "d1_truth_rank": 0,
+   "draft_top5": [
+    [
+     248046,
+     561,
+     1049,
+     21708,
+     1061
+    ],
+    [
+     198,
+     248044,
+     58,
+     271,
+     7
+    ],
+    [
+     248044,
+     220,
+     248046,
+     198,
+     262
+    ]
+   ],
+   "drafts": [
+    248046,
+    198,
+    248044
+   ],
+   "hits": [
+    true,
+    null,
+    null
+   ],
+   "input_token": 13,
+   "mtp_chain_seconds": 0.062,
+   "position": 111,
+   "step": 66,
+   "target_step_seconds": 0.455,
+   "target_top5": [
+    248046,
+    21708,
+    66463,
+    561,
+    1061
+   ],
+   "target_top5_values": [
+    23.25,
+    17.125,
+    16.375,
+    15.9375,
+    15.0
+   ],
+   "truths": [
+    248046,
+    null,
+    null
+   ]
+  },
+  {
+   "chain_accepted": [
+    null,
+    null,
+    null
+   ],
+   "d1_truth_in_top5": null,
+   "d1_truth_rank": null,
+   "draft_top5": [
+    [
+     198,
+     248044,
+     271,
+     7,
+     220
+    ],
+    [
+     248044,
+     220,
+     248046,
+     248045,
+     262
+    ],
+    [
+     248045,
+     248044,
+     8678,
+     2244,
+     96746
+    ]
+   ],
+   "drafts": [
+    198,
+    248044,
+    248045
+   ],
+   "hits": [
+    null,
+    null,
+    null
+   ],
+   "input_token": 248046,
+   "position": 112,
+   "step": 67,
+   "truths": [
+    null,
+    null,
+    null
+   ]
+  }
+ ],
+ "stop_reason": "eos",
+ "summary": {
+  "accepted_length_histogram": {
+   "counts": {
+    "0": 23,
+    "1": 12,
+    "2": 9,
+    "3": 21
+   },
+   "n": 65
+  },
+  "alpha_1": 0.6417910447761194,
+  "alpha_2|1": {
+   "accepted": 30,
+   "n": 42,
+   "rate": 0.7142857142857143
+  },
+  "alpha_3|2": {
+   "accepted": 21,
+   "n": 30,
+   "rate": 0.7
+  },
+  "chain1_accept": {
+   "accepted": 43,
+   "n": 67,
+   "rate": 0.6417910447761194
+  },
+  "chain2_accept": {
+   "accepted": 30,
+   "n": 66,
+   "rate": 0.45454545454545453
+  },
+  "chain3_accept": {
+   "accepted": 21,
+   "n": 65,
+   "rate": 0.3230769230769231
+  },
+  "d1_hit_rate": {
+   "hits": 43,
+   "n": 67,
+   "rate": 0.6417910447761194
+  },
+  "d1_truth_in_top5": {
+   "count": 65,
+   "n": 67,
+   "rate": 0.9701492537313433
+  },
+  "d2_hit_rate": {
+   "hits": 33,
+   "n": 66,
+   "rate": 0.5
+  },
+  "d3_hit_rate": {
+   "hits": 23,
+   "n": 65,
+   "rate": 0.35384615384615387
+  },
+  "depth": 3,
+  "expected_tokens_per_pass": {
+   "k1": 1.6418,
+   "k2": 2.0963,
+   "k3": 2.4194
+  }
+ },
+ "target_step_seconds": {
+  "max": 0.456,
+  "mean": 0.405,
+  "median": 0.402,
+  "n": 67
+ },
+ "token1_top5_indices": [
+  6511,
+  2972,
+  5145,
+  1428,
+  17828
+ ],
+ "token1_top5_values": [
+  27.375,
+  15.0625,
+  14.9375,
+  14.0,
+  13.5625
+ ]
+}

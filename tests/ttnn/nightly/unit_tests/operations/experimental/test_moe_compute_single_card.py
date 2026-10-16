@@ -45,15 +45,15 @@ from ttnn.experimental.moe_compute_utils import (
     get_weight_mem_configs,
     auto_output_width_shard_dim,
     effective_matmul_ring_size,
-    decode_packed_token_lists,
-    token_list_header_words,
-    token_list_page_words,
-    token_list_segment_starts,
 )
 
 # Reuse 6U test helpers verbatim. The intent is that this single-card test
 # never duplicates compute logic — same goldens, same validators.
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
+    decode_packed_token_lists,
+    token_list_header_words,
+    token_list_page_words,
+    token_list_segment_starts,
     create_torch_w0,
     create_torch_w1,
     create_torch_w2,
@@ -1530,7 +1530,11 @@ def _run_moe_compute_local_output_prefill_test(
         for start in range(0, tokens, _PREFILL_REFERENCE_TOKENS):
             stop = min(start + _PREFILL_REFERENCE_TOKENS, tokens)
             call_inputs = upload_call_inputs(hidden[start:stop], indices[start:stop], scores[start:stop])
-            outputs = run(*call_inputs, cluster_axis=None)
+            # Preserve the fused-ring reference for this local ring writer. Automatic selection may use
+            # expert rows, whose default LoFi/BF16 arithmetic is not this bitwise reference.
+            with pytest.MonkeyPatch.context() as kernel:
+                kernel.setenv("TT_METAL_MOE_COMPUTE_KERNEL", "ring")
+                outputs = run(*call_inputs, cluster_axis=None)
             reference_bits.append(_bf16_bits(outputs[5]))
             for tensor in (outputs[0], outputs[1], outputs[2], outputs[4], *call_inputs):
                 ttnn.deallocate(tensor)
