@@ -201,8 +201,15 @@ constexpr std::uint8_t EPILOGUE_DONE_SEM = semaphore::UNPACK_MATH;
 // Replay slots for the dequant sequence over half a face (8 rows): one per 16-column half of
 // the tile, since faces 0/2 (columns 0-15) and 1/3 (columns 16-31) use different scale LREGs.
 // Two 16-entry sequences fit the replay buffer where two full-face (32-entry) ones did not.
-constexpr std::uint32_t FACE_SEQ_LEN     = 4 /*SFPU passes per half face*/ * 4 /*instructions*/;
-constexpr std::uint32_t FACE_SEQ_SLOT[2] = {0, FACE_SEQ_LEN};
+// A pass covers 4 rows of the even or odd columns: 8 rows x 2 column parities = 4 passes, each
+// one LOAD, CAST, MUL and STORE.
+constexpr std::uint32_t SFPU_PASSES_PER_HALF_FACE = 4;
+constexpr std::uint32_t INSTRS_PER_PASS           = 4;
+constexpr std::uint32_t FACE_SEQ_LEN              = SFPU_PASSES_PER_HALF_FACE * INSTRS_PER_PASS;
+constexpr std::uint32_t FACE_SEQ_SLOT[2]          = {0, FACE_SEQ_LEN};
+// Each pass owns one of LREG0-3 (LREG4-7 hold the scales), and TRISC3's replay buffer holds 32.
+static_assert(SFPU_PASSES_PER_HALF_FACE <= p_sfpu::LREG4, "passes would overwrite the scale LREGs");
+static_assert(2 * FACE_SEQ_LEN <= 32, "both half-face sequences must fit TRISC3's replay buffer");
 
 // Rewrites 8 rows of a 16x16 Dest face in place: float(int32 partial) * column scale. A pass
 // covers 4 rows of the even (addr +0) or odd (addr +2) columns, so the scale LREG alternates.
@@ -219,24 +226,24 @@ inline void record_face_seq(const std::uint32_t slot)
         0 /*last*/,
         []
         {
-#pragma GCC unroll 4
-            for (int pass = 0; pass < 4; pass++)
+#pragma GCC unroll SFPU_PASSES_PER_HALF_FACE
+            for (std::uint32_t pass = 0; pass < SFPU_PASSES_PER_HALF_FACE; pass++)
             {
                 TT_SFPLOAD(pass, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, pass << 1);
             }
-#pragma GCC unroll 4
-            for (int pass = 0; pass < 4; pass++)
+#pragma GCC unroll SFPU_PASSES_PER_HALF_FACE
+            for (std::uint32_t pass = 0; pass < SFPU_PASSES_PER_HALF_FACE; pass++)
             {
                 TT_SFPCAST(pass, pass, 0 /* int32 (sign-magnitude) -> fp32, RNE */);
             }
-#pragma GCC unroll 4
-            for (int pass = 0; pass < 4; pass++)
+#pragma GCC unroll SFPU_PASSES_PER_HALF_FACE
+            for (std::uint32_t pass = 0; pass < SFPU_PASSES_PER_HALF_FACE; pass++)
             {
                 // Scale (SrcS-loaded) as the multiplier operand.
                 TT_SFPMUL((pass & 1) ? SCALE_ODD : SCALE_EVEN, pass, p_sfpu::LCONST_0, pass, 0);
             }
-#pragma GCC unroll 4
-            for (int pass = 0; pass < 4; pass++)
+#pragma GCC unroll SFPU_PASSES_PER_HALF_FACE
+            for (std::uint32_t pass = 0; pass < SFPU_PASSES_PER_HALF_FACE; pass++)
             {
                 TT_SFPSTORE(pass, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, pass << 1);
             }
