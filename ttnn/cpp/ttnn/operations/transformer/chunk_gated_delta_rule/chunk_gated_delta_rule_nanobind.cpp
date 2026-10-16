@@ -459,10 +459,12 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             q (ttnn.Tensor):    [B, T, H,  K]  or flat [B, T, H*K]   (cast to bf16; see Input layouts)
             k (ttnn.Tensor):    [B, T, H,  K]  or flat [B, T, H*K]   (cast to bf16)
             v (ttnn.Tensor):    [B, T, HV, V]  or flat [B, T, HV*V]  (cast to bf16)
-            g (ttnn.Tensor):    [B, T, HV]   log-space decay        (cast to fp32)
-            beta (ttnn.Tensor): [B, T, HV]                          (cast to fp32)
+            g (ttnn.Tensor):    [B, T, HV]   log-space decay        (fp32 or bf16, read as is)
+            beta (ttnn.Tensor): [B, T, HV]                          (fp32 or bf16, read as is)
             All of them, and every optional tensor below, must be device tensors in TILE layout: the
             op casts dtypes but never relayouts, and a ROW_MAJOR input fails the device op's validation.
+            g and beta are never touched on the host: the kernels read each head's column out of the
+            token-major tiles (any other dtype is widened to fp32 first).
 
         Input layouts (selected by the rank of q/k/v; there is no flag):
             Rank 4, head-split: q/k/v carry an explicit head axis. q/k are expected L2-normalized
@@ -553,15 +555,15 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         (the public op composes prep -> DRAM hand-off -> scan; this exposes prep alone).
 
         All state-independent per-(head,chunk) work of chunk_gated_delta_rule, fanned across
-        cores. Inputs are HEAD-MAJOR per-chunk tensors [BH, NC, C, *]; exact shapes/dtypes are
-        ChunkGdnPrepInputs, device/chunk_gdn_phased.hpp:53-63.
+        cores. q/k/v are HEAD-MAJOR per-chunk tensors [BH, NC, C, *] (or flat), g/beta token-major
+        [B, T, HV]; exact shapes/dtypes are ChunkGdnPrepInputs, device/chunk_gdn_phased.hpp.
 
         Args:
             q (ttnn.Tensor):     [BH, NC, C, K] bf16
             k (ttnn.Tensor):     [BH, NC, C, K] bf16
             v (ttnn.Tensor):     [BH, NC, C, V] bf16 (or FLAT [B, T, HV*V] when v_flat)
-            g (ttnn.Tensor):     [BH, NC, C, 1] fp32 column (log-space decay)
-            beta (ttnn.Tensor):  [BH, NC, C, 1] fp32 column
+            g (ttnn.Tensor):     [B, T, HV] fp32 or bf16 (log-space decay), B * HV == BH
+            beta (ttnn.Tensor):  [B, T, HV] fp32 or bf16
             eye (ttnn.Tensor):   [1,1,C,C] fp32 TILE identity
             tril (ttnn.Tensor):  [1,1,C,C] fp32 TILE lower-triangular ones
             ones (ttnn.Tensor):  [1,1,C,C] fp32 TILE all-ones

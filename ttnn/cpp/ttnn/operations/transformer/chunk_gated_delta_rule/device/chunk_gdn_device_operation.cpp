@@ -25,6 +25,27 @@ void check_gdn_tensor(const Tensor& t, const char* name, DataType dt) {
     TT_FATAL(t.dtype() == dt, "chunk_gdn: {} has wrong dtype", name);
     TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
 }
+
+// A gate, g or beta: the token-major [B, T, HV] tensor the model produces, fp32 or bf16, TILE, with B * HV heads and
+// num_chunks chunks of chunk_size tokens (the reader zeroes the rows past T).
+void check_gdn_gate(
+    const Tensor& t, const char* name, uint32_t BH, uint32_t HV, uint32_t num_chunks, uint32_t chunk_size) {
+    TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
+    TT_FATAL(
+        t.dtype() == DataType::FLOAT32 || t.dtype() == DataType::BFLOAT16, "chunk_gdn: {} must be fp32 or bf16", name);
+    TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
+    const auto& s = t.logical_shape();
+    TT_FATAL(s.rank() == 3, "chunk_gdn: {} must be [B, T, HV] (got rank {})", name, s.rank());
+    TT_FATAL(HV > 0 && s[2] == HV, "chunk_gdn: {} has {} heads per row, expected HV = {}", name, s[2], HV);
+    TT_FATAL(s[0] * HV == BH, "chunk_gdn: {} is [{}, {}, {}], expected B * HV == BH = {}", name, s[0], s[1], s[2], BH);
+    TT_FATAL(
+        (s[1] + chunk_size - 1) / chunk_size == num_chunks,
+        "chunk_gdn: {} has T = {} tokens, expected {} chunks of {}",
+        name,
+        s[1],
+        num_chunks,
+        chunk_size);
+}
 }  // namespace
 
 ChunkGdnDeviceOperation::program_factory_t ChunkGdnDeviceOperation::select_program_factory(
@@ -58,8 +79,8 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
             qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
     }
-    check_gdn_tensor(in.g, "g", DataType::FLOAT32);
-    check_gdn_tensor(in.beta, "beta", DataType::FLOAT32);
+    check_gdn_gate(in.g, "g", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
+    check_gdn_gate(in.beta, "beta", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
     check_gdn_tensor(in.eye_c, "eye_c", DataType::FLOAT32);
     check_gdn_tensor(in.tril_c, "tril_c", DataType::FLOAT32);
     check_gdn_tensor(in.ones_c, "ones_c", DataType::FLOAT32);
@@ -216,8 +237,8 @@ constexpr float kWpUs = 15.98f;          // producer item period; flat over BH a
 constexpr float kChainSlopeUs = 0.012f;  // receiver chunk period growth per head (shared DRAM / NoC)
 constexpr float kSkewAUs = 4.0f;         // slowest chain behind the median chain: A + B*BH
 constexpr float kSkewBUs = 0.5f;
-constexpr float kTailUs = 4.0f;          // last chunk consumed -> kernel end
-constexpr float kFillAUs = 19.5f;        // first scan step done: A + min(BH, 24) * (B + C * producers)
+constexpr float kTailUs = 4.0f;    // last chunk consumed -> kernel end
+constexpr float kFillAUs = 19.5f;  // first scan step done: A + min(BH, 24) * (B + C * producers)
 constexpr float kFillBUs = 0.72f;
 constexpr float kFillCUs = 1.0f / 144.0f;
 constexpr float kRowMajorPaceUs = 8.4f;  // link-bound chunk period of the row-major placement
@@ -228,10 +249,10 @@ constexpr float kBalanceWidthD2 = 0.25f;
 constexpr float kBalanceWidthD3 = 0.15f;
 constexpr float kPoolBalancePeak = 0.25f;
 constexpr float kPoolBalanceWidth = 0.25f;
-constexpr float kPoolStartUs = 20.0f;     // pool, Vtl <= 2: the home producers' first items end later, by
-constexpr float kPoolStartShare = 0.25f;  // kPoolStartUs * min(1, share / kPoolStartShare)
-constexpr float kPoolSkewUs = 4.0f;       // extra chain skew of a pool
-constexpr float kPoolCreditD2Us = 0.025f;  // pool at depth 2, Vtl <= 2: credit round trip exposed per step, per head
+constexpr float kPoolStartUs = 20.0f;        // pool, Vtl <= 2: the home producers' first items end later, by
+constexpr float kPoolStartShare = 0.25f;     // kPoolStartUs * min(1, share / kPoolStartShare)
+constexpr float kPoolSkewUs = 4.0f;          // extra chain skew of a pool
+constexpr float kPoolCreditD2Us = 0.025f;    // pool at depth 2, Vtl <= 2: credit round trip exposed per step, per head
 constexpr uint32_t kHandoffTiles = 19;       // fp32 tiles per hand-off slot (C=32, K=V=128)
 constexpr uint32_t kProducerPrepTiles = 48;  // the producer's prep CBs, in fp32-tile units
 constexpr uint32_t kTileBytes = 4096;
@@ -565,8 +586,8 @@ FusedGeometryChoice choose_fused_geometry(
             uint32_t best_num = nx;
             float best_t = 0.0f;
             for (uint32_t num = nx + 1; num-- > 0;) {
-                const float t = t_fused_us(
-                    BH, NC, Vtl, depths[i], 2, P, pool_load(BH, NC, nph, nx, num, P), true, float(num) / P);
+                const float t =
+                    t_fused_us(BH, NC, Vtl, depths[i], 2, P, pool_load(BH, NC, nph, nx, num, P), true, float(num) / P);
                 if (num == nx || t < best_t) {
                     best_num = num;
                     best_t = t;
@@ -663,7 +684,10 @@ std::vector<Tensor> chunk_gdn(
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Dim derivation identical to chunk_gdn_prep (both factories consume prep's inputs; the flat forms
-    // are Fused-only and rejected for Mono in validate).
+    // are Fused-only and rejected for Mono in validate). HV, when the caller leaves it 0, is the gates' head count.
+    if (HV == 0) {
+        HV = g.logical_shape()[2];
+    }
     const uint32_t BH = qk_flat ? (q_shape[0] * HV) : q_shape[0];
     const uint32_t num_chunks = qk_flat ? (q_shape[1] / chunk_size) : q_shape[1];
     const uint32_t key_dim = qk_flat ? (q_shape[2] / Hk) : q_shape[3];
@@ -749,8 +773,8 @@ std::vector<Tensor> chunk_gdn(
             const uint32_t nph = fused_pool_home_producers(grid0.x, grid0.y, BH, attrs.nv, attrs.np);
             const uint32_t nx = nph >= 1 ? attrs.np - BH * nph : 0;
             if (nx >= 1) {
-                attrs.pool_extra_num = share.has_value() ? static_cast<uint32_t>(std::lround(*share * attrs.np))
-                                                         : choice.pool_extra_num;
+                attrs.pool_extra_num =
+                    share.has_value() ? static_cast<uint32_t>(std::lround(*share * attrs.np)) : choice.pool_extra_num;
                 attrs.pool_extra_den = attrs.np;
             }
         } else {

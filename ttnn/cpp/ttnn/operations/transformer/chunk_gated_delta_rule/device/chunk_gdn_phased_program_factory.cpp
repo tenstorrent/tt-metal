@@ -357,32 +357,21 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     auto* ti_buf = outputs[6].buffer();    // t_inv
 
     // Each used core processes its contiguous slice [wi_start, wi_start+wi_count) of the BH*NC
-    // work-items. wi is the flat DRAM tile index (h*NC + c), so the kernels need no h/c at all.
+    // work-items. wi is the flat DRAM tile index (h*NC + c); the reader derives (head, chunk) from it.
+    const uint32_t T = in.g.logical_shape()[1];
+    const uint32_t g_tile_bytes = in.g.buffer()->page_size();
+    const uint32_t beta_tile_bytes = in.beta.buffer()->page_size();
     for (uint32_t i = 0; i < n_used; i++) {
         const auto& core = dist.cores[i];
         const uint32_t wi_start = dist.wi_start[i];
         const uint32_t wi_count = dist.wi_count[i];
-        // Trailing runtime args NC, HV, Hk are consumed by the reader's flat branches (V_FLAT/QK_FLAT);
-        // then the work-item stride (1: contiguous here; the fused NP>1 split strides by NP) and the kickoff
-        // wait (0: no staggering on the phased prep).
+        // Trailing runtime args NC, HV, Hk serve the reader's flat branches (V_FLAT/QK_FLAT) and the gate reads;
+        // then the work-item stride (1: contiguous here), the kickoff wait (0: no staggering on the phased
+        // prep), four words the fused producer map occupies, and the gates' source (tokens, tile sizes).
         reader.emplace_runtime_args(
-            core,
-            {wi_start,
-             wi_count,
-             q_buf,
-             k_buf,
-             v_buf,
-             g_buf,
-             beta_buf,
-             eye_buf,
-             tril_buf,
-             ones_buf,
-             masks_buf,
-             NC,
-             attrs.HV,
-             attrs.Hk,
-             1u,
-             0u});
+            core, {wi_start, wi_count,  q_buf, k_buf,        v_buf,          g_buf, beta_buf, eye_buf, tril_buf,
+                   ones_buf, masks_buf, NC,    attrs.HV,     attrs.Hk,       1u,    0u,       0u,      0u,
+                   0u,       0u,        T,     g_tile_bytes, beta_tile_bytes});
         writer.emplace_runtime_args(
             core, {wi_start, wi_count, vb_buf, nkd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf});
         compute.emplace_runtime_args(core, {wi_count});

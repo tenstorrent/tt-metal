@@ -27,15 +27,15 @@
 // producers take their head's chunks round-robin, the extras take the share num/den of every head's
 // chunks chunk-major. Placements 0/1 are its NX = 0 case.
 //
-// Handshake (specification: chunk_gdn_handoff_protocol.md in this directory): receiver (h, v) reserves its 7 slots for chunk c, resets slot (c % nbuf)'s VALID flag,
-// then atomically increments credit[h][c % nbuf] on the producer that owns chunk c. That producer sends
-// only at credit[h][c % nbuf] == NV, resets the word, writes, waits for the write ACKS (a flush proves
-// departure only), then sets VALID[c % nbuf] on the receivers. A receiver keeps nbuf-1 hand-offs in
-// flight; the per-slot flags keep their VALIDs apart. The credit words are BH x nbuf plain L1 words in
-// the last tile of the u/mask CB, which is declared on the UNION of both core sets so it has one address
-// on every core; because dispatch re-initializes only Semaphore objects per launch, each producer zeroes
-// its words at start and bumps the `init` semaphore on the receivers of every head it serves, which
-// wait for all their distinct producers before their first credit.
+// Handshake (specification: chunk_gdn_handoff_protocol.md in this directory): receiver (h, v) reserves its 7 slots for
+// chunk c, resets slot (c % nbuf)'s VALID flag, then atomically increments credit[h][c % nbuf] on the producer that
+// owns chunk c. That producer sends only at credit[h][c % nbuf] == NV, resets the word, writes, waits for the write
+// ACKS (a flush proves departure only), then sets VALID[c % nbuf] on the receivers. A receiver keeps nbuf-1 hand-offs
+// in flight; the per-slot flags keep their VALIDs apart. The credit words are BH x nbuf plain L1 words in the last tile
+// of the u/mask CB, which is declared on the UNION of both core sets so it has one address on every core; because
+// dispatch re-initializes only Semaphore objects per launch, each producer zeroes its words at start and bumps the
+// `init` semaphore on the receivers of every head it serves, which wait for all their distinct producers before their
+// first credit.
 //
 // Hand-off CB addressing: the 7 hand-off CBs are declared on the UNION of producer+receiver cores,
 // so they get identical base addresses on both sides. The receiver reserves/pushes each shared CB
@@ -514,16 +514,38 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     }
     receiver_reader.common_runtime_args = producer_table;
 
-    // Producer p: its map index and item count (the reader and writer walk the same list), the map, and for
-    // the writer the heads it serves; the receivers' coords are common.
+    // Producer p: its map index and item count (the reader and writer walk the same list), the map, the gates'
+    // source (tokens, tile sizes), and for the writer the heads it serves; the receivers' coords are common.
+    const uint32_t T = in.g.logical_shape()[1];
+    const uint32_t g_tile_bytes = in.g.buffer()->page_size();
+    const uint32_t beta_tile_bytes = in.beta.buffer()->page_size();
     for (uint32_t p = 0; p < P; p++) {
         const CoreCoord& pc = prod_cores[p];
         prep_reader.emplace_runtime_args(
-            pc, {p,        n_items[p], q_buf,     k_buf,
-                 v_buf,    g_buf,      beta_buf,  eye_buf,
-                 tril_buf, ones_buf,   masks_buf, NC,
-                 attrs.HV, attrs.Hk,   BH,        c_first[p] * kProducerKickoffStaggerCycles,
-                 map.NPH,  map.NX,     map.num,   map.den});
+            pc,
+            {p,
+             n_items[p],
+             q_buf,
+             k_buf,
+             v_buf,
+             g_buf,
+             beta_buf,
+             eye_buf,
+             tril_buf,
+             ones_buf,
+             masks_buf,
+             NC,
+             attrs.HV,
+             attrs.Hk,
+             BH,
+             c_first[p] * kProducerKickoffStaggerCycles,
+             map.NPH,
+             map.NX,
+             map.num,
+             map.den,
+             T,
+             g_tile_bytes,
+             beta_tile_bytes});
         prep_compute.emplace_runtime_args(pc, {n_items[p]});
         std::vector<std::variant<uint32_t, Buffer*>> w_args = {
             p, n_items[p], BH, NC, map.NPH, map.NX, map.num, map.den};

@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Phase A (prep) reader: constants (eye, tril, ones, masks) once, then per-chunk q,k,v,g,beta.
+// Phase A (prep) reader: constants (eye, tril, ones, masks) once, then per-chunk q,k,v,g,beta. g and beta are
+// token-major [B, T, HV] (chunk_gdn_gate_read.hpp); q/k/v are head-major per chunk or flat (V_FLAT/QK_FLAT).
 // No initial state — the prep phase is state-independent. Device 2.0 API.
 // The reads of one item, and at kickoff the constants as well, are issued as one flight behind a single
 // read barrier: the compute cannot start an item before q and k have landed, and at kickoff every
@@ -15,6 +16,7 @@
 #include "chunk_gdn_fused_map.hpp"
 #endif
 #include "chunk_gdn_handoff.hpp"
+#include "chunk_gdn_gate_read.hpp"
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
 constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7;
@@ -65,6 +67,10 @@ void kernel_main() {
     const uint32_t Hk = get_arg_val<uint32_t>(13);
     // Cycles to wait before the first read: the fused factory's kickoff stagger, 0 for the phased prep.
     const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(15);
+    // The gates' source: tokens T (rows past it are zero) and the tile size of each tensor (fp32 or bf16).
+    const uint32_t T = get_arg_val<uint32_t>(20);
+    const uint32_t g_tile_bytes = get_arg_val<uint32_t>(21);
+    const uint32_t b_tile_bytes = get_arg_val<uint32_t>(22);
 #if defined(GDN_FUSED_PRODUCER)
     // The producer map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp.
     const GdnFusedMap map{
@@ -84,14 +90,17 @@ void kernel_main() {
     auto item_wi = [&](uint32_t n) { return wi_start + n * wi_stride; };
 #endif
 
-    // Mixed precision: q/k/v are bf16; g/beta and the constants are fp32.
+    // Mixed precision: q/k/v are bf16; the constants are fp32, as are the gate CBs the compute reads (their
+    // sources are fp32 or bf16; the accessors page at the source's tile size).
     const uint32_t tb_io = get_tile_size(cb_q);
     const uint32_t tb_f = get_tile_size(cb_g);
     const auto q_acc = TensorAccessor(q_a, q_addr, tb_io);
     const auto k_acc = TensorAccessor(k_a, k_addr, tb_io);
     const auto v_acc = TensorAccessor(v_a, v_addr, tb_io);
-    const auto g_acc = TensorAccessor(g_a, g_addr, tb_f);
-    const auto b_acc = TensorAccessor(b_a, b_addr, tb_f);
+    const auto g_acc = TensorAccessor(g_a, g_addr, g_tile_bytes);
+    const auto b_acc = TensorAccessor(b_a, b_addr, b_tile_bytes);
+    const gdn_gate::Source g_src = gdn_gate::source(T, HV, g_tile_bytes);
+    const gdn_gate::Source b_src = gdn_gate::source(T, HV, b_tile_bytes);
     const auto eye_acc = TensorAccessor(eye_a, eye_addr, tb_f);
     const auto tril_acc = TensorAccessor(tril_a, tril_addr, tb_f);
     const auto ones_acc = TensorAccessor(ones_a, ones_addr, tb_f);
@@ -157,7 +166,8 @@ void kernel_main() {
         }
     };
 
-    // One item's inputs, q and k first (the norm consumes them first), as one flight.
+    // One item's inputs, q and k first (the norm consumes them first), as one flight. The gates come from the
+    // token-major [B, T, HV] tensors: the tile holding the head's column, settled into column 0 after the barrier.
     auto issue_item = [&](uint32_t hc) {
         if constexpr (QK_FLAT) {
             issue_qk_flat(q_acc, cb_q, hc);
@@ -171,8 +181,12 @@ void kernel_main() {
         } else {
             issue(v_acc, cb_v, hc * cv, cv, tb_io);
         }
-        issue(g_acc, cb_g, hc * Ct, Ct, tb_f);
-        issue(b_acc, cb_beta, hc * Ct, Ct, tb_f);
+        gdn_gate::issue(noc, g_acc, cb_g, hc / NC, hc % NC, Ct, g_src, tb_f);
+        gdn_gate::issue(noc, b_acc, cb_beta, hc / NC, hc % NC, Ct, b_src, tb_f);
+    };
+    auto settle_item = [&](uint32_t hc) {
+        gdn_gate::settle(cb_g, hc / NC, hc % NC, Ct, g_src, tb_f);
+        gdn_gate::settle(cb_beta, hc / NC, hc % NC, Ct, b_src, tb_f);
     };
     auto publish_item = [&]() {
         publish(cb_q, ck);
@@ -186,8 +200,9 @@ void kernel_main() {
     if (kickoff_wait_cycles != 0) {
         riscv_wait(kickoff_wait_cycles);
     }
+    const uint32_t hc0 = wi_count > 0 ? item_wi(0) : 0;
     if (wi_count > 0) {
-        issue_item(item_wi(0));
+        issue_item(hc0);
     }
     issue(eye_acc, cb_eye, 0, cc, tb_f);
     issue(tril_acc, cb_tril, 0, cc, tb_f);
@@ -195,6 +210,7 @@ void kernel_main() {
     issue(mask_acc, cb_mask, 0, gdn_handoff::kMaskTiles, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
     noc.async_read_barrier();
     if (wi_count > 0) {
+        settle_item(hc0);
         publish_item();
     }
     publish(cb_eye, cc);
@@ -203,8 +219,10 @@ void kernel_main() {
     publish(cb_mask, gdn_handoff::kMaskTiles);
 
     for (uint32_t i = 1; i < wi_count; i++) {
-        issue_item(item_wi(i));
+        const uint32_t hc = item_wi(i);
+        issue_item(hc);
         noc.async_read_barrier();
+        settle_item(hc);
         publish_item();
     }
 }
