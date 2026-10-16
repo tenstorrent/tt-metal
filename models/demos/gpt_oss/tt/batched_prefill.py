@@ -124,14 +124,33 @@ def per_user_reduce(x, batch_size, cluster_axis, num_links, scatter=False):
     return _flat_view(out)
 
 
-def gather_users(x_rows, batch_size, cluster_axis):
-    """All-gather sequence-parallel rows: [1, 1, B*S/N, W] (device d: rows d*S/N .. of every user) ->
-    [1, 1, B*S, W] stacked by user. batch_size 1 is the plain row all-gather."""
-    if batch_size == 1:
-        return ttnn.all_gather(x_rows, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    full = ttnn.all_gather(
-        _user_view(x_rows, batch_size), 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+def _all_gather_rows(x, cluster_axis, ccl_manager):
+    """Row all-gather (dim 2) over cluster_axis. With ccl_manager: ttnn.experimental.all_gather_async on
+    batched_reduce_links links (2 on BH 1x4; ttnn.all_gather picks its own links and workers). Pure data movement, so
+    bit-identical. Measured on BH 1x4, bf8, ms per call, all_gather -> all_gather_async 2 links:
+    [32, 1, 512, 2880] 2.394 -> 2.056; [16, 1, 1024, 2880] 2.388 -> 2.008; [8, 1, 2048, 2880] 2.389 -> 1.999."""
+    if ccl_manager is None:
+        return ttnn.all_gather(x, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.experimental.all_gather_async(
+        x,
+        dim=2,
+        cluster_axis=cluster_axis,
+        mesh_device=ccl_manager.mesh_device,
+        topology=ttnn.Topology.Ring,
+        multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
+        num_links=batched_reduce_links(ccl_manager, cluster_axis),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        barrier_semaphore=ccl_manager.get_barrier_semaphore(),
     )
+
+
+def gather_users(x_rows, batch_size, cluster_axis, ccl_manager=None):
+    """All-gather sequence-parallel rows: [1, 1, B*S/N, W] (device d: rows d*S/N .. of every user) ->
+    [1, 1, B*S, W] stacked by user. batch_size 1 is the plain row all-gather. ccl_manager: gather with
+    all_gather_async on 2 links (_all_gather_rows; the callers pass it for the [*, H] hidden rows)."""
+    if batch_size == 1:
+        return _all_gather_rows(x_rows, cluster_axis, ccl_manager)
+    full = _all_gather_rows(_user_view(x_rows, batch_size), cluster_axis, ccl_manager)
     return _flat_view(full)
 
 

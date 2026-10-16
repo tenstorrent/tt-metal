@@ -232,7 +232,7 @@ class MLP:
         expert_weights = gather_rows(w_rows)
         dtype = PREFILL_SP_EXPERT_INPUT_DTYPE
         x_in = x_rows if x_rows.dtype == dtype else ttnn.typecast(x_rows, dtype)
-        x_full = gather_users(x_in, batch_size, cluster_axis)
+        x_full = gather_users(x_in, batch_size, cluster_axis, self.routed_prefill.ccl_manager)
         if x_in is not x_rows:
             x_in.deallocate(True)
         assert self.routed_prefill_supports(x_full.shape), "SP prefill needs routed MoE"

@@ -220,7 +220,7 @@ class DecoderLayer:
             # As in __call__: reallocate the residual to limit DRAM fragmentation on long prefills.
             residual = ttnn.move(residual)
         x = self.input_layernorm(residual)
-        x_full = gather_users(x, batch_size, cluster_axis)
+        x_full = gather_users(x, batch_size, cluster_axis, self.self_attn.ccl_manager)
         x.deallocate(True)
         seqlen = x_full.shape[-2] // batch_size  # per-user length, as in __call__
         attn_rows = self.self_attn(
