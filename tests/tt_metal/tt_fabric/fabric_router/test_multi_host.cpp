@@ -80,7 +80,8 @@ std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_intramesh_connections
 std::unique_ptr<ControlPlane> make_control_plane(
     const std::filesystem::path& graph_desc,
     FabricConfig fabric_config = FabricConfig::DISABLED,
-    FabricReliabilityMode fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
+    FabricReliabilityMode fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+    const FabricRouterConfig& fabric_router_config = FabricRouterConfig{}) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -88,10 +89,27 @@ std::unique_ptr<ControlPlane> make_control_plane(
 
     if (graph_desc.empty()) {
         return std::make_unique<ControlPlane>(
-            cluster, rtoptions, hal, distributed_context, fabric_config, fabric_reliability_mode);
+            cluster,
+            rtoptions,
+            hal,
+            distributed_context,
+            fabric_config,
+            fabric_reliability_mode,
+            FabricTensixConfig::DISABLED,
+            FabricUDMMode::DISABLED,
+            fabric_router_config);
     }
     return std::make_unique<ControlPlane>(
-        cluster, rtoptions, hal, distributed_context, graph_desc.string(), fabric_config, fabric_reliability_mode);
+        cluster,
+        rtoptions,
+        hal,
+        distributed_context,
+        graph_desc.string(),
+        fabric_config,
+        fabric_reliability_mode,
+        FabricTensixConfig::DISABLED,
+        FabricUDMMode::DISABLED,
+        fabric_router_config);
 }
 
 // Deterministic, rank-independent list of requested inter-mesh boundaries. requested_intermesh_connections
@@ -1503,6 +1521,99 @@ TEST(MultiHost, BHDualGalaxyNonUniformFabricEnvAcrossRanksFatal) {
     });
 
     rtoptions.set_enable_fabric_vc2(saved_vc2);
+}
+
+// Companion to the VC2 test for the SECOND channel-geometry env knob: enable_fabric_mesh_pass_through.
+// Same mechanism -- a process-wide knob the launcher does not force uniform; a per-rank disagreement sizes
+// the two ends of an inter-mesh channel differently and silently credit-stalls. The cross-rank parity guard
+// must TT_FATAL consistently on every rank. Config is uniform so the env knob is the only disagreement.
+TEST(MultiHost, BHDualGalaxyNonUniformMeshPassThroughAcrossRanksFatal) {
+    const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    if (*world_ctx->size() < 2) {
+        GTEST_SKIP() << "Requires at least 2 ranks";
+    }
+
+    const auto my_rank = static_cast<int>(*world_ctx->rank());
+    const auto fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y;
+
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const bool saved_pass_through = rtoptions.get_enable_fabric_mesh_pass_through();
+    // Even ranks enable mesh-pass-through, odd ranks disable it -> non-uniform across the launch.
+    rtoptions.set_enable_fabric_mesh_pass_through(my_rank % 2 == 0);
+
+    const std::filesystem::path dual_bh_galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_bh_galaxy_torus_xy_graph_descriptor.textproto";
+    EXPECT_ANY_THROW({
+        auto control_plane = make_control_plane(
+            dual_bh_galaxy_mesh_graph_desc_path.string(),
+            fabric_config,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    });
+
+    rtoptions.set_enable_fabric_mesh_pass_through(saved_pass_through);
+}
+
+// Companion for the THIRD channel-geometry knob: the max_packet_payload_size override. Unlike the other two
+// this is not an rtoptions flag but a FabricRouterConfig field (max_packet_payload_size_bytes), so a per-rank
+// disagreement is injected by passing a different router config on each rank. It sets the channel buffer size;
+// a mismatch across an inter-mesh channel diverges the buffer geometry and silently stalls. The parity guard
+// must TT_FATAL on every rank. Config and env flags are uniform so the payload override is the only difference.
+TEST(MultiHost, BHDualGalaxyNonUniformMaxPayloadAcrossRanksFatal) {
+    const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    if (*world_ctx->size() < 2) {
+        GTEST_SKIP() << "Requires at least 2 ranks";
+    }
+
+    const auto my_rank = static_cast<int>(*world_ctx->rank());
+    const auto fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y;
+
+    // Even ranks override the payload size, odd ranks leave it at the default -> non-uniform across the launch.
+    FabricRouterConfig router_config{};
+    if (my_rank % 2 == 0) {
+        router_config.max_packet_payload_size_bytes = 2048;
+    }
+
+    const std::filesystem::path dual_bh_galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_bh_galaxy_torus_xy_graph_descriptor.textproto";
+    EXPECT_ANY_THROW({
+        auto control_plane = make_control_plane(
+            dual_bh_galaxy_mesh_graph_desc_path.string(),
+            fabric_config,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+            router_config);
+        control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    });
+}
+
+// Fabric-config parity on the BIG single mesh: bh_qb_4x4 is one 4x4 (RING/RING, torus-XY-capable) mesh split
+// across 2x2 = 4 host ranks, so EVERY rank owns mesh 0. The MGD declares NO per-mesh fabric_config, so the
+// process-wide config each rank passes is what resolves (an MGD-declared config would win and force agreement,
+// hiding the mismatch). Even ranks adopt FABRIC_2D, odd ranks FABRIC_2D_TORUS_XY -- both individually valid on
+// a RING/RING mesh, so the ONLY failure is mesh 0 seeing two different configs across its ranks. The per-mesh
+// config-agreement guard must TT_FATAL consistently on every rank.
+TEST(MultiHost, BHQB4x4NonUniformFabricConfigAcrossRanksFatal) {
+    const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    if (*world_ctx->size() < 2) {
+        GTEST_SKIP() << "Requires at least 2 ranks";
+    }
+
+    const auto my_rank = static_cast<int>(*world_ctx->rank());
+    const auto fabric_config =
+        my_rank % 2 == 0 ? tt::tt_fabric::FabricConfig::FABRIC_2D : tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+
+    const std::filesystem::path bh_qb_4x4_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto";
+    EXPECT_ANY_THROW({
+        auto control_plane = make_control_plane(
+            bh_qb_4x4_mesh_graph_desc_path.string(),
+            fabric_config,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    });
 }
 // Negative test: mesh 2 is a single (1x1) exit chip cabled to BOTH mesh 0 and mesh 1, and both boundaries are
 // marked assign_z_direction. They both try to claim mesh 2's one Z lane; the losing boundary is Z-only (never
