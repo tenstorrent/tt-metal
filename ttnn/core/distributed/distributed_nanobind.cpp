@@ -325,7 +325,18 @@ void py_module(nb::module_& mod) {
             nb::arg("submesh_shape"))
         .def(
             "get_submeshes",
-            &MeshDevice::get_submeshes,
+            [](nb::handle self_obj) {
+                auto& self = nb::cast<MeshDevice&>(self_obj);
+                // get_submeshes returns non-owning pointers, and a submesh does not keep its parent alive in C++, so
+                // tie each returned handle to the parent here (see create_submeshes).
+                nb::list out;
+                for (MeshDevice* submesh : self.get_submeshes()) {
+                    nb::object submesh_obj = nb::cast(submesh, nb::rv_policy::reference);
+                    nb::detail::keep_alive(submesh_obj.ptr(), self_obj.ptr());
+                    out.append(std::move(submesh_obj));
+                }
+                return out;
+            },
             R"doc(
               Get the submeshes created on this MeshDevice.
 

@@ -190,8 +190,8 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
     // does not depend on HYBRID mirroring them into each physical allocator.
     std::vector<distributed::MeshDevice*> mesh_views;
     distributed::MeshDevice* root = mesh_device;
-    while (root->get_parent_mesh()) {
-        root = root->get_parent_mesh().get();
+    while (root->get_parent_mesh() != nullptr) {
+        root = root->get_parent_mesh();
     }
     std::function<void(distributed::MeshDevice*)> collect_views = [&](distributed::MeshDevice* mesh) {
         // A remote-only view (including one not yet fully initialized) has no
@@ -199,8 +199,8 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
         if (mesh->is_initialized() && !mesh->get_view().get_devices().empty()) {
             mesh_views.push_back(mesh);
         }
-        for (const auto& submesh : mesh->get_submeshes()) {
-            collect_views(submesh.get());
+        for (auto* submesh : mesh->get_submeshes()) {
+            collect_views(submesh);
         }
     };
     collect_views(root);

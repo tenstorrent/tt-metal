@@ -58,6 +58,28 @@ def test_submesh_keeps_parent_alive(silicon_arch_name, silicon_arch_wormhole_b0)
     ttnn.close_mesh_device(mesh)
 
 
+def test_get_submeshes_returns_existing_handles_and_tracks_open_submeshes(silicon_arch_name, silicon_arch_wormhole_b0):
+    """get_submeshes lists the open submeshes, as the same Python objects the caller already holds."""
+    import gc
+
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    assert len(mesh.get_submeshes()) == 0
+
+    submesh = mesh.create_submesh(ttnn.MeshShape(1, 1))
+    listed = mesh.get_submeshes()
+    assert len(listed) == 1
+    assert listed[0] is submesh
+
+    # A closed submesh is no longer a child of its parent.
+    ttnn.close_mesh_device(submesh)
+    assert len(mesh.get_submeshes()) == 0
+
+    # The listed handle ties its parent's lifetime to itself, so dropping the submeshes before the parent is safe.
+    del listed, submesh
+    gc.collect()
+    ttnn.close_mesh_device(mesh)
+
+
 def test_multi_device_subset_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
     """Manually open and close multi-device"""
     num_pcie_devices = ttnn.get_num_pcie_devices()

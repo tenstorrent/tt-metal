@@ -22,8 +22,9 @@ void synchronize_parent_allocator_with_submeshes(tt::tt_metal::distributed::Mesh
     TT_FATAL(parent_allocator != nullptr, "Parent mesh must have an allocator");
 
     std::vector<tt::tt_metal::Allocator*> submesh_allocators;
-    submesh_allocators.reserve(parent_mesh->get_submeshes().size());
-    for (const auto& submesh : parent_mesh->get_submeshes()) {
+    const auto submeshes = parent_mesh->get_submeshes();
+    submesh_allocators.reserve(submeshes.size());
+    for (auto* submesh : submeshes) {
         auto* submesh_allocator = submesh->allocator().get();
         TT_FATAL(submesh_allocator != nullptr, "Submesh must have an allocator");
         submesh_allocators.push_back(submesh_allocator);
@@ -54,7 +55,7 @@ ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
     }
 
     // Validate all devices have the same parent mesh.
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> parent_mesh = tensors[0].device()->get_parent_mesh();
+    tt::tt_metal::distributed::MeshDevice* parent_mesh = tensors[0].device()->get_parent_mesh();
     TT_FATAL(parent_mesh != nullptr, "First device must have a parent mesh");
     TT_FATAL(parent_mesh->shape().mesh_size() == tensors.size(), "Input tensors must span the entire parent mesh");
     TT_FATAL(
@@ -62,9 +63,7 @@ ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
         "Cannot aggregate tensors when parent mesh has non-default sub-device manager");
 
     for (size_t i = 1; i < devices.size(); i++) {
-        TT_FATAL(
-            devices[i]->get_parent_mesh().get() == parent_mesh.get(),
-            "All tensors must belong to the same parent mesh");
+        TT_FATAL(devices[i]->get_parent_mesh() == parent_mesh, "All tensors must belong to the same parent mesh");
     }
 
     // Validate all tensor specs and mesh buffer addresses are the same.
@@ -76,12 +75,12 @@ ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
             tensors[i].mesh_buffer().address() == reference_address, "All mesh buffers must be at the same address");
     }
 
-    synchronize_parent_allocator_with_submeshes(parent_mesh.get());
+    synchronize_parent_allocator_with_submeshes(parent_mesh);
 
     // Create a new mesh tensor for parent mesh.
     const auto& reference_buffer = tensors[0].mesh_buffer();
     auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-        reference_buffer.global_config(), reference_buffer.device_local_config(), parent_mesh.get(), reference_address);
+        reference_buffer.global_config(), reference_buffer.device_local_config(), parent_mesh, reference_address);
 
     // Explicitly enumerate all coordinates of the parent mesh so the DeviceStorage
     // spans every device.  The single-arg DeviceStorage(mesh_buffer) constructor
@@ -118,7 +117,7 @@ std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor) {
         "Number of submeshes ({}) must match mesh size ({})",
         submeshes.size(),
         mesh_device->shape().mesh_size());
-    for (const auto& submesh : submeshes) {
+    for (auto* submesh : submeshes) {
         const auto& submesh_shape = submesh->shape();
         TT_FATAL(
             submesh_shape.mesh_size() == 1,
@@ -133,12 +132,12 @@ std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor) {
     // For all unit meshes, create individual mesh buffers with the same address.
     std::vector<Tensor> result;
     result.reserve(submeshes.size());
-    for (const auto& submesh : submeshes) {
+    for (auto* submesh : submeshes) {
         TT_FATAL(
             submesh->get_active_sub_device_manager_id() == submesh->get_default_sub_device_manager_id(),
             "Cannot disaggregate tensor when submesh has non-default sub-device manager");
         auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-            input_mesh_buffer.global_config(), input_mesh_buffer.device_local_config(), submesh.get(), input_address);
+            input_mesh_buffer.global_config(), input_mesh_buffer.device_local_config(), submesh, input_address);
 
         Tensor unit_tensor(tt::tt_metal::MeshTensor::from_buffer(std::move(*mesh_buffer), reference_spec));
         TT_FATAL(

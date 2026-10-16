@@ -842,7 +842,7 @@ distributed::UnitMeshGroup MetalEnv::create_unit_meshes(
     auto result = distributed::MeshDeviceImpl::create_unit_mesh_group(
         context_id, std::vector<ChipId>(device_ids.begin(), device_ids.end()), options);
     if (context_guard.holds_context() && !result.empty()) {
-        const auto& parent = (*result.begin()).second.get_parent_mesh();
+        auto* parent = (*result.begin()).second.get_parent_mesh();
         TT_FATAL(parent != nullptr, "Unit meshes are submeshes, so they always have a parent to own the context");
         parent->impl().set_destroy_metal_context_instance_on_close(true);
         context_guard.release();

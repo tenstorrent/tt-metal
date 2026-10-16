@@ -21,6 +21,8 @@
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -364,7 +366,7 @@ void pop_corruptible_allocation_scope(MeshDevice* device) { device->impl().pop_c
 MeshDeviceImpl::MeshDeviceImpl(
     std::shared_ptr<ScopedDevices> mesh_handle,
     std::unique_ptr<MeshDeviceView> mesh_device_view,
-    std::shared_ptr<MeshDevice> parent_mesh,
+    MeshDevice* parent_mesh,
     MetalContext& metal_context) :
     context_id_(metal_context.get_context_id()),
     metal_context_(&metal_context),
@@ -372,7 +374,7 @@ MeshDeviceImpl::MeshDeviceImpl(
     scoped_devices_(std::move(mesh_handle)),
     mesh_id_(generate_unique_mesh_id()),
     view_(std::move(mesh_device_view)),
-    parent_mesh_(std::move(parent_mesh)),
+    parent_mesh_(parent_mesh),
     dispatch_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
@@ -504,7 +506,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     // Build into locals first so a failed construction never yields a MeshDevice with a null pimpl_.
     auto mesh_device_view = std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids);
     auto mesh_device_impl = std::make_unique<MeshDeviceImpl>(
-        std::move(scoped_devices), std::move(mesh_device_view), std::shared_ptr<MeshDevice>(), ctx);
+        std::move(scoped_devices), std::move(mesh_device_view), /*parent_mesh=*/nullptr, ctx);
     auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(mesh_device_impl)));
 
     mesh_device->pimpl_->initialize_impl(
@@ -618,10 +620,11 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     auto mesh_device_view =
         std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids);
     auto mesh_device_impl = std::make_unique<MeshDeviceImpl>(
-        std::move(scoped_devices), std::move(mesh_device_view), std::shared_ptr<MeshDevice>(), ctx);
+        std::move(scoped_devices), std::move(mesh_device_view), /*parent_mesh=*/nullptr, ctx);
     auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(mesh_device_impl)));
 
-    auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
+    // The unit meshes keep their hidden parent alive until they close.
+    auto submeshes = mesh_device->pimpl_->create_submeshes(mesh_device, MeshShape(1, 1), /*submeshes_own_parent=*/true);
     TT_FATAL(
         device_ids.size() == submeshes.size(),
         "Created an unexpected number of submeshes: {} instead of {}",
@@ -719,7 +722,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
 std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     const std::shared_ptr<MeshDevice>& parent_mesh,
     const MeshShape& submesh_shape,
-    const std::optional<MeshCoordinate>& offset) {
+    const std::optional<MeshCoordinate>& offset,
+    bool submeshes_own_parent) {
     auto lock_api = this->lock_api();
     TT_FATAL(
         std::all_of(submesh_shape.cbegin(), submesh_shape.cend(), [](size_t dim) { return dim > 0; }),
@@ -772,7 +776,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
 
     auto submesh_view = std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids);
     auto submesh_impl =
-        std::make_unique<MeshDeviceImpl>(scoped_devices_, std::move(submesh_view), parent_mesh, metal_context());
+        std::make_unique<MeshDeviceImpl>(scoped_devices_, std::move(submesh_view), parent_mesh.get(), metal_context());
     auto submesh = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(submesh_impl)));
 
     TT_FATAL(
@@ -796,7 +800,10 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         }
     }
 
-    submeshes_.push_back(submesh);
+    if (submeshes_own_parent) {
+        submesh->pimpl_->hidden_parent_owner_ = parent_mesh;
+    }
+    submeshes_.push_back(submesh.get());
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->pimpl_->id(), submesh_shape, offset);
     if (!submesh->pimpl_->get_view().get_devices().empty()) {
         log_trace(
@@ -811,7 +818,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
 }
 
 std::vector<std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_submeshes(
-    const std::shared_ptr<MeshDevice>& parent_mesh, const MeshShape& submesh_shape) {
+    const std::shared_ptr<MeshDevice>& parent_mesh, const MeshShape& submesh_shape, bool submeshes_own_parent) {
     // Calculate how many submeshes fit in each dimension.
     ttsl::SmallVector<uint32_t> steps;
     for (size_t dim = 0; dim < shape().dims(); dim++) {
@@ -833,7 +840,8 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_submeshes(
         for (size_t dim = 0; dim < submesh_shape.dims(); dim++) {
             offset_coords.push_back(step_position[dim] * submesh_shape[dim]);
         }
-        submeshes.push_back(create_submesh(parent_mesh, submesh_shape, MeshCoordinate(offset_coords)));
+        submeshes.push_back(
+            create_submesh(parent_mesh, submesh_shape, MeshCoordinate(offset_coords), submeshes_own_parent));
     }
 
     return submeshes;
@@ -1059,14 +1067,14 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
         // TODO #20966: Remove these calls
         for (auto* device : local_devices_) {
-            dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_.get());
+            dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
         }
 
         // Only one mesh device can use a CQ on a physical device at a time, or else teardown or some other operation
         // will hang. Validate this.
         for (uint32_t cq_id = 0; cq_id < mesh_command_queues_.size(); cq_id++) {
             if (mesh_command_queues_[cq_id]->in_use()) {
-                auto parent_mesh = get_parent_mesh();
+                auto* parent_mesh = get_parent_mesh();
                 if (parent_mesh) {
                     auto parent_mesh_id = parent_mesh->impl().get_parent_mesh_id_with_in_use_cq(cq_id);
                     if (parent_mesh_id) {
@@ -1078,16 +1086,14 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
                     }
                 }
 
-                for (const auto& submesh : submeshes_) {
-                    if (auto submesh_ptr = submesh.lock()) {
-                        auto child_mesh_id = submesh_ptr->impl().get_child_mesh_id_with_in_use_cq(cq_id);
-                        if (child_mesh_id) {
-                            TT_THROW(
-                                "MeshDevice cq ID {} is in use by child submesh ID {} during close of mesh ID {}",
-                                cq_id,
-                                *child_mesh_id,
-                                id());
-                        }
+                for (const auto* submesh : submeshes_) {
+                    auto child_mesh_id = submesh->impl().get_child_mesh_id_with_in_use_cq(cq_id);
+                    if (child_mesh_id) {
+                        TT_THROW(
+                            "MeshDevice cq ID {} is in use by child submesh ID {} during close of mesh ID {}",
+                            cq_id,
+                            *child_mesh_id,
+                            id());
                     }
                 }
             }
@@ -1150,7 +1156,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         for (auto* device : local_devices_) {
             if (auto* physical_device = dynamic_cast<Device*>(device);
                 physical_device != nullptr && physical_device->get_mesh_device() == pimpl_wrapper) {
-                physical_device->set_mesh_device(parent_mesh_.get());
+                physical_device->set_mesh_device(parent_mesh_);
             }
         }
     }
@@ -1162,7 +1168,6 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         // handled by PersistentL1Arena::Seal's liveness token instead.
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
-        parent_mesh_.reset();
         is_internal_state_initialized = false;
         if (distributed_context_) {
             distributed_context_.reset();
@@ -1176,6 +1181,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
             experimental::PinnedMemoryCache::instance().release_for_device(*pimpl_wrapper);
         }
     }
+
+    // Last, so that releasing the parent (which may tear down the context) comes after everything above that needs it.
+    detach_from_parent(pimpl_wrapper);
 
     // TODO: This assumes only one MeshDevice per MetalEnv.
     // To support multiple MeshDevice from the same system mesh this cleanup needs to be
@@ -1196,7 +1204,7 @@ std::optional<int> MeshDeviceImpl::get_parent_mesh_id_with_in_use_cq(uint32_t cq
     if (cq_id < mesh_command_queues_.size() && mesh_command_queues_[cq_id]->in_use()) {
         return id();
     }
-    if (parent_mesh_) {
+    if (parent_mesh_ != nullptr) {
         return parent_mesh_->impl().get_parent_mesh_id_with_in_use_cq(cq_id);
     }
     return std::nullopt;
@@ -1206,12 +1214,10 @@ std::optional<int> MeshDeviceImpl::get_child_mesh_id_with_in_use_cq(uint32_t cq_
     if (cq_id < mesh_command_queues_.size() && mesh_command_queues_[cq_id]->in_use()) {
         return id();
     }
-    for (const auto& submesh : submeshes_) {
-        if (auto submesh_ptr = submesh.lock()) {
-            auto child_mesh_id = submesh_ptr->impl().get_child_mesh_id_with_in_use_cq(cq_id);
-            if (child_mesh_id) {
-                return child_mesh_id;
-            }
+    for (const auto* submesh : submeshes_) {
+        auto child_mesh_id = submesh->impl().get_child_mesh_id_with_in_use_cq(cq_id);
+        if (child_mesh_id) {
+            return child_mesh_id;
         }
     }
     return std::nullopt;
@@ -1232,16 +1238,36 @@ ChipId MeshDeviceImpl::build_id() const { return reference_device()->id(); }
 
 bool MeshDeviceImpl::is_parent_mesh() const { return parent_mesh_ == nullptr; }
 
-const std::shared_ptr<MeshDevice>& MeshDeviceImpl::get_parent_mesh() const { return parent_mesh_; }
-std::vector<std::shared_ptr<MeshDevice>> MeshDeviceImpl::get_submeshes() const {
-    std::vector<std::shared_ptr<MeshDevice>> result;
-    result.reserve(submeshes_.size());
-    for (const auto& weak_submesh : submeshes_) {
-        if (auto submesh = weak_submesh.lock()) {
-            result.push_back(std::move(submesh));
-        }
+MeshDevice* MeshDeviceImpl::get_parent_mesh() const { return parent_mesh_; }
+std::vector<MeshDevice*> MeshDeviceImpl::get_submeshes() const { return submeshes_; }
+
+void MeshDeviceImpl::detach_from_parent(MeshDevice* self) {
+    if (parent_mesh_ != nullptr) {
+        auto& siblings = parent_mesh_->impl().submeshes_;
+        siblings.erase(std::remove(siblings.begin(), siblings.end(), self), siblings.end());
+        parent_mesh_ = nullptr;
     }
-    return result;
+    // After unregistering: dropping the last owner destroys the parent, which must find no open submesh.
+    hidden_parent_owner_.reset();
+}
+
+void MeshDeviceImpl::check_no_open_submeshes() const {
+    if (submeshes_.empty()) {
+        return;
+    }
+    std::string ids;
+    for (const auto* submesh : submeshes_) {
+        ids += fmt::format(" {}", submesh->id());
+    }
+    // A destructor cannot report an error, and carrying on would leave those submeshes with a dangling parent.
+    const std::string message = fmt::format(
+        "MeshDevice {} is being destroyed while its submeshes are still open (mesh ids:{}). A submesh does not keep "
+        "its parent alive: close or destroy every submesh before its parent.",
+        id(),
+        ids);
+    log_critical(tt::LogMetal, "{}", message);
+    std::fprintf(stderr, "%s\n", message.c_str());
+    std::abort();
 }
 
 void MeshDeviceImpl::enable_program_cache() {
@@ -2027,10 +2053,8 @@ void MeshDeviceImpl::quiesce_internal() {
     TT_FATAL(
         get_active_sub_device_manager_id() == get_default_sub_device_manager_id(),
         "Cannot quiesce when non-default sub-device manager is active");
-    for (const auto& submesh : submeshes_) {
-        if (auto submesh_ptr = submesh.lock()) {
-            submesh_ptr->quiesce_devices();
-        }
+    for (auto* submesh : submeshes_) {
+        submesh->quiesce_devices();
     }
     // The launch message ring buffer and the worker GO mailboxes are shared across hardware CQs, so exactly
     // one CQ resets them. Pick the last CQ that has work outstanding: wait_for_completion finishes each CQ in
@@ -2100,6 +2124,7 @@ MeshDevice::MeshDevice(std::unique_ptr<MeshDeviceImpl> impl) : pimpl_(std::move(
 }
 
 MeshDevice::~MeshDevice() {
+    pimpl_->check_no_open_submeshes();
     pimpl_->mark_being_destroyed();
     Inspector::mesh_device_destroyed(this->pimpl_.get());
     pimpl_->close_impl(this);
@@ -2315,8 +2340,8 @@ const MeshDeviceView& MeshDevice::get_view() const { return pimpl_->get_view(); 
 uint32_t MeshDevice::get_system_mesh_id() const { return *get_view().mesh_id(); }
 std::string MeshDevice::to_string() const { return pimpl_->to_string(); }
 bool MeshDevice::is_parent_mesh() const { return pimpl_->is_parent_mesh(); }
-const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return pimpl_->get_parent_mesh(); }
-std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { return pimpl_->get_submeshes(); }
+MeshDevice* MeshDevice::get_parent_mesh() const { return pimpl_->get_parent_mesh(); }
+std::vector<MeshDevice*> MeshDevice::get_submeshes() const { return pimpl_->get_submeshes(); }
 void MeshDevice::quiesce_devices() { pimpl_->quiesce_devices(); }
 std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset) {

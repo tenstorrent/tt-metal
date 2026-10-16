@@ -285,8 +285,11 @@ public:
     std::string to_string() const;
     bool is_parent_mesh() const;
 
-    const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
-    std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
+    // The mesh this one was carved from, or nullptr for a top-level mesh (and for a mesh that has been closed). Not
+    // owning: a parent must outlive its open submeshes.
+    MeshDevice* get_parent_mesh() const;
+    // The open submeshes carved from this mesh. Not owning: closing or destroying a submesh unregisters it.
+    std::vector<MeshDevice*> get_submeshes() const;
 
     /**
      * @brief Synchronize with all devices derived from this mesh (including submeshes).

@@ -658,6 +658,58 @@ TEST(MetalContextIntegrationTest, MockDeviceUnitMeshGroupMoveAndClose) {
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 }
 
+// A submesh does not keep its parent alive: destroying a parent that still has an open submesh is a fatal error.
+// Mock device, because a death test re-runs the binary in a child process, which could not open a chip that the
+// parent process holds.
+TEST(MetalContextIntegrationDeathTest, DestroyingParentWithOpenSubmeshAborts) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_DEATH(
+        {
+            MetalEnv mock_env(
+                {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
+            auto parent = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1, 1)));
+            auto submesh = parent->create_submesh(distributed::MeshShape(1, 1));
+            parent.reset();
+        },
+        "being destroyed while its submeshes are still open");
+}
+
+TEST(MetalContextIntegrationTest, MockDeviceSubmeshesAreNonOwningChildren) {
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
+    auto parent = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1, 1)));
+    EXPECT_EQ(parent->get_parent_mesh(), nullptr);
+
+    auto submesh = parent->create_submesh(distributed::MeshShape(1, 1));
+    EXPECT_EQ(submesh->get_parent_mesh(), parent.get());
+    EXPECT_EQ(parent->get_submeshes(), std::vector<distributed::MeshDevice*>{submesh.get()});
+
+    // Closing the submesh detaches it, after which the parent can go first.
+    submesh->close();
+    EXPECT_EQ(submesh->get_parent_mesh(), nullptr);
+    EXPECT_TRUE(parent->get_submeshes().empty());
+    parent.reset();
+    submesh.reset();
+}
+
+// The unit meshes of a group keep their hidden parent until they close, and closing the last one frees the context.
+TEST(MetalContextIntegrationTest, MockDeviceUnitMeshesShareHiddenParentUntilClosed) {
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
+    auto group = mock_env.create_unit_meshes(std::array<ChipId, 2>{0, 1});
+
+    auto* parent = group.at(0).get_parent_mesh();
+    ASSERT_NE(parent, nullptr);
+    EXPECT_EQ(group.at(1).get_parent_mesh(), parent);
+    EXPECT_EQ(parent->get_submeshes().size(), 2u);
+
+    group.at(0).close();
+    EXPECT_EQ(group.at(0).get_parent_mesh(), nullptr);
+    EXPECT_EQ(group.at(1).get_parent_mesh(), parent);
+    EXPECT_EQ(parent->get_submeshes(), std::vector<distributed::MeshDevice*>{&group.at(1)});
+
+    group.close();
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+}
+
 // Changing env-wide options while a MeshDevice is open must fail rather than tear down the context underneath it.
 TEST(MetalContextIntegrationTest, MockDeviceRejectsEnvWideOptionChangeWhileOpen) {
     MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});

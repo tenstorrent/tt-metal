@@ -243,7 +243,68 @@ TEST_F(MeshDevice2x4Test, CreateSubmeshes) {
         EXPECT_THAT(submesh->get_devices(), SizeIs(2));
     }
 
-    EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
+    std::vector<MeshDevice*> expected;
+    for (const auto& submesh : submeshes) {
+        expected.push_back(submesh.get());
+    }
+    EXPECT_EQ(mesh_device_->get_submeshes(), expected);
+    for (const auto& submesh : submeshes) {
+        EXPECT_EQ(submesh->get_parent_mesh(), mesh_device_.get());
+    }
+}
+
+// A submesh is a non-owning child of its parent, so these also run on one chip (a 1x1 parent carved into a 1x1
+// submesh).
+std::shared_ptr<MeshDevice> create_1x1_mesh() {
+    return MeshDevice::create(
+        MeshDeviceConfig(MeshShape(1, 1)),
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        DispatchCoreType::WORKER);
+}
+
+TEST(SubmeshOwnershipTest, ParentTracksOpenSubmeshes) {
+    auto parent = create_1x1_mesh();
+    EXPECT_EQ(parent->get_parent_mesh(), nullptr);
+    EXPECT_THAT(parent->get_submeshes(), IsEmpty());
+
+    auto submesh = parent->create_submesh(MeshShape(1, 1));
+    EXPECT_EQ(submesh->get_parent_mesh(), parent.get());
+    EXPECT_THAT(parent->get_submeshes(), ::testing::ElementsAre(submesh.get()));
+
+    auto second_submesh = parent->create_submesh(MeshShape(1, 1));
+    EXPECT_THAT(parent->get_submeshes(), ::testing::ElementsAre(submesh.get(), second_submesh.get()));
+
+    // Destroying a submesh unregisters it.
+    second_submesh.reset();
+    EXPECT_THAT(parent->get_submeshes(), ::testing::ElementsAre(submesh.get()));
+
+    // Closing a submesh unregisters it and detaches it from its parent, even while its handle is still alive.
+    submesh->close();
+    EXPECT_THAT(parent->get_submeshes(), IsEmpty());
+    EXPECT_EQ(submesh->get_parent_mesh(), nullptr);
+
+    // The parent may be destroyed once its submeshes are closed or destroyed, in any order of the handles.
+    parent->close();
+    parent.reset();
+    submesh.reset();
+}
+
+// The unit meshes of create_unit_meshes still keep their hidden parent alive until they close.
+TEST(SubmeshOwnershipTest, UnitMeshKeepsHiddenParentUntilClosed) {
+    auto unit_mesh = MeshDevice::create_unit_mesh(0);
+    auto* parent = unit_mesh->get_parent_mesh();
+    ASSERT_NE(parent, nullptr);
+    EXPECT_THAT(parent->get_submeshes(), ::testing::ElementsAre(unit_mesh.get()));
+
+    unit_mesh->close();
+    EXPECT_EQ(unit_mesh->get_parent_mesh(), nullptr);
+    unit_mesh.reset();
+
+    // The chip is free again, so it can be reopened.
+    auto reopened = MeshDevice::create_unit_mesh(0);
+    EXPECT_NE(reopened->get_parent_mesh(), nullptr);
 }
 
 TEST(GetOptimalDramBankToLogicalWorkerAssignmentAPI, UnitMeshes) {

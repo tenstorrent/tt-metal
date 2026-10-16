@@ -197,9 +197,14 @@ private:
         std::set<CoreCoord> storage_only_cores;
     };
     std::optional<MeshProperties> mesh_properties_;
-    // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
-    std::shared_ptr<MeshDevice> parent_mesh_;
-    std::vector<std::weak_ptr<MeshDevice>> submeshes_;
+    // Non-owning: the parent must outlive its open submeshes. Null for a top-level mesh, and after this mesh is
+    // closed (close_impl detaches it).
+    MeshDevice* parent_mesh_ = nullptr;
+    // The open submeshes of this mesh, non-owning. A submesh registers when created and unregisters when it closes.
+    std::vector<MeshDevice*> submeshes_;
+    // Only set on the unit meshes made by create_unit_meshes: keeps their hidden parent alive until they close.
+    // Interim; goes away once the parent is owned by UnitMeshGroup instead.
+    std::shared_ptr<MeshDevice> hidden_parent_owner_;
 
     ttsl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 
@@ -279,7 +284,7 @@ public:
     MeshDeviceImpl(
         std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
-        std::shared_ptr<MeshDevice> parent_mesh,
+        MeshDevice* parent_mesh,
         MetalContext& metal_context);
     ~MeshDeviceImpl() override;
 
@@ -539,8 +544,8 @@ public:
     std::string to_string() const;
     bool is_parent_mesh() const;
 
-    const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
-    std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
+    MeshDevice* get_parent_mesh() const;
+    std::vector<MeshDevice*> get_submeshes() const;
 
     /**
      * @brief Synchronize with all devices derived from this mesh (including submeshes).
@@ -553,13 +558,24 @@ public:
      */
     void quiesce_devices();
 
+    // `parent_mesh` is the MeshDevice that owns this impl. When `submeshes_own_parent` is set, each submesh also holds
+    // a shared_ptr to it until the submesh closes (see hidden_parent_owner_).
     std::shared_ptr<MeshDevice> create_submesh(
         const std::shared_ptr<MeshDevice>& parent_mesh,
         const MeshShape& submesh_shape,
-        const std::optional<MeshCoordinate>& offset = std::nullopt);
+        const std::optional<MeshCoordinate>& offset = std::nullopt,
+        bool submeshes_own_parent = false);
 
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(
-        const std::shared_ptr<MeshDevice>& parent_mesh, const MeshShape& submesh_shape);
+        const std::shared_ptr<MeshDevice>& parent_mesh,
+        const MeshShape& submesh_shape,
+        bool submeshes_own_parent = false);
+
+    // Detaches this mesh from its parent: unregisters from the parent's open submeshes, then drops any ownership of
+    // the parent. Idempotent.
+    void detach_from_parent(MeshDevice* self);
+    // Aborts if this mesh is destroyed while a submesh is still open, since that submesh would be left with no parent.
+    void check_no_open_submeshes() const;
 
     // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
