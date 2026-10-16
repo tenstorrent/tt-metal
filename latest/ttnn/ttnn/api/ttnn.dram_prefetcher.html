@@ -331,26 +331,33 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.dram_prefetcher">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">dram_prefetcher</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensors</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tensor_addrs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_layers</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">global_cb</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">GlobalCircularBuffer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">enable_performance_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.dram_prefetcher" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">dram_prefetcher</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">tensors:</span> <span class="pre">List[ttnn.Tensor],</span> <span class="pre">num_layers:</span> <span class="pre">int,</span> <span class="pre">global_cb:</span> <span class="pre">GlobalCircularBuffer</span> <span class="pre">=</span> <span class="pre">None;</span> <span class="pre">exactly</span> <span class="pre">one</span> <span class="pre">of</span> <span class="pre">`global_cb`</span> <span class="pre">and</span> <span class="pre">`prefetcher_pipes`</span> <span class="pre">must</span> <span class="pre">be</span> <span class="pre">given,</span> <span class="pre">*,</span> <span class="pre">enable_performance_mode:</span> <span class="pre">bool</span> <span class="pre">|</span> <span class="pre">None,</span> <span class="pre">prefetcher_pipes:</span> <span class="pre">List[ttnn.experimental.PrefetcherPipe]</span> <span class="pre">=</span> <span class="pre">an</span> <span class="pre">empty</span> <span class="pre">list</span> <span class="pre">(none</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.dram_prefetcher" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Asynchronously pre-fetch tensors from DRAM into the neighbouring L1 cores.
-This utilizes a global circular buffer to push data on consumer cores.</p>
+Reader cores, one per DRAM bank, push each weight block to consumer cores through either a
+global circular buffer or PrefetcherPipes.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>tensors</strong> (<em>List</em><em>[</em><em>ttnn.Tensor</em><em>]</em>)</span><span class="tt-api-param-desc">A list of tensor objects to be pre-fetched.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>tensor_addrs</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">A tensor (row major layout) that contains memory addresses corresponding to the tensor locations in DRAM. The format should be as follows: [t1_l1, t2_l1, …, t1_l2, t2_l2, …, t1_l3, t2_l3, …]</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>tensors</strong> (<em>List</em><em>[</em><em>ttnn.Tensor</em><em>]</em>)</span><span class="tt-api-param-desc">The tensors to pre-fetch, followed by the address tensor: a row-major UINT32 tensor, height sharded in L1 over the reader cores, that holds the tensors’ DRAM addresses as [t1_l1, t2_l1, …, t1_l2, t2_l2, …, t1_l3, t2_l3, …].</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>num_layers</strong> (<em>int</em>)</span><span class="tt-api-param-desc">The number of layers in the pipeline or the model for which tensors need to be pre-fetched.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>global_cb</strong> (<em>GlobalCircularBuffer</em>)</span><span class="tt-api-param-desc">A global cb object, used internally to manage data movement across dram reader cores, and downstream consumer cores.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>enable_performance_mode</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">If set to true, the operation will be optimized for performance. May lead to ND behavior on wormhole 4U systems!</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>global_cb</strong> (<em>GlobalCircularBuffer</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">A worker-sender global circular buffer, used internally to manage data movement across dram reader cores, and downstream consumer cores. Defaults to None; exactly one of <cite>global_cb</cite> and <cite>prefetcher_pipes</cite> must be given.</span></p></li>
 </ul>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
+<ul class="simple">
+<li><p><span class="tt-api-param-name"><strong>enable_performance_mode</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">If set to true, the operation will be optimized for performance. May lead to ND behavior on wormhole 4U systems! On the <cite>prefetcher_pipes</cite> path it affects only the DRAM reads.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>prefetcher_pipes</strong> (<em>List</em><em>[</em><em>ttnn.experimental.PrefetcherPipe</em><em>]</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Worker-sender PrefetcherPipes to deliver into instead of <cite>global_cb</cite>, one per reader core (its sender). In the order given, as <cite>global_cb</cite> takes its senders, the i-th pipe’s sender reads DRAM bank i; pipes beyond the reader count are not used. Every reader’s pipe needs the same number of receivers. Each receiver gets one block slice per pipe entry, so the entry size follows the tensor being delivered and must fit the ring. The delivery contract is in tt_metal/impl/buffers/prefetcher_matmul_design.md, “Delivering into PrefetcherPipes”. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).</span></p></li>
+</ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
 <p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">empty tensor (TODO: Should return None)</span></p>
 </dd>
 </dl>

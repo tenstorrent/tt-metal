@@ -367,14 +367,14 @@
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="c1">// Run the workload</span>
 <span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">mesh_command_queue</span><span class="p">();</span>
-<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">distributed</span><span class="o">::</span><span class="n">EnqueueMeshWorkload</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">workload</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">distributed</span><span class="o">::</span><span class="n">EnqueueMeshWorkload</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">workload</span><span class="p">,</span><span class="w"> </span><span class="cm">/*blocking=*/</span><span class="nb">false</span><span class="p">);</span>
 <span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">distributed</span><span class="o">::</span><span class="n">Finish</span><span class="p">(</span><span class="n">cq</span><span class="p">);</span>
 
 <span class="c1">// Also reads profiler results from all devices in the mesh</span>
 <span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">close</span><span class="p">();</span>
 </pre></div>
 </div>
-<p>If for any reason you need to manually trigger the reading of profiling results (for example, more then 1000 kernel runs before device close), you can call <code class="docutils literal notranslate"><span class="pre">ReadMeshDeviceProfilerResults</span></code>:</p>
+<p>If for any reason you need to manually trigger the reading of profiling results (for example, more than 1000 kernel runs before device close), you can call <code class="docutils literal notranslate"><span class="pre">ReadMeshDeviceProfilerResults</span></code>:</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="c1">// Manually read profiler results from all devices in the mesh (if needed)</span>
 <span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">ReadMeshDeviceProfilerResults</span><span class="p">(</span><span class="o">*</span><span class="n">mesh_device</span><span class="p">);</span>
