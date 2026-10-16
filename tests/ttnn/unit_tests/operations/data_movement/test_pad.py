@@ -12,6 +12,8 @@ from models.common.utility_functions import skip_for_wormhole_b0, skip_for_black
 from tests.ttnn.unit_tests.operations.test_utils import (
     TILE_HEIGHT,
     TILE_WIDTH,
+    dm_codegen_supported_on_arch,
+    skip_unless_dm_codegen_arch,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 from tests.ttnn.utils_for_testing import assert_equal as assert_tensors_equal
@@ -181,8 +183,9 @@ def test_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, valu
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     # This bfloat8_b tile pad routes to codegen, which goes through bfloat16 (typecast, pad, typecast) only for a
-    # nonzero value; a zero value pads the block-float tiles directly.
-    expected_cache_entries = 3 if dtype == ttnn.bfloat8_b and value != 0 else 1
+    # nonzero value; a zero value pads the block-float tiles directly. Native always takes the bfloat16 round trip.
+    bf16_round_trip = value != 0 or not dm_codegen_supported_on_arch(device)
+    expected_cache_entries = 3 if dtype == ttnn.bfloat8_b and bf16_round_trip else 1
     assert device.cache_entries_counter.total == expected_cache_entries
 
 
@@ -1888,6 +1891,7 @@ _pad_codegen_cases = [
 
 @pytest.mark.parametrize("shape, padding, value, dtype, memory_config", _pad_codegen_cases)
 def test_pad_codegen(device, shape, padding, value, dtype, memory_config):
+    skip_unless_dm_codegen_arch(device)
     x = _codegen_input(shape, dtype)
     xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     output = ttnn.to_torch(_pad_force_codegen(xt, padding, value))
@@ -1916,6 +1920,7 @@ def test_pad_codegen(device, shape, padding, value, dtype, memory_config):
     ],
 )
 def test_pad_auto_routes_to_codegen(device, shape, padding, value, dtype, memory_config):
+    skip_unless_dm_codegen_arch(device)
     x = _codegen_input(shape, dtype)
     xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     device.clear_program_cache()
@@ -1932,6 +1937,7 @@ def test_pad_auto_routes_to_codegen(device, shape, padding, value, dtype, memory
 
 
 def test_pad_codegen_program_cache(device):
+    skip_unless_dm_codegen_arch(device)
     shape = [1, 2, 45, 70]
     padding = [[0, 0], [0, 1], [0, 19], [0, 26]]
     value = 1.5
@@ -1966,6 +1972,7 @@ def test_pad_codegen_program_cache(device):
 
 
 def test_pad_codegen_program_rekeys_when_l1_frontier_drops(device):
+    skip_unless_dm_codegen_arch(device)
     # The CB batching is planned against the L1 free at dispatch and is part of the program key, so a tensor landing
     # inside the full plan's CB region must build a shallower program rather than replay one that overlaps it. The
     # cost is that a plan cached at warm-up is not the one a trace capture under less L1 needs.
@@ -2012,6 +2019,7 @@ def test_pad_codegen_program_rekeys_when_l1_frontier_drops(device):
     ],
 )
 def test_pad_codegen_out_of_range_integer_value(device, dtype, value):
+    skip_unless_dm_codegen_arch(device)
     # The partial-tile lanes and the new tiles must hold one word: the value truncated and wrapped to 32 bits, and
     # zero for NaN.
     shape = [1, 1, 45, 70]
@@ -2026,6 +2034,7 @@ def test_pad_codegen_out_of_range_integer_value(device, dtype, value):
 
 
 def test_pad_codegen_matches_native_bitwise_for_unrepresentable_value(device):
+    skip_unless_dm_codegen_arch(device)
     # 0.1 has no exact bfloat16 form, so both routes must round it the same way in the input's partial-tile lanes
     # and in the new tiles. Each route fills its input's partial tiles in place, hence one input per route.
     shape = [1, 2, 45, 70]
@@ -2070,6 +2079,7 @@ def test_pad_codegen_declines_zero_volume_input(device, expect_error):
 
 def test_pad_codegen_partial_tile_input_with_thousands_of_border_tiles_per_core(device):
     """Every plane has a partial border tile, at least 1365 per core: all must be filled before the pad copies them."""
+    skip_unless_dm_codegen_arch(device)
     grid = device.compute_with_storage_grid_size()
     c = 1024
     n = -(-1365 * grid.x * grid.y // c)
@@ -2083,6 +2093,7 @@ def test_pad_codegen_partial_tile_input_with_thousands_of_border_tiles_per_core(
 
 
 def test_pad_codegen_uneven_core_split(device):
+    skip_unless_dm_codegen_arch(device)
     # One output tile more than twice the core count leaves the work split with a second core group that gets one
     # tile fewer, so that group's runtime args are exercised.
     grid = device.compute_with_storage_grid_size()
@@ -2099,6 +2110,7 @@ def test_pad_codegen_uneven_core_split(device):
 
 @pytest.mark.parametrize("value", [0.0, 2.0], ids=["zero", "nonzero"])
 def test_pad_codegen_bfloat8_b(device, value):
+    skip_unless_dm_codegen_arch(device)
     # Zero pads the block-float tiles directly; a nonzero value pads a bfloat16 copy and re-encodes it.
     shape = [1, 3, 64, 96]
     padding = [[0, 0], [0, 1], [0, 32], [0, 64]]
@@ -2118,6 +2130,7 @@ def test_pad_codegen_bfloat8_b(device, value):
     ],
 )
 def test_pad_codegen_mixed_placement(device, input_placement, output_placement):
+    skip_unless_dm_codegen_arch(device)
     shape = [1, 2, 45, 70]
     padding = [[0, 0], [0, 1], [0, 19], [0, 26]]
     value = 1.5

@@ -14,6 +14,7 @@ import pytest
 import torch
 
 import ttnn
+from tests.ttnn.unit_tests.operations.test_utils import skip_unless_dm_codegen_arch
 from tests.ttnn.utils_for_testing import assert_equal
 
 # `ttnn.pad` takes no implementation argument -- it routes on its own. The forced legs below are
@@ -266,6 +267,7 @@ _CACHE_HIT_IDS = [
 
 @pytest.mark.parametrize("shape,kwargs,dtype,layout,placement", _CACHE_HIT, ids=_CACHE_HIT_IDS)
 def test_pad_codegen_program_cache_hit(device, shape, kwargs, dtype, layout, placement):
+    skip_unless_dm_codegen_arch(device)
     x = _make_input(shape, dtype)
     xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=placement)
     golden = ttnn.to_torch(_force_native(xt, **kwargs))
