@@ -6,7 +6,6 @@
 # the one-off s_a epilogue separate as slope and intercept.
 
 import pytest
-from helpers.chip_architecture import is_4row_arch
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
@@ -16,6 +15,7 @@ from helpers.llk_params import (
 from helpers.param_config import parametrize
 from quasar.test_matmul_int4_dequant_quasar import (
     PERF_GROUP_DIMS,
+    dequant_register_format_hints,
 )
 from quasar.test_matmul_int4_dequant_quasar import (
     test_matmul_int4_dequant_quasar as run_matmul_int4_dequant,
@@ -28,8 +28,7 @@ from quasar.test_matmul_int4_dequant_quasar import (
     weight_format=[DataFormat.Int4],
     dest_sync_mode=[DestSync.Half],
     matmul_dims=PERF_GROUP_DIMS,
-    # Int8_2x (the fast int8 matmul) exists only on the 4-row variant.
-    register_format_hint=[None, DataFormat.Int8_2x] if is_4row_arch() else [None],
+    register_format_hint=dequant_register_format_hints(),
     run_types=PERF_RUN_TYPES_QUASAR_4_TRISC,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
 )
