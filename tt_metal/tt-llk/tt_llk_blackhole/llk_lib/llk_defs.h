@@ -58,6 +58,14 @@ enum class EltwiseBinaryReuseDestType
     DEST_TO_SRCB = 2,
 };
 
+// Hand-off of an operand tile from the unpacker to the math thread: one source bank and data valid per 16-row face, or one per
+// tile. The unpack init and the math init of an op must be given the same value.
+enum class SrcDvalid : std::uint8_t
+{
+    PerFace = 0,
+    PerTile = 1,
+};
+
 enum class DstSync
 {
     SyncHalf = 0,
