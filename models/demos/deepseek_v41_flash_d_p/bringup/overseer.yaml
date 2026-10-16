@@ -48,7 +48,7 @@ notes:
 - id: OV-5
   tasks:
   - C.*.experts
-  status: open
+  status: closed
   t: '2026-10-15T22:27:15'
   text: 'The run is now the scaled model (F75): 24 routed experts per chip. Store the routed experts as bfp8 at load (exact
     for this checkpoint''s fp4 e2m1 x ue8m0 values: measured, plan.md ''Weights''), so no expert is decoded per chunk; keep
@@ -56,3 +56,6 @@ notes:
     bfp8 does not fit, e.g. the real-size 4x4). Answer with the expert step''s time per chunk before and after.'
   roles:
   - implement
+  closed: '2026-10-16T06:42:58'
+  why_closed: never reached an agent (the experts steps pass without one); replaced by task FIX.1, which runs the change
+    now
