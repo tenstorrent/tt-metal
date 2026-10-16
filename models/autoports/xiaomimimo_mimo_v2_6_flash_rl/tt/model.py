@@ -38,6 +38,8 @@ def prefill_padded_len(seq_len):
 
 
 class TtMiMoModel:
+    DECODE_TOPK = 32  # candidates per chip read back each decode step
+
     def __init__(
         self,
         mesh_device,
@@ -267,7 +269,10 @@ class TtMiMoModel:
         x.deallocate(True)
         for t in (*rot_mats[True], *rot_mats[False]):
             t.deallocate(True)
-        return logits
+        # Each chip's top-k over its vocab shard: the host can merge 8 x k candidates per user instead of
+        # reading 32 x 152576 logits every step.
+        values, indices = ttnn.topk(logits, k=self.DECODE_TOPK, dim=-1, largest=True, sorted=True)
+        return {"logits": logits, "values": values, "indices": indices}
 
     def capture_decode_trace(self):
         """Compile, then capture one decode step. Later decode calls refresh the inputs and replay it.
@@ -278,7 +283,8 @@ class TtMiMoModel:
         empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
         host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty)
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
-        self.decode_forward_device(*inputs).deallocate(True)
+        for t in self.decode_forward_device(*inputs).values():
+            t.deallocate(True)
         ttnn.synchronize_device(self.mesh_device)
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         output = self.decode_forward_device(*inputs)
@@ -292,7 +298,8 @@ class TtMiMoModel:
             self.decode_trace = None
 
     def decode_enqueue(self, tokens, positions):
-        """tokens, positions: torch [max_batch]; position -1 marks an empty slot. Non-blocking."""
+        """tokens, positions: torch [max_batch]; position -1 marks an empty slot. Non-blocking.
+        Returns a handle for ``decode_read`` (full logits) or ``decode_read_topk`` (per-chip candidates)."""
         host = self.prepare_decode_inputs_host(tokens, positions)
         if self.decode_trace is not None:
             for h, d in zip(host, self.decode_trace["inputs"]):
@@ -300,16 +307,29 @@ class TtMiMoModel:
             ttnn.execute_trace(self.mesh_device, self.decode_trace["id"], cq_id=0, blocking=False)
             return self.decode_trace["output"]
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
-        logits = self.decode_forward_device(*inputs)
+        out = self.decode_forward_device(*inputs)
         for t in inputs:
             t.deallocate(True)
-        return logits
+        return out
 
-    def decode_read(self, logits):
-        out = self.plan.to_torch_tp_concat(logits, dim=-1).float()
-        if self.decode_trace is None or logits is not self.decode_trace["output"]:
-            logits.deallocate(True)
+    def _release(self, handle):
+        if self.decode_trace is None or handle is not self.decode_trace["output"]:
+            for t in handle.values():
+                t.deallocate(True)
+
+    def decode_read(self, handle):
+        """Full logits [max_batch, vocab] (reads every vocab shard)."""
+        out = self.plan.to_torch_tp_concat(handle["logits"], dim=-1).float()
+        self._release(handle)
         return out.reshape(self.max_batch, -1)
+
+    def decode_read_topk(self, handle):
+        """Per-user candidates: values [max_batch, tp * k] and global vocab ids [max_batch, tp * k]."""
+        values = self.plan.to_torch_tp_concat(handle["values"], dim=-1).float().reshape(self.max_batch, -1)
+        local = self.plan.to_torch_tp_concat(handle["indices"], dim=-1).to(torch.int64).reshape(self.max_batch, -1)
+        shard = torch.arange(self.plan.tp).repeat_interleave(self.DECODE_TOPK) * self.vocab_local
+        self._release(handle)
+        return values, local + shard[None, :]
 
     def decode(self, tokens, positions):
         return self.decode_read(self.decode_enqueue(tokens, positions))

@@ -101,9 +101,11 @@ class MiMoGalaxyGenerator:
             model.capture_decode_trace()
             logger.info(f"replica {r}: decode trace captured in {time.time() - t0:.1f}s")
 
-    def decode(self, tokens, positions, replicas=None):
-        """tokens, positions: dict user -> int. Users not listed stay idle. Returns dict user -> logits.
+    def decode(self, tokens, positions, replicas=None, mode="logits"):
+        """tokens, positions: dict user -> int. Users not listed stay idle.
 
+        mode "logits": returns dict user -> logits [vocab]. mode "topk": dict user -> (values, vocab ids) of
+        the 8 x 32 per-chip candidates, which is all greedy or top-k sampling needs and reads ~1000x less.
         ``replicas`` restricts the step to those rows (default: all four)."""
         replicas = range(self.dp) if replicas is None else replicas
         pending = []
@@ -118,12 +120,22 @@ class MiMoGalaxyGenerator:
             pending.append((r, model.decode_enqueue(tok, pos)))
         out = {}
         for r, handle in pending:
-            logits = self.models[r].decode_read(handle)
+            if mode == "topk":
+                values, ids = self.models[r].decode_read_topk(handle)
+                rows = [(v, i) for v, i in zip(values, ids)]
+            else:
+                rows = self.models[r].decode_read(handle)
             for slot in range(self.users_per_replica):
                 user = r * self.users_per_replica + slot
                 if user in tokens:
-                    out[user] = logits[slot]
+                    out[user] = rows[slot]
         return out
+
+    @staticmethod
+    def greedy_token(candidate):
+        """Argmax token from a ``mode="topk"`` entry."""
+        values, ids = candidate
+        return int(ids[int(values.argmax())])
 
     def generate_greedy(self, prompts, max_new_tokens):
         """Greedy decode for every user; returns (generated token lists, seconds per decode step)."""

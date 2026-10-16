@@ -92,14 +92,21 @@ def test_model_traced_tp8_dp4(mesh_device):
             worst = min(worst, pcc(la, lb))
     logger.info(f"eager vs traced logits: worst PCC {worst:.6f}")
 
+    # ---- the per-chip top-k readback picks the same greedy token as the full logits (same position twice
+    # rewrites the same KV, so the probe does not disturb the users)
+    full = gen.decode(cur, pos)
+    cands = gen.decode(cur, pos, mode="topk")
+    for u in cur:
+        assert int(full[u].argmax()) == gen.greedy_token(cands[u]), u
+
     # ---- throughput: one row vs all four rows, traced
     def timed(replicas):
         users = [u for u in cur if gen.locate(u)[0] in replicas]
         t0 = time.time()
         for _ in range(TIMED_STEPS):
-            logits = gen.decode({u: cur[u] for u in users}, {u: pos[u] for u in users}, replicas=replicas)
-            for u, lg in logits.items():
-                cur[u] = int(lg.argmax())
+            cands = gen.decode({u: cur[u] for u in users}, {u: pos[u] for u in users}, replicas=replicas, mode="topk")
+            for u, c in cands.items():
+                cur[u] = gen.greedy_token(c)
                 pos[u] += 1
         return (time.time() - t0) / TIMED_STEPS
 

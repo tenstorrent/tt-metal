@@ -97,11 +97,11 @@ def test_capacity_1m_tp8_dp4(mesh_device, monkeypatch):
         step_pos = {u: p for u in prompts}
         t0 = time.time()
         for _ in range(TIMED_STEPS):
-            out = gen.decode(cur, step_pos)
+            out = gen.decode(cur, step_pos, mode="topk")
             for u in step_pos:
                 step_pos[u] += 1
         timings[label] = (time.time() - t0) / TIMED_STEPS
-        finite = all(torch.isfinite(lg).all() for lg in out.values())
+        finite = all(torch.isfinite(c[0]).all() for c in out.values())
         logger.info(
             f"traced decode, 16 users at position {label}: {timings[label] * 1e3:.1f} ms/step "
             f"({gen.num_users / timings[label]:.1f} tok/s aggregate), logits finite: {finite}"
