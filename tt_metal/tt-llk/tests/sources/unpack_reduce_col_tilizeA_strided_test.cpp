@@ -12,7 +12,6 @@
 #include "params.h"
 #include "perf.h"
 #include "profiler.h"
-#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -48,8 +47,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A                = params.buffer_A;
     const Operand& buffer_B                = params.buffer_B;
 #endif
-    LLK_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
-        ckernel::make_tensor_shape(TEST_FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+    TEST_TENSOR_SHAPE(tensor_shape, TEST_FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
 
     {
@@ -114,8 +112,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_faces_r_dim_A         = params.num_faces_r_dim_A;
     const int num_faces_c_dim_A         = params.num_faces_c_dim_A;
 #endif
-    LLK_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
-        ckernel::make_tensor_shape(TEST_FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+    TEST_TENSOR_SHAPE(tensor_shape, TEST_FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
 
     {
@@ -178,8 +175,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_faces_c_dim_A         = params.num_faces_c_dim_A;
     const Operand& buffer_Res           = params.buffer_Res;
 #endif
-    LLK_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
-        ckernel::make_tensor_shape(TEST_FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+    TEST_TENSOR_SHAPE(tensor_shape, TEST_FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
 
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
     const std::uint32_t num_faces = tensor_shape.total_num_faces();

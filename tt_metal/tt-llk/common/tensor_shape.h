@@ -211,10 +211,3 @@ constexpr bool validate_tensor_shape_sub_bcast_col_custom_(const TensorShape& te
 }
 
 } // namespace ckernel
-
-// SPEED_OF_LIGHT must keep the shape constexpr: a const packed TensorShape is not folded and the loops slow down.
-#ifdef SPEED_OF_LIGHT
-#define LLK_TENSOR_SHAPE_QUALIFIER constexpr
-#else
-#define LLK_TENSOR_SHAPE_QUALIFIER const
-#endif
