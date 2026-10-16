@@ -297,3 +297,34 @@ Build fixes after fork_op.py (no behaviour change):
   `device/sparse_sdpa_program_factory.cpp`, `device/kernels/compute/sparse_sdpa_compute.cpp`,
   `device/kernels/compute/compute_streaming.hpp`, `tests/unit/test_sparse_sdpa_high_precision.py`
   (`test_fp32_scores` x3, `test_fp32_scores_program_and_refusal`)
+
+### sparse_sdpa: bf16_probs (DeepSeek's sparse_attn precision: Float32 scores and max, bf16 probabilities)
+- What: `ttnn.bringup.sparse_sdpa(..., high_precision=True, fp32_scores=True, bf16_probs=True)` (default False: the
+  previous programs). Behind a new `SPARSE_SDPA_BF16_PROBS` define (absent when off): the running max CBs (cb_max_a /
+  cb_max_b) are Float32 (the max of the TF32 scores, exact; srcB reconfigured to it for the score - max subtraction
+  and both maxima for the flash correction), so the max score's probability is exp(0) = 1; the row-sum is summed from
+  the TF32 probabilities as before; then a new in-place pass rounds the probabilities to bf16 to nearest-even in DEST
+  (SFPU, pack thread: copy -> round -> pack back, before P@V). With the option, fp32_output may be False (the output
+  rounded to bf16 by the packer, the kernel's output dtype); a bf16 q is required. Refused without fp32_scores or with
+  a float32 q; fp32_scores without fp32_output is still refused unless bf16_probs. In the program hash.
+- Why: deepseek_v41_flash_d_p FIX.2 (overseer: match the reference precision, never above it). The checkpoint's
+  inference/kernel.py sparse_attn keeps q / kv bf16, the scores, running max and sum fp32, casts P to bf16 before
+  P@V, accumulates fp32 and writes a bf16 output; fp32_scores (TF32 P, fp32 q) was above it, the bf16 scores below it.
+- Measured (op level, vs that kernel in float32 torch on the same bf16 inputs; rel L2): DS41 window (1 chunk)
+  bf16 out 0.0020 / fp32 out 0.0010, 4 chunks 0.0027 / 0.0021, 2 DST groups 0.0024 / 0.0017; bf16 scores 0.0029 /
+  0.0067 / 0.0061. Probabilities read back exactly (one-hot keys, score - max exact): all equal
+  rne_bf16(rne_tf32(exp(score))) (with the rounding disabled 0.26). Model: attention 28.8 -> 26.1 ms per layer
+  (2x2, chunk 2048; bf16 q and output halve two all_to_all's).
+- Limits (kept, documented): the FPU's score - max subtraction is TF32-precise (a difference wider than 11 bits is
+  truncated: p rel error up to |s - m| 2^-11); the flash correction exp(m_prev - m_cur) stays bf16 (cb_corr; only
+  with more than one k_chunk). Found on the way: with fp32_scores alone the TF32 probabilities reach P@V with ~9 bits
+  (0.495 equal rne_tf32(exp); the bf16-grid ones are the truncated values), so that variant is not TF32 in P@V.
+- Default unchanged: option off = no define, the same CB formats (max bf16), kernels and arguments. Unit suite 47
+  passed / 10 skipped (41 + 6 new); source-test check 216 tests, 0 regressions; model cases 5 passed / 1 skipped, as
+  recorded.
+- Needed by: deepseek_v41_flash_d_p FIX.2 (`tt/attention.py:TtWindowAttention._sdpa`; settings WINDOW_SDPA_PROBS=bf16
+  and WINDOW_SDPA_OUT=bf16, the defaults; WINDOW_SDPA_PROBS=fp32 + WINDOW_SDPA_OUT=fp32 keep the fp32_scores program)
+- Files: `sparse_sdpa.{hpp,cpp}`, `sdpa_nanobind.cpp`, `device/sparse_sdpa_device_operation{.cpp,.hpp,_types.hpp}`,
+  `device/sparse_sdpa_program_factory.cpp`, `device/kernels/compute/sparse_sdpa_compute.cpp`,
+  `device/kernels/compute/compute_streaming.hpp` (comment only), `tests/unit/test_sparse_sdpa_high_precision.py`
+  (`test_bf16_probs` x3, `test_bf16_probs_values` x2, `test_bf16_probs_program_and_refusal`)

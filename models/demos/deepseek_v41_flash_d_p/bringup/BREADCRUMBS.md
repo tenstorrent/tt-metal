@@ -853,3 +853,43 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   bit-identical). The chained gate outlives the agent tool's 600 s limit; run its four commands one at a time.
 - Re-run: gate command of the brief; timing `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all
   models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py -s` (both impls + the exactness checks).
+
+## FIX.2 overseer fix — window attention back to the reference kernel's precision
+- Request: inference/kernel.py sparse_attn stage by stage (bf16 q / kv; fp32 scores, running max, sum; P cast to bf16
+  before P.V; fp32 accumulation; bf16 output; fp32 sink) as the default AND the max-precision value; DS41-31's fp32
+  path (TF32 q through the reshard, Float32 P, fp32 output) only as non-default values. FP32_WEIGHT_ROUND=rne kept.
+- Fork `ttnn.bringup.sparse_sdpa` option `bf16_probs` (needs fp32_scores and a bf16 q; default off = the previous
+  programs, define SPARSE_SDPA_BF16_PROBS): Float32 running max (cb_max_a/b; srcB reconfigured to it for score - max
+  and for the flash correction), the row-sum from the TF32 probabilities (unchanged), then an in-place pass that rounds
+  P to bf16 (RNE, SFPU on the pack thread, DS41-31's gotcha) before P.V; fp32_output may be off (bf16 output).
+  Two wrong turns, measured: rounding P inside sub_exp made the row-sum use the rounded P (output moved 1.6x the
+  kernel's bf16-P move); then the bf16 max put p_max = exp(0) off the bf16 grid (2.2x). Fixed by the order and the
+  Float32 max.
+- Model (tt/attention.py, tt/settings.py): WINDOW_SDPA_SCORES=fp32 (TF32-nearest scores), new WINDOW_SDPA_PROBS=bf16
+  (bf16_probs, bf16 q through the reshard), WINDOW_SDPA_OUT=bf16: defaults and MAX_PRECISION. Comparison only:
+  WINDOW_SDPA_PROBS=fp32 + WINDOW_SDPA_OUT=fp32 (DS41-31's program); WINDOW_SDPA=exact (DS41-19). The scale stays
+  folded into q (K-27: one bf16 rounding of q, as the reference's one). typecast fp32 -> bf16 is RNE (probe: 100 %
+  equal to torch on random values and ties).
+- Time per layer (tt/perf_attention.py, wall clock, 5 calls after 2 warm-ups, layer 0, 2x2, chunk 2048, start 2048):
+  before (DS41-31) 28.76 ms, after (reference dtypes) 26.13 ms, bf16 scores + bf16 out 26.17 ms.
+- Accuracy at the reference's dtypes (F76 noise-floor limits): C.swa.attention pcc 0.999723 (limit 0.998523), vs CPU
+  rel 0.0221 (limit 0.0526; DS41-31 was 0.0143), bias -5.0e-4; C.swa_engram.attention pcc 0.999621 (limit 0.998121),
+  vs CPU rel 0.0253 (limit 0.0581); S.swa.11 router vs golden 0.9862 (limit 0.254; DS41-31 0.9918), router vs CPU
+  0.99987, swap attention vs CPU rel 0.0222 (limit 0.0540), pcc_swap_out 0.999824 (limit 0.992326); S.swa.15
+  pcc_swap_out 0.999824 (limit 0.976427); S.swa_engram.18 pcc_swap_out 0.999758 (limit 0.975779). Nothing failed at
+  the reference's precision.
+- Gate as run: 2 pre-existing failures, both independent of this change (same with the old dtypes):
+  test_cache_starts under BRINGUP_TASK=FIX.2 runs every spec layer and fails on layer 2 (DS41-36; 4 passed under
+  BRINGUP_TASK=C.swa.attention and C.swa_engram.attention); test_swap_swa_engram_18_ffn_residual.py's frozen `_checked`
+  patch has F76's old 8-argument signature (DS41-37; TypeError after pcc_swap_out passed). Both are outside this
+  step's paths (tests / framework).
+- Op limits left (documented, DS41-31 detail): the FPU's score - max is TF32-precise (truncating); the flash
+  correction stays bf16 (> 1 k_chunk only). Found: with fp32_scores alone P reaches P.V with ~9 bits.
+- Fork regression (option off): unit 47 passed / 10 skipped (41 + 6 new), fork_source 216 tests 0 regressions, model
+  cases 5 passed / 1 skipped. New tests: test_bf16_probs (x3, vs the kernel in torch), test_bf16_probs_values (P read
+  back exactly through one-hot keys: 1.0 equal rne_bf16(rne_tf32(exp)); 0.26 with the rounding disabled, shown by
+  hand), test_bf16_probs_program_and_refusal.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py`
+  (and the other gate files; contract with `BRINGUP_TASK=C.swa.attention`); timing:
+  `scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tt/perf_attention.py`; fork:
+  `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py -k bf16_probs`

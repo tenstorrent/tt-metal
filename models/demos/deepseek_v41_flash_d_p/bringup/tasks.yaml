@@ -2445,6 +2445,99 @@ tasks:
       both numbers in BREADCRUMBS.md and the setting''s description. The gate reruns both frozen experts component tests and
       both full-block swap tests (swa layer 0, swa_engram layer 1); all must pass. Update known_issues/repo_map entries that
       describe the per-chunk decode.'
+- id: FIX.2
+  title: attention back to the reference's precision (no fp32 scores raised for a fixed bar)
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - C.swa.attention
+  - C.swa_engram.attention
+  - S.swa.11
+  - S.swa.15
+  - S.swa_engram.18
+  gate:
+    cmd: BRINGUP_TASK=C.swa.attention scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py
+      && BRINGUP_TASK=C.swa.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
+      && BRINGUP_TASK=C.swa_engram.attention scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attention.py
+      && BRINGUP_TASK=C.swa_engram.attention scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
+      && BRINGUP_TASK=S.swa.11 scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_11_router.py
+      && BRINGUP_TASK=S.swa.15 scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_15_ffn_residual.py
+      && BRINGUP_TASK=S.swa_engram.18 scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py
+    metrics:
+      pcc_attention_L00: '>= limit'
+      pcc_attention_L01: '>= limit'
+      pcc_swap_out: '>= limit'
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  brief:
+    details: 'Attention back to the reference''s precision. The fp32 scores of the window attention (WINDOW_SDPA_SCORES=fp32:
+      q rounded to TF32 and kept fp32 through the reshard, Float32 scores and probabilities in ttnn.bringup.sparse_sdpa, DS41-31)
+      were added in S.swa.11 only to clear a fixed PCC 0.99 bar on the router vs the golden. That bar is gone (F76): every
+      limit is now 2 x the noise floor of the reference''s own dtypes, and the gates record it as <metric>_limit. Owner rule:
+      match the reference precision, never above it to pass a test. The reference kernel (inference/kernel.py sparse_attn_kernel)
+      uses: q and kv in bf16; the scores, the running max and sum in fp32; the probabilities cast to bf16 before P.V; the
+      output accumulated in fp32 and written as bf16; the attention sink in fp32. Make the device path match that stage by
+      stage, as closely as the op allows, and make it the default AND the MAX_PRECISION value of every attention setting (tt/settings.py):
+      no q TF32 rounding, no fp32 q through the reshard, no Float32 probabilities, an output dtype that matches the reference''s.
+      Keep the higher-precision variants only as non-default setting values (the fork option stays, default off). Keep FP32_WEIGHT_ROUND=rne
+      (load time, removes a truncation bias; not a precision raise). Measure the attention time per layer before and after
+      (minutes, not per-op mode). The gate reruns the passed attention component tests and the swap tests through the router
+      and the whole blocks under the new noise-floor limits; all must pass. If one fails at the reference''s precision, do
+      NOT raise the precision: report the failing check with its value and limit in BREADCRUMBS.md and answer `disagree` with
+      that evidence. Update DS41-18, DS41-19, DS41-30 and DS41-31 in known_issues.md to say what holds now.'
+    gate_tasks:
+    - C.swa.attention
+    - C.swa_engram.attention
+    - S.swa.11
+    - S.swa.15
+    - S.swa_engram.18
+- id: FIX.3
+  title: the reference's dtypes per step (precision.yaml) and a device that meets them
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - C.swa.router
+  - C.swa_engram.router
+  - S.swa.15
+  - S.swa_engram.18
+  gate:
+    cmd: BRINGUP_TASK=C.swa.router scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_router.py
+      && BRINGUP_TASK=C.swa_engram.router scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_router.py
+      && BRINGUP_TASK=S.swa.15 scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_15_ffn_residual.py
+      && BRINGUP_TASK=S.swa_engram.18 scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py
+    metrics:
+      pcc_router_L00: '>= limit'
+      pcc_router_L01: '>= limit'
+      pcc_swap_out: '>= limit'
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  brief:
+    details: 'Record the reference''s own precision per block step, and make the device match it. Owner rule: match the reference
+      precision (never above it, never below it). Every accuracy limit now derives from the CPU step run at the reference''s
+      dtypes (F76/F78), read from bringup/precision.yaml (schema in models/demos/common/bringup/testing/component_checks.step_precision).
+      Write that file from the official code (the checkpoint''s inference/model.py and kernel.py, at /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf/inference/),
+      for every step of every block type (swa, swa_engram, enc_source, enc_source_engram, enc_reuse, dec_candidate, dec_reindex,
+      dec_reuse; use `<block type>.<step>` only where they differ): `compute: fp32` for a step the official code computes
+      in fp32 from its inputs (e.g. the Gate: linear(x.float(), self.weight.float()), softplus, top-k and the weights all
+      fp32), `out: fp32` when it hands on fp32; leave a step bf16 when its intermediates are bf16 or it mixes the two (attention:
+      fp32 scores, bf16 probabilities). Cite the official line for every fp32 entry in a comment. Then run the gate: the steps
+      whose limits tighten (the router first: today the device picks another expert set on about 0.15 % of rows from the FPU''s
+      in-tile rounding, against a limit near 0.1 %) must meet the reference''s precision on the device: a step the reference
+      computes in fp32 needs an fp32-accurate result (e.g. an exact fp32 matmul for the small router linear, 2048 x 4096 x
+      96 per chip); measure its cost per layer and put it in BREADCRUMBS.md and the setting''s description. Do not mark a
+      step bf16 when the official code computes it in fp32 to make a limit pass: that is cheating (the overseer checks every
+      entry against the official code). Steps of block types not yet implemented only need their entries.'
+    gate_tasks:
+    - C.swa.router
+    - C.swa_engram.router
+    - S.swa.15
+    - S.swa_engram.18
 - id: S.enc_source.03
   title: 'enc_source block with steps 1-3 on device (last: attn_norm)'
   step: implement
