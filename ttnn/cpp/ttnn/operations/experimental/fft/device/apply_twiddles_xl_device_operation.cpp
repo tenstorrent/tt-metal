@@ -123,7 +123,7 @@ std::tuple<Tensor, Tensor> apply_twiddles_xl(
     // from tensor_args; the lookup is a hit on everything but the first call
     // for a given (device, big_modulus, full_N).
     auto delta_plan = ttnn::experimental::prim::apply_twiddles_xl_host::get_or_create(
-        input_real.device()->get_mesh_device(), big_modulus, full_N);
+        input_real.device()->shared_from_this(), big_modulus, full_N);
 
     OperationType::tensor_args_t args{
         .input_real = input_real,

@@ -6,6 +6,7 @@
 
 #include <tt_stl/span.hpp>
 #include <atomic>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -135,6 +136,9 @@ private:
     // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
     // on the device may not be thread safe.
     std::mutex api_mutex_;
+    // Set when ~MeshDevice starts. Declared early so it is still valid while the members below are destroyed (e.g.
+    // while the program cache frees buffers); see is_being_destroyed().
+    std::atomic<bool> being_destroyed_ = false;
     bool command_list_builder_active_ = false;
     // Traces and command lists may both be used on a MeshDevice, but never at the same time.
     // Traces are the legacy pre-recorded dispatch path (supported today, slated for deprecation);
@@ -282,6 +286,11 @@ public:
     MeshDeviceImpl& operator=(MeshDeviceImpl&&) = delete;
 
     ContextId get_context_id() const { return context_id_; }
+    // True from the moment ~MeshDevice starts until the object is gone. Code that can run while the mesh is being
+    // torn down (e.g. buffers freed by the program cache) uses this to avoid querying a half-destroyed mesh.
+    // Returns the same moments in which shared_from_this() on the owning MeshDevice would throw bad_weak_ptr.
+    bool is_being_destroyed() const { return being_destroyed_.load(std::memory_order_acquire); }
+    void mark_being_destroyed() { being_destroyed_.store(true, std::memory_order_release); }
     MetalContext& metal_context() const;
     MetalEnvImpl& metal_env() const;
     // The MeshDevice will call MetalContext::destroy_instance on close when this is set to true.
@@ -463,7 +472,7 @@ public:
     // Remote-only MeshDevices cannot perform operations requiring local device access like
     // allocator(), create_sub_device_manager(), etc. Use this to check before calling such methods.
     bool is_remote_only() const;
-    std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
+    distributed::MeshDevice* get_mesh_device() override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.

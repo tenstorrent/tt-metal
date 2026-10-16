@@ -294,7 +294,7 @@ void ProfilerStateManager::start_debug_dump_thread(
                     constexpr auto state = ProfilerReadState::LAST_FD_READ;
                     detail::ReadDeviceProfilerResultsInternal(
                         ctx_,
-                        device->get_mesh_device().get(),
+                        device->get_mesh_device(),
                         device,
                         virtual_cores_map.at(device->id()),
                         state,
@@ -339,7 +339,7 @@ void ProfilerStateManager::start_debug_dump_thread(
                     profiler.pollDebugDumpResults(device, virtual_cores_map.at(device->id()), /*is_final_poll=*/true);
                     detail::ReadDeviceProfilerResultsInternal(
                         ctx_,
-                        device->get_mesh_device().get(),
+                        device->get_mesh_device(),
                         device,
                         virtual_cores_map.at(device->id()),
                         ProfilerReadState::LAST_FD_READ,

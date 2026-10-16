@@ -174,10 +174,9 @@ public:
 
     bool is_mmio_capable() const override;
     // TODO #20966: Remove these APIs
-    std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
-    void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-        this->mesh_device = mesh_device;
-    };
+    distributed::MeshDevice* get_mesh_device() override;
+    // Non-owning. The MeshDevice that sets itself here must clear (or re-point) it before it goes away.
+    void set_mesh_device(distributed::MeshDevice* mesh_device) { this->mesh_device = mesh_device; };
 
     // Get SHM stats provider for real-time memory monitoring (used by GraphTracker)
     SharedMemoryStatsProvider* get_shm_stats_provider() const { return shm_stats_provider_.get(); }
@@ -242,7 +241,7 @@ private:
     bool using_fast_dispatch_ = false;
 
     // TODO #20966: Remove this member
-    std::weak_ptr<distributed::MeshDevice> mesh_device;
+    distributed::MeshDevice* mesh_device = nullptr;
 
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;

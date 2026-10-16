@@ -518,7 +518,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
 
     // TODO #20966: Remove these calls
     for (auto* device : extract_locals(root_devices)) {
-        dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
+        dynamic_cast<Device*>(device)->set_mesh_device(mesh_device.get());
     }
 
     mesh_device->pimpl_->distributed_context_->barrier();
@@ -779,7 +779,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     // TODO #20966: Remove these calls
     if (!submesh->pimpl_->get_view().get_devices().empty()) {
         for (auto* device : submesh->pimpl_->get_devices()) {
-            dynamic_cast<Device*>(device)->set_mesh_device(submesh);
+            dynamic_cast<Device*>(device)->set_mesh_device(submesh.get());
         }
     }
 
@@ -1046,7 +1046,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
         // TODO #20966: Remove these calls
         for (auto* device : local_devices_) {
-            dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
+            dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_.get());
         }
 
         // Only one mesh device can use a CQ on a physical device at a time, or else teardown or some other operation
@@ -1128,6 +1128,19 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // allocation handles have already been released (GCBs are user-owned and the
     // user's invariant is to destroy them before close).
     drisc_l1_arena_.reset();
+
+    // Physical devices hold a raw back-pointer to the mesh that is using them, so none may be left pointing at this
+    // mesh once it is gone. An initialized mesh already re-pointed them above; this covers a mesh that was never
+    // initialized (e.g. the hidden parent of the unit meshes). Only possible while scoped_devices_ keeps the devices
+    // alive, which also means a repeated close skips it.
+    if (scoped_devices_) {
+        for (auto* device : local_devices_) {
+            if (auto* physical_device = dynamic_cast<Device*>(device);
+                physical_device != nullptr && physical_device->get_mesh_device() == pimpl_wrapper) {
+                physical_device->set_mesh_device(parent_mesh_.get());
+            }
+        }
+    }
 
     if (is_initialized()) {
         // Do not clear the program cache here. Destroying cached programs while the devices are
@@ -2063,7 +2076,7 @@ const std::unique_ptr<Allocator>& MeshDeviceImpl::allocator(SubDeviceId sub_devi
     return this->allocator_impl(sub_device_id)->view();
 }
 
-std::shared_ptr<distributed::MeshDevice> MeshDeviceImpl::get_mesh_device() {
+distributed::MeshDevice* MeshDeviceImpl::get_mesh_device() {
     // This should be called from MeshDevice, not MeshDeviceImpl
     TT_THROW("get_mesh_device() should not be called on MeshDeviceImpl directly");
     return nullptr;
@@ -2074,6 +2087,7 @@ MeshDevice::MeshDevice(std::unique_ptr<MeshDeviceImpl> impl) : pimpl_(std::move(
 }
 
 MeshDevice::~MeshDevice() {
+    pimpl_->mark_being_destroyed();
     Inspector::mesh_device_destroyed(this->pimpl_.get());
     pimpl_->close_impl(this);
 }
@@ -2268,7 +2282,7 @@ void MeshDevice::set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_de
 void MeshDevice::reset_sub_device_stall_group() { pimpl_->reset_sub_device_stall_group(); }
 uint32_t MeshDevice::num_sub_devices() const { return pimpl_->num_sub_devices(); }
 bool MeshDevice::is_mmio_capable() const { return pimpl_->is_mmio_capable(); }
-std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
+distributed::MeshDevice* MeshDevice::get_mesh_device() { return this; }
 std::vector<IDevice*> MeshDevice::get_devices() const { return pimpl_->get_devices(); }
 IDevice* MeshDevice::get_device(ChipId physical_device_id) const { return pimpl_->get_device(physical_device_id); }
 IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return pimpl_->get_device(coord); }

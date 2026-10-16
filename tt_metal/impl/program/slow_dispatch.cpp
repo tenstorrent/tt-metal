@@ -99,8 +99,8 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
 
     // Individual device allocators don't track mesh buffer allocations, so use the
     // MeshDevice for validation when available to correctly detect CB/L1 buffer overlaps.
-    auto mesh_device = device.get_mesh_device();
-    const IDevice* validation_device = mesh_device ? mesh_device.get() : &device;
+    auto* mesh_device = device.get_mesh_device();
+    const IDevice* validation_device = mesh_device ? mesh_device : &device;
 
     bool is_emulated = false;
 #ifdef TT_METAL_USE_EMULE

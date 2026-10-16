@@ -2911,7 +2911,7 @@ void DeviceProfiler::pollDebugDumpResults(
         return;
     }
 
-    auto* mesh_device = device->get_mesh_device().get();
+    auto* mesh_device = device->get_mesh_device();
 
     readControlBuffers(mesh_device, device, virtual_cores, /*force_slow_dispatch=*/true);
 

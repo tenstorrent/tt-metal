@@ -191,7 +191,9 @@ public:
 
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.
-    virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
+    // Non-owning: returns nullptr if this device is not currently part of a MeshDevice. For a MeshDevice, returns
+    // itself.
+    virtual distributed::MeshDevice* get_mesh_device() = 0;
 
     /////////////////////////////////////////////////////////////////////////////
     // Internal-only APIs! These should not be part of the public API surface

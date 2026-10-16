@@ -1119,7 +1119,7 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
     return HalMemType::L1;
 }
 
-std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
+distributed::MeshDevice* Device::get_mesh_device() { return mesh_device; }
 
 // Program tracking for accurate CB memory reporting
 void Device::register_program(detail::ProgramImpl* program) {

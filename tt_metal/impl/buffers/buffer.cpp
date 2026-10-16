@@ -31,6 +31,7 @@
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "tt-metalium/mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
@@ -140,27 +141,26 @@ bool is_l1_impl(BufferType buffer_type) { return buffer_type == BufferType::L1 o
 // LiveDramRanges symbols are always linked but never touched. Uses the device's own
 // context (matching the Tracy lookups below) so it is correct under multiple contexts.
 //
-// extract_context_id() calls MeshDevice::get_mesh_device() -> shared_from_this(), which
-// throws std::bad_weak_ptr when the MeshDevice is mid-destruction (e.g. buffers freed from
-// ~ProgramImpl during device teardown). This runs inside ~Buffer (noexcept), so an escaping
-// throw would std::terminate. Treat that case as non-emule: the range registry is being torn
-// down anyway, so skipping the removal is harmless (and hardware already returns false here).
+// A MeshDevice can be mid-destruction here (e.g. buffers freed from ~ProgramImpl during device
+// teardown), when its context is no longer safe to query. This runs inside ~Buffer (noexcept).
+// Treat that case as non-emule: the range registry is being torn down anyway, so skipping the
+// removal is harmless (and hardware already returns false here).
 // Latched true the first time an emule device is seen (always via a valid device). A process is
 // emule xor hardware, so deallocate() can read this instead of dereferencing a device_ that may
 // already be dangling at teardown. See Buffer::deallocate().
 std::atomic<bool> emule_device_seen{false};
 
 inline bool is_emule_device(const IDevice* device) {
-    try {
-        bool emule = MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
-                     tt::TargetDevice::Emule;
-        if (emule) {
-            emule_device_seen.store(true, std::memory_order_relaxed);
-        }
-        return emule;
-    } catch (const std::bad_weak_ptr&) {
+    if (const auto* mesh_device = dynamic_cast<const distributed::MeshDevice*>(device);
+        mesh_device != nullptr && mesh_device->impl().is_being_destroyed()) {
         return false;
     }
+    bool emule = MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
+                 tt::TargetDevice::Emule;
+    if (emule) {
+        emule_device_seen.store(true, std::memory_order_relaxed);
+    }
+    return emule;
 }
 
 // Cores claimed through ServiceCoreManager, or an empty set when no service is running.

@@ -453,8 +453,8 @@ void syncDeviceDevice(MetalContext& ctx, ChipId device_id_sender, ChipId device_
         distributed::MeshDevice* mesh_device_sender = nullptr;
         distributed::MeshDevice* mesh_device_receiver = nullptr;
         try {
-            mesh_device_sender = device_sender->get_mesh_device().get();
-            mesh_device_receiver = device_receiver->get_mesh_device().get();
+            mesh_device_sender = device_sender->get_mesh_device();
+            mesh_device_receiver = device_receiver->get_mesh_device();
         } catch (const std::exception&) {
             log_info(
                 tt::LogMetal,
@@ -696,7 +696,7 @@ void ProfilerSync(MetalContext& ctx, ProfilerSyncState state) {
             auto* root_device = ctx.device_manager()->get_active_device(root_device_id);
             distributed::MeshDevice* mesh_device = nullptr;
             try {
-                mesh_device = root_device->get_mesh_device().get();
+                mesh_device = root_device->get_mesh_device();
             } catch (const std::exception&) {
                 log_info(
                     tt::LogMetal, "Device {} is not managed by MeshDevice. Skipping host-device sync.", root_device_id);
@@ -714,7 +714,7 @@ void ProfilerSync(MetalContext& ctx, ProfilerSyncState state) {
             auto* root_device = ctx.device_manager()->get_active_device(root_device_id);
             distributed::MeshDevice* mesh_device = nullptr;
             try {
-                mesh_device = root_device->get_mesh_device().get();
+                mesh_device = root_device->get_mesh_device();
             } catch (const std::exception&) {
                 log_info(
                     tt::LogMetal, "Device {} is not managed by MeshDevice. Skipping host-device sync.", root_device_id);
@@ -1101,7 +1101,7 @@ void ReadDeviceProfilerResults(
 
     distributed::MeshDevice* mesh_device = nullptr;
     try {
-        mesh_device = device->get_mesh_device().get();
+        mesh_device = device->get_mesh_device();
     } catch (const std::exception&) {
         log_info(tt::LogMetal, "Device {} is not managed by MeshDevice", device->id());
     }
