@@ -50,8 +50,9 @@ class GdnPrefixStateCache:
     prefill/decode trace is captured (allocating behind captured traces is unsafe). save/restore copy between a slot and
     the GDN state currently bound on the layers (the persistent B=1 prefill scratch inside prefill_paged_slots)."""
 
-    def __init__(self, model, num_slots=None):
+    def __init__(self, model, num_slots=None, name="GDN prefix-state cache"):
         self.model = model
+        self.name = name
         self.num_slots = int(num_slots if num_slots is not None else os.environ.get("QWEN36_PREFIX_CACHE_SLOTS", "32"))
         assert self.num_slots >= 1
         self.debug = os.environ.get("QWEN36_PREFIX_CACHE_DEBUG", "0") == "1"
@@ -66,7 +67,7 @@ class GdnPrefixStateCache:
         self._by_pos = {}  # pos -> {digest, ...}
         self._positions = []  # sorted positions present
         self.stats = dict(lookups=0, hits=0, tokens_skipped=0, saves=0, evictions=0)
-        logger.info(f"GDN prefix-state cache: {self.num_slots} slots x {len(self._dns)} GDN layers allocated.")
+        logger.info(f"{self.name}: {self.num_slots} slots x {len(self._dns)} GDN layers allocated.")
 
     def _alloc_pair(self, dn):
         scratch = next(s for s in self.model._gdn_prefill_scratch if s[0] is dn)

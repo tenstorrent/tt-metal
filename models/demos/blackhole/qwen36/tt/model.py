@@ -343,6 +343,11 @@ class Qwen36Model:
         self._gdn_prefill_scratch = None
         # GDN prefix-state cache (APC, see prefix_cache.py); built by the vLLM wrapper before warmup. None = off.
         self._prefix_cache = None
+        # Chunked-prefill continuation store (same snapshot class, own slots; built by the vLLM wrapper before warmup
+        # when vLLM can split a prompt across engine steps). None = off. _chunk_budget: (per-step token budget,
+        # long_prefill_token_threshold, prefill_chunk_alignment); budget None = unknown (snapshot every aligned end).
+        self._chunk_state_cache = None
+        self._chunk_budget = (None, 0, 128)
         # Per-decode-slot M-RoPE delta (batched serving, max_batch_size > 1): decode rope row = kv_pos + delta[slot].
         # Set at each user's prefill (0 for text), moved with the GDN state on a slot_remap. B=1 keeps rope.rope_delta.
         self._slot_rope_delta = torch.zeros(max(int(args.max_batch_size), 1), dtype=torch.int64)
@@ -3938,6 +3943,11 @@ class Qwen36Model:
         prefill resumes from the largest cached GDN snapshot at or below it (_prefill_with_prefix_cache); otherwise it
         is ignored and the prompt is recomputed from 0 (correct, slower). Requires the traced path (default).
 
+        vLLM chunked prefill (supports_chunked_prefill): a long prompt arrives over several engine steps, each row
+        holding the prompt from position 0, valid_lens[u] = this chunk's END and start_positions[u] = the tokens already
+        prefilled. A row that may be a non-final chunk (_maybe_partial_chunk) snapshots its GDN state at its end into
+        self._chunk_state_cache, and the next chunk resumes from that snapshot (same planner as the APC resume).
+
         vision_tokens_list (optional, per request): None (text), or a CALLABLE returning the request's packed vision
         embeddings (ttnn [n_vision_tokens, H]) -- called right before that user's prefill because the vision tower
         stashes MODEL-GLOBAL grids (_req_image_grid_thw / _req_video_grid_thw) that the prefill's M-RoPE build reads --
@@ -3953,6 +3963,9 @@ class Qwen36Model:
         assert len(empty_slots) == N, "one slot per request"
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         assert pt.shape[0] == N, "page_table must have one row per request"
+        # Tokens this engine step prefills (vLLM chunked prefill cuts a prompt only when the step's budget runs out).
+        ends = [int(valid_lens[u]) if valid_lens is not None else token_ids_list[u].shape[1] for u in range(N)]
+        step_tokens = sum(ends) - (sum(max(int(p), 0) for p in start_positions) if start_positions is not None else 0)
         host_logits = []
         for u in range(N):
             toks = token_ids_list[u]
@@ -3972,7 +3985,8 @@ class Qwen36Model:
                     start, plan = 0, None
                 else:
                     start = int(start_positions[u]) if start_positions is not None else 0
-                    plan = self._plan_prefix_prefill(toks[:, :actual], actual, start)
+                    cont = self._maybe_partial_chunk(step_tokens, actual - max(start, 0), actual)
+                    plan = self._plan_prefix_prefill(toks[:, :actual], actual, start, cont=cont)
                 if vt is not None:
                     host_logits.append(
                         self.prefill_traced_chunked(
@@ -4010,34 +4024,60 @@ class Qwen36Model:
     # the prompt (the traced short path selects the conv new-state from the segment's own last 3 rows).
     _PREFIX_ALIGN = 128
 
-    def _plan_prefix_prefill(self, toks, L, start):
-        """(resume_pos s, snapshot slot or None, sorted save positions, vLLM start) for one request, or None when the
-        prefix cache is off / unusable or there is neither a hit nor a snapshot to take (-> the legacy path)."""
-        cache = self._prefix_cache
-        if cache is None or self._chunked_trace_id is None:
+    def _maybe_partial_chunk(self, step_tokens, chunk_len, end):
+        """Can this prefill row be a NON-final chunk of a prompt vLLM split across engine steps (chunked prefill)? The
+        model is not told. The scheduler cuts a prompt only when the step's token budget (or long_prefill_token_threshold)
+        runs out, and the plugin floors a non-final chunk end to prefill_chunk_alignment (128). A wrong False costs a
+        recompute on the next chunk (resumed from an earlier snapshot, or 0); a wrong True a ~3 ms snapshot."""
+        if self._chunk_state_cache is None or end % self._PREFIX_ALIGN:
+            return False
+        budget, thr, align = self._chunk_budget
+        if budget is None:  # no vLLM config (tests): snapshot every aligned end
+            return True
+        slack = max(int(align), self._PREFIX_ALIGN)
+        return step_tokens > budget - slack or (thr > 0 and chunk_len > thr - slack)
+
+    def _plan_prefix_prefill(self, toks, L, start, cont=False):
+        """(resume_pos s, (store, slot) or None, sorted save positions, stride, vLLM start, chunk save points, cont) for
+        one request, or None when there is neither a snapshot to resume from nor one to take (-> the legacy path).
+
+        Two snapshot stores: the APC cache (self._prefix_cache, an LRU shared by all requests) and the chunked-prefill
+        continuation store (self._chunk_state_cache). cont=True (a possible non-final chunk ending at L, a multiple of
+        128): snapshot the state at L into the continuation store, where the next chunk (start = L) finds it."""
+        cache, ccache = self._prefix_cache, self._chunk_state_cache
+        cont = bool(cont) and ccache is not None and L % self._PREFIX_ALIGN == 0
+        if (cache is None and ccache is None) or self._chunked_trace_id is None:
             return None
         A = self._PREFIX_ALIGN
         h128 = (max(start, 0) // A) * A
         while h128 > 0 and L - h128 < 3:
             h128 -= A
-        s, slot = 0, None
+        s, src = 0, None
         if h128 > 0:
-            s, slot = cache.lookup(toks[0], h128)
+            for store in (ccache, cache):
+                if store is not None:
+                    p, slot = store.lookup(toks[0], h128)
+                    if slot is not None and p > s:
+                        s, src = p, (store, slot)
         points = set()
-        if h128 > s:  # vLLM has the KV up to h128 but we hold no GDN state there: learn it for the next request
-            points.add(h128)
-        min_len = int(os.environ.get("QWEN36_PREFIX_SNAPSHOT_MIN_LEN", "8192"))
-        b_end = ((L - 3) // A) * A  # end-of-prompt snapshot: covers the whole-prompt-shared prefix of a later request
         chunk_pts = set()
-        if L >= min_len and b_end > max(s, h128):
-            points.add(b_end)  # long prompts: split the prefill here (the end-of-prompt snapshot)
-        elif not points:
-            # Shorter prompts: no split. Save at the last full-chunk boundary through the per-chunk save_cb (a ~3 ms
-            # snapshot between two chunk-trace replays) when one exists and leaves >= 3 tokens after it.
-            chunk = self._chunked_chunk_size or 2048
-            p = s + ((L - s) // chunk) * chunk
-            if p > s and p <= L - 3:
-                chunk_pts.add(p)
+        if cache is not None:
+            if h128 > s:  # vLLM has the KV up to h128 but we hold no GDN state there: learn it for the next request
+                points.add(h128)
+            min_len = int(os.environ.get("QWEN36_PREFIX_SNAPSHOT_MIN_LEN", "8192"))
+            b_end = (
+                (L - 3) // A
+            ) * A  # end-of-prompt snapshot: covers the whole-prompt-shared prefix of a later request
+            # (not for a possible non-final chunk: L is not the prompt end, and the split costs an extra short replay)
+            if L >= min_len and b_end > max(s, h128) and not cont:
+                points.add(b_end)  # long prompts: split the prefill here (the end-of-prompt snapshot)
+            elif not points:
+                # Shorter prompts: no split. Save at the last full-chunk boundary through the per-chunk save_cb (a ~3 ms
+                # snapshot between two chunk-trace replays) when one exists and leaves >= 3 tokens after it.
+                chunk = self._chunked_chunk_size or 2048
+                p = s + ((L - s) // chunk) * chunk
+                if p > s and p <= L - 3:
+                    chunk_pts.add(p)
         # A 1-2 token remainder after the last full chunk would run eagerly (a < 3-token resumed tail has no short
         # trace): split 128 tokens earlier so the last segment (128 + tail tokens) replays the short trace.
         chunk = self._chunked_chunk_size or 2048
@@ -4046,29 +4086,31 @@ class Qwen36Model:
         if n_last > chunk and 0 < n_last % chunk < 3:
             points.add(last + (n_last // chunk) * chunk - A)
         stride = int(os.environ.get("QWEN36_PREFIX_SNAPSHOT_STRIDE", "8192"))
-        if s == 0 and not points and not chunk_pts and L - 3 < stride:  # nothing to save: legacy path
-            return None
-        return s, slot, sorted(points), stride, start, chunk_pts
+        if s == 0 and not points and not chunk_pts and not cont and (cache is None or L - 3 < stride):
+            return None  # nothing to resume or save: legacy path
+        return s, src, sorted(points), stride, start, chunk_pts, cont
 
     def _prefill_with_prefix_cache(self, toks, pt_row, L, plan):
         """Resumable text prefill of one request on the BOUND B=1 GDN scratch: restore the snapshot at s (or zero),
         run [s, p1), [p1, p2), ..., [pk, L) with _prefill_range (GDN state carries between segments), snapshot after the
-        segments ending at the save points and after every `stride`-th chunk; returns host logits [1,1,vocab]."""
+        segments ending at the save points and after every `stride`-th chunk (APC cache), and at L when cont (chunked-
+        prefill continuation store); returns host logits [1,1,vocab]."""
         cache = self._prefix_cache
-        s, slot, points, stride, vllm_start, chunk_pts = plan
+        s, src, points, stride, vllm_start, chunk_pts, cont = plan
         tokens = toks[:1, :L].to(torch.int32)
         # Text-only: clears per-request rope (rope_delta = 0); resumed segments slice 1D RoPE by absolute position.
         self._build_request_rope(tokens, None)
         if s > 0:
-            cache.restore(slot)
+            src[0].restore(src[1])
         saved = []
 
         def _save(p):
-            cache.save(tokens[0], p)
-            saved.append(p)
+            if cache is not None:
+                cache.save(tokens[0], p)
+                saved.append(p)
 
         def _stride_cb(p):  # after each full chunk ending at p
-            if p <= L - 3 and ((p - s) % stride == 0 or p in chunk_pts):
+            if cache is not None and p <= L - 3 and ((p - s) % stride == 0 or p in chunk_pts):
                 _save(p)
 
         host = None
@@ -4088,7 +4130,10 @@ class Qwen36Model:
             if not last:
                 _save(seg_end)
             seg_start = seg_end
-        cache.log(L, vllm_start, s, sorted(set(saved)))
+        if cont:
+            self._chunk_state_cache.save(tokens[0], L)
+        if cache is not None:
+            cache.log(L, vllm_start, s, sorted(set(saved)))
         return host
 
     def _prefill_range(self, tokens, page_table_row, start, end, reset_gdn, want_logits, save_cb=None):

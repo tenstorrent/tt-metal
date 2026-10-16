@@ -71,6 +71,11 @@ def _build_model_capabilities():
         # of the block size 64); the model keeps its own GDN-state snapshots (tt/prefix_cache.py). QWEN36_PREFIX_CACHE=0
         # disables it. Run vLLM with --block-size 64 and --enable-prefix-caching.
         "supports_prefix_caching": os.environ.get("QWEN36_PREFIX_CACHE", "1") == "1",
+        # vLLM chunked prefill: a prompt longer than the per-step token budget (--max-num-batched-tokens) is prefilled
+        # over several engine steps, with decode steps in between. Batched TP resumes each chunk from a GDN snapshot
+        # taken at the previous chunk's end (model._chunk_state_cache); the B=1 TP path recomputes from 0 (correct,
+        # slower: keep --max-num-batched-tokens >= max_model_len at max_num_seqs 1). QWEN36_CHUNKED_PREFILL=0 disables.
+        "supports_chunked_prefill": os.environ.get("QWEN36_CHUNKED_PREFILL", "1") == "1",
         "supports_async_decode": False,
         "supports_sample_on_device": True,
     }
@@ -215,15 +220,60 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         inst = cls([model], [args], mesh_device)
         # vLLM's --[no-]enable-prefix-caching, read from the config the worker publishes while loading the model; the model-side
         # GDN snapshot cache is only worth its ~1.2 GB/device (and the per-prefill snapshot saves) when vLLM will reuse prefixes.
-        # Non-vLLM callers (tests, demos) have no current config and keep the default (enabled).
-        try:
-            from vllm.config import get_current_vllm_config
-
-            inst._vllm_prefix_caching = bool(get_current_vllm_config().cache_config.enable_prefix_caching)
-        except Exception:
-            inst._vllm_prefix_caching = True
+        # Non-vLLM callers (tests, demos) have no current config and keep the default (enabled). The plugin builds the
+        # model OUTSIDE vLLM's config context, so allocate_kv_cache (inside it) reads these again.
+        inst._read_vllm_serving_flags()
         inst._vllm_mm_max_pixels = cls._read_vllm_max_pixels()
         return inst
+
+    @staticmethod
+    def _vllm_config_or_none():
+        """vLLM's current config, or None outside a set_current_vllm_config() context: the plugin calls
+        initialize_vllm_model outside one, and allocate_kv_cache inside one (WorkerWrapperBase.initialize_from_config).
+        """
+        try:
+            from vllm.config import get_current_vllm_config_or_none
+
+            vc = get_current_vllm_config_or_none()
+        except Exception:
+            return None
+        return vc if vc is not None and getattr(vc, "model_config", None) is not None else None
+
+    def _read_vllm_serving_flags(self):
+        """(Re)read vLLM's prefix caching / chunked prefill settings; keeps the current values without a vLLM config."""
+        vc = self._vllm_config_or_none()
+        if vc is None and hasattr(self, "_vllm_prefix_caching"):
+            return
+        self._vllm_prefix_caching = True if vc is None else bool(vc.cache_config.enable_prefix_caching)
+        self._vllm_chunked_prefill = self._read_vllm_chunked_prefill(vc)
+        if vc is not None:
+            logger.info(
+                f"vLLM serving config: enable_prefix_caching={self._vllm_prefix_caching}, chunked prefill "
+                f"(budget, long_prefill_threshold, align)={self._vllm_chunked_prefill}"
+            )
+
+    @staticmethod
+    def _read_vllm_chunked_prefill(vc=None):
+        """(per-step token budget, long_prefill_token_threshold, prefill_chunk_alignment) when vLLM can split a prompt
+        across engine steps, False when it cannot (chunked prefill off, or the budget covers max_model_len), or
+        (None, 0, 128) without a vLLM config (tests, demos: budget unknown)."""
+        if os.environ.get("QWEN36_CHUNKED_PREFILL", "1") != "1":
+            return False
+        if vc is None:
+            return (None, 0, 128)
+        sc, max_len = vc.scheduler_config, int(vc.model_config.max_model_len)
+        budget = int(getattr(sc, "max_num_scheduled_tokens", None) or sc.max_num_batched_tokens)
+        thr = int(getattr(sc, "long_prefill_token_threshold", 0) or 0)
+        if not sc.enable_chunked_prefill or (budget >= max_len and not 0 < thr < max_len):
+            return False
+        tt_cfg = (getattr(vc, "additional_config", None) or {}).get("tt", {}) or {}
+        align = int(tt_cfg.get("prefill_chunk_alignment", 128))
+        if align <= 0 or align % 128:
+            logger.warning(
+                f"prefill_chunk_alignment={align}: non-final prefill chunks may end off a 128 boundary, where the GDN "
+                f"state cannot be resumed; those chunks are recomputed from an earlier snapshot (correct, slower)"
+            )
+        return (budget, thr, align)
 
     @staticmethod
     def _read_vllm_max_pixels():
@@ -247,6 +297,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         batch_size = max_batch_size (vLLM's max_num_seqs, threaded through initialize_vllm_model):
         the paged KV blocks (kv_cache_shape) already cover all users, and this sizes the per-slot
         GDN recurrent/conv state [B,...] + the decode kv grid. B==1 is the single-sequence path."""
+        self._read_vllm_serving_flags()  # the plugin allocates inside vLLM's config context (warmup reads the flags)
         batch_size = self.model[0].args.max_batch_size
         return self.model[0].allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=batch_size)
 
@@ -347,7 +398,15 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             )
         # Prefix caching (start_pos > 0) is only exploited by the batched slot path above. The B=1 TP path and the
         # single-device path ignore start_pos and recompute the whole prompt from position 0: correct (the cached KV
-        # blocks are rewritten with the same values), just slower.
+        # blocks are rewritten with the same values), just slower. Chunked prefill makes that cost grow with every chunk.
+        sp = kwargs.get("start_pos")
+        if sp is not None and not getattr(self, "_warned_start_pos_recompute", False):
+            if any(int(x) > 0 for x in (sp.tolist() if hasattr(sp, "tolist") else sp)):
+                self._warned_start_pos_recompute = True
+                logger.warning(
+                    "prefill with start_pos > 0 at max_batch_size 1: recomputed from position 0. With chunked prefill "
+                    "every chunk recomputes its whole prefix; keep --max-num-batched-tokens >= max_model_len here."
+                )
         vision_tokens = self._compute_vision_tokens(model, kwargs)
         if model.num_devices > 1:
             return self._prefill_forward_tp(model, tokens, page_table, prompt_lens, vision_tokens=vision_tokens)
@@ -754,6 +813,18 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             from models.demos.blackhole.qwen36.tt.prefix_cache import GdnPrefixStateCache
 
             model._prefix_cache = GdnPrefixStateCache(model)
+        chunked = getattr(self, "_vllm_chunked_prefill", (None, 0, 128))
+        if batched and chunked and model.short_prefill_trace_enabled() and model._chunk_state_cache is None:
+            # Chunked-prefill continuation store: one GDN snapshot per in-flight prompt chunk end (vLLM schedules the
+            # running partial prefill first, so normally one at a time). Allocated NOW, before any trace is captured.
+            from models.demos.blackhole.qwen36.tt.prefix_cache import GdnPrefixStateCache
+
+            n = int(os.environ.get("QWEN36_CHUNK_STATE_SLOTS", "4"))
+            model._chunk_state_cache = GdnPrefixStateCache(model, num_slots=n, name="chunked-prefill continuation")
+            model._chunk_budget = chunked
+            logger.info(
+                f"chunked prefill: continuation store {n} slots, (budget, long_prefill_threshold, align)={chunked}"
+            )
         prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
             model.prepare_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)

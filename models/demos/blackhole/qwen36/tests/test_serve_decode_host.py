@@ -98,10 +98,13 @@ def _call(gen, num_active, *, sampling=True, remap=None, width=WIDTH, **commands
 
 def test_capabilities_flag_on(monkeypatch):
     monkeypatch.setenv("QWEN36_SERVE_DEVICE_DECODE", "1")
+    monkeypatch.delenv("QWEN36_PREFIX_CACHE", raising=False)
+    monkeypatch.delenv("QWEN36_CHUNKED_PREFILL", raising=False)
     caps = _build_model_capabilities()
     assert caps["supports_async_decode"] is True
     assert caps["supports_sample_on_device"] is True
-    assert caps["supports_prefix_caching"] is False
+    assert caps["supports_prefix_caching"] is True
+    assert caps["supports_chunked_prefill"] is True
     assert caps["max_device_top_k"] == 32
     assert caps["supports_device_penalties"] is False
     assert Qwen36ForCausalLM.decode_input_update_contract == 1
@@ -114,11 +117,69 @@ def test_capabilities_default_is_flag_on(monkeypatch):
 
 def test_capabilities_flag_off_is_the_old_dict(monkeypatch):
     monkeypatch.setenv("QWEN36_SERVE_DEVICE_DECODE", "0")
-    assert _build_model_capabilities() == {
-        "supports_prefix_caching": False,
+    monkeypatch.delenv("QWEN36_PREFIX_CACHE", raising=False)
+    monkeypatch.delenv("QWEN36_CHUNKED_PREFILL", raising=False)
+    caps = _build_model_capabilities()
+    caps.pop("fabric_config", None)  # the fabric packet payload (multi-device meshes) does not depend on this flag
+    assert caps == {
+        "supports_prefix_caching": True,
+        "supports_chunked_prefill": True,
         "supports_async_decode": False,
         "supports_sample_on_device": True,
     }
+
+
+def test_capabilities_chunked_prefill_opt_out(monkeypatch):
+    monkeypatch.setenv("QWEN36_CHUNKED_PREFILL", "0")
+    assert _build_model_capabilities()["supports_chunked_prefill"] is False
+    assert Qwen36ForCausalLM._read_vllm_chunked_prefill() is False
+
+
+def test_read_vllm_chunked_prefill_without_vllm_config(monkeypatch):
+    monkeypatch.delenv("QWEN36_CHUNKED_PREFILL", raising=False)
+    assert Qwen36ForCausalLM._vllm_config_or_none() is None
+    assert Qwen36ForCausalLM._read_vllm_chunked_prefill() == (None, 0, 128)
+
+
+def _vllm_cfg(chunked=True, budget=16384, max_len=262144, thr=0, tt=None):
+    return SimpleNamespace(
+        scheduler_config=SimpleNamespace(
+            enable_chunked_prefill=chunked,
+            max_num_batched_tokens=budget,
+            max_num_scheduled_tokens=None,
+            long_prefill_token_threshold=thr,
+        ),
+        model_config=SimpleNamespace(max_model_len=max_len),
+        additional_config={"tt": tt or {}},
+    )
+
+
+def test_read_vllm_chunked_prefill_from_config(monkeypatch):
+    monkeypatch.delenv("QWEN36_CHUNKED_PREFILL", raising=False)
+    read = Qwen36ForCausalLM._read_vllm_chunked_prefill
+    assert read(_vllm_cfg()) == (16384, 0, 128)
+    assert read(_vllm_cfg(tt={"prefill_chunk_alignment": 256})) == (16384, 0, 256)
+    assert read(_vllm_cfg(chunked=False)) is False  # the plugin turned chunked prefill off
+    assert read(_vllm_cfg(budget=262144)) is False  # tt-inference-server's default budget: nothing is ever split
+    assert read(_vllm_cfg(budget=262144, thr=8192)) == (262144, 8192, 128)
+
+
+@pytest.mark.parametrize(
+    "budget, step_tokens, chunk_len, end, expected",
+    [
+        ((None, 0, 128), 128, 128, 128, True),  # budget unknown: every 128-aligned end may be a non-final chunk
+        ((None, 0, 128), 130, 130, 130, False),  # non-final chunk ends are 128-aligned: this one is final
+        ((8192, 0, 128), 8192, 8192, 16384, True),  # a full step
+        ((8192, 0, 128), 8100, 2048, 2048, True),  # within one alignment of the budget (the cut end was floored)
+        ((8192, 0, 128), 4096, 4096, 4096, False),  # the step had budget left: nothing was cut
+        ((8192, 2048, 128), 4096, 2048, 6144, True),  # long_prefill_token_threshold cut this row
+    ],
+)
+def test_maybe_partial_chunk(budget, step_tokens, chunk_len, end, expected):
+    model = SimpleNamespace(_chunk_state_cache=object(), _chunk_budget=budget, _PREFIX_ALIGN=128)
+    assert Qwen36Model._maybe_partial_chunk(model, step_tokens, chunk_len, end) is expected
+    model._chunk_state_cache = None
+    assert Qwen36Model._maybe_partial_chunk(model, step_tokens, chunk_len, end) is False
 
 
 def test_readback_is_the_generators():

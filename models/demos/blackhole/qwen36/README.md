@@ -265,6 +265,39 @@ single-device paths ignore `start_pos` and recompute from 0.
 | `QWEN36_PREFIX_SNAPSHOT_STRIDE` | `8192` | snapshot every N tokens (chunk boundaries, relative to the resume point) |
 | `QWEN36_PREFIX_CACHE_DEBUG` | `0` | `1` logs one line per prefix-cached prefill (hit position, saves, stats) |
 
+## Chunked prefill (vLLM serving, batched TP path)
+
+The model declares `supports_chunked_prefill`. With `--max-num-batched-tokens` below `max_model_len`, vLLM prefills a
+longer prompt over several engine steps, and the plugin runs decode steps for the other requests in between (its
+decode interleave: at most `decode_interleave_prefill_steps` (2) prefill steps, then `decode_interleave_decode_steps` (1)
+decode step, both in `additional_config['tt']`). Without it, one prefill step holds every waiting prompt that fits the
+budget, which tt-inference-server sets to `max_context`, and running requests get no tokens until the step ends.
+
+Each chunk's row holds the prompt from position 0, `prompt_lens` is the chunk end and `start_pos` the tokens already
+prefilled; non-final chunk ends are 128-aligned (the plugin's `prefill_chunk_alignment`). The model is not told which
+chunk is the last. A row that may be non-final (its end is 128-aligned and the step used its whole token budget, or
+`long_prefill_token_threshold` cut it) snapshots its GDN state at its end into a small continuation store
+(`model._chunk_state_cache`, the `GdnPrefixStateCache` class with its own slots, independent of APC), and the next chunk
+resumes there through the APC planner. A 1-2 token final chunk resumes from the previous chunk's snapshot; a missed
+snapshot is recomputed from an earlier one or from 0 (correct, slower). Multimodal requests recompute from 0 on every
+chunk (vLLM never splits an image across chunks). The B=1 TP path recomputes from 0 on every chunk: keep
+`--max-num-batched-tokens >= max_model_len` at `max_num_seqs 1`. The store is allocated (before trace capture) only when
+vLLM can split a prompt: chunked prefill on and the budget below `max_model_len`. With chunked prefill on, vLLM refuses a
+budget below the largest image/video item (16384 tokens at the default processor settings: "Chunked MM input disabled
+but max_tokens_per_mm_item ... is larger than max_num_batched_tokens"); go lower only for text-only serving
+(`--limit-mm-per-prompt '{"image": 0, "video": 0}'`).
+
+Chunked prefill and vLLM prefix caching do not start together on the TT plugin today (vllm-tt-plugin d84049e and main
+6afed54): with chunked prefill on, the plugin sets `disable_chunked_mm_input=True`, and vLLM's hybrid-model prefix
+caching (`mamba_cache_mode='align'`) rejects that in `validate_block_size` ("Chunked MM input is required because we need
+the flexibility to schedule a multiple of block_size tokens ..."). Serve chunked prefill with `--no-enable-prefix-caching`
+until the plugin relaxes that for TT-owned recurrent state; the continuation store does not need APC.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `QWEN36_CHUNKED_PREFILL` | `1` | advertise `supports_chunked_prefill` and build the continuation store (`0` disables) |
+| `QWEN36_CHUNK_STATE_SLOTS` | `4` | continuation snapshot slots (about 19 MB of DRAM per device per slot at TP=8) |
+
 ## Multimodal serving: vision buckets and `max_pixels` (vLLM)
 
 The vision tower runs on padded patch buckets (ceil-to-2048 of the patch count + 1 step) that must be compiled
