@@ -80,3 +80,19 @@ The original experiment source scored **167/198 (84.34%) on full GPQA Diamond**,
 Each server has a **20-minute wall-clock readiness deadline**, within a **40-minute total recipe allowance**. These are safety limits, not measured runtimes. Gemma and Llama account for **52 minutes** of the shared QB2 budget. Public phase timings contain only fixed stage names and elapsed seconds. Startup snapshots report capacity, elapsed time, a fixed stage label, a bounded layer index and an exception flag. Private evaluator/server diagnostics remain excluded. The [model PR](https://github.com/tenstorrent/tt-metal/pull/56765) tracks final integrated validation against plugin main.
 
 Prefill compiles on demand. An unseen logical prefill shape retires decode traces before creating persistent program buffers; decode then warms and captures again. The first request for that shape can therefore include compilation and recapture latency. Reported performance uses a warmup burst per shape and does not measure this cold-request cost. The 512 MiB serving and 32 MB decoder-test trace reservations are validated budgets, not measured trace footprints or quantified safety margins.
+
+## Experimental shared request prefill
+
+`GEMMA_BATCH_PREFILL_MAX_BATCH` opts into shared prefill computation for compatible requests already supplied in one generator call. It defaults to `1`; values from `1` through `32` are accepted. The planner preserves the original matmul configuration families and limits packed rows to 2048 by default. Long or incompatible requests retain the serial fallback. This setting does not make the scheduler wait for a batch or change its aggregate token budget.
+
+Compatible requests share QKV, output and MLP matrices and collectives. Attention groups preserve each request's native query extent, start position and sliding history. Cache fills use separate request tables, and logits select each last real token. Native batch-axis reduce-scatter views preserve the original BF16 reduction ordering. No precision or kernel change is required.
+
+`GEMMA_BATCH_PREFILL_REPORT=1` emits group sizes, spans and padding for performance analysis. `GEMMA_BATCH_PREFILL_WIDE=1` and `GEMMA_BATCH_PREFILL_LONG=1` are separate, default-off experiments; their accepted planner shapes are not a claim of serving validation. A larger request batch can be slower when padding dominates. Select the serving cap using matched workload, cache, sampling and warmed-trace evidence.
+
+Run the device-free admission regression checks with:
+
+```sh
+python3 -m unittest models.demos.gemma4_31b_qb2.tests.test_prefill_batch_planner
+```
+
+These checks enforce coverage, numerical configuration boundaries and preservation of complete native sliding-attention chunks. They complement the hardware KV-isolation, retained-history, traced-decode and concurrent-sampling gates; they do not replace them. The earlier published serving and accuracy results above predate this experiment.

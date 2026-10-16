@@ -15,6 +15,8 @@ The bounded ring supports forward decoding with complete live history, not
 arbitrary rollback into evicted tokens. Page-ID changes require live KV migration.
 """
 
+import os
+
 import ttnn
 from models.demos.gemma4_31b_qb2.tt.sdpa_l1 import BLACKHOLE_L1_BYTES, full_sdpa_fp32_l1_end
 from models.demos.gpt_oss.tt.ccl import CCLManager
@@ -71,6 +73,7 @@ class Decoder:
         self.activation_dtype = ttnn.bfloat16
         self.residual_dtype = ttnn.bfloat16
         self.norms_dtype = ttnn.bfloat16
+        self.PREFILL_BATCH_ROWS = 8192 if os.environ.get("GEMMA_BATCH_PREFILL_WIDE", "0") == "1" else 2048
         self.PREFILL_CHUNK = 1024 if self.kind == "sliding_attention" else 6656
         if self.PREFILL_CHUNK <= 0 or self.PREFILL_CHUNK % self.PAGE_SIZE:
             raise ValueError("Compute chunks must contain a positive whole number of cache pages")
@@ -365,10 +368,11 @@ class Decoder:
         # tile storage for this descriptor instead of allocating and releasing
         # a large unused template between persistent norm owners. The view's
         # values are intentionally never consumed by a numerical operation.
-        elements = self.PREFILL_CHUNK * 1344
+        max_rows = max(self.PREFILL_CHUNK, self.PREFILL_BATCH_ROWS)
+        elements = max_rows * 1344
         prefix_shape = ttnn.Shape([1, 1, elements // self.head_dim, self.head_dim])
         prefix = ttnn.reshape(self.cos, prefix_shape, prefix_shape)
-        x = ttnn.experimental.view(prefix, [1, 1, self.PREFILL_CHUNK, 1344])
+        x = ttnn.experimental.view(prefix, [1, 1, max_rows, 1344])
         assert x.buffer_unique_id() == self.cos.buffer_unique_id()
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT
         assert x.memory_config() == ttnn.DRAM_MEMORY_CONFIG
@@ -385,14 +389,14 @@ class Decoder:
         # Query the native factory rather than duplicating worker/round
         # sizing. Its geometry does not depend on the norm weight's values.
         shapes = {}
-        for rows in range(self.PAGE_SIZE, self.PREFILL_CHUNK + 1, self.PAGE_SIZE):
+        for rows in range(self.PAGE_SIZE, max_rows + 1, self.PAGE_SIZE):
             shape = ttnn.Shape([1, 1, rows, 1344])
             probe = native_stats(ttnn.reshape(x, shape, shape), names[0])
             assert probe.dtype == ttnn.float32 and probe.layout == ttnn.ROW_MAJOR_LAYOUT
             assert probe.memory_config() == ttnn.DRAM_MEMORY_CONFIG
             assert probe.buffer_aligned_page_size() == 8192
             shapes[rows] = (probe.shape, probe.padded_shape)
-            if rows == self.PREFILL_CHUNK:
+            if rows == max_rows:
                 first_owner = probe
             del probe
         self.prefill_norm_stats_owners = {}
@@ -474,15 +478,24 @@ class Decoder:
         """Residual ownership chosen once at entry to the entire layer stack."""
         return 1344 if sequence_length > 128 else 5376
 
-    def _reduce(self, x, residual_width=None):
+    def _reduce(self, x, residual_width=None, *, batch=1):
         residual_width = self.residual_width if residual_width is None else residual_width
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         dtype = ttnn.bfloat16
         if x.dtype != dtype:
             x = ttnn.typecast(x, dtype)
         if residual_width == self.hidden_size:
+            if x.shape[2] > 128:
+                return ttnn.concat(
+                    [self._reduce(x[:, :, i : i + 128, :], residual_width) for i in range(0, x.shape[2], 128)], dim=2
+                )
             y = ttnn.all_reduce(x, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             return ttnn.typecast(y, ttnn.bfloat16) if y.dtype != ttnn.bfloat16 else y
+        # Ring BF16 pair ordering restarts per native batch unit. Preserve each
+        # request's row origin when packed spans are not multiples of 256.
+        packed_rows = x.shape[2]
+        if batch > 1:
+            x = ttnn.reshape(x, [batch, 1, packed_rows // batch, x.shape[-1]])
         y = ttnn.experimental.reduce_scatter_minimal_async(
             x,
             dim=3,
@@ -494,17 +507,42 @@ class Decoder:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             num_workers_per_link=None,
         )
+        if batch > 1:
+            y = ttnn.reshape(y, [1, 1, packed_rows, y.shape[-1]])
         return ttnn.typecast(y, ttnn.bfloat16) if y.dtype != ttnn.bfloat16 else y
 
-    def _pref_linear(self, x, name, activation=None):
+    def _pref_linear(self, x, name, activation=None, *, sequence_hint=None):
         import math
 
+        sequence = x.shape[2] if sequence_hint is None else sequence_hint
+        packed_rows = x.shape[2]
+        if packed_rows > 2048 and sequence_hint is not None and 256 < sequence_hint < 1024:
+            return ttnn.concat(
+                [
+                    self._pref_linear(
+                        x[:, :, begin : min(begin + 2048, packed_rows), :],
+                        name,
+                        activation,
+                        sequence_hint=sequence_hint,
+                    )
+                    for begin in range(0, packed_rows, 2048)
+                ],
+                dim=2,
+            )
+        native_batch = (
+            sequence_hint is not None
+            and packed_rows > sequence_hint
+            and ((not self.sliding and sequence_hint in (128, 256)) or sequence_hint == 1024 or packed_rows > 2048)
+        )
+        if native_batch:
+            native_rows = max(rows for rows in range(128, min(sequence_hint, 1024) + 1, 128) if packed_rows % rows == 0)
+            x = ttnn.reshape(x, [packed_rows // native_rows, 1, native_rows, x.shape[-1]])
         weight = getattr(self, name)
         grid = (8, 8) if self.sliding and name in ("qkv", "qk") else (11, 8) if self.sliding else (11, 10)
         wide_qkv = (
             self.sliding
             and name == "qkv"
-            and x.shape[2] == 1024
+            and sequence == 1024
             and weight.dtype == ttnn.bfloat4_b
             and x.dtype == ttnn.bfloat16
         )
@@ -519,9 +557,9 @@ class Decoder:
         cap = (8 if name == "o" else 14) if self.sliding else (4 if name == "o" else 6)
         expected_input = ttnn.bfloat8_b if name == "o" and not self.sliding else ttnn.bfloat16
         if not wide_qkv and weight.dtype == ttnn.bfloat4_b and x.dtype == expected_input:
-            if not self.sliding and x.shape[2] in (128, 256):
+            if not self.sliding and sequence in (128, 256):
                 cap = 64 if name == "o" else 42
-            elif x.shape[2] == 1024:
+            elif sequence == 1024:
                 cap = 32 if name == "o" else 28
         if wide_qkv:
             cap = 42
@@ -538,7 +576,7 @@ class Decoder:
             fuse_batch=False,
             fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH) if activation else None,
         )
-        return ttnn.linear(
+        result = ttnn.linear(
             x,
             weight,
             program_config=config,
@@ -546,6 +584,8 @@ class Decoder:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        return ttnn.reshape(result, [1, 1, packed_rows, result.shape[-1]]) if native_batch else result
 
     def _dlinear(self, x, name):
         weight = self.decode_weights[name]
@@ -584,6 +624,10 @@ class Decoder:
             return self._dnorm(x, name)
         if x.shape[-1] == self.hidden_size:
             rows = x.padded_shape[-2]
+            if rows > 128:
+                return ttnn.concat(
+                    [self._resnorm(x[:, :, i : i + 128, :], name, False) for i in range(0, rows, 128)], dim=2
+                )
             mem = ttnn.create_sharded_memory_config(
                 (rows, 192),
                 ttnn.CoreGrid(x=7, y=4),
@@ -641,16 +685,16 @@ class Decoder:
         n = self._resnorm(x, name, decode)
         return self._gather(n) if x.shape[-1] != self.hidden_size else n
 
-    def _prefill_mlp(self, x):
+    def _prefill_mlp(self, x, *, sequence_hint=None, batch=1):
         n = self._input_norm(x, "pre_feedforward_layernorm", False)
-        gate = self._pref_linear(n, "gate", "gelu_tanh")
-        up = self._pref_linear(n, "up")
+        gate = self._pref_linear(n, "gate", "gelu_tanh", sequence_hint=sequence_hint)
+        up = self._pref_linear(n, "up", sequence_hint=sequence_hint)
         del n
         product = ttnn.multiply(gate, up)
         del gate, up
-        local = self._pref_linear(product, "down")
+        local = self._pref_linear(product, "down", sequence_hint=sequence_hint)
         del product
-        reduced = self._reduce(local, x.shape[-1])
+        reduced = self._reduce(local, x.shape[-1], batch=batch)
         del local
         post = self._resnorm(reduced, "post_feedforward_layernorm", False)
         del reduced
@@ -681,11 +725,15 @@ class Decoder:
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
         )
 
-    def _prefill_sdpa_config(self, q, cache, page_table, *, start=0):
+    def _prefill_sdpa_config(self, q, cache, page_table, *, start=0, logical_sequence=None):
         k_chunk = 128
         if not self.sliding and start % k_chunk:
             raise ValueError(f"Full-attention SDPA start {start} must align to K chunk {k_chunk}")
-        eligible = sorted((c for c in self.pref_sdpa_by_q if q.shape[2] % c == 0 and start % c == 0), reverse=True)
+        logical_sequence = q.shape[2] if logical_sequence is None else logical_sequence
+        eligible = sorted(
+            (c for c in self.pref_sdpa_by_q if q.shape[2] % c == 0 and logical_sequence % c == 0 and start % c == 0),
+            reverse=True,
+        )
         if not eligible:
             raise ValueError(f"No SDPA Q chunk aligns with rows {q.shape[2]} and start {start}")
         if self.sliding or not self.pref_compute.fp32_dest_acc_en:
@@ -730,9 +778,15 @@ class Decoder:
         result = self._apply_decode_rope(x, cos, sin)
         return ttnn.reshape(result, ttnn.Shape(list(x.shape)), ttnn.Shape(list(x.padded_shape)))
 
-    def _prefill_qkv(self, x, start):
+    def _prefill_qkv(self, x, start, *, batch=1, sequence_hint=None):
         tied = not self.sliding
-        fused = self._pref_linear(self._input_norm(x, "input_layernorm", False), "qk" if tied else "qkv")
+        fused = self._pref_linear(
+            self._input_norm(x, "input_layernorm", False),
+            "qk" if tied else "qkv",
+            sequence_hint=x.shape[2] // batch if sequence_hint is None else sequence_hint,
+        )
+        if batch > 1:
+            fused = ttnn.reshape(fused, [batch, 1, x.shape[2] // batch, fused.shape[-1]])
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             fused,
             num_heads=8,
@@ -746,24 +800,289 @@ class Decoder:
             # Full attention derives rotated K from normalized V below.
             # The raw K output has no consumer after head creation.
             del k
-        # Only a start-zero, whole-width prefix can alias the table buffer.
-        rope_shape = ttnn.Shape([1, 1, x.shape[2], self.head_dim])
-        if start == 0:
-            cos = ttnn.reshape(self.cos, rope_shape, rope_shape)
-            sin = ttnn.reshape(self.sin, rope_shape, rope_shape)
-        else:
-            cos = ttnn.reshape(self.cos[start : start + x.shape[2], :], rope_shape)
-            sin = ttnn.reshape(self.sin[start : start + x.shape[2], :], rope_shape)
-        q = self._norm(q, "self_attn.q_norm")
-        q = ttnn.experimental.rotary_embedding(q, cos, sin)
+        sequence = x.shape[2] // batch
+        rope_shape = ttnn.Shape([1, 1, sequence, self.head_dim])
+        starts = [start] * batch if isinstance(start, int) else list(start)
+
+        def rotate(value):
+            def one(tensor, position):
+                if position == 0:
+                    cos = ttnn.reshape(self.cos, rope_shape, rope_shape)
+                    sin = ttnn.reshape(self.sin, rope_shape, rope_shape)
+                else:
+                    available = min(sequence, self.max_context - position)
+                    cos_rows = self.cos[position : position + available, :]
+                    sin_rows = self.sin[position : position + available, :]
+                    if available < sequence:
+                        # Only common-bucket padding can extend beyond context.
+                        # Attention trims each row to its own valid padded span,
+                        # so these extra rotary values are never consumed.
+                        cos_rows = ttnn.concat([cos_rows, self.cos[: sequence - available, :]], dim=0)
+                        sin_rows = ttnn.concat([sin_rows, self.sin[: sequence - available, :]], dim=0)
+                    cos = ttnn.reshape(cos_rows, rope_shape)
+                    sin = ttnn.reshape(sin_rows, rope_shape)
+                return ttnn.experimental.rotary_embedding(tensor, cos, sin)
+
+            if len(set(starts)) == 1:
+                return one(value, starts[0])
+            return ttnn.concat([one(value[row : row + 1], position) for row, position in enumerate(starts)], dim=0)
+
+        q = rotate(self._norm(q, "self_attn.q_norm"))
         if not self.sliding:
             v = self._norm(v)
-            k = ttnn.experimental.rotary_embedding(ttnn.multiply(v, self.norms["self_attn.k_norm"]), cos, sin)
+            k = rotate(ttnn.multiply(v, self.norms["self_attn.k_norm"]))
         else:
-            k = self._norm(k, "self_attn.k_norm")
-            k = ttnn.experimental.rotary_embedding(k, cos, sin)
+            k = rotate(self._norm(k, "self_attn.k_norm"))
             v = self._norm(v)
         return (q, k, v)
+
+    def prefill_batched(
+        self,
+        x,
+        *,
+        batch,
+        page_table,
+        kv_cache,
+        start_pos=0,
+        histories=None,
+        logical_lengths=None,
+        return_history=False,
+        fill_page_table=None,
+        batch_indices=None,
+        sequence_hint=None,
+    ):
+        """Shared projections/CCL/MLP, with native batched attention by compatible span.
+
+        Packed residual rows are independent requests. Attention groups share
+        causal coordinates; different full-cache starts form distinct groups.
+        Sliding groups share preceding-history length, normally 1024 on hits.
+        """
+        total = x.shape[2]
+        if batch < 2 or total % batch or total > 8192:
+            raise ValueError("Batched prefill requires 2+ equal padded spans and at most 8192 rows")
+        seq = total // batch
+        starts = [start_pos] * batch if isinstance(start_pos, int) else list(start_pos)
+        lengths = [seq] * batch if logical_lengths is None else list(logical_lengths)
+        histories = [None] * batch if histories is None else list(histories)
+        if seq % self.PAGE_SIZE or len(starts) != batch or any(p % self.PAGE_SIZE for p in starts):
+            raise ValueError("Batched prefill spans and starts must be page aligned")
+        if (
+            len(lengths) != batch
+            or len(histories) != batch
+            or any(
+                not 0 < length <= seq or position < 0 or position + length > self.max_context
+                for position, length in zip(starts, lengths)
+            )
+        ):
+            raise ValueError("Batched prefill logical spans must lie within the model context")
+        if self.sliding and any(p and h is None for p, h in zip(starts, histories)):
+            raise ValueError("Batched sliding continuation requires preceding history")
+        if batch >= 2 and total % batch == 0 and (total > self.PREFILL_BATCH_ROWS or total // batch > 1024):
+            return self._prefill_batched_stream(
+                x,
+                batch=batch,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                start_pos=start_pos,
+                histories=histories,
+                logical_lengths=logical_lengths,
+                return_history=return_history,
+                fill_page_table=fill_page_table,
+                batch_indices=batch_indices,
+            )
+        hint = seq if sequence_hint is None else sequence_hint
+        q, k, v = self._prefill_qkv(x, starts, batch=batch, sequence_hint=hint)
+        if not self.sliding:
+            q = ttnn.typecast(q, ttnn.bfloat8_b)
+        if fill_page_table is not None:
+            if batch_indices is None:
+                raise ValueError("Batched cache fill needs an explicit row-index tensor")
+            for cache, value in zip(kv_cache, (k, v)):
+                ttnn.experimental.paged_fill_cache(
+                    cache,
+                    ttnn.typecast(value, cache.dtype),
+                    fill_page_table,
+                    batch_idx_tensor=batch_indices,
+                )
+        else:
+            for row, position in enumerate(starts):
+                # Write only pages containing actual input; bucket padding cannot
+                # overwrite a following page or another request's scratch space.
+                valid_pages = (lengths[row] + self.PAGE_SIZE - 1) // self.PAGE_SIZE
+                pt = page_table[row : row + 1, position // self.PAGE_SIZE : position // self.PAGE_SIZE + valid_pages]
+                for cache, value in zip(kv_cache, (k, v)):
+                    ttnn.experimental.paged_fill_cache(
+                        cache,
+                        ttnn.typecast(value[row : row + 1, :, : valid_pages * self.PAGE_SIZE, :], cache.dtype),
+                        pt,
+                        batch_idx=0,
+                    )
+        del cache, value
+        groups = {}
+        for row in range(batch):
+            key = (0 if histories[row] is None else histories[row][0].shape[2]) if self.sliding else starts[row]
+            groups.setdefault((key, (lengths[row] + 127) // 128 * 128), []).append(row)
+        outputs = [None] * batch
+        next_histories = [None] * batch
+        for (coordinate, logical_sequence), rows in groups.items():
+
+            def selected(tensor):
+                return (
+                    tensor
+                    if len(rows) == batch
+                    else ttnn.concat([tensor[r : r + 1] for r in rows], dim=0)
+                    if len(rows) > 1
+                    else tensor[rows[0] : rows[0] + 1]
+                )
+
+            qq, pt = selected(q), selected(page_table)
+            if logical_sequence < seq:
+                qq = qq[:, :, :logical_sequence, :]
+            cfg = self._prefill_sdpa_config(
+                qq, kv_cache[0], pt, start=0 if self.sliding else coordinate, logical_sequence=logical_sequence
+            )
+            if self.sliding:
+                kk, vv = selected(k), selected(v)
+                if logical_sequence < seq:
+                    kk, vv = kk[:, :, :logical_sequence, :], vv[:, :, :logical_sequence, :]
+                if coordinate:
+                    previous = [
+                        ttnn.concat([histories[r][j] for r in rows], dim=0) if len(rows) > 1 else histories[rows[0]][j]
+                        for j in range(2)
+                    ]
+                    attn = ttnn.transformer.scaled_dot_product_attention(
+                        qq,
+                        ttnn.concat([previous[0], kk], dim=2),
+                        ttnn.concat([previous[1], vv], dim=2),
+                        attn_mask=self.history_mask[
+                            :, :, :logical_sequence, 1024 - coordinate : 1024 + logical_sequence
+                        ],
+                        is_causal=False,
+                        scale=1.0,
+                        program_config=cfg,
+                        compute_kernel_config=self.pref_compute,
+                    )
+                else:
+                    attn = ttnn.transformer.scaled_dot_product_attention(
+                        qq,
+                        kk,
+                        vv,
+                        is_causal=True,
+                        scale=1.0,
+                        sliding_window_size=self.window,
+                        program_config=cfg,
+                        compute_kernel_config=self.pref_compute,
+                    )
+            else:
+                attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    qq,
+                    kv_cache[0],
+                    kv_cache[1],
+                    pt,
+                    chunk_start_idx=coordinate,
+                    scale=1.0,
+                    program_config=cfg,
+                    compute_kernel_config=self.pref_compute,
+                )
+            del qq, pt
+            if self.sliding:
+                del kk, vv
+                if coordinate:
+                    del previous
+            if logical_sequence < seq:
+                attn = ttnn.pad(attn, [(0, 0), (0, 0), (0, seq - logical_sequence), (0, 0)], value=0.0)
+            if len(rows) == batch:
+                all_attention = attn
+            else:
+                for index, row in enumerate(rows):
+                    outputs[row] = attn[index : index + 1] if len(rows) > 1 else attn
+        if self.sliding and return_history:
+            for row, length in enumerate(lengths):
+                tails = []
+                for j, value in enumerate((k, v)):
+                    live = value[row : row + 1, :, :length, :]
+                    joined = ttnn.concat([histories[row][j], live], dim=2) if histories[row] is not None else live
+                    tails.append(joined[:, :, max(0, joined.shape[2] - self.window - self.PAGE_SIZE) :, :])
+                next_histories[row] = tuple(tails)
+            del live, joined, value, tails
+        del q, k, v, histories
+        attn = all_attention if len(groups) == 1 else ttnn.concat(outputs, dim=0)
+        if len(groups) == 1:
+            del all_attention
+        joined = self._concat_heads(attn)
+        del attn, outputs
+        joined = ttnn.reshape(joined, [1, 1, total, joined.shape[-1]])
+        local = self._pref_linear(joined, "o", sequence_hint=hint)
+        del joined
+        reduced = self._reduce(local, x.shape[-1], batch=batch)
+        del local
+        post = self._resnorm(reduced, "post_attention_layernorm", False)
+        del reduced
+        residual = ttnn.add(x, post, dtype=self.residual_dtype)
+        del post
+        result = self._prefill_mlp(residual, sequence_hint=hint, batch=batch)
+        return (result, next_histories) if return_history else result
+
+    def _prefill_batched_stream(
+        self,
+        x,
+        *,
+        batch,
+        page_table,
+        kv_cache,
+        start_pos,
+        histories,
+        logical_lengths,
+        return_history,
+        fill_page_table,
+        batch_indices,
+    ):
+        """Bound packed activation work while advancing every request per layer."""
+        seq = x.shape[2] // batch
+        if x.shape[2] > 8192 or seq % self.PAGE_SIZE:
+            raise ValueError("Batched stream exceeds the 8192 aggregate padded-token budget")
+        if self.sliding and batch * min(seq, self.PREFILL_CHUNK) > self.PREFILL_BATCH_ROWS:
+            raise ValueError("Batched streaming must preserve whole native sliding-attention chunks")
+        lengths = [seq] * batch if logical_lengths is None else list(logical_lengths)
+        if any((length + 127) // 128 * 128 != seq for length in lengths):
+            raise ValueError("Long batched spans must occupy the same padded span")
+        starts = [start_pos] * batch if isinstance(start_pos, int) else list(start_pos)
+        tails = [None] * batch if histories is None else list(histories)
+        parts = [[] for _ in range(batch)]
+        # Native BF16 reduce-scatter alternates reduction order every 256
+        # sequence rows. Keep every nonfinal slice at the original phase.
+        chunk = min(1024, self.PREFILL_BATCH_ROWS // (batch * 256) * 256)
+        if chunk == 0:
+            raise ValueError("Streaming prefill needs at least 256 packed rows per request")
+        begin = 0
+        while begin < seq:
+            native_begin = begin // self.PREFILL_CHUNK * self.PREFILL_CHUNK
+            end = min(seq, begin + chunk, native_begin + self.PREFILL_CHUNK)
+            span = end - begin
+            inp = ttnn.concat([x[:, :, row * seq + begin : row * seq + end, :] for row in range(batch)], dim=2)
+            previous = []
+            for tail in tails:
+                previous.append(
+                    tuple(t[:, :, max(0, t.shape[2] - 1024) :, :] for t in tail) if tail is not None else None
+                )
+            result, tails = self.prefill_batched(
+                inp,
+                batch=batch,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                start_pos=[position + begin for position in starts],
+                histories=previous,
+                logical_lengths=[min(length - begin, span) for length in lengths],
+                return_history=True,
+                fill_page_table=fill_page_table[:, begin // 128 : end // 128] if fill_page_table is not None else None,
+                batch_indices=batch_indices,
+                sequence_hint=min(self.PREFILL_CHUNK, seq - native_begin),
+            )
+            for row in range(batch):
+                parts[row].append(result[:, :, row * span : (row + 1) * span, :])
+            begin = end
+        result = ttnn.concat([ttnn.concat(part, dim=2) if len(part) > 1 else part[0] for part in parts], dim=2)
+        return (result, tails) if return_history else result
 
     def prefill_forward(
         self, x, *, page_table, kv_cache, consume_input=False, start_pos=0, history=None, return_history=False
