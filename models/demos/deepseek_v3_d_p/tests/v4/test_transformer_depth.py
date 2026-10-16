@@ -57,9 +57,9 @@ _HEAD = "head.weight"
 _PRO_SPLIT = 36  # first layer of the second Pro tail process
 _HANDOFF = Path(os.getenv("V4_DEPTH_HANDOFF_DIR", "generated/v4_depth_handoff")) / "pro"
 # The last layer is graded at its own floor: its PCC is carried by a few tokens whose norm is
-# hundreds of times the median. It measures Flash L42 0.5919, Pro L60 0.7457 to 0.7581, and moves by
-# about 0.01 across hosts and bases.
-_LAST_LAYER_FLOOR = {DeepSeekV4FlashConfig: 0.58, DeepSeekV4ProConfig: 0.73}
+# hundreds of times the median. It measures Flash L42 0.5919 to 0.6348 and Pro L60 0.7457 to 0.7581
+# across hosts and bases.
+_LAST_LAYER_FLOOR = {DeepSeekV4FlashConfig: 0.62, DeepSeekV4ProConfig: 0.73}
 
 _GALAXY = [p for p in mesh_params(DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE) if p.id == "torus-xy-8x4"]
 
