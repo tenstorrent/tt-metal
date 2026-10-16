@@ -31,7 +31,7 @@ def test_trace_exec_buf_end_race(mesh_device):
 
     # The hang needs a short device's EXEC_BUF_END near the start of a 16 KB cmddat_q chunk (2048 ops is one
     # 256 KB lap) and the next host commands inside the in-flight read, so sweep both the op count and the
-    # number of host writes between replays.
+    # number of host writes between replays. The sweep is tuned to BH Galaxy; on WH Galaxy it passes without the fix.
     for n in range(2032, 2068, 4):
         ops(n)
         ttnn.synchronize_device(mesh_device)

@@ -59,7 +59,7 @@
   cmd: pytest tests/ttnn/distributed/test_trace_exec_buf_end_race.py
   skus:
     bh_galaxy:
-      timeout: 5
+      timeout: 2
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
   budget_type: integration
