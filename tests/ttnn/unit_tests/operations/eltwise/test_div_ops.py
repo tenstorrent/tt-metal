@@ -415,24 +415,30 @@ def test_fmod_nan(testing_dtype, device):
 
 def _opposite_sign_exact_multiples(torch_dtype, count, seed=0):
     """Pairs (a, b) with a = n * |b| exactly representable in torch_dtype and
-    sign(a) != sign(b), so remainder(a, b) is exactly 0. Deterministic (seeded)."""
+    sign(a) != sign(b), so remainder(a, b) is exactly 0. Deterministic (seeded).
+    n is drawn first and b gets at most (precision - n.bit_length()) significant
+    bits, so n * b always fits the dtype's significand and every draw is exact."""
+    precision, max_n = (24, 4096) if torch_dtype == torch.float32 else (8, 64)
     gen = torch.Generator().manual_seed(seed)
+    n = torch.randint(2, max_n, (count,), generator=gen)
+    exponent = torch.randint(-3, 18, (count,), generator=gen)
     a_vals, b_vals = [], []
-    while len(a_vals) < count:
-        mantissa = 1.0 + torch.rand(1, generator=gen, dtype=torch.float64).item()
-        exponent = int(torch.randint(-3, 18, (1,), generator=gen).item())
-        b = torch.tensor(mantissa * 2.0**exponent, dtype=torch_dtype).double().item()
-        n = int(torch.randint(2, 4096 if torch_dtype == torch.float32 else 200, (1,), generator=gen).item())
-        a = torch.tensor(n * b, dtype=torch_dtype).double().item()
-        if a != n * b:
-            continue  # n * b is not exact in this dtype
-        if len(a_vals) % 2 == 0:
+    for i in range(count):
+        b_bits = precision - int(n[i]).bit_length()
+        significand = int(torch.randint(2 ** (b_bits - 1), 2**b_bits, (1,), generator=gen).item())
+        b = significand * 2.0 ** (int(exponent[i]) - b_bits + 1)
+        a = int(n[i]) * b
+        if i % 2 == 0:
             a_vals.append(a)
             b_vals.append(-b)
         else:
             a_vals.append(-a)
             b_vals.append(b)
-    return torch.tensor(a_vals, dtype=torch_dtype), torch.tensor(b_vals, dtype=torch_dtype)
+    a_tensor = torch.tensor(a_vals, dtype=torch_dtype)
+    b_tensor = torch.tensor(b_vals, dtype=torch_dtype)
+    assert torch.equal(a_tensor.double(), torch.tensor(a_vals, dtype=torch.float64))
+    assert torch.equal(b_tensor.double(), torch.tensor(b_vals, dtype=torch.float64))
+    return a_tensor, b_tensor
 
 
 # remainder(a, b) must be exactly 0 when a is an exact multiple of b. The kernel computes
