@@ -429,7 +429,7 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
             report_e2e_metrics(
                 "deepseek-v3-tg",
                 {"decode_t/s/u": float(decode_tps_u)},
-                batch_size=case["max_users_per_row"],
+                batch_size=case["max_users_per_row"] * int(mesh_shape[0]),
                 model_type="llm",
             )
 

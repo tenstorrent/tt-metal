@@ -376,7 +376,8 @@ def run_panoptic_deeplab_demo(
     from models.demos.utils.common_demo_utils import report_vision_fps
 
     report_name = f"{model_category}-traced" if use_trace else model_category
-    report_vision_fps(report_name, samples_per_second, num_inputs)
+    # The model runs with batch_size=1; num_inputs are separate requests, not one batch.
+    report_vision_fps(report_name, samples_per_second, 1)
     logger.info(f"  Total execution time: {total_execution_time * 1e6:.2f} μs ({total_execution_time * 1e3:.2f} ms)")
     logger.info(f"  Number of samples: {num_inputs}")
     logger.info("=" * 80)
