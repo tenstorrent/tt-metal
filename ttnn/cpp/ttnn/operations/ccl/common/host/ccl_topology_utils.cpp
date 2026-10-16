@@ -405,6 +405,15 @@ std::optional<TensorTopology> all_gather_output_topology(
         require_contiguous_gather);
 }
 
+// all_reduce reuses the all_gather rule on purpose. A label records where bytes live, not the arithmetic that
+// produced them: an all_gather along `cluster_axis` leaves every device on that axis holding the same bytes (the
+// concatenated pieces) and so does an all_reduce (the sum), while neither touches the other axes. Both therefore read
+// as Replicate on `cluster_axis` with every other placement kept (whole mesh: Replicate everywhere), which is what
+// all_gather_output_topology computes, including the collapsed-label reading and the coverage check. The contiguity
+// requirement is off because it guards the *order* in which a gather concatenates a dim sharded on more than one mesh
+// axis (gathering along an outer axis would interleave pieces an inner axis keeps apart); a sum has no concatenation
+// order, so a dim sharded twice reduces along either axis. `gathered_dim` is consulted only by that check, so the
+// value passed here is irrelevant.
 std::optional<TensorTopology> all_reduce_output_topology(
     const TensorTopology& in, std::optional<uint32_t> cluster_axis, const MeshShape& mesh_shape, uint32_t tensor_rank) {
     return all_gather_output_topology(
@@ -416,6 +425,12 @@ std::optional<TensorTopology> all_reduce_output_topology(const Tensor& input, st
         input.tensor_topology(), cluster_axis, mesh_shape_of(input, "all_reduce"), rank_of(input));
 }
 
+// all_broadcast reuses the all_gather rule on purpose, once per output. The op returns one tensor per device on
+// `cluster_axis`; output i holds device i's input on every device of that axis, so each output has the same bytes
+// on every device there (Replicate on `cluster_axis`, every other placement kept; whole mesh: Replicate everywhere),
+// which is the all_gather label; the hook applies it to all `ring_size` outputs. Nothing is concatenated, so the
+// contiguity check (the order a gather concatenates a dim sharded on more than one mesh axis) does not apply, and
+// `gathered_dim`, consulted only by that check, is irrelevant.
 std::optional<TensorTopology> all_broadcast_output_topology(
     const TensorTopology& in, std::optional<uint32_t> cluster_axis, const MeshShape& mesh_shape, uint32_t tensor_rank) {
     return all_gather_output_topology(
