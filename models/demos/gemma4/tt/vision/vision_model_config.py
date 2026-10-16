@@ -93,8 +93,21 @@ class VisionModelArgs(ModelArgs):
         # all-reduce so activations stay replicated at the block boundaries. Batch is
         # always 1 — callers loop over users.
         self.tp = self.cluster_shape[1] if self.cluster_shape else 1
+        # The tower is never laid out in the base class's Galaxy 2-D scheme (heads over one axis,
+        # K over the other): on a 2-D mesh it is TP over axis 1 and replicated over axis 0, so the
+        # Galaxy-specific program configs below must not engage.
+        self.is_galaxy = False
         if self.tp > 1:
-            self.mesh_config = mesh_config or MeshConfig(self.mesh_device.shape, decode=ModeConfig(tp=self.tp))
+            # A caller's mesh config (the text model's, possibly TP on axis 0 with fractured weights)
+            # only applies when it describes the same split; otherwise the tower builds its own.
+            if (
+                mesh_config is None
+                or getattr(mesh_config, "tp", None) != self.tp
+                or getattr(mesh_config, "tp_axis", 1) != 1
+                or bool(getattr(mesh_config, "weight_fracture", False))
+            ):
+                mesh_config = MeshConfig(self.mesh_device.shape, decode=ModeConfig(tp=self.tp))
+            self.mesh_config = mesh_config
             self.ccl_manager = ccl_manager or CCLManager(self.mesh_device)
         else:
             self.mesh_config = None

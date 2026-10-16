@@ -19,8 +19,10 @@ adds, pooler and projector need no distributed variants.
 """
 
 import math
+import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -510,6 +512,12 @@ class VisionAttention(LightweightModule):
 
         ttnn.deallocate(x_11SH)
 
+        if os.environ.get("GEMMA4_VISION_DEBUG") == "1":
+            logger.info(
+                f"vision attention prefill: mesh={tuple(self.mesh_device.shape)} tp={self.num_devices_per_group} "
+                f"n_local_heads={self.n_local_heads} head_dim={self.head_dim} padded_head_dim={self.padded_head_dim} "
+                f"wqkv={tuple(self.wqkv.shape)} xqkv_fused={tuple(xqkv_fused.shape)}"
+            )
         # split qkv into heads
         (
             q_heads_1QSD_pre_rot,
