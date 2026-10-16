@@ -29,7 +29,7 @@ from collections import deque, namedtuple
 from loguru import logger
 
 # Wire order of LayerCompletionQueue.try_pop().
-Completion = namedtuple("Completion", "slot_id pos_start pos_end layer_start layer_end")
+Completion = namedtuple("Completion", "slot_id pos_start pos_end layer_start layer_end host_timestamp_ns")
 
 
 def chunk_key(c: Completion) -> tuple:

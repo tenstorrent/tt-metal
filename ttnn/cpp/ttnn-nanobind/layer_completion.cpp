@@ -55,25 +55,35 @@ void bind_layer_completion_api(nb::module_& mod) {
                uint32_t pos_end,
                uint32_t layer_start,
                uint32_t layer_end) {
-                return self.try_push(LayerCompletionMessage{slot_id, pos_start, pos_end, layer_start, layer_end, 0u});
+                return self.try_push(LayerCompletionMessage{
+                    slot_id,
+                    pos_start,
+                    pos_end,
+                    layer_start,
+                    layer_end,
+                    0u,
+                    tt::tt_metal::internal::layer_completion_host_timestamp_ns()});
             },
             nb::arg("slot_id"),
             nb::arg("pos_start"),
             nb::arg("pos_end"),
             nb::arg("layer_start"),
             nb::arg("layer_end"),
-            "Producer push. Returns False (no write) when the ring is full.")
+            "Producer push, stamped with the host time. Returns False (no write) when the ring is full.")
         .def(
             "try_pop",
             [](LayerCompletionQueue& self)
-                -> std::optional<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>> {
+                -> std::optional<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t>> {
                 LayerCompletionMessage m{};
                 if (!self.try_pop(m)) {
                     return std::nullopt;
                 }
-                return std::make_tuple(m.slot_id, m.pos_start, m.pos_end, m.layer_start, m.layer_end);
+                return std::make_tuple(
+                    m.slot_id, m.pos_start, m.pos_end, m.layer_start, m.layer_end, m.host_timestamp_ns);
             },
-            "Consumer pop. Returns (slot_id, pos_start, pos_end, layer_start, layer_end) or None when empty.")
+            "Consumer pop. Returns (slot_id, pos_start, pos_end, layer_start, layer_end, host_timestamp_ns) or None "
+            "when "
+            "empty.")
         .def("shutdown", &LayerCompletionQueue::shutdown, "Idempotent teardown. Owner unlinks; connector unmaps.")
         .def_prop_ro("shm_name", &LayerCompletionQueue::shm_name)
         .def_prop_ro("completions_per_chunk", &LayerCompletionQueue::completions_per_chunk);

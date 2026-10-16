@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -30,10 +31,12 @@ struct LayerCompletionMessage {
     uint32_t layer_end = 0;
     // 0 for completions; kLayerCompletionSentinel for end-of-stream.
     uint32_t flags = 0;
+    // Host wall clock (ns since the Unix epoch) when a host first saw the completion; forwarding keeps it.
+    uint64_t host_timestamp_ns = 0;
 };
 
 // Offsets are shared across processes, so drift is a compile error.
-static_assert(sizeof(LayerCompletionMessage) == 24, "LayerCompletionMessage wire size changed");
+static_assert(sizeof(LayerCompletionMessage) == 32, "LayerCompletionMessage wire size changed");
 static_assert(std::is_trivially_copyable_v<LayerCompletionMessage>);
 static_assert(std::is_standard_layout_v<LayerCompletionMessage>);
 static_assert(offsetof(LayerCompletionMessage, slot_id) == 0);
@@ -42,8 +45,15 @@ static_assert(offsetof(LayerCompletionMessage, pos_end) == 8);
 static_assert(offsetof(LayerCompletionMessage, layer_start) == 12);
 static_assert(offsetof(LayerCompletionMessage, layer_end) == 16);
 static_assert(offsetof(LayerCompletionMessage, flags) == 20);
+static_assert(offsetof(LayerCompletionMessage, host_timestamp_ns) == 24);
 
 inline constexpr uint32_t kLayerCompletionSentinel = 0xFFFFFFFFu;
+
+inline uint64_t layer_completion_host_timestamp_ns() noexcept {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count());
+}
 
 inline bool is_layer_completion_sentinel(const LayerCompletionMessage& m) noexcept {
     return m.flags == kLayerCompletionSentinel;

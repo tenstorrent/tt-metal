@@ -34,9 +34,9 @@ class FakeRing:
         return self._q.popleft() if self._q else None
 
 
-def msg(layer_start, layer_end, *, slot_id=0, pos_start=0, pos_end=128):
+def msg(layer_start, layer_end, *, slot_id=0, pos_start=0, pos_end=128, host_timestamp_ns=0):
     """A wire-order tuple, as LayerCompletionQueue.try_pop() returns."""
-    return (slot_id, pos_start, pos_end, layer_start, layer_end)
+    return (slot_id, pos_start, pos_end, layer_start, layer_end, host_timestamp_ns)
 
 
 def per_layer(layers=range(NUM_LAYERS), **kw):
