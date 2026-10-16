@@ -28,7 +28,14 @@ import os
 import torch
 
 MUTATE_STEP_ENV = "BRINGUP_MUTATE_STEP"
-FLOAT_KINDS = ("scale1.02", "scale0.98", "halfswap", "rowshift", "quarterzero", "noise1e-2", "sign")
+FLOAT_KINDS = (
+    "scale1.02",
+    "scale0.98",
+    "halfswap",
+    "rowshift",
+    "quarterzero",
+    "sign",
+)  # noise1e-2 dropped (owner, F90): within the noise limit by design
 INT_KINDS = ("idxshift",)
 KINDS = FLOAT_KINDS + INT_KINDS
 CONTROL_KINDS = ("bf16",)
