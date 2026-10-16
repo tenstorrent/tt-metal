@@ -110,6 +110,7 @@ class ServingPrefillTraceTests(unittest.TestCase):
             ],
             self.ops,
         )
+        events = self.events
         self.gen = FakeGenerator(
             mesh=object(),
             cache=SimpleNamespace(batch_size=4, capacity=8192, num_pages=1024, layers=[]),
@@ -118,6 +119,7 @@ class ServingPrefillTraceTests(unittest.TestCase):
                 prefill_selectors=lambda *, length: SimpleNamespace(
                     length=length, valid=None, update=lambda valid: None
                 ),
+                prime_conv_selectors=lambda max_batch: events.append(("prime", max_batch)),
             ),
             page_table=SimpleNamespace(shape=(4, 256)),
             _slot_prefix_len=[0] * 4,
@@ -536,6 +538,10 @@ class ServingPrefillTraceTests(unittest.TestCase):
                 self.assertIsNone(self.gen.prefill_sample_input)
                 self.assertEqual(self.events[0], ("release", "old-sample"))
                 self.assertIs(self.gen.cache, replacement)
+                # The selectors are persistent buffers, so they may only be built once the
+                # traces holding addresses are gone.
+                self.assertIn(("prime", 4), self.events)
+                self.assertGreater(self.events.index(("prime", 4)), 0)
 
 
 class ServingPrefillAdapterTests(unittest.TestCase):
