@@ -1463,7 +1463,14 @@ class Orchestrator:
             # The work may already exist (e.g. R.3 once R.2's reference is written, a swap test once its components
             # pass): try the gate before starting an agent.
             existing = any((self.spec.repo / p).exists() for p in task.get("paths") or [])
-            pre = self.gate(tid) if existing and task.get("precheck", True) else None
+            # F87: a task resumed after a stop (a fix job included) gates first: its work may be done meanwhile
+            hist = self.led.state().get(tid, {}).get("history") or []
+            resumed = bool(hist) and hist[-1].get("status") == "RESUMED"
+            pre = self.gate(tid) if existing and (task.get("precheck", True) or resumed) else None
+            if resumed and task.get("step") == OV.FIX_STEP and pre is not None and pre.verdict != "PASS":
+                # its agents' work was already judged: a person or the overseer decides, never another agent
+                self.stop_task(task, "resumed fix job still fails its gate; the overseer decides (no agent)")
+                return STOPPED
             if (pre is None or pre.verdict != "PASS") and not self.attempt_loop(
                 task, role, self.failure_text(pre) if pre else ""
             ):
