@@ -531,12 +531,10 @@ KDA_PREP_HELPER void prepare_gate_factors(
     matmul_blocks<Ct, Ct, Kt, false>(prefix_sum_mask, g, centered_decay);
     centered_decay.wait_front(chunk_key_tiles);
 
-    matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, g, g_last);  // replicated G_last
-    g_last.wait_front(chunk_key_tiles);
-    g.pop_front(chunk_key_tiles);
-
-    multiply_by_half(g_last, anchor_g, chunk_key_tiles);  // anchor = G_last/2
+    // The sum-broadcast matrix carries half the gate scale, so this is the anchor G_last/2, replicated.
+    matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, g, anchor_g);
     anchor_g.wait_front(chunk_key_tiles);
+    g.pop_front(chunk_key_tiles);
 
     {
         DataflowBuffer& centered_g = anchor_decay;
@@ -600,7 +598,6 @@ KDA_PREP_HELPER void prepare_final_decay_rows(
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     square_tiles(anchor_decay, final_decay_rows, chunk_key_tiles);
     final_decay_rows.wait_front(chunk_key_tiles);
-    g_last.pop_front(chunk_key_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt>

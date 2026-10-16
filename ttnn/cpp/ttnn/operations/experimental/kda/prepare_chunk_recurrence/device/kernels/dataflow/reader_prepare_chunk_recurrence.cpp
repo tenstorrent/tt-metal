@@ -15,7 +15,8 @@
 
 // Fill one tile of `ones` with `value_bits` and one tile of `tril` with it on and below the diagonal (an inclusive
 // lower-triangular matrix): seed one face row, then replicate it with local NoC reads.
-template <uint32_t value_bits>
+// ones_bits fills the all-ones matrix (default value_bits); the lower-triangular one always carries value_bits.
+template <uint32_t value_bits, uint32_t ones_bits = value_bits>
 inline void fill_ones_and_tril(DataflowBuffer& ones, DataflowBuffer& tril) {
     constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
     constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
@@ -57,6 +58,19 @@ inline void fill_ones_and_tril(DataflowBuffer& ones, DataflowBuffer& tril) {
         .noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = tril.get_write_ptr()};
     noc.async_read(self, tril, face_bytes, tril_source, {.offset_bytes = bottom_right_face * face_bytes});
     noc.async_read_barrier();
+    if constexpr (ones_bits != value_bits) {
+        for (uint32_t column = 0; column < face_width; ++column) {
+            ones_tile[column] = ones_bits;
+        }
+        for (uint32_t row = 1; row < face_height; ++row) {
+            noc.async_read(self, ones, row_bytes, ones_source, {.offset_bytes = row * row_bytes});
+        }
+        noc.async_read_barrier();
+        for (uint32_t face = 1; face < faces_per_tile; ++face) {
+            noc.async_read(self, ones, face_bytes, ones_source, {.offset_bytes = face * face_bytes});
+        }
+        noc.async_read_barrier();
+    }
     tril.push_back(1);
     ones.push_back(1);
 }
@@ -242,7 +256,9 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         // the cumulative sum applies it without a separate pass over the gate (exactly for any BF16-representable
         // scale, since the HiFi4 product of BF16 g and the scale is exact in FP32).
         static_assert(Ct == 1, "fill_ones_and_tril fills one tile per chunk matrix");
-        fill_ones_and_tril<GATE_SCALE_BITS>(gate_ones, gate_tril);
+        // The sum-broadcast matrix carries half the scale: the matmul yields the anchor G_last / 2 directly (an exact
+        // power-of-two scaling of the same FP32 sums).
+        fill_ones_and_tril<GATE_SCALE_BITS, GATE_SCALE_BITS - (1u << 23)>(gate_ones, gate_tril);
         fill_inverse_constants(eye, block_masks);
         constants_pending = false;
     };
