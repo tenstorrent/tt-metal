@@ -12,6 +12,7 @@ from models.experimental.bevformer.model_config import (
     CODE_XY,
     CODE_Z,
     DECODER_NUM_LAYERS,
+    MAX_NUM,
     NUM_CLASSES,
     NUM_QUERY,
     POST_CENTER_RANGE,
