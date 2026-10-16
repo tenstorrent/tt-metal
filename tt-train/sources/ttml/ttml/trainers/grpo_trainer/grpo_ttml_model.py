@@ -236,9 +236,7 @@ def _build_qwen3(tf_config: TransformerConfig, device_config: DeviceConfig, mode
     if fsdp_enabled and bool(device_config.lazy_parameter_init):
         with ttml.lazy_init():
             tt_model = Qwen3(qwen_config)
-        for block in tt_model.blocks:
-            ttml.fsdp.fully_shard(block, reshard_after_forward=True)
-        ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True)
+        _fully_shard(tt_model, device_config.fsdp_replicate_params)
         ttml.materialize_module(tt_model)
 
         hf_state_dict = load_hf_state_dict(model_source)
@@ -252,11 +250,22 @@ def _build_qwen3(tf_config: TransformerConfig, device_config: DeviceConfig, mode
         del hf_state_dict
 
         if fsdp_enabled:
-            for block in tt_model.blocks:
-                ttml.fsdp.fully_shard(block, reshard_after_forward=True)
-            ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True)
+            _fully_shard(tt_model, device_config.fsdp_replicate_params)
 
     return tt_model, tokenizer
+
+
+def _fully_shard(tt_model: Any, replicate: list[str]) -> None:
+    """Wrap each block, then the root, with FSDP; params matching ``replicate`` are not sharded."""
+    for block in tt_model.blocks:
+        ttml.fsdp.fully_shard(block, reshard_after_forward=True, replicate=replicate)
+    ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True, replicate=replicate)
+    replicated = ttml.fsdp.replicated_parameters(tt_model)
+    if replicated:
+        logging.info("FSDP: %d parameter(s) kept replicated", len(replicated))
+    unmatched = ttml.fsdp.unmatched_replicate_patterns(tt_model, replicate)
+    if unmatched:
+        logging.warning("fsdp_replicate_params: no parameter matches %s", unmatched)
 
 
 # --------------------------------------------------------------
