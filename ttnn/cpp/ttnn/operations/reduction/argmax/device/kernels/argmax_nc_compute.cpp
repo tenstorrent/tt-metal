@@ -31,8 +31,9 @@
  * Both the max-value and argmax updates run through `where_tile`, just with
  * different DataFormat template parameters (Float32 / Int32) — same SFPU op,
  * different load/store mod. Using a single `where_tile_init()` avoids an
- * SFPCONFIG macro collision: `binary_max_min_init` and `where_tile_init` both
- * write SFPCONFIG macros 0 and 1, so they can't coexist in the same kernel.
+ * SFPCONFIG collision: `binary_max_min_init` and `where_tile_init` both
+ * write SFPCONFIG macro 2 and the Misc register, so they can't coexist in the
+ * same kernel.
  *
  *   mask   = (new_val > max_val)                            // gt_binary_tile, raw 0/1
  *   max    = where<Float32>(mask, new_val, max)             // fp32 ternary
@@ -66,8 +67,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_val, dfb_out);
     copy_init(dfb_val);
-    // SFPU op inits. `where_tile_init` and `binary_max_min_init` BOTH install
-    // SFPCONFIG macros 0 and 1 with different semantics, so they cannot be
+    // SFPU op inits. `where_tile_init` and `binary_max_min_init` BOTH write
+    // SFPCONFIG macro 2 and Misc with different semantics, so they cannot be
     // active simultaneously. We sidestep the collision by using `where_tile`
     // for BOTH the max update (over fp32 values) and the argmax update (over
     // int32 indices) — same op, only the DataFormat template parameter differs.
