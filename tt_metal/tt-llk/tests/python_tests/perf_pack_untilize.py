@@ -5,6 +5,7 @@ import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    DestAccumulation,
     PerfRunType,
 )
 from helpers.param_config import (
@@ -15,6 +16,7 @@ from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
+    PACK_UNTILIZE_DATUM_SIZES,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -84,7 +86,12 @@ def test_perf_pack_untilize(
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[generate_input_dim(dimensions, dimensions, block_ct_dim)],
+        templates=[
+            generate_input_dim(dimensions, dimensions, block_ct_dim),
+            PACK_UNTILIZE_DATUM_SIZES(
+                formats, DestAccumulation.No, formats.input_format.is_32_bit()
+            ),
+        ],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(32)],
         variant_stimuli=StimuliConfig(
             None,

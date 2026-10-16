@@ -27,7 +27,7 @@ template <
     bool narrow_row,
     std::uint32_t row_num_datums,
     bool dense,
-    bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool pace_32bit_rows = true>
 ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::PACK>(ocb, call_line);
@@ -39,8 +39,19 @@ ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __buil
     }
 #endif
     PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(ocb)));
+#ifdef ARCH_BLACKHOLE
+    PACK((llk_pack_untilize_init<
+          block_ct_dim,
+          full_ct_dim,
+          false /*diagonal*/,
+          narrow_row,
+          row_num_datums,
+          dense,
+          pace_32bit_rows>(ocb)));
+#else
     PACK((
         llk_pack_untilize_init<block_ct_dim, full_ct_dim, false /*diagonal*/, narrow_row, row_num_datums, dense>(ocb)));
+#endif
     PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>(ocb)));
 #else
     static_assert(narrow_row == false, "non-default narrow_row not supported on Quasar");
@@ -117,6 +128,7 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
  * | Template   | dense           | Packs two 2 face tiles in a single 4 face region    | bool      | true/false                | False (default false) |
  * | Template   | configure_remap      | Whether to (re)configure BH DEST remap (BH only)    | bool      | true/false                | False (default true)  |
  * | Template   | is_fp32_dest_acc_en  | DEST accumulation mode                              | bool      | true/false                | False                 |
+ * | Template   | pace_32bit_rows      | Pace 32-bit rows in blocks of three (BH only)       | bool      | true/false                | False (default true)  |
  * | Function   | ocb                  | Output circular buffer identifier                   | uint32_t  | 0 to 31                   | True                  |
  *
  * NOTE: When a row is processed in multiple blocks, every block must use the same block_ct_dim;
@@ -131,7 +143,8 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense = false,
     bool configure_remap = true,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool pace_32bit_rows = true>
 ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     pack_untilize_detail::pack_untilize_dest_init_impl<
@@ -141,7 +154,8 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_L
         row_num_datums,
         dense,
         configure_remap,
-        is_fp32_dest_acc_en>(ocb, call_line);
+        is_fp32_dest_acc_en,
+        pace_32bit_rows>(ocb, call_line);
 }
 
 // clang-format off
@@ -216,6 +230,23 @@ ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
         icb, ocb, call_line);
 }
 
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_UNPACK)
+// A block row of 16-bit, 8-bit or block-float tiles takes one unpack context; 32-bit tiles read faster unpacked one by one.
+template <uint32_t block_ct_dim>
+ALWI void pack_untilize_unpack_block_row(uint32_t icb) {
+    const uint32_t operand_id = get_operand_id(icb);
+    const uint32_t src_format = unpack_src_format[operand_id];
+    if (src_format == static_cast<uint32_t>(DataFormat::Float32) || src_format == static_cast<uint32_t>(DataFormat::Int32) ||
+        src_format == static_cast<uint32_t>(DataFormat::UInt32)) {
+        for (uint32_t c = 0; c < block_ct_dim; ++c) {
+            llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, c);
+        }
+    } else {
+        llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(icb, 0, block_ct_dim);
+    }
+}
+#endif
+
 // clang-format off
 /**
  * Performs the untilize operation on a block of tiles. Loops over the provided block size. The block is characterized
@@ -245,18 +276,40 @@ ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
  * is computed as block_c_index * block_ct_dim.
  */
 // clang-format on
-template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+// math_clears_dest (Blackhole): the math thread clears each section and the pack release does not
+// (llk_pack_common_api.h).
+template <
+    uint32_t block_ct_dim = 8,
+    uint32_t full_ct_dim = block_ct_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool math_clears_dest = false>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
     LLK_SAN_FUNCTION();
+#ifdef ARCH_BLACKHOLE
+    constexpr bool unpack_block = block_ct_dim > 2;
+#else
+    constexpr bool unpack_block = false;
+#endif
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
+#ifdef ARCH_BLACKHOLE
+        MATH((llk_math_wait_for_dest_available<math_clears_dest>()));
+#else
         MATH((llk_math_wait_for_dest_available()));
+#endif
+#ifdef ARCH_BLACKHOLE
+        if constexpr (unpack_block) {
+            UNPACK((pack_untilize_unpack_block_row<block_ct_dim>(icb)));
+        }
+#endif
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
 #ifndef ARCH_QUASAR
-            UNPACK((llk_unpack_A<
-                    BroadcastType::NONE,
-                    false /*acc_to_dest*/,
-                    EltwiseBinaryReuseDestType::NONE,
-                    UnpackToDestEn>(icb, c)));
+            if constexpr (!unpack_block) {
+                UNPACK((llk_unpack_A<
+                        BroadcastType::NONE,
+                        false /*acc_to_dest*/,
+                        EltwiseBinaryReuseDestType::NONE,
+                        UnpackToDestEn>(icb, c)));
+            }
             MATH((
                 llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
                     c, icb)));
@@ -272,7 +325,11 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
         MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
         PACK((llk_packer_wait_for_math_done()));
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
+#ifdef ARCH_BLACKHOLE
+        PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, math_clears_dest, true>()));
+#else
         PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
+#endif
     }
 }
 
