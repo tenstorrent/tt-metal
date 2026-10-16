@@ -1212,6 +1212,13 @@ tasks:
     - engram_rows
     - engram_kv
     layer: 1
+  frozen:
+    at: '2026-10-16T02:18:31'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_02_engram_kv.py: b4ff7a24fd1235f7c4ab7c8aaa98644e5d0822e8f03fb6c4e89452d35d110d02
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.swa_engram.engram_add
   title: swa_engram engram_add (residual) on device, layer 1
   step: implement
