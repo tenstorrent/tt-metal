@@ -101,6 +101,8 @@
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2*Fixture.*"
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    # Metal 2.0 ProgramSpec kernels get the fabric kernel defines (skips below two chips, so it runs here).
+    ./build/test/tt_metal/unit_tests_api --gtest_filter="FabricConfigs/ProgramSpecFabricDefinesHWTest.*"
   skus:
     bh_loudbox:
       timeout: 15
