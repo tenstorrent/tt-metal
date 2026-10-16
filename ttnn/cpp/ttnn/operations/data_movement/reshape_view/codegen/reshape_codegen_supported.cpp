@@ -147,18 +147,25 @@ bool native_runs_two_kernels(uint32_t new_stick, const tt::tt_metal::MemoryConfi
 
 // Merges issue every read from one RISC on one NOC while native spreads them over two. From L1 a read of
 // kMaxReadSize is alone between barriers, and a 32 KB new stick is one push the writer waits on in full.
+constexpr uint32_t kSinglePushNewStick = 16 * kMaxReadSize;
+
 bool coalesced_l1_merge_native_faster(uint32_t piece, uint32_t new_stick) {
-    return piece >= kMaxReadSize || (2 * piece >= kMaxReadSize && new_stick >= 16 * kMaxReadSize);
+    return piece >= kMaxReadSize || (2 * piece >= kMaxReadSize && new_stick >= kSinglePushNewStick);
 }
 
 // Unaligned sticks are repacked by a RISC at a cost per byte; native pays a round trip per piece, so it wins from a
 // piece size set by that round trip and its kernel count. Merges pay a read round trip per piece, splits only a
-// staged write.
+// staged write. Fitted on Blackhole.
+constexpr uint32_t kMinNativeMergePieceTwoKernels = 40;
+constexpr uint32_t kMinNativeSplitPieceTwoKernels = 20;
+constexpr uint32_t kMinNativeMergePieceOneKernel = 128;
+constexpr uint32_t kMinNativeSplitPieceOneKernel = 40;
+
 uint32_t min_native_piece(bool two_kernels, bool merge) {
     if (two_kernels) {
-        return merge ? 40 : 20;
+        return merge ? kMinNativeMergePieceTwoKernels : kMinNativeSplitPieceTwoKernels;
     }
-    return merge ? 128 : 40;
+    return merge ? kMinNativeMergePieceOneKernel : kMinNativeSplitPieceOneKernel;
 }
 
 // Native hands each of its two kernels half of a core's source sticks; at two sticks per core each kernel moves one,
@@ -190,6 +197,10 @@ bool staged_native_faster(
            (!merge && paired_l1_split_native_faster(ratio, num_old_sticks, num_cores, output_mem_config));
 }
 
+// Slack native's row-major factory adds to each source read and destination slot.
+constexpr uint64_t kNativeSourceReadSlack = 128;
+constexpr uint64_t kNativeDestSlotSlack = 80;
+
 // Native's row-major kernel fits its minimum scratch in the static L1 window. Native sizes that scratch from live L1
 // and fails when it does not fit.
 bool native_rm_fits_l1(
@@ -201,8 +212,8 @@ bool native_rm_fits_l1(
     const uint64_t old_stick = static_cast<uint64_t>(input.logical_shape()[-1]) * elem;
     const uint64_t new_stick = static_cast<uint64_t>(logical_output_shape[-1]) * elem;
     // Per instance: two source pages padded to 64 B plus 128 B, one destination slot padded to 64 B plus 80 B.
-    const uint64_t per_kernel =
-        (2 * (((old_stick - 1) & ~uint64_t{63}) + 128)) + ((new_stick - 1) & ~uint64_t{63}) + 80;
+    const uint64_t per_kernel = (2 * (((old_stick - 1) & ~uint64_t{63}) + kNativeSourceReadSlack)) +
+                                ((new_stick - 1) & ~uint64_t{63}) + kNativeDestSlotSlack;
     const bool divisible = old_stick % new_stick == 0 || new_stick % old_stick == 0;
     const uint64_t kernels =
         divisible && native_runs_two_kernels(static_cast<uint32_t>(new_stick), output_mem_config) ? 2 : 1;
@@ -215,6 +226,8 @@ bool native_rm_fits_l1(
 constexpr uint32_t kWhMinDramMergePiece = 2048;
 constexpr uint32_t kWhMinL1MergePiece = 1024;
 constexpr uint32_t kWhMinUnderfilledSplitPiece = 20;
+// Blackhole's counterpart of kWhMinDramMergePiece; the reason is at its use in rm_native_faster.
+constexpr uint32_t kBhMinDramMergePiece = 256;
 
 // Whether an rm_native_faster verdict may be taken once the static fit is known. Native's scratch must fit, and the
 // stick program rm_native_faster was measured against must fit the static L1 window. When only the slab program
@@ -256,7 +269,7 @@ bool rm_native_faster(
         // Splits keep every short write in flight; native waits on each one. From 256 B a DRAM read is no longer
         // transaction-bound and the port's single read NOC caps it.
         if (input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM) {
-            return merge && piece >= (wormhole ? kWhMinDramMergePiece : 256);
+            return merge && piece >= (wormhole ? kWhMinDramMergePiece : kBhMinDramMergePiece);
         }
         if (wormhole) {
             return merge && piece >= kWhMinL1MergePiece;
