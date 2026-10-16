@@ -50,6 +50,43 @@ TT_ALWAYS_INLINE void configure_gathering()
 #endif
 }
 
+// Blackhole RISCs boot with the L1 data cache on, and its self invalidation every 128 transactions changes the timing
+// from launch to launch. Bit 3 turns it off, as the tt-metal firmware does (configure_l1_data_cache).
+TT_ALWAYS_INLINE void configure_l1_data_cache()
+{
+#if defined(ARCH_BLACKHOLE)
+    asm(R"ASM(
+        fence
+        li t1, 0x8
+        csrrs zero, 0x7c0, t1
+         )ASM" ::
+            : "t1");
+#endif
+}
+
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+// STREAM_SCRATCH_0 of overlay streams 0..3 (24 bits, host readable): TRISC completion flags in slots 0..2 and the
+// BRISC command counter in slot 3, so the host can wait on a kernel without reading its L1.
+namespace host_signal
+{
+#if defined(ARCH_WORMHOLE)
+constexpr std::uint32_t STREAM_SCRATCH_REG_INDEX = 248;
+#else
+constexpr std::uint32_t STREAM_SCRATCH_REG_INDEX = 36;
+#endif
+constexpr std::uint32_t NOC_OVERLAY_START_ADDR    = 0xFFB40000;
+constexpr std::uint32_t NOC_STREAM_REG_SPACE_SIZE = 0x1000;
+constexpr std::uint32_t BRISC_COUNTER_SLOT        = 3;
+
+TT_ALWAYS_INLINE void write([[maybe_unused]] std::uint32_t slot, [[maybe_unused]] std::uint32_t value)
+{
+#if !defined(TT_METAL_TTSIM) // ttsim models no overlay registers; the host polls L1 there
+    *reinterpret_cast<volatile std::uint32_t*>(NOC_OVERLAY_START_ADDR + slot * NOC_STREAM_REG_SPACE_SIZE + STREAM_SCRATCH_REG_INDEX * 4) = value;
+#endif
+}
+} // namespace host_signal
+#endif
+
 __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
 {
     asm volatile(
@@ -64,6 +101,7 @@ __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
 
     // Before any global constructor or Tensix instruction can run.
     configure_gathering();
+    configure_l1_data_cache();
 
     // Initialize .bss
     for (volatile std::uint32_t* p = (volatile std::uint32_t*)__ldm_bss_start; p < (volatile std::uint32_t*)__ldm_bss_end; p++)
