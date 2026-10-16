@@ -496,9 +496,11 @@ def test_remainder_opposite_sign_exact_multiple(testing_dtype, pairs, device):
 
 # Quotients of 2^24 and above: floor(a / b) can no longer be stepped by one in float, so the
 # overshoot correction has to fall back to subtracting b from the raw result. The non-multiple
-# pairs are the ones the kernel resolves at this magnitude (a / b rounds to the float just below
-# the true quotient, leaving |result| >= |b| once); remainder(419430432.0, 25.0) returned 32.0
-# instead of 7.0 without the fallback.
+# pairs are the ones the kernel resolves at this magnitude on Wormhole, where the reciprocal of 25
+# rounds down so a / b lands just below the true quotient, leaving |result| >= |b| once;
+# remainder(419430432.0, 25.0) returned 32.0 instead of 7.0 without the fallback. Blackhole seeds
+# its reciprocal differently and was not run locally; if its reciprocal of 25 rounds up these two
+# pairs land one above the quotient instead and Blackhole CI decides whether they hold there.
 @pytest.mark.parametrize(
     "testing_dtype, pairs",
     [
