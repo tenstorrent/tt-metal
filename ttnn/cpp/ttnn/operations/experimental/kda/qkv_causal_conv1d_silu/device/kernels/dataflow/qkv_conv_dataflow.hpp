@@ -4,8 +4,8 @@
 // Data-movement helpers shared by the qkv_causal_conv1d_silu kernels.
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/qkv_causal_conv1d_silu_layout.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
 #include "api/core_local_mem.h"
 #include "api/dataflow/noc.h"
 #include "experimental/kernel_args.h"

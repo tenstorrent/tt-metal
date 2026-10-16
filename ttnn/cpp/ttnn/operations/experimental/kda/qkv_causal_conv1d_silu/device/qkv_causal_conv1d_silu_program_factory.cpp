@@ -5,7 +5,6 @@
 
 #include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
 #include <algorithm>
-#include <limits>
 #include <vector>
 
 #include <internal/fabric.hpp>
@@ -22,7 +21,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
-#include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/qkv_causal_conv1d_silu_layout.hpp"
+#include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -74,6 +73,14 @@ ExchangeRoute exchange_route(const ttnn::MeshDevice& device, const ttnn::MeshCoo
     route.successor_connection = successor_forward ? route.forward_connection : route.backward_connection;
     route.successor_hops = successor_forward ? 1 : sp_size - 1;
     return route;
+}
+
+// The exchange core's packets go to the ETH cores above the first Tensix row, so its kernel uses the NoC that routes
+// toward lower rows (NOC_1) rather than inheriting whichever the writer placement picks.
+tt::tt_metal::experimental::DataMovementHardwareConfig exchange_datamovement_config() {
+    auto config = ttnn::create_writer_datamovement_config();
+    config.config_1xx->noc = tt::tt_metal::NOC::NOC_1;
+    return config;
 }
 
 // Add the fabric history exchange to every rank's program: one kernel on exchange_core that sends the rows the
@@ -168,7 +175,7 @@ void add_history_exchange(
                  {"local_rows", attrs.sequence},
                  {"has_actual_end", uint32_t(in.actual_end.has_value())}},
             .runtime_arg_schema = {.runtime_arg_names = {semaphore_args.begin(), semaphore_args.end()}},
-            .hw_config = ttnn::create_writer_datamovement_config(),
+            .hw_config = exchange_datamovement_config(),
         };
         if (sp_size > 1) {
             // The fabric API-type defines; lowering adds only the control plane's routing and header-size ones.
@@ -237,13 +244,13 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     const uint32_t Ct = Qt + Kt + Vt;
     const uint32_t block_ct = attrs.channel_chunk_size / tt::constants::TILE_WIDTH;
     const uint32_t num_blocks = Ct / block_ct;
-    const uint32_t group = qkv_conv::dest_group(block_ct);
+    const uint32_t dest_limit = qkv_conv::dest_tile_limit(attrs.compute_kernel_config.fp32_dest_acc_en);
+    const uint32_t group = qkv_conv::dest_group(block_ct, dest_limit);
     const uint32_t input_wt = input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     const uint32_t input_ct_offset = attrs.input_column_offset / tt::constants::TILE_WIDTH;
     const auto grid = device.compute_with_storage_grid_size();
     const CoreCoord exchange_core = qkv_causal_conv1d_silu_exchange_core(grid);
-    auto dist = kda_factory_detail::distribute_prep(
-        grid, Mt * num_blocks, exchange ? grid.x * grid.y - 1 : std::numeric_limits<uint32_t>::max());
+    auto dist = qkv_causal_conv1d_silu_distribution(grid, Mt * num_blocks, exchange);
     const auto& cores = dist.core_set;
     const uint32_t max_staged_ct =
         exchange ? qkv_causal_conv1d_silu_staged_ct(Ct, static_cast<uint32_t>(dist.cores.size())) : 0;
@@ -292,7 +299,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     // validate_on_program_cache_miss checks qkv_causal_conv1d_silu_l1_bytes against the free L1 per core.
     const uint32_t window_bytes = qkv_conv::ReaderScratch{block_ct}.bytes();
 
-    const auto dfb_tiles = qkv_causal_conv1d_silu_dfb_tiles(block_ct);
+    const auto dfb_tiles = qkv_causal_conv1d_silu_dfb_tiles(block_ct, dest_limit);
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
         make_dfb(act_tile_dfb_name, dfb_tiles.act_tile),
         make_dfb(taps_dfb_name, dfb_tiles.taps),
@@ -400,7 +407,11 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                     output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
             },
         .compile_time_args =
-            {{"block_ct", block_ct}, {"Mt", Mt}, {"group", group}, {"defer_first_rows", uint32_t(exchange)}},
+            {{"block_ct", block_ct},
+             {"Mt", Mt},
+             {"group", group},
+             {"dest_limit", dest_limit},
+             {"defer_first_rows", uint32_t(exchange)}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::to_compute_hardware_config(attrs.compute_kernel_config),
     };

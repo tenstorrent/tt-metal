@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "qkv_causal_conv1d_silu_nanobind.hpp"
 #include "qkv_causal_conv1d_silu.hpp"
+#include "device/qkv_causal_conv1d_silu_program_factory.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail {
 void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
@@ -96,6 +97,16 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("input_column_offset") = 0);
 
+    mod.def(
+        "qkv_causal_conv1d_silu_exchange_core",
+        &ttnn::experimental::prim::qkv_causal_conv1d_silu_exchange_core,
+        nb::arg("grid"),
+        R"doc(
+        The core of a ``grid``-sized compute grid that runs
+        ``qkv_causal_conv1d_silu_with_carry``'s fabric history exchange, and so
+        the core its ``exchange_semaphores`` must cover.
+        )doc");
+
     ttnn::bind_function<"qkv_causal_conv1d_silu_with_carry", "ttnn.experimental.kda.">(
         mod,
         R"doc(
@@ -105,7 +116,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
 
         ``exchange_buffer`` is a persistent ``[1, 12, Q+K+V]`` ROW_MAJOR BFLOAT16
         DRAM tensor and ``exchange_semaphores`` three persistent global semaphores
-        on the compute grid's last core, zero before the first call. Each segment
+        on ``qkv_causal_conv1d_silu_exchange_core``, zero before the first call. Each segment
         that does not start the logical sequence reads the preceding rank's last
         three rows, which arrive over the fabric. The fourth output is the
         three-token history ending at the logical end of the interval

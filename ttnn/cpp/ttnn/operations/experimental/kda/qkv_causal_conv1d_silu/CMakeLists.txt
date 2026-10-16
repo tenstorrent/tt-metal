@@ -18,7 +18,7 @@ file(
     GLOB_RECURSE kernels
     device/kernels/*.cpp
     device/kernels/*.hpp
-    device/qkv_causal_conv1d_silu_layout.hpp
+    device/hostdevcommon/*.hpp
 )
 
 target_sources(
