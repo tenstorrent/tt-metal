@@ -30,6 +30,11 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
+// TRISC2 <-> TRISC3 handshake around the s_a epilogue (both indices are unused by this kernel's
+// dest-dvalid pipeline).
+constexpr std::uint8_t ACC_READY_SEM     = ckernel::trisc::semaphore::PACK_UNPACK;
+constexpr std::uint8_t EPILOGUE_DONE_SEM = ckernel::trisc::semaphore::UNPACK_MATH;
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_bfd_alloc.h"
@@ -192,11 +197,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
-
-// TRISC2 <-> TRISC3 handshake around the s_a epilogue (both indices are unused by this kernel's
-// dest-dvalid pipeline).
-constexpr std::uint8_t ACC_READY_SEM     = semaphore::PACK_UNPACK;
-constexpr std::uint8_t EPILOGUE_DONE_SEM = semaphore::UNPACK_MATH;
 
 // Replay slots for the dequant sequence over half a face (8 rows): one per 16-column half of
 // the tile, since faces 0/2 (columns 0-15) and 1/3 (columns 16-31) use different scale LREGs.
@@ -433,9 +433,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_matmul.h"
 #include "llk_sync.h"
 #include "params.h"
-
-constexpr std::uint8_t ACC_READY_SEM     = semaphore::PACK_UNPACK;
-constexpr std::uint8_t EPILOGUE_DONE_SEM = semaphore::UNPACK_MATH;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
