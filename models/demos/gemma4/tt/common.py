@@ -73,6 +73,18 @@ def gemma4_cp_prefill_engaged(mesh_device):
     )
 
 
+def _moe_expert_parallel(hf_text_config, mesh_shape, tp_axis) -> int:
+    """Expert-parallel degree for a MoE checkpoint on a 2-D mesh: the size of the non-TP axis
+    (each row of it computes its own slice of the expert set; see experts/__init__.py).
+    1 for dense checkpoints, 1-D meshes, or GEMMA4_MOE_EP=0."""
+    if not (getattr(hf_text_config, "num_experts", None) or 0):
+        return 1
+    if os.environ.get("GEMMA4_MOE_EP", "1").lower() in ("0", "false", "no"):
+        return 1
+    ep_axis = 0 if tp_axis == 1 else 1
+    return int(mesh_shape[ep_axis]) if int(mesh_shape[ep_axis]) > 1 else 1
+
+
 def create_tt_model(
     mesh_device,
     max_batch_size=1,
@@ -118,9 +130,11 @@ def create_tt_model(
             # are both valid, so orientation stays a MESH_DEVICE knob. GEMMA4_GALAXY_LANES=1 lane-shards the batch.
             _shape = tuple(mesh_device.shape)
             _tp_axis = 0 if _shape[0] == 8 else (1 if _shape[1] == 8 else 0)
+            _ep = _moe_expert_parallel(hf_text_config, _shape, _tp_axis)
             mesh_config = MeshConfig(
                 mesh_device.shape,
-                decode=ModeConfig(tp=_shape[_tp_axis]),
+                decode=ModeConfig(tp=_shape[_tp_axis], ep=_ep),
+                prefill=ModeConfig(tp=_shape[_tp_axis], ep=_ep),
                 tp_axis=_tp_axis,
                 weight_fracture=True,
             )
@@ -132,7 +146,12 @@ def create_tt_model(
                 logger.warning("GEMMA4_CP_PREFILL ignored: incompatible with GEMMA4_GALAXY_LANES (owner-lane KV)")
                 mesh_config.cp_prefill = False
         elif is_mesh and num_devices > 1:
-            mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
+            _ep = _moe_expert_parallel(hf_text_config, tuple(mesh_device.shape), 1)
+            mesh_config = MeshConfig(
+                mesh_device.shape,
+                decode=ModeConfig(tp=mesh_device.shape[1], ep=_ep),
+                prefill=ModeConfig(tp=mesh_device.shape[1], ep=_ep),
+            )
         else:
             mesh_config = MeshConfig((1, 1), decode=ModeConfig(tp=1))
 

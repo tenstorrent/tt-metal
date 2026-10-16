@@ -23,8 +23,27 @@ from .weights import ExpertWeights
 TILE_SIZE = 32
 
 
-def create_prefill_sparsity(mesh_device, num_experts):
-    """Create all-ones sparsity mask for prefill (all experts active).
+def create_local_expert_mask(mesh_device, mesh_config, num_experts, ep):
+    """[1, 1, 1, num_experts] TILE bf16 mask per device: ones for the experts of the device's
+    ep row (row r owns experts [r*E/ep, (r+1)*E/ep)), zeros elsewhere; replicated over tp."""
+    per_row = num_experts // ep
+    mask = torch.zeros(ep, 1, 1, num_experts, dtype=torch.bfloat16)
+    for r in range(ep):
+        mask[r, 0, 0, r * per_row : (r + 1) * per_row] = 1.0
+    dims = (0, None) if mesh_config.ep_axis == 0 else (None, 0)
+    return ttnn.from_torch(
+        mask,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=dims),
+    )
+
+
+def create_prefill_sparsity(mesh_device, num_experts, mesh_config=None, ep=1):
+    """Create the prefill sparsity mask: all-ones (all experts active), or under EP the
+    device's local-expert mask (its ep row's experts only).
 
     Following gpt_oss: prefill computes all experts, routing weights
     zero out inactive experts afterward.
@@ -33,6 +52,20 @@ def create_prefill_sparsity(mesh_device, num_experts):
         [1, 1, 1, num_experts] ROW_MAJOR bfloat16 tensor on device
     """
     is_mesh = hasattr(mesh_device, "shape")
+    if ep > 1:
+        per_row = num_experts // ep
+        sparsity = torch.zeros(ep, 1, 1, num_experts, dtype=torch.bfloat16)
+        for r in range(ep):
+            sparsity[r, 0, 0, r * per_row : (r + 1) * per_row] = 1.0
+        dims = (0, None) if mesh_config.ep_axis == 0 else (None, 0)
+        return ttnn.from_torch(
+            sparsity,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=dims),
+        )
     sparsity = torch.ones(1, 1, 1, num_experts, dtype=torch.bfloat16)
     return ttnn.from_torch(
         sparsity,
@@ -49,6 +82,7 @@ def _process_prefill_chunk(
     weights: ExpertWeights,
     config,
     prefill_sparsity,
+    num_local_experts=None,
 ):
     """Process a single chunk of the sequence in prefill mode.
 
@@ -59,6 +93,7 @@ def _process_prefill_chunk(
         [1, 1, chunk_len, hidden_size] expert output
     """
     chunk_len = hidden_states.shape[2]
+    num_local_experts = num_local_experts or config.num_experts
     num_experts = config.num_experts
     hidden_size = config.hidden_size
 
@@ -70,8 +105,8 @@ def _process_prefill_chunk(
     # All-ones sparsity repeated across groups
     sparsity = ttnn.repeat(prefill_sparsity, (1, 1, group_size, 1))
 
-    # nnz = all experts × groups (compute every expert for every group)
-    nnz = num_experts * group_size
+    # nnz = local experts x groups (every local expert for every group; all experts when EP=1)
+    nnz = num_local_experts * group_size
 
     output_tile = ttnn.Tile([32, 32])
     intermediate_size = weights.intermediate_size_per_device
@@ -135,7 +170,7 @@ def _process_prefill_chunk(
         down_input,
         weights.down_proj,
         sparsity=prefill_sparsity,
-        nnz=num_experts,
+        nnz=num_local_experts,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=down_config,
@@ -177,9 +212,14 @@ def prefill_forward(
     mesh_config=None,
     mesh_device=None,
     ccl_manager=None,
+    num_local_experts=None,
+    combine=True,
 ):
     """
     On-device expert prefill forward using sparse_matmul.
+
+    Under EP ``prefill_sparsity`` is the device's local-expert mask and ``num_local_experts``
+    its expert count; ``combine=False`` returns the local partial sum.
 
     Following gpt_oss pattern:
     1. Chunk long sequences so group_size fits in the core grid
@@ -212,7 +252,9 @@ def prefill_forward(
 
     result_acc = None
     for h_chunk, r_chunk in zip(hidden_chunks, routing_chunks):
-        chunk_result = _process_prefill_chunk(h_chunk, r_chunk, weights, config, prefill_sparsity)
+        chunk_result = _process_prefill_chunk(
+            h_chunk, r_chunk, weights, config, prefill_sparsity, num_local_experts or config.num_experts
+        )
 
         if result_acc is None:
             result_acc = chunk_result
@@ -222,7 +264,12 @@ def prefill_forward(
             chunk_result.deallocate(True)
             result_acc = result_concat
 
-    # All-reduce after row-parallel down_proj
+    if not combine:
+        return result_acc
+    # Sum the ep rows' partial expert outputs, then the row-parallel down_proj partials over tp
+    ep = int(getattr(mesh_config, "ep", 1) or 1) if mesh_config is not None else 1
+    if ep > 1:
+        result_acc = ccl_allreduce(result_acc, mesh_config, ccl_manager, axis=mesh_config.ep_axis, group_size=ep)
     if mesh_config is not None and mesh_config.tp > 1:
         result_acc = ccl_allreduce(result_acc, mesh_config, ccl_manager)
 

@@ -11,8 +11,9 @@ Prefill (seq_len>1): on-device via sparse_matmul with all-ones sparsity (gpt_oss
 import ttnn
 
 from .decode import decode_forward
-from .prefill import create_prefill_sparsity, prefill_forward
+from .prefill import create_local_expert_mask, create_prefill_sparsity, prefill_forward
 from .weights import ExpertWeights, load_expert_weights
+from models.demos.gemma4.tt.ccl import ccl_lane_gather_rows, ccl_lane_scatter_rows
 
 
 class Gemma4ExpertConfig:
@@ -51,10 +52,34 @@ class Gemma4Experts:
             weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
         )
-        # Cache all-ones prefill sparsity (reused for every prefill call)
-        self.prefill_sparsity = create_prefill_sparsity(mesh_device, config.num_experts)
+        # Expert parallelism over the mesh axis that is not TP: every device keeps the full
+        # (TP-sliced) expert set, but row ``r`` of the ep axis only ever computes experts
+        # [r*E/ep, (r+1)*E/ep). The static local-expert mask zeroes the routing of the other
+        # experts, so ``sparse_matmul`` neither reads nor computes them; the ep-axis combine
+        # below sums the rows' partial outputs. EP=1 keeps the previous all-ones behaviour.
+        self.ep = int(getattr(mesh_config, "ep", 1) or 1) if mesh_config is not None else 1
+        self.num_local_experts = config.num_experts // self.ep
+        self.local_expert_mask = None
+        if self.ep > 1:
+            self.local_expert_mask = create_local_expert_mask(mesh_device, mesh_config, config.num_experts, self.ep)
+        # Prefill sparsity: all-ones, or the local-expert mask under EP (reused for every prefill call)
+        self.prefill_sparsity = create_prefill_sparsity(
+            mesh_device, config.num_experts, mesh_config=mesh_config if self.ep > 1 else None, ep=self.ep
+        )
 
     def __call__(self, hidden_states, dense_routing):
+        lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+        if lane_sharded:
+            # Lanes hold different rows: gather every lane's rows (and their routing), run the
+            # local experts on all of them, then reduce_scatter the rows back to their lanes
+            # (summing the ep partials) and all-reduce over tp -- the SharedMLP choreography.
+            hidden_states = ccl_lane_gather_rows(hidden_states, self.mesh_config)
+            dense_routing = ccl_lane_gather_rows(dense_routing, self.mesh_config)
+            out = self._forward(hidden_states, dense_routing, combine=False)
+            return ccl_lane_scatter_rows(out, self.mesh_config)
+        return self._forward(hidden_states, dense_routing, combine=True)
+
+    def _forward(self, hidden_states, dense_routing, combine=True):
         """
         Expert forward — fully on-device.
 
@@ -69,6 +94,8 @@ class Gemma4Experts:
 
         if seq_len == 1:
             return decode_forward(
+                local_expert_mask=self.local_expert_mask,
+                combine=combine,
                 hidden_states=hidden_states,
                 routing_weights=dense_routing,
                 weights=self.weights,
@@ -80,6 +107,8 @@ class Gemma4Experts:
         else:
             assert seq_len % 32 == 0, f"Prefill seq_len must be a multiple of 32, got {seq_len}"
             return prefill_forward(
+                num_local_experts=self.num_local_experts,
+                combine=combine,
                 hidden_states=hidden_states,
                 routing_weights=dense_routing,
                 weights=self.weights,

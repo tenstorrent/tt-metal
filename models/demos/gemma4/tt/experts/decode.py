@@ -60,9 +60,16 @@ def decode_forward(
     mesh_config=None,
     mesh_device=None,
     ccl_manager=None,
+    local_expert_mask=None,
+    combine=True,
 ):
     """
     On-device expert forward using sparse_matmul.
+
+    ``local_expert_mask`` ([1, 1, 1, E], TILE bf16, ones for this device's experts under EP)
+    zeroes the routing of the experts other ep rows own, so only local experts are read and
+    computed. ``combine=False`` returns the local partial sum (the caller completes the
+    cross-lane / cross-axis reduction).
 
     Args:
         hidden_states: [1, 1, seq_len, hidden_size] on device (seq_len=1 for decode)
@@ -78,6 +85,13 @@ def decode_forward(
     top_k = config.top_k
     intermediate_size = weights.intermediate_size_per_device
 
+    # Under EP the masked routing row holds a data-dependent number of nonzeros per device
+    # (0..top_k local experts), and sparse_matmul deadlocks when a supplied ``nnz`` differs from
+    # count_nonzero(sparsity). Omit nnz there so the kernels take the batch count from the reader.
+    nnz = top_k
+    if local_expert_mask is not None:
+        routing_weights = ttnn.mul(routing_weights, local_expert_mask)
+        nnz = None
     # Prepare sparsity pattern (must be ROW_MAJOR bfloat16)
     sparsity = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT)
     output_tile = ttnn.Tile([32, 32])
@@ -90,7 +104,7 @@ def decode_forward(
         hidden_states,
         weights.gate_proj,
         sparsity=sparsity,
-        nnz=top_k,
+        nnz=nnz,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=gate_up_config,
@@ -108,7 +122,7 @@ def decode_forward(
         hidden_states,
         weights.up_proj,
         sparsity=sparsity,
-        nnz=top_k,
+        nnz=nnz,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=gate_up_config,
@@ -130,7 +144,7 @@ def decode_forward(
         down_input,
         weights.down_proj,
         sparsity=sparsity,
-        nnz=top_k,
+        nnz=nnz,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=down_config,
@@ -158,7 +172,12 @@ def decode_forward(
         (1, 1, max(32, batch_size), config.hidden_size),
     )
 
-    # All-reduce after row-parallel down_proj
+    if not combine:
+        return next_states
+    # Sum the ep rows' partial expert outputs, then the row-parallel down_proj partials over tp
+    ep = int(getattr(mesh_config, "ep", 1) or 1) if mesh_config is not None else 1
+    if ep > 1:
+        next_states = ccl_allreduce(next_states, mesh_config, ccl_manager, axis=mesh_config.ep_axis, group_size=ep)
     if mesh_config is not None and mesh_config.tp > 1:
         next_states = ccl_allreduce(next_states, mesh_config, ccl_manager)
 
