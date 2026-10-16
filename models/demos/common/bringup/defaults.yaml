@@ -47,6 +47,8 @@ noise_floor:               # F80: the floor of every component / swap limit (tes
 
 tests:
   official_floor: true        # F80: task R.5 taps the official code per step (the reference arithmetic of every limit)
+  waivers: {}                 # F85: owner waivers of a step's noise-floor checks, {<step> | <block type>.<step>: reason}
+                              # (a gap the device cannot close at its normal settings, fixed later); reported, recorded
   component_max_precision: true  # component and swap tests run at the model's max precision (tt/settings.py
                                  # max_precision); shipped precision is judged by the ladder and contract tests
   low_precision_kinds: [moe]  # step kinds with a looser precision factor (bfp8 expert weights, F56)

@@ -376,7 +376,7 @@ function header(){
   const Bx = D.boxes, dep = Bx && `${Bx.deploy.box} (${Bx.deploy.mesh.join("x")}), ${Bx.deploy.seq.toLocaleString()} tokens`;
   $("#facts").innerHTML = [["Model", D.model], ["Deployment", dep], ["Target", D.target], ["Box", D.box + (Bx ? `, ${Bx.run.mode} mode` : "")], ["Arch", D.arch]]
     .filter(([, v]) => v).map(([k, v]) => `<span>${k} <b>${esc(v)}</b></span>`).join("");
-  $("#gen").textContent = `Snapshot ${D.generated} · ${D.branch} @ ${D.head}`;
+  $("#gen").textContent = `Snapshot ${D.generated} · ${D.branch} @ ${D.head}` + (D.overseer_status ? ` · Overseer: ${D.overseer_status}` : "");
   const n = D.tasks.length, counts = {};
   D.tasks.forEach(t => counts[t.status] = (counts[t.status] || 0) + 1);
   $("#passn").textContent = `${counts.PASS || 0}/${n}`;

@@ -85,6 +85,9 @@ def check_metrics(spec: dict[str, str], got: dict) -> tuple[bool, list[str]]:
             lines.append(f"  MISSING  {glob} (need {cond})")
             continue
         for k, v in sorted(matched.items()):
+            if (got.get(f"{k}_waived") or {}).get("value"):  # F85: the owner waived this step's noise-floor checks
+                lines.append(f"  WAIVED   {k} = {v} (need {cond}; owner waiver, see the log)")
+                continue
             want = (got.get(f"{k}_limit") or {}).get("value") if from_test else float(val_s)
             try:
                 good = v is not None and want is not None and OPS[op_s](float(v), float(want))

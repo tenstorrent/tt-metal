@@ -1194,3 +1194,34 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   results/ and the commits are untouched. After a change of limits (F76-F81) the overseer reruns every passed step's
   frozen tests once and turns each failure into a fix job (overseer fix), instead of a gate run that would flip the
   task to FAIL mid-run or overwrite its committed results. Selftest: test_verify.py.
+
+## F83 (2026-10-16): every row and column against its own floor; the signed additive bias
+
+- Owner: rel is unreliable at small magnitudes (worst row / per column behind a fixed 1e-6 floor, near-zero rows
+  "equal"), and the worst row's limit came from the floor's worst row (one tiny noisy row set it for all).
+  noise_floor.own_floor: per row (and per column), ||dev_r - ref_r|| / max(the floor's ||nudged_r - ref_r||, one
+  rounding of ref_r), times 1 / (1 + sqrt(2 ln 2N / m)) for the worst of N rows of length m: no division by a small
+  norm, no fixed floor, an exact row counts 0. Additive bias per column: |mean_r(dev - ref)| over the larger of the
+  floor's |mean|, and sqrt(2 ln 2C) x rms / sqrt(rows) of the floor's and of one rounding's error (the largest random
+  mean of C columns). The official arithmetic's excess over the nudge (whole-output) widens every row's floor.
+- Gated <= calib (x the probe factor on second inputs; columns and bias on the golden input only) in component and
+  swap tests; they replace the worst-row, row-norm-ratio and per-column limits. Kept: whole-output rel, the median
+  row-norm ratio (a scale bias), selections' explained flips.
+- Synthetic check (2048 x 256, 5 seeds): a correct output scores <= 1.3; a 1 % row, an error on a 1e-5 row, a 3e-4
+  column offset each fail at their own place. Selftest: test_noise_floor.py.
+
+## F84 (2026-10-16): the overseer's "stopped because" on the dashboard
+
+- `overseer status --spec S "why"` writes runs/<run>/OVERSEER_STATUS.json; the dashboards show it (standard: the
+  snapshot line; teletext: HOLD); the orchestrator clears it when it starts. The owner saw a dashboard "still on R.5"
+  for an hour while the overseer re-verified passed steps with the run stopped.
+
+## F85 (2026-10-16): owner waivers of a step's noise-floor checks
+
+- Owner (DeepSeek-V4.1 run1): no multi-pass / split / exact matmuls to match an fp32 reference; "if it doesn't work,
+  let it be, continue and we'll fix it later". Spec `tests.waivers: {<step> | <block type>.<step>: reason}`: the step's
+  noise-floor checks still run and print; a failure is reported `WAIVED` with the reason and recorded
+  (`<metric>_waived`), the gate passes it (core/gate.check_metrics) as long as the output is whole (finite, the right
+  size). Component tests, every swapped step's checks, and the tail check of a waived last step. Only the owner adds
+  a waiver (a spec edit, re-approved); the dashboard and the end-of-run report list every waived step.
+- Selftest: test_noise_floor.py::test_an_owner_waiver_passes_a_steps_noise_floor_checks_and_records_it.

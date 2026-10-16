@@ -24,6 +24,7 @@ next attempt with the note in its brief. A running agent cannot take messages; a
     python -m models.demos.common.bringup.overseer abort --spec S --reason "..." [--tasks GLOB ...]
     python -m models.demos.common.bringup.overseer fix --spec S --gate TASK [--gate TASK ...] [--title T] [--hold WHY] "text"
     python -m models.demos.common.bringup.overseer release --spec S FIX.n
+    python -m models.demos.common.bringup.overseer status --spec S ["why the run is stopped"]   (empty: clear)
 
 `fix` (F77) queues a change for an agent to make now, when no failing test would start one (the code passes today:
 a per-chunk weight rebuild, a precision raise a fixed limit forced). At its next task boundary the orchestrator turns
@@ -270,6 +271,24 @@ def abort(bringup_dir: Path, run_dir: Path, reason: str, tasks=None, kill=os.kil
     return {**agent, "note": note["id"]}
 
 
+STATUS_FILE = "OVERSEER_STATUS.json"  # in the run dir: why the overseer has the run stopped (the dashboard shows it)
+
+
+def set_status(run_dir: Path, text: str) -> dict:
+    rec = {"text": text.strip(), "t": now()}
+    (Path(run_dir) / STATUS_FILE).write_text(json.dumps(rec))
+    return rec
+
+
+def status(run_dir: Path) -> dict | None:
+    p = Path(run_dir) / STATUS_FILE
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+def clear_status(run_dir: Path) -> None:
+    (Path(run_dir) / STATUS_FILE).unlink(missing_ok=True)
+
+
 def _dirs(spec_path: str):
     from models.demos.common.bringup.core.gate import run_name
     from models.demos.common.bringup.core.ledger import Ledger
@@ -282,7 +301,7 @@ def _dirs(spec_path: str):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("note", "close", "list", "abort", "fix", "release"):
+    for name in ("note", "close", "list", "abort", "fix", "release", "status"):
         p = sub.add_parser(name)
         p.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"))
         if name in ("note", "abort"):
@@ -306,6 +325,8 @@ def main(argv=None) -> int:
             p.add_argument("text")
         if name == "release":
             p.add_argument("id")
+        if name == "status":
+            p.add_argument("text", nargs="?", default="", help="why the run is stopped; empty clears it")
     a = ap.parse_args(argv)
     bdir, rdir = _dirs(a.spec)
     if a.cmd == "note":
@@ -324,6 +345,12 @@ def main(argv=None) -> int:
         x = queue_fix(bdir, a.text, a.gate, a.title, led_tasks, a.hold)
         when = f"held until `release` ({a.hold})" if a.hold else "the orchestrator starts it at its next task boundary"
         print(f"queued {x['id']} (gate {x['gate']}): {when}")
+    elif a.cmd == "status":
+        if a.text:
+            print(f"status: {set_status(rdir, a.text)['text']}")
+        else:
+            clear_status(rdir)
+            print("status cleared")
     elif a.cmd == "release":
         print(f"released {release(bdir, a.id)['id']}: placed at the orchestrator's next task boundary")
     else:
