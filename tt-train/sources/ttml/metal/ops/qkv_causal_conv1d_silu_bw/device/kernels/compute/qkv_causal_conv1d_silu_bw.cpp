@@ -188,7 +188,7 @@ template <uint32_t channel_tiles_per_block>
     dc_views.pop_front(tap_count * channel_tiles_per_block);
 }
 
-template <uint32_t channel_tiles_per_block, uint32_t sequence_tiles, uint32_t sequence_splits>
+template <uint32_t channel_tiles_per_block, uint32_t tile_rows, uint32_t row_splits>
 TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     compute_kernel_hw_startup(dfb::act_rm, dfb::act_tile, dfb::dc_rm);
     DataflowBuffer activation(dfb::act_tile);
@@ -205,11 +205,11 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
 
     for (uint32_t item = 0; item < wi_count; ++item) {
         const uint32_t work = wi_start + item;
-        const uint32_t split = work % sequence_splits;
-        const uint32_t m0 = split * sequence_tiles / sequence_splits;
-        const uint32_t m1 = (split + 1) * sequence_tiles / sequence_splits;
+        const uint32_t split = work % row_splits;
+        const uint32_t m0 = split * tile_rows / row_splits;
+        const uint32_t m1 = (split + 1) * tile_rows / row_splits;
         const uint32_t own = m1 - m0;
-        const bool has_halo = m1 < sequence_tiles;
+        const bool has_halo = m1 < tile_rows;
         const uint32_t dc_tiles = own + (has_halo ? 1 : 0);
 
         weights.wait_front(tap_count * channel_tiles_per_block);

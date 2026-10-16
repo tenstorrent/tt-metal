@@ -43,41 +43,41 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
     uint32_t k_width,
     uint32_t v_width,
     uint32_t channel_chunk_size,
-    uint32_t sequence_splits) {
+    uint32_t row_splits) {
     TT_FATAL(
         input.storage_type() == ttnn::StorageType::DEVICE && input.logical_shape().rank() == 3,
         "qkv_causal_conv1d_silu_bw: input must be a [1,T,Q+K+V] device tensor");
-    const auto sequence = static_cast<uint32_t>(input.logical_shape()[1]);
+    const auto row_count = static_cast<uint32_t>(input.logical_shape()[1]);
     const auto channels = q_width + k_width + v_width;
-    // One core gets channel_chunk_size channels x (sequence / sequence_splits) rows. Both default to auto.
+    // One core gets channel_chunk_size channels x (row_count / row_splits) rows. Both default to auto.
     if (channel_chunk_size == 0) {
         channel_chunk_size = qkv_causal_conv1d_silu_chunk_size(channels, *input.device());
     }
-    if (sequence_splits == 0) {
+    if (row_splits == 0) {
         const auto grid = input.device()->compute_with_storage_grid_size();
         const uint32_t cores = grid.x * grid.y;
         const uint32_t channel_blocks = channels / channel_chunk_size;
-        const uint32_t sequence_tiles = sequence / tt::constants::TILE_HEIGHT;
+        const uint32_t tile_rows = row_count / tt::constants::TILE_HEIGHT;
         uint64_t best_cost = ~0ULL;
-        for (uint32_t candidate = 1; candidate <= sequence_tiles; ++candidate) {
+        for (uint32_t candidate = 1; candidate <= tile_rows; ++candidate) {
             const uint64_t items = static_cast<uint64_t>(channel_blocks) * candidate;
             const uint64_t rounds = (items + cores - 1) / cores;
             const uint64_t halo_tiles = candidate > 1 ? 1 : 0;
-            const uint64_t tiles_per_item = (sequence_tiles + candidate - 1) / candidate + halo_tiles;
+            const uint64_t tiles_per_item = (tile_rows + candidate - 1) / candidate + halo_tiles;
             const uint64_t cost = rounds * tiles_per_item;
             if (cost < best_cost) {
                 best_cost = cost;
-                sequence_splits = candidate;
+                row_splits = candidate;
             }
         }
     }
     const ops::qkv_causal_conv1d_silu_bw::device::QkvCausalConv1dSiluBackwardParams params{
-        .sequence = sequence,
+        .row_count = row_count,
         .q_width = q_width,
         .k_width = k_width,
         .v_width = v_width,
         .channel_chunk_size = channel_chunk_size,
-        .sequence_splits = sequence_splits,
+        .row_splits = row_splits,
         .output_mem_config = ttnn::DRAM_MEMORY_CONFIG,
         .compute_kernel_config = ttnn::init_device_compute_kernel_config(
             input.device()->arch(),
@@ -89,7 +89,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
 
     auto outputs = ttnn::prim::ttml_qkv_causal_conv1d_silu_bw(
         grad_q, grad_k, grad_v, input, history, tap0, tap1, tap2, tap3, params);
-    // Partials are fp32 [4, sequence_splits*32, C]: one fp32 row reduction (reducing an outer dim in fp32 is ~20x
+    // Partials are fp32 [4, row_splits*32, C]: one fp32 row reduction (reducing an outer dim in fp32 is ~20x
     // slower),
     // then cast the [4, 1, C] result once.
     auto grad_taps =

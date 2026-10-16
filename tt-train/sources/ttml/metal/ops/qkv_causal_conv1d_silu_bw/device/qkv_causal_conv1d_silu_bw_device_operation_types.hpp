@@ -13,12 +13,12 @@ using ttnn::DeviceComputeKernelConfig;
 using ttnn::Tensor;
 
 struct QkvCausalConv1dSiluBackwardParams {
-    uint32_t sequence;
+    uint32_t row_count;
     uint32_t q_width;
     uint32_t k_width;
     uint32_t v_width;
     uint32_t channel_chunk_size;
-    uint32_t sequence_splits;
+    uint32_t row_splits;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };

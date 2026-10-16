@@ -19,8 +19,8 @@ constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 // previous rows + 32 new rows), 4 shifted views of it, and the matching grad_q/k/v tiles.
 template <
     uint32_t channel_tiles_per_block,
-    uint32_t sequence_tiles,
-    uint32_t sequence_splits,
+    uint32_t tile_rows,
+    uint32_t row_splits,
     uint32_t q_tiles,
     uint32_t k_tiles,
     uint32_t v_tiles>
@@ -59,13 +59,13 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
 
     for (uint32_t item = 0; item < wi_count; ++item) {
         const uint32_t work = wi_start + item;
-        const uint32_t channel_block = work / sequence_splits;
-        const uint32_t split = work % sequence_splits;
+        const uint32_t channel_block = work / row_splits;
+        const uint32_t split = work % row_splits;
         const uint32_t first_tile_column = channel_block * channel_tiles_per_block;
         const uint32_t col_bytes = first_tile_column * tt::constants::TILE_WIDTH * sizeof(uint16_t);
-        const uint32_t m0 = split * sequence_tiles / sequence_splits;
-        const uint32_t m1 = (split + 1) * sequence_tiles / sequence_splits;
-        const uint32_t dc_tiles = m1 - m0 + (m1 < sequence_tiles ? 1 : 0);
+        const uint32_t m0 = split * tile_rows / row_splits;
+        const uint32_t m1 = (split + 1) * tile_rows / row_splits;
+        const uint32_t dc_tiles = m1 - m0 + (m1 < tile_rows ? 1 : 0);
 
         weights.reserve_back(tap_count * channel_tiles_per_block);
         for (uint32_t tile_column = 0; tile_column < channel_tiles_per_block; ++tile_column) {

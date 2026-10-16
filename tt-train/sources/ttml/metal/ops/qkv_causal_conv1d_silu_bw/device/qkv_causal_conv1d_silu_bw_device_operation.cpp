@@ -49,15 +49,16 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
         attrs.q_width % tw == 0 && attrs.k_width % tw == 0 && attrs.v_width % tw == 0,
         "{}: Q/K/V widths must be tile aligned",
         op_name);
-    TT_FATAL(attrs.sequence > 0 && attrs.sequence % th == 0, "{}: sequence must be positive and tile aligned", op_name);
+    TT_FATAL(
+        attrs.row_count > 0 && attrs.row_count % th == 0, "{}: row_count must be positive and tile aligned", op_name);
     TT_FATAL(
         attrs.channel_chunk_size > 0 && attrs.channel_chunk_size % tw == 0 && attrs.channel_chunk_size <= c &&
             c % attrs.channel_chunk_size == 0,
         "{}: channel_chunk_size must be a tile-aligned divisor of Q+K+V",
         op_name);
     TT_FATAL(
-        attrs.sequence_splits >= 1 && attrs.sequence_splits <= attrs.sequence / th,
-        "{}: sequence_splits must be in [1, sequence / 32]",
+        attrs.row_splits >= 1 && attrs.row_splits <= attrs.row_count / th,
+        "{}: row_splits must be in [1, row_count / 32]",
         op_name);
     TT_FATAL(!attrs.output_mem_config.is_sharded(), "{}: output memory layout must be INTERLEAVED", op_name);
     TT_FATAL(!attrs.compute_kernel_config.packer_l1_acc, "{}: packer_l1_acc is unsupported", op_name);
@@ -75,7 +76,7 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
             op_name);
     }
     TT_FATAL(
-        in.input.logical_shape() == Shape({1, attrs.sequence, static_cast<uint32_t>(c)}),
+        in.input.logical_shape() == Shape({1, attrs.row_count, static_cast<uint32_t>(c)}),
         "{}: input must be [1,T,Q+K+V]",
         op_name);
     TT_FATAL(
@@ -83,11 +84,11 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
         "{}: history must be [1,3,Q+K+V]",
         op_name);
     TT_FATAL(
-        in.grad_q.logical_shape() == Shape({1, attrs.sequence, attrs.q_width}), "{}: grad_q must be [1,T,Q]", op_name);
+        in.grad_q.logical_shape() == Shape({1, attrs.row_count, attrs.q_width}), "{}: grad_q must be [1,T,Q]", op_name);
     TT_FATAL(
-        in.grad_k.logical_shape() == Shape({1, attrs.sequence, attrs.k_width}), "{}: grad_k must be [1,T,K]", op_name);
+        in.grad_k.logical_shape() == Shape({1, attrs.row_count, attrs.k_width}), "{}: grad_k must be [1,T,K]", op_name);
     TT_FATAL(
-        in.grad_v.logical_shape() == Shape({1, attrs.sequence, attrs.v_width}), "{}: grad_v must be [1,T,V]", op_name);
+        in.grad_v.logical_shape() == Shape({1, attrs.row_count, attrs.v_width}), "{}: grad_v must be [1,T,V]", op_name);
 
     const auto* mesh = in.input.device();
     const uint64_t available_l1_bytes =
@@ -108,10 +109,10 @@ QkvCausalConv1dSiluBackwardOperation::spec_return_value_t QkvCausalConv1dSiluBac
     const auto c = static_cast<uint32_t>(channels(attrs));
     return {
         TensorSpec(
-            Shape({1, attrs.sequence, c}),
+            Shape({1, attrs.row_count, c}),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config)),
         TensorSpec(
-            Shape({qkv_conv_bw_tap_count, attrs.sequence_splits * tt::constants::TILE_HEIGHT, c}),
+            Shape({qkv_conv_bw_tap_count, attrs.row_splits * tt::constants::TILE_HEIGHT, c}),
             TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config))};
 }
 

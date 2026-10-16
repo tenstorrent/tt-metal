@@ -17,7 +17,7 @@ constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
 // Keeps the previous dc tile as rows in a 35-row window. When the next dc tile arrives, its first 3 rows complete
 // the window, 4 shifted views are pushed for the grad_input conv of the previous tile, then grad_input is written.
-template <uint32_t channel_tiles_per_block, uint32_t sequence_tiles, uint32_t sequence_splits, uint32_t channel_tiles>
+template <uint32_t channel_tiles_per_block, uint32_t tile_rows, uint32_t row_splits, uint32_t channel_tiles>
 TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     const auto grad_input = TensorAccessor(tensor::grad_input);
     const auto grad_tap_partial = TensorAccessor(tensor::grad_tap_partial);
@@ -66,12 +66,12 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
 
     for (uint32_t item = 0; item < wi_count; ++item) {
         const uint32_t work = wi_start + item;
-        const uint32_t channel_block = work / sequence_splits;
-        const uint32_t split = work % sequence_splits;
+        const uint32_t channel_block = work / row_splits;
+        const uint32_t split = work % row_splits;
         const uint32_t first_tile_column = channel_block * channel_tiles_per_block;
-        const uint32_t m0 = split * sequence_tiles / sequence_splits;
-        const uint32_t m1 = (split + 1) * sequence_tiles / sequence_splits;
-        const bool has_halo = m1 < sequence_tiles;
+        const uint32_t m0 = split * tile_rows / row_splits;
+        const uint32_t m1 = (split + 1) * tile_rows / row_splits;
+        const bool has_halo = m1 < tile_rows;
         const uint32_t dc_tiles = m1 - m0 + (has_halo ? 1 : 0);
 
         for (uint32_t k = 0; k < dc_tiles; ++k) {
@@ -112,7 +112,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
                     grad_tap_partial,
                     grad_tap_tile_bytes,
                     {.offset_bytes = (tap * channel_tiles_per_block + tile_column) * grad_tap_tile_bytes},
-                    {.page_id = (tap * sequence_splits + split) * channel_tiles + first_tile_column + tile_column});
+                    {.page_id = (tap * row_splits + split) * channel_tiles + first_tile_column + tile_column});
             }
         }
         noc.async_write_barrier();
