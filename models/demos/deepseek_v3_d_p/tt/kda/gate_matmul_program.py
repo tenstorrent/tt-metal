@@ -10,7 +10,8 @@ NoC 1, the first core of each column reads that column's W blocks and multicasts
 (ttnn.Mcast line pipes, the 2D multicast matmul's NoC split; the other assignment takes 251 us instead of 155 us at the
 K3 gate's shape). A and W blocks are double-buffered: a sender reads straight into its circular buffer, multicasts the
 block to the same address on the receivers, then reads the next block into the other slot while compute runs.
-Compute accumulates the K blocks in an FP32 buffer with packer L1 accumulation and packs the result once.
+Compute accumulates the K blocks in an FP32 buffer with packer L1 accumulation; the last K block reloads that
+buffer into DST and packs the BF16 output subblock by subblock, which the writer sends out as it lands.
 """
 
 from __future__ import annotations
@@ -93,7 +94,9 @@ void kernel_main() {
     constexpr uint32_t w_row_tiles = get_compile_time_arg_val(6);    // Nt of W
     constexpr uint32_t out_row_tiles = get_compile_time_arg_val(7);  // Nt of the output
     constexpr bool sends = get_compile_time_arg_val(8) != 0;
-    constexpr auto w_args = TensorAccessorArgs<9>();
+    constexpr uint32_t sub_w = get_compile_time_arg_val(9);
+    constexpr uint32_t sub_h = get_compile_time_arg_val(10);
+    constexpr auto w_args = TensorAccessorArgs<11>();
     constexpr auto out_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto mc =
         dataflow_kernel_lib::McastArgs<get_named_compile_time_arg_val("w_ct_offset"), get_named_compile_time_arg_val("w_rt_offset")>();
@@ -141,14 +144,24 @@ void kernel_main() {
             cb_push_back(cb_w, block_tiles);
         }
     }
-    // The finished block: tile (r, c) at page r * n_block + c.
+    // The finished block: tile (r, c) at page r * n_block + c. Subblocks one tile high arrive in that order, each
+    // written as it lands.
     const uint32_t out_tile_bytes = get_tile_size(cb_out);
     const auto out = TensorAccessor(out_args, out_addr, out_tile_bytes);
-    cb_wait_front(cb_out, m_block * n_block);
+    if constexpr (sub_h != 1) {
+        cb_wait_front(cb_out, m_block * n_block);
+    }
     const uint32_t base = get_read_ptr(cb_out);
-    for (uint32_t r = 0; r < m_valid; ++r) {
-        for (uint32_t c = 0; c < n_valid; ++c) {
-            noc_async_write_page((m0 + r) * out_row_tiles + out_col0 + n0 + c, out, base + (r * n_block + c) * out_tile_bytes);
+    for (uint32_t r = 0; r < m_block; ++r) {
+        for (uint32_t c0 = 0; c0 < n_block; c0 += sub_w) {
+            if constexpr (sub_h == 1) {
+                cb_wait_front(cb_out, r * n_block + c0 + sub_w);
+            }
+            for (uint32_t c = c0; c < c0 + sub_w; ++c) {
+                if (r < m_valid && c < n_valid) {
+                    noc_async_write_page((m0 + r) * out_row_tiles + out_col0 + n0 + c, out, base + (r * n_block + c) * out_tile_bytes);
+                }
+            }
         }
     }
     noc_async_write_barrier();
@@ -178,25 +191,66 @@ void kernel_main() {
     constexpr uint32_t out_tiles = m_block * n_block;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a, cb_w, cb_acc);
+    // Subblocks one tile high land in the output in order, so the writer can take them as they come.
+    constexpr bool stream = sub_h == 1;
     cb_reserve_back(cb_acc, out_tiles);
     for (uint32_t kb = 0; kb < k_blocks; ++kb) {
+        const bool last = kb + 1 == k_blocks;
         cb_wait_front(cb_a, m_block * k_block);
         cb_wait_front(cb_w, k_block * n_block);
         reconfig_data_format<SrcOrder::Reverse>(cb_a, cb_w);
         matmul_block_init(cb_a, cb_w, false, sub_w, sub_h, k_block);
-        // The first K block overwrites the accumulator; later ones add to it in L1.
-        pack_reconfig_l1_acc(kb == 0 ? 0 : 1);
+        if (!last) {
+            // The first K block overwrites the accumulator; later ones add to it in L1.
+            pack_reconfig_l1_acc(kb == 0 ? 0 : 1);
+        } else {
+            // The last K block starts from the FP32 partial (unpacked straight to DST, exact) and packs BF16.
+            pack_reconfig_l1_acc(0);
+            if (k_blocks > 1) {
+                cb_push_back(cb_acc, out_tiles);
+                cb_wait_front(cb_acc, out_tiles);
+            }
+            pack_reconfig_data_format(cb_out);
+            if constexpr (!stream) {
+                cb_reserve_back(cb_out, out_tiles);
+            }
+        }
         for (uint32_t r0 = 0; r0 < m_block; r0 += sub_h) {
             for (uint32_t c0 = 0; c0 < n_block; c0 += sub_w) {
                 tile_regs_acquire();
+                if (last && k_blocks > 1) {
+                    reconfig_data_format_srca(cb_w, cb_acc);
+                    copy_init(cb_acc);
+                    for (uint32_t r = 0; r < sub_h; ++r) {
+                        for (uint32_t t = 0; t < sub_w; ++t) {
+                            copy_tile(cb_acc, (r0 + r) * n_block + c0 + t, r * sub_w + t);
+                        }
+                    }
+                    reconfig_data_format_srca(cb_acc, cb_w);
+                    matmul_block_init(cb_a, cb_w, false, sub_w, sub_h, k_block);
+                }
                 for (uint32_t k = 0; k < k_block; ++k) {
                     matmul_block(cb_a, cb_w, r0 * k_block + k, k * n_block + c0, 0, false, sub_w, sub_h, k_block);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t r = 0; r < sub_h; ++r) {
+                if (!last) {
+                    for (uint32_t r = 0; r < sub_h; ++r) {
+                        for (uint32_t t = 0; t < sub_w; ++t) {
+                            pack_tile<true>(r * sub_w + t, cb_acc, (r0 + r) * n_block + c0 + t);
+                        }
+                    }
+                } else if constexpr (stream) {
+                    cb_reserve_back(cb_out, sub_w);
                     for (uint32_t t = 0; t < sub_w; ++t) {
-                        pack_tile<true>(r * sub_w + t, cb_acc, (r0 + r) * n_block + c0 + t);
+                        pack_tile(t, cb_out);
+                    }
+                    cb_push_back(cb_out, sub_w);
+                } else {
+                    for (uint32_t r = 0; r < sub_h; ++r) {
+                        for (uint32_t t = 0; t < sub_w; ++t) {
+                            pack_tile<true>(r * sub_w + t, cb_out, (r0 + r) * n_block + c0 + t);
+                        }
                     }
                 }
                 tile_regs_release();
@@ -205,25 +259,12 @@ void kernel_main() {
         cb_pop_front(cb_a, m_block * k_block);
         cb_pop_front(cb_w, k_block * n_block);
     }
-    pack_reconfig_l1_acc(0);
-    cb_push_back(cb_acc, out_tiles);
-
-    // FP32 accumulator to the BF16 output.
-    cb_wait_front(cb_acc, out_tiles);
-    cb_reserve_back(cb_out, out_tiles);
-    reconfig_data_format_srca(cb_acc);
-    pack_reconfig_data_format(cb_out);
-    copy_init(cb_acc);
-    for (uint32_t t = 0; t < out_tiles; ++t) {
-        tile_regs_acquire();
-        copy_tile(cb_acc, t, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_out, t);
-        tile_regs_release();
+    if constexpr (!stream) {
+        cb_push_back(cb_out, out_tiles);
     }
-    cb_push_back(cb_out, out_tiles);
-    cb_pop_front(cb_acc, out_tiles);
+    if (k_blocks > 1) {
+        cb_pop_front(cb_acc, out_tiles);
+    }
 }
 """
 
@@ -253,6 +294,10 @@ class GateMatmulProgram:
         self.x0, self.x1 = cols
         self.k_block = k_block
         self.compute_config = ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, fp32_dest_acc_en=True)
+        # The last K block reloads the FP32 accumulator into DST; unpacking straight to DST keeps it exact.
+        modes = [ttnn.UnpackToDestMode.Default] * 64
+        modes[_CB_ACC] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        self.compute_config.unpack_to_dest_mode = modes
 
     @property
     def columns(self) -> int:
@@ -387,7 +432,7 @@ class GateMatmulProgram:
                                 w_row_tiles,
                                 out_row_tiles,
                             ]
-                            + [sends]
+                            + [sends, sub_w, sub_h]
                             + w_ct
                             + out_ct,
                             runtime_args=rt,
