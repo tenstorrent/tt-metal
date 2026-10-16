@@ -149,3 +149,90 @@ def fp8_qdq(x: ttnn.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor:
         _free(res)
         res = res2
     return res
+
+
+# ------------------------------------------------------------------------------------------------- fp4 (e2m1)
+FP4_MAX = 6.0
+INV_FP4_MAX = 0.1666666716337204  # float32(1 / 6), the kernels' constant (exactly representable as a double)
+FP4_E4M3_AMAX_MIN = FP4_MAX * 2.0**-9  # e4m3-scale groups: amax clamped at 6 x the smallest e4m3 subnormal
+FP4_UE8M0_AMAX_MIN = FP4_MAX * 2.0**-126  # ue8m0-scale groups: amax clamped at 6 x the smallest normal
+# e2m1 magnitudes 0, .5, 1, 1.5, 2, 3, 4, 6: the midpoints between neighbours, the step up past each, and whether a
+# value equal to the midpoint rounds up (ties to the even code: midpoint k sits between codes k and k + 1, and
+# rounds up iff k + 1 is even, i.e. k odd)
+FP4_STEPS = (
+    (0.25, 0.5, False),
+    (0.75, 0.5, True),
+    (1.25, 0.5, False),
+    (1.75, 0.5, True),
+    (2.5, 1.0, False),
+    (3.5, 1.0, True),
+    (5.0, 2.0, False),
+)
+
+
+def fp4_qdq(x: ttnn.Tensor, block: int, e4m3_scale: bool = False, dtype=ttnn.float32) -> ttnn.Tensor:
+    """reference/kernels.py:fp4_quant_dequant(x, block, e4m3_scale) of an fp32 TILE tensor [..., R, W]
+    (W % block == 0), groups of ``block`` along the last dim, bit-exact:
+
+        amax = max |x| per group, clamped below (6 x 2^-9 for an e4m3 scale, 6 x 2^-126 for ue8m0)
+        s    = e4m3(amax / 6)                       e4m3 scale: one IEEE fp32 division by the scalar 6 (exact on the
+                                                    SFPU: probe in BREADCRUMBS), tt/quant.round_e4m3
+             = 2^ceil(log2(amax x fp32(1/6)))       ue8m0 scale: tt/quant.pow2_ceil on the bits
+        q    = e2m1(clamp(x / s, +-6)) x s          without the division: x / s > m  <=>  |x| > m s for each e2m1
+                                                    midpoint m, and m s is exact in fp32 (m has 3 significant bits,
+                                                    s 4), so the code is a sum of 7 exact compares (> for a midpoint
+                                                    that rounds down at a tie, >= for one that rounds up: ties to
+                                                    the even code); |q| = s x the summed steps (exact), the sign of x
+
+    Every step is a single exact fp32 SFPU operation (no FPU, K-30). Returns the input's shape in ``dtype`` (bf16
+    holds every value exactly: e2m1 x an e4m3 or power-of-two scale). Does not consume ``x``."""
+    assert x.dtype == ttnn.float32, x.dtype
+    shape = list(x.shape)
+    w = shape[-1]
+    assert w % block == 0, f"last dim {w} is not a multiple of {block}"
+    rows = 1
+    for d in shape[:-1]:
+        rows *= d
+    xg = ttnn.reshape(x, [1, 1, rows * (w // block), block])
+    a = ttnn.abs(xg, memory_config=DRAM)
+    amax = ttnn.max(a, dim=-1, keepdim=True, memory_config=DRAM)
+    if e4m3_scale:
+        am = ttnn.maximum(amax, FP4_E4M3_AMAX_MIN, memory_config=DRAM)
+        t = ttnn.divide(am, FP4_MAX, memory_config=DRAM)
+        _free(am)
+        tc = ttnn.clamp(t, 0.0, FP8_MAX, memory_config=DRAM)
+        _free(t)
+        s = round_e4m3(tc)
+        _free(tc)
+    else:
+        am = ttnn.maximum(amax, FP4_UE8M0_AMAX_MIN, memory_config=DRAM)
+        t = ttnn.multiply(am, INV_FP4_MAX, dtype=ttnn.float32, memory_config=DRAM)
+        _free(am)
+        s, _inv = pow2_ceil(t)
+        _free(t)
+    _free(amax)
+    steps = None
+    for mid, step, up in FP4_STEPS:
+        thr = ttnn.multiply(s, mid, dtype=ttnn.float32, memory_config=DRAM)
+        cmp = (ttnn.ge if up else ttnn.gt)(a, thr, dtype=ttnn.float32, memory_config=DRAM)
+        _free(thr)
+        if steps is None:
+            steps = ttnn.multiply(cmp, step, dtype=ttnn.float32, memory_config=DRAM)
+        else:
+            nxt = ttnn.add(steps, ttnn.multiply(cmp, step, dtype=ttnn.float32, memory_config=DRAM), memory_config=DRAM)
+            _free(steps)
+            steps = nxt
+        _free(cmp)
+    _free(a)
+    mag = ttnn.multiply(steps, s, dtype=ttnn.float32, memory_config=DRAM)
+    _free(steps)
+    neg = ttnn.lt(xg, 0.0, dtype=ttnn.float32, memory_config=DRAM)
+    nmag = ttnn.neg(mag, memory_config=DRAM)
+    out = ttnn.where(neg, nmag, mag, memory_config=DRAM)
+    _free(neg, nmag, mag)
+    res = ttnn.reshape(out, shape)  # (xg / res may be views: never freed here)
+    if dtype != ttnn.float32:
+        res2 = ttnn.typecast(res, dtype, memory_config=DRAM)
+        _free(res)
+        res = res2
+    return res

@@ -47,6 +47,14 @@ TABLE = {
         "reference for any input); skip = none, the identity on real table rows (e4m3 x 2^k: 0 values changed on the "
         "layer-1 golden) except groups with amax < 1e-4 (a perf pick for the owner)",
     ),
+    # ---- compressor (tt/compressor.py)
+    "COMPRESSOR_X": Setting(
+        "round_tf32",
+        ("round_tf32", "truncate"),
+        "the fp32 matmul inputs of the compressor (attn_norm into [wkv | wgate], the latent into wk; matmul in0, which "
+        "the FPU reads at TF32 by truncation, K-30): round_tf32 = rounded to TF32 to nearest even first "
+        "(tt/quant.round_tf32, DS41-31: an unbiased read, same bits); truncate = the FPU's own truncation",
+    ),
     # ---- attention (tt/attention.py)
     "WINDOW_SDPA": Setting(
         "high_precision",
@@ -161,6 +169,7 @@ MAX_PRECISION = {
     "HC_SINKHORN": "sfpu_fp32",  # FIX.4: the official kernel computes the Sinkhorn in fp32
     "ENGRAM_KV_QDQ": "qdq",
     "FP32_WEIGHT_ROUND": "srca",  # FIX.4: what HiFi4 multiplies of in1 (DS41-42)
+    "COMPRESSOR_X": "round_tf32",  # unbiased TF32 read of the fp32 matmul inputs (DS41-31)
     "ATTN_IN_MM": "fpu",  # owner 2026-10-15 (OV-3): accuracy against the noise floor, not exactness
     "WINDOW_SDPA": "high_precision",  # owner 2026-10-15 (OV-3); "exact" only for comparison
     "WINDOW_SDPA_OUT": "bf16",  # FIX.2: the reference kernel's dtypes (owner rule: never above the reference)

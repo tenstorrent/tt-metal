@@ -118,6 +118,16 @@ DEVICE_STEPS = {
         "kv",
         "attention",
     },
+    # attn_hc .. kv: the swa modules (C.enc_source.* and S.enc_source.01-05 passed on them, DS41-28); the compressor
+    # writes the served compressed caches and updates the reference state the CPU indexer / attention read
+    "enc_source": {
+        "attn_hc",
+        "attn_collapse",
+        "attn_norm",
+        "q_a",
+        "kv",
+        "compressor",
+    },
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -345,6 +355,51 @@ def _attention_host_fn(mesh, module):
     return fn
 
 
+def _compressor_host_fn(mesh, module, cfg, layer):
+    """fn(ctx, x_host [S, H]) -> compressed host [S / r, head_dim + index_dim] fp32 = [ckv | k] (harness boundary:
+    attn_norm rows over axis 0 and hidden columns over axis 1 in; both halves row-split, TP-replicated, read back from
+    mesh column 0). The chunk's complete groups (by ctx.extra["end"] = actual_end, default the whole chunk) are
+    written into the served caches ctx.extra["compress_cache"] (tt/compressor.TtCompressCaches, the hybrid model's
+    state); without one (component tests) a pair is made for the call and freed. With a reference state carrying
+    the layer (the hybrid model), its compress_kv / index_k rows of the chunk and its partial group are updated as
+    the reference step does, for the CPU steps that read them (indexer, attention, reader layers)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.compressor import TtCompressCaches
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_device, row_split_to_host
+
+    r, hd = module.ratio, cfg.head_dim
+
+    def fn(ctx, x):
+        start, s = int(ctx.start), x.shape[0]
+        assert start % r == 0 and s % r == 0, (start, s, r)
+        end = ctx.extra.get("end")
+        end = start + s if end is None else int(end)
+        caches = ctx.extra.get("compress_cache")
+        own = caches is None
+        if own:
+            max_seq = max(int(ctx.extra.get("max_seq") or 0), start + s)
+            caches = TtCompressCaches(mesh, module.tables, max_seq, r, hd, cfg.index_dim)
+        xd = hidden_split_to_device(mesh, x)
+        ckv, k = module(xd, start)
+        module.write(ckv, k, start, end, caches)
+        out = torch.cat([row_split_to_host(mesh, ckv).float(), row_split_to_host(mesh, k).float()], dim=-1)
+        for t in (xd, ckv, k):
+            ttnn.deallocate(t)
+        if own:
+            caches.free()
+        st = ctx.state
+        if st is not None and layer in getattr(st, "ckv", {}):
+            g0, n = start // r, out.shape[0]
+            st.ckv[layer][g0 : g0 + n] = out[:, :hd]
+            st.index_k[layer][g0 : g0 + n] = out[:, hd:]
+            if layer in st.partial:  # start and S even: no group pending after the chunk (reference _compressor)
+                st.partial[layer].zero_()
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _router_host_fn(mesh, module):
     """fn(ctx, x_host [S, H]) -> dense routing host [S, E] fp32 (harness boundary: ffn_norm's gathered rows split over
     axis 0, replicated over axis 1, in; the dense [S/SP, E] fp32 ROW_MAJOR routing back from mesh column 0)."""
@@ -544,6 +599,11 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
         return _attention_host_fn(
             mesh, build_attention(mesh, ck, cfg, layer, _max_seq(spec), _chunk(spec), tables=tables)
         )
+    if step == "compressor":
+        from models.demos.deepseek_v41_flash_d_p.tt.compressor import build_compressor
+
+        tables = _window_tables(mesh, spec, shared)
+        return _compressor_host_fn(mesh, build_compressor(mesh, ck, cfg, layer, _max_seq(spec), tables), cfg, layer)
     if step == "kv":
         from models.demos.deepseek_v41_flash_d_p.tt.kv import build_kv
 
@@ -612,17 +672,28 @@ class _HybridState:
     whose attention runs on the device: the reference's window ring is then a view of that cache (to_torch /
     load_prefix), and state.served reads it (serving_contract.md "KV cache")."""
 
-    def __init__(self, ref, max_seq, mesh=None, tables=None, window_layers=()):
+    def __init__(self, ref, max_seq, mesh=None, tables=None, window_layers=(), compress_layers=()):
         from models.demos.deepseek_v41_flash_d_p.tt.attention import TtWindowCache
+        from models.demos.deepseek_v41_flash_d_p.tt.compressor import TtCompressCaches
 
+        cfg = ref.cfg
         self.ref, self.s = ref, ref.new_state(max_seq)
         self.window = {i: TtWindowCache(mesh, tables, max_seq) for i in window_layers}
+        # served 1_compress_kv_r2 / 2_index_k_r2 (3_ / 4_ for ratio 1) of every layer whose compressor is on device
+        self.compress = {
+            i: TtCompressCaches(mesh, tables, max_seq, cfg.ratio(i), cfg.head_dim, cfg.index_dim)
+            for i in compress_layers
+        }
         self.tokens = None
 
     def load_prefix(self, layer, tensors, length):
         self.ref.load_state(self.s, layer, tensors, length)
         if layer in self.window:
             self.window[layer].load_ring(tensors["window_kv"], length)
+        if layer in self.compress and length:
+            c = self.compress[layer]
+            c.ckv.load_host(tensors["compress_kv"][: length // c.ratio], 0)
+            c.index_k.load_host(tensors["index_k"][: length // c.ratio], 0)
 
     def to_torch(self, layer, length):
         out = self.ref.state_tensors(self.s, layer, length)
@@ -634,7 +705,10 @@ class _HybridState:
         """{config name: natural-order rows of positions [0, ceil32(length))} (tests/bringup/contract/parts.py)."""
         if layer not in self.window:
             raise NotImplementedError(f"layer {layer}: its attention (and served caches) is not on the device yet")
-        return {"0_window_kv": self.window[layer].to_host(length)}
+        out = {"0_window_kv": self.window[layer].to_host(length)}
+        if layer in self.compress:
+            out.update({n: t.to_host(length) for n, t in self.compress[layer].by_config().items()})
+        return out
 
     def load_served(self, layer, tensors, length):
         if layer not in self.window:
@@ -647,12 +721,15 @@ class _HybridState:
     def formats(self):
         import ttnn
 
-        return {"0_window_kv": ttnn.bfloat16}
+        out = {"0_window_kv": ttnn.bfloat16}
+        for c in self.compress.values():
+            out.update({n: ttnn.bfloat16 for n in c.names})
+        return out
 
     def free(self):
-        for c in self.window.values():
+        for c in [*self.window.values(), *self.compress.values()]:
             c.free()
-        self.window = {}
+        self.window, self.compress = {}, {}
 
 
 class HybridDeviceModel:
@@ -675,11 +752,14 @@ class HybridDeviceModel:
             missing = [st for st, f in self.overrides[i].items() if f is None]
             assert not missing, f"layer {i}: no device module for {missing}"
         self.window_layers = [i for i in self.ref.layer_ids if "attention" in self.overrides[i]]
+        self.compress_layers = [i for i in self.ref.layer_ids if "compressor" in self.overrides[i]]
         self._tokens = None
         self.load_seconds = time.time() - t0
 
     def new_state(self, max_seq):
-        return _HybridState(self.ref, max_seq, self.mesh, self.shared.get("window_tables"), self.window_layers)
+        return _HybridState(
+            self.ref, max_seq, self.mesh, self.shared.get("window_tables"), self.window_layers, self.compress_layers
+        )
 
     def begin_chunk(self, tokens, start):
         self._tokens = tokens.reshape(-1).long()
@@ -706,6 +786,8 @@ class HybridDeviceModel:
         ctx.extra["end"] = end
         if i in state.window:
             ctx.extra["window_cache"] = state.window[i]
+        if i in state.compress:
+            ctx.extra["compress_cache"] = state.compress[i]
         return run_block(
             self.ref.block_graph(i), lambda n: self.ref.component(i, n), ctx, h, overrides=self.overrides[i]
         )

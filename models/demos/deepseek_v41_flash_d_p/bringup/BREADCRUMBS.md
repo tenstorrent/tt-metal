@@ -1175,3 +1175,52 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   off grid 0, mismatch 0.0077-0.0102, A,B,A bit-identical. The FAIL lines in the log come from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_kv.py`
   (BRINGUP_IMPL=mutations | reference | stub for the freeze checks).
+
+## C.enc_source.compressor test (attempt 1)
+- Previous sweep: scale 1.02 / 0.98 slipped the auto checks (rel 0.020 vs limits 0.031-0.075; the golden's comes
+  from the official arithmetic, DS41-38). Output [1024, 640] = cat(ckv fp4 x e4m3 scale per 16, k fp4 x ue8m0 per 32).
+- Added (as DS41-14 / DS41-46 did for the fp8 kv), on all 6 inputs vs the CPU step on the same inputs:
+  fp4 grid (re-quantizing either half changes nothing: limit exactly 0; scale mutations 0.86-0.93 off grid) and
+  exact-match fraction <= 0.023 (2 x the nudge's worst half, ckv 0.0114; whole-output nudge 0.006-0.010).
+  BRINGUP_IMPL=mutations runs the sweep with these checks (pattern of test_c_enc_source_kv.py).
+- Measured mistakes (CPU): rope +1 position, ckv block 32, ckv ue8m0 scale, no fp4: all caught by the auto rel
+  limits already. model.py's bf16 points ahead of fp4 (DS41-38): rel 0.036 > chunk0 / small / big limits 0.031-0.032
+  -> the device step must keep its intermediates in fp32 (DS41-47).
+- Results: mutations PASS (all 6 mistakes caught, 3 controls pass); reference PASS (err_compressor_L02 0.0155 <=
+  0.1905); stub FAIL. Default (device) mode fails with "no device module for compressor yet" (implement step next).
+- Re-run: `BRINGUP_IMPL={reference,stub,mutations} scripts/run_safe_pytest.sh --run-all
+  models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_compressor.py`.
+
+## C.enc_source.compressor implement (attempt 1)
+- New `tt/compressor.py` (TtCompressor, CompressRope, TtServedRows, TtCompressCaches), `tt/quant.py:fp4_qdq`, setting
+  COMPRESSOR_X, hooks `_compressor_host_fn` + device step "compressor", DEVICE_STEPS["enc_source"] = attn_hc .. kv
+  (passed C.enc_source.* / S.enc_source.01-05 on the swa modules, DS41-28) + compressor; _HybridState holds the
+  served compressed caches of compressor layers (state.served adds them when the layer's attention is on the device;
+  formats() lists them, bf16).
+- Chain per chip: x fp32 [S/SP, H/TP] (TF32-rounded, COMPRESSOR_X=round_tf32, DS41-31) @ the chip's K rows of
+  [wkv | wgate]^T (bf16 as stored, HiFi4, fp32 acc) -> tp_sum (exact) -> reshape [S/SP/2, 2048] pairs -> softmax
+  (max, exp, sum, divide; fp32 SFPU) -> kv0 w0 + kv1 w1 -> compressor.norm (fp32) -> RoPE at positions 2j from a
+  load-time ROW_MAJOR table (sliced at start / 2, any 16-aligned offset) -> fp4_qdq(16, e4m3) = ckv; latent @ wk^T
+  (bf16, HiFi4) -> k_norm -> RoPE -> fp4_qdq(32, ue8m0) = k. Rope dims de-interleaved at load in wkv / wgate rows,
+  compressor.norm, wk columns (latent order) and rows, k_norm (DS41-15). Intermediates fp32 to fp4 (DS41-47).
+- fp4_qdq (DS41-48): exact without dividing: e2m1 code = sum of 7 compares of |x| with midpoint x s (exact products),
+  > or >= by the tie rule; e4m3 scale = round_e4m3(divide(amax, 6.0)) (the scalar divide matched torch on 524k values);
+  0 mismatches vs kernels.fp4_quant_dequant on random / wide / tiny / zero / exact-tie sets (probe_002).
+  ttnn.max over 16-wide groups (reshape [N, 16]) is exact (probe_001); tensor / tensor ttnn.divide is 1 ulp off 6.6 %.
+- Served caches (DS41-48): token units: compressed row j = r token rows of width / r (ckv [.., 256], index [.., 64]),
+  init_kvpe_cache record shard [1, 1, 32, 256] = the contract's [16, 512] record; write = TtWindowCache's path
+  (all_gather over SP, rows of incomplete groups ((j + 1) r > end) zeroed by the load-time iota, embedding to server
+  order, update_padded_kv_cache(kv_actual_global=start, valid_global=end)); ckv TP-dedup, index keys TP-replicated.
+  Probe_003: starts (0, 2048)+(2048, 3017), 1000+(960, 3000), 1330+(1312, 3001), pulled back 1000+(960, 3008)+
+  (2048, 4000): every row == expected (prefix untouched, incomplete / pad rows zero); load_host round trip exact.
+- Not here: the sparse-attention table (all_gather of the source's served rows) belongs to enc_source attention; no
+  device compress_partial (always zero: starts are 32-aligned, chunks even; the hybrid zeroes the reference's).
+- Gate: PASS, err_compressor_L02 0.0159 <= 0.1905; vs CPU rel 0.0078 (limit 0.0746); chunk0 / layer24 / mixed /
+  small / big rel 0.0080 / 0.0089 / 0.0099 / 0.0078 / 0.0082 (limits 0.031-0.042); fp4 off grid 0, mismatch
+  0.0011-0.0019 (<= 0.023); A,B,A bit-identical. COMPRESSOR_X=truncate: err 0.0158, vs CPU 0.0077, mismatch
+  0.0012-0.0019 (no measurable difference; round_tf32 kept as the unbiased read). The own-floor WARN lines
+  (row / column inf x) are not gating (DS41-43). The FAIL lines at the top of the log are the precompile pass (K-52).
+- Hybrid probe_004 (device_model(mesh, spec, [2]), golden chunks 0, 1): block out PCC 0.99964 / 0.99957; state
+  compress_kv PCC 0.99988, index_k 0.99991, partial exact; served caches == the reference state bit for bit.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_compressor.py`;
+  probes `scripts/tt-probe.sh ds41_compressor < tests/ttnn/unit_tests/operations/ds41_compressor/probes/probe_00{2,3,4}.py`.
