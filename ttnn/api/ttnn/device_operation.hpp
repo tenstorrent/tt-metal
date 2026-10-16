@@ -203,11 +203,11 @@ void enqueue_mesh_workload(
     }
 
     // Inspector: emit debug entry with tensor parameters
-    if (tt::tt_metal::experimental::inspector::IsEnabled()) {
+    if (tt::tt_metal::experimental::inspector::IsEnabled(*mesh_device)) {
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
 
         std::vector<tt::tt_metal::TensorSpec> spec_copies;
-        if (tt::tt_metal::experimental::inspector::ShouldCaptureTensorSpecs()) {
+        if (tt::tt_metal::experimental::inspector::ShouldCaptureTensorSpecs(*mesh_device)) {
             size_t specs_count = ttsl::reflection::count_object_of_type<Tensor>(tensor_args);
             spec_copies.reserve(specs_count);
 
@@ -217,7 +217,7 @@ void enqueue_mesh_workload(
 
         auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(mesh_device);
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
-            workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
+            *mesh_device, workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }
 
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {

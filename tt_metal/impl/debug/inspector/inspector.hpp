@@ -31,13 +31,15 @@ class Data;
 
 class Inspector {
 public:
-    static bool is_enabled();
-
     // Creates the inspector session for `context`. The caller (the MetalContext) owns the returned session and must
     // keep `context` alive for as long as the session lives. Returns nullptr if the inspector is disabled or `context`
     // targets a mock device.
     static std::unique_ptr<inspector::Data> initialize(
         MetalContext& context, std::optional<int> rank, uint64_t fw_compile_hash);
+    // Whether `context` has an inspector session.
+    static bool is_enabled(const MetalContext& context);
+    // Whether `context` has an inspector session that captures tensor specs on op dispatch.
+    static bool capture_tensor_specs(const MetalContext& context);
     static void serialize_rpc(const MetalContext& context);
 
     static void program_created(const MetalContext& context, const detail::ProgramImpl* program) noexcept;
@@ -82,12 +84,13 @@ public:
     static void global_semaphore_reset(const distributed::MeshBuffer* buffer, uint32_t value) noexcept;
 
     static void emit_debug_entry(
+        const MetalContext& context,
         const distributed::MeshWorkloadImpl* mesh_workload,
         uint64_t runtime_id,
         std::string_view operation_name,
         std::vector<TensorSpec> tensor_specs,
         std::optional<distributed::MeshTraceId> trace_id = std::nullopt) noexcept;
-    static void release_trace(distributed::MeshTraceId trace_id) noexcept;
+    static void release_trace(const MetalContext& context, distributed::MeshTraceId trace_id) noexcept;
 
     // static method for logging dispatch core info
     static void set_dispatch_core_info(
