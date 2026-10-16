@@ -45,6 +45,13 @@ void kernel_main() {
     CircularBuffer src_cb(src_cb_id);
     CircularBuffer out_cb(out_cb_id);
 
+#if defined(ARCH_BLACKHOLE) && (defined(TRISC_MATH) || defined(TRISC_PACK))
+    // The math thread clears each DEST section: no 32-bit unpack source writes DEST here.
+    constexpr bool math_clears_dest = !llk_unpack_may_write_dest();
+#else
+    constexpr bool math_clears_dest = false;
+#endif
+
     compute_kernel_hw_startup(src_cb_id, out_cb_id);
     pack_untilize_init<block_ct_dim, full_ct_dim>(src_cb_id, out_cb_id);
 
@@ -52,7 +59,7 @@ void kernel_main() {
         out_cb.reserve_back(full_ct_dim);
         for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
             src_cb.wait_front(block_ct_dim);
-            pack_untilize_block<block_ct_dim, full_ct_dim>(src_cb_id, 1, out_cb_id, b);
+            pack_untilize_block<block_ct_dim, full_ct_dim, DST_ACCUM_MODE, math_clears_dest>(src_cb_id, 1, out_cb_id, b);
             src_cb.pop_front(block_ct_dim);
         }
         out_cb.push_back(full_ct_dim);

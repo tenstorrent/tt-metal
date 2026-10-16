@@ -33,6 +33,19 @@ constexpr static std::uint32_t format_size_in_bytes(std::uint32_t data_format)
     }
 }
 
+
+// As the untilize kernels: the math thread clears each DEST section when no 32-bit source writes DEST (Blackhole)
+inline bool math_clears_dest(const std::uint32_t unpack_src)
+{
+#ifdef ARCH_BLACKHOLE
+    return unpack_src != ckernel::to_underlying(DataFormat::Float32) && unpack_src != ckernel::to_underlying(DataFormat::Int32) &&
+           unpack_src != ckernel::to_underlying(DataFormat::UInt32);
+#else
+    (void)unpack_src;
+    return false;
+#endif
+}
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -59,6 +72,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         for (std::uint32_t block_num = 0; block_num < num_blocks_per_col; ++block_num) // Loop over blocks in the tile-row.
         {
+#ifdef ARCH_BLACKHOLE
+            // As pack_untilize_block: one context per block row of three or more tiles that are not 32-bit
+            const std::uint32_t src_format = formats.unpack_A_src;
+            const bool src_32bit           = src_format == ckernel::to_underlying(DataFormat::Float32) || src_format == ckernel::to_underlying(DataFormat::Int32) ||
+                                   src_format == ckernel::to_underlying(DataFormat::UInt32);
+            if (BLOCK_CT_DIM > 2 && !src_32bit)
+            {
+                const std::uint32_t first      = rt * FULL_CT_DIM + block_num * BLOCK_CT_DIM;
+                const std::uint32_t address    = L1_ADDRESS(params.buffer_A[first]);
+                const std::uint32_t stride_16B = L1_ADDRESS(params.buffer_A[first + 1]) - address;
+                if (!IS_BFP_FORMAT(formats.unpack_A_src) && stride_16B == params.num_faces * FACE_R_DIM * datum_size_in_bytes(formats.unpack_A_src))
+                {
+                    _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en, true>(
+                        address, BLOCK_CT_DIM, stride_16B, formats.unpack_A_src, formats.unpack_A_dst, params.num_faces);
+                }
+                else
+                {
+                    _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en>(
+                        address, BLOCK_CT_DIM, stride_16B, formats.unpack_A_src, formats.unpack_A_dst, params.num_faces);
+                }
+                continue;
+            }
+#endif
             for (std::uint32_t tile_index_within_block = 0; tile_index_within_block < BLOCK_CT_DIM; ++tile_index_within_block) // Loop over tiles in the block
             {
                 std::uint32_t tile_index_in_memory = rt * FULL_CT_DIM + block_num * BLOCK_CT_DIM + tile_index_within_block;
@@ -98,6 +134,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t block_num = 0; block_num < num_blocks_per_col; ++block_num) // Loop over blocks in the tile-row.
         {
             _llk_math_wait_for_dest_available_<dest_sync>();
+#ifdef ARCH_BLACKHOLE
+            if (math_clears_dest(formats.unpack_A_src))
+            {
+                _llk_math_clear_dest_section_<dest_sync, is_fp32_dest_acc_en>();
+            }
+#endif
             for (std::uint32_t tile_index_within_block = 0; tile_index_within_block < BLOCK_CT_DIM; ++tile_index_within_block) // Loop over tiles in the block
             {
                 LLK_ASSERT(
@@ -120,6 +162,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_untilize.h"
 #include "params.h"
 
+#ifndef PACK_UNTILIZE_SRC_DATUM_SIZE
+#define PACK_UNTILIZE_SRC_DATUM_SIZE 0
+#define PACK_UNTILIZE_DST_DATUM_SIZE 0
+#endif
+
 constexpr std::uint32_t L1_ACCESS_ADDRESS_GRANULARITY = 16; // in bytes
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -129,16 +176,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const bool UNTILIZE                    = true;
     const std::uint32_t NUM_DATUMS_IN_TILE = FACE_R_DIM * FACE_C_DIM * params.num_faces;
-    const std::uint32_t row_stride_16B     = (FULL_CT_DIM * NUM_DATUMS_IN_TILE * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
-    const std::uint32_t block_stride_16B =
+    std::uint32_t row_stride_16B           = (FULL_CT_DIM * NUM_DATUMS_IN_TILE * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
+    std::uint32_t block_stride_16B =
         (BLOCK_CT_DIM * ((params.num_faces > 2) ? params.num_faces / 2 : params.num_faces) * FACE_C_DIM * format_size_in_bytes(formats.pack_dst)) /
         L1_ACCESS_ADDRESS_GRANULARITY;
+    if constexpr (NARROW_ROW)
+    {
+        const std::uint32_t rows_per_tile = FACE_R_DIM * ((params.num_faces > 2) ? 2 : 1);
+        row_stride_16B   = (FULL_CT_DIM * rows_per_tile * ROW_NUM_DATUMS * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
+        block_stride_16B = (BLOCK_CT_DIM * ROW_NUM_DATUMS * format_size_in_bytes(formats.pack_dst)) / L1_ACCESS_ADDRESS_GRANULARITY;
+    }
     const std::uint32_t base_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
 
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
         formats.pack_src, formats.pack_dst, NUM_DATUMS_IN_TILE /* tile_size */);
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
-    _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, params.num_faces);
+    _llk_pack_untilize_init_wrapper_<
+        BLOCK_CT_DIM,
+        FULL_CT_DIM,
+        false /* diagonal */,
+        NARROW_ROW,
+        ROW_NUM_DATUMS,
+        false /* dense */,
+        unpack_to_dest,
+        PACK_UNTILIZE_SRC_DATUM_SIZE,
+        PACK_UNTILIZE_DST_DATUM_SIZE>(formats.pack_src, formats.pack_dst, FACE_R_DIM, params.num_faces);
     const std::uint32_t num_blocks_per_col = FULL_CT_DIM / BLOCK_CT_DIM;
 
     for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++) // Loop over all tiles vertically
@@ -148,9 +210,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
             std::uint32_t pack_addr_16B = base_addr_16B + rt * row_stride_16B + block_num * block_stride_16B;
 
             _llk_packer_wait_for_math_done_();
-            _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
-                pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
-            _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            _llk_pack_untilize_wrapper_<
+                BLOCK_CT_DIM,
+                FULL_CT_DIM,
+                false /* diagonal */,
+                NARROW_ROW,
+                ROW_NUM_DATUMS,
+                TILE_DST_CT_OFFSET,
+                false /* dense */,
+                PACK_UNTILIZE_SRC_DATUM_SIZE,
+                PACK_UNTILIZE_DST_DATUM_SIZE>(pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
+#ifdef ARCH_BLACKHOLE
+            if (math_clears_dest(formats.unpack_A_src))
+            {
+                _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en, false>();
+            }
+            else
+#endif
+            {
+                _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            }
         }
     }
 

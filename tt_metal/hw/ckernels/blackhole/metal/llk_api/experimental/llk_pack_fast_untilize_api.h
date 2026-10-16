@@ -17,6 +17,7 @@ inline void llk_pack_fast_untilize_init_with_formats(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format) {
     SAN_HOOK(unsupported());
     ckernel::_llk_pack_fast_untilize_init_<block_ct_dim, full_ct_dim>(pack_src_format, pack_dst_format);
+    ckernel::_llk_pack_fast_untilize_init_mop_<block_ct_dim, full_ct_dim>();
 }
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
@@ -28,6 +29,7 @@ inline void llk_pack_fast_untilize_init(const std::uint32_t output) {
         "fast_untilize pack requires 4-face output");
     ckernel::_llk_pack_fast_untilize_init_<block_ct_dim, full_ct_dim>(
         pack_src_format[output_id], pack_dst_format[output_id]);
+    ckernel::_llk_pack_fast_untilize_init_mop_<block_ct_dim, full_ct_dim>();
 }
 
 template <std::uint32_t block_ct_dim>
@@ -43,8 +45,7 @@ inline void llk_pack_fast_untilize_block(
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t output_address = get_output_tile_address<true, PackMode::Default>(output_id, output_tile_index);
-    std::uint32_t prev_unit_dim = 0;
-    ckernel::_llk_pack_fast_untilize_block_<block_ct_dim>(output_address, unit_dim, prev_unit_dim);
+    ckernel::_llk_pack_fast_untilize_block_<block_ct_dim>(output_address, unit_dim, ckernel::pack_fast_untilize_mop_key);
 }
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
@@ -69,6 +70,30 @@ inline void llk_pack_fast_untilize_block_strided(
     const std::uint32_t output_row_stride = SCALE_DATUM_SIZE(pack_dst_format[output_id], full_ct_dim * TILE_C_DIM) / 16;
     ckernel::_llk_pack_fast_untilize_block_strided_<block_ct_dim, full_ct_dim>(
         output_row_address + chunk_offset, unit_dim, prev_unit_dim, output_row_stride);
+}
+
+// One face-pair pass of the unit starting tile_offset tiles into the output row; full_ct_dim is the row's width.
+template <std::uint32_t full_ct_dim>
+inline void llk_pack_fast_untilize_pass_block(
+    const std::uint32_t output,
+    const std::uint32_t output_tile_index,
+    const std::uint32_t tile_offset,
+    const std::uint32_t unit_dim,
+    const std::uint32_t pass,
+    std::uint32_t& prev_unit_dim) {
+    SAN_HOOK(unsupported());
+    const std::uint32_t output_id = get_output_id(output);
+    const std::uint32_t output_row_address =
+        get_output_tile_address<true, PackMode::Default>(output_id, output_tile_index);
+    const std::uint32_t output_row_stride = SCALE_DATUM_SIZE(pack_dst_format[output_id], full_ct_dim * TILE_C_DIM) / 16;
+    if constexpr (full_ct_dim > ckernel::FAST_UNTILIZE_MAX_PASS_UNIT_DIM) {
+        const std::uint32_t chunk_offset = SCALE_DATUM_SIZE(pack_dst_format[output_id], tile_offset * TILE_C_DIM) / 16;
+        ckernel::_llk_pack_fast_untilize_pass_block_strided_(
+            output_row_address + chunk_offset, unit_dim, pass, prev_unit_dim, output_row_stride);
+    } else {
+        ckernel::_llk_pack_fast_untilize_pass_block_(
+            output_row_address, unit_dim, pass, prev_unit_dim, output_row_stride);
+    }
 }
 
 inline void llk_pack_fast_untilize_uninit_with_src_format(const std::uint32_t pack_src_format) {

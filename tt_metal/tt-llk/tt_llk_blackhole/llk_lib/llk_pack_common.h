@@ -61,9 +61,29 @@ inline void _llk_packer_set_math_semaphore_()
 // Wait for all writes to complete in L1 (header + data)
 // Tell math it can write again
 // Clear dest only when clear_dest is true
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest = true>
+// select_first: point the packer at the next half before the drain wait; accepted PACRs keep their DEST address, and
+// the next PACR comes after this call's waits.
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest = true, bool select_first = false>
 inline void _llk_pack_dest_section_done_()
 {
+    if constexpr (select_first && Dst == DstSync::SyncHalf)
+    {
+        const std::uint32_t released_half = dest_offset_id % 2;
+        flip_packer_dest_offset_id();
+        TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        if constexpr (clear_dest)
+        {
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);
+            TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, released_half);
+            _llk_packer_set_math_semaphore_<p_stall::NONE>();
+        }
+        else
+        {
+            _llk_packer_set_math_semaphore_<p_stall::PACK>();
+        }
+        return;
+    }
+
     if constexpr (clear_dest)
     {
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
