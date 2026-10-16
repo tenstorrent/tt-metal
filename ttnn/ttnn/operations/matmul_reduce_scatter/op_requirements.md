@@ -51,7 +51,7 @@
 - **Accuracy**: rel-RMS 0.0047, PCC ≥ 0.99988, median 1 bf16 ULP on 4 shapes (HiFi2), see `verification_report.md`.
 - **Perf (untraced, max over 4 chips)**: focus 142-144 µs (target 124.8), GLM 206-207 µs (target 207.3, met), MiMo 255-261 µs (target 220.6).
 
-### [ ] Refinement 1 — Numerical formats: bfloat8_b activations + bfloat4_b weights
+### [x] Refinement 1 — Numerical formats: bfloat8_b activations + bfloat4_b weights
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` (activation) and `ttnn.bfloat4_b` to `SUPPORTED["weight_dtype"]`, closing `TARGET − SUPPORTED` on every axis. Per the Blocking Model these are knob-turns. They change the page format and tile size of `cb_act_k_window` (bf8b: 1088 B tiles) and `cb_weight_k_window` (bf4b: 576 B tiles), plus the `tA` / `tW` terms of `footprint()`, with no structure change. The output stays bfloat16 whatever the activation dtype (`check_output` enforces it). The golden bf8b-activation reference quantizes A like the device (`quantize_like_device`), so the cells score the op, not the input format. Keep `compute_kernel_config` behaviour unchanged: fidelity is the caller's, fp32 DEST stays forced on the matmul cores. Any cell that fails out of the box goes to `EXCLUSIONS` with its reason, not to a separate refinement.
 

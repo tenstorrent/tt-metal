@@ -75,27 +75,37 @@ def ring_mesh():
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-# (id, A shape, W shape, scatter_dim, weight dtype, fp32_dest_acc_en floor)
+# (id, A shape, W shape, scatter_dim, activation dtype, weight dtype, fp32_dest_acc_en floor)
 CASES = [
-    ("small", (1, 1, 128, 256), (256, 512), -1, ttnn.bfloat16, True),
-    ("medium", (1, 1, 640, 1024), (1024, 2048), -2, ttnn.bfloat16, True),
-    ("focus_kimi_oproj", (1, 1, 640, 2048), (2048, 7168), -1, ttnn.bfloat8_b, False),
-    ("mimo_oproj_rows", (1, 1, 2048, 2048), (2048, 4096), -2, ttnn.bfloat8_b, True),
+    ("small", (1, 1, 128, 256), (256, 512), -1, ttnn.bfloat16, ttnn.bfloat16, True),
+    ("medium", (1, 1, 640, 1024), (1024, 2048), -2, ttnn.bfloat16, ttnn.bfloat16, True),
+    ("focus_kimi_oproj", (1, 1, 640, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b, False),
+    ("mimo_oproj_rows", (1, 1, 2048, 2048), (2048, 4096), -2, ttnn.bfloat16, ttnn.bfloat8_b, True),
+    # Refinement 1: block-float activations / weights (A quantized like the device, as the golden reference does)
+    ("focus_a_bf8b_w_bf4b", (1, 1, 640, 2048), (2048, 7168), -1, ttnn.bfloat8_b, ttnn.bfloat4_b, False),
+    ("mimo_w_bf4b", (1, 1, 2048, 2048), (2048, 4096), -2, ttnn.bfloat16, ttnn.bfloat4_b, True),
 ]
+
+
+def _plan_summary():
+    import ttnn.operations.matmul_reduce_scatter as pkg
+
+    plan = getattr(pkg, "_LAST_PLAN", None) or {}
+    return {k: plan[k] for k in ("xblock", "kb", "grid") if k in plan}
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c[0] for c in CASES])
 def test_precision_baseline(ring_mesh, case):
-    name, a_shape, w_shape, scatter_dim, weight_dtype, fp32_dest = case
+    name, a_shape, w_shape, scatter_dim, act_dtype, weight_dtype, fp32_dest = case
     cluster_axis = ring_mesh.ring_cluster_axis
     g = tuple(ring_mesh.shape)[cluster_axis]
-    a = random_stacked(ring_mesh, a_shape, torch.bfloat16, seed=0)
+    a = quantize_like_device(random_stacked(ring_mesh, a_shape, torch.bfloat16, seed=0), act_dtype)
     w = random_stacked(ring_mesh, w_shape, torch.bfloat16, seed=1, scale=w_shape[0] ** -0.5)
     w = quantize_like_device(w, weight_dtype)
     expected = pytorch_matmul_reduce_scatter(a.float(), w.float(), cluster_axis, scatter_dim)  # fp32 reference
 
     out = matmul_reduce_scatter(
-        create_ttnn_input_tensor(a, ring_mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+        create_ttnn_input_tensor(a, ring_mesh, dtype=act_dtype, layout=ttnn.TILE_LAYOUT),
         create_ttnn_input_tensor(w, ring_mesh, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT),
         cluster_axis=cluster_axis,
         scatter_dim=scatter_dim,
@@ -106,6 +116,7 @@ def test_precision_baseline(ring_mesh, case):
         ),
     )
     assert list(out.shape) == output_shape(a_shape, w_shape, scatter_dim, g)
+    assert out.dtype == ttnn.bfloat16
 
     cols = tuple(ring_mesh.shape)[1]
     got = torch.stack(
@@ -134,6 +145,7 @@ def test_precision_baseline(ring_mesh, case):
         f"mean_abs={err.mean().item():.6f} rel_rms={rel_rms:.5f} ulp_median={ulp_q[0].item():.0f} "
         f"ulp_p99={ulp_q[1].item():.0f} ulp_nonsmall_median={ulp_ns[0].item():.0f} "
         f"ulp_nonsmall_p99={ulp_ns[1].item():.0f} ulp_max={ulp.max().item():.0f} "
-        f"ratio_p5={q[0].item():.4f} ratio_median={q[1].item():.4f} ratio_p95={q[2].item():.4f} | {allclose_msg}"
+        f"ratio_p5={q[0].item():.4f} ratio_median={q[1].item():.4f} ratio_p95={q[2].item():.4f} "
+        f"plan={_plan_summary()} | {allclose_msg}"
     )
     assert rel_rms <= rms_target, f"rel_rms {rel_rms} > {rms_target}"
