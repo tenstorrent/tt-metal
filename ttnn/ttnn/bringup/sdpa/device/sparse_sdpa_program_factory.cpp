@@ -100,7 +100,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // Q -> bf16 cb_q_in. Q is read row-major in its native dtype (cb_q_rm) and tilized into cb_q_in.
     const tt::DataFormat q_rm_df = tt::tt_metal::datatype_to_dataformat_converter(t.q.dtype());
     const bool q_is_fp8 = (q_rm_df == tt::DataFormat::Fp8_e4m3);
-    const tt::DataFormat q_in_df = q_is_fp8 ? tt::DataFormat::Bfp8_b : bf;
+    // fp32_scores (fork option) admits a FLOAT32 q: its row-major and tiled CBs are Float32.
+    const tt::DataFormat q_in_df = q_is_fp8 ? tt::DataFormat::Bfp8_b : (q_rm_df == fp32 ? fp32 : bf);
     const uint32_t q_in_tile_bytes = tt::tile_size(q_in_df);
     // Output dtype matches q (compute_output_specs). The final untilize packs the bf16 accumulator
     // (cb_out_im) to this format in cb_out_rm — fp8_e4m3 is a regular float8, not block-float, so it
@@ -152,7 +153,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     cb(cb_neginf, tile_bytes, 1, bf);
     cb(cb_mask_part, tile_bytes, 1, bf);
     cb(cb_scale, tile_bytes, 1, bf);
-    cb(cb_qk_im, tile_bytes, Sqt * Skt, bf);
+    // fp32_scores (fork option): the scores and the softmax probabilities (probs@V's operand) in Float32 (default
+    // bf16).
+    const tt::DataFormat qk_df = attrs.fp32_scores ? fp32 : bf;
+    cb(cb_qk_im, tt::tile_size(qk_df), Sqt * Skt, qk_df);
     cb(cb_max_a, tile_bytes, Sqt, bf);
     cb(cb_max_b, tile_bytes, Sqt, bf);
     // high_precision (fork option): the L1-accumulated running output / row-sum in Float32 (default bf16); the
@@ -329,6 +333,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     }
     if (attrs.fp32_output) {
         compute_desc.defines.emplace_back("SPARSE_SDPA_FP32_OUTPUT", "1");
+    }
+    if (attrs.fp32_scores) {
+        compute_desc.defines.emplace_back("SPARSE_SDPA_FP32_SCORES", "1");
     }
     // fp8 inputs must unpack into a 32-bit dest (fp8 -> fp32 in DEST, then packed to bfp8 cb_*_in).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(

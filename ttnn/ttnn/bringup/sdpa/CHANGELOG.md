@@ -267,3 +267,33 @@ Build fixes after fork_op.py (no behaviour change):
   `tests/unit/test_sparse_sdpa_high_precision.py` (`test_fp32_output` x4: Float32 dtype, off the bf16 / TF32 grids,
   <= 0.5 bf16 steps from the bf16 output, closer to float32; `test_fp32_output_program_and_refusal`). Without the
   pack reconfig all 4 accuracy cases fail (seen during development).
+
+### sparse_sdpa: fp32_scores (Float32 scores / probabilities, TF32 nearest rounding, float32 q)
+- What: `ttnn.bringup.sparse_sdpa(..., high_precision=True, fp32_output=True, fp32_scores=True)` (default False: the
+  previous program). Behind a new `SPARSE_SDPA_FP32_SCORES` define (absent when off): cb_qk_im (scores, then the
+  softmax probabilities, probs@V's operand) is Float32 instead of bf16; a FLOAT32 q is accepted (cb_q_rm / cb_q_in
+  Float32); and every Float32 value the FPU reads later is rounded to TF32 to nearest-even in DEST by an SFPU step on
+  the pack thread before its pack (the FPU reads Float32 at TF32 by truncation, a coherent bias, K-30): the scores,
+  the probabilities, the running output (probs@V), the row-sum (the k_chunk's Skt probability tiles summed in DEST by
+  SFPU fp32 adds when Skt <= DEST tiles, else the previous L1-accumulated sum) and 1/sum. Explicit unpack / pack format
+  restores where the kernel assumed cb_qk_im was bf16 (per query group, around the bf16 running max, after PV and
+  SALAD, in reduce_c_row_group's eltwise max). The running max stays bf16. Refused unless high_precision and
+  fp32_output; a float32 q is refused without fp32_scores. In the program hash.
+- Default unchanged: option off = no define, the same CB formats and arguments (the program hash adds the flag). Unit
+  suite 41 passed / 10 skipped (37 + 4 new); source-test check 216 tests, 0 regressions; model cases 5 passed /
+  1 skipped, as recorded.
+- Why: deepseek_v41_flash_d_p S.swa.11 (scaled 96-expert router) failed router vs golden 0.9887 < 0.99: the window
+  attention's bf16 scores / probabilities and the FPU's truncating TF32 reads (CPU emulation: bf16 scores 0.9910,
+  TF32-truncated scores 0.9940, TF32-nearest scores / q / probabilities 0.9953). With the option and q rounded to TF32
+  by the model: attention vs the CPU step rel 0.0189 -> 0.0143, bias -0.00075 -> -0.00030, router vs golden 0.9918
+  (gate PASS). Op level, vs float32 on a float32 q: rel 0.0026 / 0.0068 / 0.0063 (bf16 scores, bf16 q) -> 0.0009 /
+  0.0022 / 0.0017. Cost: the model's attention 26.5 -> 28.6 ms per layer (2x2, chunk 2048).
+- Gotcha: the SFPU is one unit shared by the threads; with half-sync DEST the math thread's next tiles overlap the
+  pack thread's work on the other half, so an SFPU add issued on the math thread (add_binary_tile) next to the pack
+  thread's rounding corrupted the 2-group cases (rel 2-400). All new SFPU work runs on the pack thread.
+- Needed by: deepseek_v41_flash_d_p S.swa.11 (`tt/attention.py:TtWindowAttention._sdpa`, setting
+  WINDOW_SDPA_SCORES=fp32; bf16 keeps the previous program)
+- Files: `sparse_sdpa.{hpp,cpp}`, `sdpa_nanobind.cpp`, `device/sparse_sdpa_device_operation{.cpp,.hpp,_types.hpp}`,
+  `device/sparse_sdpa_program_factory.cpp`, `device/kernels/compute/sparse_sdpa_compute.cpp`,
+  `device/kernels/compute/compute_streaming.hpp`, `tests/unit/test_sparse_sdpa_high_precision.py`
+  (`test_fp32_scores` x3, `test_fp32_scores_program_and_refusal`)

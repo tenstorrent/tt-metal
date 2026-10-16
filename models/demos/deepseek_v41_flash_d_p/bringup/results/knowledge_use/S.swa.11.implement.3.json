@@ -1,0 +1,109 @@
+{
+ "used": [
+  {
+   "id": "K-30",
+   "how": "traced the remaining attention / mHC bias to the FPU's truncating TF32 read of fp32 operands; fixed by rounding to TF32 nearest before the FPU reads (sparse_sdpa fp32_scores SFPU rounding in DEST, tt/quant.round_tf32 for q, tt/common.fpu_weight for hc_fn)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-30",
+   "how": "started from its diagnosis (router fine, upstream noise); found the remaining lever it did not list: bf16 scores / probabilities inside sparse_sdpa and TF32 truncation (DS41-31); updated it (layer 0 resolved, layer 1 still 0.9847)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-18",
+   "how": "took the window attention as the dominant error source and measured which of its bf16 buffers matters (scores, not only the output)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-29",
+   "how": "followed its lesson on compile-time format-skip helpers: explicit pack / unpack reconfigs wherever the kernel assumed cb_qk_im was bf16 (per group, around the bf16 max, after PV and SALAD)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-16",
+   "how": "attributed attn_hc's remaining error (bias -3.4e-4 after rounding hc_fn) to the in-tile partial-dot rounding and did not chase it with an exact kernel (owner rule)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-19",
+   "how": "did not make the exact window kernel or ATTN_IN_MM=exact the default or max-precision value (OV-3); the fix stays in the fast kernel",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "ignored the pcc-0 / rel-1 / rel-inf FAIL lines of the precompile collect pass in every gate and component log",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-39",
+   "how": "named a routing-aware vs-golden check as the remaining lever for layer 1 (S.swa_engram.14, 0.9847)",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-30",
+   "evidence": "its Fix said only an owner / framework decision (exact path or a new check) could clear the scaled router vs golden; ttnn.bringup.sparse_sdpa(fp32_scores=True) + q TF32 rounding passes S.swa.11 at 0.991817 (/tmp/s11c/gate_final.log) on the fast kernel; entry updated",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the FPU's fp32 read (K-30) is a truncation, i.e. a coherent bias over long dot products; rounding the operand to TF32 nearest-even first (on the host for weights, on device by int bit ops, or SFPU in DEST before a pack) makes the read exact and unbiased (DS41-31)",
+  "sparse_sdpa high_precision still packs the scores / probabilities to bf16 (cb_qk_im); for the router that costs more than the bf16 output did (CPU emulation 0.9910 vs 0.9921)",
+  "the SFPU is one unit shared by the TRISC threads: with half-sync DEST, SFPU work issued on the math thread beside pack-thread SFPU work (exp_packthread style) corrupts results (rel 2-400); keep a kernel's SFPU steps on one thread"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "known_issues.md DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x (swap_step_calib) the step's own component error, no cap (testing/component.py:350-356)'; left as is while adding DS41-31 and updating DS41-30"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "DS41-31"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.swa.11",
+  "role": "implement",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T01:17:18",
+  "head": "956e200b4c3",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.swa.11.implement.3.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/quant.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
+   "ttnn/ttnn/bringup/sdpa/device/kernels/compute/compute_streaming.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/kernels/compute/sparse_sdpa_compute.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_program_factory.cpp",
+   "ttnn/ttnn/bringup/sdpa/sdpa_nanobind.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.hpp",
+   "ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py"
+  ]
+ }
+}

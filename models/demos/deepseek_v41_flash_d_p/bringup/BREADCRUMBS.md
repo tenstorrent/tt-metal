@@ -620,3 +620,59 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - OV-4: DS41-20 already states the F73 fix; unchanged. DS41-18 updated (fp32 output now enough since F73).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_06_attention.py`;
   fork: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py -k fp32_output`
+
+## S.swa.11 implement (attempt 1, scaled run) — gate FAIL, needs an owner / overseer decision
+- Nothing to build: `tt/router.py:TtRouter` and `DEVICE_STEPS["swa"]` (router) were in place from C.swa.router.
+  The gate fails one check only: `swap_router_vs_golden` pcc 0.988729 < 0.99 (the router component test's default
+  PCC). Everything else passes: pcc_swap_out 0.999848, router vs the CPU step rel 9e-5, reselected 0.0015, tail rel
+  0.0019 (limit 0.117).
+- Cause (DS41-30): upstream bf16 noise, not the router. S.swa.10 (router on the CPU) already had router vs golden
+  0.988758. Host-only CPU run, attention replaced by its bf16 precision model: router vs golden 0.984 (13 % of rows
+  pick another expert set). The device is better than that floor. With DS41_WINDOW_SDPA=exact (comparison only) the
+  gate passes: router vs golden 0.992686, attention vs CPU rel 0.0042.
+- Not done: making WINDOW_SDPA=exact the default or the max-precision value. The owner rule and OV-3 forbid it
+  without an owner decision ("never trade speed for exactness").
+- Fix in `tt/window_exact.py:_lane_sum`: with one lane group (G == 1, the scaled 2x2 head count), the full-range slice
+  aliased `o`, and `_lane_matmul` freed it ("Input Tensor B is not allocated"). G == 1 now returns o (or o + acc), and
+  the caller frees o only when it is not the result. This only affects the exact (comparison) path.
+- OV-4: DS41-20 already says F73 (2 x the component error, no cap); left as it is.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_11_router.py`
+  (comparison: prefix `DS41_WINDOW_SDPA=exact`).
+
+## S.swa.11 implement (attempt 2) — gate FAIL again, same single check; no model change
+- Gate re-run unchanged: only `swap_router_vs_golden` 0.988729 < 0.99 fails (bit-identical to attempt 1); router vs
+  the CPU step rel 9.1e-5, reselected 0.0015, pcc_swap_out 0.999848.
+- DS41-30 / K-39: the router is right; the loss is top-6-of-96 near-tie flips from upstream bf16 noise. New CPU
+  emulation (known_issues_detail.md, "Scaled router vs golden"): the attention alone with today's bf16 q / bf16
+  probabilities gives router vs golden 0.9921; with fp32 (TF32-read) q and probabilities 0.9956. On device that
+  would be roughly 0.991 (the in-tile rounding stays): a sparse_sdpa fork extension (fp32 q input, fp32 P CB) for a
+  marginal pass, slower than the default. Not built: OV-3 / owner 2026-10-15 (fast path default, thresholds from the
+  noise floor); the 0.99 vs-golden PCC is a fixed number below that floor (CC precision model 0.984).
+- Needs: an owner / overseer decision (framework vs-golden limit for selection outputs from the precision model,
+  or fp32-operand window attention as the max-precision value).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_11_router.py`
+
+## S.swa.11 implement (attempt 3) — gate PASS (router vs golden 0.9918)
+- Cause found (DS41-31): the window attention's sparse_sdpa kept the scores / probabilities in a bf16 CB, and the FPU
+  reads fp32 operands at TF32 by truncation (K-30), a coherent bias. CPU emulation: bf16 scores alone cap router vs
+  golden at 0.9910; TF32-nearest scores / q / probabilities 0.9953.
+- Fork `ttnn.bringup.sparse_sdpa(fp32_scores=True)` (needs high_precision + fp32_output; default off = the previous
+  program; define SPARSE_SDPA_FP32_SCORES): Float32 cb_qk_im, float32 q accepted, and an SFPU TF32 round-to-nearest in
+  DEST on the pack thread before each pack the FPU later reads (scores, probabilities, running output, row-sum summed
+  in DEST, 1/sum). Explicit unpack / pack format restores where the kernel assumed cb_qk_im was bf16. Gotcha: an SFPU
+  op on the math thread next to the pack thread's SFPU work corrupts the other DEST half (one SFPU): pack thread only.
+- Model: setting WINDOW_SDPA_SCORES (default and max precision fp32; bf16 = the previous path, a perf pick: 26.5 vs
+  28.6 ms per attention call, 2x2, chunk 2048); q rounded by `tt/quant.round_tf32` (bit-exact vs torch) and kept fp32
+  through the all_to_all. Setting FP32_WEIGHT_ROUND (rne): hc_fn rounded to TF32 at load (`tt/common.fpu_weight`),
+  free; attn_hc rel 6.5e-4 -> 6.1e-4 (the rest is DS41-16's in-tile rounding).
+- Gate: attention vs CPU rel 0.0189 -> 0.0143 (bias -7.5e-4 -> -3.0e-4), router vs golden 0.98873 -> 0.99182,
+  pcc_swap_out 0.99987. Dropped: TF32 rounding of the mHC / router activations (5 ms per layer, router vs golden
+  unchanged within flip noise).
+- Regressions run: C.swa.attention / attn_hc / ffn_hc / router, C.swa_engram.attention / attn_hc / ffn_hc / router,
+  S.swa.06 PASS. Fork: unit suite 41 passed / 10 skipped (37 + 4 new), source check 216 tests 0 regressions, model
+  cases 5 passed / 1 skipped.
+- Next: S.swa_engram.14 (layer 1, scaled) measures router vs golden 0.9847 with this (0.9839 without): it will fail
+  the same fixed 0.99 check (DS41-30).
+- Attempt 1's window_exact.py G == 1 fix stays in the tree (comparison path only).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_11_router.py`;
+  fork: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py -k fp32_scores`

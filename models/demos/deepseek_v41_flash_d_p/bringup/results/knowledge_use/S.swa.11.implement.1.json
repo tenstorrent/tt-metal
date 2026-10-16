@@ -1,0 +1,67 @@
+{
+ "used": [
+  {
+   "id": "K-39",
+   "how": "classified the swap_router_vs_golden failure as near-tie top-k flips from upstream noise (13 % rows reselected under the bf16 model), not a router bug; proposed a routing-split vs-golden check",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-18",
+   "how": "identified the window attention's bf16 sparse_sdpa error as the noise source that drives the router's reselection vs golden",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-19",
+   "how": "ran WINDOW_SDPA=exact as a comparison only (router vs golden 0.9927, gate passes) and fixed its G == 1 aliasing bug on the scaled head count; did not make it the default (OV-3)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-28",
+   "how": "checked that DEVICE_STEPS['swa'] already lists router, so no hooks.py change was needed",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "ignored the pcc-0 / rel-inf FAIL lines of the precompile collect pass and read only the real pass",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a vs-golden check for selection outputs (router dense weights) that stays above the bf16 noise floor: on the scaled 96-expert router the fixed component PCC 0.99 is failed by the attention's own bf16 precision model (0.984); DS41-30",
+  "window_exact.py had never run with one lane group (scaled heads per chip); the exact comparison path broke silently after scaling"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "known_issues.md DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x (swap_step_calib) the step's own component error, no cap (testing/component.py:350-356)'; it matches component.py:_check_step (rel_lim = swap_step_calib * max(err, res)), so it was left unchanged while DS41-30 was added"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "DS41-30"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.swa.11",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T00:10:54",
+  "head": "956e200b4c3",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.swa.11.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/window_exact.py"
+  ]
+ }
+}

@@ -55,6 +55,14 @@ enum class SparseKVFormat : uint8_t {
 // fp32_output (bring-up fork option, default false = output in q's dtype; needs high_precision): return the
 // normalized output in Float32 (the fp32 DEST value, untilized exactly) instead of rounding it to bf16.
 //
+// fp32_scores (bring-up fork option, default false = bf16 scores / probabilities; needs high_precision and
+// fp32_output): keep the scores Q@Kᵀ and the softmax probabilities (the operand of probs@V) in a Float32 CB instead
+// of rounding them to bf16, and accept a FLOAT32 q (tilized to a Float32 CB). The FPU reads Float32 operands at TF32
+// by truncation (a coherent bias), so every Float32 value it reads later is rounded to TF32 to nearest-even in DEST
+// (SFPU, pack thread) before it is packed: the scores, the probabilities, the running output (probs@V), the row-sum
+// (summed in DEST when a k_chunk's key tiles fit DEST) and 1/sum. A Float32 q is read as given (round it first). The
+// running max stays bf16 (it is subtracted from the scores and the sink alike).
+//
 // attention_sink: optional [1,1,1,H] unpadded interleaved ROW_MAJOR BF16 tensor in DRAM.
 // Like classic SDPA, the sink is multiplied by scale and contributes only to the softmax denominator.
 // DeepSeek-V4 stores sinks in the already-scaled logit domain: pass model_sink / scale (scale != 0),
@@ -82,6 +90,7 @@ ttnn::Tensor sparse_sdpa(
     bool block_cyclic_cache_tp_sharded = false,
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
     bool high_precision = false,
-    bool fp32_output = false);
+    bool fp32_output = false,
+    bool fp32_scores = false);
 
 }  // namespace ttnn::transformer::bringup
