@@ -5,77 +5,17 @@
 #include <tt-metalium/experimental/sockets/h2d_stream_service_descriptor.hpp>
 
 #include "h2d_stream_service_descriptor_generated.h"
-#include "hd_socket_descriptor_generated.h"
+#include "hd_socket_descriptor_serialization.hpp"
+
+#include <internal/descriptor_file.hpp>
 
 #include <tt_stl/assert.hpp>
 
-#include <cerrno>
-#include <chrono>
-#include <cstdio>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <thread>
 #include <variant>
 
 namespace tt::tt_metal::distributed {
 
 namespace {
-
-flatbuffers::Offset<flatbuffer::HDSocketDescriptor> build_socket_descriptor_offset(
-    flatbuffers::FlatBufferBuilder& builder, const HDSocketDescriptor& src) {
-    auto fb_socket_type = builder.CreateString(src.socket_type);
-    auto fb_shm_name = builder.CreateString(src.shm_name);
-    auto fb_mesh_coord = builder.CreateVector(src.mesh_coord);
-    return flatbuffer::CreateHDSocketDescriptor(
-        builder,
-        fb_socket_type,
-        fb_shm_name,
-        src.shm_size,
-        src.data_offset,
-        src.bytes_acked_offset,
-        src.bytes_sent_offset,
-        src.fifo_size,
-        src.h2d_mode,
-        src.config_buffer_address,
-        src.aligned_data_buf_start,
-        src.device_id,
-        src.core_x,
-        src.core_y,
-        src.virtual_core_x,
-        src.virtual_core_y,
-        src.pcie_alignment,
-        src.bytes_acked_device_offset,
-        src.connector_state_offset,
-        fb_mesh_coord);
-}
-
-// Like HDSocketDescriptor::read_from_file but decodes an embedded sub-table rather than a root table.
-HDSocketDescriptor decode_socket_descriptor(const flatbuffer::HDSocketDescriptor& fb) {
-    HDSocketDescriptor desc;
-    desc.socket_type = fb.socket_type() ? fb.socket_type()->str() : "";
-    desc.shm_name = fb.shm_name() ? fb.shm_name()->str() : "";
-    desc.shm_size = fb.shm_size();
-    desc.data_offset = fb.data_offset();
-    desc.bytes_acked_offset = fb.bytes_acked_offset();
-    desc.bytes_sent_offset = fb.bytes_sent_offset();
-    desc.fifo_size = fb.fifo_size();
-    desc.h2d_mode = fb.h2d_mode();
-    desc.config_buffer_address = fb.config_buffer_address();
-    desc.aligned_data_buf_start = fb.aligned_data_buf_start();
-    desc.device_id = fb.device_id();
-    desc.core_x = fb.core_x();
-    desc.core_y = fb.core_y();
-    desc.virtual_core_x = fb.virtual_core_x();
-    desc.virtual_core_y = fb.virtual_core_y();
-    desc.pcie_alignment = fb.pcie_alignment();
-    desc.bytes_acked_device_offset = fb.bytes_acked_device_offset();
-    desc.connector_state_offset = fb.connector_state_offset();
-    if (const auto* mc = fb.mesh_coord()) {
-        desc.mesh_coord.assign(mc->begin(), mc->end());
-    }
-    return desc;
-}
 
 std::pair<flatbuffer::PlacementKind, int32_t> encode_placement(
     const MeshMapperConfig::Placement& p) {
@@ -135,7 +75,7 @@ void H2DStreamServiceDescriptor::write_to_file(const std::string& path) const {
     for (const auto& [coord, socket_desc] : per_coord_entries) {
         std::vector<uint32_t> coord_vec(coord.coords().begin(), coord.coords().end());
         auto fb_coord = builder.CreateVector(coord_vec);
-        auto fb_socket = build_socket_descriptor_offset(builder, socket_desc);
+        auto fb_socket = to_flatbuffer(builder, socket_desc);
         entry_offsets.push_back(flatbuffer::CreatePerCoordEntry(builder, fb_coord, fb_socket));
     }
     auto fb_entries = builder.CreateVector(entry_offsets);
@@ -158,45 +98,12 @@ void H2DStreamServiceDescriptor::write_to_file(const std::string& path) const {
         completion_completed_stride,
         fb_entries);
     builder.Finish(fb_desc);
-
-    // Atomic write-rename so a concurrent reader never observes a partial file.
-    std::string tmp_path = path + ".tmp";
-    std::ofstream ofs(tmp_path, std::ios::binary);
-    TT_FATAL(ofs.is_open(), "Failed to open service descriptor file for writing: {}", tmp_path);
-    ofs.write(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
-    ofs.close();
-    TT_FATAL(!ofs.fail(), "Failed to write service descriptor file: {}", tmp_path);
-    TT_FATAL(
-        std::rename(tmp_path.c_str(), path.c_str()) == 0,
-        "Failed to rename service descriptor file from {} to {}: {}",
-        tmp_path,
-        path,
-        std::strerror(errno));
+    internal::write_file_atomically(path, ttsl::Span<const uint8_t>(builder.GetBufferPointer(), builder.GetSize()));
 }
 
 H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
     const std::string& path, uint32_t timeout_ms) {
-    auto start_time = std::chrono::high_resolution_clock::now();
-    while (!std::filesystem::exists(path)) {
-        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::high_resolution_clock::now() - start_time)
-                              .count();
-        if (static_cast<uint32_t>(elapsed_ms) > timeout_ms) {
-            TT_THROW("Timeout waiting for service descriptor file: {}", path);
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-
-    std::ifstream ifs(path, std::ios::binary | std::ios::ate);
-    TT_FATAL(ifs.is_open(), "Failed to open service descriptor for reading: {}", path);
-    auto pos = ifs.tellg();
-    TT_FATAL(pos > 0, "Service descriptor file is empty or unreadable: {}", path);
-    auto size = static_cast<std::size_t>(pos);
-    ifs.seekg(0, std::ios::beg);
-    std::vector<uint8_t> buf(size);
-    ifs.read(reinterpret_cast<char*>(buf.data()), size);
-    TT_FATAL(!ifs.fail(), "Failed to read service descriptor file: {}", path);
-
+    const auto buf = internal::wait_and_read_file(path, timeout_ms);
     const auto* fb = flatbuffer::GetH2DStreamServiceDescriptor(buf.data());
     TT_FATAL(fb, "Failed to parse flatbuffer service descriptor from: {}", path);
     TT_FATAL(
@@ -263,7 +170,7 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
 
         const auto* fb_socket = fb_entry->socket_descriptor();
         TT_FATAL(fb_socket != nullptr, "PerCoordEntry missing socket_descriptor");
-        desc.per_coord_entries.emplace_back(coord, decode_socket_descriptor(*fb_socket));
+        desc.per_coord_entries.emplace_back(coord, from_flatbuffer(*fb_socket));
     }
 
     return desc;

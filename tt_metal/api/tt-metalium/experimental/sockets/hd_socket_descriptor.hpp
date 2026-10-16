@@ -9,6 +9,7 @@
 #include <vector>
 #include <fmt/format.h>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/pcie_core_location.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -49,16 +50,9 @@ struct HDSocketDescriptor {
     uint32_t aligned_data_buf_start = 0;  // H2D only: L1 address of the aligned data buffer
 
     // --- Core identification (for TLB setup by the connector) ---
-    uint32_t device_id = 0;  // Physical chip ID
-    uint32_t core_x = 0;     // Logical core coordinate X
-    uint32_t core_y = 0;     // Logical core coordinate Y
-
-    // Owning device's mesh coordinate (1 entry per mesh dim), so the connector can rebuild the MeshCoreCoord.
-    std::vector<uint32_t> mesh_coord;
+    PCIeCoreLocation location;
 
     // --- Pre-resolved transport info (connector uses these to bypass MetalContext) ---
-    uint32_t virtual_core_x = 0;             // Virtual (translated) core coordinate X
-    uint32_t virtual_core_y = 0;             // Virtual (translated) core coordinate Y
     uint32_t pcie_alignment = 0;             // PCIe page alignment in bytes (e.g. 64 for Blackhole)
     uint32_t bytes_acked_device_offset = 0;  // D2H: L1 offset of bytes_acked within config buffer
     uint32_t connector_state_offset = 0;     // Offset of HDSocketConnectorState within the SHM region
@@ -67,8 +61,7 @@ struct HDSocketDescriptor {
      * @brief Populate common fields from the owner socket's state.
      *
      * Sets shm_name, shm_size, fifo_size, config_buffer_address, and resolves
-     * device_id, core coordinates (logical + virtual), and pcie_alignment from
-     * the mesh device. Called by the owner during export_descriptor().
+     * location and pcie_alignment from the mesh device. Called by the owner during export_descriptor().
      */
     void populate_from_owner(
         const std::string& type,
