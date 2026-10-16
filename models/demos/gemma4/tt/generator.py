@@ -3,6 +3,7 @@
 
 import os
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import torch
@@ -412,6 +413,34 @@ def _patch_model_args(
     model_args.encode_prompt = _encode_prompt
 
 
+def _g4_dram_bottom_up_bytes(view) -> int:
+    """Bytes allocated below the largest free gap: the bottom-up region where trace intermediates live.
+
+    Kernel binaries are allocated top-down (above the gap) and never collide with a replay, so they are
+    left out; a persistent tensor placed into a hole below the gap counts, since that hole was free (and
+    therefore usable by the trace) at capture time. Falls back to the allocated total without a block table.
+    """
+    try:
+        table = list(view.block_table)
+    except Exception:  # noqa: BLE001
+        table = []
+    if not table:
+        return int(view.total_bytes_allocated_per_bank)
+    free_start, free_size = 0, -1
+    for b in table:
+        if str(b.get("allocated", "")).lower() in ("no", "false", "0"):
+            size = int(b.get("size", 0))
+            if size > free_size:
+                free_start, free_size = int(b.get("address", 0)), size
+    total = 0
+    for b in table:
+        if str(b.get("allocated", "")).lower() in ("yes", "true", "1"):
+            addr = int(b.get("address", 0))
+            if free_size < 0 or addr < free_start:
+                total += int(b.get("size", 0))
+    return total
+
+
 class ChunkedPrefillPageTableGuardMixin:
     """Gemma4 prefill guards + async decode continuity (no ``tt_transformers`` edits).
 
@@ -550,7 +579,9 @@ class ChunkedPrefillPageTableGuardMixin:
         """
         if not hasattr(model, "update_persistent_per_layer_page_tables"):
             return
-        model.update_persistent_per_layer_page_tables(page_tables_per_layer)
+        # A prefill always re-uploads: the host-side "unchanged" shortcut must not reuse a device
+        # table that a decode-trace replay may have overwritten since the last upload.
+        model.update_persistent_per_layer_page_tables(page_tables_per_layer, force=(writer == "prefill"))
         rows = cls._page_tables_rows(page_tables_per_layer)
         if rows is None:
             return
@@ -1908,6 +1939,130 @@ class ChunkedPrefillPageTableGuardMixin:
             for model, tables in zip(self.model, previous):
                 model._active_page_tables_per_layer = tables
 
+    # ── Decode-trace allocation guard ──────────────────────────────────────
+    # A trace replay writes its intermediates to the addresses they had at capture time. Anything
+    # allocated after the capture and still alive at a replay (per-layer page tables for a new batch
+    # key, a sliding-window tail stash, a program's semaphores, ...) can sit in that range and be
+    # overwritten: the symptom is a request that is right until the first traced decode and wrong
+    # afterwards. The allocator level right after a capture is the quiescent baseline; a higher level
+    # at the next replay means such an allocation happened, so the traces are released and re-captured
+    # against the new layout. Bounded by GEMMA4_TRACE_ALLOC_GUARD_MAX re-captures (default 8);
+    # GEMMA4_TRACE_ALLOC_GUARD=0 disables the guard.
+    _g4_trace_alloc_baseline: dict = {}
+    _g4_trace_guard_recaptures: int = 0
+
+    _g4_alloc_dump_count: int = 0
+
+    def _g4_alloc_dump(self, prefix: str) -> None:
+        """GEMMA4_ALLOC_DUMPS=1: write the allocator block tables (generated/reports) at trace captures and
+        the first prefills, to diff for allocations that outlive a capture."""
+        if os.environ.get("GEMMA4_ALLOC_DUMPS", "0") != "1" or self._g4_alloc_dump_count >= 40:
+            return
+        self._g4_alloc_dump_count += 1
+        try:
+            mesh = self.model_args[0].mesh_device
+            ttnn.synchronize_device(mesh)
+            ttnn.dump_device_memory_state(mesh, f"{self._g4_alloc_dump_count:02d}_{prefix}")
+            logger.info(
+                "Gemma4: allocator dump {:02d}_{} (levels {})",
+                self._g4_alloc_dump_count,
+                prefix,
+                self._g4_alloc_levels(),
+            )
+        except Exception as exc:  # noqa: BLE001 - diagnostics only
+            logger.warning("Gemma4: allocator dump failed: {}", exc)
+
+    def _g4_alloc_levels(self):
+        """Per mesh: (DRAM bytes allocated bottom-up, worker-L1 bytes allocated).
+
+        Trace intermediates are bottom-up in DRAM and top-down in L1, so a persistent allocation that
+        can collide with a replay raises the DRAM bottom-up total (kernel binaries are top-down and
+        excluded) or the L1 total.
+        """
+        levels = []
+        for args in self.model_args:
+            mesh = getattr(args, "mesh_device", None)
+            try:
+                view = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
+                levels.append(_g4_dram_bottom_up_bytes(view))
+            except Exception:  # noqa: BLE001 - no view means nothing to guard
+                levels.append(0)
+            try:
+                levels.append(int(ttnn.get_memory_view(mesh, ttnn.BufferType.L1).total_bytes_allocated_per_bank))
+            except Exception:  # noqa: BLE001
+                levels.append(0)
+        return tuple(levels)
+
+    def _g4_trace_guard_should_recapture(self, decode_trace_key) -> bool:
+        if os.environ.get("GEMMA4_TRACE_ALLOC_GUARD", "1") == "0":
+            return False
+        baseline = self._g4_trace_alloc_baseline.get(decode_trace_key)
+        if baseline is None:
+            # Captured by a warmup path: the level at this first replay is the baseline.
+            self._g4_trace_alloc_baseline[decode_trace_key] = self._g4_alloc_levels()
+            return False
+        if not getattr(self, "_g4_alloc_check_pending", True):
+            return False  # nothing but replays since the last check: no new persistent allocation
+        self._g4_alloc_check_pending = False
+        current = self._g4_alloc_levels()
+        if all(c <= b for b, c in zip(baseline, current)):
+            # The level right after the capture can still include tensors the warmup frees later; the
+            # lowest level seen at a replay is the true quiescent baseline, so track it downwards.
+            self._g4_trace_alloc_baseline[decode_trace_key] = tuple(min(b, c) for b, c in zip(baseline, current))
+            return False
+        limit = int(os.environ.get("GEMMA4_TRACE_ALLOC_GUARD_MAX", "8"))
+        if self._g4_trace_guard_recaptures >= limit:
+            if self._g4_trace_guard_recaptures == limit:
+                self._g4_trace_guard_recaptures += 1
+                logger.error(
+                    "Gemma4: device allocations grew again after a decode-trace capture (baseline {} -> {}) "
+                    "but the re-capture limit ({}) is spent; replays may overwrite the new buffers",
+                    baseline,
+                    current,
+                    limit,
+                )
+            return False
+        self._g4_trace_guard_recaptures += 1
+        logger.warning(
+            "Gemma4: device allocations grew after the decode-trace capture (bytes per bank {} -> {}); "
+            "re-capturing the decode traces ({}/{})",
+            baseline,
+            current,
+            self._g4_trace_guard_recaptures,
+            limit,
+        )
+        return True
+
+    def _g4_release_decode_traces(self, reason: str) -> None:
+        """Release every captured decode trace (and the sampling traces bound to its logits)."""
+        released = 0
+        for _key, tids in list(self.trace_ids_decode.items()):
+            if not tids:
+                continue
+            for mid, tid in tids.items():
+                try:
+                    ttnn.release_trace(self.model_args[mid].mesh_device, tid)
+                    released += 1
+                except Exception as exc:  # noqa: BLE001 - keep going, the dict is reset below
+                    logger.warning("Gemma4: decode trace release failed: {}", exc)
+        for m in self.model:
+            sampling = getattr(m, "sampling", None)
+            if sampling is not None and hasattr(sampling, "reset_trace"):
+                sampling.reset_trace()
+        # The bound input/output tensors are only dropped, not freed: the sampler and the serving loop
+        # may still hold the token/log-prob outputs of the last step. The old buffers stay allocated,
+        # which also keeps the re-capture from landing on them.
+        self.trace_ids_decode = defaultdict(lambda: None)
+        self.trace_inputs_decode = defaultdict(lambda: None)
+        self.trace_output_decode = defaultdict(lambda: None)
+        # ``_prev_decode_batch`` is kept: the step re-captures the same batch key, and the sampled-token
+        # feedback (``_gemma4_eager_token_feedback_buffer``) finds the new trace inputs through it; with
+        # it cleared the token would go to the warmup dummy and the next step would replay the old token.
+        self.prev_page_table = None
+        self._g4_trace_alloc_baseline = {}
+        self._g4_recapture_without_precompile = True
+        logger.warning("Gemma4: released {} decode trace(s): {}", released, reason)
+
     def _decode_forward_trace_text(
         self,
         tokens,
@@ -1932,7 +2087,14 @@ class ChunkedPrefillPageTableGuardMixin:
 
         batch = int(tokens[0].shape[0]) if tokens else 1
         decode_trace_key = self._decode_trace_key(on_device_sampling, tokens)
+        if self.trace_ids_decode[decode_trace_key] and self._g4_trace_guard_should_recapture(decode_trace_key):
+            self._g4_release_decode_traces("device allocations grew after the decode-trace capture")
         if not self.trace_ids_decode[decode_trace_key]:
+            # A re-capture after a guard release happens inside a live request: the programs are warm,
+            # and the compile pass would run the sampler's warmup-only precompile (all configs, token
+            # count update) against that request's device state, so only the graph is recorded.
+            skip_precompile = skip_precompile or bool(getattr(self, "_g4_recapture_without_precompile", False))
+            self._g4_recapture_without_precompile = False
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
                 tokens,
                 current_pos,
@@ -1944,6 +2106,8 @@ class ChunkedPrefillPageTableGuardMixin:
             self.trace_ids_decode[decode_trace_key] = trace_ids
             self.trace_inputs_decode[decode_trace_key] = device_inputs
             self.trace_output_decode[decode_trace_key] = tt_out_trace
+            self._g4_trace_alloc_baseline[decode_trace_key] = self._g4_alloc_levels()
+            self._g4_alloc_dump(f"cap_b{batch}_")
 
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
@@ -2112,6 +2276,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         warmup_prefill=True,
         **kwargs,
     ):
+        self._g4_alloc_check_pending = True  # a prefill may leave persistent allocations behind
         if model_id_warmup is not None:
             warmup_prefill = False
 

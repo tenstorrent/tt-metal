@@ -712,6 +712,15 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 can_sample_on_device=can_sample_on_device,
                 **kwargs,
             )
+        # Baseline for the decode-trace allocation guard: the level right after the captures, before
+        # any request can leave a persistent allocation in the traces' scratch range.
+        if enable_trace:
+            levels = self._g4_alloc_levels()
+            for key, tids in list(self.trace_ids_decode.items()):
+                if tids:
+                    self._g4_trace_alloc_baseline[key] = levels
+            self._g4_alloc_check_pending = False
+            self._g4_alloc_dump("post_warmup_")
 
     @classmethod
     def get_max_tokens_all_users(cls, model_name: str = "", **kwargs) -> int:
@@ -2036,6 +2045,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         return full_page_tables, kwargs
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        self._g4_alloc_dump("prefill_")
+        self._g4_alloc_check_pending = True
         tokens = kwargs.get("tokens")
         if tokens is None and args:
             tokens = args[0]

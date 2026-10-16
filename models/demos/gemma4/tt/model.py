@@ -1787,7 +1787,7 @@ class Gemma4Model:
         out[:host_b, :host_w] = pt_host.to(dtype=torch.int32)
         return out
 
-    def update_persistent_per_layer_page_tables(self, page_tables_per_layer):
+    def update_persistent_per_layer_page_tables(self, page_tables_per_layer, force: bool = False):
         """Update the content of persistent per-layer page-table device
         tensors in place.
 
@@ -1800,7 +1800,9 @@ class Gemma4Model:
         host table to the captured device shape so we never reallocate and
         orphan decode-trace addresses. Skip the H2D when the host table is
         unchanged from the last update for this batch key (decode steps
-        within a KV block).
+        within a KV block). ``force`` uploads regardless: a prefill always
+        re-uploads, so a device table a trace replay may have overwritten is
+        never trusted on the host's say-so.
         """
         if page_tables_per_layer is None:
             return
@@ -1839,7 +1841,8 @@ class Gemma4Model:
             else:
                 pt_padded = self._pad_page_table_host_to_shape(pt_host, target_b, target_w)
             if (
-                last_hosts is not None
+                not force
+                and last_hosts is not None
                 and i < len(last_hosts)
                 and last_hosts[i] is not None
                 and torch.equal(last_hosts[i], pt_padded)
@@ -1861,7 +1864,7 @@ class Gemma4Model:
                 last_by_batch.pop(batch_key, None)
                 self._invalidate_decode_traces_after_page_table_realloc = True
                 self.mesh_config_share_page_tables = False
-                return self.update_persistent_per_layer_page_tables(page_tables_per_layer)
+                return self.update_persistent_per_layer_page_tables(page_tables_per_layer, force=force)
             written[id(persistent[i])] = pt_padded
             # Cache key includes target shape so B=1 and B=32 pads don't collide.
             key = (id(pt), target_b, target_w)
