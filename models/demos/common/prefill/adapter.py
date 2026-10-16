@@ -86,6 +86,8 @@ class PrefillRunParams:
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
     mtp_levels: int = 0
+    # Chunks per forward. A runtime that implements prefill_forward is built for this many entries.
+    max_chunks_per_batch: int = 1
 
     @property
     def sp_factor(self) -> int:

@@ -8,7 +8,6 @@ import json
 import math
 import os
 import random
-import struct
 import sys
 import time
 from dataclasses import dataclass
@@ -20,7 +19,8 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
-from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
+from models.demos.common.prefill.batch_metadata import SHUTDOWN_WORD, encode, metadata_size_bytes, sentinel
+from models.demos.common.prefill.prefill_entry import PrefillEntry, pack_forward_tokens
 from models.demos.common.prefill.runners.layer_completion_ring_reader import (
     connect_layer_completion_channel,
     start_layer_completion_drain,
@@ -94,17 +94,17 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     return manifest
 
 
-METADATA_SIZE_BYTES = 12
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
-
-
 def _load_env_config() -> None:
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
+    global MAX_CHUNKS_PER_BATCH, CHUNK_METADATA_SIZE_BYTES
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
+    # Must match the runner's PREFILL_MAX_CHUNKS_PER_BATCH.
+    MAX_CHUNKS_PER_BATCH = int(os.environ.get("PREFILL_MAX_CHUNKS_PER_BATCH", 1))
+    CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(MAX_CHUNKS_PER_BATCH)
     MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
     # Default from the adapter's own depth (see prefill_runner.py's MODEL_CFG.NUM_LAYERS
@@ -121,8 +121,8 @@ def _load_env_config() -> None:
 _load_env_config()
 
 
-def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
-    return struct.pack("<3I", slot_id, actual_start, actual_end)
+def _pack_metadata(*records) -> bytes:
+    return encode([PrefillEntry(*r) for r in records], MAX_CHUNKS_PER_BATCH)
 
 
 def _push(service, expect_bytes: int, tokens, mtp_tokens, metadata: bytes) -> None:
@@ -147,15 +147,30 @@ def _chunk_slice(pool, actual_start: int, actual_isl=None):
     return _pool_slice(pool, actual_start, CHUNK_SIZE, actual_isl)
 
 
+class _QueuedChunk(NamedTuple):
+    slot_id: int
+    actual_start: int
+    actual_end: int
+    tokens: list
+    pool: list
+    actual_isl: int | None
+
+
 def _h2d_rows(tokens, actual_start: int = 0):
+    return _h2d_rows_batch([(tokens, actual_start)])
+
+
+def _h2d_rows_batch(chunks):
     # Same host-side reshuffle as the engine's H2D prefill connector: a chunk starting mid-slab (multi-turn
     # resume) is rotated so each SP chip receives the tokens the KV writer places on it (identity when the
     # start is chunk-aligned).
     sp = GLOBAL_MESH_SHAPE[0]
-    stride = h2d_row_len(CHUNK_SIZE, sp)
-    assert len(tokens) == CHUNK_SIZE, f"expected {CHUNK_SIZE} tokens, got {len(tokens)}"
-    tokens = rotate_chunk_tokens(list(tokens), actual_start, sp)
-    return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, stride))
+    assert 1 <= len(chunks) <= MAX_CHUNKS_PER_BATCH, f"{len(chunks)} chunks in a push of at most {MAX_CHUNKS_PER_BATCH}"
+    for tokens, _start in chunks:
+        assert len(tokens) == CHUNK_SIZE, f"expected {CHUNK_SIZE} tokens, got {len(tokens)}"
+    chunks = list(chunks) + [([MTP_PAD_TOKEN_ID] * CHUNK_SIZE, 0)] * (MAX_CHUNKS_PER_BATCH - len(chunks))
+    tokens = pack_forward_tokens([t for t, _ in chunks], [start for _, start in chunks], sp)
+    return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, -1))
 
 
 def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
@@ -1584,20 +1599,36 @@ def main() -> None:
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
-    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
-        pool = pools_by_trace[slot_traces[slot_id]]
-        tokens = _chunk_slice(pool, actual_start, actual_isl)
-        metadata = _pack_metadata(slot_id, actual_start, actual_end)
-        logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
+    pending: list[_QueuedChunk] = []
+
+    def flush() -> float:
+        if not pending:
+            return 0.0
+        records = [(q.slot_id, q.actual_start, q.actual_end) for q in pending]
+        logger.info("[producer] push " + " ".join(f"slot={s} [{a},{e})" for s, a, e in records))
         push_start = time.perf_counter()
+        first = pending[0]
+        mtp = (
+            _mtp_rows(first.pool, first.actual_start, first.actual_isl, actual_end=first.actual_end)
+            if len(pending) == 1
+            else None
+        )
         _push(
             service,
             payload_bytes,
-            _h2d_rows(tokens, actual_start),
-            _mtp_rows(pool, actual_start, actual_isl, actual_end=actual_end),
-            metadata,
+            _h2d_rows_batch([(q.tokens, q.actual_start) for q in pending]),
+            mtp,
+            _pack_metadata(*records),
         )
+        pending.clear()
         return (time.perf_counter() - push_start) * 1000.0
+
+    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
+        pool = pools_by_trace[slot_traces[slot_id]]
+        tokens = _chunk_slice(pool, actual_start, actual_isl)
+        pending.append(_QueuedChunk(slot_id, actual_start, actual_end, tokens, pool, actual_isl))
+        logger.info(f"[producer] queue slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
+        return flush() if len(pending) >= MAX_CHUNKS_PER_BATCH else 0.0
 
     # Drains from the first push to the last barrier: the completion rings are bounded, so a drain that waited
     # for the barrier would leave the runner blocked on a full ring and the barrier waiting on the runner.
@@ -1608,11 +1639,13 @@ def main() -> None:
             logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
             for cidx in range(warmup_chunks):
                 push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
+            flush()
             service.barrier()
             wait_for_layer_completions(drain, chunk_layers * warmup_chunks)
             logger.info("[producer] warmup complete; starting the measured request")
 
         stats = run_schedule(cfg, push_fn=push_chunk)
+        flush()
         service.barrier()
         # One completion per layer per chunk; chunk_layers is what the runner emits (KV-writing layers plus
         # MTP/DFlash extras), not NUM_LAYERS. The count is cumulative, so it includes the warm-up.
@@ -1621,7 +1654,7 @@ def main() -> None:
         if drain is not None:
             drain.stop()
 
-    sorted_ms = sorted(stats.push_ms)
+    sorted_ms = sorted(ms for ms in stats.push_ms if ms > 0.0)  # 0.0 is a queued chunk, not a push
     total_tokens = stats.total_pushes * CHUNK_SIZE
     logger.info(
         f"[producer] DONE wall={stats.wall_s:.1f}s pushes={stats.total_pushes} requests={stats.completed} "
@@ -1653,11 +1686,10 @@ def main() -> None:
         verify_ok = all(verdicts)
 
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
-        nwords = CHUNK_METADATA_SIZE_BYTES // 4
-        sentinel = struct.pack(f"<{nwords}i", *([-1] * nwords))
-        assert len(sentinel) == CHUNK_METADATA_SIZE_BYTES
-        logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
-        _push(service, payload_bytes, _h2d_rows(_chunk_slice([], 0)), _mtp_rows([], 0), sentinel)
+        shutdown = sentinel(SHUTDOWN_WORD, MAX_CHUNKS_PER_BATCH)
+        assert len(shutdown) == CHUNK_METADATA_SIZE_BYTES
+        logger.info("[producer] sending SHUTDOWN sentinel (every metadata word -1)")
+        _push(service, payload_bytes, _h2d_rows(_chunk_slice([], 0)), _mtp_rows([], 0), shutdown)
         service.barrier()
         logger.info("[producer] exiting; SHUTDOWN sentinel sent — runner will drain and shut down.")
     else:
