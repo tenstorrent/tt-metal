@@ -31,6 +31,17 @@ namespace ckernel {
 // clang-format on
 template <DataFormat DATA_FORMAT>
 ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        copy_dest_value,
+        (DATA_FORMAT, false /*APPROXIMATE*/, 32 /*ITERATIONS*/),
+        idst_in,
+        idst_out,
+        0 /*unused*/,
+        VectorMode::None)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -40,6 +51,7 @@ ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
         idst_out,
         0 /*unused*/,
         VectorMode::RC)));
+#endif
 }
 
 // clang-format off
@@ -59,9 +71,18 @@ ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
 // clang-format on
 [[deprecated("Use copy_dest_values<DataFormat> instead")]]
 ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
-    // Routes through the deprecated 1-template-arg `copy_dest_value<APPROXIMATE>` overload in
-    // ckernel::sfpu (the format-agnostic sfpi::vFloat path). New code should use the
-    // DataFormat-templated overload above.
+    // Routes through the deprecated copy_dest_value overload in ckernel::sfpu; new code uses the overload above.
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        copy_dest_value,
+        (false /*APPROXIMATE*/, 32 /*ITERATIONS*/),
+        idst_in,
+        idst_out,
+        0 /*unused*/,
+        VectorMode::None)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -71,6 +92,7 @@ ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
         idst_out,
         0 /*unused*/,
         VectorMode::RC)));
+#endif
 }
 
 ALWI void copy_dest_values_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::copy_dest_value_init))); }
