@@ -34,12 +34,19 @@ def lazy_init():
         _lazy_init_enabled.reset(token)
 
 
-def _replicate_tensor_to_mesh_mapper() -> Any | None:
-    """Return a TensorToMesh replicate mapper for non-sharded mesh parameters."""
+def _replicate_tensor_to_mesh_mapper(mesh: Any) -> Any | None:
+    """Mapper replicating a non-sharded parameter with one Replicate per axis of ``mesh``.
+
+    One placement per mesh axis (like :meth:`ttml.Mesh.axis_mapper_config`), so FSDP and gradient synchronisation
+    can read the parameter's placement on each axis; the collapsed 1-D ``{N}, [Replicate]`` of ttnn's default
+    replicate mapper has a single placement for the whole mesh.
+    """
+    import ttnn
     import ttml
 
     device = ttml.autograd.AutoContext.get_instance().get_device()
-    return ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
+    placements = [ttnn.PlacementReplicate() for _ in mesh.shape]
+    return ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(placements))
 
 
 def _collect_lazy_parameter_slots(root: Any) -> list[tuple[Any, str]]:
@@ -101,7 +108,7 @@ def materialize_module(
             if override is not None:
                 mapper = override
         if mapper is None and mesh is not None and mesh.num_devices() > 1:
-            return _replicate_tensor_to_mesh_mapper()
+            return _replicate_tensor_to_mesh_mapper(mesh)
         return mapper
 
     tensor_by_metadata_id: dict[int, Any] = {}

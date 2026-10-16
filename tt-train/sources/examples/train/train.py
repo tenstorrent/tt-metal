@@ -522,6 +522,10 @@ def run_training(
                 f"HSDP batch sharding requires batch_size ({training_cfg.batch_size}) to be "
                 f"divisible by D*F ({data_parallel_size}); got data_axes={data_axes}."
             )
+        # Whole-mesh shard of the batch dim: device k, in mesh row-major order, holds rows [k*B/(D*F), (k+1)*B/(D*F)).
+        # The collapsed label {D*F}, [Shard(0)] is the exact description of that layout -- dim 0 split hierarchically
+        # over both data axes, which no one-placement-per-axis label can state -- and the readers expand it to Shard on
+        # every mesh axis, which is right because every axis is a data axis here (HSDP + TP is refused above).
         device = ttml.autograd.AutoContext.get_instance().get_device()
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, None)
     else:
