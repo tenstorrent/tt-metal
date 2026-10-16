@@ -1,0 +1,31 @@
+{
+  "node_id": "r01-b01-a04",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 1,
+  "attempt": 4,
+  "parent": "r01-b01-a03",
+  "parent_commit": "eb509c8be3e8f80fb43ed4eae4d88419a2230b4a",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T19:47:35+00:00",
+  "mechanism": "cross-unit x look-ahead: on top of r01-b01-a02 (reverting a03's pacing), the row-shared x pipeline (RM read 2 blocks ahead, owner tilize 1 block ahead) runs on across chunk/expert boundaries, so each unit's first x blocks are read and tilized during the previous unit",
+  "tags": [
+    "x-path",
+    "tilize",
+    "expert-boundary",
+    "pipelining",
+    "revert-parent",
+    "row-major-path"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4576,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 41,
+  "finished_at": "2026-10-08T20:22:17+00:00"
+}

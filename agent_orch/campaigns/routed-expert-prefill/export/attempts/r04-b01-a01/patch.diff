@@ -1,0 +1,160 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index df39641a2bb..3c84e1fc3be 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -68,6 +68,9 @@
+ #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
+ // Profiler-only hardware counters / FW throttle samples (MATH thread; empty without PROFILE_KERNEL).
+ #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp"
++// Op-local matmul unpack MOP: one CFGSHIFTMASK per streamed SrcA tile instead of the stock
++// RDCFG/ADDDMAREG/STALLWAIT/WRCFG chain (UNPACK thread; see re_mm_unpack.h).
++#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_mm_unpack.h"
+ 
+ #ifdef FUSE_BIAS
+ // Row-broadcast bias add (gpt-oss). Bias is a (1, N) tensor tiled to one
+@@ -129,6 +132,15 @@
+ 
+ namespace {
+ 
++// matmul_block_init plus the op-local unpack MOP (re_mm_unpack.h). Every matmul (re-)entry in this
++// kernel goes through here, so the replay and SCRATCH_SEC0 are rewritten after any tilize / copy /
++// bcast init that changed them.
++FORCE_INLINE void re_mm_block_init(
++    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
++    matmul_block_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
++    UNPACK((re_mm::shiftmask_mop(in1_cb_id, ct_dim, rt_dim)));
++}
++
+ // Packer-completion barrier for the K-block boundary of a PACKER_L1_ACC phase.
+ //
+ // Every K-block re-packs the same absolute partials slots, and the accumulate is
+@@ -555,7 +567,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+                 x_tl_cb.push_back(x_pad);
+             }
+             reconfig_data_format_srca(gate_cb_id);
+-            matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
++            re_mm_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+             pack_reconfig_data_format(x_tl_cb_id, partials_gu_cb_id);
+ #ifdef PACKER_L1_ACC
+             PACK((llk_pack_reconfig_l1_acc(l1_acc)));
+@@ -655,7 +667,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+             return;
+         }
+         reconfig_data_format(gate_cb_id, x_cb_id);  // in1 -> SrcA, in0 -> SrcB
+-        matmul_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
++        re_mm_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
+         pack_reconfig_data_format(partials_gu_cb_id);
+ #ifdef PACKER_L1_ACC
+         PACK((llk_pack_reconfig_l1_acc(l1_acc_last)));
+@@ -846,7 +858,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     // ---- Last K-block (its x / gate / up are waited on above) ----
+     // Packs keep the L1_ACC state the K-loop left (on for num_blocks > 1, off for a single block).
+     if constexpr (LW != out_subblock_w) {
+-        matmul_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
++        re_mm_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
+     }
+     bool pend = false;
+     bool pend_real = false;
+@@ -1274,7 +1286,7 @@ void kernel_main() {
+             // chunk >= 1 the unpacker is left on multiply_phase's operands, so reset it
+             // to the gate/up inputs here (in1 -> SrcA, in0 -> SrcB).
+             reconfig_data_format(cb_in1_gate, cb_in0_x);
+-            matmul_block_init(
++            re_mm_block_init(
+                 cb_in0_x,
+                 cb_in1_gate,
+                 /*transpose=*/0,
+@@ -1365,7 +1377,7 @@ void kernel_main() {
+ #endif
+             RE_HW_BEGIN(1);
+             reconfig_data_format(cb_in1_down, cb_in0_down_full);
+-            matmul_block_init(
++            re_mm_block_init(
+                 cb_in0_down_full,
+                 cb_in1_down,
+                 /*transpose=*/0,
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_mm_unpack.h b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_mm_unpack.h
+new file mode 100644
+index 00000000000..be46815f7d0
+--- /dev/null
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_mm_unpack.h
+@@ -0,0 +1,79 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++//
++// SPDX-License-Identifier: Apache-2.0
++
++// Op-local matmul unpack MOP (UNPACK thread only).
++//
++// The stock BH matmul unpack MOP (tt_llk_blackhole/llk_lib/llk_unpack_AB_matmul.h,
++// _llk_unpack_AB_matmul_mop_config_) streams the non-reused operand one tile per iteration and
++// moves the context's L1 base address on with
++//     UNPACR -> RDCFG -> ADDDMAREG -> STALLWAIT(STALL_CFG, THCON) -> WRCFG -> NOP
++// i.e. a config read into a GPR, an add, a THCON stall and a config write per streamed tile.
++// This header re-records the streamed-SrcA (reuse-A) replay with the one-instruction form BH uses
++// in its hot loops (llk_unpack_tilize.h per-row replay, llk_pack_untilize.h, custom_mm unpack):
++//     UNPACR -> CFGSHIFTMASK(Base_address[ctx] += SCRATCH_SEC0) -> NOP
++// with SCRATCH_SEC0 preloaded to in1's tile size. The same tiles are unpacked from the same L1
++// addresses in the same order, so results are bit-identical. The stock execute
++// (_llk_unpack_AB_matmul_: per-call address setup, SrcB unpack, TT_MOP over ct_dim with the
++// config-context mask) is unchanged; only the replay it plays differs.
++//
++// Call after the stock matmul init (which programs everything else and the stock MOP). Every
++// re-entry to matmul after another unpack op (tilize, copy, bcast) must call it again: those inits
++// reprogram the replay buffer, and the tilize one also rewrites SCRATCH_SEC0.
++
++#pragma once
++
++#include <cstdint>
++
++#ifdef TRISC_UNPACK
++namespace re_mm {
++
++__attribute__((noipa)) inline void shiftmask_mop(
++    const std::uint32_t in1_cb_id, const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
++    const std::uint32_t in1_id = get_operand_id(in1_cb_id);
++    // Reuse-B (SrcB streamed) and partial-face SrcA keep the stock MOP.
++    if (ct_dim < rt_dim || get_operand_partial_face(in1_id)) {
++        return;
++    }
++    // In1 -> SrcA. CB page sizes are already in unpacker L1 address units (16 B words), the same
++    // units as the TILE_SIZE_A GPR the stock chain adds.
++    const std::uint32_t tile_size = get_local_cb_interface(in1_id).fifo_page_size;
++
++    // Preload the increment through the Tensix pipe (in order with any queued tilize unpacks whose
++    // own CFGSHIFTMASKs still read the previous scratch value), as llk_unpack_tilize's init does.
++    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TMP0));
++    TT_SETDMAREG(0, UPPER_HALFWORD(tile_size), 0, HI_16(p_gpr_unpack::TMP0));
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
++    TTI_WRCFG(p_gpr_unpack::TMP0, 0, SCRATCH_SEC0_val_ADDR32);
++    TTI_NOP;
++
++    constexpr std::uint32_t run_len = 3;
++    load_replay_buf(0, 2 * run_len, [] {
++        // Config context 0.
++        TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
++        // THCON_SEC0_REG3_Base_address += SCRATCH_SEC0_val (next in1 tile of the row)
++        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
++        TTI_NOP;  // CFGSHIFTMASK takes 2 cycles; the next UNPACR reads the address
++        // Config context 1.
++        TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
++        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
++        TTI_NOP;
++    });
++
++    // Same template shape as the stock reuse-A MOP: A0 runs in context 0, the skip-A slot (zmask
++    // 0xff) in context 1.
++    ckernel_unpack_template tmp = ckernel_unpack_template(
++        false,
++        false,
++        lltt::replay_insn(0, run_len),
++        0,
++        0,
++        0,
++        lltt::replay_insn(run_len, run_len),
++        0,
++        0);
++    tmp.program();
++}
++
++}  // namespace re_mm
++#endif

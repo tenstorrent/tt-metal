@@ -1,0 +1,85 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index 1888a694fb7..ad591e66ff3 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -204,21 +204,26 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     // also beats any single host-side seed here, since each local expert carries a
+     // different token count. (Owned by the op, not the caller.)
+     //
+-    // The REQUESTED per_core_M_max, not necessarily the final one. 4 rather than the
+-    // 8 L1 can hold because per_core_M_max and the gate/up K-block width
+-    // in0_block_w_gu compete for the same L1, and on most shapes the width is worth
+-    // more: the x-staging CBs are sized M * in0_block_w_gu tiles, so per_core_M_max
+-    // sets the PRICE of a wider K-block. At M=8 width 16 does not fit and the L1 fit
+-    // below narrows it, multiplying the K-block count; each block costs a fixed
+-    // mcast-ready barrier round plus read tail that does NOT shrink with width. On
+-    // shapes where the halved chunk count outweighs that, the L1 fit doubles this
+-    // back to 8 -- see kWidenMMinTilesPerBlock.
++    // The REQUESTED per_core_M_max, not necessarily the final one. per_core_M_max and
++    // the gate/up K-block width in0_block_w_gu compete for the same L1: the x-staging CBs
++    // are sized M * in0_block_w_gu tiles, so per_core_M_max sets the PRICE of a wider
++    // K-block. Every gate/up K-block carries a fixed cost that does not shrink with
++    // width (tilize init/uninit + matmul/pack reconfig + packer drain on compute, one
++    // ready/valid handshake round plus read and multicast tails on both the x row and the
++    // weight column), so the width is worth more than M headroom: 2 rows/core x 32 tiles
++    // keeps the x staging at the old 4 x 16 size and halves the K-block count.
++    //
++    // per_core_M_max only caps a chunk; the runtime picker (adaptive_chunk.hpp) sizes each
++    // expert's chunks from its own token count. At the production per-chip loads every
++    // expert is <= 16 tile-rows, i.e. one chunk of per_core_M 1-2, so the larger max
++    // bought nothing but narrower K-blocks. An expert with more tile-rows than one chunk
++    // now runs more chunks (one weight re-read each) instead.
+     //
+     // Keep this a POWER OF TWO * kCoreGridY: per_core_M_for_chunk() quantizes tail
+     // chunks to divisors of per_core_M_max.
+-    constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
++    constexpr uint32_t kMaxChunkMTiles = 2 * kCoreGridY;  // per_core_M <= 2 (see above)
+     uint32_t chunk_M_tiles = kMaxChunkMTiles;
+-    uint32_t in0_block_w_gu = 16;
++    uint32_t in0_block_w_gu = 32;
+     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
+     TT_FATAL(
+         grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
+@@ -469,7 +474,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         return {0, 0};
+     };
+ 
+-    auto [fit_M, fit_w] = fit_config(per_core_M);
++    const auto [fit_M, fit_w] = fit_config(per_core_M);
+     TT_FATAL(
+         fit_M != 0,
+         "unified_routed_expert_ffn: per-core CBs do not fit in L1 even at the smallest config "
+@@ -482,33 +487,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         GRID_X,
+         GRID_Y);
+ 
+-    // Doubling per_core_M halves the M-chunk count, and every chunk re-reads the
+-    // full gate/up/down weights (adaptive_chunk.hpp) - the dominant DRAM cost. It is
+-    // not free: per_core_M and in0_block_w_gu compete for the same L1, so the widest
+-    // width that still fits narrows, and each gate/up K-block carries a fixed
+-    // mcast-ready barrier plus read tail that does NOT shrink with width. Take the
+-    // doubling only when each extra K-block buys enough avoided weight traffic:
+-    //
+-    //     weight tiles per extra gate/up K-block
+-    //         = (2*K_gate*N_gate + K_down*N_down) / (K_gate/w_wide - K_gate/w_narrow)
+-    //
+-    // Measured on a BH p150b at ISL 5120, tiles per extra block: kimi_k3 4608,
+-    // kimi_k26 / dsv4_flash / glm_53 3072, gptoss_120b 2700, minimax_m3 1536,
+-    // dsv4_pro 658. Only kimi_k3 clears the bar, and it is the only shape the
+-    // doubling measurably helps: +3-4% at ISL >= 512, -3% at ISL <= 256, against
+-    // 1.5-1.85x LOSSES on the shapes below it. The bar sits between 3072 and 4608;
+-    // it is calibrated on one favourable shape, so widen it only with measurements.
+-    constexpr uint32_t kWidenMMinTilesPerBlock = 4096;
+-    const auto [wide_M, wide_w] = fit_config(per_core_M * 2);
+-    if (wide_M == per_core_M * 2 && wide_w < fit_w) {
+-        const uint32_t extra_blocks = K_gate_tiles / wide_w - K_gate_tiles / fit_w;
+-        const uint32_t weight_tiles = 2 * K_gate_tiles * N_gate_tiles_full + K_down_tiles * N_down_tiles_full;
+-        if (extra_blocks > 0 && weight_tiles / extra_blocks >= kWidenMMinTilesPerBlock) {
+-            fit_M = wide_M;
+-            fit_w = wide_w;
+-        }
+-    }
+-
+     per_core_M = fit_M;
+     in0_block_w_gu = fit_w;
+     chunk_M_tiles = per_core_M * GRID_Y;

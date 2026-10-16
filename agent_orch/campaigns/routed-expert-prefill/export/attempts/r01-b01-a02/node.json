@@ -1,0 +1,30 @@
+{
+  "node_id": "r01-b01-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 1,
+  "attempt": 2,
+  "parent": "r01-b01-a01",
+  "parent_commit": "5203b2ce08e2451dae68800aa224741d977500c6",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T18:57:37+00:00",
+  "mechanism": "row-shared x tilize: each gate/up K-block of row-major x is tilized once per M-row by a rotating owner core and multicast as bf8 tiles",
+  "tags": [
+    "compute",
+    "tilize",
+    "x-multicast",
+    "dedup",
+    "row-major-path"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4716,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 42,
+  "finished_at": "2026-10-08T19:22:02+00:00"
+}

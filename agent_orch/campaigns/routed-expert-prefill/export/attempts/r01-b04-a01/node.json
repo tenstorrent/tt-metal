@@ -1,0 +1,27 @@
+{
+  "node_id": "r01-b04-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "c54a00a7697836212f42b5a5e83dddb6ce3f77fc",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T18:40:18+00:00",
+  "mechanism": "software-pipeline weight streams: issue next K-block DRAM read before multicasting the current one (writer up, reader down)",
+  "tags": [
+    "data-movement",
+    "pipelining",
+    "weight-mcast"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 0.933,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 42,
+  "finished_at": "2026-10-08T18:55:15+00:00"
+}

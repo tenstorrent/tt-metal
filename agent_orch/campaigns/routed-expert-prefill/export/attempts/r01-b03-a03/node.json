@@ -1,0 +1,32 @@
+{
+  "node_id": "r01-b03-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 3,
+  "attempt": 3,
+  "parent": "r01-b03-a02",
+  "parent_commit": "dc6fb9cbbcd016c626aef6247d9e9b705f2c40a2",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T19:24:09+00:00",
+  "mechanism": "on r01-b01-a02's row-group code: weight-sender writers feed the next unit's first gate/up block (up read + gate/up mcast) while waiting to drain this unit's output, instead of after the drain",
+  "tags": [
+    "data-movement",
+    "expert-boundary",
+    "prefetch",
+    "rebase-onto-best",
+    "writer"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4574,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 43,
+  "finished_at": "2026-10-08T19:47:27+00:00"
+}

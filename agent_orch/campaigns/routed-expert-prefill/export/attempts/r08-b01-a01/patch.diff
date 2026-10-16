@@ -1,0 +1,162 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index f76bc80f445..49724139ad3 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -359,18 +359,30 @@ inline uint32_t group_cost(uint32_t count_tiles, uint32_t rows, uint32_t per_cor
+ constexpr uint8_t kNoGroup = 0xFF;
+ constexpr uint32_t kNoSchedule = 0xFFFFFFFFu;
+ 
+-// Uniform layouts: list scheduling in expert order, each expert to the least-loaded group (lowest
+-// index on a tie). Returns the makespan; fills owner[] when given.
++// Uniform layouts: list scheduling in expert order, each expert to the least-loaded group. Returns
++// the makespan; fills owner[] when given.
++//
++// Ties go to the HIGHEST index (lowest grid rows) when `to_bottom` (plan_groups: every group gets an
++// expert), else to the lowest. With all groups streaming at once the top row group gets the smallest
++// share of the shared DRAM/NoC stream (r07-b02-a01: its first expert runs up to ~2.3x longer than the
++// bottom group's), so an uneven deal must put its extra experts on the bottom groups. A short deal keeps its idle
++// group at the bottom: an idle top group only makes the next group the slow one (r07-b04-a01).
++// Equal-height groups make either order a relabelling, so the makespan is unchanged.
+ template <typename TilesOf>
+ inline uint32_t schedule_in_order(
+-    const GroupLayout& l, const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max, uint8_t* owner) {
++    const GroupLayout& l,
++    const TilesOf& tiles_of,
++    uint32_t num_experts,
++    uint32_t per_core_M_max,
++    bool to_bottom,
++    uint8_t* owner) {
+     uint32_t loads[kLayoutMaxGroups] = {0};
+     for (uint32_t e = 0; e < num_experts; ++e) {
+         const uint32_t cost = group_cost(tiles_of(e), l.rows[0], per_core_M_max);
+         uint32_t best = 0;
+         if (cost > 0) {
+             for (uint32_t g = 1; g < l.groups; ++g) {
+-                if (loads[g] < loads[best]) {
++                if (loads[g] < loads[best] || (to_bottom && loads[g] == loads[best])) {
+                     best = g;
+                 }
+             }
+@@ -456,12 +468,13 @@ inline uint32_t schedule_lpt(
+ // STRICTLY better: it is scheduled under a cap one below the best makespan so far.
+ //
+ // `uniform[li]` is schedule_in_order's makespan for uniform layout li (uniform_makespans), shared
+-// with make_plan so the uniform layouts are scheduled once per launch.
++// with make_plan so the uniform layouts are scheduled once per launch. `active` = experts with rows.
+ template <uint32_t NumExperts, typename TilesOf>
+ inline uint32_t plan_groups(
+     const TilesOf& tiles_of,
+     uint32_t per_core_M_max,
+     const uint32_t (&uniform)[kNumUniformLayouts],
++    uint32_t active,
+     uint8_t (&owner)[NumExperts]) {
+     uint32_t best_layout = 0;
+     uint32_t best = kNoSchedule;
+@@ -486,7 +499,8 @@ inline uint32_t plan_groups(
+         }
+     }
+     if (best_layout < kNumUniformLayouts) {
+-        schedule_in_order(layout_at(kGridY, best_layout), tiles_of, NumExperts, per_core_M_max, owner);
++        const GroupLayout& l = layout_at(kGridY, best_layout);
++        schedule_in_order(l, tiles_of, NumExperts, per_core_M_max, active >= l.groups, owner);
+     } else {
+         schedule_lpt(layout_at(kGridY, best_layout), tiles_of, NumExperts, per_core_M_max, best_cap, owner);
+     }
+@@ -522,7 +536,7 @@ struct Plan {
+     uint32_t thresh = 0;
+     uint32_t quota_eq = 0;
+     // Two-phase plans only: phase B's layout (uniform or mixed-height). Phase B runs each leftover
+-    // expert alone on one group, the k-th largest on group k (taller groups come first in a layout).
++    // expert alone on one of the layout's bottom groups, the k-th largest on the k-th from the bottom.
+     uint32_t layout_b = 0;
+ };
+ 
+@@ -561,7 +575,7 @@ template <typename TilesOf>
+ inline void uniform_makespans(
+     const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max, uint32_t (&uniform)[kNumUniformLayouts]) {
+     for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
+-        uniform[li] = schedule_in_order(layout_at(kGridY, li), tiles_of, num_experts, per_core_M_max, nullptr);
++        uniform[li] = schedule_in_order(layout_at(kGridY, li), tiles_of, num_experts, per_core_M_max, false, nullptr);
+     }
+ }
+ inline uint32_t pick_group_rows(const uint32_t (&uniform)[kNumUniformLayouts]) {
+@@ -688,9 +702,11 @@ inline uint32_t model_phase(
+ 
+ // The two-phase candidate: full waves on the best uniform size followed by the leftover experts on
+ // a larger uniform layout or a mixed-height one, when the model predicts a clear gain; otherwise
+-// rows_a == 0 (no phase A). A mixed phase B gives an odd leftover a group each without leaving rows
+-// idle: dsv3's 3 leftover 5-tile experts run per_core_M 2 on 4+3+3 rows (3 streams), where the
+-// uniform layouts either keep them at per_core_M 3 on 2-row groups or need two rounds on 5-row ones.
++// rows_a == 0 (no phase A). A mixed phase B gives the leftovers a group each below the top phase-A
++// group: kimi-k2.7's 2 leftover 3-tile experts run per_core_M 1 on the 3+3 rows under a 4-row top
++// group that only finishes phase A, where a 5+5 phase B would wait for the top rows. dsv3's 3
++// leftovers would need per_core_M 3 on 2-row groups below the top group, which no longer beats the
++// single-phase deal, so dsv3 runs single-phase with its extra experts on the bottom groups.
+ //
+ // Phase B must finish the leftover in ONE round (one leftover expert per phase-B group at most).
+ // A phase-B group's stream rate is capped by its 11 column senders, not by DRAM (r02-b03-a01:
+@@ -775,15 +791,21 @@ inline Plan make_plan(
+     uint32_t best_t = t_single * (100 - kModelMarginPct);
+     // Phase-B candidates: every layout with a group per leftover expert (one round), other than phase
+     // A's own. Uniform layouts come first, so a mixed one must be strictly better to replace them.
++    //
++    // The leftovers run on the layout's BOTTOM groups, the k-th largest on the k-th group from the
++    // bottom, and the top group, which must cover the top phase-A group's rows, stays idle. A phase-B
++    // group starts when the last of its rows ends phase A, and phase A ends top-last by up to ~1.8x
++    // (r07-b02-a01: dsv3 phase-A row-group ends 373 / 340 / 288 / 215 / 202 us top to bottom), so a
++    // phase-B expert on the top rows only starts once the slowest group is done and runs as the tail.
+     const uint32_t layout_a = uniform_layout_index(rows_a);
+     for (uint32_t li = 0; li < num_layouts(kGridY); ++li) {
+         const GroupLayout& l = layout_at(kGridY, li);
+-        if (li == layout_a || l.groups < n_left || (li < kNumUniformLayouts && l.rows[0] < rows_a)) {
++        if (li == layout_a || l.groups <= n_left || l.rows[0] < rows_a) {
+             continue;
+         }
+         uint32_t t_b = 0;
+         for (uint32_t k = 0; k < n_left; ++k) {
+-            const uint32_t t = model_expert(left[k], l.rows[k], per_core_M_max, n_left);
++            const uint32_t t = model_expert(left[k], l.rows[l.groups - 1 - k], per_core_M_max, n_left);
+             t_b = (t > t_b) ? t : t_b;
+         }
+         const uint32_t t_two = (t_a + t_b + kModelPhaseSwitch) * 100;
+@@ -818,8 +840,11 @@ struct LaunchPlan {
+ template <uint32_t NumExperts, typename TilesOfL1>
+ inline LaunchPlan plan_launch(const TilesOfL1& tiles_of_l1, uint32_t per_core_M_max, uint8_t (&owner)[2][NumExperts]) {
+     uint16_t tiles_cache[NumExperts];
++    uint32_t active = 0;
+     for (uint32_t e = 0; e < NumExperts; ++e) {
+-        tiles_cache[e] = static_cast<uint16_t>(tiles_of_l1(e));
++        const uint32_t t = tiles_of_l1(e);
++        tiles_cache[e] = static_cast<uint16_t>(t);
++        active += (t > 0) ? 1u : 0u;
+     }
+     auto tiles_of = [&](uint32_t e) -> uint32_t { return tiles_cache[e]; };
+     uint32_t uniform[kNumUniformLayouts];
+@@ -830,7 +855,7 @@ inline LaunchPlan plan_launch(const TilesOfL1& tiles_of_l1, uint32_t per_core_M_
+         for (uint32_t e = 0; e < NumExperts; ++e) {
+             owner[0][e] = kNoGroup;
+         }
+-        lp.layout[1] = plan_groups(tiles_of, per_core_M_max, uniform, owner[1]);
++        lp.layout[1] = plan_groups(tiles_of, per_core_M_max, uniform, active, owner[1]);
+         return lp;
+     }
+     lp.layout[0] = uniform_layout_index(two.rows_a);
+@@ -841,7 +866,8 @@ inline LaunchPlan plan_launch(const TilesOfL1& tiles_of_l1, uint32_t per_core_M_
+         owner[0][e] = static_cast<uint8_t>(d.deal(tiles_of(e)));
+     }
+     // Phase B: the leftover experts (fewer than phase A's groups) in expert order; the k-th largest
+-    // (ties -> lower index) runs on group k, matching make_plan's model.
++    // (ties -> lower index) runs on the k-th group from the bottom, matching make_plan's model.
++    const uint32_t last_b = layout_at(kGridY, two.layout_b).groups - 1;
+     uint32_t left[kMaxGroups];
+     uint32_t left_tiles[kMaxGroups];
+     uint32_t n_left = 0;
+@@ -859,7 +885,7 @@ inline LaunchPlan plan_launch(const TilesOfL1& tiles_of_l1, uint32_t per_core_M_
+         for (uint32_t j = 0; j < n_left; ++j) {
+             rank += (left_tiles[j] > left_tiles[i] || (left_tiles[j] == left_tiles[i] && j < i)) ? 1u : 0u;
+         }
+-        owner[1][left[i]] = static_cast<uint8_t>(rank);
++        owner[1][left[i]] = static_cast<uint8_t>(last_b - rank);
+     }
+     return lp;
+ }

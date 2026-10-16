@@ -1,0 +1,414 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index bf32e3fd294..2d06025ca14 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -1202,7 +1202,8 @@ void kernel_main() {
+     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
+     RE_HW_INIT();
+     RE_UW_INIT();
+-#if defined(PROFILE_KERNEL)
++    // The in-situ matmul probe (r04-b03-a01) delays the first gate/up by 1-2 µs; build it only on request.
++#if defined(PROFILE_KERNEL) && defined(RE_PROBE)
+     re_probe_gu<g_in0_block_w, gu_out_subblock_w, g_in1_per_core_w>(cb_in0_x, cb_in1_gate, cb_in1_up);
+ #endif
+ 
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 585abf4955b..1edc38c97db 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -1002,203 +1002,208 @@ void kernel_main() {
+ 
+         // -------- PHASE 4 — down matmul feed via L1 mcast of activated + down weight mcast --
+         //
+-        // For each K-block kb (0..num_blocks_d-1=7), exactly one core in this
+-        // M-row is the "activated sender": the core at gx == kb. Its
+-        // cb_activated holds the per_core_M x per_core_N_gu tiles whose
+-        // hidden-column range matches K-block kb. Sender mcasts those tiles
+-        // (with loopback to its own L1) to every M-row core's cb_in0_down_full.
++        // For each K-block kb (0..num_blocks_d-1), exactly one core in this M-row is the
++        // "activated sender": the core at gx == kb. Its cb_activated holds the per_core_M x
++        // per_core_N_gu tiles whose hidden-column range matches K-block kb. It mcasts those tiles
++        // (with loopback to its own L1) to every M-row core's cb_in0_down_full. In parallel the
++        // group column's in1_down sender reads + mcasts the down-weight block kb into cb_in1_down.
+         //
+-        // We compute the mcast destination rectangle from the M-row NoC table
+-        // once: corners are mrow[0] (top-left) and mrow[GRID_X-1] (bottom-right).
+-        // Sender NoC addr for the per-K-block ready-sem inc is looked up by
+-        // index kb from the same table.
+-        // GRID_X_NOC comes from compile-time arg now (= GRID_X in program factory).
+-        // (mrow_first_* / mrow_last_* are read once, before the expert loop.)
++        // The two streams run INDEPENDENTLY. A lock-step loop (ack both senders, wait both
++        // valids, next block) made every down block a grid-wide barrier: a receiver's ack for
++        // activated kb+1 waited for the column's down weights of kb, the act sender of kb+1 could
++        // only send after receiving both streams of kb, and the column's ack for kb+1 waited for
++        // the row's activated kb. Here one non-blocking loop polls both streams; each stream keeps
++        // its own block counters and advances as soon as ITS previous block landed and ITS ring
++        // slot is free. Each core still holds at most one outstanding ack per stream (it acks
++        // block j only after pushing block j-1), so:
++        //   * the valid semaphores stay binary: a receiver resets valid to 0 before acking j, and
++        //     block j+1's valid cannot be sent before this core acks j+1;
++        //   * the sender of block j has pushed blocks 0..j-1 like every receiver, so its write
++        //     pointer (the multicast destination) is the receivers' slot address.
++        // Block order, slots, bytes and semaphores are those of the lock-step loop.
+         constexpr uint32_t ACT_VALID = 1;
+         const uint32_t intermed_tile_bytes = cb_in0_down_full_obj.get_tile_size();
+-
+-        for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
+-            const bool is_act_sender = (my_nt_d == kb);
+-
+-            cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
+-            cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
+-
+-            // DOWN_SPLIT: slot reserved -> release the writer to read the block on NoC 1.
+-            if constexpr (split_down) {
+-                if (is_in1_sender) {
+-                    ++down_seq;
+-                    down_go_sem.set(down_seq);
+-                }
+-            }
+-
+-            // Step 1: receivers ack BOTH senders (in1_down and act) at the
+-            // top of the K-block iter. The in1_down ack lets the in1_down
+-            // sender immediately start DRAM reads; the act ack lets the act
+-            // sender start mcasting as soon as compute pushes cb_activated.
+-            // Without the early act ack the sender would only see receivers
+-            // after the in1_down section finishes, serializing the two paths.
+-            if (!is_in1_sender) {
+-                in1_valid_sem.set(0);
+-                in1_ready_sem.up(noc, in1_sender_nx, in1_sender_ny, 1);
+-            }
+-            if (!is_act_sender) {
+-                act_valid_sem.set(0);
+-                const uint32_t sender_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 0);
+-                const uint32_t sender_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 1);
+-                act_ready_sem.up(noc, sender_nx, sender_ny, 1);
++        const uint32_t down_col0 = my_nt_d * per_core_N_d;
++        const uint32_t down_col_end =
++            (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
++
++        uint32_t act_rx = 0;   // activated blocks pushed into cb_in0_down_full
++        uint32_t act_ack = 0;  // activated blocks this core acked (receivers) or sent (own block)
++        uint32_t w_rx = 0;     // down-weight blocks pushed into cb_in1_down
++        uint32_t w_ack = 0;    // receivers: blocks acked; in1 sender: blocks whose slot is reserved
++        bool w_reading = false;  // in1 sender: block w_rx's DRAM read is in flight
++        // Non-blocking form of noc_read.async_read_barrier(): this RISC's NoC-0 reads all landed.
++        auto down_reads_landed = [&]() -> bool {
++            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
++                invalidate_l1_cache();
++                return ncrisc_dynamic_noc_reads_flushed(0);
++            } else {
++                return ncrisc_noc_reads_flushed(0);
+             }
+-
+-            // Step 2: in1_down sender kicks off DRAM reads (NoC 0) without
+-            // barriering — reads run concurrently with the activated mcast
+-            // below on NoC 1.
+-            uint32_t in1_block_start = 0;
+-            if (is_in1_sender) {
+-                in1_ready_sem.wait(in1_num_receivers);
+-                in1_ready_sem.set(0);
+-                uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
+-                in1_block_start = l1_w;
+-                // DOWN_SPLIT: only the rows this RISC keeps; the writer reads the rest on
+-                // NoC 1 into the upper part of the same slot.
+-                // Both OOB directions are left UNWRITTEN.
+-                //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds its K-loop
+-                //     by real_k_tiles, so these are never reduced. Were they reduced, stale L1
+-                //     decoding to Inf would NaN every valid output column — the bound is what
+-                //     makes the skip safe.
+-                //   * N-OOB (col >= N_down_tiles_full, free dim): the output column is dropped
+-                //     by the writer's col guard.
+-                const uint32_t down_col0 = my_nt_d * per_core_N_d;
+-                const uint32_t down_col_end =
+-                    (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
+-                for (uint32_t k = 0; k < down_split_k; ++k) {
+-                    const uint32_t row = kb * in0_block_w_d + k;
+-                    if (row < K_down_tiles) {
+-                        DRuns::read(
+-                            noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
++        };
++        while (act_rx < num_blocks_d || w_rx < num_blocks_d) {
++            // ---- activated (row) stream ----
++            if (act_rx < num_blocks_d) {
++                if (act_rx == my_nt_d) {
++                    // Own block: multicast once a slot is free, the compute has pushed cb_activated
++                    // and all GRID_X - 1 row cores have acked. cb_activated carries a FULL max block
++                    // (constant CB block size — see adaptive_chunk.hpp), of which only the first
++                    // per_core_M (runtime) x in0_block_w_d tiles hold this chunk's real rows; drain
++                    // the whole block but mcast only the real tiles (#50885). cb_in0_down_full is
++                    // pushed FULL and the down matmul MAC-skips the rows past per_core_M.
++                    if (cb_in0_down_full_obj.pages_reservable_at_back(d_in0_block_num_tiles) &&
++                        cb_activated_obj.pages_available_at_front(act_tiles_max) &&
++                        act_ready_sem.value() >= GRID_X_NOC - 1) {
++                        cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
++                        act_ready_sem.set(0);
++                        const uint32_t re_act_tiles = per_core_M * in0_block_w_d;
++                        const uint32_t src_l1 = cb_activated_obj.get_read_ptr();
++                        const uint32_t dst_l1 = cb_in0_down_full_obj.get_write_ptr();
++                        const uint32_t mcast_bytes = re_act_tiles * intermed_tile_bytes;
++                        // linked=true keeps the multicast path RESERVED so the valid-semaphore
++                        // multicast below travels the SAME path and is delivered AFTER the data at
++                        // every receiver. With linked=false the valid-sem multicast can overtake the
++                        // bulk data at a receiver -> it pushes cb_in0_down_full and the compute reads
++                        // stale L1 (run-to-run nondeterministic). Mirrors the canonical matmul in0
++                        // sender (reader_bmm_tile_layout_in0_sender_padding.cpp).
++                        if (mcast_bytes > 0) {
++                            noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
++                                CoreLocalMem<uint32_t>(src_l1),
++                                MulticastEndpoint{},
++                                mcast_bytes,
++                                GRID_X_NOC,
++                                {.offset_bytes = 0},
++                                {.noc_x_start = mrow_first_nx,
++                                 .noc_y_start = mrow_first_ny,
++                                 .noc_x_end = mrow_last_nx,
++                                 .noc_y_end = mrow_last_ny,
++                                 .addr = dst_l1},
++                                /*linked=*/true);
++                        }
++                        noc.async_writes_flushed();
++
++                        act_valid_sem.set(ACT_VALID);
++                        act_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
++                            noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
++
++                        cb_activated_obj.pop_front(act_tiles_max);
++                        // The sender's own copy arrives via the INCL_SRC loopback. The mcast is
++                        // non-posted, so only the ack-wait proves the data LANDED before this core's
++                        // compute reads the slot (async_writes_flushed only proves the request left).
++                        // Placed after the valid-sem mcast so receivers are not held up.
++                        noc.async_write_barrier();
++                        cb_in0_down_full_obj.push_back(d_in0_block_num_tiles);
++                        ++act_rx;
++                        act_ack = act_rx;
+                     }
+-                    l1_w += per_core_N_d * down_tile_bytes;
+-                }
+-            }
+-
+-            // Step 3: in1_down sender finishes — barrier on the DRAM reads it
+-            // kicked off in step 2, then mcasts the down-weight block. Reordered
+-            // BEFORE the activated mcast: the down weight has no compute
+-            // dependency (DRAM-ready early), so sending it first clears NoC 1 for
+-            // the compute-gated activated mcast below. Tradeoff: on the one core
+-            // that is BOTH senders (gy==0 && gx==kb) the DRAM-read barrier is no
+-            // longer hidden under the activated wait — measure before keeping.
+-            if (is_in1_sender) {
+-                noc_read.async_read_barrier();
+-                // DOWN_SPLIT: the writer's block must have landed before it is multicast
+-                // (or consumed locally at GRID_Y == 1).
+-                if constexpr (split_down) {
+-                    down_done_sem.wait_min(down_seq);
+-                }
+-                // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
+-                // core consumes the locally-read down weight directly.
+-                if (in1_num_receivers > 0) {
+-                    const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
+-                    // linked=true so the in1_valid-sem multicast is ordered behind
+-                    // the weight data on the same reserved path (see the activated
+-                    // mcast below for the full rationale).
+-                    noc.async_write_multicast(
+-                        CoreLocalMem<uint32_t>(in1_block_start),
+-                        MulticastEndpoint{},
+-                        block_bytes,
+-                        in1_num_receivers,
+-                        {.offset_bytes = 0},
+-                        {.noc_x_start = in1_mcast_nx_start,
+-                         .noc_y_start = in1_mcast_ny_start,
+-                         .noc_x_end = in1_mcast_nx_end,
+-                         .noc_y_end = in1_mcast_ny_end,
+-                         .addr = in1_block_start},
+-                        /*linked=*/true);
+-                    noc.async_writes_flushed();
+-
+-                    in1_valid_sem.set(IN1_VALID);
+-                    in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+-                        noc,
+-                        in1_mcast_nx_start,
+-                        in1_mcast_ny_start,
+-                        in1_mcast_nx_end,
+-                        in1_mcast_ny_end,
+-                        in1_num_receivers);
++                } else if (act_ack == act_rx) {
++                    // Offer block act_rx's slot to its sender (gx == act_rx) as soon as it is free.
++                    if (cb_in0_down_full_obj.pages_reservable_at_back(d_in0_block_num_tiles)) {
++                        cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
++                        act_valid_sem.set(0);
++                        act_ready_sem.up(
++                            noc,
++                            get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * act_rx + 0),
++                            get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * act_rx + 1),
++                            1);
++                        ++act_ack;
++                    }
++                } else if (act_valid_sem.value() == ACT_VALID) {
++                    cb_in0_down_full_obj.push_back(d_in0_block_num_tiles);
++                    ++act_rx;
+                 }
+             }
+ 
+-            // Step 4: activated L1 mcast (sender for this K-block = gx==kb). Runs
+-            // after the in1_down mcast; starts as soon as compute pushes
+-            // cb_activated AND the ready acks are in (already done in step 1).
+-            if (is_act_sender) {
+-                // cb_activated carries a FULL max block (constant CB block size —
+-                // see adaptive_chunk.hpp), of which only the first per_core_M
+-                // (runtime) x in0_block_w_d tiles hold this chunk's real rows. Drain
+-                // the whole block but MCAST only the real tiles (#50885). Likewise
+-                // cb_in0_down_full is pushed FULL below, and the down matmul
+-                // MAC-skips the rows past per_core_M.
+-                const uint32_t re_act_tiles = per_core_M * in0_block_w_d;
+-                cb_activated_obj.wait_front(act_tiles_max);
+-                act_ready_sem.wait(GRID_X_NOC - 1);
+-                act_ready_sem.set(0);
+-
+-                const uint32_t src_l1 = cb_activated_obj.get_read_ptr();
+-                const uint32_t dst_l1 = cb_in0_down_full_obj.get_write_ptr();
+-                const uint32_t mcast_bytes = re_act_tiles * intermed_tile_bytes;
+-                // linked=true keeps the multicast path RESERVED so the
+-                // valid-semaphore multicast below travels the SAME path and is
+-                // delivered AFTER the data at every receiver. With linked=false
+-                // the path is released and the valid-sem multicast can
+-                // overtake the bulk data multicast at a receiver -> the receiver
+-                // observes act_valid, pushes cb_in0_down_full, and compute reads
+-                // stale L1 -> that core's whole down-matmul output block is wrong
+-                // (run-to-run nondeterministic). Path-linking orders the sem behind
+-                // the data for free; the alternative, an ack-wait before sending the
+-                // sem, would stall this core on every receiver's ack. (The mcast is
+-                // non-posted and ack-counted, so an ack-wait also orders it — step 5
+-                // needs exactly that for the sender's own loopback copy.) Mirrors the
+-                // canonical matmul in0 sender
+-                // (reader_bmm_tile_layout_in0_sender_padding.cpp).
+-                if (mcast_bytes > 0) {
+-                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+-                        CoreLocalMem<uint32_t>(src_l1),
+-                        MulticastEndpoint{},
+-                        mcast_bytes,
+-                        GRID_X_NOC,
+-                        {.offset_bytes = 0},
+-                        {.noc_x_start = mrow_first_nx,
+-                         .noc_y_start = mrow_first_ny,
+-                         .noc_x_end = mrow_last_nx,
+-                         .noc_y_end = mrow_last_ny,
+-                         .addr = dst_l1},
+-                        /*linked=*/true);
++            // ---- down-weight (column) stream ----
++            if (w_rx < num_blocks_d) {
++                if (is_in1_sender) {
++                    if (w_ack == w_rx) {
++                        // Slot free -> reserve it and (DOWN_SPLIT) release the writer to read its
++                        // half of block w_rx on NoC 1.
++                        if (cb_in1_down_obj.pages_reservable_at_back(d_in1_block_num_tiles)) {
++                            cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
++                            if constexpr (split_down) {
++                                ++down_seq;
++                                down_go_sem.set(down_seq);
++                            }
++                            ++w_ack;
++                        }
++                    } else if (!w_reading) {
++                        // All column receivers acked block w_rx: issue its DRAM read (NoC 0). Not
++                        // barriered here; the loop keeps serving the activated stream meanwhile.
++                        if (in1_ready_sem.value() >= in1_num_receivers) {
++                            in1_ready_sem.set(0);
++                            // DOWN_SPLIT: only the rows this RISC keeps; the writer reads the rest on
++                            // NoC 1 into the upper part of the same slot.
++                            // Both OOB directions are left UNWRITTEN.
++                            //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds its
++                            //     K-loop by real_k_tiles, so these are never reduced. Were they reduced,
++                            //     stale L1 decoding to Inf would NaN every valid output column — the
++                            //     bound is what makes the skip safe.
++                            //   * N-OOB (col >= N_down_tiles_full, free dim): the output column is
++                            //     dropped by the writer's col guard.
++                            uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
++                            for (uint32_t k = 0; k < down_split_k; ++k) {
++                                const uint32_t row = w_rx * in0_block_w_d + k;
++                                if (row < K_down_tiles) {
++                                    DRuns::read(
++                                        noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w,
++                                        down_tile_bytes);
++                                }
++                                l1_w += per_core_N_d * down_tile_bytes;
++                            }
++                            w_reading = true;
++                        }
++                    } else if (
++                        down_reads_landed() && (!split_down || down_done_sem.value() >= down_seq)) {
++                        // Block landed (this RISC's NoC-0 half and, DOWN_SPLIT, the writer's NoC-1
++                        // half): multicast it (or consume it locally at GRID_Y == 1).
++                        noc_read.async_read_barrier();
++                        const uint32_t in1_block_start = cb_in1_down_obj.get_write_ptr();
++                        if (in1_num_receivers > 0) {
++                            const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
++                            // linked=true so the in1_valid-sem multicast is ordered behind
++                            // the weight data on the same reserved path (see the activated
++                            // mcast above for the full rationale).
++                            noc.async_write_multicast(
++                                CoreLocalMem<uint32_t>(in1_block_start),
++                                MulticastEndpoint{},
++                                block_bytes,
++                                in1_num_receivers,
++                                {.offset_bytes = 0},
++                                {.noc_x_start = in1_mcast_nx_start,
++                                 .noc_y_start = in1_mcast_ny_start,
++                                 .noc_x_end = in1_mcast_nx_end,
++                                 .noc_y_end = in1_mcast_ny_end,
++                                 .addr = in1_block_start},
++                                /*linked=*/true);
++                            noc.async_writes_flushed();
++
++                            in1_valid_sem.set(IN1_VALID);
++                            in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
++                                noc,
++                                in1_mcast_nx_start,
++                                in1_mcast_ny_start,
++                                in1_mcast_nx_end,
++                                in1_mcast_ny_end,
++                                in1_num_receivers);
++                        }
++                        cb_in1_down_obj.push_back(d_in1_block_num_tiles);
++                        ++w_rx;
++                        w_reading = false;
++                    }
++                } else if (w_ack == w_rx) {
++                    if (cb_in1_down_obj.pages_reservable_at_back(d_in1_block_num_tiles)) {
++                        cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
++                        in1_valid_sem.set(0);
++                        in1_ready_sem.up(noc, in1_sender_nx, in1_sender_ny, 1);
++                        ++w_ack;
++                    }
++                } else if (in1_valid_sem.value() == IN1_VALID) {
++                    cb_in1_down_obj.push_back(d_in1_block_num_tiles);
++                    ++w_rx;
+                 }
+-                noc.async_writes_flushed();
+-
+-                act_valid_sem.set(ACT_VALID);
+-                act_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
+-                    noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
+-
+-                cb_activated_obj.pop_front(act_tiles_max);
+-            }
+-
+-            // Step 5: receivers wait for both valid sems and push.
+-            if (!is_act_sender) {
+-                act_valid_sem.wait(ACT_VALID);
+-            } else {
+-                // The sender's own copy arrives via the INCL_SRC loopback, so it needs a wait
+-                // too. async_writes_flushed() is not one: it polls NIU_MST_NONPOSTED_WR_REQ_SENT
+-                // (request left this NIU), not the ack. The mcast is non-posted, so only the
+-                // ack-wait proves the data LANDED before this core's compute reads the slot.
+-                // Placed after the valid-sem mcast so receivers are not held up; note the
+-                // wait is whole-queue, so it also covers that sem mcast's acks, not just
+-                // the loopback copy.
+-                noc.async_write_barrier();
+-            }
+-            cb_in0_down_full_obj.push_back(d_in0_block_num_tiles);
+-
+-            if (!is_in1_sender) {
+-                in1_valid_sem.wait(IN1_VALID);
+             }
+-            cb_in1_down_obj.push_back(d_in1_block_num_tiles);
+         }
+     }  // end chunk loop
+     }  // end per-local-expert loop

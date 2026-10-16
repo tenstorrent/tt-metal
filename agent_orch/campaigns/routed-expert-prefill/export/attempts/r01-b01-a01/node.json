@@ -1,0 +1,31 @@
+{
+  "node_id": "r01-b01-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 1,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "c54a00a7697836212f42b5a5e83dddb6ce3f77fc",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T18:40:13+00:00",
+  "mechanism": "runtime expert-parallel row groups: split the 8 M-rows into 1/2/4 groups that run different experts concurrently",
+  "tags": [
+    "work-partition",
+    "expert-parallel",
+    "multicast-topology",
+    "runtime-schedule"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4376,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 42,
+  "finished_at": "2026-10-08T18:54:04+00:00"
+}

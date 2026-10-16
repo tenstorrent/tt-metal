@@ -1,0 +1,12 @@
+{
+  "round": 3,
+  "policy": "v0",
+  "beta": 0.6,
+  "W": 4,
+  "R": 4,
+  "reason": "v0: fixed campaign defaults",
+  "round_root": "dream/routed-expert-prefill/n/r02-b02-a04",
+  "round_root_commit": "cb2514ebcd5a184ca65ee0478a7315579ee2c682",
+  "max_steps": 30,
+  "started_at": "2026-10-08T21:57:40+00:00"
+}

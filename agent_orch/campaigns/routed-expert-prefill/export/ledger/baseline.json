@@ -1,0 +1,123 @@
+{
+  "shapes": {
+    "deepseek-v3-h7168-i2048": {
+      "us_chip_mean": 801.266,
+      "us_chip_max": 801.266,
+      "runs_us_chip_mean": [
+        801.266,
+        804.631,
+        800.61
+      ],
+      "spread_pct": 0.5,
+      "pcc": 0.9803104379437951,
+      "max_abs": 1.928636,
+      "mean_abs": 0.273027
+    },
+    "kimi-k2-7-h7168-i2048": {
+      "us_chip_mean": 1161.992,
+      "us_chip_max": 1161.992,
+      "runs_us_chip_mean": [
+        1159.995,
+        1162.091,
+        1161.992
+      ],
+      "spread_pct": 0.18,
+      "pcc": 0.9802862865744592,
+      "max_abs": 1.936279,
+      "mean_abs": 0.273584
+    },
+    "kimi-k3-latent-h3584-i3072": {
+      "us_chip_mean": 2570.422,
+      "us_chip_max": 2570.422,
+      "runs_us_chip_mean": [
+        2570.422,
+        2572.307,
+        2564.729
+      ],
+      "spread_pct": 0.29,
+      "pcc": 0.9804434106531542,
+      "max_abs": 0.993449,
+      "mean_abs": 0.146626
+    },
+    "glm-5-3-h6144-i2048": {
+      "us_chip_mean": 704.062,
+      "us_chip_max": 704.062,
+      "runs_us_chip_mean": [
+        705.604,
+        704.062,
+        703.843
+      ],
+      "spread_pct": 0.25,
+      "pcc": 0.9802854616113968,
+      "max_abs": 1.609396,
+      "mean_abs": 0.232011
+    },
+    "mistral-small-4-h4096-i2048": {
+      "us_chip_mean": 261.791,
+      "us_chip_max": 261.791,
+      "runs_us_chip_mean": [
+        261.791,
+        261.744,
+        262.076
+      ],
+      "spread_pct": 0.13,
+      "pcc": 0.9802601253434263,
+      "max_abs": 1.013836,
+      "mean_abs": 0.149542
+    },
+    "deepseek-v4-flash-h4096-i2048": {
+      "us_chip_mean": 525.151,
+      "us_chip_max": 525.151,
+      "runs_us_chip_mean": [
+        525.096,
+        525.739,
+        525.151
+      ],
+      "spread_pct": 0.12,
+      "pcc": 0.9804867801077508,
+      "max_abs": 0.997776,
+      "mean_abs": 0.151036
+    },
+    "deepseek-v4-pro-h7168-i3072": {
+      "us_chip_mean": 1604.119,
+      "us_chip_max": 1604.119,
+      "runs_us_chip_mean": [
+        1605.061,
+        1600.378,
+        1604.119
+      ],
+      "spread_pct": 0.29,
+      "pcc": 0.9804813350677272,
+      "max_abs": 2.507647,
+      "mean_abs": 0.340592
+    },
+    "minimax-m3-h6144-i3072": {
+      "us_chip_mean": 477.77,
+      "us_chip_max": 477.77,
+      "runs_us_chip_mean": [
+        478.534,
+        477.527,
+        477.77
+      ],
+      "spread_pct": 0.21,
+      "pcc": 0.9824444075624631,
+      "max_abs": 2.351124,
+      "mean_abs": 0.346576
+    },
+    "gpt-oss-120b-h2880-i2880": {
+      "us_chip_mean": 572.05,
+      "us_chip_max": 572.05,
+      "runs_us_chip_mean": [
+        572.458,
+        572.05,
+        569.188
+      ],
+      "spread_pct": 0.57,
+      "pcc": 0.9835043928689363,
+      "max_abs": 1.109722,
+      "mean_abs": 0.168411
+    }
+  },
+  "noise_pct": 1.0,
+  "runs": 3
+}

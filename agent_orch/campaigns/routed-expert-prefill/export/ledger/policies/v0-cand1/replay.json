@@ -1,0 +1,162 @@
+{
+  "policy": "/localdev/nstamatovic/dream/routed-expert-prefill/ledger/policies/v0-cand1/policy.py",
+  "default_beta": 0.6,
+  "objective_V": 1.5229,
+  "cost_per_attempt": 0.005,
+  "parallel_bonus": 0.01,
+  "noise_pct": 1.0,
+  "rounds": [
+    1,
+    2,
+    3
+  ],
+  "sweep": {
+    "0.2": {
+      "mean_V": 1.5229,
+      "mean_attempts": 15,
+      "mean_best": 1.5604
+    },
+    "0.4": {
+      "mean_V": 1.5229,
+      "mean_attempts": 15,
+      "mean_best": 1.5604
+    },
+    "0.6": {
+      "mean_V": 1.5229,
+      "mean_attempts": 15,
+      "mean_best": 1.5604
+    },
+    "0.8": {
+      "mean_V": 1.5229,
+      "mean_attempts": 15,
+      "mean_best": 1.5604
+    },
+    "1.0": {
+      "mean_V": 1.5229,
+      "mean_attempts": 15,
+      "mean_best": 1.5604
+    }
+  },
+  "episodes": [
+    {
+      "round": 1,
+      "beta": 0.2,
+      "V": 1.4636,
+      "attempts": 15,
+      "steps": 4,
+      "best": 1.5011
+    },
+    {
+      "round": 2,
+      "beta": 0.2,
+      "V": 1.5347,
+      "attempts": 14,
+      "steps": 4,
+      "best": 1.5697
+    },
+    {
+      "round": 3,
+      "beta": 0.2,
+      "V": 1.5703,
+      "attempts": 16,
+      "steps": 4,
+      "best": 1.6103
+    },
+    {
+      "round": 1,
+      "beta": 0.4,
+      "V": 1.4636,
+      "attempts": 15,
+      "steps": 4,
+      "best": 1.5011
+    },
+    {
+      "round": 2,
+      "beta": 0.4,
+      "V": 1.5347,
+      "attempts": 14,
+      "steps": 4,
+      "best": 1.5697
+    },
+    {
+      "round": 3,
+      "beta": 0.4,
+      "V": 1.5703,
+      "attempts": 16,
+      "steps": 4,
+      "best": 1.6103
+    },
+    {
+      "round": 1,
+      "beta": 0.6,
+      "V": 1.4636,
+      "attempts": 15,
+      "steps": 4,
+      "best": 1.5011
+    },
+    {
+      "round": 2,
+      "beta": 0.6,
+      "V": 1.5347,
+      "attempts": 14,
+      "steps": 4,
+      "best": 1.5697
+    },
+    {
+      "round": 3,
+      "beta": 0.6,
+      "V": 1.5703,
+      "attempts": 16,
+      "steps": 4,
+      "best": 1.6103
+    },
+    {
+      "round": 1,
+      "beta": 0.8,
+      "V": 1.4636,
+      "attempts": 15,
+      "steps": 4,
+      "best": 1.5011
+    },
+    {
+      "round": 2,
+      "beta": 0.8,
+      "V": 1.5347,
+      "attempts": 14,
+      "steps": 4,
+      "best": 1.5697
+    },
+    {
+      "round": 3,
+      "beta": 0.8,
+      "V": 1.5703,
+      "attempts": 16,
+      "steps": 4,
+      "best": 1.6103
+    },
+    {
+      "round": 1,
+      "beta": 1.0,
+      "V": 1.4636,
+      "attempts": 15,
+      "steps": 4,
+      "best": 1.5011
+    },
+    {
+      "round": 2,
+      "beta": 1.0,
+      "V": 1.5347,
+      "attempts": 14,
+      "steps": 4,
+      "best": 1.5697
+    },
+    {
+      "round": 3,
+      "beta": 1.0,
+      "V": 1.5703,
+      "attempts": 16,
+      "steps": 4,
+      "best": 1.6103
+    }
+  ]
+}

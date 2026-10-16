@@ -1,0 +1,33 @@
+{
+  "node_id": "r03-b02-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 2,
+  "attempt": 2,
+  "parent": "r03-b02-a01",
+  "parent_commit": "d1e2f8539da78d10e4832a1a7e690ef8748a35c3",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T22:22:42+00:00",
+  "mechanism": "keep the row-shared x owner off weight-sender cores: gate/up block j of a row is read, tilized and multicast by the row's non-weight-sender columns in turn, so no weight-sender NCRISC carries x stick reads (under its gate read barrier), the tilize wait or the x multicast",
+  "tags": [
+    "data-movement",
+    "x-path",
+    "sender-placement",
+    "row-shared-tilize",
+    "critical-path",
+    "kernel-only",
+    "kernel-size",
+    "planner-opt-level"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5952,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 45,
+  "finished_at": "2026-10-08T22:40:26+00:00"
+}

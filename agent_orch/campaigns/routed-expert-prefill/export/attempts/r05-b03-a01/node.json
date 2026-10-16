@@ -1,0 +1,33 @@
+{
+  "node_id": "r05-b03-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 5,
+  "branch": 3,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "23a0c81920c2b34fe967d79d471d784ade856bdc",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T01:26:33+00:00",
+  "mechanism": "stagger the row-shared x owner rotation by M-row (group index + 2 x row-in-group), so a gate/up K-block's x stick reads, tilize and row multicast are spread over ~10 grid columns instead of landing on the same 1-2 columns in every row",
+  "tags": [
+    "data-movement",
+    "x-path",
+    "noc-hotspot",
+    "owner-placement",
+    "row-shared-tilize",
+    "kernel-only",
+    "bit-identical",
+    "measurement"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6177,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 63,
+  "finished_at": "2026-10-09T02:07:28+00:00"
+}

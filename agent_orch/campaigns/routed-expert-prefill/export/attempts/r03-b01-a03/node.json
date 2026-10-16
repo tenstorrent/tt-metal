@@ -1,0 +1,31 @@
+{
+  "node_id": "r03-b01-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 1,
+  "attempt": 3,
+  "parent": "r03-b01-a02",
+  "parent_commit": "ac43f3ed0c4227be65c104f83e11062e280bfd1a",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T22:51:43+00:00",
+  "mechanism": "make the reader's single launch planner fast: port r03-b04-a01's bit-identical planner trim onto the plan-once-per-core lineage, overlap the reader/writer start reads with planning, and build the planner region at -O3 on the dataflow RISCs",
+  "tags": [
+    "planner",
+    "prologue",
+    "kernel-only",
+    "bit-identical",
+    "opt-level",
+    "combination"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5917,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 44,
+  "finished_at": "2026-10-08T23:00:38+00:00"
+}

@@ -1,0 +1,32 @@
+{
+  "node_id": "r02-b04-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 4,
+  "attempt": 3,
+  "parent": "r02-b04-a02",
+  "parent_commit": "986718d4b40557cbe3e5c4eda5c35ed319522715",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T21:15:46+00:00",
+  "mechanism": "single-row expert groups: a 10 x 1-row layout with no weight multicast (row-major x only), so kimi-k3's 28 small experts run 2-3 per row at their own tile count instead of 5-6 per 2-row group at padded per_core_M 2; reverts the parent's writer-owned down stream",
+  "tags": [
+    "work-partition",
+    "row-groups",
+    "runtime-schedule",
+    "single-row-groups",
+    "revert-parent"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5234,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 44,
+  "finished_at": "2026-10-08T21:38:13+00:00"
+}

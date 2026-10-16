@@ -1,0 +1,658 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index 12b5ad80f79..dccfa0891a9 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -419,10 +419,11 @@ template <
+     uint32_t out_subblock_w,
+     uint32_t out_subblock_num_tiles,
+     uint32_t out_block_num_tiles,
+-    // x_cb_id / x_rm_cb_id are compile-time so the tilize helper (which takes the
++    // x_cb_id / x_rm_cb_id / x_tl_cb_id are compile-time so the tilize helper (which takes the
+     // input/output CB as template args, like conv_bmm_tilize.cpp) can consume them.
+     uint32_t x_cb_id,
+     uint32_t x_rm_cb_id,
++    uint32_t x_tl_cb_id,
+     bool tilize_x = false>
+ FORCE_INLINE void matmul_phase_fused_gu(
+     uint32_t gate_cb_id,
+@@ -432,7 +433,13 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     uint32_t gate_intermed_cb_id,
+     uint32_t up_intermed_cb_id,
+     uint32_t m_subblocks,
+-    uint32_t n_subblocks) {
++    uint32_t n_subblocks,
++    // Row-shared tilize (tilize_x only): this chunk's first gate/up block number, this core's
++    // grid column and the row width. Block x_blk_base + b is tilized by column
++    // (x_blk_base + b) % grid_x alone; the reader multicasts the tiles to the rest of the row.
++    uint32_t x_blk_base = 0,
++    uint32_t my_gx = 0,
++    uint32_t grid_x = 1) {
+     // No real_k_tiles bound here, unlike the down phase: the host asserts
+     // K_gate_tiles % in0_block_w == 0, so the gate/up K-loop covers the reduction
+     // dim exactly and there is no padded K position to skip. This phase's padding
+@@ -477,19 +484,24 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     partials_gu_cb.reserve_back(EFF_OUT_MAX);
+     partials_up_cb.reserve_back(EFF_OUT_MAX);
+ 
+-    for (uint32_t block = 0; block < num_blocks; ++block) {
++    // Row-major x, row-shared tilize. Only the block's owner tilizes it: cb_x_rm (bf16, read by
++    // its own reader) -> cb_x_tl (bf8), which its reader multicasts into cb_in0_x (x_cb) on every
++    // core of the row. The owner tilizes ONE block ahead -- block b+1 before its matmul of block b,
++    // block 0 before the loop -- so the multicast lands while the row still computes block b.
++    // A core that does not own a block runs straight through to its matmul with no tilize and no
++    // unpack/pack reconfig.
++    //
++    // L1_ACC is turned off so the tilize packs OVERWRITE cb_x_tl rather than accumulate; the
++    // shared tilize helper (same one conv_bmm_tilize.cpp uses) then reconfigures unpack SrcA +
++    // pack format, drives the per-strip wait/reserve/tilize/push/pop over the runtime
++    // x_block_tiles / in0_block_w tile-rows (adaptive per_core_M), and restores init on exit. The
++    // helper left SrcA pointing at the bf16 row-major input, so restore it to the gate/up weight
++    // format before resuming the matmul (SrcB still holds x_cb_id — the BH tilize path never
++    // touches it); then restore the partials packer + L1_ACC state (`l1_acc` = that of the block
++    // whose matmul runs next).
++    [[maybe_unused]] auto tilize_owned_x_block = [&](uint32_t l1_acc) {
++        // Instantiated only on the row-major path: on TILE x the tilize CBs are not allocated.
+         if constexpr (tilize_x) {
+-            //  Row-major x: tilize this K-block's cb_x_rm strips (bf16) -> x_cb
+-            //  (cb_in0_x, bf8_b) before the matmul consumes it. L1_ACC is turned
+-            //  off so the tilize packs OVERWRITE x_cb rather than accumulate; the
+-            //  shared tilize helper (same one conv_bmm_tilize.cpp uses) then
+-            //  reconfigures unpack SrcA + pack format, drives the per-strip
+-            //  wait/reserve/tilize/push/pop over the runtime x_block_tiles /
+-            //  in0_block_w tile-rows (adaptive per_core_M), and restores init on
+-            //  exit. The helper left SrcA pointing at the bf16 row-major input, so
+-            //  restore it to the gate/up weight format before resuming the matmul
+-            //  (SrcB still holds x_cb_id — the BH tilize path never touches it);
+-            //  then restore the partials packer + L1_ACC state for this block.
+ #ifdef PACKER_L1_ACC
+             PACK((llk_pack_reconfig_l1_acc(0)));
+ #endif
+@@ -497,30 +509,45 @@ FORCE_INLINE void matmul_phase_fused_gu(
+             compute_kernel_lib::tilize<
+                 in0_block_w,
+                 x_rm_cb_id,
+-                x_cb_id,
++                x_tl_cb_id,
+                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                 compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(n_strips);
+-            // The helper consumed/produced only the runtime rows, but the reader
+-            // pushed a full max cb_x_rm block and the matmul below pops a full max
+-            // cb_in0_x block. Settle both with pointer-only bumps (no tilize work
+-            // on the stale rows) so every CB moves a constant-size block.
+-            {
+-                const uint32_t x_pad = X_BLOCK_TILES_MAX - x_block_tiles;
+-                if (x_pad > 0) {
+-                    CircularBuffer x_rm_cb(x_rm_cb_id);
+-                    x_rm_cb.wait_front(x_pad);
+-                    x_rm_cb.pop_front(x_pad);
+-                    x_cb.reserve_back(x_pad);
+-                    x_cb.push_back(x_pad);
+-                }
++            // The helper consumed/produced only the runtime rows, but the reader pushed a full max
++            // cb_x_rm block and pops a full max cb_x_tl block. Settle both with pointer-only bumps (no
++            // tilize work on the stale rows) so every CB moves a constant-size block.
++            const uint32_t x_pad = X_BLOCK_TILES_MAX - x_block_tiles;
++            if (x_pad > 0) {
++                CircularBuffer x_rm_cb(x_rm_cb_id);
++                CircularBuffer x_tl_cb(x_tl_cb_id);
++                x_rm_cb.wait_front(x_pad);
++                x_rm_cb.pop_front(x_pad);
++                x_tl_cb.reserve_back(x_pad);
++                x_tl_cb.push_back(x_pad);
+             }
+             reconfig_data_format_srca(gate_cb_id);
+             matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+-            pack_reconfig_data_format(x_cb_id, partials_gu_cb_id);
++            pack_reconfig_data_format(x_tl_cb_id, partials_gu_cb_id);
+ #ifdef PACKER_L1_ACC
+-            PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
++            PACK((llk_pack_reconfig_l1_acc(l1_acc)));
++#else
++            (void)l1_acc;
+ #endif
++        } else {
++            (void)l1_acc;
++        }
++    };
++    if constexpr (tilize_x) {
++        if (x_blk_base % grid_x == my_gx) {
++            tilize_owned_x_block(0);
++        }
++    }
++
++    for (uint32_t block = 0; block < num_blocks; ++block) {
++        if constexpr (tilize_x) {
++            if (block + 1 < num_blocks && (x_blk_base + block + 1) % grid_x == my_gx) {
++                tilize_owned_x_block(block == 0 ? 0 : 1);
++            }
+         }
+         x_cb.wait_front(X_BLOCK_TILES_MAX);
+         gate_cb.wait_front(in1_block_num_tiles);
+@@ -891,6 +918,8 @@ void kernel_main() {
+     const uint32_t d_valid_n_subblocks = get_arg_val<uint32_t>(1);
+     // This core's M-row: selects its row group in the runtime row-group schedule.
+     const uint32_t my_mt = get_arg_val<uint32_t>(2);
++    // Grid column: picks the gate/up x blocks this core tilizes for its row (row-major x only).
++    const uint32_t my_gx = get_arg_val<uint32_t>(3);
+ 
+     // Phase 1 (gate)
+     constexpr uint32_t g_in0_block_w = get_compile_time_arg_val(0);
+@@ -975,6 +1004,10 @@ void kernel_main() {
+     // Row-major bf16 x staging (x_is_row_major only); tilize input CB. Unused
+     // when x is TILE.
+     constexpr uint32_t cb_x_rm = get_named_compile_time_arg_val("cb_x_rm");
++    // Row-shared tilize output (x_is_row_major only): bf8 tiles of the x blocks this core owns,
++    // multicast by the reader to the whole row. grid_x = cores per M-row.
++    constexpr uint32_t cb_x_tl = get_named_compile_time_arg_val("cb_x_tl");
++    constexpr uint32_t grid_x = get_named_compile_time_arg_val("grid_x");
+ #ifdef FUSE_BIAS
+     constexpr uint32_t cb_gate_bias = get_named_compile_time_arg_val("cb_gate_bias");
+     constexpr uint32_t cb_up_bias = get_named_compile_time_arg_val("cb_up_bias");
+@@ -1039,6 +1072,9 @@ void kernel_main() {
+     const uint32_t chunk_M_grp = (chunk_M_max / adaptive_chunk::kGridY) * group_rows;
+     adaptive_chunk::GroupDealer dealer{adaptive_chunk::kGridY / group_rows, my_mt / group_rows};
+     (void)dealer;  // only UNPACK deals; MATH/PACK take the dealt count from the mailbox
++    // Gate/up K-blocks done so far, counted exactly as the reader counts them (x_blk there):
++    // every core of a row runs the same experts and chunks, so they agree on each block's owner.
++    uint32_t x_blk = 0;
+ 
+     // ======================= per-local-expert loop =======================
+     // Run the full gate/up/down FFN for every local expert dealt to this row group.
+@@ -1133,6 +1169,7 @@ void kernel_main() {
+                 gu_out_block_num_tiles,
+                 /*x_cb_id=*/cb_in0_x,
+                 /*x_rm_cb_id=*/cb_x_rm,
++                /*x_tl_cb_id=*/cb_x_tl,
+                 /*tilize_x=*/(x_is_row_major != 0)>(
+                 cb_in1_gate,
+                 cb_in1_up,
+@@ -1141,7 +1178,11 @@ void kernel_main() {
+                 cb_gate_intermed,
+                 cb_up_intermed,
+                 /*m_subblocks=*/re_m_valid,
+-                /*n_subblocks=*/gu_valid_n_subblocks);
++                /*n_subblocks=*/gu_valid_n_subblocks,
++                /*x_blk_base=*/x_blk,
++                my_gx,
++                grid_x);
++            x_blk += g_num_blocks;
+ 
+ #ifdef FUSED_BINARY_ACT
+             // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index b71f7476821..53fb83c6aa3 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -178,8 +178,11 @@ void kernel_main() {
+     constexpr uint32_t D_SHARD_W = get_compile_time_arg_val(35);
+     using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
+     using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
++    // Row-shared tilize (row-major x only): the owner core's compute tilizes a K-block of x into
++    // this bf8 CB, and this RISC multicasts it into every row core's cb_in0_x. See the gate/up loop.
++    constexpr uint32_t cb_x_tl = get_compile_time_arg_val(36);
+ 
+-    constexpr uint32_t x_accessor_offset = 36;
++    constexpr uint32_t x_accessor_offset = 37;
+     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
+     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
+     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
+@@ -262,17 +265,14 @@ void kernel_main() {
+     CircularBuffer cb_idx_scratch_obj(cb_idx_scratch);
+     CircularBuffer cb_start_scratch_obj(cb_start_scratch);
+     CircularBuffer cb_x_rm_obj(cb_x_rm);
++    CircularBuffer cb_x_tl_obj(cb_x_tl);
+     CircularBuffer cb_activated_obj(cb_activated);
+ 
+-    // x staging CB for the in0 path. Row-major: the reader fills + mcasts
+-    // cb_x_rm (bf16 row-major) and the compute kernel tilizes it into cb_in0_x.
+-    // TILE: the reader fills + mcasts cb_in0_x directly. reserve / mcast /
+-    // push all operate on x_stage_obj; only the DRAM read loop differs
+-    // (partial-stick vs tile-page). In row-major mode the reader never touches
+-    // cb_in0_x — compute produces it.
+-    constexpr uint32_t x_stage_cb = (x_is_row_major != 0) ? cb_x_rm : cb_in0_x;
+-    CircularBuffer x_stage_obj(x_stage_cb);
+-    const uint32_t x_stage_tile_bytes = x_stage_obj.get_tile_size();
++    // x CB the matmul consumes, filled by this RISC on both layouts. TILE: the row's fixed x
++    // sender reads bf8 tiles from DRAM and multicasts them. Row-major: the block's owner core
++    // tilizes it once (cb_x_rm -> cb_x_tl on its compute) and multicasts the bf8 tiles, so the
++    // other ten cores of the row never tilize it.
++    CircularBuffer x_stage_obj(cb_in0_x);
+ 
+     // D2.0 Semaphore wrappers.
+     Semaphore<> in1_ready_sem(in1_ready_sem_id);
+@@ -428,6 +428,17 @@ void kernel_main() {
+     Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(MCAST_SEM_RT + 1));
+     uint32_t mc_seq = 0;
+ 
++    // Row-shared tilize (row-major x). Gate/up K-blocks are numbered across every chunk and
++    // expert this row works on (x_blk = number of earlier blocks); block x_blk + kb belongs to row
++    // column (x_blk + kb) % GRID_X. The compute kernel keeps the same counter, and all cores of a
++    // row run the same experts and chunks, so every core of the row agrees on each block's owner.
++    uint32_t x_blk = 0;
++    // The whole M-row: the row-shared x multicast and the phase-4 activated multicast both span it.
++    const uint32_t mrow_first_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 0);
++    const uint32_t mrow_first_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 1);
++    const uint32_t mrow_last_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * (GRID_X_NOC - 1) + 0);
++    const uint32_t mrow_last_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * (GRID_X_NOC - 1) + 1);
++
+     // ======================= per-local-expert loop =======================
+     // Per expert we resolve its global id (idx_table[e]), token count
+     // (counts[global_id]), region offset (start[global_id]) and per-expert
+@@ -559,6 +570,67 @@ void kernel_main() {
+             adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_grp, group_rows);
+         const uint32_t this_core_first_row = chunk * chunk_M_grp + my_row_in_group * per_core_M;
+ 
++        // Valid tile-rows of this core's M-slice: a contiguous prefix of per_core_M. Rows past the
++        // token count hold stale L1 and are dropped downstream (no FFN stage reduces across M).
++        const uint32_t valid_tile_rows =
++            (this_core_first_row < count_tiles)
++                ? ((count_tiles - this_core_first_row < per_core_M) ? (count_tiles - this_core_first_row) : per_core_M)
++                : 0;
++
++        // Row-major x: read K-block kb_rm's column window (in0_block_w_gu tiles wide) of this
++        // core's tile-rows into cb_x_rm, each tile-row laid out as one TILE_HEIGHT x
++        // (in0_block_w_gu*32) strip for the tilize. Issued only; the caller barriers and pushes.
++        // Only sticks < count_value are real tokens; the padding sticks of the last tile-row and
++        // whole rows >= count_tiles are skipped and stay stale (free-dim rows, dropped downstream).
++        [[maybe_unused]] auto issue_x_rm_read = [&](uint32_t kb_rm) {
++            constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
++            cb_x_rm_obj.reserve_back(g_in0_block_tiles_max);
++            uint32_t l1_x = cb_x_rm_obj.get_write_ptr();
++            const uint32_t col_off_bytes = kb_rm * rm_kblock_bytes;
++            for (uint32_t m = 0; m < per_core_M; ++m) {
++                const uint32_t tile_row = this_core_first_row + m;
++                if (tile_row < count_tiles) {
++                    const uint32_t row_base = tile_row * TILE_HEIGHT;
++                    const uint32_t real_r =
++                        (row_base + TILE_HEIGHT <= count_value) ? TILE_HEIGHT : (count_value - row_base);
++                    for (uint32_t r = 0; r < real_r; ++r) {
++                        noc_read.async_read(
++                            x_acc_rm,
++                            CoreLocalMem<uint32_t>(l1_x),
++                            rm_kblock_bytes,
++                            {.page_id = x_start_stick + row_base + r, .offset_bytes = col_off_bytes},
++                            {});
++                        l1_x += rm_kblock_bytes;
++                    }
++                    l1_x += (TILE_HEIGHT - real_r) * rm_kblock_bytes;
++                } else {
++                    l1_x += TILE_HEIGHT * rm_kblock_bytes;
++                }
++            }
++        };
++        [[maybe_unused]] auto owns_x_block = [&](uint32_t kb_x) { return (x_blk + kb_x) % GRID_X_NOC == my_nt_gu; };
++
++        // Row-shared tilize, row-major x. Every core of an M-row needs the same x K-block. Instead
++        // of each of the GRID_X cores tilizing it, block x_blk + kb is read, tilized and multicast
++        // by ONE owner core of the row, column (x_blk + kb) % GRID_X, so each core tilizes ~1/GRID_X
++        // of the blocks and skips the per-block tilize/matmul reconfig on the rest:
++        //   * this RISC on the owner reads the raw block into cb_x_rm TWO blocks ahead (below), so
++        //     it is in L1 when the owner's compute tilizes it one block ahead (cb_x_rm -> cb_x_tl,
++        //     before that compute's matmul of the previous block);
++        //   * it then multicasts the bf8 tiles from cb_x_tl into the cb_in0_x slot of every row
++        //     core, itself included. Every core pushes cb_in0_x one constant block per K-block
++        //     from kernel start, so the slot sits at the same L1 address on all of them.
++        // Blocks 0 and 1 of the chunk are read up front; the loop reads block kb + 2.
++        if constexpr (x_is_row_major != 0) {
++            for (uint32_t kb_x = 0; kb_x < 2 && kb_x < num_blocks_gu; ++kb_x) {
++                if (owns_x_block(kb_x)) {
++                    issue_x_rm_read(kb_x);
++                    noc_read.async_read_barrier();
++                    cb_x_rm_obj.push_back(g_in0_block_tiles_max);
++                }
++            }
++        }
++
+         // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.
+         //
+         // Per-K-block restructure for parallelism:
+@@ -573,6 +645,16 @@ void kernel_main() {
+         //   per-K-block elapsed time at small per_core_M where mcast/handshake
+         //   overhead dominates compute.
+         for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
++            // This block's x source: the rotating owner (row-major) or the row's fixed x sender (TILE).
++            const bool is_x_src = (x_is_row_major != 0) ? owns_x_block(kb) : is_in0_sender;
++            [[maybe_unused]] bool x_rm_pending = false;
++            if constexpr (x_is_row_major != 0) {
++                if (kb + 2 < num_blocks_gu && owns_x_block(kb + 2)) {
++                    issue_x_rm_read(kb + 2);
++                    x_rm_pending = true;
++                }
++            }
++
+             x_stage_obj.reserve_back(g_in0_block_tiles_max);
+             cb_in1_gate_obj.reserve_back(g_in1_block_num_tiles);
+             if constexpr (reader_mcasts_up) {
+@@ -592,9 +674,18 @@ void kernel_main() {
+             // proceed in parallel. The senders are usually disjoint sets of
+             // cores; the only core that's both senders is (0,0) which doesn't
+             // self-inc (it's its own sender for both).
+-            if (!is_in0_sender) {
++            if (!is_x_src) {
+                 in0_valid_sem.set(0);
+-                in0_ready_sem.up(noc, in0_sender_nx, in0_sender_ny, 1);
++                if constexpr (x_is_row_major != 0) {
++                    const uint32_t owner = (x_blk + kb) % GRID_X_NOC;
++                    in0_ready_sem.up(
++                        noc,
++                        get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * owner + 0),
++                        get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * owner + 1),
++                        1);
++                } else {
++                    in0_ready_sem.up(noc, in0_sender_nx, in0_sender_ny, 1);
++                }
+             }
+             if (!is_in1_sender) {
+                 in1_valid_sem.set(0);
+@@ -606,7 +697,9 @@ void kernel_main() {
+             // for the common case where a core is one type of sender, the
+             // work begins immediately. For core (0,0) (both senders), in0
+             // runs first then in1, ~60µs sequentially — same as before.
+-            if (is_in0_sender) {
++            // (Row-major: the owner's x multicast runs AFTER its weight work, below, because
++            // it waits on its own compute's tilize.)
++            if (x_is_row_major == 0 && is_x_src) {
+                 in0_ready_sem.wait(in0_num_receivers);
+                 in0_ready_sem.set(0);
+ 
+@@ -617,98 +710,31 @@ void kernel_main() {
+                 // reduces across M (tokens), so garbage stays confined to its own
+                 // row, and the writer drops every row >= count_tiles (its
+                 // `row < count_tiles` guard), so it never reaches the output.
+-                if constexpr (x_is_row_major != 0) {
+-                    // Row-major: read this K-block's column window (in0_block_w_gu
+-                    // tiles wide) from each of the TILE_HEIGHT token-row sticks of
+-                    // every tile-row, laid contiguously so each tile-row forms one
+-                    // TILE_HEIGHT x (in0_block_w_gu*32) strip for tilize_block.
+-                    // page_id is the token-row stick; offset_bytes is the K-block
+-                    // column window within the emb-wide stick.
+-                    constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
+-                    const uint32_t col_off_bytes = kb * rm_kblock_bytes;
+-                    for (uint32_t m = 0; m < per_core_M; ++m) {
+-                        const uint32_t tile_row = this_core_first_row + m;
+-                        if (tile_row < count_tiles) {
+-                            // Only sticks < count_value are real tokens; the rest of a valid
+-                            // tile-row is dispatch padding. Read just the real sticks (the
+-                            // last tile-row is usually partial) and leave the padding sticks
+-                            // stale — they are free-dim (token) rows, dropped downstream (the
+-                            // writer emits full tile-rows but combine consumes only the real
+-                            // count), so no cross-row contamination. This is stick-granular,
+-                            // unlike the TILE path where a 32-row tile can't be partially read.
+-                            const uint32_t row_base = tile_row * TILE_HEIGHT;
+-                            const uint32_t real_r =
+-                                (row_base + TILE_HEIGHT <= count_value) ? TILE_HEIGHT : (count_value - row_base);
+-                            for (uint32_t r = 0; r < real_r; ++r) {
+-                                // x_start_stick offsets into this expert's region
+-                                // of the shared row-major buffer (0 when x is a
+-                                // standalone per-expert buffer).
+-                                const uint32_t stick = x_start_stick + row_base + r;
+-                                noc_read.async_read(
+-                                    x_acc_rm,
+-                                    CoreLocalMem<uint32_t>(l1_x),
+-                                    rm_kblock_bytes,
+-                                    {.page_id = stick, .offset_bytes = col_off_bytes},
+-                                    {});
+-                                l1_x += rm_kblock_bytes;
+-                            }
+-                            // Skip the padding sticks in this tile-row (stale L1, dropped).
+-                            l1_x += (TILE_HEIGHT - real_r) * rm_kblock_bytes;
+-                        } else {
+-                            // Invalid row (>= count_tiles): skip the read, advance the
+-                            // write ptr. Stale L1 here is dropped by the writer (see above).
+-                            l1_x += TILE_HEIGHT * rm_kblock_bytes;
+-                        }
+-                    }
+-                } else {
+-                    for (uint32_t m = 0; m < per_core_M; ++m) {
+-                        const uint32_t row = this_core_first_row + m;
+-                        const bool row_valid = row < count_tiles;
+-                        if (row_valid) {
+-                            for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+-                                const uint32_t col = kb * in0_block_w_gu + k;
+-                                // x_start_tile_idx offsets into this expert's region
+-                                // of a shared buffer (0 when x is per-expert).
+-                                const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;
+-                                noc_read.async_read(
+-                                    x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
+-                                l1_x += x_tile_bytes;
+-                            }
+-                        } else {
+-                            // Invalid row (>= count_tiles): skip the read, advance the
+-                            // write ptr. Stale L1 here is dropped by the writer (see above).
+-                            l1_x += in0_block_w_gu * x_tile_bytes;
++                for (uint32_t m = 0; m < per_core_M; ++m) {
++                    const uint32_t row = this_core_first_row + m;
++                    const bool row_valid = row < count_tiles;
++                    if (row_valid) {
++                        for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
++                            const uint32_t col = kb * in0_block_w_gu + k;
++                            // x_start_tile_idx offsets into this expert's region
++                            // of a shared buffer (0 when x is per-expert).
++                            const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;
++                            noc_read.async_read(
++                                x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
++                            l1_x += x_tile_bytes;
+                         }
++                    } else {
++                        // Invalid row (>= count_tiles): skip the read, advance the
++                        // write ptr. Stale L1 here is dropped by the writer (see above).
++                        l1_x += in0_block_w_gu * x_tile_bytes;
+                     }
+                 }
+                 noc_read.async_read_barrier();
+ 
+-                // Multicast only the real rows of the block. Valid tile-rows form a
+-                // contiguous prefix from block_start; padding rows past the token
+-                // count stay stale at receivers and are dropped downstream (same
+-                // free-dim-M safety as the skipped reads above). RM trims to the real
+-                // token-row sticks; TILE to whole valid tile-rows (a 32-row tile can't
+-                // be split). A fully-padding M-row (this_core_first_row >= count_tiles)
+-                // sends no data — only the valid sem, so receivers still advance.
+-                const uint32_t valid_tile_rows =
+-                    (this_core_first_row < count_tiles)
+-                        ? ((count_tiles - this_core_first_row < per_core_M) ? (count_tiles - this_core_first_row)
+-                                                                            : per_core_M)
+-                        : 0;
+-                uint32_t mcast_bytes;
+-                if constexpr (x_is_row_major != 0) {
+-                    constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
+-                    uint32_t real_sticks = 0;
+-                    if (valid_tile_rows > 0) {
+-                        const uint32_t last_valid = this_core_first_row + valid_tile_rows - 1;
+-                        const uint32_t real_r_last =
+-                            (last_valid == count_tiles - 1) ? (count_value - last_valid * TILE_HEIGHT) : TILE_HEIGHT;
+-                        real_sticks = (valid_tile_rows - 1) * TILE_HEIGHT + real_r_last;
+-                    }
+-                    mcast_bytes = real_sticks * rm_kblock_bytes;
+-                } else {
+-                    mcast_bytes = valid_tile_rows * in0_block_w_gu * x_tile_bytes;
+-                }
++                // Multicast only the real rows of the block (whole valid tile-rows; a 32-row
++                // tile can't be split). A fully-padding M-row sends no data — only the valid
++                // sem, so receivers still advance.
++                const uint32_t mcast_bytes = valid_tile_rows * in0_block_w_gu * x_tile_bytes;
+                 // linked=true keeps the multicast path RESERVED so the in0_valid
+                 // sem multicast below travels the SAME path and is delivered
+                 // AFTER the data at every receiver. With linked=false the path is
+@@ -881,8 +907,50 @@ void kernel_main() {
+                 }
+             }
+ 
++            // Row-major x, owner of this block: multicast the tiles its compute tilized into
++            // cb_x_tl to every row core's cb_in0_x slot (this core's included), once the other
++            // GRID_X - 1 cores have reserved theirs. Data and valid sem both go INCL_SRC on one
++            // linked path, as the phase-4 activated multicast does, and the write barrier is
++            // what proves the loopback copy landed before this core pushes its own slot.
++            if constexpr (x_is_row_major != 0) {
++                if (is_x_src) {
++                    cb_x_tl_obj.wait_front(g_in0_block_tiles_max);
++                    in0_ready_sem.wait(GRID_X_NOC - 1);
++                    in0_ready_sem.set(0);
++                    // Whole valid tile-rows only; rows past the token count stay stale downstream.
++                    const uint32_t x_mcast_bytes = valid_tile_rows * in0_block_w_gu * x_tile_bytes;
++                    const uint32_t x_dst = x_stage_obj.get_write_ptr();
++                    if (x_mcast_bytes > 0) {
++                        noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
++                            CoreLocalMem<uint32_t>(cb_x_tl_obj.get_read_ptr()),
++                            MulticastEndpoint{},
++                            x_mcast_bytes,
++                            GRID_X_NOC,
++                            {.offset_bytes = 0},
++                            {.noc_x_start = mrow_first_nx,
++                             .noc_y_start = mrow_first_ny,
++                             .noc_x_end = mrow_last_nx,
++                             .noc_y_end = mrow_last_ny,
++                             .addr = x_dst},
++                            /*linked=*/true);
++                    }
++                    noc.async_writes_flushed();
++                    in0_valid_sem.set(IN0_VALID);
++                    in0_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
++                        noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
++                    noc.async_write_barrier();
++                    cb_x_tl_obj.pop_front(g_in0_block_tiles_max);
++                    x_stage_obj.push_back(g_in0_block_tiles_max);
++                }
++                // The look-ahead raw block issued at the top of this iteration.
++                if (x_rm_pending) {
++                    noc_read.async_read_barrier();
++                    cb_x_rm_obj.push_back(g_in0_block_tiles_max);
++                }
++            }
++
+             // Step 3: receivers wait for both valid semaphores and push.
+-            if (!is_in0_sender) {
++            if (!is_x_src) {
+                 in0_valid_sem.wait(IN0_VALID);
+                 x_stage_obj.push_back(g_in0_block_tiles_max);
+             }
+@@ -894,6 +962,7 @@ void kernel_main() {
+                 }
+             }
+         }
++        x_blk += num_blocks_gu;
+ 
+         // IN1_WRITER_MCAST: drain the decoupled weight-multicast pipeline before phase 4.
+         // in1_ready_sem is SHARED by phase 3 (gate/up mcast) and phase 4 (down mcast):
+@@ -920,10 +989,7 @@ void kernel_main() {
+         // Sender NoC addr for the per-K-block ready-sem inc is looked up by
+         // index kb from the same table.
+         // GRID_X_NOC comes from compile-time arg now (= GRID_X in program factory).
+-        const uint32_t mrow_first_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 0);
+-        const uint32_t mrow_first_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 1);
+-        const uint32_t mrow_last_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * (GRID_X_NOC - 1) + 0);
+-        const uint32_t mrow_last_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * (GRID_X_NOC - 1) + 1);
++        // (mrow_first_* / mrow_last_* are read once, before the expert loop.)
+         constexpr uint32_t ACT_VALID = 1;
+         const uint32_t intermed_tile_bytes = cb_in0_down_full_obj.get_tile_size();
+ 
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index c6c755eb9e0..1eb7ca394cd 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -68,6 +68,9 @@ constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
+ constexpr uint32_t CB_GATE_BIAS = tt::CBIndex::c_17;
+ constexpr uint32_t CB_UP_BIAS = tt::CBIndex::c_18;
+ constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
++// Row-shared tilize (x_is_row_major only): one gate/up K-block of x, tilized to bf8 by the core
++// that owns that block in its M-row and multicast from here into every row core's CB_IN0_X.
++constexpr uint32_t CB_X_TL = tt::CBIndex::c_20;
+ 
+ // Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
+ // interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
+@@ -413,10 +416,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     // section below; keep the two in sync.
+     const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
+         uint64_t total = 0;
+-        total += static_cast<uint64_t>(M * w_gu * (op.x_is_row_major ? 1 : 2)) *
+-                 in0_x_tile_size;  // cb_in0_x (RM: single-buf)
++        total += static_cast<uint64_t>(M * w_gu * 2) * in0_x_tile_size;  // cb_in0_x
+         if (op.x_is_row_major) {
+-            total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
++            total += static_cast<uint64_t>(M * w_gu) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
++            total += static_cast<uint64_t>(M * w_gu) * in0_x_tile_size;        // cb_x_tl (tilized block)
+         }
+         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;          // cb_in1_gate
+         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;            // cb_in1_up
+@@ -701,28 +704,26 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         });
+     };
+ 
+-    // Single-buffered DRAM-streamed inputs (no double-buffer) to fit L1.
+     // Double-buffered input CBs so the reader (NCRISC) can fetch K-block N+1
+     // while compute consumes K-block N. PM FPU util = 0 today says we're
+     // memory-bound; bigger input CBs let the kernel pipeline DRAM I/O with
+     // compute instead of serialising.
+-    // Row-major path: cb_in0_x is compute-internal (tilize output -> matmul input,
+-    // both on the compute threads sharing DST -> serial), so a second slot buys no
+-    // pipelining. Single-buffer it to free L1 for a wider in0_block_w_gu. TILE path
+-    // keeps double-buffering: the reader fills it and compute consumes it (cross-RISC
+-    // overlap).
+-    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_x_tile_size);
+-    // Row-major bf16 x staging (x_is_row_major only). Double-buffered like
+-    // cb_in0_x: it is a MULTICAST SOURCE, so the sender must fill K-block N+1
+-    // while N's posted mcast still drains — single-buffering reuses the slot
+-    // mid-mcast and deadlocks. Skipped when x is TILE so the bf8_b path's L1 is
+-    // unchanged.
++    // cb_in0_x is the multicast DESTINATION on both layouts (the reader fills it, compute
++    // consumes it), so it is double-buffered on both: the next block's multicast lands while
++    // compute still works on this one.
++    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * 2, in0_x_tile_size);
++    // Row-major x only, row-shared tilize (see the reader's gate/up loop): each K-block of x is
++    // read and tilized by ONE core of its M-row. cb_x_rm holds the raw bf16 block a core owns
++    // (local only, never multicast) and cb_x_tl its bf8 tilize, the multicast source. A core owns
++    // every GRID_X-th block, so one block of each is enough. Skipped when x is TILE so the bf8_b
++    // path's L1 is unchanged.
+     if (op.x_is_row_major) {
+         make_cb(
+             CB_X_RM,
+             tt::DataFormat::Float16_b,
+-            /*tiles=*/gu_in0_block_num_tiles * 2,
++            /*tiles=*/gu_in0_block_num_tiles,
+             tt::tile_size(tt::DataFormat::Float16_b));
++        make_cb(CB_X_TL, in0_x_df, /*tiles=*/gu_in0_block_num_tiles, in0_x_tile_size);
+     }
+     make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
+     make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
+@@ -782,9 +783,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     };
+     // x and its row-major staging move one in0_block_w_gu-wide tile-row strip at a time
+     // (the tilize helper pushes per strip; the per_core_M remainder is a pointer-only pad).
+-    check_ring("cb_in0_x", gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_block_w_gu);
++    check_ring("cb_in0_x", gu_in0_block_num_tiles * 2, in0_block_w_gu);
+     if (op.x_is_row_major) {
+-        check_ring("cb_x_rm", gu_in0_block_num_tiles * 2, in0_block_w_gu);
++        check_ring("cb_x_rm", gu_in0_block_num_tiles, in0_block_w_gu);
++        check_ring("cb_x_tl", gu_in0_block_num_tiles, in0_block_w_gu);
+     }
+     // gate/up intermediates and their accumulators move one gate/up subblock at a time.
+     check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
+@@ -928,6 +930,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         // kernels' read coalescing only — both layouts run the same code path.
+         gu_shard_w,  // 34
+         d_shard_w,   // 35
++        // Row-shared tilize output CB (only allocated / used when x_is_row_major).
++        CB_X_TL,  // 36
+     };
+     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
+     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
+@@ -1094,6 +1098,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
+         // Row-major bf16 x staging (x_is_row_major only); tilize input CB.
+         {"cb_x_rm", CB_X_RM},
++        // Row-shared tilize (x_is_row_major only): this core's tilized x blocks, and the M-row
++        // width that decides which blocks it owns.
++        {"cb_x_tl", CB_X_TL},
++        {"grid_x", GRID_X},
+         {"cb_in0_x", CB_IN0_X},
+         {"cb_in1_gate", CB_IN1_GATE},
+         {"cb_in1_up", CB_IN1_UP},
+@@ -1365,6 +1373,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+             (valid_n_gu + gu_out_subblock_w - 1) / gu_out_subblock_w,  // 0 gu valid N subblocks
+             (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w,     // 1 down valid N subblocks
+             my_mt,                                                     // 2 row-group schedule
++            my_nt_gu,                                                  // 3 grid column (x tilize owner)
+         };
+         tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
+         compute_rt_args.append(compute_args);

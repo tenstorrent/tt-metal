@@ -1,0 +1,28 @@
+{
+  "node_id": "r02-b01-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 1,
+  "attempt": 3,
+  "parent": "r02-b01-a02",
+  "parent_commit": "20eb6f20a4e14df3483bdb96ed2a44ac5d024b6e",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T21:15:46+00:00",
+  "mechanism": "pipeline the gate/up activation into the last gate/up K-block: per-subblock hand-off of the final partials, SFPU (binary op or SiLU) on the PACK thread overlapping the next subblock's last-block matmul on MATH",
+  "tags": [
+    "compute",
+    "sfpu-fpu-overlap",
+    "activation",
+    "pack-thread-sfpu",
+    "kernel-only"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5275,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 44,
+  "finished_at": "2026-10-08T21:36:05+00:00"
+}

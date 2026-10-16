@@ -1,0 +1,483 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index c58828500cd..8560cb4eac4 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -33,6 +33,12 @@
+ #include "../adaptive_chunk.hpp"
+ #include "../weight_runs.hpp"
+ 
++// Depth of cb_in1_down, set by the host from its L1 fit; phase 4 streams the down weights
++// IN1_DW_SLOTS - 2 blocks ahead of the activated multicast.
++#ifndef IN1_DW_SLOTS
++#define IN1_DW_SLOTS 2
++#endif
++
+ void kernel_main() {
+     // -------------------------- runtime args ------------------------------
+     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
+@@ -390,9 +396,6 @@ void kernel_main() {
+     const uint32_t group_rows = my_pos.rows;
+     const uint32_t my_group = my_pos.group;     // kIdleGroup on a row the layout leaves idle
+     const uint32_t my_mt = my_gy - my_pos.base;  // M-row within the group
+-    // Request VC of every weight DRAM read this core issues (weight_runs.hpp): spreads the
+-    // concurrent column / group weight streams over the unicast request VCs.
+-    const uint32_t weight_vc = unified_routed_expert_ffn::weight_read_vc(my_nt_gu, my_group);
+     const uint32_t chunk_M = per_core_M_max * group_rows;
+     adaptive_chunk::LayoutScheduler group_sched;
+     group_sched.init(plan.layout);
+@@ -812,8 +815,7 @@ void kernel_main() {
+                         gate_col0,
+                         gate_col_end,
+                         l1_w_gate,
+-                        gate_tile_bytes,
+-                        weight_vc);
++                        gate_tile_bytes);
+                     l1_w_gate += per_core_N_gu * gate_tile_bytes;
+                 }
+                 // `up` slot. LEGACY: reader reads it on NoC 0. UP_SPLIT: writer
+@@ -836,8 +838,7 @@ void kernel_main() {
+                             gate_col0,
+                             gate_col_end,
+                             l1_w_up,
+-                            up_tile_bytes,
+-                            weight_vc);
++                            up_tile_bytes);
+                         l1_w_up += per_core_N_gu * up_tile_bytes;
+                     }
+                 }
+@@ -1004,12 +1005,24 @@ void kernel_main() {
+         constexpr uint32_t ACT_VALID = 1;
+         const uint32_t intermed_tile_bytes = cb_in0_down_full_obj.get_tile_size();
+ 
+-        for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
+-            const bool is_act_sender = (my_nt_d == kb);
+-
++        // Down-weight look-ahead (IN1_DW_SLOTS = cb_in1_down depth, host-sized from leftover L1).
++        // The down weights have no compute dependency, but the activated block kb needs compute to
++        // finish gate/up AND the activation. Pairing weight block kb with activated block kb in one
++        // iteration therefore leaves the group's weight stream idle for the whole activation, with
++        // only block 0 fetched. Instead, run the weight index kDownLookAhead blocks ahead: a prologue
++        // streams weight blocks [0, L) with no activated wait, then iteration kb handles weight
++        // block kb + L beside activated block kb. Weight block kb + L reuses the slot of block
++        // kb + L - IN1_DW_SLOTS = kb - 2, which is exactly the slot the L = 0 loop reserved, so
++        // the steady state is never closer to compute than before. At IN1_DW_SLOTS == 2, L = 0
++        // and this is the plain one-for-one loop. Block contents, slots and order are unchanged.
++        static_assert(IN1_DW_SLOTS >= 2, "cb_in1_down needs at least 2 slots");
++        constexpr uint32_t kDownWeightAhead = static_cast<uint32_t>(IN1_DW_SLOTS) - 2u;
++        constexpr uint32_t kDownLookAhead = (kDownWeightAhead < num_blocks_d) ? kDownWeightAhead : num_blocks_d;
++
++        // Weight block kw, step 1 (every core): reserve the slot and, as a column receiver, ack
++        // the in1_down sender so it can start its DRAM read.
++        auto down_w_begin = [&]() {
+             cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
+-            cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
+-
+             // DOWN_SPLIT: slot reserved -> release the writer to read the block on NoC 1.
+             if constexpr (split_down) {
+                 if (is_in1_sender) {
+@@ -1017,17 +1030,109 @@ void kernel_main() {
+                     down_go_sem.set(down_seq);
+                 }
+             }
+-
+-            // Step 1: receivers ack BOTH senders (in1_down and act) at the
+-            // top of the K-block iter. The in1_down ack lets the in1_down
+-            // sender immediately start DRAM reads; the act ack lets the act
+-            // sender start mcasting as soon as compute pushes cb_activated.
+-            // Without the early act ack the sender would only see receivers
+-            // after the in1_down section finishes, serializing the two paths.
+             if (!is_in1_sender) {
+                 in1_valid_sem.set(0);
+                 in1_ready_sem.up(noc, in1_sender_nx, in1_sender_ny, 1);
+             }
++        };
++        // Weight block kw, steps 2+3 (in1_down sender): DRAM reads on NoC 0, barrier, mcast.
++        auto down_w_send = [&](uint32_t kw) {
++            if (!is_in1_sender) {
++                return;
++            }
++            in1_ready_sem.wait(in1_num_receivers);
++            in1_ready_sem.set(0);
++            uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
++            const uint32_t in1_block_start = l1_w;
++            // DOWN_SPLIT: only the rows this RISC keeps; the writer reads the rest on
++            // NoC 1 into the upper part of the same slot.
++            // Both OOB directions are left UNWRITTEN.
++            //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds its K-loop
++            //     by real_k_tiles, so these are never reduced. Were they reduced, stale L1
++            //     decoding to Inf would NaN every valid output column — the bound is what
++            //     makes the skip safe.
++            //   * N-OOB (col >= N_down_tiles_full, free dim): the output column is dropped
++            //     by the writer's col guard.
++            const uint32_t down_col0 = my_nt_d * per_core_N_d;
++            const uint32_t down_col_end =
++                (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
++            for (uint32_t k = 0; k < down_split_k; ++k) {
++                const uint32_t row = kw * in0_block_w_d + k;
++                if (row < K_down_tiles) {
++                    DRuns::read(
++                        noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
++                }
++                l1_w += per_core_N_d * down_tile_bytes;
++            }
++            // Barrier on the DRAM reads, then mcast the down-weight block. This runs BEFORE
++            // the activated mcast of the same iteration: the down weight has no compute
++            // dependency (DRAM-ready early), so sending it first clears NoC 1 for the
++            // compute-gated activated mcast. Tradeoff: on the one core that is BOTH senders
++            // (gy==0 && gx==kb) the DRAM-read barrier is no longer hidden under the
++            // activated wait.
++            noc_read.async_read_barrier();
++            // DOWN_SPLIT: the writer's block must have landed before it is multicast
++            // (or consumed locally at GRID_Y == 1).
++            if constexpr (split_down) {
++                down_done_sem.wait_min(down_seq);
++            }
++            // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
++            // core consumes the locally-read down weight directly.
++            if (in1_num_receivers > 0) {
++                const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
++                // linked=true so the in1_valid-sem multicast is ordered behind
++                // the weight data on the same reserved path (see the activated
++                // mcast below for the full rationale).
++                noc.async_write_multicast(
++                    CoreLocalMem<uint32_t>(in1_block_start),
++                    MulticastEndpoint{},
++                    block_bytes,
++                    in1_num_receivers,
++                    {.offset_bytes = 0},
++                    {.noc_x_start = in1_mcast_nx_start,
++                     .noc_y_start = in1_mcast_ny_start,
++                     .noc_x_end = in1_mcast_nx_end,
++                     .noc_y_end = in1_mcast_ny_end,
++                     .addr = in1_block_start},
++                    /*linked=*/true);
++                noc.async_writes_flushed();
++
++                in1_valid_sem.set(IN1_VALID);
++                in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
++                    noc, in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, in1_num_receivers);
++            }
++        };
++        // Weight block kw, final step (every core): receivers wait for the data, then push.
++        auto down_w_end = [&]() {
++            if (!is_in1_sender) {
++                in1_valid_sem.wait(IN1_VALID);
++            }
++            cb_in1_down_obj.push_back(d_in1_block_num_tiles);
++        };
++
++        // Prologue: weight blocks [0, L) while compute is still in gate/up + activation.
++        for (uint32_t kw = 0; kw < kDownLookAhead; ++kw) {
++            down_w_begin();
++            down_w_send(kw);
++            down_w_end();
++        }
++
++        for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
++            const bool is_act_sender = (my_nt_d == kb);
++            // Weight block streamed this iteration (none in the last L iterations).
++            const uint32_t kw = kb + kDownLookAhead;
++            const bool has_w = kw < num_blocks_d;
++
++            if (has_w) {
++                down_w_begin();
++            }
++            cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
++
++            // Step 1: receivers ack BOTH senders (in1_down above, act here) at the top of the
++            // iteration. The in1_down ack lets the in1_down sender immediately start DRAM
++            // reads; the act ack lets the act sender start mcasting as soon as compute pushes
++            // cb_activated. Without the early act ack the sender would only see receivers
++            // after the in1_down section finishes, serializing the two paths.
+             if (!is_act_sender) {
+                 act_valid_sem.set(0);
+                 const uint32_t sender_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * kb + 0);
+@@ -1035,89 +1140,9 @@ void kernel_main() {
+                 act_ready_sem.up(noc, sender_nx, sender_ny, 1);
+             }
+ 
+-            // Step 2: in1_down sender kicks off DRAM reads (NoC 0) without
+-            // barriering — reads run concurrently with the activated mcast
+-            // below on NoC 1.
+-            uint32_t in1_block_start = 0;
+-            if (is_in1_sender) {
+-                in1_ready_sem.wait(in1_num_receivers);
+-                in1_ready_sem.set(0);
+-                uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
+-                in1_block_start = l1_w;
+-                // DOWN_SPLIT: only the rows this RISC keeps; the writer reads the rest on
+-                // NoC 1 into the upper part of the same slot.
+-                // Both OOB directions are left UNWRITTEN.
+-                //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds its K-loop
+-                //     by real_k_tiles, so these are never reduced. Were they reduced, stale L1
+-                //     decoding to Inf would NaN every valid output column — the bound is what
+-                //     makes the skip safe.
+-                //   * N-OOB (col >= N_down_tiles_full, free dim): the output column is dropped
+-                //     by the writer's col guard.
+-                const uint32_t down_col0 = my_nt_d * per_core_N_d;
+-                const uint32_t down_col_end =
+-                    (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
+-                for (uint32_t k = 0; k < down_split_k; ++k) {
+-                    const uint32_t row = kb * in0_block_w_d + k;
+-                    if (row < K_down_tiles) {
+-                        DRuns::read(
+-                            noc_read,
+-                            down_acc,
+-                            row,
+-                            N_down_tiles_full,
+-                            down_col0,
+-                            down_col_end,
+-                            l1_w,
+-                            down_tile_bytes,
+-                            weight_vc);
+-                    }
+-                    l1_w += per_core_N_d * down_tile_bytes;
+-                }
+-            }
+-
+-            // Step 3: in1_down sender finishes — barrier on the DRAM reads it
+-            // kicked off in step 2, then mcasts the down-weight block. Reordered
+-            // BEFORE the activated mcast: the down weight has no compute
+-            // dependency (DRAM-ready early), so sending it first clears NoC 1 for
+-            // the compute-gated activated mcast below. Tradeoff: on the one core
+-            // that is BOTH senders (gy==0 && gx==kb) the DRAM-read barrier is no
+-            // longer hidden under the activated wait — measure before keeping.
+-            if (is_in1_sender) {
+-                noc_read.async_read_barrier();
+-                // DOWN_SPLIT: the writer's block must have landed before it is multicast
+-                // (or consumed locally at GRID_Y == 1).
+-                if constexpr (split_down) {
+-                    down_done_sem.wait_min(down_seq);
+-                }
+-                // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
+-                // core consumes the locally-read down weight directly.
+-                if (in1_num_receivers > 0) {
+-                    const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
+-                    // linked=true so the in1_valid-sem multicast is ordered behind
+-                    // the weight data on the same reserved path (see the activated
+-                    // mcast below for the full rationale).
+-                    noc.async_write_multicast(
+-                        CoreLocalMem<uint32_t>(in1_block_start),
+-                        MulticastEndpoint{},
+-                        block_bytes,
+-                        in1_num_receivers,
+-                        {.offset_bytes = 0},
+-                        {.noc_x_start = in1_mcast_nx_start,
+-                         .noc_y_start = in1_mcast_ny_start,
+-                         .noc_x_end = in1_mcast_nx_end,
+-                         .noc_y_end = in1_mcast_ny_end,
+-                         .addr = in1_block_start},
+-                        /*linked=*/true);
+-                    noc.async_writes_flushed();
+-
+-                    in1_valid_sem.set(IN1_VALID);
+-                    in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+-                        noc,
+-                        in1_mcast_nx_start,
+-                        in1_mcast_ny_start,
+-                        in1_mcast_nx_end,
+-                        in1_mcast_ny_end,
+-                        in1_num_receivers);
+-                }
++            // Steps 2+3: in1_down sender reads + mcasts weight block kw.
++            if (has_w) {
++                down_w_send(kw);
+             }
+ 
+             // Step 4: activated L1 mcast (sender for this K-block = gx==kb). Runs
+@@ -1175,7 +1200,7 @@ void kernel_main() {
+                 cb_activated_obj.pop_front(act_tiles_max);
+             }
+ 
+-            // Step 5: receivers wait for both valid sems and push.
++            // Step 5: receivers wait for both valid sems and push (weight block kw below).
+             if (!is_act_sender) {
+                 act_valid_sem.wait(ACT_VALID);
+             } else {
+@@ -1190,10 +1215,9 @@ void kernel_main() {
+             }
+             cb_in0_down_full_obj.push_back(d_in0_block_num_tiles);
+ 
+-            if (!is_in1_sender) {
+-                in1_valid_sem.wait(IN1_VALID);
++            if (has_w) {
++                down_w_end();
+             }
+-            cb_in1_down_obj.push_back(d_in1_block_num_tiles);
+         }
+     }  // end chunk loop
+     }  // end per-local-expert loop
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 44852f94eca..484ce7a5bf1 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -253,9 +253,6 @@ void kernel_main() {
+     const uint32_t group_rows = my_pos.rows;
+     const uint32_t my_group = my_pos.group;     // kIdleGroup on a row the layout leaves idle
+     const uint32_t my_mt = my_gy - my_pos.base;  // M-row within the group
+-    // Request VC of every weight DRAM read this core issues (weight_runs.hpp): spreads the
+-    // concurrent column / group weight streams over the unicast request VCs.
+-    const uint32_t weight_vc = unified_routed_expert_ffn::weight_read_vc(my_nt_gu, my_group);
+     const uint32_t chunk_M = per_core_M_max * group_rows;
+     adaptive_chunk::LayoutScheduler group_sched;
+     group_sched.init(plan.layout);
+@@ -341,8 +338,7 @@ void kernel_main() {
+                                 up_col0,
+                                 up_col_end,
+                                 l1_w_up,
+-                                up_tile_bytes,
+-                                weight_vc);
++                                up_tile_bytes);
+                             l1_w_up += per_core_N_gu * up_tile_bytes;
+                         }
+                         noc_up.async_read_barrier();
+@@ -449,8 +445,7 @@ void kernel_main() {
+                                     down_col0,
+                                     down_col_end,
+                                     l1_w,
+-                                    down_tile_bytes,
+-                                    weight_vc);
++                                    down_tile_bytes);
+                             }
+                             l1_w += per_core_N_d * down_tile_bytes;
+                         }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp
+index dd3e3f06367..b0764e56ae9 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp
+@@ -26,11 +26,6 @@
+ // contiguous run exists: run() collapses to 1 and this degenerates to the per-tile read.
+ namespace unified_routed_expert_ffn {
+ 
+-// Request VC for this core's weight reads: column + row group, mod the 4 unicast request VCs. Adjacent
+-// columns of a group's sender row differ, and so does one column's sender in consecutive groups.
+-// Every weight-reading RISC of a core (reader NoC 0, writer NoC 1) uses the same value.
+-inline uint32_t weight_read_vc(uint32_t grid_col, uint32_t group) { return (grid_col + group) & 3u; }
+-
+ template <uint32_t SHARD_W = 0>
+ struct WeightRuns {
+     // Length of the maximal contiguous run starting at tile column j, clipped to end.
+@@ -48,13 +43,6 @@ struct WeightRuns {
+     // `l1_base + (j - j0) * page_bytes`. Columns are the free dim, so callers pass jend clipped to
+     // the tensor's real N and the phantom columns past it stay UNWRITTEN — the guard the per-tile
+     // loops used to spell out per column. Reads are ISSUED only; the caller owns the barrier.
+-    //
+-    // `vc` is the request virtual channel. Requests inside one VC are served first-come first-served,
+-    // so concurrent weight streams on one VC can starve each other for a whole call (one row group
+-    // runs persistently slow and sets the op time). The callers give neighbouring sender columns and
+-    // consecutive row groups different unicast request VCs (0..3), as the DRAM-sharded matmul does
+-    // for readers sharing a row (tech_reports/Saturating_DRAM_bandwidth). The default is the VC a plain
+-    // async_read uses, so callers that pass none (the hybrid op's kernels) are unchanged.
+     template <class Acc>
+     static FORCE_INLINE void read(
+         const Noc& noc,
+@@ -64,8 +52,7 @@ struct WeightRuns {
+         uint32_t j0,
+         uint32_t jend,
+         uint32_t l1_base,
+-        uint32_t page_bytes,
+-        uint32_t vc = NOC_UNICAST_WRITE_VC) {
++        uint32_t page_bytes) {
+         const uint32_t page_row_base = row * n_tiles_full;
+         uint32_t j = j0;
+         uint32_t off = 0;
+@@ -73,13 +60,12 @@ struct WeightRuns {
+             const uint32_t len = run(j, jend);
+             // The accessor supplies the run's START page and the size covers the whole run, so
+             // `len` pages leave as one transaction rather than one per page.
+-            noc.template async_read<NocOptions::CUSTOM_VC>(
++            noc.async_read(
+                 acc,
+                 CoreLocalMem<uint32_t>(l1_base + off * page_bytes),
+                 len * page_bytes,
+                 {.page_id = page_row_base + j},
+-                {},
+-                NocOptVals{.vc = vc});
++                {});
+             j += len;
+             off += len;
+         }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index 35f80959d79..7df133e6d74 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -421,7 +421,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     // gu_slots / d_slots are the ring depths of the streamed inputs (see "ring depth" below the
+     // fit): the fit itself always runs at the 2-slot default, so (per_core_M, in0_block_w_gu) --
+     // and with it the K-block accumulation the accuracy depends on -- never depends on them.
+-    const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu, uint32_t gu_slots = 2, uint32_t d_slots = 2) -> uint64_t {
++    // dw_slots is the depth of the down-WEIGHT ring alone (cb_in1_down); 0 means "same as d_slots".
++    const auto cb_footprint_bytes =
++        [&](uint32_t M, uint32_t w_gu, uint32_t gu_slots = 2, uint32_t d_slots = 2, uint32_t dw_slots = 0) -> uint64_t {
++        if (dw_slots == 0) {
++            dw_slots = d_slots;
++        }
+         uint64_t total = 0;
+         total += static_cast<uint64_t>(M * w_gu * gu_slots) * in0_x_tile_size;  // cb_in0_x
+         if (op.x_is_row_major) {
+@@ -430,7 +435,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         }
+         total += static_cast<uint64_t>(w_gu * per_core_N_gu * gu_slots) * gate_tile_size;         // cb_in1_gate
+         total += static_cast<uint64_t>(w_gu * per_core_N_gu * gu_slots) * up_tile_size;           // cb_in1_up
+-        total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * d_slots) * down_tile_size;  // cb_in1_down
++        total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * dw_slots) * down_tile_size;  // cb_in1_down
+         total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;             // cb_gate_intermed
+         total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;             // cb_activated
+         total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;          // cb_mm_partials_gu
+@@ -542,6 +547,20 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     if (cb_footprint_bytes(per_core_M, in0_block_w_gu, gu_slots, kDeepRingSlots) <= l1_budget) {
+         d_slots = kDeepRingSlots;
+     }
++    // Down-weight look-ahead. The reader streams down-weight block kb + (dw_slots - 2) beside the
++    // activated block kb, so the first dw_slots - 1 down blocks are fetched while compute is still
++    // in the activation (binary SFPU / SiLU copy pass) instead of only block 0. Each extra slot of
++    // this ring alone is one more down block off the gap; the reserve condition the steady state
++    // waits on (compute popped block kb - 2) is unchanged. Spend whatever L1 the rings above left,
++    // up to the point where the whole look-ahead fits in one expert's down phase.
++    constexpr uint32_t kMaxDownWeightSlots = 8;
++    const uint32_t num_blocks_d_host = K_down_tiles_padded / in0_block_w_d;
++    const uint32_t dw_slots_cap = std::min<uint32_t>(kMaxDownWeightSlots, num_blocks_d_host + 1);
++    uint32_t dw_slots = d_slots;
++    while (dw_slots < dw_slots_cap &&
++           cb_footprint_bytes(per_core_M, in0_block_w_gu, gu_slots, d_slots, dw_slots + 1) <= l1_budget) {
++        ++dw_slots;
++    }
+ 
+     // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); the
+     // divisor-snap after the short_seq picker and the L1 guard above both
+@@ -754,7 +773,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     }
+     make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * gu_slots, gate_tile_size);
+     make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * gu_slots, up_tile_size);
+-    make_cb(CB_IN1_DOWN, down_df, /*tiles=*/d_in1_block_num_tiles * d_slots, down_tile_size);
++    make_cb(CB_IN1_DOWN, down_df, /*tiles=*/d_in1_block_num_tiles * dw_slots, down_tile_size);
+     // Intermediate L1 buffers hold one full per-core block each.
+     make_cb(CB_GATE_INT, intermed_df, /*tiles=*/gu_out_block_num_tiles, intermed_tile_size);
+     // cb_up_intermed removed — multiply reads cb_partials_up directly.
+@@ -830,7 +849,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     check_ring("cb_in0_down_full", d_in0_block_num_tiles * d_slots, d_in0_block_num_tiles);
+     check_ring("cb_in1_gate", gu_in1_block_num_tiles * gu_slots, gu_in1_block_num_tiles);
+     check_ring("cb_in1_up", gu_in1_block_num_tiles * gu_slots, gu_in1_block_num_tiles);
+-    check_ring("cb_in1_down", d_in1_block_num_tiles * d_slots, d_in1_block_num_tiles);
++    check_ring("cb_in1_down", d_in1_block_num_tiles * dw_slots, d_in1_block_num_tiles);
+ 
+     // Scratch CBs for the device-side count lookup. The reader does a single
+     // noc_async_read_page(page=0, ...) of each tensor and then indexes
+@@ -988,6 +1007,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         reader_defines.emplace_back("FUSE_BIAS", "1");
+     }
+     reader_defines.emplace_back("UNIFIED_RE_GRID_Y", std::to_string(GRID_Y));
++    // Depth of cb_in1_down: the reader's phase-4 down-weight look-ahead is IN1_DW_SLOTS - 2 blocks.
++    reader_defines.emplace_back("IN1_DW_SLOTS", std::to_string(dw_slots));
+     tt::tt_metal::KernelDescriptor reader_kernel_desc;
+     reader_kernel_desc.kernel_source =
+         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
+@@ -1073,7 +1094,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     // them off a block counter modulo the ring depth, which must match the CBs above.
+     writer_kernel_desc.defines = {
+         {"IN1_GU_SLOTS", std::to_string(gu_slots)},
+-        {"IN1_D_SLOTS", std::to_string(d_slots)},
++        {"IN1_D_SLOTS", std::to_string(dw_slots)},
+         {"UNIFIED_RE_GRID_Y", std::to_string(GRID_Y)},
+     };
+     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};

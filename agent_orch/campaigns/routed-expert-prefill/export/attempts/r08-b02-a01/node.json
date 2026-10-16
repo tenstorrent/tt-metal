@@ -1,0 +1,37 @@
+{
+  "node_id": "r08-b02-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 8,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a13919e548ea2f1b8dbaede82e0ad5c6fcb73f46",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T04:27:11+00:00",
+  "mechanism": "combine r07-b01-a01 with r07-b02-a01: the reader plans once per core and publishes the launch plan in a one-page L1 CB (writer and compute UNPACK lose their planner copies), and the freed kernel-config space carries the idle-row tie pass, so mistral / minimax-m3 run 3+3+2+2 rows on the wrap-free gate/up and down multicasts instead of 2x5 with rows y10-11 idle",
+  "tags": [
+    "combination",
+    "port",
+    "planner",
+    "plan-sharing",
+    "kernel-size",
+    "row-groups",
+    "idle-rows",
+    "tie-pass",
+    "host+kernel",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.7797,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-09T04:53:13+00:00"
+}

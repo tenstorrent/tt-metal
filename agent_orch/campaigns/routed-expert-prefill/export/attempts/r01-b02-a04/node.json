@@ -1,0 +1,28 @@
+{
+  "node_id": "r01-b02-a04",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 2,
+  "attempt": 4,
+  "parent": "r01-b02-a03",
+  "parent_commit": "6ada475fe03e44916d4d6c8e105f5a7078ca961d",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T19:47:35+00:00",
+  "mechanism": "balanced ragged matmul subblocks: per_core_N 9 runs as 1x5 + 1x4 instead of 3 x 1x3 (gate/up on the hidden-3072/2880 shapes, down on gpt-oss), cutting per-row LLK unpack-context rounds by a third",
+  "tags": [
+    "compute",
+    "matmul-subblock",
+    "llk-overhead",
+    "ragged-subblock"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4705,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 43,
+  "finished_at": "2026-10-08T20:03:58+00:00"
+}

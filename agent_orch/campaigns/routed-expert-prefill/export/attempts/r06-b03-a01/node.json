@@ -1,0 +1,32 @@
+{
+  "node_id": "r06-b03-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 6,
+  "branch": 3,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "5d961ca906c29b86081f6c09d5b3063a71bfa868",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T02:20:13+00:00",
+  "mechanism": "NoC-1 weight reads (writer up rows + down tail tiles) target each DRAM bank's NoC tile nearest above the reading core's row (3 tiles per BH bank; today always the fixed NoC-1 endpoint, whose responses wrap round the DRAM column), and the NoC-0/NoC-1 weight split moves back toward 50/50 (up_head_rows ~w/16, d_head ceil(N/2)) to use the freed NoC-1 links",
+  "tags": [
+    "data-movement",
+    "noc-balance",
+    "dram-endpoint",
+    "noc-congestion",
+    "weight-delivery",
+    "host+kernel",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5712,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-09T02:33:53+00:00"
+}

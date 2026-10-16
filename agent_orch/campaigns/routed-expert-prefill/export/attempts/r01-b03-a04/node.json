@@ -1,0 +1,32 @@
+{
+  "node_id": "r01-b03-a04",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 3,
+  "attempt": 4,
+  "parent": "r01-b03-a03",
+  "parent_commit": "1a1c3d02ae5128897251c3810aabf653ec63fa23",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T19:47:35+00:00",
+  "mechanism": "span the device's 2 spare core rows: add 10-row expert-group layouts (5 groups of 2 rows, 2 groups of 5 rows) that the runtime picker takes only when they strictly beat the 8-row layouts",
+  "tags": [
+    "work-partition",
+    "expert-parallel",
+    "grid-size",
+    "row-groups",
+    "runtime-schedule"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4856,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 43,
+  "finished_at": "2026-10-08T20:02:23+00:00"
+}

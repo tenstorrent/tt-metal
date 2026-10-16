@@ -1,0 +1,34 @@
+{
+  "node_id": "r03-b04-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 4,
+  "attempt": 3,
+  "parent": "r03-b04-a02",
+  "parent_commit": "166035cc9902e9e6a2ae556221a505144e092e58",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T22:51:44+00:00",
+  "mechanism": "hide the gate/up activation behind two K-blocks of matmul: on r03-b02-a02's code, the last two gate/up K-blocks are walked subblock by subblock and each subblock's PACK-thread SFPU activation is split over both blocks' matmul acquires",
+  "tags": [
+    "compute",
+    "sfpu-fpu-overlap",
+    "pack-thread-sfpu",
+    "activation",
+    "pipelining",
+    "kernel-only",
+    "bit-identical",
+    "rebase-onto-best"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.601,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-08T23:24:30+00:00"
+}

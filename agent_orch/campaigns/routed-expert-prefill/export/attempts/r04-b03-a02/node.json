@@ -1,0 +1,31 @@
+{
+  "node_id": "r04-b03-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 4,
+  "branch": 3,
+  "attempt": 2,
+  "parent": "r04-b03-a01",
+  "parent_commit": "20d1b8662c514be223110a6fc7d93652d1adfa4f",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T00:26:28+00:00",
+  "mechanism": "decouple the down phase's row (activated) and column (down-weight) streams in the reader: one non-blocking polling loop where each stream acks its next block as soon as its own previous block landed and its slot is free, the act sender multicasts as soon as its row acks are in, and the in1 sender's DRAM read is polled instead of barriered; parent's probe compiled out",
+  "tags": [
+    "data-movement",
+    "down-phase",
+    "handshake",
+    "stream-decoupling",
+    "polling-loop",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6119,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 47,
+  "finished_at": "2026-10-09T00:36:18+00:00"
+}

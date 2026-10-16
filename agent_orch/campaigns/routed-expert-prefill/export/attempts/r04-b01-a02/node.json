@@ -1,0 +1,36 @@
+{
+  "node_id": "r04-b01-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 4,
+  "branch": 1,
+  "attempt": 2,
+  "parent": "r04-b01-a01",
+  "parent_commit": "77b7d9b0e387b7c89c0011878efbfd6993d2989d",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T00:26:27+00:00",
+  "mechanism": "activated stream one block ahead in the down phase: receivers ack activated block kb+1 as soon as their own cb_in0_down_full slot for it is free and its sender multicasts it while the row still waits for block kb (two parity valid flags), on r04-b02-a01's down weight look-ahead",
+  "tags": [
+    "data-movement",
+    "down-phase",
+    "activated-stream",
+    "handshake",
+    "lookahead",
+    "port",
+    "kernel-size",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5915,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_mm_unpack.h",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-09T01:00:24+00:00"
+}

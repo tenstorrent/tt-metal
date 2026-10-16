@@ -1,0 +1,36 @@
+{
+  "node_id": "r03-b03-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 3,
+  "attempt": 3,
+  "parent": "r03-b03-a02",
+  "parent_commit": "225474be064495b7f26f8799fda22224970199a6",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T22:51:44+00:00",
+  "mechanism": "plain SiLU runs as a fused binary SiLU-GLU SFPU op on PACK (silu(gate)*up in one pass, pipelined into the last gate/up K-block), dropping the separate FPU multiply pass; code base = best node r03-b02-a02 (reverts parent's all-NoC-0 reads)",
+  "tags": [
+    "compute",
+    "sfpu",
+    "activation",
+    "pack-thread-sfpu",
+    "silu",
+    "rebase-onto-best",
+    "kernel-only"
+  ],
+  "valid": false,
+  "fail_class": "accuracy_fail",
+  "score": 0.0,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/binary_act_sfpu.h",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/re_prof.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-08T23:05:02+00:00"
+}

@@ -1,0 +1,30 @@
+{
+  "node_id": "r02-b03-a04",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 3,
+  "attempt": 4,
+  "parent": "r02-b03-a03",
+  "parent_commit": "5d60cda72b4d381712fae175bbeb63a9a7da4112",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T21:38:22+00:00",
+  "mechanism": "pipeline the op-local fast SFPU activations into the last gate/up K-block on the PACK thread (port of r02-b01-a03's pack-thread pipeline onto r02-b03-a03's bodies and the two-phase/mixed-layout schedule)",
+  "tags": [
+    "compute",
+    "sfpu-fpu-overlap",
+    "activation",
+    "pack-thread-sfpu",
+    "combination",
+    "kernel-only"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.563,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/binary_act_sfpu.h",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 47,
+  "finished_at": "2026-10-08T21:46:55+00:00"
+}

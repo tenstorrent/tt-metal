@@ -1,0 +1,32 @@
+{
+  "node_id": "r01-b04-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 4,
+  "attempt": 3,
+  "parent": "r01-b04-a02",
+  "parent_commit": "0b6acb26d6842e02c260f88e8ef2903299a4f331",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T19:24:09+00:00",
+  "mechanism": "port r01-b01-a02 (row groups + row-shared x tilize) and deepen the gate/up (x, gate, up) and down (down weights, activated) input rings to 3 slots when L1 has room",
+  "tags": [
+    "cb-depth",
+    "pipelining",
+    "l1-budget",
+    "port-best",
+    "row-groups"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4622,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 43,
+  "finished_at": "2026-10-08T19:37:46+00:00"
+}

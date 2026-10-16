@@ -1,0 +1,34 @@
+{
+  "node_id": "r07-b03-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 7,
+  "branch": 3,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a7291294eddeb8d28e7cdeb8468aa0dd060c53fa",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T03:48:18+00:00",
+  "mechanism": "NoC-1 weight reads (writer up rows + down tail tiles) go through each DRAM bank's free tile (never its NoC-0 endpoint) when it is fewer north hops away, via a per-core toggle of the writer's NoC-1 bank table around each read loop, with the weight split moved from ~0.60 to ~0.56 NoC 0; profiler-only MATH counters made opt-in for kernel-config room",
+  "tags": [
+    "data-movement",
+    "noc-balance",
+    "dram-endpoint",
+    "noc-congestion",
+    "weight-delivery",
+    "repair",
+    "host+kernel",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.7051,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 62,
+  "finished_at": "2026-10-09T04:16:25+00:00"
+}

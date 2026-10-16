@@ -1,0 +1,32 @@
+{
+  "node_id": "r05-b02-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 5,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "23a0c81920c2b34fe967d79d471d784ade856bdc",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T01:26:31+00:00",
+  "mechanism": "rebalance the weight DRAM reads ~60/40 toward NoC 0: the reader also reads the first ~0.2w up K-rows of each gate/up block and the leading ~60% tiles of every down K-row (tile split instead of row split), so the hot NoC-1 response links in the DRAM columns carry ~40% instead of 50%",
+  "tags": [
+    "data-movement",
+    "noc-balance",
+    "dram-bandwidth",
+    "weight-delivery",
+    "noc-congestion",
+    "host+kernel",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6667,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-09T01:46:11+00:00"
+}

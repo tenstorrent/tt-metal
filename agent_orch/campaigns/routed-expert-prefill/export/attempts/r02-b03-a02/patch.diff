@@ -1,0 +1,718 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index 3a25db73af4..34c6267092e 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -160,30 +160,94 @@ inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t
+     }
+     return (need < per_core_M_max) ? need : per_core_M_max;
+ }
+-
+ // ---------------------------------------------------------------------------------------------
+ // Expert-parallel row groups.
+ //
+ // Routed experts are small (a few tile-rows each in prefill), so spreading ONE expert over all
+ // kGridY M-rows leaves most rows computing padding and runs the experts strictly one after
+-// another. Instead the kGridY rows split into kGridY / rows groups of `rows` consecutive M-rows;
+-// each group runs its own subset of experts, all groups concurrently. A group's rows cover an
+-// expert with per_core_M = ceil(count_tiles / rows), each group-column has its own weight
+-// multicast sender, and the x / activated multicasts are per M-row, so groups share nothing.
++// another. Instead the kGridY rows split into groups of consecutive M-rows; each group runs its
++// own subset of experts, all groups concurrently. A group of `rows` rows covers an expert with
++// per_core_M = ceil(count_tiles / rows), each group-column has its own weight multicast sender,
++// and the x / activated multicasts are per M-row, so groups share nothing.
+ //
+-// `rows` is picked at RUNTIME from the device-side counts. Every RISC of every core runs the
+-// identical integer schedule below over the same counts, so they agree on the group size and on
+-// which group owns which expert without any host sync. An expert outside a core's group is
+-// skipped exactly like a count-0 expert (the uniform skip every kernel already agrees on).
++// The layout (how the rows split into groups) and the expert -> group map are picked at RUNTIME
++// from the device-side counts. Every RISC of every core runs the identical integer schedule below
++// over the same counts, so they agree on both without any host sync. An expert outside a core's
++// group is skipped exactly like a count-0 expert (the uniform skip every kernel already agrees on).
+ constexpr uint32_t kMinGroupRows = 2;
+ constexpr uint32_t kMaxGroups = kGridY / kMinGroupRows;
+ 
+-// Index of a group size in the host's per-topology runtime-arg sets, in the order the host builds
+-// them ({kGridY, kGridY / 2, kGridY / 4}): rows 8/4/2 or 10/5/2 -> 0/1/2. pick_group_rows halves
+-// rows from kGridY, which visits exactly those sizes on both grids.
+-static_assert(
+-    (kGridY / 2) / 2 == kGridY / 4 && kGridY / 4 == kMinGroupRows, "group sizes must match the host topology sets");
+-inline uint32_t group_rows_index(uint32_t rows) { return (rows >= kGridY) ? 0u : (rows >= kGridY / 2) ? 1u : 2u; }
++// Group heights, top row first. The host builds one weight-multicast topology per layout, in
++// table order, so the kernels index the runtime-arg sets by layout index.
++//
++// The first kNumUniformLayouts are the equal-height splits (kGridY, kGridY / 2, kGridY / 4 rows per
++// group), scheduled exactly as before mixed layouts existed. The rest mix heights so that experts
++// whose tile-row count does not divide a uniform height stop paying a phantom tile-row per core:
++// a 9-tile expert runs per_core_M 3 on 3 rows instead of 5 on 2 or 2 on 5; a 3-tile expert runs
++// per_core_M 1 on 3 rows instead of 2 on 2.
++constexpr uint32_t kLayoutMaxGroups = 5;
++struct GroupLayout {
++    uint32_t groups;
++    uint32_t rows[kLayoutMaxGroups];
++};
++constexpr uint32_t kNumUniformLayouts = 3;
++constexpr GroupLayout kLayouts10[] = {
++    {1, {10}}, {2, {5, 5}}, {5, {2, 2, 2, 2, 2}}, {4, {3, 3, 2, 2}}, {3, {4, 3, 3}}, {4, {4, 2, 2, 2}}};
++constexpr GroupLayout kLayouts8[] = {{1, {8}}, {2, {4, 4}}, {4, {2, 2, 2, 2}}, {3, {3, 3, 2}}, {3, {4, 2, 2}}};
++constexpr uint32_t num_layouts(uint32_t grid_y) {
++    return grid_y == 10 ? sizeof(kLayouts10) / sizeof(kLayouts10[0]) : sizeof(kLayouts8) / sizeof(kLayouts8[0]);
++}
++constexpr const GroupLayout& layout_at(uint32_t grid_y, uint32_t layout) {
++    return grid_y == 10 ? kLayouts10[layout] : kLayouts8[layout];
++}
++
++constexpr bool layouts_valid(uint32_t grid_y) {
++    for (uint32_t li = 0; li < num_layouts(grid_y); ++li) {
++        const GroupLayout& l = layout_at(grid_y, li);
++        if (l.groups < 1 || l.groups > kLayoutMaxGroups || l.groups > grid_y / kMinGroupRows) {
++            return false;
++        }
++        uint32_t sum = 0;
++        for (uint32_t g = 0; g < l.groups; ++g) {
++            if (l.rows[g] < kMinGroupRows) {
++                return false;
++            }
++            sum += l.rows[g];
++        }
++        // Uniform layouts come first, in halving order, each with equal heights.
++        if (li < kNumUniformLayouts) {
++            const uint32_t rows = (li == 0) ? grid_y : (li == 1) ? grid_y / 2 : grid_y / 4;
++            for (uint32_t g = 0; g < l.groups; ++g) {
++                if (l.rows[g] != rows) {
++                    return false;
++                }
++            }
++        }
++        if (sum != grid_y) {
++            return false;
++        }
++    }
++    return true;
++}
++static_assert(layouts_valid(10) && layouts_valid(8), "every layout must tile the grid with groups of >= 2 rows");
++static_assert(kGridY == 10 || kGridY == 8, "row-group layouts exist for 8- and 10-row grids");
++static_assert(kMaxGroups <= kLayoutMaxGroups, "layout table too narrow for this grid");
++
++// The group holding grid row `gy`, with its first row and height.
++inline uint32_t layout_group(const GroupLayout& l, uint32_t gy, uint32_t& base, uint32_t& rows) {
++    uint32_t b = 0;
++    for (uint32_t g = 0; g + 1 < l.groups; ++g) {
++        if (gy < b + l.rows[g]) {
++            base = b;
++            rows = l.rows[g];
++            return g;
++        }
++        b += l.rows[g];
++    }
++    base = b;
++    rows = l.rows[l.groups - 1];
++    return l.groups - 1;
++}
+ 
+ // Modelled cost of one expert on a group of `rows` M-rows, in units of one per-core tile-row of
+ // work: the per_core_M summed over its chunks, plus one unit per chunk for the chunk's fixed
+@@ -201,62 +265,151 @@ inline uint32_t expert_cost(uint32_t count_tiles, uint32_t rows, uint32_t per_co
+     return units + chunks;
+ }
+ 
+-// List scheduling in expert order: each expert goes to the least-loaded group (lowest index on a
+-// tie). Deterministic, so every kernel that feeds it the same costs in the same order derives the
+-// same owner for every expert.
+-struct GroupScheduler {
+-    uint32_t groups = 1;
+-    uint32_t loads[kMaxGroups] = {0};
+-
+-    void init(uint32_t num_groups) {
+-        groups = num_groups;
+-        for (uint32_t g = 0; g < kMaxGroups; ++g) {
+-            loads[g] = 0;
+-        }
++// expert_cost without a divide for the usual single-chunk expert (these RISC-Vs have no hardware
++// divider, and the schedule runs on every RISC before any work starts): ceil(tiles / rows) + 1 by
++// at most per_core_M_max additions. Identical values; larger experts take the general path.
++inline uint32_t group_cost(uint32_t count_tiles, uint32_t rows, uint32_t per_core_M_max) {
++    if (count_tiles == 0) {
++        return 0;
+     }
+-    // Charge `cost` (> 0) to the least-loaded group and return that group.
+-    uint32_t assign(uint32_t cost) {
++    if (count_tiles > per_core_M_max * rows) {
++        return expert_cost(count_tiles, rows, per_core_M_max);
++    }
++    uint32_t per_core_M = 1;
++    for (uint32_t covered = rows; covered < count_tiles; covered += rows) {
++        ++per_core_M;
++    }
++    return per_core_M + 1;
++}
++
++constexpr uint8_t kNoGroup = 0xFF;
++constexpr uint32_t kNoSchedule = 0xFFFFFFFFu;
++
++// Uniform layouts: list scheduling in expert order, each expert to the least-loaded group (lowest
++// index on a tie). Returns the makespan; fills owner[] when given.
++template <typename TilesOf>
++inline uint32_t schedule_in_order(
++    const GroupLayout& l, const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max, uint8_t* owner) {
++    uint32_t loads[kLayoutMaxGroups] = {0};
++    for (uint32_t e = 0; e < num_experts; ++e) {
++        const uint32_t cost = group_cost(tiles_of(e), l.rows[0], per_core_M_max);
+         uint32_t best = 0;
+-        for (uint32_t g = 1; g < groups; ++g) {
+-            if (loads[g] < loads[best]) {
+-                best = g;
++        if (cost > 0) {
++            for (uint32_t g = 1; g < l.groups; ++g) {
++                if (loads[g] < loads[best]) {
++                    best = g;
++                }
+             }
++            loads[best] += cost;
+         }
+-        loads[best] += cost;
+-        return best;
+-    }
+-    uint32_t makespan() const {
+-        uint32_t m = 0;
+-        for (uint32_t g = 0; g < groups; ++g) {
+-            m = (loads[g] > m) ? loads[g] : m;
++        if (owner != nullptr) {
++            owner[e] = (cost > 0) ? static_cast<uint8_t>(best) : kNoGroup;
+         }
+-        return m;
+     }
+-};
++    uint32_t makespan = 0;
++    for (uint32_t g = 0; g < l.groups; ++g) {
++        makespan = (loads[g] > makespan) ? loads[g] : makespan;
++    }
++    return makespan;
++}
+ 
+-// Group size (rows per group) with the smallest modelled makespan; ties keep the larger group, so
+-// a single expert or large token counts stay on the whole-grid schedule. `tiles_of(e)` returns
+-// local expert e's (band-filtered, clamped) tile-row count.
++// Mixed layouts: largest expert first (ties by index), each to the group where it is cheapest
++// among those it fits in under `cap` (ties -> lower load -> lower index). Returns the makespan, or
++// kNoSchedule when some expert fits nowhere. Distinct tile counts are walked largest-first instead
++// of sorting, so no per-expert buffer beyond owner[] is needed.
+ template <typename TilesOf>
+-inline uint32_t pick_group_rows(const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max) {
+-    uint32_t best_rows = kGridY;
+-    uint32_t best = 0xFFFFFFFFu;
+-    for (uint32_t rows = kGridY; rows >= kMinGroupRows; rows /= 2) {
+-        GroupScheduler sched;
+-        sched.init(kGridY / rows);
++inline uint32_t schedule_lpt(
++    const GroupLayout& l,
++    const TilesOf& tiles_of,
++    uint32_t num_experts,
++    uint32_t per_core_M_max,
++    uint32_t cap,
++    uint8_t* owner) {
++    uint32_t loads[kLayoutMaxGroups] = {0};
++    uint32_t cur = 0;
++    for (uint32_t e = 0; e < num_experts; ++e) {
++        const uint32_t t = tiles_of(e);
++        cur = (t > cur) ? t : cur;
++        if (owner != nullptr) {
++            owner[e] = kNoGroup;
++        }
++    }
++    while (cur > 0) {
++        uint32_t cost[kLayoutMaxGroups];
++        for (uint32_t g = 0; g < l.groups; ++g) {
++            cost[g] = group_cost(cur, l.rows[g], per_core_M_max);
++        }
++        uint32_t next = 0;
+         for (uint32_t e = 0; e < num_experts; ++e) {
+-            const uint32_t cost = expert_cost(tiles_of(e), rows, per_core_M_max);
+-            if (cost > 0) {
+-                sched.assign(cost);
++            const uint32_t t = tiles_of(e);
++            if (t != cur) {
++                next = (t < cur && t > next) ? t : next;
++                continue;
++            }
++            uint32_t best = kLayoutMaxGroups;
++            for (uint32_t g = 0; g < l.groups; ++g) {
++                if (loads[g] + cost[g] > cap) {
++                    continue;
++                }
++                if (best == kLayoutMaxGroups || cost[g] < cost[best] ||
++                    (cost[g] == cost[best] && loads[g] < loads[best])) {
++                    best = g;
++                }
++            }
++            if (best == kLayoutMaxGroups) {
++                return kNoSchedule;
++            }
++            loads[best] += cost[best];
++            if (owner != nullptr) {
++                owner[e] = static_cast<uint8_t>(best);
+             }
+         }
+-        const uint32_t m = sched.makespan();
++        cur = next;
++    }
++    uint32_t makespan = 0;
++    for (uint32_t g = 0; g < l.groups; ++g) {
++        makespan = (loads[g] > makespan) ? loads[g] : makespan;
++    }
++    return makespan;
++}
++
++// The layout with the smallest modelled makespan, and owner[e] = the group (within that layout)
++// that runs local expert e, kNoGroup for an expert with no rows. `tiles_of(e)` returns local expert
++// e's (band-filtered, clamped) tile-row count.
++//
++// Uniform layouts are compared first, ties keeping the larger groups, so a single expert or large
++// token counts stay on the whole-grid schedule. A mixed layout replaces the winner only when it is
++// STRICTLY better: it is scheduled under a cap one below the best makespan so far.
++template <uint32_t NumExperts, typename TilesOf>
++inline uint32_t plan_groups(const TilesOf& tiles_of, uint32_t per_core_M_max, uint8_t (&owner)[NumExperts]) {
++    uint32_t best_layout = 0;
++    uint32_t best = kNoSchedule;
++    for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
++        const uint32_t m = schedule_in_order(layout_at(kGridY, li), tiles_of, NumExperts, per_core_M_max, nullptr);
+         if (m < best) {
+             best = m;
+-            best_rows = rows;
++            best_layout = li;
+         }
+     }
+-    return best_rows;
++    uint32_t best_cap = 0;
++    for (uint32_t li = kNumUniformLayouts; li < num_layouts(kGridY); ++li) {
++        if (best < 2) {
++            break;  // no rows at all: nothing to improve on
++        }
++        const uint32_t cap = best - 1;
++        const uint32_t m = schedule_lpt(layout_at(kGridY, li), tiles_of, NumExperts, per_core_M_max, cap, nullptr);
++        if (m < best) {
++            best = m;
++            best_layout = li;
++            best_cap = cap;
++        }
++    }
++    if (best_layout < kNumUniformLayouts) {
++        schedule_in_order(layout_at(kGridY, best_layout), tiles_of, NumExperts, per_core_M_max, owner);
++    } else {
++        schedule_lpt(layout_at(kGridY, best_layout), tiles_of, NumExperts, per_core_M_max, best_cap, owner);
++    }
++    return best_layout;
+ }
+ 
+ 
+@@ -289,7 +442,51 @@ struct Plan {
+     uint32_t quota_eq = 0;
+ };
+ 
+-constexpr uint32_t kNoGroup = 0xFFFFFFFFu;
++// Index of the uniform layout with `rows` rows per group (the first kNumUniformLayouts table
++// entries are kGridY, kGridY / 2, kGridY / 4 rows per group; layouts_valid checks that order).
++inline uint32_t uniform_layout_index(uint32_t rows) { return (rows >= kGridY) ? 0u : (rows >= kGridY / 2) ? 1u : 2u; }
++
++// List scheduling in expert order: each expert goes to the least-loaded group (lowest index on a
++// tie), as schedule_in_order does for a uniform layout.
++struct GroupScheduler {
++    uint32_t groups = 1;
++    uint32_t loads[kMaxGroups] = {0};
++
++    void init(uint32_t num_groups) {
++        groups = num_groups;
++        for (uint32_t g = 0; g < kMaxGroups; ++g) {
++            loads[g] = 0;
++        }
++    }
++    // Charge `cost` (> 0) to the least-loaded group and return that group.
++    uint32_t assign(uint32_t cost) {
++        uint32_t best = 0;
++        for (uint32_t g = 1; g < groups; ++g) {
++            if (loads[g] < loads[best]) {
++                best = g;
++            }
++        }
++        loads[best] += cost;
++        return best;
++    }
++};
++
++// Uniform group size (rows per group) with the smallest in-order makespan; ties keep the larger
++// group. The same pick plan_groups makes among its uniform layouts.
++template <typename TilesOf>
++inline uint32_t pick_group_rows(const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max) {
++    uint32_t best_rows = kGridY;
++    uint32_t best = kNoSchedule;
++    for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
++        const GroupLayout& l = layout_at(kGridY, li);
++        const uint32_t m = schedule_in_order(l, tiles_of, num_experts, per_core_M_max, nullptr);
++        if (m < best) {
++            best = m;
++            best_rows = l.rows[0];
++        }
++    }
++    return best_rows;
++}
+ 
+ // Deals one phase's experts to that phase's groups. Feed it EVERY local expert's tile count, in
+ // expert order; it returns the group that runs the expert in this phase, or kNoGroup. Every kernel
+@@ -399,8 +596,13 @@ inline uint32_t model_phase(
+     return m;
+ }
+ 
+-// The launch's plan: today's single group size from pick_group_rows, or, when the model predicts
+-// a clear gain, full waves on that size followed by the leftover experts on a larger size.
++// The two-phase candidate: full waves on the best uniform size followed by the leftover experts on
++// a larger uniform size, when the model predicts a clear gain; otherwise rows_a == 0 (no phase A).
++//
++// Phase B must finish the leftover in ONE round (one leftover expert per phase-B group at most).
++// A phase-B group's stream rate is capped by its 11 column senders, not by DRAM (r02-b03-a01:
++// a lone 5-row group pulls ~250 GB/s), so a second phase-B round on a big group runs far slower
++// than the model's DRAM share says, and loses to the uniform layout's one-round tail.
+ template <typename TilesOf>
+ inline Plan make_plan(const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max) {
+     Plan single;
+@@ -457,6 +659,9 @@ inline Plan make_plan(const TilesOf& tiles_of, uint32_t num_experts, uint32_t pe
+     Plan best = single;
+     uint32_t best_t = t_single * (100 - kModelMarginPct);
+     for (uint32_t rows_b = kGridY; rows_b > rows_a; rows_b /= 2) {
++        if (active - n_a > kGridY / rows_b) {
++            continue;
++        }
+         two.rows_b = rows_b;
+         const uint32_t t_two =
+             (t_a + model_phase(tiles_of, num_experts, per_core_M_max, two, 1) + kModelPhaseSwitch) * 100;
+@@ -468,4 +673,40 @@ inline Plan make_plan(const TilesOf& tiles_of, uint32_t num_experts, uint32_t pe
+     return best;
+ }
+ 
++// ---------------------------------------------------------------------------------------------
++// The launch plan every kernel runs: up to two phases, each a row-group layout (index into the
++// layout table, which the host's per-layout topology sets follow) and owner[phase][e] = the group
++// (within that phase's layout) that runs local expert e in that phase, kNoGroup otherwise.
++//
++// A two-phase plan (make_plan) is taken when the model says it clearly beats the uniform layouts.
++// Otherwise phase A is empty and phase B is plan_groups' single layout, uniform or mixed-height.
++constexpr uint32_t kNoLayout = 0xFFFFFFFFu;
++
++struct LaunchPlan {
++    uint32_t layout[2] = {kNoLayout, 0};
++};
++
++template <uint32_t NumExperts, typename TilesOf>
++inline LaunchPlan plan_launch(const TilesOf& tiles_of, uint32_t per_core_M_max, uint8_t (&owner)[2][NumExperts]) {
++    LaunchPlan lp;
++    const Plan two = make_plan(tiles_of, NumExperts, per_core_M_max);
++    if (two.rows_a == 0) {
++        for (uint32_t e = 0; e < NumExperts; ++e) {
++            owner[0][e] = kNoGroup;
++        }
++        lp.layout[1] = plan_groups(tiles_of, per_core_M_max, owner[1]);
++        return lp;
++    }
++    lp.layout[0] = uniform_layout_index(two.rows_a);
++    lp.layout[1] = uniform_layout_index(two.rows_b);
++    for (uint32_t phase = 0; phase < 2; ++phase) {
++        PhaseDealer d;
++        d.begin(two, phase, per_core_M_max);
++        for (uint32_t e = 0; e < NumExperts; ++e) {
++            owner[phase][e] = static_cast<uint8_t>(d.deal(tiles_of(e)));
++        }
++    }
++    return lp;
++}
++
+ }  // namespace adaptive_chunk
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index 75c35ccc5bb..896e396d42e 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -934,7 +934,7 @@ void kernel_main() {
+     // compile-time) because they vary per core and one kernel serves the whole grid.
+     const uint32_t gu_valid_n_subblocks = get_arg_val<uint32_t>(0);
+     const uint32_t d_valid_n_subblocks = get_arg_val<uint32_t>(1);
+-    // Grid M-row: selects this core's expert group (adaptive_chunk::pick_group_rows).
++    // Grid M-row: selects this core's expert group (adaptive_chunk::plan_launch).
+     [[maybe_unused]] const uint32_t my_gy = get_arg_val<uint32_t>(2);
+     // Grid column: picks the gate/up x blocks this core tilizes for its row (row-major x only).
+     const uint32_t my_gx = get_arg_val<uint32_t>(3);
+@@ -1071,7 +1071,7 @@ void kernel_main() {
+     // Run the full gate/up/down FFN for every local expert this core's row group owns.
+     //
+     // Expert-parallel row groups (adaptive_chunk.hpp): UNPACK reads the counts, builds the same
+-    // two-phase plan the reader and writer run, walks its phases, and sends MATH/PACK (whose CB
++    // launch plan (per-phase layout and expert -> group map) the reader and writer run, walks its phases, and sends MATH/PACK (whose CB
+     // interface cannot reach the counts L1) the tile-row count and group size of each expert this
+     // core's group works on, in the order the reader feeds them, then a 0 sentinel. Experts
+     // another group owns, or with no rows, never reach MATH/PACK, so the mailbox carries one
+@@ -1084,14 +1084,12 @@ void kernel_main() {
+             cb_counts_scratch, cb_idx_scratch, e);
+     };
+ #endif
+-    [[maybe_unused]] adaptive_chunk::Plan plan;
+-    [[maybe_unused]] adaptive_chunk::PhaseDealer dealer;
++    // Read by UNPACK's scan only.
++    [[maybe_unused]] adaptive_chunk::LaunchPlan plan;
++    [[maybe_unused]] uint8_t expert_group[2][experts_per_chip];
+     [[maybe_unused]] uint32_t phase = 0;
+     [[maybe_unused]] uint32_t next_expert = 0;
+-    UNPACK(({
+-        plan = adaptive_chunk::make_plan(tiles_of, experts_per_chip, per_core_M_max);
+-        dealer.begin(plan, phase, per_core_M_max);
+-    }));
++    UNPACK(({ plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group); }));
+     // Gate/up K-blocks done so far, counted exactly as the reader counts them (x_blk there):
+     // every core of a row runs the same experts and chunks, so they agree on each block's owner.
+     uint32_t x_blk = 0;
+@@ -1103,21 +1101,23 @@ void kernel_main() {
+         uint32_t group_rows = 0;
+         UNPACK(({
+             while (count_tiles == 0) {
+-                if (next_expert == experts_per_chip || !dealer.active()) {
++                if (next_expert == experts_per_chip || plan.layout[phase] == adaptive_chunk::kNoLayout) {
+                     if (phase == 1) {
+                         break;
+                     }
+                     phase = 1;
+                     next_expert = 0;
+-                    dealer.begin(plan, phase, per_core_M_max);
+                     continue;
+                 }
+-                const uint32_t tiles = tiles_of(next_expert);
+-                ++next_expert;
+-                if (dealer.deal(tiles) == my_gy / dealer.rows) {
+-                    count_tiles = tiles;
+-                    group_rows = dealer.rows;
++                uint32_t group_base = 0;
++                uint32_t rows = 0;
++                const uint32_t my_group = adaptive_chunk::layout_group(
++                    adaptive_chunk::layout_at(adaptive_chunk::kGridY, plan.layout[phase]), my_gy, group_base, rows);
++                if (expert_group[phase][next_expert] == my_group) {
++                    count_tiles = tiles_of(next_expert);
++                    group_rows = rows;
+                 }
++                ++next_expert;
+             }
+             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_tiles);
+             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_tiles);
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 7d94a452f4f..786da1282c6 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -41,8 +41,8 @@ void kernel_main() {
+ 
+     // Grid M-row of this core. The row WITHIN its expert group (my_mt) and the group's
+     // weight-multicast topology are picked at runtime once the counts are known (see
+-    // adaptive_chunk::pick_group_rows); args 3 and 6..12 hold the whole-column topology and
+-    // are superseded by the per-group-size sets at GROUP_TOPO_RT.
++    // adaptive_chunk::plan_launch); args 3 and 6..12 hold the whole-column topology and
++    // are superseded by the per-layout sets at GROUP_TOPO_RT.
+     const uint32_t my_gy = get_arg_val<uint32_t>(0);
+     const uint32_t my_nt_gu = get_arg_val<uint32_t>(1);
+     const uint32_t my_nt_d = get_arg_val<uint32_t>(2);
+@@ -119,9 +119,9 @@ void kernel_main() {
+     static_assert(chunk_M_max == per_core_M_max * adaptive_chunk::kGridY, "chunk_M_max must be per_core_M_max * GRID_Y");
+     constexpr uint32_t cb_activated = get_compile_time_arg_val(20);
+     constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(21);  // M-row mcast group size
+-    // Per-group-size weight-multicast topologies follow the M-row NoC table: one set of
+-    // GROUP_TOPO_ARGS per group size (rows 8, 4, 2; adaptive_chunk::group_rows_index), each
+-    // {is_sender, num_receivers, mcast nx_start, ny_start, nx_end, ny_end, sender nx, sender ny}.
++    // Per-layout weight-multicast topologies follow the M-row NoC table: one set of
++    // GROUP_TOPO_ARGS per row-group layout (adaptive_chunk layout table order), each for this
++    // core's group: {is_sender, num_receivers, mcast nx_start, ny_start, nx_end, ny_end, sender nx, sender ny}.
+     constexpr uint32_t GROUP_TOPO_RT = M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC;
+     constexpr uint32_t GROUP_TOPO_ARGS = 8;
+     constexpr uint32_t K_down_tiles_padded = get_compile_time_arg_val(22);
+@@ -382,12 +382,14 @@ void kernel_main() {
+         return adaptive_chunk::clamp_count_tiles(
+             (count + TILE_HEIGHT - 1) / TILE_HEIGHT, clamp_chunk, num_chunks_max, M_tiles_full);
+     };
+-    // Two-phase plan (adaptive_chunk::make_plan): phase A runs full waves of experts on one group
+-    // size, phase B the rest on a larger one; or phase B alone is the single-phase schedule. The
+-    // group size, this core's row within its group and the weight-multicast topology are per phase.
+-    const adaptive_chunk::Plan plan = adaptive_chunk::make_plan(tiles_of, experts_per_chip, per_core_M_max);
+-    // Phase A's own weight-multicast semaphore pair follows the per-group-size topologies.
+-    constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + 3 * GROUP_TOPO_ARGS;
++    // Launch plan (adaptive_chunk::plan_launch): phase A runs full waves of experts on one uniform
++    // layout, phase B the rest on a larger one; or phase B alone is the single-layout schedule
++    // (uniform or mixed-height). The layout, this core's group and row within it, and the
++    // weight-multicast topology are per phase.
++    uint8_t expert_group[2][experts_per_chip];
++    const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
++    // Phase A's own weight-multicast semaphore pair follows the per-layout topologies.
++    constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + adaptive_chunk::num_layouts(adaptive_chunk::kGridY) * GROUP_TOPO_ARGS;
+ 
+     const uint32_t x_tile_bytes = get_tile_size(cb_in0_x);
+     const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
+@@ -429,18 +431,19 @@ void kernel_main() {
+     // (counts[global_id]), region offset (start[global_id]) and per-expert
+     // weight base addresses, then drive the same chunked matmul pipeline.
+     for (uint32_t phase = 0; phase < 2; ++phase) {
+-    adaptive_chunk::PhaseDealer dealer;
+-    dealer.begin(plan, phase, per_core_M_max);
+-    if (!dealer.active()) {
++    const uint32_t layout = plan.layout[phase];
++    if (layout == adaptive_chunk::kNoLayout) {
+         continue;
+     }
+-    const uint32_t group_rows = dealer.rows;
+-    const uint32_t my_group = my_gy / group_rows;
+-    const uint32_t my_mt = my_gy % group_rows;  // M-row within the group
++    uint32_t group_base = 0;
++    uint32_t group_rows = 0;
++    const uint32_t my_group = adaptive_chunk::layout_group(
++        adaptive_chunk::layout_at(adaptive_chunk::kGridY, layout), my_gy, group_base, group_rows);
++    const uint32_t my_mt = my_gy - group_base;  // M-row within the group
+     const uint32_t chunk_M = per_core_M_max * group_rows;
+ 
+     // This group's weight (in1) multicast topology: sender row, rectangle over the group's rows.
+-    const uint32_t topo = GROUP_TOPO_RT + GROUP_TOPO_ARGS * adaptive_chunk::group_rows_index(group_rows);
++    const uint32_t topo = GROUP_TOPO_RT + GROUP_TOPO_ARGS * layout;
+     const bool is_in1_sender = get_arg_val<uint32_t>(topo + 0) != 0;
+     const uint32_t in1_num_receivers = get_arg_val<uint32_t>(topo + 1);
+     const uint32_t in1_mcast_nx_start = get_arg_val<uint32_t>(topo + 2);
+@@ -470,8 +473,8 @@ void kernel_main() {
+         const uint32_t global_expert_id = idx_ptr[local_expert_id];
+         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
+         // op and are dropped here exactly like a zero count. So is an expert another row group
+-        // owns (every kernel charges the same costs in the same order, so all agree).
+-        const bool mine = dealer.deal(tiles_of(local_expert_id)) == my_group;
++        // owns (every kernel runs the same plan over the same counts, so all agree).
++        const bool mine = expert_group[phase][local_expert_id] == my_group;
+         const uint32_t count_value =
+             mine ? adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens)
+                  : 0u;
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 07d3d741471..117803e894a 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -234,11 +234,12 @@ void kernel_main() {
+     // the NoC reads start > end as a torus wraparound, covers no receiver, and the run
+     // deadlocks with no assert.
+     //
+-    // Expert-parallel row groups (adaptive_chunk.hpp): pick the group size from the counts with
+-    // the identical schedule the reader and compute run, then take that group's weight-multicast
+-    // topology from the per-group-size sets the host appends after the IN1_WRITER_MCAST block
+-    // (rows 8, 4, 2; each {is_sender, num_receivers, NoC-0 rectangle x0, y0, x1, y1, sender x, y}).
+-    // They supersede the whole-column topology in args 3 and IN1_WM_RT + 0..4.
++    // Expert-parallel row groups (adaptive_chunk.hpp): plan the row-group layouts and the expert ->
++    // group map from the counts with the identical schedule the reader and compute run, then take
++    // this core's group's weight-multicast topology from the per-layout sets the host appends after
++    // the IN1_WRITER_MCAST block (layout table order; each {is_sender, num_receivers, NoC-0
++    // rectangle x0, y0, x1, y1, sender x, y}). They supersede the whole-column topology in args 3
++    // and IN1_WM_RT + 0..4.
+     constexpr uint32_t GROUP_TOPO_RT = IN1_WM_RT + 9;
+     constexpr uint32_t GROUP_TOPO_ARGS = 8;
+     constexpr uint32_t clamp_chunk = per_core_M_max * adaptive_chunk::kMinGroupRows;
+@@ -247,10 +248,11 @@ void kernel_main() {
+         return adaptive_chunk::clamp_count_tiles(
+             (count + TILE_HEIGHT - 1) / TILE_HEIGHT, clamp_chunk, num_chunks_max, M_tiles_full);
+     };
+-    // Two-phase plan, identical to the reader's and compute's (adaptive_chunk::make_plan); the group
+-    // size, row within the group, topology and in1 semaphore pair are per phase (see the reader).
+-    const adaptive_chunk::Plan plan = adaptive_chunk::make_plan(tiles_of, experts_per_chip, per_core_M_max);
+-    constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + 3 * GROUP_TOPO_ARGS;
++    // Launch plan, identical to the reader's and compute's (adaptive_chunk::plan_launch); the layout,
++    // group, row within the group, topology and in1 semaphore pair are per phase (see the reader).
++    uint8_t expert_group[2][experts_per_chip];
++    const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
++    constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + adaptive_chunk::num_layouts(adaptive_chunk::kGridY) * GROUP_TOPO_ARGS;
+     // Gate/up and down blocks this core has consumed so far, sender or not. The writer never pushes,
+     // so it indexes the reader's live ring slot off these. They must count EVERY block: the sender
+     // role can change between phases, while the reader's write pointer advanced on all of them.
+@@ -266,16 +268,17 @@ void kernel_main() {
+     // expert's region offset. The chunk-loop body below is unchanged from the
+     // single-expert kernel — only the per-expert bindings differ.
+     for (uint32_t phase = 0; phase < 2; ++phase) {
+-    adaptive_chunk::PhaseDealer dealer;
+-    dealer.begin(plan, phase, per_core_M_max);
+-    if (!dealer.active()) {
++    const uint32_t layout = plan.layout[phase];
++    if (layout == adaptive_chunk::kNoLayout) {
+         continue;
+     }
+-    const uint32_t group_rows = dealer.rows;
+-    const uint32_t my_group = my_gy / group_rows;
+-    const uint32_t my_mt = my_gy % group_rows;  // M-row within the group
++    uint32_t group_base = 0;
++    uint32_t group_rows = 0;
++    const uint32_t my_group = adaptive_chunk::layout_group(
++        adaptive_chunk::layout_at(adaptive_chunk::kGridY, layout), my_gy, group_base, group_rows);
++    const uint32_t my_mt = my_gy - group_base;  // M-row within the group
+     const uint32_t chunk_M = per_core_M_max * group_rows;
+-    const uint32_t topo = GROUP_TOPO_RT + GROUP_TOPO_ARGS * adaptive_chunk::group_rows_index(group_rows);
++    const uint32_t topo = GROUP_TOPO_RT + GROUP_TOPO_ARGS * layout;
+     const bool is_up_sender = get_arg_val<uint32_t>(topo + 0) != 0;
+     const uint32_t in1_num_receivers = get_arg_val<uint32_t>(topo + 1);
+     const uint32_t in1_mc_nx_start = get_arg_val<uint32_t>(topo + 4);  // NoC-0 frame's END x
+@@ -293,8 +296,8 @@ void kernel_main() {
+         const uint32_t global_expert_id = idx_ptr[local_expert_id];
+         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
+         // op and are dropped here exactly like a zero count. So is an expert another row group
+-        // owns (same schedule as the reader and compute).
+-        const bool mine = dealer.deal(tiles_of(local_expert_id)) == my_group;
++        // owns (same plan as the reader and compute).
++        const bool mine = expert_group[phase][local_expert_id] == my_group;
+         const uint32_t count_value =
+             mine ? adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens)
+                  : 0u;
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index b1622325730..4e6dedf5e55 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -22,6 +22,7 @@
+ #include <tt-metalium/tensor_accessor_args.hpp>
+ 
+ #include "ttnn/operation.hpp"
++#include "kernels/adaptive_chunk.hpp"
+ 
+ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
+ 
+@@ -1293,21 +1294,25 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         const uint32_t in0_sender_ny = in0_sender_noc.y;
+ 
+         // Expert-parallel row groups (kernels/adaptive_chunk.hpp). The kernels split the GRID_Y
+-        // M-rows into groups of `rows` consecutive rows that run different experts concurrently
+-        // and pick `rows` at runtime from the device-side counts, so every core gets the weight
+-        // (in1) multicast topology for each candidate size, in group_rows_index order (10, 5, 2 on
+-        // the 10-row grid; 8, 4, 2 on the 8-row one):
+-        // the group-column's sender is row group_base + gx % rows (staggered like the
++        // M-rows into groups of consecutive rows that run different experts concurrently, and pick
++        // the layout (the group heights) at runtime from the device-side counts, so every core gets
++        // the weight (in1) multicast topology of its group in every layout, in the layout table's
++        // order: the group-column's sender is row group_base + gx % rows (staggered like the
+         // whole-column placement above), and the rectangle spans the group's rows only.
+         // x and activated multicasts stay per M-row, which a group never splits.
+         std::vector<uint32_t> group_topologies;
+-        for (const uint32_t rows : {GRID_Y, GRID_Y / 2, GRID_Y / 4}) {
++        for (uint32_t layout = 0; layout < adaptive_chunk::num_layouts(GRID_Y); ++layout) {
++            uint32_t group_base = 0;
++            uint32_t rows = 0;
++            adaptive_chunk::layout_group(adaptive_chunk::layout_at(GRID_Y, layout), gy, group_base, rows);
+             TT_FATAL(
+-                rows >= kMinGroupRows && GRID_Y % rows == 0,
+-                "group size {} must divide the {}-row grid",
++                rows >= kMinGroupRows && group_base + rows <= GRID_Y,
++                "row-group layout {} puts row {} in a bad group (base {}, {} rows) on the {}-row grid",
++                layout,
++                gy,
++                group_base,
+                 rows,
+                 GRID_Y);
+-            const uint32_t group_base = (gy / rows) * rows;
+             const uint32_t sender_row = group_base + gx % rows;
+             TT_FATAL(
+                 !(gy == sender_row && gx == in0_sender_col),
+@@ -1393,8 +1398,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+             reader_args.push_back(static_cast<uint32_t>(noc.x));
+             reader_args.push_back(static_cast<uint32_t>(noc.y));
+         }
+-        // Expert-parallel row groups: one weight-multicast topology per group size, picked by
+-        // the kernels at runtime (adaptive_chunk::pick_group_rows / group_rows_index).
++        // Expert-parallel row groups: one weight-multicast topology per row-group layout, picked
++        // by the kernels at runtime (adaptive_chunk::plan_launch).
+         reader_args.insert(reader_args.end(), group_topologies.begin(), group_topologies.end());
+         // Phase-A weight-multicast sems (PHASE_A_SEM_RT, right after the topologies).
+         reader_args.push_back(in1_ready_a_sem_id);

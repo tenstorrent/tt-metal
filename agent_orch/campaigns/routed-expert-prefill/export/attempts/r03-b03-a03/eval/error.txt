@@ -1,0 +1,1 @@
+deepseek-v3-h7168-i2048: mean_abs 0.277167 > baseline 0.273027 (+tol); kimi-k2-7-h7168-i2048: mean_abs 0.277733 > baseline 0.273584 (+tol); glm-5-3-h6144-i2048: mean_abs 0.235483 > baseline 0.232011 (+tol); mistral-small-4-h4096-i2048: mean_abs 0.151607 > baseline 0.149542 (+tol)

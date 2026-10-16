@@ -1,0 +1,29 @@
+{
+  "node_id": "r03-b04-a04",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 4,
+  "attempt": 4,
+  "parent": "r03-b04-a03",
+  "parent_commit": "f2aaf4b4dc5be77bc20a0f9609884ba65c5d5183",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T23:26:36+00:00",
+  "mechanism": "down-weight sender issues block kb+1's DRAM read (both DOWN_SPLIT halves) right after multicasting block kb, into its own already-free ring slot, instead of after all column receivers ack kb+1",
+  "tags": [
+    "data-movement",
+    "down-phase",
+    "pipelining",
+    "ack-decoupling",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6078,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-08T23:38:15+00:00"
+}

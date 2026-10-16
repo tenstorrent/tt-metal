@@ -1,0 +1,31 @@
+{
+  "node_id": "r03-b03-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 3,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "cb2514ebcd5a184ca65ee0478a7315579ee2c682",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T21:57:44+00:00",
+  "mechanism": "cheap launch planner: each RISC caches the experts' tile counts once and plans on that array with division-free costs and one uniform pass (identical plan), so the first DRAM read / matmul starts earlier",
+  "tags": [
+    "prologue",
+    "planner",
+    "runtime-schedule",
+    "kernel-only",
+    "measurement"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5751,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 45,
+  "finished_at": "2026-10-08T22:11:39+00:00"
+}

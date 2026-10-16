@@ -1,0 +1,333 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index e43fd82df35..8fa52d60a1c 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -250,43 +250,21 @@ inline uint32_t layout_group(const GroupLayout& l, uint32_t gy, uint32_t& base,
+ }
+ 
+ // Row-shared x tilize (row-major x): the grid column that reads, tilizes and multicasts gate/up
+-// K-block j of an M-row. That row is row `my_mt` of a `rows`-row group, whose weight sender for
+-// column c is the group's row c % rows (the host's placement). Columns whose core is this row's
+-// weight sender are skipped: its reader streams the column's weights, and x duty there (the stick
+-// reads under the same read barrier as the gate block, the tilize wait and the row multicast)
+-// would delay the column's weight multicast on every block. The remaining columns take the blocks
+-// in turn. Every core of the row shares (j, rows, my_mt), so all agree on the owner.
++// K-block j of an M-row: column j % grid_x, every column in turn. Every core of the row shares j,
++// so all agree on the owner.
++//
++// Owners used to skip the row's gate/up weight-sender columns (sender row c % rows). The senders
++// now sit where their column multicast starts so it never wraps around the torus (the host's
++// placement): every gate/up sender is on its group's bottom row. A row is therefore either all
++// senders or none, and there is nothing to skip; r03-b02-a02 measured the skip neutral anyway.
++// `rows` and `my_mt` are kept so reader and compute share one call shape.
+ //
+ // Owner slots: the number of eligible columns (block j goes to slot j % slots).
+-inline uint32_t x_owner_slots(uint32_t grid_x, uint32_t rows, uint32_t my_mt) {
+-    if (rows < 2 || my_mt >= rows) {
+-        return grid_x;
+-    }
+-    const uint32_t senders = (my_mt < grid_x) ? (grid_x - 1 - my_mt) / rows + 1 : 0;
+-    return grid_x - senders;
+-}
+-// Slot of column `col` (its rank among the eligible columns), or `slots` if it is never an owner.
+-inline uint32_t x_owner_rank(uint32_t col, uint32_t rows, uint32_t my_mt, uint32_t slots) {
+-    if (rows < 2 || my_mt >= rows) {
+-        return col;
+-    }
+-    if (col % rows == my_mt) {
+-        return slots;
+-    }
+-    return col - ((col > my_mt) ? (col - 1 - my_mt) / rows + 1 : 0);
+-}
+-// Owner column of block j. Out of line: the reader calls it a few times per K-block.
+-inline __attribute__((noinline)) uint32_t x_owner_col(uint32_t j, uint32_t grid_x, uint32_t rows, uint32_t my_mt) {
+-    const uint32_t r = j % x_owner_slots(grid_x, rows, my_mt);
+-    if (rows < 2 || my_mt >= rows) {
+-        return r;
+-    }
+-    // r-th column c (ascending) with c % rows != my_mt: each run of `rows` columns holds rows - 1.
+-    const uint32_t per = rows - 1;
+-    const uint32_t q = r / per;
+-    const uint32_t rem = r - q * per;
+-    return q * rows + rem + (rem >= my_mt ? 1u : 0u);
+-}
++inline uint32_t x_owner_slots(uint32_t grid_x, uint32_t /*rows*/, uint32_t /*my_mt*/) { return grid_x; }
++// Slot of column `col` (its rank among the eligible columns).
++inline uint32_t x_owner_rank(uint32_t col, uint32_t /*rows*/, uint32_t /*my_mt*/, uint32_t /*slots*/) { return col; }
++// Owner column of block j.
++inline uint32_t x_owner_col(uint32_t j, uint32_t grid_x, uint32_t /*rows*/, uint32_t /*my_mt*/) { return j % grid_x; }
+ 
+ // Modelled cost of one expert on a group of `rows` M-rows, in units of one per-core tile-row of
+ // work: the per_core_M summed over its chunks, plus one unit per chunk for the chunk's fixed
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index df39641a2bb..4423113695a 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -464,8 +464,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     uint32_t n_subblocks,
+     // Row-shared tilize (tilize_x only): this chunk's first gate/up block number, the row's owner
+     // slot count and this core's slot. Block x_blk_base + b is tilized by the core in slot
+-    // (x_blk_base + b) % x_slots alone (adaptive_chunk::x_owner_col: never the column's weight
+-    // sender); the reader multicasts the tiles to the rest of the row.
++    // (x_blk_base + b) % x_slots alone (adaptive_chunk::x_owner_col); the reader multicasts the
++    // tiles to the rest of the row.
+     uint32_t x_blk_base = 0,
+     uint32_t x_slots = 1,
+     uint32_t x_rank = 0) {
+@@ -1214,9 +1214,9 @@ void kernel_main() {
+         // Next expert this group works on: its tile-row count, already band-filtered and clamped
+         // (0 = no more experts). UNPACK scans, MATH/PACK receive.
+         uint32_t count_tiles = 0;
+-        // Group height in the low half, this core's row within the group (the x tilize owner
+-        // rotation skips its weight-sender columns, see adaptive_chunk::x_owner_col) in the high
+-        // half: one mailbox word per expert.
++        // Group height in the low half, this core's row within the group in the high half (the x
++        // tilize owner rotation takes both, see adaptive_chunk::x_owner_col): one mailbox word per
++        // expert.
+         uint32_t group_word = 0;
+         UNPACK(({
+             while (count_tiles == 0) {
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 6e808ac2930..0bc250ea657 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -443,16 +443,20 @@ void kernel_main() {
+     const uint32_t my_mt = my_gy - group_base;  // M-row within the group
+     const uint32_t chunk_M = per_core_M_max * group_rows;
+ 
+-    // This group's weight (in1) multicast topology: sender row, rectangle over the group's rows.
++    // This group's weight (in1) multicast topology: rectangle over the group's rows, and a sender per
++    // phase placed where that phase's multicast starts, so it never wraps around the torus (see the
++    // host): gate/up on the bottom row (the writer's NoC-1 multicast runs -y), down on the top row
++    // (this RISC's NoC-0 multicast runs +y), i.e. at the rectangle's start corner.
+     const uint32_t topo = GROUP_TOPO_RT + GROUP_TOPO_ARGS * layout;
+-    const bool is_in1_sender = get_arg_val<uint32_t>(topo + 0) != 0;
++    const bool is_gu_sender = get_arg_val<uint32_t>(topo + 0) != 0;
++    const bool is_dn_sender = my_mt == 0;
+     const uint32_t in1_num_receivers = get_arg_val<uint32_t>(topo + 1);
+     const uint32_t in1_mcast_nx_start = get_arg_val<uint32_t>(topo + 2);
+     const uint32_t in1_mcast_ny_start = get_arg_val<uint32_t>(topo + 3);
+     const uint32_t in1_mcast_nx_end = get_arg_val<uint32_t>(topo + 4);
+     const uint32_t in1_mcast_ny_end = get_arg_val<uint32_t>(topo + 5);
+-    const uint32_t in1_sender_nx = get_arg_val<uint32_t>(topo + 6);
+-    const uint32_t in1_sender_ny = get_arg_val<uint32_t>(topo + 7);
++    const uint32_t gu_sender_nx = get_arg_val<uint32_t>(topo + 6);
++    const uint32_t gu_sender_ny = get_arg_val<uint32_t>(topo + 7);
+     // Phase A has its own pair: a core already in phase B acks ITS phase-B sender, which may still
+     // be sending (or receiving) for phase A, and must not be counted there.
+     Semaphore<> in1_ready_sem((phase == 0) ? get_arg_val<uint32_t>(PHASE_A_SEM_RT + 0) : in1_ready_sem_id);
+@@ -624,8 +628,7 @@ void kernel_main() {
+                 }
+             }
+         };
+-        // Owner column of this chunk's x block kb_x: never this row's weight sender for that column
+-        // (adaptive_chunk::x_owner_col), so the weight stream's RISC carries no x duty.
++        // Owner column of this chunk's x block kb_x (adaptive_chunk::x_owner_col: the columns in turn).
+         [[maybe_unused]] auto x_owner = [&](uint32_t kb_x) {
+             return adaptive_chunk::x_owner_col(x_blk + kb_x, GRID_X_NOC, group_rows, my_mt);
+         };
+@@ -633,7 +636,7 @@ void kernel_main() {
+ 
+         // Row-shared tilize, row-major x. Every core of an M-row needs the same x K-block. Instead
+         // of each of the GRID_X cores tilizing it, block x_blk + kb is read, tilized and multicast
+-        // by ONE owner core of the row, x_owner(kb) (the row's non-weight-sender columns in turn),
++        // by ONE owner core of the row, x_owner(kb) (the row's columns in turn),
+         // so each core tilizes a few of the blocks and skips the per-block tilize/matmul reconfig
+         // on the rest:
+         //   * this RISC on the owner reads the raw block into cb_x_rm TWO blocks ahead (below), so
+@@ -735,7 +738,7 @@ void kernel_main() {
+             // concurrent with the reader's NoC-0 `gate` read below (unless the look-ahead in
+             // iteration kb - 1 already did both).
+             if constexpr (up_split) {
+-                if (is_in1_sender && !gu_read_issued) {
++                if (is_gu_sender && !gu_read_issued) {
+                     ++up_seq;
+                     up_go_sem.set(up_seq);
+                 }
+@@ -758,9 +761,9 @@ void kernel_main() {
+                     in0_ready_sem.up(noc, in0_sender_nx, in0_sender_ny, 1);
+                 }
+             }
+-            if (!is_in1_sender) {
++            if (!is_gu_sender) {
+                 in1_valid_sem.set(0);
+-                in1_ready_sem.up(noc, in1_sender_nx, in1_sender_ny, 1);
++                in1_ready_sem.up(noc, gu_sender_nx, gu_sender_ny, 1);
+             }
+ 
+             // Step 2: senders run their work. in0 sender path and in1 sender
+@@ -838,7 +841,7 @@ void kernel_main() {
+                     noc, in0_mcast_nx_start, in0_mcast_ny_start, in0_mcast_nx_end, in0_mcast_ny_end, in0_num_receivers);
+             }
+ 
+-            if (is_in1_sender) {
++            if (is_gu_sender) {
+                 if constexpr (writer_mcasts_in1) {
+                     // The writer multicasts, so it owns the receivers' ready handshake. This
+                     // RISC only needs its own slot back: block mc_seq reuses the slot block
+@@ -1012,7 +1015,7 @@ void kernel_main() {
+ 
+             // Step 3: receivers wait for both valid semaphores and push.
+             if (!is_x_src) {
+-                if (gu_lookahead && is_in1_sender) {
++                if (gu_lookahead && is_gu_sender) {
+                     // The sender's compute frees the look-ahead slot while this core waits for
+                     // its x block, so keep re-checking until x lands.
+                     while (in0_valid_sem.value() != IN0_VALID) {
+@@ -1023,7 +1026,7 @@ void kernel_main() {
+                 }
+                 x_stage_obj.push_back(g_in0_block_tiles_max);
+             }
+-            if (!is_in1_sender) {
++            if (!is_gu_sender) {
+                 in1_valid_sem.wait(IN1_VALID);
+                 cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
+                 if constexpr (reader_mcasts_up) {
+@@ -1034,13 +1037,14 @@ void kernel_main() {
+         x_blk += num_blocks_gu;
+ 
+         // IN1_WRITER_MCAST: drain the decoupled weight-multicast pipeline before phase 4.
+-        // in1_ready_sem is SHARED by phase 3 (gate/up mcast) and phase 4 (down mcast):
+-        // receivers up() it in both. Once the phase-3 multicast runs on the writer it can
+-        // lag into the window where receivers are already acking for phase 4, and the writer
+-        // then consumes acks meant for the down multicast -- after which the reader's
+-        // phase-4 mcast waits forever for acks that were eaten.
++        // The in1 semaphores are shared by phase 3 (gate/up mcast) and phase 4 (down mcast).
++        // The gate/up sender's writer sets its OWN in1_valid when it multicasts, and once the
++        // phase-3 multicast runs on the writer it can lag into phase 4, where this core is a
++        // down receiver that has already reset in1_valid and waits for the down sender's: a
++        // late set would release a down block that has not landed. (The acks themselves no
++        // longer mix: gate/up acks go to the bottom row only, down acks to the top row only.)
+         if constexpr (writer_mcasts_in1) {
+-            if (is_in1_sender) {
++            if (is_gu_sender) {
+                 mcast_done_sem.wait_min(mc_seq);
+             }
+         }
+@@ -1123,7 +1127,7 @@ void kernel_main() {
+             // original order (writer's NoC-1 half now, this RISC's half after the acks, below), so
+             // no extra down weight is fetched during the activation gap, where it would only take
+             // DRAM share from groups still in gate/up.
+-            if (is_in1_sender && !down_read_issued) {
++            if (is_dn_sender && !down_read_issued) {
+                 release_writer_down();
+                 if (kb > 0) {
+                     issue_down_read(kb, cb_in1_down_obj.get_write_ptr());
+@@ -1137,9 +1141,9 @@ void kernel_main() {
+             // sender start mcasting as soon as compute pushes cb_activated.
+             // Without the early act ack the sender would only see receivers
+             // after the in1_down section finishes, serializing the two paths.
+-            if (!is_in1_sender) {
++            if (!is_dn_sender) {
+                 in1_valid_sem.set(0);
+-                in1_ready_sem.up(noc, in1_sender_nx, in1_sender_ny, 1);
++                in1_ready_sem.up(noc, in1_mcast_nx_start, in1_mcast_ny_start, 1);
+             }
+             if (!is_act_sender) {
+                 act_valid_sem.set(0);
+@@ -1152,7 +1156,7 @@ void kernel_main() {
+             // reads (NoC 0) without barriering — reads run concurrently with the activated mcast
+             // below on NoC 1.
+             uint32_t in1_block_start = 0;
+-            if (is_in1_sender) {
++            if (is_dn_sender) {
+                 in1_ready_sem.wait(in1_num_receivers);
+                 in1_ready_sem.set(0);
+                 in1_block_start = cb_in1_down_obj.get_write_ptr();
+@@ -1169,7 +1173,7 @@ void kernel_main() {
+             // the compute-gated activated mcast below. Tradeoff: on the one core
+             // that is BOTH senders (gy==0 && gx==kb) the DRAM-read barrier is no
+             // longer hidden under the activated wait — measure before keeping.
+-            if (is_in1_sender) {
++            if (is_dn_sender) {
+                 noc_read.async_read_barrier();
+                 // DOWN_SPLIT: the writer's block must have landed before it is multicast
+                 // (or consumed locally at GRID_Y == 1).
+@@ -1275,7 +1279,7 @@ void kernel_main() {
+             // Step 5: receivers wait for both valid sems and push. The in1_down sender keeps
+             // re-checking its look-ahead while it waits: its compute frees the next slot meanwhile.
+             if (!is_act_sender) {
+-                if (is_in1_sender) {
++                if (is_dn_sender) {
+                     while (act_valid_sem.value() != ACT_VALID) {
+                         try_down_lookahead(kb, in1_block_start);
+                     }
+@@ -1294,7 +1298,7 @@ void kernel_main() {
+             }
+             cb_in0_down_full_obj.push_back(d_in0_block_num_tiles);
+ 
+-            if (!is_in1_sender) {
++            if (!is_dn_sender) {
+                 in1_valid_sem.wait(IN1_VALID);
+             }
+             cb_in1_down_obj.push_back(d_in1_block_num_tiles);
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 117803e894a..ebe37fc48dd 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -279,7 +279,11 @@ void kernel_main() {
+     const uint32_t my_mt = my_gy - group_base;  // M-row within the group
+     const uint32_t chunk_M = per_core_M_max * group_rows;
+     const uint32_t topo = GROUP_TOPO_RT + GROUP_TOPO_ARGS * layout;
++    // Gate/up sender (reads `up`, multicasts gate/up on NoC 1): the group's bottom row, where that
++    // -y multicast starts. Down sender (DOWN_SPLIT half-read): the top row, where the reader's +y
++    // down multicast starts. Neither multicast wraps around the torus; see the host.
+     const bool is_up_sender = get_arg_val<uint32_t>(topo + 0) != 0;
++    const bool is_down_sender = my_mt == 0;
+     const uint32_t in1_num_receivers = get_arg_val<uint32_t>(topo + 1);
+     const uint32_t in1_mc_nx_start = get_arg_val<uint32_t>(topo + 4);  // NoC-0 frame's END x
+     const uint32_t in1_mc_ny_start = get_arg_val<uint32_t>(topo + 5);  // NoC-0 frame's END y
+@@ -428,7 +432,7 @@ void kernel_main() {
+             // blocks into that counter shifts the up slot by num_blocks_d per chunk and
+             // corrupts the gate/up path from the second chunk on.
+             if constexpr (writer_split_down) {
+-                if (is_up_sender) {
++                if (is_down_sender) {
+                     const auto down_acc = TensorAccessor(
+                         down_args, get_common_arg_val<uint32_t>(COMMON_DOWN + local_expert_id), down_tile_bytes);
+                     // cb_in1_down holds IN1_D_SLOTS blocks with one push per down K-block, and
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index 4e6dedf5e55..00036460e9f 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -1297,9 +1297,19 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         // M-rows into groups of consecutive rows that run different experts concurrently, and pick
+         // the layout (the group heights) at runtime from the device-side counts, so every core gets
+         // the weight (in1) multicast topology of its group in every layout, in the layout table's
+-        // order: the group-column's sender is row group_base + gx % rows (staggered like the
+-        // whole-column placement above), and the rectangle spans the group's rows only.
+-        // x and activated multicasts stay per M-row, which a group never splits.
++        // order, and the rectangle spans the group's rows only. x and activated multicasts stay per
++        // M-row, which a group never splits.
++        //
++        // Sender rows follow the multicast's NoC direction, so neither column multicast wraps around
++        // the torus. The gate/up multicast is the writer's, on NoC 1, which routes -y and starts at the
++        // rectangle's BOTTOM row; the down multicast is the reader's, on NoC 0, which routes +y and
++        // starts at the TOP row. A sender on any other row first has to reach that start corner the
++        // long way round the whole column (every other group's rows), holding a linked path through
++        // links that carry the other groups' traffic: receivers of such columns waited 1.4-4x longer
++        // for their weights (r05-b04-a01). So the gate/up sender is the group's bottom row (emitted
++        // here) and the down sender its top row (the rectangle's start corner, derived in the kernels).
++        // Every bottom-row core is then a gate/up sender, so on the TILE path the row's fixed x sender
++        // shares a core with one; that costs that path time only, each role has its own semaphores.
+         std::vector<uint32_t> group_topologies;
+         for (uint32_t layout = 0; layout < adaptive_chunk::num_layouts(GRID_Y); ++layout) {
+             uint32_t group_base = 0;
+@@ -1313,14 +1323,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+                 group_base,
+                 rows,
+                 GRID_Y);
+-            const uint32_t sender_row = group_base + gx % rows;
+-            TT_FATAL(
+-                !(gy == sender_row && gx == in0_sender_col),
+-                "sender placement collision at ({}, {}) for {}-row groups: a core must not own both the "
+-                "weight and x DRAM read",
+-                gx,
+-                gy,
+-                rows);
++            // gate/up sender: the bottom row; the top row when DS_NO_WRITER_MCAST puts the gate/up
++            // multicast back on the reader's NoC 0, which runs +y like the down multicast.
++            const uint32_t sender_row = kWriterMcastsIn1 ? group_base + rows - 1 : group_base;
+             const auto g_sender = device->worker_core_from_logical_core(CoreCoord{gx, sender_row});
+             const auto g_first = device->worker_core_from_logical_core(CoreCoord{gx, group_base});
+             const auto g_last = device->worker_core_from_logical_core(CoreCoord{gx, group_base + rows - 1});

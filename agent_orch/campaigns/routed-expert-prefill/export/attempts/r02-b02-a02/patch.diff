@@ -1,0 +1,141 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 55430e0159c..c58828500cd 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -390,6 +390,9 @@ void kernel_main() {
+     const uint32_t group_rows = my_pos.rows;
+     const uint32_t my_group = my_pos.group;     // kIdleGroup on a row the layout leaves idle
+     const uint32_t my_mt = my_gy - my_pos.base;  // M-row within the group
++    // Request VC of every weight DRAM read this core issues (weight_runs.hpp): spreads the
++    // concurrent column / group weight streams over the unicast request VCs.
++    const uint32_t weight_vc = unified_routed_expert_ffn::weight_read_vc(my_nt_gu, my_group);
+     const uint32_t chunk_M = per_core_M_max * group_rows;
+     adaptive_chunk::LayoutScheduler group_sched;
+     group_sched.init(plan.layout);
+@@ -809,7 +812,8 @@ void kernel_main() {
+                         gate_col0,
+                         gate_col_end,
+                         l1_w_gate,
+-                        gate_tile_bytes);
++                        gate_tile_bytes,
++                        weight_vc);
+                     l1_w_gate += per_core_N_gu * gate_tile_bytes;
+                 }
+                 // `up` slot. LEGACY: reader reads it on NoC 0. UP_SPLIT: writer
+@@ -832,7 +836,8 @@ void kernel_main() {
+                             gate_col0,
+                             gate_col_end,
+                             l1_w_up,
+-                            up_tile_bytes);
++                            up_tile_bytes,
++                            weight_vc);
+                         l1_w_up += per_core_N_gu * up_tile_bytes;
+                     }
+                 }
+@@ -1055,7 +1060,15 @@ void kernel_main() {
+                     const uint32_t row = kb * in0_block_w_d + k;
+                     if (row < K_down_tiles) {
+                         DRuns::read(
+-                            noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
++                            noc_read,
++                            down_acc,
++                            row,
++                            N_down_tiles_full,
++                            down_col0,
++                            down_col_end,
++                            l1_w,
++                            down_tile_bytes,
++                            weight_vc);
+                     }
+                     l1_w += per_core_N_d * down_tile_bytes;
+                 }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 484ce7a5bf1..44852f94eca 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -253,6 +253,9 @@ void kernel_main() {
+     const uint32_t group_rows = my_pos.rows;
+     const uint32_t my_group = my_pos.group;     // kIdleGroup on a row the layout leaves idle
+     const uint32_t my_mt = my_gy - my_pos.base;  // M-row within the group
++    // Request VC of every weight DRAM read this core issues (weight_runs.hpp): spreads the
++    // concurrent column / group weight streams over the unicast request VCs.
++    const uint32_t weight_vc = unified_routed_expert_ffn::weight_read_vc(my_nt_gu, my_group);
+     const uint32_t chunk_M = per_core_M_max * group_rows;
+     adaptive_chunk::LayoutScheduler group_sched;
+     group_sched.init(plan.layout);
+@@ -338,7 +341,8 @@ void kernel_main() {
+                                 up_col0,
+                                 up_col_end,
+                                 l1_w_up,
+-                                up_tile_bytes);
++                                up_tile_bytes,
++                                weight_vc);
+                             l1_w_up += per_core_N_gu * up_tile_bytes;
+                         }
+                         noc_up.async_read_barrier();
+@@ -445,7 +449,8 @@ void kernel_main() {
+                                     down_col0,
+                                     down_col_end,
+                                     l1_w,
+-                                    down_tile_bytes);
++                                    down_tile_bytes,
++                                    weight_vc);
+                             }
+                             l1_w += per_core_N_d * down_tile_bytes;
+                         }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp
+index b0764e56ae9..dd3e3f06367 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp
+@@ -26,6 +26,11 @@
+ // contiguous run exists: run() collapses to 1 and this degenerates to the per-tile read.
+ namespace unified_routed_expert_ffn {
+ 
++// Request VC for this core's weight reads: column + row group, mod the 4 unicast request VCs. Adjacent
++// columns of a group's sender row differ, and so does one column's sender in consecutive groups.
++// Every weight-reading RISC of a core (reader NoC 0, writer NoC 1) uses the same value.
++inline uint32_t weight_read_vc(uint32_t grid_col, uint32_t group) { return (grid_col + group) & 3u; }
++
+ template <uint32_t SHARD_W = 0>
+ struct WeightRuns {
+     // Length of the maximal contiguous run starting at tile column j, clipped to end.
+@@ -43,6 +48,13 @@ struct WeightRuns {
+     // `l1_base + (j - j0) * page_bytes`. Columns are the free dim, so callers pass jend clipped to
+     // the tensor's real N and the phantom columns past it stay UNWRITTEN — the guard the per-tile
+     // loops used to spell out per column. Reads are ISSUED only; the caller owns the barrier.
++    //
++    // `vc` is the request virtual channel. Requests inside one VC are served first-come first-served,
++    // so concurrent weight streams on one VC can starve each other for a whole call (one row group
++    // runs persistently slow and sets the op time). The callers give neighbouring sender columns and
++    // consecutive row groups different unicast request VCs (0..3), as the DRAM-sharded matmul does
++    // for readers sharing a row (tech_reports/Saturating_DRAM_bandwidth). The default is the VC a plain
++    // async_read uses, so callers that pass none (the hybrid op's kernels) are unchanged.
+     template <class Acc>
+     static FORCE_INLINE void read(
+         const Noc& noc,
+@@ -52,7 +64,8 @@ struct WeightRuns {
+         uint32_t j0,
+         uint32_t jend,
+         uint32_t l1_base,
+-        uint32_t page_bytes) {
++        uint32_t page_bytes,
++        uint32_t vc = NOC_UNICAST_WRITE_VC) {
+         const uint32_t page_row_base = row * n_tiles_full;
+         uint32_t j = j0;
+         uint32_t off = 0;
+@@ -60,12 +73,13 @@ struct WeightRuns {
+             const uint32_t len = run(j, jend);
+             // The accessor supplies the run's START page and the size covers the whole run, so
+             // `len` pages leave as one transaction rather than one per page.
+-            noc.async_read(
++            noc.template async_read<NocOptions::CUSTOM_VC>(
+                 acc,
+                 CoreLocalMem<uint32_t>(l1_base + off * page_bytes),
+                 len * page_bytes,
+                 {.page_id = page_row_base + j},
+-                {});
++                {},
++                NocOptVals{.vc = vc});
+             j += len;
+             off += len;
+         }

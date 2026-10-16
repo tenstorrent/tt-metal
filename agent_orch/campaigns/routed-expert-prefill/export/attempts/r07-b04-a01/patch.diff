@@ -1,0 +1,46 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index f76bc80f445..767f8f122b5 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -359,8 +359,12 @@ inline uint32_t group_cost(uint32_t count_tiles, uint32_t rows, uint32_t per_cor
+ constexpr uint8_t kNoGroup = 0xFF;
+ constexpr uint32_t kNoSchedule = 0xFFFFFFFFu;
+ 
+-// Uniform layouts: list scheduling in expert order, each expert to the least-loaded group (lowest
+-// index on a tie). Returns the makespan; fills owner[] when given.
++// Uniform layouts: list scheduling in expert order, each expert to the least-loaded group, the
++// HIGHEST index (lowest grid rows) on a tie. With every group streaming at once the lower row groups
++// finish first (r06-b01-a01 / r06-b02-a01: the top groups' first expert runs up to ~2x longer), so an
++// uneven deal puts its extra experts on the bottom groups and a short deal leaves the TOP group idle.
++// Equal-height groups make this a relabelling: the makespan, hence every plan choice, is unchanged.
++// Returns the makespan; fills owner[] when given.
+ template <typename TilesOf>
+ inline uint32_t schedule_in_order(
+     const GroupLayout& l, const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max, uint8_t* owner) {
+@@ -370,7 +374,7 @@ inline uint32_t schedule_in_order(
+         uint32_t best = 0;
+         if (cost > 0) {
+             for (uint32_t g = 1; g < l.groups; ++g) {
+-                if (loads[g] < loads[best]) {
++                if (loads[g] <= loads[best]) {
+                     best = g;
+                 }
+             }
+@@ -530,7 +534,7 @@ struct Plan {
+ // entries are kGridY, kGridY / 2, kGridY / 4 rows per group; layouts_valid checks that order).
+ inline uint32_t uniform_layout_index(uint32_t rows) { return (rows >= kGridY) ? 0u : (rows >= kGridY / 2) ? 1u : 2u; }
+ 
+-// List scheduling in expert order: each expert goes to the least-loaded group (lowest index on a
++// List scheduling in expert order: each expert goes to the least-loaded group (highest index on a
+ // tie), as schedule_in_order does for a uniform layout.
+ struct GroupScheduler {
+     uint32_t groups = 1;
+@@ -546,7 +550,7 @@ struct GroupScheduler {
+     uint32_t assign(uint32_t cost) {
+         uint32_t best = 0;
+         for (uint32_t g = 1; g < groups; ++g) {
+-            if (loads[g] < loads[best]) {
++            if (loads[g] <= loads[best]) {
+                 best = g;
+             }
+         }

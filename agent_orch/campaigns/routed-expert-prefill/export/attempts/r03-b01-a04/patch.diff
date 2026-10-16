@@ -1,0 +1,166 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index 61e63af3028..96c83c4b740 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -146,6 +146,74 @@ FORCE_INLINE void drain_packer_before_reaccumulate() {
+ #endif
+ }
+ 
++// ---- Weight-reuse matmul (rt = per_core_M, ct = 1) -------------------------------------------
++// A 1 x w subblock (ct >= rt) makes the LLK keep the x tile in SrcB and unpack a NEW bf4 weight tile
++// into SrcA for every tile-mult, and on BH that SrcA unpack does not overlap the FPU: ~16 FPU +
++// ~17.5 unpacker-0 cycles per mult, back to back (r03-b02-a03's counters). With rt > ct the LLK
++// reuses the weight tile in SrcA for rt mults and streams the x tiles through SrcB instead
++// (_llk_unpack_AB_matmul_ !reuse_a: SrcB steps TILE_SIZE_B * KT_DIM, i.e. one x tile-row), the mode
++// big GEMMs run near the LoFi ideal in. Same operands in the same Src registers, same MVMUL replay,
++// same K order per dst tile, so the result is bit-identical to the 1 x w path.
++//
++// Used from per_core_M >= kReuseWeightMinM only: at rt = 2 one call is 2 mults, too little work to
++// hide the per-call TRISC overhead. rt must also fit one dst half.
++constexpr uint32_t kMatmulDstHalf = (FP32_DEST_ACC_EN != 0) ? 4u : 8u;
++constexpr uint32_t kReuseWeightMinM = 3;
++FORCE_INLINE bool use_weight_reuse(uint32_t rows) { return rows >= kReuseWeightMinM && rows <= kMatmulDstHalf; }
++
++// Output columns [n0, n0 + w) of tile-rows [0, rows), K-tiles [0, k_steps) of the current block, in
++// one dst acquire (w * rows <= kMatmulDstHalf). Column j occupies dst [j * rows, (j + 1) * rows);
++// tile (m, n) is packed to the absolute partials slot m * row_tiles + n, the slot the 1 x w path
++// packs it to. Needs matmul_block_init(in0, in1, 0, /*ct=*/1, /*rt=*/rows, kt_dim) first.
++FORCE_INLINE void matmul_cols_reuse_w(
++    uint32_t in0_cb_id,
++    uint32_t in1_cb_id,
++    uint32_t partials_cb_id,
++    uint32_t rows,
++    uint32_t n0,
++    uint32_t w,
++    uint32_t k_steps,
++    uint32_t kt_dim,
++    uint32_t in1_row_tiles,
++    uint32_t row_tiles) {
++    tile_regs_acquire();
++    for (uint32_t j = 0; j < w; ++j) {
++        uint32_t in1_index = n0 + j;
++        for (uint32_t k = 0; k < k_steps; ++k) {
++            matmul_block(
++                in0_cb_id, in1_cb_id, k, in1_index, /*dst_index=*/j * rows, /*transpose=*/0, 1, rows, kt_dim);
++            in1_index += in1_row_tiles;
++        }
++    }
++    tile_regs_commit();
++    tile_regs_wait();
++    for (uint32_t m = 0; m < rows; ++m) {
++        for (uint32_t j = 0; j < w; ++j) {
++            pack_tile<true>(j * rows + m, partials_cb_id, m * row_tiles + n0 + j);
++        }
++    }
++    tile_regs_release();
++}
++
++// All real columns [0, real_cols) of one K-block, in dst-half-sized column chunks.
++FORCE_INLINE void matmul_block_reuse_w(
++    uint32_t in0_cb_id,
++    uint32_t in1_cb_id,
++    uint32_t partials_cb_id,
++    uint32_t rows,
++    uint32_t real_cols,
++    uint32_t k_steps,
++    uint32_t kt_dim,
++    uint32_t in1_row_tiles,
++    uint32_t row_tiles) {
++    const uint32_t chunk = kMatmulDstHalf / rows;
++    for (uint32_t n0 = 0; n0 < real_cols; n0 += chunk) {
++        const uint32_t w = (real_cols - n0) < chunk ? (real_cols - n0) : chunk;
++        matmul_cols_reuse_w(
++            in0_cb_id, in1_cb_id, partials_cb_id, rows, n0, w, k_steps, kt_dim, in1_row_tiles, row_tiles);
++    }
++}
++
+ template <
+     uint32_t in0_block_w,
+     uint32_t in0_num_subblocks,
+@@ -232,6 +300,15 @@ FORCE_INLINE void matmul_phase(
+     // the unpacked tail is drained by the pointer-only pop after the copy loop.
+     partials_cb.reserve_back(out_block_num_tiles);
+ 
++    // per_core_M >= kReuseWeightMinM: weight-reuse calls (see matmul_cols_reuse_w) over the real
++    // columns, i.e. the subblocks below n_subblocks with the ragged tail counted.
++    const bool reuse_w = use_weight_reuse(EFF_M);
++    const uint32_t real_cols =
++        (n_subblocks >= in1_num_subblocks) ? N_PER_ROW : n_subblocks * out_subblock_w;
++    if (reuse_w) {
++        matmul_block_init(in0_cb_id, in1_cb_id, /*transpose=*/0, /*ct_dim=*/1, /*rt_dim=*/EFF_M, in0_block_w);
++    }
++
+     for (uint32_t block = 0; block < num_blocks; ++block) {
+         // The reader pushes the FULL compile-time-max activated block (filling only
+         // its first per_core_M tile-rows), so this wait/pop stays compile-time sized.
+@@ -253,7 +330,10 @@ FORCE_INLINE void matmul_phase(
+         // its pack (with L1_ACC on, packing an untouched dst would ADD garbage to
+         // the accumulator). Its CBs are still drained below — the reader and writer
+         // push every padded block unconditionally.
+-        if (k_steps > 0) {
++        if (k_steps > 0 && reuse_w) {
++            matmul_block_reuse_w(
++                in0_cb_id, in1_cb_id, partials_cb_id, EFF_M, real_cols, k_steps, in0_block_w, in1_per_core_w, N_PER_ROW);
++        } else if (k_steps > 0) {
+             int in0_index_subblock_offset = 0;
+             uint32_t partials_slot_idx = 0;
+             for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
+@@ -511,6 +591,22 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     partials_gu_cb.reserve_back(EFF_OUT_MAX);
+     partials_up_cb.reserve_back(EFF_OUT_MAX);
+ 
++    // Blocks 0..N-2 run weight-reuse calls (see matmul_cols_reuse_w) once per_core_M >= kReuseWeightMinM.
++    // The last block keeps 1 x LW subblocks: the PACK-thread activation pipeline below is built on them,
++    // and it re-inits the matmul for them before it starts.
++    const bool reuse_w = use_weight_reuse(EFF_M) && (num_blocks > 1);
++    // Matmul init for the K-loop blocks (the caller inited the 1 x out_subblock_w config).
++    auto init_kloop_matmul = [&]() {
++        if (reuse_w) {
++            matmul_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, /*ct_dim=*/1, /*rt_dim=*/EFF_M, in0_block_w);
++        } else {
++            matmul_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, out_subblock_w, out_subblock_h, in0_block_w);
++        }
++    };
++    if (reuse_w) {
++        init_kloop_matmul();
++    }
++
+     // Row-major x, row-shared tilize. Only the block's owner tilizes it: cb_x_rm (bf16, read by
+     // its own reader) -> cb_x_tl (bf8), which its reader multicasts into cb_in0_x (x_cb) on every
+     // core of the row. The owner tilizes ONE block ahead -- block b+1 before its matmul of block b,
+@@ -553,7 +649,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+                 x_tl_cb.push_back(x_pad);
+             }
+             reconfig_data_format_srca(gate_cb_id);
+-            matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
++            init_kloop_matmul();
+             pack_reconfig_data_format(x_tl_cb_id, partials_gu_cb_id);
+ #ifdef PACKER_L1_ACC
+             PACK((llk_pack_reconfig_l1_acc(l1_acc)));
+@@ -751,7 +847,16 @@ FORCE_INLINE void matmul_phase_fused_gu(
+ 
+         int in0_index_subblock_offset = 0;
+         uint32_t partials_slot_idx = 0;
+-        for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
++        if (reuse_w) {
++            // Real columns only: phantom subblocks end on an out_subblock_w boundary.
++            constexpr uint32_t kRowTiles = in1_num_subblocks * out_subblock_w;
++            const uint32_t gu_real_cols = n_subblocks * out_subblock_w;
++            matmul_block_reuse_w(
++                x_cb_id, gate_cb_id, partials_gu_cb_id, EFF_M, gu_real_cols, in0_block_w, in0_block_w, in1_per_core_w, kRowTiles);
++            matmul_block_reuse_w(
++                x_cb_id, up_cb_id, partials_up_cb_id, EFF_M, gu_real_cols, in0_block_w, in0_block_w, in1_per_core_w, kRowTiles);
++        }
++        for (uint32_t sb_m = 0; sb_m < (reuse_w ? 0u : EFF_M); ++sb_m) {
+             int in1_index_subblock_offset = 0;
+             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
+                 // Phantom-column subblocks (col >= N_gate_tiles_full): the reader/writer
+@@ -839,7 +944,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+ 
+     // ---- Last K-block (its x / gate / up are waited on above) ----
+     // Packs keep the L1_ACC state the K-loop left (on for num_blocks > 1, off for a single block).
+-    if constexpr (LW != out_subblock_w) {
++    if (reuse_w || LW != out_subblock_w) {
+         matmul_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
+     }
+     bool pend = false;

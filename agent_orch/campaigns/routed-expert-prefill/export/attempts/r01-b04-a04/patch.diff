@@ -1,0 +1,149 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index 8b6c72ff1a7..d11cbd70e90 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -27,7 +27,12 @@
+ // is valid in BRISC, NCRISC, and TRISC translation units alike.
+ namespace adaptive_chunk {
+ 
+-constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGridY tile-rows
++// M-row cores; a chunk spans per_core_M * kGridY tile-rows. The host passes the grid height it
++// launched (10 on Blackhole, 8 on smaller grids); group sizes are kGridY, kGridY / 2, kGridY / 4.
++#ifndef UNIFIED_RE_GRID_Y
++#define UNIFIED_RE_GRID_Y 8
++#endif
++constexpr uint32_t kGridY = UNIFIED_RE_GRID_Y;
+ 
+ // Chunk layout for `count_tiles` tile-rows, given the CB-sized maximum chunk
+ // `max_chunk` (= per_core_M_max * kGridY): a run of FULL chunks of max_chunk,
+@@ -173,7 +178,11 @@ inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t
+ constexpr uint32_t kMinGroupRows = 2;
+ constexpr uint32_t kMaxGroups = kGridY / kMinGroupRows;
+ 
+-// Index of a group size in the host's per-topology runtime-arg sets: rows 8 -> 0, 4 -> 1, 2 -> 2.
++// Index of a group size in the host's per-topology runtime-arg sets, in the order the host builds
++// them ({kGridY, kGridY / 2, kGridY / 4}): rows 8/4/2 or 10/5/2 -> 0/1/2. pick_group_rows halves
++// rows from kGridY, which visits exactly those sizes on both grids.
++static_assert(
++    (kGridY / 2) / 2 == kGridY / 4 && kGridY / 4 == kMinGroupRows, "group sizes must match the host topology sets");
+ inline uint32_t group_rows_index(uint32_t rows) { return (rows >= kGridY) ? 0u : (rows >= kGridY / 2) ? 1u : 2u; }
+ 
+ // Modelled cost of one expert on a group of `rows` M-rows, in units of one per-core tile-row of
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index 0e88bdc7963..4e06734a3a5 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -173,10 +173,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
+     const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
+ 
+-    // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
+-    // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
+-    // per_core_N clean divisors of common chunk sizes (chunk_M_tiles values
+-    // {16, 24, ..., 64} all divide by GRID_Y=8). N-axis is rounded UP to a
++    // We use the bottom-left 11 columns and every row up to kCoreGridYMax (11x10 = 110 on a
++    // Blackhole 11x10 worker grid, 11x8 on smaller grids). N-axis is rounded UP to a
+     // multiple of GRID_X via ceil_div per_core_N. Phantom tiles past the
+     // actual tensor dims (col 64-65 of hidden, col 224-230 of emb) are
+     // zero-padded in the reader (zero-fill L1 instead of DRAM read).
+@@ -196,8 +194,20 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     // per_core_M / num_chunks at runtime from the device token count, never
+     // exceeding this max; the CBs below are sized to the max so a smaller pick
+     // simply uses fewer of the reserved tiles.
++    const auto grid_size = t.x.device()->compute_with_storage_grid_size();
++    TT_FATAL(
++        grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
++        "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
++        kCoreGridX,
++        kCoreGridY,
++        grid_size.x,
++        grid_size.y);
+     uint32_t GRID_X = kCoreGridX;
+-    uint32_t GRID_Y = kCoreGridY;
++    // Span every M-row the device has (up to kCoreGridYMax). Rows only split tokens and host the
++    // expert-parallel row groups (kernels/adaptive_chunk.hpp, group sizes GRID_Y, GRID_Y/2, GRID_Y/4),
++    // so the extra rows run more concurrent experts, or the same expert with fewer tile-rows per
++    // core, without touching the N blocking. The kernels take GRID_Y as UNIFIED_RE_GRID_Y.
++    uint32_t GRID_Y = (grid_size.y >= kCoreGridYMax) ? kCoreGridYMax : kCoreGridY;
+     // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
+     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
+     // kernels derive the ACTUAL chunk_M_tiles / per_core_M / num_chunks at runtime
+@@ -217,19 +227,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     // shapes where the halved chunk count outweighs that, the L1 fit doubles this
+     // back to 8 -- see kWidenMMinTilesPerBlock.
+     //
+-    // Keep this a POWER OF TWO * kCoreGridY: per_core_M_for_chunk() quantizes tail
+-    // chunks to divisors of per_core_M_max.
+-    constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
++    const uint32_t kMaxChunkMTiles = 4 * GRID_Y;  // per_core_M <= 4 (see above)
+     uint32_t chunk_M_tiles = kMaxChunkMTiles;
+     uint32_t in0_block_w_gu = 16;
+-    const auto grid_size = t.x.device()->compute_with_storage_grid_size();
+-    TT_FATAL(
+-        grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
+-        "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
+-        kCoreGridX,
+-        kCoreGridY,
+-        grid_size.x,
+-        grid_size.y);
+     // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
+     // below may shrink per_core_M / in0_block_w_gu (and hence chunk_M_tiles) to
+     // fit the device's per-core L1 on large models.
+@@ -984,6 +984,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
+         reader_defines.emplace_back("FUSE_BIAS", "1");
+     }
++    reader_defines.emplace_back("UNIFIED_RE_GRID_Y", std::to_string(GRID_Y));
+     tt::tt_metal::KernelDescriptor reader_kernel_desc;
+     reader_kernel_desc.kernel_source =
+         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
+@@ -1070,6 +1071,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     writer_kernel_desc.defines = {
+         {"IN1_GU_SLOTS", std::to_string(gu_slots)},
+         {"IN1_D_SLOTS", std::to_string(d_slots)},
++        {"UNIFIED_RE_GRID_Y", std::to_string(GRID_Y)},
+     };
+     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+ 
+@@ -1162,6 +1164,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
+     tt::tt_metal::KernelDescriptor::Defines compute_defines;
+     compute_defines.emplace_back("PACKER_L1_ACC", "1");
++    compute_defines.emplace_back("UNIFIED_RE_GRID_Y", std::to_string(GRID_Y));
+     // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
+     // the SFPU fp32-dest template derive from this, staying in sync with
+     // DST_CAPACITY / ComputeConfig.fp32_dest_acc_en (single source above).
+@@ -1243,7 +1246,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         //   weight sender for column gx -> row    gx % GRID_Y
+         //   x      sender for row    gy -> column (gy + 1) % GRID_X
+         // A core is in both only if gx == (gx % GRID_Y + 1) % GRID_X, which has no
+-        // solution on the 11x8 grid; the TT_FATAL keeps that honest for other grids.
++        // solution on the 11x8 or 11x10 grid; the TT_FATAL keeps that honest for other grids.
+         const uint32_t in1_sender_row = gx % GRID_Y;
+         const uint32_t in0_sender_col = (gy + 1) % GRID_X;
+         TT_FATAL(
+@@ -1286,7 +1289,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         // Expert-parallel row groups (kernels/adaptive_chunk.hpp). The kernels split the GRID_Y
+         // M-rows into groups of `rows` consecutive rows that run different experts concurrently
+         // and pick `rows` at runtime from the device-side counts, so every core gets the weight
+-        // (in1) multicast topology for each candidate size, in group_rows_index order (8, 4, 2):
++        // (in1) multicast topology for each candidate size, in group_rows_index order (10, 5, 2 on
++        // the 10-row grid; 8, 4, 2 on the 8-row one):
+         // the group-column's sender is row group_base + gx % rows (staggered like the
+         // whole-column placement above), and the rectangle spans the group's rows only.
+         // x and activated multicasts stay per M-row, which a group never splits.
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp
+index a763e01b11c..4d3f389242e 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp
+@@ -27,6 +27,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
+ // measured token-count crossover between them stops applying. Read it, do not restate it.
+ inline constexpr uint32_t kCoreGridX = 11;
+ inline constexpr uint32_t kCoreGridY = 8;
++// M-rows the op actually spans when the device has them (Blackhole: 10). Rows only split tokens and
++// host expert-parallel row groups (kernels/adaptive_chunk.hpp), so N blocking -- what the export
++// above pins -- does not depend on it. Devices with fewer rows fall back to kCoreGridY.
++inline constexpr uint32_t kCoreGridYMax = 10;
+ 
+ // Maximum number of global experts the op supports.
+ //

@@ -1,0 +1,32 @@
+{
+  "node_id": "r06-b01-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 6,
+  "branch": 1,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "5d961ca906c29b86081f6c09d5b3063a71bfa868",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T02:20:09+00:00",
+  "mechanism": "tilt the gate/up NoC split by grid row: each sender's reader issues 0 (top row) to 2x the host's head-row count (bottom row) of every up block's leading K-rows on NoC 0, same ~0.6 mean, so top-row senders lean on NoC 1 and bottom-row senders on NoC 0",
+  "tags": [
+    "data-movement",
+    "noc-balance",
+    "row-fairness",
+    "weight-delivery",
+    "dram-bandwidth",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6619,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-09T02:42:12+00:00"
+}

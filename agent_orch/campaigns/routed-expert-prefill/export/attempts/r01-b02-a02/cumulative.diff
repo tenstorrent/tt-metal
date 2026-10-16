@@ -1,0 +1,517 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index ed5bdb3a7fb..c48ff30606d 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -139,18 +139,86 @@ inline uint32_t num_chunks(uint32_t count_tiles, uint32_t max_chunk) {
+ // per_core_M for chunk index `c`: per_core_M_max for the full chunks; for the
+ // tail chunk, exactly the rows/core needed to cover the tail tiles, so no MAC,
+ // DRAM read or multicast byte is spent on a row the tail does not hold.
+-inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t max_chunk) {
+-    const uint32_t per_core_M_max = max_chunk / kGridY;
++// `rows` is the number of M-rows sharing the expert (the row-group size below);
++// max_chunk = per_core_M_max * rows.
++inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t max_chunk, uint32_t rows = kGridY) {
++    const uint32_t per_core_M_max = max_chunk / rows;
+     const uint32_t num_full = count_tiles / max_chunk;
+     if (c < num_full) {
+         return per_core_M_max;
+     }
+     const uint32_t tail = count_tiles - num_full * max_chunk;  // > 0 for the tail chunk
+-    uint32_t need = (tail + kGridY - 1) / kGridY;              // min rows/core to cover the tail
++    uint32_t need = (tail + rows - 1) / rows;                  // min rows/core to cover the tail
+     if (need < 1) {
+         need = 1;
+     }
+     return (need < per_core_M_max) ? need : per_core_M_max;
+ }
+ 
++// Row-group schedule.
++//
++// The grid's kGridY M-rows split into kGridY / rows groups of `rows` consecutive
++// M-rows. Each group runs a disjoint subset of the local experts concurrently: its
++// rows split one expert's tokens, the weight multicast spans only the group's rows,
++// and different groups never synchronise with each other. rows == kGridY is the
++// classic schedule (every expert on the whole grid, one after another).
++//
++// rows is the smallest power of two (>= kMinGroupRows) whose single chunk
++// (rows * per_core_M_max tile-rows) holds the LARGEST local expert, so with
++// rows < kGridY every expert is exactly one chunk and its weights are read exactly
++// once, as in the classic schedule. It then grows while there would be more groups
++// than active experts (an idle group buys nothing, a wider one splits the work
++// further).
++//
++// Every RISC of every core derives this from the same counts vector, so all of
++// them agree on the groups, the expert -> group assignment and the row mapping.
++//
++// Groups have at least two rows: a one-row group makes every core its own weight
++// reader, so the row's x reads can no longer sit on a core without weight reads
++// (the host's fixed x sender at column gy + 1 is collision-free with the group
++// weight sender group_base + gx % rows only for rows >= 2).
++constexpr uint32_t kMinGroupRows = 2;
++inline uint32_t group_rows(uint32_t max_count_tiles, uint32_t num_active, uint32_t per_core_M_max) {
++    uint32_t rows = kMinGroupRows;
++    while (rows < kGridY && max_count_tiles > rows * per_core_M_max) {
++        rows <<= 1;
++    }
++    while (rows < kGridY && kGridY / rows > num_active) {
++        rows <<= 1;
++    }
++    return rows;
++}
++
++// group_rows() over the local experts; count_tiles_of(e) returns local expert e's
++// clamped tile-row count (0 = inactive).
++template <typename CountTilesOf>
++inline uint32_t plan_group_rows(const CountTilesOf& count_tiles_of, uint32_t experts, uint32_t per_core_M_max) {
++    uint32_t max_count_tiles = 0;
++    uint32_t num_active = 0;
++    for (uint32_t e = 0; e < experts; ++e) {
++        const uint32_t ct = count_tiles_of(e);
++        if (ct > 0) {
++            ++num_active;
++            max_count_tiles = (ct > max_count_tiles) ? ct : max_count_tiles;
++        }
++    }
++    return group_rows(max_count_tiles, num_active, per_core_M_max);
++}
++
++// Walks the local experts in order and deals the active ones round-robin to the
++// groups. next(count_tiles) returns whether that expert belongs to `my_group`.
++struct GroupDealer {
++    uint32_t num_groups;
++    uint32_t my_group;
++    uint32_t rank = 0;
++    bool next(uint32_t count_tiles) {
++        if (count_tiles == 0) {
++            return false;
++        }
++        const bool mine = (rank % num_groups) == my_group;
++        ++rank;
++        return mine;
++    }
++};
++
+ }  // namespace adaptive_chunk
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index a1cf9b7bd8a..12b5ad80f79 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -889,6 +889,8 @@ void kernel_main() {
+     // compile-time) because they vary per core and one kernel serves the whole grid.
+     const uint32_t gu_valid_n_subblocks = get_arg_val<uint32_t>(0);
+     const uint32_t d_valid_n_subblocks = get_arg_val<uint32_t>(1);
++    // This core's M-row: selects its row group in the runtime row-group schedule.
++    const uint32_t my_mt = get_arg_val<uint32_t>(2);
+ 
+     // Phase 1 (gate)
+     constexpr uint32_t g_in0_block_w = get_compile_time_arg_val(0);
+@@ -1014,8 +1016,32 @@ void kernel_main() {
+ #endif
+ 
+ 
++    // Row-group schedule (adaptive_chunk::group_rows), derived on UNPACK from the same
++    // counts the reader and writer use and broadcast to MATH/PACK like the counts below.
++    uint32_t group_rows = adaptive_chunk::kGridY;
++    UNPACK(({
++        const volatile tt_l1_ptr uint32_t* counts_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
++            get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4);
++        const volatile tt_l1_ptr uint32_t* idx_ptr =
++            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4);
++        const auto count_tiles_of = [&](uint32_t e) -> uint32_t {
++            const uint32_t cv =
++                adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], min_active_tokens, max_active_tokens);
++            return adaptive_chunk::clamp_count_tiles((cv + 31) / 32, chunk_M_max, num_chunks_max, m_tiles_full);
++        };
++        group_rows =
++            adaptive_chunk::plan_group_rows(count_tiles_of, experts_per_chip, chunk_M_max / adaptive_chunk::kGridY);
++        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, group_rows);
++        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, group_rows);
++    }));
++    MATH(group_rows = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
++    PACK(group_rows = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
++    const uint32_t chunk_M_grp = (chunk_M_max / adaptive_chunk::kGridY) * group_rows;
++    adaptive_chunk::GroupDealer dealer{adaptive_chunk::kGridY / group_rows, my_mt / group_rows};
++    (void)dealer;  // only UNPACK deals; MATH/PACK take the dealt count from the mailbox
++
+     // ======================= per-local-expert loop =======================
+-    // Run the full gate/up/down FFN for every local expert in this program.
++    // Run the full gate/up/down FFN for every local expert dealt to this row group.
+     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+         // This expert's token count via the UNPACK→{MATH,PACK} mailbox (MATH/PACK
+         // cannot read the counts/idx L1 via the CB interface).
+@@ -1034,6 +1060,11 @@ void kernel_main() {
+             // routed-expert op and are dropped here exactly like a zero count.
+             count_value =
+                 adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
++            // Experts dealt to another row group are skipped like a zero count.
++            if (!dealer.next(adaptive_chunk::clamp_count_tiles(
++                    (count_value + 31) / 32, chunk_M_max, num_chunks_max, m_tiles_full))) {
++                count_value = 0;
++            }
+             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
+             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
+         }));
+@@ -1056,7 +1087,7 @@ void kernel_main() {
+         const uint32_t count_tiles =
+             adaptive_chunk::clamp_count_tiles(count_tiles_raw, chunk_M_max, num_chunks_max, m_tiles_full);
+         ASSERT(count_tiles == count_tiles_raw);
+-        const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
++        const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_grp);
+ 
+         for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+             // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller divisor
+@@ -1065,7 +1096,8 @@ void kernel_main() {
+             // rows >= per_core_M (see matmul_phase). re_eff_out_gu = per_core_M *
+             // per_core_N_gu (g_in1_num_subblocks * gu_out_subblock_num_tiles ==
+             // per_core_N_gu since gu_out_subblock_h == 1).
+-            const uint32_t re_m_valid = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
++            const uint32_t re_m_valid =
++                adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_grp, group_rows);
+             const uint32_t re_eff_out_gu = re_m_valid * g_in1_num_subblocks * gu_out_subblock_num_tiles;
+             //
+             // matmul_block_init only re-programs addressing, not SrcA/SrcB formats. On
+@@ -1169,10 +1201,13 @@ void kernel_main() {
+         }  // end chunk loop
+ 
+ #ifdef FUSE_BIAS
+-        // Pop this expert's biases so the reader can refill for the next expert.
+-        CircularBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
+-        CircularBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
+-        CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
++        // Pop this expert's biases so the reader can refill for the next expert. The
++        // reader pushes them only for experts this row group runs (effective_chunks > 0).
++        if (effective_chunks > 0) {
++            CircularBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
++            CircularBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
++            CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
++        }
+ #endif
+     }  // end per-local-expert loop
+ }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index b68bbb5f28e..b71f7476821 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -44,19 +44,15 @@ void kernel_main() {
+     const uint32_t my_nt_d = get_arg_val<uint32_t>(2);
+ 
+     // Weight-multicast runtime args (indices 3..12).
+-    const uint32_t is_in1_sender_u32 = get_arg_val<uint32_t>(3);
+-    const bool is_in1_sender = is_in1_sender_u32 != 0;
++    // The weight-multicast group (sender role, receiver count, rectangle, sender
++    // coords) is a function of the runtime row-group size and is derived below, after
++    // the counts are known; only the semaphore ids are taken from here.
+     const uint32_t in1_ready_sem_id = get_arg_val<uint32_t>(4);
+     const uint32_t in1_valid_sem_id = get_arg_val<uint32_t>(5);
+-    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(6);
+-    const uint32_t in1_mcast_nx_start = get_arg_val<uint32_t>(7);
+-    const uint32_t in1_mcast_ny_start = get_arg_val<uint32_t>(8);
+-    const uint32_t in1_mcast_nx_end = get_arg_val<uint32_t>(9);
+-    const uint32_t in1_mcast_ny_end = get_arg_val<uint32_t>(10);
+-    const uint32_t in1_sender_nx = get_arg_val<uint32_t>(11);
+-    const uint32_t in1_sender_ny = get_arg_val<uint32_t>(12);
+-
+-    // x (in0) multicast runtime args (indices 13..22).
++
++    // x (in0) multicast runtime args (indices 13..22). The sender is fixed per M-row at
++    // column gy + 1, which never holds a weight sender for any row-group size >= 2 (see
++    // adaptive_chunk::group_rows), so x and weight DRAM reads stay on different cores.
+     const uint32_t is_in0_sender_u32 = get_arg_val<uint32_t>(13);
+     const bool is_in0_sender = is_in0_sender_u32 != 0;
+     const uint32_t in0_ready_sem_id = get_arg_val<uint32_t>(14);
+@@ -92,6 +88,11 @@ void kernel_main() {
+     // IN1_WRITER_MCAST go/done sems follow the DOWN_SPLIT pair.
+     constexpr uint32_t MCAST_SEM_RT = DOWN_SEM_RT + 2;
+     constexpr uint32_t M_ROW_NOC_RT_OFFSET = MCAST_SEM_RT + 2;
++    // Column NoC table follows the M-row table (GRID_X pairs): this column's NoC x, then
++    // the NoC y of each of the kGridY M-rows. Row groups build their weight-multicast
++    // rectangle and sender address from it.
++    const uint32_t my_col_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * get_compile_time_arg_val(21));
++    constexpr uint32_t COL_NOC_Y_RT = M_ROW_NOC_RT_OFFSET + 2 * get_compile_time_arg_val(21) + 1;
+ 
+     // -------------------------- compile-time args -------------------------
+     constexpr uint32_t cb_in0_x = get_compile_time_arg_val(0);
+@@ -373,6 +374,36 @@ void kernel_main() {
+     cb_start_scratch_obj.push_back(1);
+     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
+ 
++    // Row-group schedule (adaptive_chunk::group_rows): the same derivation the compute
++    // and writer kernels run on the same counts, so every RISC agrees on the groups,
++    // the expert -> group deal and the row mapping.
++    const auto count_tiles_of = [&](uint32_t e) -> uint32_t {
++        const uint32_t cv =
++            adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], min_active_tokens, max_active_tokens);
++        return adaptive_chunk::clamp_count_tiles(
++            (cv + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
++    };
++    const uint32_t group_rows = adaptive_chunk::plan_group_rows(count_tiles_of, experts_per_chip, per_core_M_max);
++    // A group's chunk: group_rows rows of up to per_core_M_max tile-rows each.
++    const uint32_t chunk_M_grp = per_core_M_max * group_rows;
++    const uint32_t group_first_row = (my_mt / group_rows) * group_rows;
++    const uint32_t my_row_in_group = my_mt - group_first_row;
++    adaptive_chunk::GroupDealer dealer{adaptive_chunk::kGridY / group_rows, my_mt / group_rows};
++
++    // Weight multicast within the group's slice of this column. The sender is staggered
++    // across the group's rows by column (the classic schedule's gx % GRID_Y at
++    // group_rows == GRID_Y), so the weight reads of one group spread over its rows.
++    // group_rows == 1: every core reads its own weights and nothing is multicast.
++    const uint32_t in1_sender_row = group_first_row + (my_nt_gu % group_rows);
++    const bool is_in1_sender = my_mt == in1_sender_row;
++    const uint32_t in1_num_receivers = group_rows - 1;
++    const uint32_t in1_mcast_nx_start = my_col_nx;
++    const uint32_t in1_mcast_ny_start = get_arg_val<uint32_t>(COL_NOC_Y_RT + group_first_row);
++    const uint32_t in1_mcast_nx_end = my_col_nx;
++    const uint32_t in1_mcast_ny_end = get_arg_val<uint32_t>(COL_NOC_Y_RT + group_first_row + group_rows - 1);
++    const uint32_t in1_sender_nx = my_col_nx;
++    const uint32_t in1_sender_ny = get_arg_val<uint32_t>(COL_NOC_Y_RT + in1_sender_row);
++
+     const uint32_t x_tile_bytes = get_tile_size(cb_in0_x);
+     const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
+     const uint32_t up_tile_bytes = get_tile_size(cb_in1_up);
+@@ -435,7 +466,9 @@ void kernel_main() {
+         // mapping). Full chunks span chunk_M_max tile-rows; the tail chunk shrinks
+         // per_core_M to the remainder, so per_core_M is per-chunk (see the chunk
+         // loop) and adapts to each expert's own load with minimal phantom work.
+-        const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
++        // Experts dealt to another row group are skipped like a zero count.
++        const bool mine = dealer.next(count_tiles);
++        const uint32_t effective_chunks = mine ? adaptive_chunk::num_chunks(count_tiles, chunk_M_grp) : 0;
+ 
+         // x-read row offset: this expert's rows begin at start[global_id].
+         // Convert the token row to a tile-page offset (row_tile * K_gate_tiles)
+@@ -451,14 +484,16 @@ void kernel_main() {
+ #ifdef FUSE_BIAS
+         // This expert's N-column slice of its (1, N) biases. The compute
+         // kernel wait_fronts then pops at the end of this expert so the next
+-        // expert can reuse the single-buffered bias CBs. Bias is a single
++        // expert can reuse the single-buffered bias CBs. Only for an expert
++        // this row group runs (effective_chunks > 0): the compute kernel pops
++        // under the same condition, so skipped experts cost no DRAM reads. Bias is a single
+         // tile-row tensor, so the DRAM page index == tile column. Phantom
+         // columns (col >= actual N) are zero-filled: unlike the per-K-block
+         // weight reads this runs once per expert, so the fill is cheap, and it
+         // keeps the bias add from turning a phantom column into Inf/NaN. Those
+         // columns are discarded either way — the gate/up ones by the down
+         // phase's K bound, the down ones by the writer.
+-        {
++        if (effective_chunks > 0) {
+             const uint32_t gbias_addr =
+                 get_common_arg_val<uint32_t>(COMMON_BIAS + 0 * experts_per_chip + local_expert_id);
+             const uint32_t ubias_addr =
+@@ -520,8 +555,9 @@ void kernel_main() {
+         // Per-chunk per_core_M: per_core_M_max for full chunks, a smaller divisor
+         // for the tail. Chunk starts are UNIFORM at chunk*chunk_M_max (full chunks
+         // are max_chunk; the tail is last, so its start is num_full*max_chunk too).
+-        const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
+-        const uint32_t this_core_first_row = chunk * chunk_M_max + my_mt * per_core_M;
++        const uint32_t per_core_M =
++            adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_grp, group_rows);
++        const uint32_t this_core_first_row = chunk * chunk_M_grp + my_row_in_group * per_core_M;
+ 
+         // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.
+         //
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 0d7df0363f3..7c884adef8f 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -54,7 +54,8 @@ void kernel_main() {
+     // UP_SPLIT up-weight read args. The per-expert `up` addresses live in the
+     // runtime-arg array starting at COMMON_UP.
+     const uint32_t my_nt_gu = get_arg_val<uint32_t>(2);
+-    const bool is_up_sender = get_arg_val<uint32_t>(3) != 0;
++    // The weight-sender role (arg 3 in the classic schedule) depends on the runtime
++    // row-group size, so it is derived below once the counts are known.
+     // UP_SPLIT local handshake sems (see reader): up_go = slot reserved,
+     // up_done = up landed.
+     const uint32_t up_go_sem_id = get_arg_val<uint32_t>(4);
+@@ -222,11 +223,30 @@ void kernel_main() {
+     // corners come in the OPPOSITE order from a NoC-0 multicast: pass them unswapped and
+     // the NoC reads start > end as a torus wraparound, covers no receiver, and the run
+     // deadlocks with no assert.
+-    const uint32_t in1_mc_nx_start = get_arg_val<uint32_t>(IN1_WM_RT + 2);  // NoC-0 frame's END x
+-    const uint32_t in1_mc_ny_start = get_arg_val<uint32_t>(IN1_WM_RT + 3);  // NoC-0 frame's END y
+-    const uint32_t in1_mc_nx_end = get_arg_val<uint32_t>(IN1_WM_RT + 0);    // NoC-0 frame's START x
+-    const uint32_t in1_mc_ny_end = get_arg_val<uint32_t>(IN1_WM_RT + 1);    // NoC-0 frame's START y
+-    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(IN1_WM_RT + 4);
++    //
++    // The rectangle is the row group's slice of this column (see the reader), built from
++    // the column NoC table that follows the IN1_WM_RT block: this column's NoC x, then the
++    // NoC y of each M-row.
++    constexpr uint32_t COL_NOC_RT = IN1_WM_RT + 9;
++    const uint32_t my_col_nx = get_arg_val<uint32_t>(COL_NOC_RT);
++    const auto count_tiles_of = [&](uint32_t e) -> uint32_t {
++        const uint32_t cv =
++            adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], min_active_tokens, max_active_tokens);
++        return adaptive_chunk::clamp_count_tiles(
++            (cv + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
++    };
++    const uint32_t group_rows = adaptive_chunk::plan_group_rows(count_tiles_of, experts_per_chip, per_core_M_max);
++    const uint32_t chunk_M_grp = per_core_M_max * group_rows;
++    const uint32_t group_first_row = (my_mt / group_rows) * group_rows;
++    const uint32_t my_row_in_group = my_mt - group_first_row;
++    adaptive_chunk::GroupDealer dealer{adaptive_chunk::kGridY / group_rows, my_mt / group_rows};
++    const bool is_up_sender = my_mt == group_first_row + (my_nt_gu % group_rows);
++    const uint32_t in1_mc_nx_start = my_col_nx;  // NoC-0 frame's END x
++    const uint32_t in1_mc_ny_start =
++        get_arg_val<uint32_t>(COL_NOC_RT + 1 + group_first_row + group_rows - 1);  // NoC-0 frame's END y
++    const uint32_t in1_mc_nx_end = my_col_nx;                                       // NoC-0 frame's START x
++    const uint32_t in1_mc_ny_end = get_arg_val<uint32_t>(COL_NOC_RT + 1 + group_first_row);  // NoC-0 START y
++    const uint32_t in1_num_receivers = group_rows - 1;
+     Semaphore<> in1_ready_sem(get_arg_val<uint32_t>(IN1_WM_RT + 5));
+     Semaphore<> in1_valid_sem(get_arg_val<uint32_t>(IN1_WM_RT + 6));
+     Semaphore<> mcast_go_sem(get_arg_val<uint32_t>(IN1_WM_RT + 7));
+@@ -257,7 +277,9 @@ void kernel_main() {
+         // Runtime chunk layout from THIS expert's count — the same math the reader
+         // and compute kernels run, so all three agree on the row mapping (a
+         // mismatch would emit this expert's rows at the wrong token offsets).
+-        const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
++        // Experts dealt to another row group are skipped like a zero count.
++        const bool mine = dealer.next(count_tiles);
++        const uint32_t effective_chunks = mine ? adaptive_chunk::num_chunks(count_tiles, chunk_M_grp) : 0;
+         const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
+ 
+         for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+@@ -313,47 +335,51 @@ void kernel_main() {
+                             mcast_go_sem.wait_min(mc_seq);
+                             in1_ready_sem.wait(in1_num_receivers);
+                             in1_ready_sem.set(0);
+-                            CircularBuffer cb_in1_gate_buf(cb_in1_gate);
+-                            const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
+-                            const uint32_t gate_slot_bytes = g_in1_block_num_tiles * gate_tile_bytes;
+-                            const uint32_t gate_block_start =
+-                                cb_in1_gate_buf.get_write_ptr() + ((up_seq - 1) % kUpNumSlots) * gate_slot_bytes;
+-                            // linked=true on both data multicasts and the sem, so the posted
+-                            // valid-sem write cannot overtake the data (same rationale as the
+-                            // reader's NoC-0 version this replaces).
+-                            noc_up.async_write_multicast(
+-                                CoreLocalMem<uint32_t>(gate_block_start),
+-                                MulticastEndpoint{},
+-                                gate_slot_bytes,
+-                                in1_num_receivers,
+-                                {.offset_bytes = 0},
+-                                {.noc_x_start = in1_mc_nx_start,
+-                                 .noc_y_start = in1_mc_ny_start,
+-                                 .noc_x_end = in1_mc_nx_end,
+-                                 .noc_y_end = in1_mc_ny_end,
+-                                 .addr = gate_block_start},
+-                                /*linked=*/true);
+-                            noc_up.async_write_multicast(
+-                                CoreLocalMem<uint32_t>(l1_w_up_block_start),
+-                                MulticastEndpoint{},
+-                                up_slot_bytes,
+-                                in1_num_receivers,
+-                                {.offset_bytes = 0},
+-                                {.noc_x_start = in1_mc_nx_start,
+-                                 .noc_y_start = in1_mc_ny_start,
+-                                 .noc_x_end = in1_mc_nx_end,
+-                                 .noc_y_end = in1_mc_ny_end,
+-                                 .addr = l1_w_up_block_start},
+-                                /*linked=*/true);
+-                            noc_up.async_writes_flushed();
+-                            in1_valid_sem.set(1);
+-                            in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+-                                noc_up,
+-                                in1_mc_nx_start,
+-                                in1_mc_ny_start,
+-                                in1_mc_nx_end,
+-                                in1_mc_ny_end,
+-                                in1_num_receivers);
++                            // A one-row group has no receivers: nothing to multicast, but
++                            // mcast_done still hands the slot back to the reader.
++                            if (in1_num_receivers > 0) {
++                                CircularBuffer cb_in1_gate_buf(cb_in1_gate);
++                                const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
++                                const uint32_t gate_slot_bytes = g_in1_block_num_tiles * gate_tile_bytes;
++                                const uint32_t gate_block_start =
++                                    cb_in1_gate_buf.get_write_ptr() + ((up_seq - 1) % kUpNumSlots) * gate_slot_bytes;
++                                // linked=true on both data multicasts and the sem, so the posted
++                                // valid-sem write cannot overtake the data (same rationale as the
++                                // reader's NoC-0 version this replaces).
++                                noc_up.async_write_multicast(
++                                    CoreLocalMem<uint32_t>(gate_block_start),
++                                    MulticastEndpoint{},
++                                    gate_slot_bytes,
++                                    in1_num_receivers,
++                                    {.offset_bytes = 0},
++                                    {.noc_x_start = in1_mc_nx_start,
++                                     .noc_y_start = in1_mc_ny_start,
++                                     .noc_x_end = in1_mc_nx_end,
++                                     .noc_y_end = in1_mc_ny_end,
++                                     .addr = gate_block_start},
++                                    /*linked=*/true);
++                                noc_up.async_write_multicast(
++                                    CoreLocalMem<uint32_t>(l1_w_up_block_start),
++                                    MulticastEndpoint{},
++                                    up_slot_bytes,
++                                    in1_num_receivers,
++                                    {.offset_bytes = 0},
++                                    {.noc_x_start = in1_mc_nx_start,
++                                     .noc_y_start = in1_mc_ny_start,
++                                     .noc_x_end = in1_mc_nx_end,
++                                     .noc_y_end = in1_mc_ny_end,
++                                     .addr = l1_w_up_block_start},
++                                    /*linked=*/true);
++                                noc_up.async_writes_flushed();
++                                in1_valid_sem.set(1);
++                                in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
++                                    noc_up,
++                                    in1_mc_nx_start,
++                                    in1_mc_ny_start,
++                                    in1_mc_nx_end,
++                                    in1_mc_ny_end,
++                                    in1_num_receivers);
++                            }
+                             mcast_done_sem.set(mc_seq);
+                         }
+                     }
+@@ -417,8 +443,9 @@ void kernel_main() {
+             // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller
+             // divisor for the tail); chunk starts are uniform at chunk*chunk_M_max.
+             // Contiguous row map: this core owns rows [row0, row0 + per_core_M).
+-            const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
+-            const uint32_t row0 = chunk * chunk_M_max + my_mt * per_core_M;
++            const uint32_t per_core_M =
++                adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_grp, group_rows);
++            const uint32_t row0 = chunk * chunk_M_grp + my_row_in_group * per_core_M;
+             const uint32_t col0 = my_nt_d * per_core_N_d;
+             // The DOWN matmul packs and pushes the FULL compile-time-MAX ring (its
+             // L1_ACC needs full-ring cycling), so DRAIN all d_in1_num_subblocks_M
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index 1888a694fb7..c6c755eb9e0 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -1309,6 +1309,17 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+             reader_args.push_back(static_cast<uint32_t>(noc.x));
+             reader_args.push_back(static_cast<uint32_t>(noc.y));
+         }
++        // Column NoC table: this column's NoC x, then the NoC y of every M-row. The kernels
++        // pick a row-group size at runtime from the device counts (adaptive_chunk::group_rows)
++        // and build the group's weight-multicast rectangle and sender address from it; the
++        // in1 sender/rectangle args above are the full-column special case.
++        const auto col_noc_table = [&](std::vector<uint32_t>& args) {
++            args.push_back(static_cast<uint32_t>(device->worker_core_from_logical_core(CoreCoord{gx, 0}).x));
++            for (uint32_t gyi = 0; gyi < GRID_Y; ++gyi) {
++                args.push_back(static_cast<uint32_t>(device->worker_core_from_logical_core(CoreCoord{gx, gyi}).y));
++            }
++        };
++        col_noc_table(reader_args);
+         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
+         reader_rt_args.append(reader_args);
+         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
+@@ -1330,6 +1341,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         writer_args.push_back(in1_valid_sem_id);
+         writer_args.push_back(mcast_go_sem_id);
+         writer_args.push_back(mcast_done_sem_id);
++        // Column NoC table (see the reader's), right after the IN1_WRITER_MCAST block.
++        col_noc_table(writer_args);
+         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
+         writer_rt_args.append(writer_args);
+         writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);
+@@ -1351,6 +1364,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         std::vector<uint32_t> compute_args = {
+             (valid_n_gu + gu_out_subblock_w - 1) / gu_out_subblock_w,  // 0 gu valid N subblocks
+             (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w,     // 1 down valid N subblocks
++            my_mt,                                                     // 2 row-group schedule
+         };
+         tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
+         compute_rt_args.append(compute_args);

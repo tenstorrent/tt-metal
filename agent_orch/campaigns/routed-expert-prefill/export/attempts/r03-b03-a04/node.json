@@ -1,0 +1,32 @@
+{
+  "node_id": "r03-b03-a04",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 3,
+  "attempt": 4,
+  "parent": "r03-b03-a03",
+  "parent_commit": "0f29c96861873daba5d67f65e10faa52191b7640",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T23:26:36+00:00",
+  "mechanism": "reuse-B matmul at per_core_M >= 3: hold the bf4 weight tile in SrcA and stream x / activated rows through SrcB (rt = per_core_M, ct = 2) in the non-last gate/up K-blocks and the down K-blocks; all matmuls via one out-of-line helper (code base = best node r03-b02-a03)",
+  "tags": [
+    "compute",
+    "matmul-reuse",
+    "unpack-bound",
+    "subblock-shape",
+    "kernel-only",
+    "rebase-onto-best",
+    "kernel-size"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5554,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/binary_act_sfpu.h",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 47,
+  "finished_at": "2026-10-08T23:41:21+00:00"
+}

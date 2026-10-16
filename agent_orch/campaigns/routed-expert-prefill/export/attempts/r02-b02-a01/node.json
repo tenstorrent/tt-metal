@@ -1,0 +1,32 @@
+{
+  "node_id": "r02-b02-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "ff0bcd951efdb912ba0acbd56fd88f57f260bd60",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T20:28:39+00:00",
+  "mechanism": "mixed-height expert row groups: runtime layouts 3+3+2+2 and 3+3+3 (beside 10 / 5+5 / 2x5) with a height-aware largest-first expert deal",
+  "tags": [
+    "work-partition",
+    "expert-parallel",
+    "row-groups",
+    "runtime-schedule",
+    "load-balance"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5279,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 42,
+  "finished_at": "2026-10-08T20:45:23+00:00"
+}

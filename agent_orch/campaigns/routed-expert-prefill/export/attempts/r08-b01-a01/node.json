@@ -1,0 +1,30 @@
+{
+  "node_id": "r08-b01-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 8,
+  "branch": 1,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a13919e548ea2f1b8dbaede82e0ad5c6fcb73f46",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T04:27:09+00:00",
+  "mechanism": "bottom-first launch plan: uniform deals break ties toward the bottom row group when every group is busy, and two-phase plans put their leftover experts on the bottom groups of a layout whose top group (covering the slowest top phase-A group) stays idle, so dsv3/glm run single-phase 1/1/2/2/2 and kimi-k2.7/dsv4-pro run phase B on 4+3+3's lower groups",
+  "tags": [
+    "planner",
+    "runtime-schedule",
+    "row-gradient",
+    "load-balance",
+    "two-phase",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.7397,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 47,
+  "finished_at": "2026-10-09T04:56:15+00:00"
+}

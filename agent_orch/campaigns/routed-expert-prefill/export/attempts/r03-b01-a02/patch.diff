@@ -1,0 +1,182 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index 5d981deec70..02965d87b72 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -761,4 +761,40 @@ inline LaunchPlan plan_launch(const TilesOf& tiles_of, uint32_t per_core_M_max,
+     return lp;
+ }
+ 
++// ---------------------------------------------------------------------------------------------
++// The plan is computed ONCE per core, by the reader, and shared with the writer and compute
++// (UNPACK) through a one-page L1 scratch CB (cb_plan_scratch). Running plan_launch in all three
++// RISCs put three copies of the planner in the core's kernel binaries (~10 KB on TRISC0 at -O3),
++// which overflowed the kernel config buffer on the h7168 shapes.
++//
++// Page layout: [layout[0] u32][layout[1] u32][owner[0][0..E) u8][owner[1][0..E) u8], padded.
++// The host sizes the page with the same formula.
++constexpr uint32_t plan_page_bytes(uint32_t num_experts) { return (8 + 2 * num_experts + 31) & ~31u; }
++
++template <uint32_t NumExperts>
++inline void store_plan(uint32_t l1_addr, const LaunchPlan& lp, const uint8_t (&owner)[2][NumExperts]) {
++    volatile uint32_t* words = reinterpret_cast<volatile uint32_t*>(l1_addr);
++    words[0] = lp.layout[0];
++    words[1] = lp.layout[1];
++    volatile uint8_t* bytes = reinterpret_cast<volatile uint8_t*>(l1_addr + 8);
++    for (uint32_t e = 0; e < NumExperts; ++e) {
++        bytes[e] = owner[0][e];
++        bytes[NumExperts + e] = owner[1][e];
++    }
++}
++
++template <uint32_t NumExperts>
++inline LaunchPlan load_plan(uint32_t l1_addr, uint8_t (&owner)[2][NumExperts]) {
++    const volatile uint32_t* words = reinterpret_cast<const volatile uint32_t*>(l1_addr);
++    LaunchPlan lp;
++    lp.layout[0] = words[0];
++    lp.layout[1] = words[1];
++    const volatile uint8_t* bytes = reinterpret_cast<const volatile uint8_t*>(l1_addr + 8);
++    for (uint32_t e = 0; e < NumExperts; ++e) {
++        owner[0][e] = bytes[e];
++        owner[1][e] = bytes[NumExperts + e];
++    }
++    return lp;
++}
++
+ }  // namespace adaptive_chunk
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index 6f58afc5006..61e63af3028 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -1179,8 +1179,9 @@ void kernel_main() {
+     // ======================= per-local-expert loop =======================
+     // Run the full gate/up/down FFN for every local expert this core's row group owns.
+     //
+-    // Expert-parallel row groups (adaptive_chunk.hpp): UNPACK reads the counts, builds the same
+-    // launch plan (per-phase layout and expert -> group map) the reader and writer run, walks its phases, and sends MATH/PACK (whose CB
++    // Expert-parallel row groups (adaptive_chunk.hpp): UNPACK reads the counts and the reader's
++    // launch plan (per-phase layout and expert -> group map, cb_plan_scratch), walks its phases, and
++    // sends MATH/PACK (whose CB
+     // interface cannot reach the counts L1) the tile-row count and group size of each expert this
+     // core's group works on, in the order the reader feeds them, then a 0 sentinel. Experts
+     // another group owns, or with no rows, never reach MATH/PACK, so the mailbox carries one
+@@ -1198,7 +1199,14 @@ void kernel_main() {
+     [[maybe_unused]] uint8_t expert_group[2][experts_per_chip];
+     [[maybe_unused]] uint32_t phase = 0;
+     [[maybe_unused]] uint32_t next_expert = 0;
+-    UNPACK(({ plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group); }));
++    // The reader plans once for the core and publishes the plan in cb_plan_scratch
++    // (adaptive_chunk::store_plan); UNPACK copies it instead of running the planner itself.
++    CircularBuffer plan_scratch_cb(get_named_compile_time_arg_val("cb_plan_scratch"));
++    plan_scratch_cb.wait_front(1);
++    UNPACK(({
++        plan = adaptive_chunk::load_plan(
++            get_local_cb_interface(get_named_compile_time_arg_val("cb_plan_scratch")).fifo_rd_ptr << 4, expert_group);
++    }));
+     // Gate/up K-blocks done so far, counted exactly as the reader counts them (x_blk there):
+     // every core of a row runs the same experts and chunks, so they agree on each block's owner.
+     uint32_t x_blk = 0;
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 786da1282c6..fea0155c616 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -264,6 +264,9 @@ void kernel_main() {
+     CircularBuffer cb_counts_scratch_obj(cb_counts_scratch);
+     CircularBuffer cb_idx_scratch_obj(cb_idx_scratch);
+     CircularBuffer cb_start_scratch_obj(cb_start_scratch);
++    // The launch plan this RISC computes once and shares with the writer and compute
++    // (adaptive_chunk::store_plan).
++    CircularBuffer cb_plan_scratch_obj(get_named_compile_time_arg_val("cb_plan_scratch"));
+     CircularBuffer cb_x_rm_obj(cb_x_rm);
+     CircularBuffer cb_x_tl_obj(cb_x_tl);
+     CircularBuffer cb_activated_obj(cb_activated);
+@@ -386,8 +389,14 @@ void kernel_main() {
+     // layout, phase B the rest on a larger one; or phase B alone is the single-layout schedule
+     // (uniform or mixed-height). The layout, this core's group and row within it, and the
+     // weight-multicast topology are per phase.
++    //
++    // Only this RISC runs the planner. It publishes the plan in cb_plan_scratch for the writer
++    // and compute, which wait on it instead of planning again (one planner copy per core).
+     uint8_t expert_group[2][experts_per_chip];
+     const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
++    cb_plan_scratch_obj.reserve_back(1);
++    adaptive_chunk::store_plan(cb_plan_scratch_obj.get_write_ptr(), plan, expert_group);
++    cb_plan_scratch_obj.push_back(1);
+     // Phase A's own weight-multicast semaphore pair follows the per-layout topologies.
+     constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + adaptive_chunk::num_layouts(adaptive_chunk::kGridY) * GROUP_TOPO_ARGS;
+ 
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 117803e894a..7af5c085f11 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -243,15 +243,14 @@ void kernel_main() {
+     constexpr uint32_t GROUP_TOPO_RT = IN1_WM_RT + 9;
+     constexpr uint32_t GROUP_TOPO_ARGS = 8;
+     constexpr uint32_t clamp_chunk = per_core_M_max * adaptive_chunk::kMinGroupRows;
+-    auto tiles_of = [&](uint32_t e) -> uint32_t {
+-        const uint32_t count = adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], min_active_tokens, max_active_tokens);
+-        return adaptive_chunk::clamp_count_tiles(
+-            (count + TILE_HEIGHT - 1) / TILE_HEIGHT, clamp_chunk, num_chunks_max, M_tiles_full);
+-    };
+-    // Launch plan, identical to the reader's and compute's (adaptive_chunk::plan_launch); the layout,
+-    // group, row within the group, topology and in1 semaphore pair are per phase (see the reader).
++    // Launch plan: the reader runs adaptive_chunk::plan_launch once for the core and publishes it in
++    // cb_plan_scratch (adaptive_chunk::store_plan); the `start` read above overlaps that planning.
++    // The layout, group, row within the group, topology and in1 semaphore pair are per phase (see
++    // the reader).
++    CircularBuffer cb_plan_scratch_buf(get_named_compile_time_arg_val("cb_plan_scratch"));
++    cb_plan_scratch_buf.wait_front(1);
+     uint8_t expert_group[2][experts_per_chip];
+-    const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
++    const adaptive_chunk::LaunchPlan plan = adaptive_chunk::load_plan(cb_plan_scratch_buf.get_read_ptr(), expert_group);
+     constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + adaptive_chunk::num_layouts(adaptive_chunk::kGridY) * GROUP_TOPO_ARGS;
+     // Gate/up and down blocks this core has consumed so far, sender or not. The writer never pushes,
+     // so it indexes the reader's live ring slot off these. They must count EVERY block: the sender
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index 4e6dedf5e55..27cbd3f53d7 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -72,6 +72,9 @@ constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
+ // Row-shared tilize (x_is_row_major only): one gate/up K-block of x, tilized to bf8 by the core
+ // that owns that block in its M-row and multicast from here into every row core's CB_IN0_X.
+ constexpr uint32_t CB_X_TL = tt::CBIndex::c_20;
++// Launch plan (adaptive_chunk::store_plan): the reader plans once per core and publishes the
++// per-phase layouts and expert -> group map here for the writer and compute.
++constexpr uint32_t CB_PLAN_SCRATCH = tt::CBIndex::c_21;
+ 
+ // Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
+ // interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
+@@ -882,6 +885,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     // Reader's `start` scratch. Same sizing; separate CB so
+     // reader (NCRISC) and writer (BRISC) never share one scratch page.
+     make_cb(CB_START_SCRATCH_READER, tt::DataFormat::UInt32, /*tiles=*/1, start_scratch_bytes);
++    // Launch-plan page: two u32 layout indices + two u8 owner maps of experts_per_chip entries,
++    // padded to 32 B (adaptive_chunk::plan_page_bytes).
++    const uint32_t plan_scratch_bytes = (8 + 2 * experts_per_chip + 31) & ~31u;
++    make_cb(CB_PLAN_SCRATCH, tt::DataFormat::UInt32, /*tiles=*/1, plan_scratch_bytes);
+ 
+     // Bias CBs (FUSE_BIAS): one full per-core N-column slice each; single-buffered
+     // (read once, reused across all chunks). gate/up: per_core_N_gu tiles; down:
+@@ -1000,6 +1007,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     reader_kernel_desc.core_ranges = core_range_set;
+     reader_kernel_desc.compile_time_args = std::move(reader_ct_args);
+     reader_kernel_desc.defines = std::move(reader_defines);
++    reader_kernel_desc.named_compile_time_args = {{"cb_plan_scratch", CB_PLAN_SCRATCH}};
+     reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
+ 
+     // Writer compile-time args (must match writer's get_compile_time_arg_val order).
+@@ -1081,6 +1089,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         {"UNIFIED_RE_GRID_Y", std::to_string(GRID_Y)},
+     };
+     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
++    writer_kernel_desc.named_compile_time_args = {{"cb_plan_scratch", CB_PLAN_SCRATCH}};
+ 
+     // Compute kernel compile-time args: positional + named CB ids.
+     std::vector<uint32_t> compute_ct_args = {
+@@ -1157,6 +1166,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         // bounds its chunk loop by effective_chunks = ceil(count/chunk_M_tiles).
+         {"cb_counts_scratch", CB_COUNTS_SCRATCH},
+         {"cb_idx_scratch", CB_IDX_SCRATCH},
++        {"cb_plan_scratch", CB_PLAN_SCRATCH},
+         // Region size in tile-rows: caps the device-provided per-expert count
+         // (adaptive_chunk::clamp_count_tiles). Reader and writer take it as a
+         // positional CT arg; compute has no free positional slot, so it is named.

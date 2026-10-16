@@ -1,0 +1,1947 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index 0f09335e908..e43fd82df35 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -133,10 +133,8 @@ inline uint32_t count_in_band(uint32_t count_value, uint32_t min_tokens, uint32_
+ 
+ // Number of chunks for `count_tiles`: full chunks of max_chunk + one tail chunk.
+ inline uint32_t num_chunks(uint32_t count_tiles, uint32_t max_chunk) {
+-    // Prefill experts nearly always fit one chunk; skip the divide (the planner calls this per
+-    // expert per modelled layout on every RISC before any work starts).
+-    if (count_tiles <= max_chunk) {
+-        return (count_tiles != 0) ? 1u : 0u;
++    if (count_tiles < 1) {
++        return 0;
+     }
+     const uint32_t num_full = count_tiles / max_chunk;
+     const uint32_t tail = count_tiles - num_full * max_chunk;
+@@ -251,21 +249,54 @@ inline uint32_t layout_group(const GroupLayout& l, uint32_t gy, uint32_t& base,
+     return l.groups - 1;
+ }
+ 
+-// ceil(count_tiles / rows) for 0 < count_tiles <= per_core_M_max * rows (a single-chunk expert's
+-// per_core_M), by at most per_core_M_max additions instead of a divide.
+-__attribute__((always_inline)) inline uint32_t single_chunk_per_core_M(uint32_t count_tiles, uint32_t rows) {
+-    uint32_t per_core_M = 1;
+-    for (uint32_t covered = rows; covered < count_tiles; covered += rows) {
+-        ++per_core_M;
++// Row-shared x tilize (row-major x): the grid column that reads, tilizes and multicasts gate/up
++// K-block j of an M-row. That row is row `my_mt` of a `rows`-row group, whose weight sender for
++// column c is the group's row c % rows (the host's placement). Columns whose core is this row's
++// weight sender are skipped: its reader streams the column's weights, and x duty there (the stick
++// reads under the same read barrier as the gate block, the tilize wait and the row multicast)
++// would delay the column's weight multicast on every block. The remaining columns take the blocks
++// in turn. Every core of the row shares (j, rows, my_mt), so all agree on the owner.
++//
++// Owner slots: the number of eligible columns (block j goes to slot j % slots).
++inline uint32_t x_owner_slots(uint32_t grid_x, uint32_t rows, uint32_t my_mt) {
++    if (rows < 2 || my_mt >= rows) {
++        return grid_x;
++    }
++    const uint32_t senders = (my_mt < grid_x) ? (grid_x - 1 - my_mt) / rows + 1 : 0;
++    return grid_x - senders;
++}
++// Slot of column `col` (its rank among the eligible columns), or `slots` if it is never an owner.
++inline uint32_t x_owner_rank(uint32_t col, uint32_t rows, uint32_t my_mt, uint32_t slots) {
++    if (rows < 2 || my_mt >= rows) {
++        return col;
+     }
+-    return per_core_M;
++    if (col % rows == my_mt) {
++        return slots;
++    }
++    return col - ((col > my_mt) ? (col - 1 - my_mt) / rows + 1 : 0);
++}
++// Owner column of block j. Out of line: the reader calls it a few times per K-block.
++inline __attribute__((noinline)) uint32_t x_owner_col(uint32_t j, uint32_t grid_x, uint32_t rows, uint32_t my_mt) {
++    const uint32_t r = j % x_owner_slots(grid_x, rows, my_mt);
++    if (rows < 2 || my_mt >= rows) {
++        return r;
++    }
++    // r-th column c (ascending) with c % rows != my_mt: each run of `rows` columns holds rows - 1.
++    const uint32_t per = rows - 1;
++    const uint32_t q = r / per;
++    const uint32_t rem = r - q * per;
++    return q * rows + rem + (rem >= my_mt ? 1u : 0u);
+ }
+ 
+-// expert_cost below for an expert that needs more than one chunk.
+-__attribute__((noinline)) inline uint32_t multi_chunk_expert_cost(
+-    uint32_t count_tiles, uint32_t rows, uint32_t per_core_M_max) {
++// Modelled cost of one expert on a group of `rows` M-rows, in units of one per-core tile-row of
++// work: the per_core_M summed over its chunks, plus one unit per chunk for the chunk's fixed
++// pipeline fill/drain and its full re-read of the expert's weights. 0 for an expert with no rows.
++inline uint32_t expert_cost(uint32_t count_tiles, uint32_t rows, uint32_t per_core_M_max) {
+     const uint32_t max_chunk = per_core_M_max * rows;
+     const uint32_t chunks = num_chunks(count_tiles, max_chunk);
++    if (chunks == 0) {
++        return 0;
++    }
+     uint32_t units = (count_tiles / max_chunk) * per_core_M_max;
+     if (count_tiles % max_chunk != 0) {
+         units += per_core_M_for_chunk(chunks - 1, count_tiles, max_chunk, rows);
+@@ -273,81 +304,35 @@ __attribute__((noinline)) inline uint32_t multi_chunk_expert_cost(
+     return units + chunks;
+ }
+ 
+-// Modelled cost of one expert on a group of `rows` M-rows, in units of one per-core tile-row of
+-// work: the per_core_M summed over its chunks, plus one unit per chunk for the chunk's fixed
+-// pipeline fill/drain and its full re-read of the expert's weights. 0 for an expert with no rows.
+-// Prefill experts nearly always fit one chunk: that case is ceil(count_tiles / rows) + 1 with no
+-// divide (the general path's tail rule; a full chunk is per_core_M_max either way).
+-__attribute__((always_inline)) inline uint32_t expert_cost(
+-    uint32_t count_tiles, uint32_t rows, uint32_t per_core_M_max) {
+-    if (count_tiles <= per_core_M_max * rows) {
+-        return (count_tiles != 0) ? single_chunk_per_core_M(count_tiles, rows) + 1 : 0u;
+-    }
+-    return multi_chunk_expert_cost(count_tiles, rows, per_core_M_max);
+-}
+-
+-// The schedulers' name for expert_cost.
+-__attribute__((always_inline)) inline uint32_t group_cost(
+-    uint32_t count_tiles, uint32_t rows, uint32_t per_core_M_max) {
+-    return expert_cost(count_tiles, rows, per_core_M_max);
++// expert_cost without a divide for the usual single-chunk expert (these RISC-Vs have no hardware
++// divider, and the schedule runs on every RISC before any work starts): ceil(tiles / rows) + 1 by
++// at most per_core_M_max additions. Identical values; larger experts take the general path.
++inline uint32_t group_cost(uint32_t count_tiles, uint32_t rows, uint32_t per_core_M_max) {
++    if (count_tiles == 0) {
++        return 0;
++    }
++    if (count_tiles > per_core_M_max * rows) {
++        return expert_cost(count_tiles, rows, per_core_M_max);
++    }
++    uint32_t per_core_M = 1;
++    for (uint32_t covered = rows; covered < count_tiles; covered += rows) {
++        ++per_core_M;
++    }
++    return per_core_M + 1;
+ }
+ 
++// The launch planner below runs once per kernel, before any work. On the compute kernel (UNPACK) it
++// is built at -O2, as the dataflow kernels build it, not at the compute kernels' -O3: -O3 roughly
++// doubles its code (~9.5 KB vs ~4.5 KB) for no measurable gain, and every RISC binary of a core has
++// to fit the kernel config buffer together (r03-b01-a01 overflowed it). The reader's -O2 copy plans
++// at the same speed, and compute waits for the reader's first weight multicast anyway.
++#if defined(COMPILE_FOR_TRISC)
++#pragma GCC push_options
++#pragma GCC optimize("O2")
++#endif
+ constexpr uint8_t kNoGroup = 0xFF;
+ constexpr uint32_t kNoSchedule = 0xFFFFFFFFu;
+ 
+-// ---------------------------------------------------------------------------------------------
+-// Planner input.
+-//
+-// Every RISC plans before its first DRAM read, so the planner sits on the critical path of every
+-// call, and it walks the experts' tile counts a few dozen times (uniform, mixed and two-phase
+-// candidates). The caller's `tiles_of` reads two L1 words and band-filters / clamps them, so
+-// PlanTiles reads every count ONCE into a local byte array, and also keeps the active experts in
+-// largest-first order (tile-rows descending, expert index ascending), the order every
+-// largest-first walk below needs. A count that does not fit a byte (kTilesEscape) is re-read
+-// through `tiles_of`, so the plan is the same for any count.
+-template <bool FitsByte>
+-struct ExpertIndexType {
+-    using type = uint16_t;
+-};
+-template <>
+-struct ExpertIndexType<true> {
+-    using type = uint8_t;
+-};
+-
+-template <uint32_t NumExperts, typename TilesOf>
+-struct PlanTiles {
+-    static constexpr uint32_t kNumExperts = NumExperts;
+-    static constexpr uint32_t kTilesEscape = 0xFF;
+-    using Index = typename ExpertIndexType<(NumExperts <= 256)>::type;
+-
+-    const TilesOf& tiles_of_l1;
+-    uint8_t cache[NumExperts];
+-    Index order[NumExperts];  // [0, active): active experts, largest first, index order on ties
+-    uint32_t active = 0;
+-    uint32_t t_max = 0;
+-
+-    explicit PlanTiles(const TilesOf& tiles_of) : tiles_of_l1(tiles_of) {
+-        for (uint32_t e = 0; e < NumExperts; ++e) {
+-            const uint32_t t = tiles_of_l1(e);
+-            cache[e] = static_cast<uint8_t>((t < kTilesEscape) ? t : kTilesEscape);
+-            if (t == 0) {
+-                continue;
+-            }
+-            t_max = (t > t_max) ? t : t_max;
+-            // Stable insertion: e goes after every expert with at least as many tile-rows.
+-            uint32_t i = active++;
+-            for (; i > 0 && (*this)(order[i - 1]) < t; --i) {
+-                order[i] = order[i - 1];
+-            }
+-            order[i] = static_cast<Index>(e);
+-        }
+-    }
+-    __attribute__((always_inline)) inline uint32_t operator()(uint32_t e) const {
+-        const uint32_t t = cache[e];
+-        return (t != kTilesEscape) ? t : tiles_of_l1(e);
+-    }
+-};
+-
+ // Uniform layouts: list scheduling in expert order, each expert to the least-loaded group (lowest
+ // index on a tie). Returns the makespan; fills owner[] when given.
+ template <typename TilesOf>
+@@ -376,76 +361,58 @@ inline uint32_t schedule_in_order(
+     return makespan;
+ }
+ 
+-// In-order makespans of the kNumUniformLayouts uniform layouts (schedule_in_order without an owner
+-// map), all three in ONE walk of the experts: make_plan's uniform pick and plan_groups both start
+-// from them, so the planner schedules each uniform layout once instead of twice.
+-template <typename TilesOf>
+-inline void uniform_makespans(
+-    const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max, uint32_t (&makespan)[kNumUniformLayouts]) {
+-    uint32_t loads[kNumUniformLayouts][kLayoutMaxGroups] = {};
+-    for (uint32_t e = 0; e < num_experts; ++e) {
+-        const uint32_t t = tiles_of(e);
+-        if (t == 0) {
+-            continue;
+-        }
+-        for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
+-            const GroupLayout& l = layout_at(kGridY, li);
+-            uint32_t best = 0;
+-            for (uint32_t g = 1; g < l.groups; ++g) {
+-                if (loads[li][g] < loads[li][best]) {
+-                    best = g;
+-                }
+-            }
+-            loads[li][best] += group_cost(t, l.rows[0], per_core_M_max);
+-        }
+-    }
+-    for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
+-        uint32_t m = 0;
+-        for (uint32_t g = 0; g < layout_at(kGridY, li).groups; ++g) {
+-            m = (loads[li][g] > m) ? loads[li][g] : m;
+-        }
+-        makespan[li] = m;
+-    }
+-}
+-
+ // Mixed layouts: largest expert first (ties by index), each to the group where it is cheapest
+ // among those it fits in under `cap` (ties -> lower load -> lower index). Returns the makespan, or
+-// kNoSchedule when some expert fits nowhere. Walks PlanTiles' largest-first order once.
+-template <typename Tiles>
+-inline uint32_t schedule_lpt(const GroupLayout& l, const Tiles& tiles, uint32_t per_core_M_max, uint32_t cap, uint8_t* owner) {
++// kNoSchedule when some expert fits nowhere. Distinct tile counts are walked largest-first instead
++// of sorting, so no per-expert buffer beyond owner[] is needed.
++template <typename TilesOf>
++inline uint32_t schedule_lpt(
++    const GroupLayout& l,
++    const TilesOf& tiles_of,
++    uint32_t num_experts,
++    uint32_t per_core_M_max,
++    uint32_t cap,
++    uint8_t* owner) {
+     uint32_t loads[kLayoutMaxGroups] = {0};
+-    if (owner != nullptr) {
+-        for (uint32_t e = 0; e < Tiles::kNumExperts; ++e) {
++    uint32_t cur = 0;
++    for (uint32_t e = 0; e < num_experts; ++e) {
++        const uint32_t t = tiles_of(e);
++        cur = (t > cur) ? t : cur;
++        if (owner != nullptr) {
+             owner[e] = kNoGroup;
+         }
+     }
+-    uint32_t cur = 0;
+-    uint32_t cost[kLayoutMaxGroups] = {0};
+-    for (uint32_t i = 0; i < tiles.active; ++i) {
+-        const uint32_t e = tiles.order[i];
+-        const uint32_t t = tiles(e);
+-        if (t != cur) {
+-            cur = t;
+-            for (uint32_t g = 0; g < l.groups; ++g) {
+-                cost[g] = group_cost(t, l.rows[g], per_core_M_max);
+-            }
+-        }
+-        uint32_t best = kLayoutMaxGroups;
++    while (cur > 0) {
++        uint32_t cost[kLayoutMaxGroups];
+         for (uint32_t g = 0; g < l.groups; ++g) {
+-            if (loads[g] + cost[g] > cap) {
++            cost[g] = group_cost(cur, l.rows[g], per_core_M_max);
++        }
++        uint32_t next = 0;
++        for (uint32_t e = 0; e < num_experts; ++e) {
++            const uint32_t t = tiles_of(e);
++            if (t != cur) {
++                next = (t < cur && t > next) ? t : next;
+                 continue;
+             }
+-            if (best == kLayoutMaxGroups || cost[g] < cost[best] || (cost[g] == cost[best] && loads[g] < loads[best])) {
+-                best = g;
++            uint32_t best = kLayoutMaxGroups;
++            for (uint32_t g = 0; g < l.groups; ++g) {
++                if (loads[g] + cost[g] > cap) {
++                    continue;
++                }
++                if (best == kLayoutMaxGroups || cost[g] < cost[best] ||
++                    (cost[g] == cost[best] && loads[g] < loads[best])) {
++                    best = g;
++                }
++            }
++            if (best == kLayoutMaxGroups) {
++                return kNoSchedule;
++            }
++            loads[best] += cost[best];
++            if (owner != nullptr) {
++                owner[e] = static_cast<uint8_t>(best);
+             }
+         }
+-        if (best == kLayoutMaxGroups) {
+-            return kNoSchedule;
+-        }
+-        loads[best] += cost[best];
+-        if (owner != nullptr) {
+-            owner[e] = static_cast<uint8_t>(best);
+-        }
++        cur = next;
+     }
+     uint32_t makespan = 0;
+     for (uint32_t g = 0; g < l.groups; ++g) {
+@@ -454,55 +421,28 @@ inline uint32_t schedule_lpt(const GroupLayout& l, const Tiles& tiles, uint32_t
+     return makespan;
+ }
+ 
+-// False when NO assignment of the experts to `l`'s groups keeps every group's load within `cap`:
+-// some expert costs more than `cap` on every group, or the cheapest placements already sum past
+-// `cap` on every group. schedule_lpt can only succeed under `cap` when an assignment exists, so
+-// skipping it then changes nothing; it saves a whole scheduling pass per hopeless layout.
+-template <typename Tiles>
+-inline bool lpt_may_fit(const GroupLayout& l, const Tiles& tiles, uint32_t per_core_M_max, uint32_t cap) {
+-    uint32_t sum = 0;
+-    uint32_t cur = 0;
+-    uint32_t cheapest = 0;
+-    for (uint32_t i = 0; i < tiles.active; ++i) {
+-        const uint32_t t = tiles(tiles.order[i]);
+-        if (t != cur) {
+-            cur = t;
+-            cheapest = kNoSchedule;
+-            for (uint32_t g = 0; g < l.groups; ++g) {
+-                const uint32_t c = group_cost(t, l.rows[g], per_core_M_max);
+-                cheapest = (c < cheapest) ? c : cheapest;
+-            }
+-            if (cheapest > cap) {
+-                return false;
+-            }
+-        }
+-        sum += cheapest;
+-    }
+-    uint32_t total_cap = 0;
+-    for (uint32_t g = 0; g < l.groups; ++g) {
+-        total_cap += cap;
+-    }
+-    return sum <= total_cap;
+-}
+-
+ // The layout with the smallest modelled makespan, and owner[e] = the group (within that layout)
+-// that runs local expert e, kNoGroup for an expert with no rows. `uniform` holds the uniform
+-// layouts' in-order makespans (uniform_makespans).
++// that runs local expert e, kNoGroup for an expert with no rows. `tiles_of(e)` returns local expert
++// e's (band-filtered, clamped) tile-row count.
+ //
+ // Uniform layouts are compared first, ties keeping the larger groups, so a single expert or large
+ // token counts stay on the whole-grid schedule. A mixed layout replaces the winner only when it is
+ // STRICTLY better: it is scheduled under a cap one below the best makespan so far.
+-template <uint32_t NumExperts, typename Tiles>
++//
++// `uniform[li]` is schedule_in_order's makespan for uniform layout li (uniform_makespans), shared
++// with make_plan so the uniform layouts are scheduled once per launch.
++template <uint32_t NumExperts, typename TilesOf>
+ inline uint32_t plan_groups(
+-    const Tiles& tiles,
++    const TilesOf& tiles_of,
+     uint32_t per_core_M_max,
+     const uint32_t (&uniform)[kNumUniformLayouts],
+     uint8_t (&owner)[NumExperts]) {
+     uint32_t best_layout = 0;
+     uint32_t best = kNoSchedule;
+     for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
+-        if (uniform[li] < best) {
+-            best = uniform[li];
++        const uint32_t m = uniform[li];
++        if (m < best) {
++            best = m;
+             best_layout = li;
+         }
+     }
+@@ -512,11 +452,7 @@ inline uint32_t plan_groups(
+             break;  // no rows at all: nothing to improve on
+         }
+         const uint32_t cap = best - 1;
+-        const GroupLayout& l = layout_at(kGridY, li);
+-        if (!lpt_may_fit(l, tiles, per_core_M_max, cap)) {
+-            continue;  // no assignment fits under the cap, so schedule_lpt would fail too
+-        }
+-        const uint32_t m = schedule_lpt(l, tiles, per_core_M_max, cap, nullptr);
++        const uint32_t m = schedule_lpt(layout_at(kGridY, li), tiles_of, NumExperts, per_core_M_max, cap, nullptr);
+         if (m < best) {
+             best = m;
+             best_layout = li;
+@@ -524,13 +460,14 @@ inline uint32_t plan_groups(
+         }
+     }
+     if (best_layout < kNumUniformLayouts) {
+-        schedule_in_order(layout_at(kGridY, best_layout), tiles, NumExperts, per_core_M_max, owner);
++        schedule_in_order(layout_at(kGridY, best_layout), tiles_of, NumExperts, per_core_M_max, owner);
+     } else {
+-        schedule_lpt(layout_at(kGridY, best_layout), tiles, per_core_M_max, best_cap, owner);
++        schedule_lpt(layout_at(kGridY, best_layout), tiles_of, NumExperts, per_core_M_max, best_cap, owner);
+     }
+     return best_layout;
+ }
+ 
++
+ // ---------------------------------------------------------------------------------------------
+ // Two-phase schedule.
+ //
+@@ -551,8 +488,7 @@ inline uint32_t plan_groups(
+ // semaphore pair, so an early phase-B ack never reaches a core still sending for phase A.
+ 
+ // Membership and order. Phase A takes the n_a experts with the most tile-rows: every expert with
+-// more than `thresh`, then the first `quota_eq` (in expert order) with exactly `thresh` -- i.e. the
+-// first n_a experts of PlanTiles' largest-first order. Phase B takes the rest of that order.
++// more than `thresh`, then the first `quota_eq` (in expert order) with exactly `thresh`.
+ // rows_a == 0 means there is no phase A and phase B is today's single-phase schedule.
+ struct Plan {
+     uint32_t rows_a = 0;
+@@ -562,17 +498,46 @@ struct Plan {
+     // Two-phase plans only: phase B's layout (uniform or mixed-height). Phase B runs each leftover
+     // expert alone on one group, the k-th largest on group k (taller groups come first in a layout).
+     uint32_t layout_b = 0;
+-    // Two-phase plans only: phase A's expert count (= the first n_a experts of the largest-first order).
+-    uint32_t n_a = 0;
+ };
+ 
+ // Index of the uniform layout with `rows` rows per group (the first kNumUniformLayouts table
+ // entries are kGridY, kGridY / 2, kGridY / 4 rows per group; layouts_valid checks that order).
+ inline uint32_t uniform_layout_index(uint32_t rows) { return (rows >= kGridY) ? 0u : (rows >= kGridY / 2) ? 1u : 2u; }
+ 
++// List scheduling in expert order: each expert goes to the least-loaded group (lowest index on a
++// tie), as schedule_in_order does for a uniform layout.
++struct GroupScheduler {
++    uint32_t groups = 1;
++    uint32_t loads[kMaxGroups] = {0};
++
++    void init(uint32_t num_groups) {
++        groups = num_groups;
++        for (uint32_t g = 0; g < kMaxGroups; ++g) {
++            loads[g] = 0;
++        }
++    }
++    // Charge `cost` (> 0) to the least-loaded group and return that group.
++    uint32_t assign(uint32_t cost) {
++        uint32_t best = 0;
++        for (uint32_t g = 1; g < groups; ++g) {
++            if (loads[g] < loads[best]) {
++                best = g;
++            }
++        }
++        loads[best] += cost;
++        return best;
++    }
++};
++
+ // Uniform group size (rows per group) with the smallest in-order makespan; ties keep the larger
+-// group. The same pick plan_groups makes among its uniform layouts. `uniform` holds their
+-// makespans (uniform_makespans).
++// group. The same pick plan_groups makes among its uniform layouts.
++template <typename TilesOf>
++inline void uniform_makespans(
++    const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max, uint32_t (&uniform)[kNumUniformLayouts]) {
++    for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
++        uniform[li] = schedule_in_order(layout_at(kGridY, li), tiles_of, num_experts, per_core_M_max, nullptr);
++    }
++}
+ inline uint32_t pick_group_rows(const uint32_t (&uniform)[kNumUniformLayouts]) {
+     uint32_t best_rows = kGridY;
+     uint32_t best = kNoSchedule;
+@@ -585,22 +550,53 @@ inline uint32_t pick_group_rows(const uint32_t (&uniform)[kNumUniformLayouts]) {
+     return best_rows;
+ }
+ 
+-// Phase A's deal: walking the experts in expert order, the j-th phase-A member goes to group
+-// j % groups_a. Membership: more than `thresh` tile-rows, or exactly `thresh` and among the first
+-// `quota_eq` such experts in expert order. Calls deal(e, tiles, group) for every member.
+-template <typename Tiles, typename Deal>
+-inline void deal_phase_a(const Plan& plan, const Tiles& tiles, uint32_t num_experts, uint32_t groups_a, const Deal& deal) {
+-    uint32_t eq_seen = 0;
+-    uint32_t g = 0;
+-    for (uint32_t e = 0; e < num_experts; ++e) {
+-        const uint32_t t = tiles(e);
+-        if (t == 0 || t < plan.thresh || (t == plan.thresh && eq_seen++ >= plan.quota_eq)) {
+-            continue;
++// Deals one phase's experts to that phase's groups. Feed it EVERY local expert's tile count, in
++// expert order; it returns the group that runs the expert in this phase, or kNoGroup. Every kernel
++// walks it identically, so all agree on the owner of every expert.
++struct PhaseDealer {
++    Plan plan;
++    uint32_t phase = 0;  // 0 = phase A, 1 = phase B
++    uint32_t rows = 0;   // this phase's group size; 0 = the phase is empty
++    uint32_t groups = 0;
++    uint32_t per_core_M_max = 1;
++    uint32_t pos = 0;      // phase-A round-robin position
++    uint32_t eq_seen = 0;  // experts with exactly plan.thresh tile-rows seen so far
++    GroupScheduler sched;
++
++    void begin(const Plan& p, uint32_t ph, uint32_t pm_max) {
++        plan = p;
++        phase = ph;
++        rows = (ph == 0) ? p.rows_a : p.rows_b;
++        groups = (rows > 0) ? kGridY / rows : 0;
++        per_core_M_max = pm_max;
++        pos = 0;
++        eq_seen = 0;
++        sched.init(groups > 0 ? groups : 1);
++    }
++    bool active() const { return rows > 0; }
++
++    uint32_t deal(uint32_t tiles) {
++        if (tiles == 0) {
++            return kNoGroup;
++        }
++        bool in_a = false;
++        if (plan.rows_a != 0) {
++            if (tiles > plan.thresh) {
++                in_a = true;
++            } else if (tiles == plan.thresh) {
++                in_a = eq_seen < plan.quota_eq;
++                ++eq_seen;
++            }
++        }
++        if (in_a != (phase == 0)) {
++            return kNoGroup;
++        }
++        if (phase == 0) {
++            return pos++ % groups;
+         }
+-        deal(e, t, g);
+-        g = (g + 1 == groups_a) ? 0 : g + 1;
++        return sched.assign(group_cost(tiles, rows, per_core_M_max));
+     }
+-}
++};
+ 
+ // Time model used to choose the plan, in hundredths of `c` = the time to stream one expert's
+ // weights at the full DRAM rate. An expert costs its per-core compute (kModelRow per tile-row of
+@@ -615,56 +611,50 @@ constexpr uint32_t kModelPhaseSwitch = 20;
+ constexpr uint32_t kModelMarginPct = 5;
+ 
+ inline uint32_t model_expert(uint32_t tiles, uint32_t rows, uint32_t per_core_M_max, uint32_t streams) {
+-    const uint32_t chunks = num_chunks(tiles, per_core_M_max * rows);
+-    const uint32_t row_units = (chunks == 1) ? single_chunk_per_core_M(tiles, rows)  // sum of per_core_M
+-                                             : expert_cost(tiles, rows, per_core_M_max) - chunks;
++    // group_cost == expert_cost, and a single-chunk expert needs no num_chunks divide.
++    const uint32_t chunks =
++        (tiles <= per_core_M_max * rows) ? ((tiles > 0) ? 1u : 0u) : num_chunks(tiles, per_core_M_max * rows);
++    const uint32_t row_units = group_cost(tiles, rows, per_core_M_max) - chunks;  // sum of per_core_M
+     const uint32_t compute = kModelRow * row_units + kModelChunk * chunks;
+     const uint32_t dram = kModelStream * streams * chunks;
+     return (compute > dram) ? compute : dram;
+ }
+ 
+-// Modelled makespan of the single-phase schedule on the uniform layout of `rows` rows per group:
+-// experts dealt in expert order to the least-loaded group (schedule_in_order's deal). The i-th
+-// expert of a group overlaps with the i-th of every other group that has one, so it streams
+-// alongside that many groups.
+-template <uint32_t NumExperts, typename Tiles>
+-inline uint32_t model_single_phase(const Tiles& tiles, uint32_t rows, uint32_t per_core_M_max) {
+-    const uint32_t groups = layout_at(kGridY, uniform_layout_index(rows)).groups;
+-    uint8_t group_of[NumExperts];
+-    uint32_t loads[kLayoutMaxGroups] = {0};
+-    uint32_t count[kLayoutMaxGroups] = {0};
+-    for (uint32_t e = 0; e < NumExperts; ++e) {
+-        const uint32_t t = tiles(e);
+-        if (t == 0) {
+-            continue;
+-        }
+-        uint32_t best = 0;
+-        for (uint32_t g = 1; g < groups; ++g) {
+-            if (loads[g] < loads[best]) {
+-                best = g;
+-            }
++// Modelled makespan of one phase of `plan`. The i-th expert of a group overlaps with the i-th of
++// every other group that has one, so it streams alongside that many groups.
++template <typename TilesOf>
++inline uint32_t model_phase(
++    const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max, const Plan& plan, uint32_t phase) {
++    PhaseDealer d;
++    d.begin(plan, phase, per_core_M_max);
++    if (!d.active()) {
++        return 0;
++    }
++    uint32_t count[kMaxGroups] = {0};
++    for (uint32_t e = 0; e < num_experts; ++e) {
++        const uint32_t g = d.deal(tiles_of(e));
++        if (g != kNoGroup) {
++            ++count[g];
+         }
+-        loads[best] += expert_cost(t, rows, per_core_M_max);
+-        ++count[best];
+-        group_of[e] = static_cast<uint8_t>(best);
+     }
+-    uint32_t time[kLayoutMaxGroups] = {0};
+-    uint32_t seen[kLayoutMaxGroups] = {0};
+-    for (uint32_t e = 0; e < NumExperts; ++e) {
+-        const uint32_t t = tiles(e);
+-        if (t == 0) {
++    uint32_t time[kMaxGroups] = {0};
++    uint32_t seen[kMaxGroups] = {0};
++    d.begin(plan, phase, per_core_M_max);
++    for (uint32_t e = 0; e < num_experts; ++e) {
++        const uint32_t tiles = tiles_of(e);
++        const uint32_t g = d.deal(tiles);
++        if (g == kNoGroup) {
+             continue;
+         }
+-        const uint32_t g = group_of[e];
+         ++seen[g];
+         uint32_t streams = 0;
+-        for (uint32_t h = 0; h < groups; ++h) {
++        for (uint32_t h = 0; h < d.groups; ++h) {
+             streams += (count[h] >= seen[g]) ? 1u : 0u;
+         }
+-        time[g] += model_expert(t, rows, per_core_M_max, streams);
++        time[g] += model_expert(tiles, d.rows, per_core_M_max, streams);
+     }
+     uint32_t m = 0;
+-    for (uint32_t g = 0; g < groups; ++g) {
++    for (uint32_t g = 0; g < d.groups; ++g) {
+         m = (time[g] > m) ? time[g] : m;
+     }
+     return m;
+@@ -680,80 +670,91 @@ inline uint32_t model_single_phase(const Tiles& tiles, uint32_t rows, uint32_t p
+ // A phase-B group's stream rate is capped by its 11 column senders, not by DRAM (r02-b03-a01:
+ // a lone 5-row group pulls ~250 GB/s), so a second phase-B round on a big group runs far slower
+ // than the model's DRAM share says, and loses to the uniform layout's one-round tail.
+-template <uint32_t NumExperts, typename Tiles>
+-inline Plan make_plan(const Tiles& tiles, uint32_t per_core_M_max, const uint32_t (&uniform)[kNumUniformLayouts]) {
++template <typename TilesOf>
++inline Plan make_plan(
++    const TilesOf& tiles_of,
++    uint32_t num_experts,
++    uint32_t per_core_M_max,
++    const uint32_t (&uniform)[kNumUniformLayouts]) {
+     Plan single;
+     single.rows_b = pick_group_rows(uniform);
+     const uint32_t rows_a = single.rows_b;
+     if (rows_a >= kGridY) {
+         return single;
+     }
+-    const uint32_t layout_a = uniform_layout_index(rows_a);
+-    const uint32_t groups_a = layout_at(kGridY, layout_a).groups;
+-    const uint32_t active = tiles.active;
+-    uint32_t n_a = 0;
+-    while (n_a + groups_a <= active) {
+-        n_a += groups_a;
++    const uint32_t groups_a = kGridY / rows_a;
++    uint32_t active = 0;
++    uint32_t t_max = 0;
++    for (uint32_t e = 0; e < num_experts; ++e) {
++        const uint32_t t = tiles_of(e);
++        active += (t > 0) ? 1u : 0u;
++        t_max = (t > t_max) ? t : t_max;
+     }
++    const uint32_t n_a = (active / groups_a) * groups_a;
+     if (n_a == 0 || n_a == active) {
+         return single;
+     }
+     // thresh = the n_a-th largest tile count; `above` experts have more.
+-    const uint32_t thresh = tiles(tiles.order[n_a - 1]);
+-    uint32_t above = n_a - 1;
+-    while (above > 0 && tiles(tiles.order[above - 1]) == thresh) {
+-        --above;
++    uint32_t thresh = t_max;
++    uint32_t above = 0;
++    while (true) {
++        uint32_t at = 0;
++        uint32_t next = 0;
++        for (uint32_t e = 0; e < num_experts; ++e) {
++            const uint32_t t = tiles_of(e);
++            if (t == thresh) {
++                ++at;
++            } else if (t < thresh && t > next) {
++                next = t;
++            }
++        }
++        if (above + at >= n_a || next == 0) {
++            break;
++        }
++        above += at;
++        thresh = next;
+     }
+     // Ring alignment at the phase switch needs equal units per phase-A group: every phase-A expert
+     // must take the same number of chunks (monotonic in tiles, so compare the extremes).
+     const uint32_t chunk_a = per_core_M_max * rows_a;
+-    if (num_chunks(tiles.t_max, chunk_a) != num_chunks(thresh, chunk_a)) {
++    if (num_chunks(t_max, chunk_a) != num_chunks(thresh, chunk_a)) {
+         return single;
+     }
+     Plan two;
+     two.rows_a = rows_a;
+     two.thresh = thresh;
+     two.quota_eq = n_a - above;
+-    two.n_a = n_a;
+ 
+-    // The leftover experts (phase B), largest first: the tail of the largest-first order.
+-    // n_left < groups_a <= kMaxGroups.
+-    const uint32_t n_left = active - n_a;
++    // The leftover experts (phase B), largest first. n_left < groups_a <= kMaxGroups.
+     uint32_t left[kMaxGroups];
+-    for (uint32_t k = 0; k < n_left; ++k) {
+-        left[k] = tiles(tiles.order[n_a + k]);
+-    }
+-    // Phase-B candidates: every layout with a group per leftover expert (one round), other than phase
+-    // A's own. Uniform layouts come first, so a mixed one must be strictly better to replace them.
+-    auto candidate = [&](uint32_t li) {
+-        const GroupLayout& l = layout_at(kGridY, li);
+-        return !(li == layout_a || l.groups < n_left || (li < kNumUniformLayouts && l.rows[0] < rows_a));
+-    };
+-    bool any_candidate = false;
+-    for (uint32_t li = 0; li < num_layouts(kGridY); ++li) {
+-        any_candidate = any_candidate || candidate(li);
+-    }
+-    if (!any_candidate) {
+-        return single;
++    uint32_t n_left = 0;
++    {
++        uint32_t eq_seen = 0;
++        for (uint32_t e = 0; e < num_experts; ++e) {
++            const uint32_t t = tiles_of(e);
++            if (t == 0 || t > thresh || (t == thresh && eq_seen++ < two.quota_eq)) {
++                continue;
++            }
++            uint32_t i = n_left++;
++            for (; i > 0 && left[i - 1] < t; --i) {
++                left[i] = left[i - 1];
++            }
++            left[i] = t;
++        }
+     }
+ 
+-    const uint32_t t_single = model_single_phase<NumExperts>(tiles, rows_a, per_core_M_max);
+-    // Phase A: every group runs n_a / groups_a experts, so each streams alongside all groups_a.
+-    uint32_t time_a[kLayoutMaxGroups] = {0};
+-    deal_phase_a(two, tiles, NumExperts, groups_a, [&](uint32_t, uint32_t t, uint32_t g) {
+-        time_a[g] += model_expert(t, rows_a, per_core_M_max, groups_a);
+-    });
+-    uint32_t t_a = 0;
+-    for (uint32_t g = 0; g < groups_a; ++g) {
+-        t_a = (time_a[g] > t_a) ? time_a[g] : t_a;
+-    }
++    const uint32_t t_single = model_phase(tiles_of, num_experts, per_core_M_max, single, 1);
++    const uint32_t t_a = model_phase(tiles_of, num_experts, per_core_M_max, two, 0);
+     Plan best = single;
+     uint32_t best_t = t_single * (100 - kModelMarginPct);
++    // Phase-B candidates: every layout with a group per leftover expert (one round), other than phase
++    // A's own. Uniform layouts come first, so a mixed one must be strictly better to replace them.
++    const uint32_t layout_a = uniform_layout_index(rows_a);
+     for (uint32_t li = 0; li < num_layouts(kGridY); ++li) {
+-        if (!candidate(li)) {
++        const GroupLayout& l = layout_at(kGridY, li);
++        if (li == layout_a || l.groups < n_left || (li < kNumUniformLayouts && l.rows[0] < rows_a)) {
+             continue;
+         }
+-        const GroupLayout& l = layout_at(kGridY, li);
+         uint32_t t_b = 0;
+         for (uint32_t k = 0; k < n_left; ++k) {
+             const uint32_t t = model_expert(left[k], l.rows[k], per_core_M_max, n_left);
+@@ -783,35 +784,62 @@ struct LaunchPlan {
+     uint32_t layout[2] = {kNoLayout, 0};
+ };
+ 
+-template <uint32_t NumExperts, typename TilesOf>
+-inline LaunchPlan plan_launch(const TilesOf& tiles_of, uint32_t per_core_M_max, uint8_t (&owner)[2][NumExperts]) {
+-    const PlanTiles<NumExperts, TilesOf> tiles(tiles_of);
+-    uint32_t uniform[kNumUniformLayouts];
+-    uniform_makespans(tiles, NumExperts, per_core_M_max, uniform);
+-
+-    LaunchPlan lp;
+-    const Plan two = make_plan<NumExperts>(tiles, per_core_M_max, uniform);
++//
++// The planner walks the tile counts a few hundred times (every layout candidate, every model pass).
++// `tiles_of` reads the counts and idx pages in L1 and band-filters and clamps each entry, so the
++// counts are read ONCE into a local array here and every pass walks that instead. Every RISC runs
++// this before its first DRAM read, so it is critical-path time on every call.
++template <uint32_t NumExperts, typename TilesOfL1>
++inline LaunchPlan plan_launch(const TilesOfL1& tiles_of_l1, uint32_t per_core_M_max, uint8_t (&owner)[2][NumExperts]) {
++    uint16_t tiles_cache[NumExperts];
+     for (uint32_t e = 0; e < NumExperts; ++e) {
+-        owner[0][e] = kNoGroup;
++        tiles_cache[e] = static_cast<uint16_t>(tiles_of_l1(e));
+     }
++    auto tiles_of = [&](uint32_t e) -> uint32_t { return tiles_cache[e]; };
++    uint32_t uniform[kNumUniformLayouts];
++    uniform_makespans(tiles_of, NumExperts, per_core_M_max, uniform);
++    LaunchPlan lp;
++    const Plan two = make_plan(tiles_of, NumExperts, per_core_M_max, uniform);
+     if (two.rows_a == 0) {
+-        lp.layout[1] = plan_groups(tiles, per_core_M_max, uniform, owner[1]);
++        for (uint32_t e = 0; e < NumExperts; ++e) {
++            owner[0][e] = kNoGroup;
++        }
++        lp.layout[1] = plan_groups(tiles_of, per_core_M_max, uniform, owner[1]);
+         return lp;
+     }
+     lp.layout[0] = uniform_layout_index(two.rows_a);
+     lp.layout[1] = two.layout_b;
+-    deal_phase_a(two, tiles, NumExperts, layout_at(kGridY, lp.layout[0]).groups, [&](uint32_t e, uint32_t, uint32_t g) {
+-        owner[0][e] = static_cast<uint8_t>(g);
+-    });
+-    // Phase B: the leftover experts (fewer than phase A's groups); the k-th largest (ties -> lower
+-    // index) runs on group k, matching make_plan's model.
++    PhaseDealer d;
++    d.begin(two, 0, per_core_M_max);
++    for (uint32_t e = 0; e < NumExperts; ++e) {
++        owner[0][e] = static_cast<uint8_t>(d.deal(tiles_of(e)));
++    }
++    // Phase B: the leftover experts (fewer than phase A's groups) in expert order; the k-th largest
++    // (ties -> lower index) runs on group k, matching make_plan's model.
++    uint32_t left[kMaxGroups];
++    uint32_t left_tiles[kMaxGroups];
++    uint32_t n_left = 0;
+     for (uint32_t e = 0; e < NumExperts; ++e) {
+         owner[1][e] = kNoGroup;
++        const uint32_t t = tiles_of(e);
++        if (t != 0 && owner[0][e] == kNoGroup && n_left < kMaxGroups) {
++            left[n_left] = e;
++            left_tiles[n_left] = t;
++            ++n_left;
++        }
+     }
+-    for (uint32_t k = 0; two.n_a + k < tiles.active; ++k) {
+-        owner[1][tiles.order[two.n_a + k]] = static_cast<uint8_t>(k);
++    for (uint32_t i = 0; i < n_left; ++i) {
++        uint32_t rank = 0;
++        for (uint32_t j = 0; j < n_left; ++j) {
++            rank += (left_tiles[j] > left_tiles[i] || (left_tiles[j] == left_tiles[i] && j < i)) ? 1u : 0u;
++        }
++        owner[1][left[i]] = static_cast<uint8_t>(rank);
+     }
+     return lp;
+ }
+ 
++#if defined(COMPILE_FOR_TRISC)
++#pragma GCC pop_options
++#endif
++
+ }  // namespace adaptive_chunk
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index f81a3910fdb..17805f5260d 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -21,9 +21,10 @@
+ //     read-modify-write can overtake block N's pack of the same slot and
+ //     silently drop that contribution.
+ //   * After the K-loop the partials CB is pushed once, holding the final
+-//     accumulated sum, and a second pass copies each subblock back into dst,
+-//     optionally applies SILU, and packs into the final CB (cb_gate_intermed /
+-//     cb_out).
++//     accumulated sum, and a second pass copies each subblock back into dst
++//     and packs it into the final CB (cb_out). The fused gate/up phase instead
++//     pushes subblock by subblock during its last K-block and activates each one
++//     on the PACK thread as it lands (see matmul_phase_fused_gu).
+ //
+ // Cross-K-block accumulation is handled by the packer (PACKER_L1_ACC), not by
+ // reloading dst between K-blocks — a dst-reload approach produced Inf outputs.
+@@ -92,11 +93,38 @@
+ // Clamped SiLU-GLU computes silu(min(gate,L)) * clamp(up,±L) (ClampedSiluGluConfigDsV4: limit=10.0).
+ // binary_act_sfpu.h holds op-local copies of the three stock SFPU ops (moe_gpt swiglu_sfpu.h,
+ // ckernel_sfpu_situ_glu.h, ckernel_sfpu_clamped_silu_glu.h) with the same math in fewer SFPU
+-// instructions per row; see that header.
+-#if defined(FUSED_BINARY_ACT) && defined(TRISC_MATH)
++// instructions per row; see that header. This kernel runs the activation on PACK.
++#if defined(FUSED_BINARY_ACT) && defined(TRISC_PACK)
+ #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/binary_act_sfpu.h"
+ #endif
+ 
++// Dst-accumulator mode (fp32 dest accum on/off) from the host ComputeConfig,
++// passed via -DFP32_DEST_ACC_EN. Defaults to bf16 dst (0) if not passed.
++#ifndef FP32_DEST_ACC_EN
++#define FP32_DEST_ACC_EN 0
++#endif
++
++// The gate/up activation runs its SFPU op on the PACK thread (the apply_activation_from_pack /
++// moe_gpt pattern), so it overlaps the FPU work of the last gate/up K-block on MATH (see
++// matmul_phase_fused_gu). All three binary variants share the (gate, up, out) dst-index signature
++// and bake their constants into a config struct; binary_act_sfpu.h dispatches on the variant define.
++#if defined(FUSED_BINARY_ACT)
++#define PACK_ACT_INIT() \
++    PACK((ckernel::llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::re_act::binary_act_init)))
++#define PACK_ACT_TILE(g, u, o)                     \
++    PACK((SFPU_BINARY_CALL(                        \
++        DST_SYNC_MODE,                             \
++        DST_ACCUM_MODE,                            \
++        re_act::binary_act,                        \
++        ((FP32_DEST_ACC_EN != 0), 8 /*ITERATIONS*/), \
++        g,                                         \
++        u,                                         \
++        o,                                         \
++        ::ckernel::VectorMode::RC)))
++#else
++#define PACK_ACT_INIT() silu_tile_init_pack()
++#endif
++
+ namespace {
+ 
+ // Packer-completion barrier for the K-block boundary of a PACKER_L1_ACC phase.
+@@ -394,9 +422,10 @@ FORCE_INLINE void matmul_phase(
+ //      the SAME for both partials (PACKER_L1_ACC is a global packer state).
+ //   3. Pop x, gate, up once per K-block (the same x K-block feeds both
+ //      matmuls, so x is read from DRAM once per K-block instead of twice).
+-// After the K-loop, copy partials_gu → gate_intermed (with silu fused on
+-// the pack), then partials_up → up_intermed (no activation). Both partials
+-// CBs are Float16_b so switching between them needs no format reconfig.
++// The LAST K-block is different: it is walked subblock by subblock, and each subblock's
++// activation (binary op -> cb_activated, or silu -> cb_gate_intermed) runs on the PACK thread's
++// SFPU while MATH computes the next subblock's last-block matmul. See the pipeline comment at
++// the K-loop.
+ template <
+     uint32_t in0_block_w,
+     uint32_t in0_num_subblocks,
+@@ -423,14 +452,20 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     uint32_t partials_up_cb_id,
+     uint32_t gate_intermed_cb_id,
+     uint32_t up_intermed_cb_id,
++    // Binary activations write cb_activated directly (bias-added first on gpt-oss); SiLU writes
++    // gate_intermed_cb_id. See the activation pipeline at the K-loop.
++    uint32_t activated_cb_id,
++    uint32_t gate_bias_cb_id,
++    uint32_t up_bias_cb_id,
+     uint32_t m_subblocks,
+     uint32_t n_subblocks,
+-    // Row-shared tilize (tilize_x only): this chunk's first gate/up block number, this core's
+-    // grid column and the row width. Block x_blk_base + b is tilized by column
+-    // (x_blk_base + b) % grid_x alone; the reader multicasts the tiles to the rest of the row.
++    // Row-shared tilize (tilize_x only): this chunk's first gate/up block number, the row's owner
++    // slot count and this core's slot. Block x_blk_base + b is tilized by the core in slot
++    // (x_blk_base + b) % x_slots alone (adaptive_chunk::x_owner_col: never the column's weight
++    // sender); the reader multicasts the tiles to the rest of the row.
+     uint32_t x_blk_base = 0,
+-    uint32_t my_gx = 0,
+-    uint32_t grid_x = 1) {
++    uint32_t x_slots = 1,
++    uint32_t x_rank = 0) {
+     // No real_k_tiles bound here, unlike the down phase: the host asserts
+     // K_gate_tiles % in0_block_w == 0, so the gate/up K-loop covers the reduction
+     // dim exactly and there is no padded K position to skip. This phase's padding
+@@ -528,15 +563,200 @@ FORCE_INLINE void matmul_phase_fused_gu(
+             (void)l1_acc;
+         }
+     };
++    // Owner slot of the next block to tilize (block 0 here, block + 1 in the loop).
++    [[maybe_unused]] uint32_t x_slot = 0;
+     if constexpr (tilize_x) {
+-        if (x_blk_base % grid_x == my_gx) {
++        x_slot = x_blk_base % x_slots;
++        if (x_slot == x_rank) {
+             tilize_owned_x_block(0);
+         }
+     }
+ 
++    // ---- Activation pipelined into the last K-block ------------------------------------------
++    // Subblock s of the output is final once the LAST K-block has packed it, so its activation
++    // (bias add + binary SFPU op -> cb_activated, or silu -> cb_gate_intermed) can run while the
++    // FPU computes the last-block matmuls of the next subblock. The SFPU op runs on the PACK thread
++    // (apply_activation_from_pack pattern), MATH only moves the partials into dst, so the FPU and
++    // SFPU work overlap instead of running back to back after the K-loop.
++    //
++    // The last block is walked in LW-wide subblocks (LW = out_subblock_w, halved when gate + up of a
++    // full subblock would not fit one dst half), so each activation chunk has a matmul to hide
++    // behind. A MATH commit waits for the SFPU to go idle (dest_section_flip), so each SFPU chunk
++    // overlaps exactly one dst acquire of matmul work: gate and up share that acquire when 2 * LW
++    // fits a dst half.
++    //
++    // Hand-off: after its last-block packs, subblock s's LW slots are pushed on both partials CBs,
++    // so pack_tile<true> indices are relative to the pushed pointer (always 0..LW-1 here) and the
++    // slot addresses are the same ones blocks 0..N-2 accumulated into. The activation pops what it
++    // read. Pads (pointer-only) keep every CB moving the constant max block, as before.
++    //
++    // Two-block walk: an activation chunk costs more SFPU time than one LW-subblock's last-block
++    // matmul costs FPU time, so with one matmul acquire per chunk MATH stalls at every commit. So
++    // the last kPipeBlocks K-blocks are walked subblock by subblock (both resident in their rings):
++    // subblock s runs its block N-2 matmul, then its block N-1 matmul, and the previous subblock's
++    // activation is split into one part per matmul acquire, which doubles the FPU work each
++    // activation can hide behind. Every output tile still accumulates its K-blocks in order through
++    // the same L1_ACC packs (the packer is drained between the two same-slot packs), so the results
++    // are bit-identical.
++#ifdef FUSED_BINARY_ACT
++    const uint32_t act_out_cb_id = activated_cb_id;
++    (void)gate_intermed_cb_id;
++#ifndef FUSE_BIAS
++    (void)gate_bias_cb_id;
++    (void)up_bias_cb_id;
++#endif
++    constexpr uint32_t kActSlots = 2;  // gate and up pinned in dst together per activated tile
++#else
++    // SiLU: silu(gate) -> cb_gate_intermed (bf8); multiply_phase pairs it with cb_partials_up, which
++    // therefore stays resident here (pushed, never popped).
++    const uint32_t act_out_cb_id = gate_intermed_cb_id;
++    (void)activated_cb_id;
++    (void)gate_bias_cb_id;
++    (void)up_bias_cb_id;
++    constexpr uint32_t kActSlots = 1;
++#endif
++    // Up partials are NOT copied to a separate cb_up_intermed (see multiply_phase).
++    (void)up_intermed_cb_id;
++    CircularBuffer act_out_cb(act_out_cb_id);
++
++    static_assert(out_subblock_h == 1, "the last-block walk indexes tile-rows by sb_m");
++    constexpr uint32_t kDstHalf = (FP32_DEST_ACC_EN != 0) ? 4u : 8u;
++    constexpr uint32_t kActChunk = kDstHalf / kActSlots;
++    constexpr uint32_t LW = (2 * out_subblock_w <= kDstHalf || (out_subblock_w % 2) != 0) ? out_subblock_w
++                                                                                           : out_subblock_w / 2;
++    constexpr bool kFusedGU = (2 * LW <= kDstHalf);
++    constexpr uint32_t LN = (in1_num_subblocks * out_subblock_w) / LW;  // LW-subblocks per tile-row
++    static_assert(LN * LW == in1_num_subblocks * out_subblock_w, "LW must tile per_core_N");
++    static_assert(((LW + 1) / 2) * kActSlots <= kDstHalf, "activation half-chunk must fit a dst half");
++    // Phantom columns end on an out_subblock_w boundary, so an LW-subblock is real iff it starts below it.
++    const uint32_t real_cols = n_subblocks * out_subblock_w;
++    const uint32_t l1_acc_last = (num_blocks > 1) ? 1u : 0u;  // L1_ACC state of the last block's packs
++
++    // Mode switches between the last-block matmul and the activation's partials -> dst pass. Every
++    // thread runs the same control flow, so `in_act` agrees across UNPACK / MATH / PACK.
++    bool in_act = false;
++    auto enter_act = [&]() {
++        if (in_act) {
++            return;
++        }
++#if defined(FUSED_BINARY_ACT) && defined(FUSE_BIAS)
++        // Gate/up bias, broadcast across rows (gpt-oss). Read once per expert by the reader and
++        // popped by the caller at the expert's end.
++        CircularBuffer(gate_bias_cb_id).wait_front(in1_per_core_w);
++        CircularBuffer(up_bias_cb_id).wait_front(in1_per_core_w);
++        reconfig_data_format(partials_gu_cb_id, gate_bias_cb_id);
++        add_bcast_rows_init(partials_gu_cb_id, gate_bias_cb_id);
++#else
++        reconfig_data_format_srca(partials_gu_cb_id);
++        copy_init(partials_gu_cb_id);
++#endif
++#ifdef PACKER_L1_ACC
++        PACK((llk_pack_reconfig_l1_acc(0)));  // activation packs overwrite
++#endif
++        pack_reconfig_data_format(act_out_cb_id);
++        in_act = true;
++    };
++    auto leave_act = [&]() {
++        if (!in_act) {
++            return;
++        }
++        reconfig_data_format(gate_cb_id, x_cb_id);  // in1 -> SrcA, in0 -> SrcB
++        matmul_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
++        pack_reconfig_data_format(partials_gu_cb_id);
++#ifdef PACKER_L1_ACC
++        PACK((llk_pack_reconfig_l1_acc(l1_acc_last)));
++#endif
++        in_act = false;
++    };
++    // Activate tiles [lo, hi) of the oldest handed-off subblock (rd pointer of the partials sits on
++    // its first tile; flat_base = its first flat (m, n) index, for the bias column).
++    auto act_tiles = [&](uint32_t lo, uint32_t hi, [[maybe_unused]] uint32_t flat_base) {
++        partials_gu_cb.wait_front(LW);
++#ifdef FUSED_BINARY_ACT
++        partials_up_cb.wait_front(LW);
++#endif
++        for (uint32_t base = lo; base < hi; base += kActChunk) {
++            const uint32_t c = (hi - base) < kActChunk ? (hi - base) : kActChunk;
++            tile_regs_acquire();
++            for (uint32_t j = 0; j < c; ++j) {
++#ifdef FUSED_BINARY_ACT
++#ifdef FUSE_BIAS
++                const uint32_t ncol = (flat_base + base + j) % in1_per_core_w;
++                add_tiles_bcast_rows(partials_gu_cb_id, gate_bias_cb_id, base + j, ncol, j);
++                add_tiles_bcast_rows(partials_up_cb_id, up_bias_cb_id, base + j, ncol, c + j);
++#else
++                copy_tile(partials_gu_cb_id, base + j, j);
++                copy_tile(partials_up_cb_id, base + j, c + j);
++#endif
++#else
++                copy_tile(partials_gu_cb_id, base + j, j);
++#endif
++            }
++            tile_regs_commit();
++            // PACK: wait for MATH's commit, point the SFPU at the packer's dst half, activate in
++            // place (out == gate slot), and let the packer start only once the SFPU is done.
++            PACK(TTI_SEMWAIT(
++                p_stall::STALL_TDMA | p_stall::STALL_CFG,
++                semaphore::t6_sem(semaphore::MATH_PACK),
++                p_stall::STALL_ON_ZERO));
++            PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
++            for (uint32_t j = 0; j < c; ++j) {
++#ifdef FUSED_BINARY_ACT
++                PACK_ACT_TILE(j, c + j, j);
++#else
++                silu_tile_pack(j);
++#endif
++            }
++            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
++            act_out_cb.reserve_back(c);
++            for (uint32_t j = 0; j < c; ++j) {
++                pack_tile(j, act_out_cb_id);
++            }
++            act_out_cb.push_back(c);
++            tile_regs_release();
++        }
++    };
++    // Retire the oldest handed-off subblock's partials slots.
++    auto pop_pending = [&]() {
++        partials_gu_cb.wait_front(LW);
++        partials_gu_cb.pop_front(LW);
++#ifdef FUSED_BINARY_ACT
++        partials_up_cb.wait_front(LW);
++        partials_up_cb.pop_front(LW);
++#endif
++    };
++    // A phantom subblock (no real columns) was never MAC'd: retire its slots and hand the activated
++    // stream pointer-only slots, exactly as the old pad did.
++    auto skip_pending = [&]() {
++        pop_pending();
++        act_out_cb.reserve_back(LW);
++        act_out_cb.push_back(LW);
++    };
++    // Walked K-blocks: two once there is a K-block before them to set L1_ACC (so every walked pack
++    // accumulates) and their rings hold two blocks (gate/up rings are 2 or 3 slots deep).
++    constexpr uint32_t kPipeBlocks = (num_blocks >= 3) ? 2u : 1u;
++    // Matmul acquires per walked block (gate + up together, or one each), and so activation parts.
++    constexpr uint32_t kMmPerBlock = kFusedGU ? 1u : 2u;
++    constexpr uint32_t kActParts = kPipeBlocks * kMmPerBlock;
++    constexpr uint32_t kPartTiles = (LW + kActParts - 1) / kActParts;
++
++    // Last-block matmul of one LW-subblock into dst[dst_base, dst_base + LW).
++    auto mm_last = [&](uint32_t in1_cb, uint32_t in0_base, uint32_t in1_base, uint32_t dst_base) {
++        uint32_t in0_index = in0_base;
++        uint32_t in1_index = in1_base;
++        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
++            matmul_block(x_cb_id, in1_cb, in0_index, in1_index, dst_base, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
++            in0_index += 1;
++            in1_index += in1_per_core_w;
++        }
++    };
++
+     for (uint32_t block = 0; block < num_blocks; ++block) {
+         if constexpr (tilize_x) {
+-            if (block + 1 < num_blocks && (x_blk_base + block + 1) % grid_x == my_gx) {
++            if (++x_slot == x_slots) {
++                x_slot = 0;
++            }
++            if (block + 1 < num_blocks && x_slot == x_rank) {
+                 tilize_owned_x_block(block == 0 ? 0 : 1);
+             }
+         }
+@@ -544,6 +764,10 @@ FORCE_INLINE void matmul_phase_fused_gu(
+         gate_cb.wait_front(in1_block_num_tiles);
+         up_cb.wait_front(in1_block_num_tiles);
+ 
++        if (block + kPipeBlocks == num_blocks) {
++            break;  // the walked blocks run pipelined with the activation, below
++        }
++
+         int in0_index_subblock_offset = 0;
+         uint32_t partials_slot_idx = 0;
+         for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
+@@ -631,202 +855,166 @@ FORCE_INLINE void matmul_phase_fused_gu(
+         gate_cb.pop_front(in1_block_num_tiles);
+         up_cb.pop_front(in1_block_num_tiles);
+     }
+-    // Make the accumulated partials visible to the second-pass copy loops.
+-    partials_gu_cb.push_back(EFF_OUT_MAX);
+-    partials_up_cb.push_back(EFF_OUT_MAX);
+ 
+-    // After K-loop: partials_gu holds gate-matmul accumulator,
+-    // partials_up holds up-matmul accumulator. Copy each to its intermed
+-    // CB, fusing silu on the gate copy's final pack.
+-#ifdef PACKER_L1_ACC
+-    PACK((llk_pack_reconfig_l1_acc(0)));
+-#endif
+-
+-#ifdef FUSED_BINARY_ACT
+-    // Leave both partials pushed (bf16) so binary_activation_phase() can read raw gate and
+-    // up together. Activating off the bf8 gate_intermed would lose precision first.
+-    (void)gate_intermed_cb_id;
+-    (void)up_intermed_cb_id;
++    // ---- Walked K-blocks (the first one's x / gate / up are waited on above) ----
++    // Packs keep the L1_ACC state the K-loop left (on, unless the walk is a lone single block).
++    if constexpr (LW != out_subblock_w) {
++        matmul_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
++    }
++    x_cb.wait_front(kPipeBlocks * X_BLOCK_TILES_MAX);
++    gate_cb.wait_front(kPipeBlocks * in1_block_num_tiles);
++    up_cb.wait_front(kPipeBlocks * in1_block_num_tiles);
++    // Tile offset of walked block p from its ring's read pointer. A later block may sit at the ring's
++    // start, behind the read pointer: its offset is then negative mod 2^32, which the unpacker's
++    // base + index * page_size address arithmetic resolves to the right slot. Only UNPACK addresses
++    // tiles by these indices; the other threads ignore them.
++    auto ring_offset = [](uint32_t cb_id, uint32_t tiles) -> uint32_t {
++#ifdef TRISC_UNPACK
++        const auto& cb = get_local_cb_interface(cb_id);
++        if (cb.fifo_rd_ptr + tiles * cb.fifo_page_size >= cb.fifo_limit) {
++            return tiles - cb.fifo_size / cb.fifo_page_size;
++        }
+ #else
+-    // Gate partials → gate_intermed (silu applied via MATH-thread SFPU on dst,
+-    // NOT packer-fused). Per subblock:
+-    //   * copy partials_gu → dst (UNPACK reads bf16, MATH stores in dst regs).
+-    //   * silu_tile on each dst tile — runs on the MATH thread's SFPU,
+-    //     overlapping with the next subblock's UNPACK rather than gating the
+-    //     pack pipeline as apply_activation_from_pack would.
+-    //   * pack dst → gate_intermed without per-tile SFPU.
+-    pack_reconfig_data_format(gate_intermed_cb_id);
+-    // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
+-    // to partials_gu so copy_tile reads the accumulator.
+-    reconfig_data_format_srca(up_cb_id, partials_gu_cb_id);
+-    copy_init(partials_gu_cb_id);
+-    for (uint32_t sb = 0; sb < (EFF_OUT / out_subblock_num_tiles); ++sb) {
++        (void)cb_id;
++#endif
++        return tiles;
++    };
++    uint32_t x_off[kPipeBlocks];
++    uint32_t gate_off[kPipeBlocks];
++    uint32_t up_off[kPipeBlocks];
++    for (uint32_t p = 0; p < kPipeBlocks; ++p) {
++        x_off[p] = ring_offset(x_cb_id, p * X_BLOCK_TILES_MAX);
++        gate_off[p] = ring_offset(gate_cb_id, p * in1_block_num_tiles);
++        up_off[p] = ring_offset(up_cb_id, p * in1_block_num_tiles);
++    }
++    bool pend = false;
++    bool pend_real = false;
++    uint32_t pend_flat = 0;
++    uint32_t flat = 0;
++    // Part q of the previous subblock's activation, run in front of this subblock's matmul acquire q
++    // so PACK's SFPU works on it while MATH runs that acquire.
++    auto act_part = [&](uint32_t q) {
++        if (!pend || !pend_real) {
++            return;
++        }
++        const uint32_t lo = q * kPartTiles;
++        const uint32_t hi = (lo + kPartTiles < LW) ? lo + kPartTiles : LW;
++        if (lo < hi) {
++            enter_act();
++            act_tiles(lo, hi, pend_flat);
++        }
++    };
++    // One matmul acquire of this subblock's walked block p: gate (into dst[0, LW)) and/or up (into
++    // dst[LW, 2 * LW) when fused, else dst[0, LW)), packed onto the subblock's partials slots. Block
++    // p > 0 re-packs the slots block p - 1 just packed, so the packer drains first (as at every
++    // K-block boundary of the K-loop).
++    auto mm_acquire = [&](uint32_t p, uint32_t in0_base, uint32_t in1_base, bool do_gate, bool do_up) {
++        leave_act();
+         tile_regs_acquire();
+-        partials_gu_cb.wait_front(out_subblock_num_tiles);
+-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+-            copy_tile(partials_gu_cb_id, i, i);
++        if (do_gate) {
++            mm_last(gate_cb_id, in0_base + x_off[p], in1_base + gate_off[p], /*dst_base=*/0);
+         }
+-        partials_gu_cb.pop_front(out_subblock_num_tiles);
+-        // MATH-thread SFPU pass: apply silu to each dst tile before pack.
+-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+-            silu_tile(i);
++        if (do_up) {
++            mm_last(up_cb_id, in0_base + x_off[p], in1_base + up_off[p], /*dst_base=*/do_gate ? LW : 0);
+         }
+         tile_regs_commit();
+         tile_regs_wait();
+-        gate_intermed_cb.reserve_back(out_subblock_num_tiles);
+-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+-            pack_tile(i, gate_intermed_cb_id);
++        if (p > 0) {
++            drain_packer_before_reaccumulate();
++        }
++        if (do_gate) {
++            for (uint32_t i = 0; i < LW; ++i) {
++                pack_tile<true>(i, partials_gu_cb_id, i);
++            }
++        }
++        if (do_up) {
++            const uint32_t up_dst = do_gate ? LW : 0;
++            for (uint32_t i = 0; i < LW; ++i) {
++                pack_tile<true>(up_dst + i, partials_up_cb_id, i);
++            }
+         }
+-        gate_intermed_cb.push_back(out_subblock_num_tiles);
+         tile_regs_release();
+-    }
+-    // The copy loop above did real work only for the runtime rows. Settle the rest
+-    // of the constant-size block with pointer-only bumps: drop the stale tail of
+-    // partials_gu and pad gate_intermed so multiply_phase sees a full max block.
+-    {
+-        const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
+-        if (pad > 0) {
+-            partials_gu_cb.wait_front(pad);
+-            partials_gu_cb.pop_front(pad);
+-            gate_intermed_cb.reserve_back(pad);
+-            gate_intermed_cb.push_back(pad);
++    };
++    for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
++        const uint32_t in0_base = sb_m * in0_subblock_num_tiles;
++        for (uint32_t j = 0; j < LN; ++j) {
++            const bool real = j * LW < real_cols;
++            const uint32_t in1_base = j * LW;
++            for (uint32_t p = 0; p < kPipeBlocks; ++p) {
++                if constexpr (kFusedGU) {
++                    // Gate + up of block p share ONE acquire.
++                    act_part(p);
++                    if (real) {
++                        mm_acquire(p, in0_base, in1_base, /*do_gate=*/true, /*do_up=*/true);
++                    }
++                } else {
++                    // Gate and up need a dst half each: one activation part in front of each.
++                    act_part(2 * p);
++                    if (real) {
++                        mm_acquire(p, in0_base, in1_base, /*do_gate=*/true, /*do_up=*/false);
++                    }
++                    act_part(2 * p + 1);
++                    if (real) {
++                        mm_acquire(p, in0_base, in1_base, /*do_gate=*/false, /*do_up=*/true);
++                    }
++                }
++            }
++            if (pend) {
++                if (pend_real) {
++                    pop_pending();
++                } else {
++                    skip_pending();
++                }
++            }
++            // Hand this subblock's (now final) slots to the activation. The push waits for the packer,
++            // so the unpacker reads the accumulated values.
++            partials_gu_cb.push_back(LW);
++            partials_up_cb.push_back(LW);
++            pend = true;
++            pend_real = real;
++            pend_flat = flat;
++            flat += LW;
+         }
+     }
++    // The walked blocks' operands are done: free them before the trailing activation so the reader
++    // and writer can refill. One block at a time: a pop may not straddle the ring's end.
++    for (uint32_t p = 0; p < kPipeBlocks; ++p) {
++        x_cb.pop_front(X_BLOCK_TILES_MAX);
++        gate_cb.pop_front(in1_block_num_tiles);
++        up_cb.pop_front(in1_block_num_tiles);
++    }
+ 
+-    // Up partials are NOT copied to a separate cb_up_intermed: the multiply
+-    // phase reads cb_partials_up directly (bf16) and pairs each tile with
+-    // cb_gate_intermed (bf8 after silu+pack). Skipping the copy saves 48KB of
+-    // L1 and lets cb_in0_down_full stay double-buffered.
+-    (void)up_intermed_cb_id;
+-#endif
+-}
+-
+-#ifdef FUSED_BINARY_ACT
+-// Dst-accumulator mode (fp32 dest accum on/off) from the host ComputeConfig,
+-// passed via -DFP32_DEST_ACC_EN. Defaults to bf16 dst (0) if not passed.
+-#ifndef FP32_DEST_ACC_EN
+-#define FP32_DEST_ACC_EN 0
+-#endif
+-
+-// All three variants share the (gate, up, out) dst-index signature and bake their constants into
+-// a config struct; binary_act_sfpu.h dispatches on the variant define.
+-#define BINARY_ACT_INIT() \
+-    MATH((ckernel::llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::re_act::binary_act_init)))
+-#define BINARY_ACT_TILE(fp32, g, u, o)                                                                        \
+-    MATH((SFPU_BINARY_CALL(                                                                                    \
+-        DST_SYNC_MODE, DST_ACCUM_MODE, re_act::binary_act, (fp32, 8 /*ITERATIONS*/), g, u, o, VectorMode::RC)))
+-
+-// Replaces gate-silu + multiply_phase: reads the raw bf16 gate/up accumulators from their
+-// partials CBs and writes the activated result to activated_cb. Runs on MATH (between
+-// tile_regs_acquire/commit), matching this kernel's silu_tile structure.
+-//
+-// The binary op pins BOTH gate and up in dst, so each output tile costs 2 dst slots. With
+-// 8 dst tiles available we stream in chunks of <=4 output tiles. The activated CB is
+-// drained count-based, so push granularity need not match out_subblock_num_tiles.
+-template <uint32_t out_block_num_tiles, uint32_t per_core_N_gu = 0>
+-FORCE_INLINE void binary_activation_phase(
+-    uint32_t prev_srcA_cb_id,
+-    uint32_t gate_partials_cb_id,
+-    uint32_t up_partials_cb_id,
+-    uint32_t activated_cb_id,
+-    uint32_t eff_out_tiles,
+-    uint32_t gate_bias_cb_id = 0,
+-    uint32_t up_bias_cb_id = 0) {
+-    // Adaptive per_core_M: this core produces eff_out_tiles = per_core_M * pcN
+-    // activated tiles this chunk (0 if it owns no row -> nothing to do).
+-    const uint32_t EFF_OUT = eff_out_tiles;
+-    // CB blocks are the constant compile-time max (see matmul_phase_fused_gu);
+-    // only the activation work below is bounded by the runtime EFF_OUT.
+-    constexpr uint32_t EFF_OUT_MAX = out_block_num_tiles;
+-    // Dst budget derived from the host ComputeConfig (via -DFP32_DEST_ACC_EN) so
+-    // it and the SFPU op's fp32-dest template below stay in sync with the
+-    // program factory's DST_CAPACITY / fp32_dest_acc_en (no silent drift). The
+-    // 16-tile dst reg file halves under fp32 dest accum. Each output tile pins
+-    // gate+up simultaneously -> 2 dst slots -> kActChunk output tiles / acquire.
+-    constexpr bool kFp32DestAccEn = (FP32_DEST_ACC_EN != 0);
+-    // SiTU-GLU's op reads DST_ACCUM_MODE instead of the define; both come from the same
+-    // host fp32_dest_acc_en, so assert they agree rather than trusting it.
+-    static_assert(kFp32DestAccEn == DST_ACCUM_MODE, "FP32_DEST_ACC_EN disagrees with DST_ACCUM_MODE");
+-    constexpr uint32_t kDstCapacity = kFp32DestAccEn ? 4u : 8u;
+-    constexpr uint32_t kActChunk = kDstCapacity / 2;
+-
+-    CircularBuffer gate_partials_cb(gate_partials_cb_id);
+-    CircularBuffer up_partials_cb(up_partials_cb_id);
+-    CircularBuffer activated_cb(activated_cb_id);
+-
+-    gate_partials_cb.wait_front(EFF_OUT_MAX);
+-    up_partials_cb.wait_front(EFF_OUT_MAX);
+-
+-    pack_reconfig_data_format(activated_cb_id);
+-    // SrcA was last configured for the up matmul's in1 weights (prev_srcA_cb_id,
+-    // e.g. bf4). Reconfig to the Float16_b partials so copy_tile reads the
+-    // accumulator with the right format. Both partials CBs are Float16_b, so this
+-    // single init covers reads from gate AND up partials. (Passing a Float16_b CB
+-    // as the "old" operand would no-op the reconfig and leave SrcA on bf4.)
+-#ifdef FUSE_BIAS
+-    // Add gate/up bias (broadcast across rows) before the activation. The
+-    // bias CBs were read once by the reader (per_core_N_gu tiles each) and are
+-    // NOT popped here (reused across chunks). add_bcast_rows sets SrcA=partials,
+-    // SrcB=bias — same format for gate and up, so one init covers both.
+-    (void)prev_srcA_cb_id;
+-    CircularBuffer gate_bias_cb(gate_bias_cb_id);
+-    CircularBuffer up_bias_cb(up_bias_cb_id);
+-    gate_bias_cb.wait_front(per_core_N_gu);
+-    up_bias_cb.wait_front(per_core_N_gu);
+-    // The gate/up matmul left SrcA on the up weights (bf4) and SrcB on x (bf8).
+-    // The bcast add reads SrcA=partials (Float16_b), SrcB=bias — reconfig both
+-    // before the init (add_bcast uses both operands, unlike the copy path).
+-    reconfig_data_format(gate_partials_cb_id, gate_bias_cb_id);
+-    add_bcast_rows_init(gate_partials_cb_id, gate_bias_cb_id);
+-#else
+-    (void)gate_bias_cb_id;
+-    (void)up_bias_cb_id;
+-    reconfig_data_format_srca(prev_srcA_cb_id, gate_partials_cb_id);
+-    copy_init(gate_partials_cb_id);
+-#endif
+-
+-    for (uint32_t base = 0; base < EFF_OUT; base += kActChunk) {
+-        const uint32_t remaining = EFF_OUT - base;
+-        const uint32_t c = remaining < kActChunk ? remaining : kActChunk;
+-        tile_regs_acquire();
+-        // gate -> dst[0..c), up -> dst[c..2c) (bias-added when FUSE_BIAS)
+-        for (uint32_t j = 0; j < c; ++j) {
+-#ifdef FUSE_BIAS
+-            const uint32_t ncol = (base + j) % per_core_N_gu;
+-            add_tiles_bcast_rows(gate_partials_cb_id, gate_bias_cb_id, base + j, ncol, j);
+-            add_tiles_bcast_rows(up_partials_cb_id, up_bias_cb_id, base + j, ncol, c + j);
+-#else
+-            copy_tile(gate_partials_cb_id, base + j, j);
+-            copy_tile(up_partials_cb_id, base + j, c + j);
+-#endif
+-        }
+-        // Fused gate/up activation; result written in place to dst[j]
+-        // (out == gate slot, mirroring moe_gpt's swiglu(0,1,0)).
+-        for (uint32_t j = 0; j < c; ++j) {
+-            BINARY_ACT_TILE(kFp32DestAccEn, j, c + j, j);
+-        }
+-        tile_regs_commit();
+-        tile_regs_wait();
+-        activated_cb.reserve_back(c);
+-        for (uint32_t j = 0; j < c; ++j) {
+-            pack_tile(j, activated_cb_id);
++    if (pend) {
++        if (pend_real) {
++            enter_act();
++            act_tiles(0, LW, pend_flat);
++            pop_pending();
++        } else {
++            skip_pending();
+         }
+-        activated_cb.push_back(c);
+-        tile_regs_release();
+     }
+-    // Pad cb_activated up to the constant block (pointer-only); the reader drains
+-    // the full max block and mcasts only the runtime rows.
++
++    // Settle the rest of the constant-size blocks with pointer-only bumps: the partials slots past
++    // the runtime rows were never packed, and the activation stream gets the matching pad.
+     {
+         const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
+         if (pad > 0) {
+-            activated_cb.reserve_back(pad);
+-            activated_cb.push_back(pad);
++            partials_gu_cb.push_back(pad);
++            partials_up_cb.push_back(pad);
++            partials_gu_cb.wait_front(pad);
++            partials_gu_cb.pop_front(pad);
++#ifdef FUSED_BINARY_ACT
++            partials_up_cb.wait_front(pad);
++            partials_up_cb.pop_front(pad);
++#endif
++            act_out_cb.reserve_back(pad);
++            act_out_cb.push_back(pad);
+         }
+     }
+-    gate_partials_cb.pop_front(EFF_OUT_MAX);
+-    up_partials_cb.pop_front(EFF_OUT_MAX);
+-}
++#ifdef PACKER_L1_ACC
++    PACK((llk_pack_reconfig_l1_acc(0)));  // later phases' packs overwrite
+ #endif
++}
+ 
+ // eff_out_tiles = number of valid output tiles this core produces this chunk
+ // (= per_core_M * per_core_N_gu, runtime-adaptive). Precomputed by the caller so
+@@ -1030,22 +1218,13 @@ void kernel_main() {
+     counts_scratch_cb.wait_front(1);
+     idx_scratch_cb.wait_front(1);
+ 
+-    // SiLU is applied as a MATH-thread SFPU pass on dst (silu_tile) between
+-    // copy_tile and pack_tile — not packer-fused via apply_activation_from_pack.
+-    // Empirically the packer-fused variant serialises the pack pipeline against
+-    // the SFPU, slowing down the gate-intermed write. silu_tile_init() configures
+-    // the MATH-side SFPU for silu; the pack then runs plain (no per-tile SFPU on
+-    // the pack thread). Same total compute, better pipelining.
+-    // Init once — shared across all experts.
+-#ifdef FUSED_BINARY_ACT
+-    // The binary activations init their own SFPU tables (recip for SwiGLU-OAI and clamped
+-    // SiLU-GLU, tanh for SiTU-GLU) instead of silu's. The recip table sets
+-    // vConstFloatPrgm0 = 2.0f, which nothing between here and the tile calls reprograms.
+-    BINARY_ACT_INIT();
+-#else
+-    silu_tile_init();
+-#endif
+-
++    // The gate/up activation (SiLU, or the binary SwiGLU-OAI / SiTU-GLU / clamped SiLU-GLU op)
++    // runs its SFPU work on the PACK thread, pipelined into the last gate/up K-block (see
++    // matmul_phase_fused_gu), so the SFPU is initialised on PACK. Init once, shared across all
++    // experts: the binary ops' tables (recip for SwiGLU-OAI and clamped SiLU-GLU, tanh for
++    // SiTU-GLU) live in the vConstFloatPrgm registers, which nothing between here and the tile
++    // calls reprograms. MATH runs no SFPU op in this kernel.
++    PACK_ACT_INIT();
+ 
+     // ======================= per-local-expert loop =======================
+     // Run the full gate/up/down FFN for every local expert this core's row group owns.
+@@ -1069,10 +1248,7 @@ void kernel_main() {
+     [[maybe_unused]] uint8_t expert_group[2][experts_per_chip];
+     [[maybe_unused]] uint32_t phase = 0;
+     [[maybe_unused]] uint32_t next_expert = 0;
+-    UNPACK(({
+-        DeviceZoneScopedN("RE-PLAN");
+-        plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
+-    }));
++    UNPACK(({ plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group); }));
+     // Gate/up K-blocks done so far, counted exactly as the reader counts them (x_blk there):
+     // every core of a row runs the same experts and chunks, so they agree on each block's owner.
+     uint32_t x_blk = 0;
+@@ -1081,7 +1257,10 @@ void kernel_main() {
+         // Next expert this group works on: its tile-row count, already band-filtered and clamped
+         // (0 = no more experts). UNPACK scans, MATH/PACK receive.
+         uint32_t count_tiles = 0;
+-        uint32_t group_rows = 0;
++        // Group height in the low half, this core's row within the group (the x tilize owner
++        // rotation skips its weight-sender columns, see adaptive_chunk::x_owner_col) in the high
++        // half: one mailbox word per expert.
++        uint32_t group_word = 0;
+         UNPACK(({
+             while (count_tiles == 0) {
+                 if (next_expert == experts_per_chip || plan.layout[phase] == adaptive_chunk::kNoLayout) {
+@@ -1098,15 +1277,15 @@ void kernel_main() {
+                     adaptive_chunk::layout_at(adaptive_chunk::kGridY, plan.layout[phase]), my_gy, group_base, rows);
+                 if (expert_group[phase][next_expert] == my_group) {
+                     count_tiles = tiles_of(next_expert);
+-                    group_rows = rows;
++                    group_word = rows | ((my_gy - group_base) << 16);
+                 }
+                 ++next_expert;
+             }
+             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_tiles);
+             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_tiles);
+             if (count_tiles != 0) {
+-                ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, group_rows);
+-                ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, group_rows);
++                ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, group_word);
++                ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, group_word);
+             }
+         }));
+         MATH(count_tiles = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+@@ -1114,8 +1293,13 @@ void kernel_main() {
+         if (count_tiles == 0) {
+             break;
+         }
+-        MATH(group_rows = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+-        PACK(group_rows = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
++        MATH(group_word = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
++        PACK(group_word = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
++        const uint32_t group_rows = group_word & 0xFFFF;
++        const uint32_t my_mt = group_word >> 16;
++        // Row-shared tilize owners of this row (adaptive_chunk::x_owner_col): slot count, my slot.
++        const uint32_t x_slots = adaptive_chunk::x_owner_slots(grid_x, group_rows, my_mt);
++        const uint32_t x_rank = adaptive_chunk::x_owner_rank(my_gx, group_rows, my_mt, x_slots);
+         const uint32_t chunk_M = per_core_M_max * group_rows;
+         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M);
+ 
+@@ -1147,6 +1331,14 @@ void kernel_main() {
+             // own partials CB; after the K-loop, partials_gu -> gate_intermed (with
+             // silu) and partials_up -> up_intermed are produced by the same fused
+             // function.
++            //
++            // Phase zones (MATH thread only, so one marker pair per phase per core): RE-GU, RE-ACT
++            // and RE-DN tile the per-expert timeline, waits included, to split the per-expert
++            // fixed cost between gate/up fill, activation and the down phase.
++            {
++#ifdef TRISC_MATH
++            DeviceZoneScopedN("RE-GU");
++#endif
+             matmul_phase_fused_gu<
+                 g_in0_block_w,
+                 g_in0_num_subblocks,
+@@ -1170,19 +1362,25 @@ void kernel_main() {
+                 cb_partials_up,
+                 cb_gate_intermed,
+                 cb_up_intermed,
++                cb_activated,
++                cb_gate_bias,
++                cb_up_bias,
+                 /*m_subblocks=*/re_m_valid,
+                 /*n_subblocks=*/gu_valid_n_subblocks,
+                 /*x_blk_base=*/x_blk,
+-                my_gx,
+-                grid_x);
++                x_slots,
++                x_rank);
++            }
+             x_blk += g_num_blocks;
+ 
++            {
++#ifdef TRISC_MATH
++            DeviceZoneScopedN("RE-ACT");
++#endif
+ #ifdef FUSED_BINARY_ACT
+-            // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.
+-            // cb_in1_up is the unpacker's last SrcA operand, passed so the partials reconfig
+-            // (weights df -> Float16_b) actually fires.
+-            binary_activation_phase<gu_out_block_num_tiles, g_in1_per_core_w>(
+-                cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated, re_eff_out_gu, cb_gate_bias, cb_up_bias);
++            // Phase 3: the binary activation already ran inside the gate/up phase (pipelined into
++            // its last K-block) and pushed cb_activated.
++            (void)re_eff_out_gu;
+             (void)cb_gate_intermed;
+             (void)cb_up_intermed;
+ #else
+@@ -1195,11 +1393,16 @@ void kernel_main() {
+                 cb_gate_intermed, cb_partials_up, cb_activated, re_eff_out_gu);
+             (void)cb_up_intermed;
+ #endif
++            }
+ 
+             // Phase 4: down matmul, output to cb_out.
+             // multiply_phase left the unpacker on (cb_gate_intermed, cb_partials_up);
+             // matmul_block_init does not re-program data formats, so reset the down
+             // operands here (in1 -> SrcA, in0 -> SrcB) before the matmul.
++            {
++#ifdef TRISC_MATH
++            DeviceZoneScopedN("RE-DN");
++#endif
+             reconfig_data_format(cb_in1_down, cb_in0_down_full);
+             matmul_block_init(
+                 cb_in0_down_full,
+@@ -1232,6 +1435,7 @@ void kernel_main() {
+                 /*m_subblocks=*/re_m_valid,
+                 /*n_subblocks=*/d_valid_n_subblocks,
+                 cb_down_bias);
++            }
+         }  // end chunk loop
+ 
+ #ifdef FUSE_BIAS
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 5042cada8ce..585abf4955b 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -30,7 +30,6 @@
+ #include "api/dataflow/endpoints.h"
+ #include "api/core_local_mem.h"
+ #include "api/debug/assert.h"
+-#include "tools/profiler/kernel_profiler.hpp"
+ #include "../adaptive_chunk.hpp"
+ #include "../weight_runs.hpp"
+ 
+@@ -120,16 +119,6 @@ void kernel_main() {
+     static_assert(chunk_M_max == per_core_M_max * adaptive_chunk::kGridY, "chunk_M_max must be per_core_M_max * GRID_Y");
+     constexpr uint32_t cb_activated = get_compile_time_arg_val(20);
+     constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(21);  // M-row mcast group size
+-    // Row-major x look-ahead decoupling (see the gate/up loop): only with >= 2 row columns, where
+-    // a core never owns two consecutive x blocks.
+-    constexpr bool kDeferXRm = GRID_X_NOC >= 2;
+-    constexpr uint32_t kNoXPending = 0xFFFFFFFFu;
+-    // NoC-0 read transaction ids (sticky NOC_PACKET_TAG on the read command buffer, as in
+-    // moe_fused_swiglu_reader.cpp): x look-ahead reads and gate weight reads. Every other read keeps
+-    // id 0 and the global barrier.
+-    constexpr uint32_t NOC_READ_ID = 0;
+-    constexpr uint32_t X_RM_TRID = 15;
+-    constexpr uint32_t GATE_TRID = 14;
+     // Per-layout weight-multicast topologies follow the M-row NoC table: one set of
+     // GROUP_TOPO_ARGS per row-group layout (adaptive_chunk layout table order), each for this
+     // core's group: {is_sender, num_receivers, mcast nx_start, ny_start, nx_end, ny_end, sender nx, sender ny}.
+@@ -374,12 +363,13 @@ void kernel_main() {
+     // is the shared dispatched buffer; each expert's rows begin at
+     // start[global_id]. Indexed per expert in the loop below (must agree with
+     // the writer's row_offset_tiles so x is read and y is written to the same
+-    // region). Only issued here: the launch plan below needs only counts/idx, so the
+-    // read's DRAM latency runs under the planning and the barrier follows the plan.
++    // region).
+     cb_start_scratch_obj.reserve_back(1);
+     const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
+     noc_read.async_read(
+         start_acc, CoreLocalMem<uint32_t>(start_l1), start_acc.get_aligned_page_size(), {.page_id = 0}, {});
++    noc_read.async_read_barrier();
++    cb_start_scratch_obj.push_back(1);
+     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
+ 
+     // -------- expert-parallel row groups (adaptive_chunk.hpp) --------
+@@ -397,14 +387,7 @@ void kernel_main() {
+     // (uniform or mixed-height). The layout, this core's group and row within it, and the
+     // weight-multicast topology are per phase.
+     uint8_t expert_group[2][experts_per_chip];
+-    adaptive_chunk::LaunchPlan plan;
+-    {
+-        DeviceZoneScopedN("RE-PLAN");
+-        plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
+-    }
+-    // The `start` page issued above.
+-    noc_read.async_read_barrier();
+-    cb_start_scratch_obj.push_back(1);
++    const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
+     // Phase A's own weight-multicast semaphore pair follows the per-layout topologies.
+     constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + adaptive_chunk::num_layouts(adaptive_chunk::kGridY) * GROUP_TOPO_ARGS;
+ 
+@@ -433,9 +416,10 @@ void kernel_main() {
+     uint32_t mc_seq = 0;
+ 
+     // Row-shared tilize (row-major x). Gate/up K-blocks are numbered across every chunk and
+-    // expert this row works on (x_blk = number of earlier blocks); block x_blk + kb belongs to row
+-    // column (x_blk + kb) % GRID_X. The compute kernel keeps the same counter, and all cores of a
+-    // row run the same experts and chunks, so every core of the row agrees on each block's owner.
++    // expert this row works on (x_blk = number of earlier blocks); block x_blk + kb belongs to the
++    // row column adaptive_chunk::x_owner_col(x_blk + kb, ...). The compute kernel keeps the same
++    // counter, and all cores of a row run the same experts and chunks in the same group row, so
++    // every core of the row agrees on each block's owner.
+     uint32_t x_blk = 0;
+     // The whole M-row: the row-shared x multicast and the phase-4 activated multicast both span it.
+     const uint32_t mrow_first_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 0);
+@@ -640,45 +624,18 @@ void kernel_main() {
+                 }
+             }
+         };
+-        [[maybe_unused]] auto owns_x_block = [&](uint32_t kb_x) { return (x_blk + kb_x) % GRID_X_NOC == my_nt_gu; };
+-
+-        // x look-ahead reads off the weight path. The raw block x(j) an owner reads two blocks ahead is
+-        // needed only by its own compute's tilize before matmul j-1, a whole block after the
+-        // iteration that issues it. So its reads carry their own transaction id (X_RM_TRID) and the
+-        // block is pushed into cb_x_rm as soon as they have landed (non-blocking polls through
+-        // iterations j-2 and j-1), or, at the latest, by a blocking wait at the END of iteration j-1,
+-        // after that iteration's x and weights have been pushed. Neither the gate-sender's barrier
+-        // (GATE_TRID, below) nor this core's weight push of block j-2 waits for x(j) any more. One
+-        // cb_x_rm slot and one owned block every GRID_X: with GRID_X >= 2 at most one block is
+-        // pending per core, and the previous one was pushed before the next is issued.
+-        [[maybe_unused]] uint32_t x_rm_pending_blk = kNoXPending;
+-        [[maybe_unused]] auto issue_x_rm_tagged = [&](uint32_t kb_rm) {
+-            noc_async_read_set_trid(X_RM_TRID, NOC_READ_ID);
+-            issue_x_rm_read(kb_rm);
+-            noc_async_read_set_trid(0, NOC_READ_ID);
+-            x_rm_pending_blk = kb_rm;
+-        };
+-        [[maybe_unused]] auto try_push_x_rm = [&]() {
+-            if (x_rm_pending_blk != kNoXPending && ncrisc_noc_read_with_transaction_id_flushed(NOC_READ_ID, X_RM_TRID)) {
+-                cb_x_rm_obj.push_back(g_in0_block_tiles_max);
+-                x_rm_pending_blk = kNoXPending;
+-            }
+-        };
+-        [[maybe_unused]] auto force_push_x_rm = [&]() {
+-            if (x_rm_pending_blk != kNoXPending) {
+-                {
+-                    DeviceZoneScopedN("RE-XW");
+-                    noc_async_read_barrier_with_trid(X_RM_TRID, NOC_READ_ID);
+-                }
+-                cb_x_rm_obj.push_back(g_in0_block_tiles_max);
+-                x_rm_pending_blk = kNoXPending;
+-            }
++        // Owner column of this chunk's x block kb_x: never this row's weight sender for that column
++        // (adaptive_chunk::x_owner_col), so the weight stream's RISC carries no x duty.
++        [[maybe_unused]] auto x_owner = [&](uint32_t kb_x) {
++            return adaptive_chunk::x_owner_col(x_blk + kb_x, GRID_X_NOC, group_rows, my_mt);
+         };
++        [[maybe_unused]] auto owns_x_block = [&](uint32_t kb_x) { return x_owner(kb_x) == my_nt_gu; };
+ 
+         // Row-shared tilize, row-major x. Every core of an M-row needs the same x K-block. Instead
+         // of each of the GRID_X cores tilizing it, block x_blk + kb is read, tilized and multicast
+-        // by ONE owner core of the row, column (x_blk + kb) % GRID_X, so each core tilizes ~1/GRID_X
+-        // of the blocks and skips the per-block tilize/matmul reconfig on the rest:
++        // by ONE owner core of the row, x_owner(kb) (the row's non-weight-sender columns in turn),
++        // so each core tilizes a few of the blocks and skips the per-block tilize/matmul reconfig
++        // on the rest:
+         //   * this RISC on the owner reads the raw block into cb_x_rm TWO blocks ahead (below), so
+         //     it is in L1 when the owner's compute tilizes it one block ahead (cb_x_rm -> cb_x_tl,
+         //     before that compute's matmul of the previous block);
+@@ -686,18 +643,12 @@ void kernel_main() {
+         //     core, itself included. Every core pushes cb_in0_x one constant block per K-block
+         //     from kernel start, so the slot sits at the same L1 address on all of them.
+         // Blocks 0 and 1 of the chunk are read up front; the loop reads block kb + 2.
+-        // Block 0 is pushed here (the compute tilizes it before its first matmul); block 1 is pending
+-        // like a loop look-ahead block and is pushed by the end of iteration 0.
+         if constexpr (x_is_row_major != 0) {
+             for (uint32_t kb_x = 0; kb_x < 2 && kb_x < num_blocks_gu; ++kb_x) {
+                 if (owns_x_block(kb_x)) {
+-                    if (kDeferXRm && kb_x == 1) {
+-                        issue_x_rm_tagged(kb_x);
+-                    } else {
+-                        issue_x_rm_read(kb_x);
+-                        noc_read.async_read_barrier();
+-                        cb_x_rm_obj.push_back(g_in0_block_tiles_max);
+-                    }
++                    issue_x_rm_read(kb_x);
++                    noc_read.async_read_barrier();
++                    cb_x_rm_obj.push_back(g_in0_block_tiles_max);
+                 }
+             }
+         }
+@@ -717,23 +668,13 @@ void kernel_main() {
+         //   overhead dominates compute.
+         for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+             // This block's x source: the rotating owner (row-major) or the row's fixed x sender (TILE).
+-            const bool is_x_src = (x_is_row_major != 0) ? owns_x_block(kb) : is_in0_sender;
++            const uint32_t x_owner_kb = (x_is_row_major != 0) ? x_owner(kb) : 0;
++            const bool is_x_src = (x_is_row_major != 0) ? (x_owner_kb == my_nt_gu) : is_in0_sender;
+             [[maybe_unused]] bool x_rm_pending = false;
+-            // A gate sender issues its look-ahead x read right after its gate reads (below), so the
+-            // gate requests reach the DRAM queues first.
+-            [[maybe_unused]] bool x_rm_after_gate = false;
+             if constexpr (x_is_row_major != 0) {
+                 if (kb + 2 < num_blocks_gu && owns_x_block(kb + 2)) {
+-                    if constexpr (kDeferXRm) {
+-                        if (is_in1_sender) {
+-                            x_rm_after_gate = true;
+-                        } else {
+-                            issue_x_rm_tagged(kb + 2);
+-                        }
+-                    } else {
+-                        issue_x_rm_read(kb + 2);
+-                        x_rm_pending = true;
+-                    }
++                    issue_x_rm_read(kb + 2);
++                    x_rm_pending = true;
+                 }
+             }
+ 
+@@ -759,7 +700,7 @@ void kernel_main() {
+             if (!is_x_src) {
+                 in0_valid_sem.set(0);
+                 if constexpr (x_is_row_major != 0) {
+-                    const uint32_t owner = (x_blk + kb) % GRID_X_NOC;
++                    const uint32_t owner = x_owner_kb;
+                     in0_ready_sem.up(
+                         noc,
+                         get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * owner + 0),
+@@ -867,9 +808,7 @@ void kernel_main() {
+                     in1_ready_sem.set(0);
+                 }
+ 
+-                // DRAM read gate region first, tagged GATE_TRID so its barrier below waits for the
+-                // weight reads alone, not for an x look-ahead read in flight on the same NoC.
+-                noc_async_read_set_trid(GATE_TRID, NOC_READ_ID);
++                // DRAM read gate region first.
+                 uint32_t l1_w_gate = cb_in1_gate_obj.get_write_ptr();
+                 const uint32_t gate_block_start = l1_w_gate;
+                 // N-OOB hidden padding columns (col >= N_gate_tiles_full == down's K_down_tiles)
+@@ -915,16 +854,7 @@ void kernel_main() {
+                         l1_w_up += per_core_N_gu * up_tile_bytes;
+                     }
+                 }
+-                noc_async_read_set_trid(0, NOC_READ_ID);
+-                if constexpr (x_is_row_major != 0 && kDeferXRm) {
+-                    if (x_rm_after_gate) {
+-                        issue_x_rm_tagged(kb + 2);
+-                    }
+-                }
+-                {
+-                    DeviceZoneScopedN("RE-GW");
+-                    noc_async_read_barrier_with_trid(GATE_TRID, NOC_READ_ID);
+-                }
++                noc_read.async_read_barrier();
+ 
+                 // IN1_WRITER_MCAST: gate is in L1 -- hand this slot to the writer, which
+                 // multicasts it (and `up`, which it read itself) on NoC 1. Signalled BEFORE
+@@ -1041,49 +971,22 @@ void kernel_main() {
+                     noc_read.async_read_barrier();
+                     cb_x_rm_obj.push_back(g_in0_block_tiles_max);
+                 }
+-                if constexpr (kDeferXRm) {
+-                    try_push_x_rm();
+-                }
+             }
+ 
+-            // Step 3: receivers wait for both valid semaphores and push. While an x look-ahead block
+-            // is in flight the waits poll, so the block is pushed the moment it lands.
++            // Step 3: receivers wait for both valid semaphores and push.
+             if (!is_x_src) {
+-                if constexpr (x_is_row_major != 0 && kDeferXRm) {
+-                    while (x_rm_pending_blk != kNoXPending && in0_valid_sem.value() != IN0_VALID) {
+-                        try_push_x_rm();
+-                    }
+-                }
+                 in0_valid_sem.wait(IN0_VALID);
+                 x_stage_obj.push_back(g_in0_block_tiles_max);
+             }
+             if (!is_in1_sender) {
+-                if constexpr (x_is_row_major != 0 && kDeferXRm) {
+-                    while (x_rm_pending_blk != kNoXPending && in1_valid_sem.value() != IN1_VALID) {
+-                        try_push_x_rm();
+-                    }
+-                }
+                 in1_valid_sem.wait(IN1_VALID);
+                 cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
+                 if constexpr (reader_mcasts_up) {
+                     cb_in1_up_obj.push_back(g_in1_block_num_tiles);
+                 }
+             }
+-            // x(kb + 1) must be in cb_x_rm before the owner's compute tilizes it, ahead of its matmul
+-            // of block kb, whose inputs were all pushed above.
+-            if constexpr (x_is_row_major != 0 && kDeferXRm) {
+-                try_push_x_rm();
+-                if (x_rm_pending_blk == kb + 1) {
+-                    force_push_x_rm();
+-                }
+-            }
+         }
+         x_blk += num_blocks_gu;
+-        // Nothing is pending here (the last look-ahead block went out at the end of iteration
+-        // num_blocks_gu - 2); kept so a pending block can never leak into the next chunk.
+-        if constexpr (x_is_row_major != 0 && kDeferXRm) {
+-            force_push_x_rm();
+-        }
+ 
+         // IN1_WRITER_MCAST: drain the decoupled weight-multicast pipeline before phase 4.
+         // in1_ready_sem is SHARED by phase 3 (gate/up mcast) and phase 4 (down mcast):
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index fefe3016b06..117803e894a 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -200,12 +200,12 @@ void kernel_main() {
+     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1);
+ 
+     // Read the `start` (= expert_region_offsets) page ONCE into resident L1;
+-    // each expert's output slice begins at start[global_id] (token row). Only issued
+-    // here: its DRAM latency runs under the launch planning below, which barriers it.
++    // each expert's output slice begins at start[global_id] (token row).
+     const uint32_t start_l1 = cb_start_scratch_buf.get_write_ptr();
+     {
+         const uint32_t start_page_size = start_acc.get_aligned_page_size();
+         noc.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
++        noc.async_read_barrier();
+     }
+     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
+ 
+@@ -252,8 +252,6 @@ void kernel_main() {
+     // group, row within the group, topology and in1 semaphore pair are per phase (see the reader).
+     uint8_t expert_group[2][experts_per_chip];
+     const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
+-    // The `start` page issued above.
+-    noc.async_read_barrier();
+     constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + adaptive_chunk::num_layouts(adaptive_chunk::kGridY) * GROUP_TOPO_ARGS;
+     // Gate/up and down blocks this core has consumed so far, sender or not. The writer never pushes,
+     // so it indexes the reader's live ring slot off these. They must count EVERY block: the sender

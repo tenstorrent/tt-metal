@@ -1,0 +1,226 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index dccfa0891a9..41bcebeddc6 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -458,7 +458,13 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     // fifo_limit, which never wraps, and the CB pointer runs away into L1.
+     const uint32_t EFF_M = m_subblocks;
+     const uint32_t x_block_tiles = m_subblocks * in0_block_w;  // runtime x work (per_core_M rows)
+-    const uint32_t EFF_OUT = m_subblocks * in1_num_subblocks * out_subblock_num_tiles;
++    // Ragged N grid (program factory: fewest subblocks that fit dst): every subblock is
++    // out_subblock_w wide except the last, which takes the remainder of the row. in1_per_core_w is
++    // the row width (per_core_N_gu). Equal to out_subblock_w on an exact grid.
++    static_assert(out_subblock_h == 1, "m_subblocks bounds sb_m only when out_subblock_h == 1");
++    constexpr uint32_t out_subblock_w_tail = in1_per_core_w - (in1_num_subblocks - 1) * out_subblock_w;
++    static_assert(out_subblock_w_tail >= 1 && out_subblock_w_tail <= out_subblock_w, "bad gate/up tail width");
++    const uint32_t EFF_OUT = m_subblocks * in1_per_core_w;
+     // Constant CB block sizes (per_core_M_max-derived, from the host CB sizing).
+     constexpr uint32_t X_BLOCK_TILES_MAX = in0_block_num_tiles;
+     constexpr uint32_t EFF_OUT_MAX = out_block_num_tiles;
+@@ -563,6 +569,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+                 // stale L1. Skip the MAC and the pack; the slot counters still advance so
+                 // the surviving subblocks keep their absolute partials slots, and the
+                 // pushed EFF_OUT stays full width for the activated mcast.
++                const uint32_t this_w = (sb_n + 1 == in1_num_subblocks) ? out_subblock_w_tail : out_subblock_w;
+                 if (sb_n < n_subblocks) {
+                     // --- Gate matmul: x * gate -> partials_gu ---
+                     tile_regs_acquire();
+@@ -577,7 +584,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+                                 in1_index,
+                                 /*dst_index=*/0,
+                                 /*transpose=*/0,
+-                                out_subblock_w,
++                                this_w,
+                                 out_subblock_h,
+                                 in0_block_w);
+                             in0_index += 1;
+@@ -586,7 +593,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+                     }
+                     tile_regs_commit();
+                     tile_regs_wait();
+-                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
++                    for (uint32_t i = 0; i < this_w; ++i) {
+                         pack_tile<true>(i, partials_gu_cb_id, partials_slot_idx + i);
+                     }
+                     tile_regs_release();
+@@ -604,7 +611,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+                                 in1_index,
+                                 /*dst_index=*/0,
+                                 /*transpose=*/0,
+-                                out_subblock_w,
++                                this_w,
+                                 out_subblock_h,
+                                 in0_block_w);
+                             in0_index += 1;
+@@ -613,12 +620,12 @@ FORCE_INLINE void matmul_phase_fused_gu(
+                     }
+                     tile_regs_commit();
+                     tile_regs_wait();
+-                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
++                    for (uint32_t i = 0; i < this_w; ++i) {
+                         pack_tile<true>(i, partials_up_cb_id, partials_slot_idx + i);
+                     }
+                     tile_regs_release();
+                 }
+-                partials_slot_idx += out_subblock_num_tiles;
++                partials_slot_idx += this_w;
+ 
+                 in1_index_subblock_offset += out_subblock_w;
+             }
+@@ -669,24 +676,28 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     // to partials_gu so copy_tile reads the accumulator.
+     reconfig_data_format_srca(up_cb_id, partials_gu_cb_id);
+     copy_init(partials_gu_cb_id);
+-    for (uint32_t sb = 0; sb < (EFF_OUT / out_subblock_num_tiles); ++sb) {
++    // Elementwise over the flat row-major block, so it is chunked by the subblock width rather than
++    // by the (possibly ragged) subblock grid; the last chunk takes the remainder. Both rings are one
++    // block, so the chunk pushes plus the pad below still end exactly on fifo_limit.
++    for (uint32_t base = 0; base < EFF_OUT; base += out_subblock_num_tiles) {
++        const uint32_t c = (EFF_OUT - base < out_subblock_num_tiles) ? (EFF_OUT - base) : out_subblock_num_tiles;
+         tile_regs_acquire();
+-        partials_gu_cb.wait_front(out_subblock_num_tiles);
+-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
++        partials_gu_cb.wait_front(c);
++        for (uint32_t i = 0; i < c; ++i) {
+             copy_tile(partials_gu_cb_id, i, i);
+         }
+-        partials_gu_cb.pop_front(out_subblock_num_tiles);
++        partials_gu_cb.pop_front(c);
+         // MATH-thread SFPU pass: apply silu to each dst tile before pack.
+-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
++        for (uint32_t i = 0; i < c; ++i) {
+             silu_tile(i);
+         }
+         tile_regs_commit();
+         tile_regs_wait();
+-        gate_intermed_cb.reserve_back(out_subblock_num_tiles);
+-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
++        gate_intermed_cb.reserve_back(c);
++        for (uint32_t i = 0; i < c; ++i) {
+             pack_tile(i, gate_intermed_cb_id);
+         }
+-        gate_intermed_cb.push_back(out_subblock_num_tiles);
++        gate_intermed_cb.push_back(c);
+         tile_regs_release();
+     }
+     // The copy loop above did real work only for the runtime rows. Settle the rest
+@@ -877,22 +888,22 @@ FORCE_INLINE void multiply_phase(
+     reconfig_data_format(gate_cb_id, up_cb_id);
+     mul_init(gate_cb_id, up_cb_id);
+ 
+-    const uint32_t num_subblocks = EFF_OUT / out_subblock_num_tiles;
+-    uint32_t base = 0;
+-    for (uint32_t sb = 0; sb < num_subblocks; ++sb) {
++    // Flat elementwise pass, chunked by the subblock width; the last chunk takes the remainder
++    // (a ragged gate/up grid leaves EFF_OUT a non-multiple of the width).
++    for (uint32_t base = 0; base < EFF_OUT; base += out_subblock_num_tiles) {
++        const uint32_t c = (EFF_OUT - base < out_subblock_num_tiles) ? (EFF_OUT - base) : out_subblock_num_tiles;
+         tile_regs_acquire();
+-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
++        for (uint32_t i = 0; i < c; ++i) {
+             mul_tiles(gate_cb_id, up_cb_id, base + i, base + i, i);
+         }
+         tile_regs_commit();
+         tile_regs_wait();
+-        activated_cb.reserve_back(out_subblock_num_tiles);
+-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
++        activated_cb.reserve_back(c);
++        for (uint32_t i = 0; i < c; ++i) {
+             pack_tile(i, activated_cb_id);
+         }
+-        activated_cb.push_back(out_subblock_num_tiles);
++        activated_cb.push_back(c);
+         tile_regs_release();
+-        base += out_subblock_num_tiles;
+     }
+     // Pad cb_activated up to the constant block (pointer-only); the reader drains
+     // the full max block and mcasts only the runtime rows.
+@@ -1130,11 +1141,11 @@ void kernel_main() {
+             // for the tail). The gate/up + multiply phases do per_core_M rows of real
+             // work; the down matmul keeps its full compile-time ring and MAC-skips
+             // rows >= per_core_M (see matmul_phase). re_eff_out_gu = per_core_M *
+-            // per_core_N_gu (g_in1_num_subblocks * gu_out_subblock_num_tiles ==
+-            // per_core_N_gu since gu_out_subblock_h == 1).
++            // per_core_N_gu (g_in1_per_core_w), which the gate/up subblock grid tiles
++            // exactly, ragged last subblock included.
+             const uint32_t re_m_valid =
+                 adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_grp, group_rows);
+-            const uint32_t re_eff_out_gu = re_m_valid * g_in1_num_subblocks * gu_out_subblock_num_tiles;
++            const uint32_t re_eff_out_gu = re_m_valid * g_in1_per_core_w;
+             //
+             // matmul_block_init only re-programs addressing, not SrcA/SrcB formats. On
+             // chunk >= 1 the unpacker is left on multiply_phase's operands, so reset it
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index 1eb7ca394cd..12167f986ca 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -316,6 +316,21 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     // SwiGLU-OAI dst budget + SFPU fp32-dest template, so they can't drift.
+     constexpr bool kFp32DestAccEn = false;
+     constexpr uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
++    // Each matmul_block call is one unpack round per output row on BH (wait for a free unpack
++    // context, program addresses, post/get the sync semaphore, unpack in0 once, then ct in1 tiles),
++    // so that fixed cost is paid once per ct tile-mults. The divisor rule below can leave ct far
++    // under DST_CAPACITY (per_core_N 9 -> 1x3: three rounds per row and k). When a ragged grid of
++    // balanced widths needs FEWER subblocks, take it instead (9 -> 5 + 4): the last subblock is
++    // narrower, which the matmul phases handle (the unpack/math MOPs depend only on ct >= rt, so
++    // one init at the full width also serves the tail). Exact grids that are already minimal
++    // (6, 7x3, 6x3, ...) are left untouched.
++    const auto fewest_subblocks_w = [&](uint32_t per_core_n, uint32_t divisor_w) -> uint32_t {
++        const uint32_t nsb = (per_core_n + DST_CAPACITY - 1) / DST_CAPACITY;
++        const uint32_t balanced_w = (per_core_n + nsb - 1) / nsb;
++        const uint32_t balanced_nsb = (per_core_n + balanced_w - 1) / balanced_w;
++        const uint32_t divisor_nsb = (per_core_n + divisor_w - 1) / divisor_w;
++        return (balanced_nsb < divisor_nsb) ? balanced_w : divisor_w;
++    };
+     const uint32_t gu_out_subblock_h = 1;
+     uint32_t gu_sub_w = 1;
+     for (uint32_t cand = DST_CAPACITY; cand >= 1; --cand) {
+@@ -324,7 +339,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+             break;
+         }
+     }
++    gu_sub_w = fewest_subblocks_w(per_core_N_gu, gu_sub_w);
+     const uint32_t gu_out_subblock_w = gu_sub_w;
++    // Ceil: on a ragged grid the last gate/up subblock is gu_out_subblock_w_tail wide. The compute
++    // kernel derives the tail from per_core_N_gu, the subblock count and the width.
++    const uint32_t gu_in1_num_subblocks = (per_core_N_gu + gu_out_subblock_w - 1) / gu_out_subblock_w;
++    const bool gu_subblocks_exact = (per_core_N_gu % gu_out_subblock_w) == 0;
+     TT_FATAL(
+         gu_out_subblock_h * gu_out_subblock_w <= DST_CAPACITY,
+         "gu subblock h*w ({}) exceeds dst capacity",
+@@ -346,6 +366,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     if (d_sub_w < 3) {
+         d_sub_w = std::min<uint32_t>(DST_CAPACITY, per_core_N_d);
+     }
++    // Same fewest-subblocks rule as gate/up (per_core_N_d 9 -> 5 + 4); a no-op wherever the
++    // grid above is already minimal, including the ragged 8 + 3 of per_core_N_d = 11.
++    d_sub_w = fewest_subblocks_w(per_core_N_d, d_sub_w);
+     const uint32_t d_out_subblock_w = d_sub_w;
+     // Ceil, not exact: the last subblock may be narrower (d_out_subblock_w_tail). Equal to the
+     // exact division whenever the width divides, which is every shape but the ragged one.
+@@ -536,7 +559,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+ 
+     // Phase-level numbers.
+     const uint32_t gu_in0_num_subblocks = per_core_M / gu_out_subblock_h;
+-    const uint32_t gu_in1_num_subblocks = per_core_N_gu / gu_out_subblock_w;
+     const uint32_t gu_in0_block_num_tiles = per_core_M * in0_block_w_gu;
+     const uint32_t gu_in0_subblock_num_tiles = gu_out_subblock_h * in0_block_w_gu;
+     const uint32_t gu_in1_block_num_tiles = in0_block_w_gu * per_core_N_gu;
+@@ -788,10 +810,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         check_ring("cb_x_rm", gu_in0_block_num_tiles, in0_block_w_gu);
+         check_ring("cb_x_tl", gu_in0_block_num_tiles, in0_block_w_gu);
+     }
+-    // gate/up intermediates and their accumulators move one gate/up subblock at a time.
+-    check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
+-    check_ring("cb_partials_gu", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
+-    check_ring("cb_partials_up", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
++    // gate/up intermediates and their accumulators move one gate/up subblock at a time; on a
++    // ragged grid the push widths alternate, so the sequence repeats on a whole output row.
++    const uint32_t gu_row_granule = gu_out_subblock_h * (gu_subblocks_exact ? gu_out_subblock_w : per_core_N_gu);
++    check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_row_granule);
++    check_ring("cb_partials_gu", gu_out_block_num_tiles, gu_row_granule);
++    check_ring("cb_partials_up", gu_out_block_num_tiles, gu_row_granule);
+     // The reader drains cb_activated one down K-block at a time; in0_block_w_d ==
+     // per_core_N_gu makes that granule the whole block, which this pins.
+     check_ring("cb_activated", gu_out_block_num_tiles, per_core_M * in0_block_w_d);

@@ -1,0 +1,30 @@
+{
+  "node_id": "r04-b04-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 4,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "e7b91709fcfc71c51a862e0e55ef4be7dd743452",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T23:56:03+00:00",
+  "mechanism": "decouple the gate/up x and weight handshakes on the receivers: each stream's next-block ack goes out as soon as that stream's own block lands (and its next slot is free), not after both streams' blocks land",
+  "tags": [
+    "data-movement",
+    "handshake",
+    "stream-decoupling",
+    "x-path",
+    "weight-delivery",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6002,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-09T00:17:55+00:00"
+}

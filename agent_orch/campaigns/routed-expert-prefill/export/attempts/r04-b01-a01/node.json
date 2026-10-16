@@ -1,0 +1,31 @@
+{
+  "node_id": "r04-b01-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 4,
+  "branch": 1,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "e7b91709fcfc71c51a862e0e55ef4be7dd743452",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T23:55:58+00:00",
+  "mechanism": "op-local matmul unpack MOP that advances the streamed SrcA tile address with one CFGSHIFTMASK per tile instead of the stock RDCFG / ADDDMAREG / STALLWAIT / WRCFG chain",
+  "tags": [
+    "compute",
+    "llk-unpack-mop",
+    "cfgshiftmask",
+    "unpack-bound",
+    "op-local-llk",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6011,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_mm_unpack.h"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-09T00:08:47+00:00"
+}

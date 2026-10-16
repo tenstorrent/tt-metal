@@ -1,0 +1,12 @@
+{
+  "round": 5,
+  "policy": "v2",
+  "beta": 0.6,
+  "W": 4,
+  "R": 1,
+  "reason": "4 wide, 1 step(s) deep: in r02-r04 step 1 set the round's largest gain and steps 2-4 never paid for their attempts; the next round re-roots on the best node and runs W wide from it",
+  "round_root": "dream/routed-expert-prefill/n/r04-b02-a01",
+  "round_root_commit": "23a0c81920c2b34fe967d79d471d784ade856bdc",
+  "max_steps": 30,
+  "started_at": "2026-10-09T01:26:28+00:00"
+}

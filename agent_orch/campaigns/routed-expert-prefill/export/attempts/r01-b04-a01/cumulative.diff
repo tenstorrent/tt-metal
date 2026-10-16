@@ -1,0 +1,240 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index b68bbb5f28e..a567105d311 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -891,19 +891,54 @@ void kernel_main() {
+         constexpr uint32_t ACT_VALID = 1;
+         const uint32_t intermed_tile_bytes = cb_in0_down_full_obj.get_tile_size();
+ 
++        // Down-weight DRAM read of K-block `kb_r` into `l1_w`: only the rows this RISC keeps
++        // (DOWN_SPLIT: the writer reads the rest on NoC 1 into the upper part of the same slot).
++        // Issued only; the caller owns the barrier. Both OOB directions are left UNWRITTEN.
++        //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds its K-loop
++        //     by real_k_tiles, so these are never reduced. Were they reduced, stale L1
++        //     decoding to Inf would NaN every valid output column — the bound is what
++        //     makes the skip safe.
++        //   * N-OOB (col >= N_down_tiles_full, free dim): the output column is dropped
++        //     by the writer's col guard.
++        const uint32_t down_col0 = my_nt_d * per_core_N_d;
++        const uint32_t down_col_end =
++            (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
++        auto issue_down_read = [&](uint32_t kb_r, uint32_t l1_w) {
++            for (uint32_t k = 0; k < down_split_k; ++k) {
++                const uint32_t row = kb_r * in0_block_w_d + k;
++                if (row < K_down_tiles) {
++                    DRuns::read(
++                        noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
++                }
++                l1_w += per_core_N_d * down_tile_bytes;
++            }
++        };
++        // DOWN PREFETCH (in1 sender only): K-block kb+1's DRAM read (both halves) is issued
++        // BEFORE K-block kb is multicast, as soon as the other cb_in1_down slot is free, so
++        // the read overlaps the multicast and the wait for the receivers instead of following
++        // them. The next iteration then finds its block already in flight.
++        bool down_prefetched = false;
++
+         for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
+             const bool is_act_sender = (my_nt_d == kb);
+ 
++            // Already free when this block was prefetched (the prefetch checked for two
++            // free blocks before kb was pushed).
+             cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
+             cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
+ 
++            // Step 2 (moved ahead of the acks): the in1_down sender issues this block's DRAM
++            // reads into its own reserved slot -- they need no receiver to be ready, only the
++            // multicast does -- unless the previous iteration already prefetched it.
+             // DOWN_SPLIT: slot reserved -> release the writer to read the block on NoC 1.
+-            if constexpr (split_down) {
+-                if (is_in1_sender) {
++            if (is_in1_sender && !down_prefetched) {
++                if constexpr (split_down) {
+                     ++down_seq;
+                     down_go_sem.set(down_seq);
+                 }
++                issue_down_read(kb, cb_in1_down_obj.get_write_ptr());
+             }
++            down_prefetched = false;
+ 
+             // Step 1: receivers ack BOTH senders (in1_down and act) at the
+             // top of the K-block iter. The in1_down ack lets the in1_down
+@@ -922,36 +957,7 @@ void kernel_main() {
+                 act_ready_sem.up(noc, sender_nx, sender_ny, 1);
+             }
+ 
+-            // Step 2: in1_down sender kicks off DRAM reads (NoC 0) without
+-            // barriering — reads run concurrently with the activated mcast
+-            // below on NoC 1.
+-            uint32_t in1_block_start = 0;
+-            if (is_in1_sender) {
+-                in1_ready_sem.wait(in1_num_receivers);
+-                in1_ready_sem.set(0);
+-                uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
+-                in1_block_start = l1_w;
+-                // DOWN_SPLIT: only the rows this RISC keeps; the writer reads the rest on
+-                // NoC 1 into the upper part of the same slot.
+-                // Both OOB directions are left UNWRITTEN.
+-                //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds its K-loop
+-                //     by real_k_tiles, so these are never reduced. Were they reduced, stale L1
+-                //     decoding to Inf would NaN every valid output column — the bound is what
+-                //     makes the skip safe.
+-                //   * N-OOB (col >= N_down_tiles_full, free dim): the output column is dropped
+-                //     by the writer's col guard.
+-                const uint32_t down_col0 = my_nt_d * per_core_N_d;
+-                const uint32_t down_col_end =
+-                    (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
+-                for (uint32_t k = 0; k < down_split_k; ++k) {
+-                    const uint32_t row = kb * in0_block_w_d + k;
+-                    if (row < K_down_tiles) {
+-                        DRuns::read(
+-                            noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
+-                    }
+-                    l1_w += per_core_N_d * down_tile_bytes;
+-                }
+-            }
++            const uint32_t in1_block_start = cb_in1_down_obj.get_write_ptr();
+ 
+             // Step 3: in1_down sender finishes — barrier on the DRAM reads it
+             // kicked off in step 2, then mcasts the down-weight block. Reordered
+@@ -961,12 +967,39 @@ void kernel_main() {
+             // that is BOTH senders (gy==0 && gx==kb) the DRAM-read barrier is no
+             // longer hidden under the activated wait — measure before keeping.
+             if (is_in1_sender) {
++                // Only this block's reads are outstanding (a prefetch is issued after this).
+                 noc_read.async_read_barrier();
+                 // DOWN_SPLIT: the writer's block must have landed before it is multicast
+                 // (or consumed locally at GRID_Y == 1).
+                 if constexpr (split_down) {
+                     down_done_sem.wait_min(down_seq);
+                 }
++                // Prefetch kb+1 into the other slot once the local compute has popped kb-1
++                // (two free blocks while kb is still unpushed). The slot after kb is kb's
++                // write pointer plus one block, wrapped exactly as cb_push_back wraps.
++                auto try_prefetch_down = [&]() {
++                    if (!down_prefetched && kb + 1 < num_blocks_d &&
++                        cb_in1_down_obj.pages_reservable_at_back(2 * d_in1_block_num_tiles)) {
++                        const auto& iface = get_local_cb_interface(cb_in1_down);
++                        uint32_t next = in1_block_start + d_in1_block_num_tiles * down_tile_bytes;
++                        if (next == iface.fifo_limit) {
++                            next -= iface.fifo_size;
++                        }
++                        if constexpr (split_down) {
++                            ++down_seq;
++                            down_go_sem.set(down_seq);
++                        }
++                        issue_down_read(kb + 1, next);
++                        down_prefetched = true;
++                    }
++                };
++                // The receivers' ready gates only the multicast; poll the prefetch meanwhile.
++                try_prefetch_down();
++                while (in1_ready_sem.value() < in1_num_receivers) {
++                    try_prefetch_down();
++                }
++                in1_ready_sem.set(0);
++                try_prefetch_down();
+                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
+                 // core consumes the locally-read down weight directly.
+                 if (in1_num_receivers > 0) {
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 0d7df0363f3..73288d99ee9 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -279,29 +279,65 @@ void kernel_main() {
+                     CircularBuffer cb_in1_up_buf(cb_in1_up);
+                     const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
+                     const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
+-                    for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+-                        ++up_seq;
+-                        up_go_sem.wait_min(up_seq);
+-                        const uint32_t l1_w_up_block_start = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
+-                        uint32_t l1_w_up = l1_w_up_block_start;
+-                        // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
+-                        // a down K position the down matmul never reduces (the compute bounds
+-                        // its K-loop by real_k_tiles), so stale L1 is dropped.
++                    // Issue (not barrier) the DRAM read of up K-block `kb_r` into `l1_dst`.
++                    // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
++                    // a down K position the down matmul never reduces (the compute bounds
++                    // its K-loop by real_k_tiles), so stale L1 is dropped.
++                    auto issue_up_read = [&](uint32_t kb_r, uint32_t l1_dst) {
+                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                             GuRuns::read(
+                                 noc_up,
+                                 up_acc,
+-                                kb * in0_block_w_gu + k,
++                                kb_r * in0_block_w_gu + k,
+                                 N_gate_tiles_full,
+                                 up_col0,
+                                 up_col_end,
+-                                l1_w_up,
++                                l1_dst,
+                                 up_tile_bytes);
+-                            l1_w_up += per_core_N_gu * up_tile_bytes;
++                            l1_dst += per_core_N_gu * up_tile_bytes;
++                        }
++                    };
++                    // UP PREFETCH (IN1_WRITER_MCAST only): K-block kb+1's DRAM read is issued
++                    // BEFORE K-block kb is multicast, so the read overlaps the multicast and
++                    // its handshakes instead of following them. kb+1 goes into the slot block
++                    // kb-1 used; that slot is free once (a) this RISC's multicast of kb-1 has
++                    // flushed -- it has, one iteration ago -- and (b) the local compute has
++                    // popped kb-1, read straight off cb_in1_up's tiles_acked register (the
++                    // reader's up_go would only say so after it has also waited for up_done(kb)
++                    // and this row's x, i.e. too late to overlap anything). If the slot is not
++                    // free before the multicast, the next iteration takes the original
++                    // blocking up_go path, so the semaphore protocol is unchanged.
++                    bool up_prefetched = false;
++                    for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
++                        ++up_seq;
++                        const uint32_t l1_w_up_block_start = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
++                        if (!up_prefetched) {
++                            up_go_sem.wait_min(up_seq);
++                            issue_up_read(kb, l1_w_up_block_start);
+                         }
++                        up_prefetched = false;
++                        // Only this block's reads are outstanding here (the prefetch below is
++                        // issued after this barrier).
+                         noc_up.async_read_barrier();
+                         up_done_sem.set(up_seq);
+ 
++                        // Popped-page count the compute must reach before kb+1 may overwrite
++                        // block kb-1's slot: (up_seq - 1) blocks, as a wrapping uint16 like the
++                        // register itself.
++                        [[maybe_unused]] const uint16_t popped_target = static_cast<uint16_t>((up_seq - 1) * g_in1_block_num_tiles);
++                        [[maybe_unused]] auto try_prefetch_up = [&]() {
++                            if constexpr (writer_mcasts_in1) {
++                                if (!up_prefetched && kb + 1 < num_blocks_gu) {
++                                    const uint16_t acked =
++                                        static_cast<uint16_t>(reg_read((uintptr_t)get_cb_tiles_acked_ptr(cb_in1_up)));
++                                    if (static_cast<int16_t>(acked - popped_target) >= 0) {
++                                        issue_up_read(kb + 1, up_cb_base + (up_seq % kUpNumSlots) * up_slot_bytes);
++                                        up_prefetched = true;
++                                    }
++                                }
++                            }
++                        };
++
+                         // IN1_WRITER_MCAST: wait for the reader's gate read (mcast_go), then
+                         // for the receivers to free their slots (in1_ready), multicast
+                         // gate+up on NoC 1, and signal mcast_done so the reader may
+@@ -310,9 +346,17 @@ void kernel_main() {
+                         // read overlaps this multicast -- which is the whole point.
+                         if constexpr (writer_mcasts_in1) {
+                             ++mc_seq;
+-                            mcast_go_sem.wait_min(mc_seq);
+-                            in1_ready_sem.wait(in1_num_receivers);
++                            // Poll for the prefetch while waiting on the gate read and on the
++                            // receivers; both waits are the original conditions.
++                            try_prefetch_up();
++                            while (mcast_go_sem.value() < mc_seq) {
++                                try_prefetch_up();
++                            }
++                            while (in1_ready_sem.value() < in1_num_receivers) {
++                                try_prefetch_up();
++                            }
+                             in1_ready_sem.set(0);
++                            try_prefetch_up();
+                             CircularBuffer cb_in1_gate_buf(cb_in1_gate);
+                             const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
+                             const uint32_t gate_slot_bytes = g_in1_block_num_tiles * gate_tile_bytes;

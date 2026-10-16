@@ -1,0 +1,36 @@
+{
+  "node_id": "r02-b02-a04",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 2,
+  "attempt": 4,
+  "parent": "r02-b02-a03",
+  "parent_commit": "33b4d60b4c1b34ee3aff2565780d17beb08cd922",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T21:38:22+00:00",
+  "mechanism": "on r02-b03-a03's code, the two-phase schedule's phase B may use a mixed-height layout (4+3+3 etc.), one leftover expert per group largest-first, so dsv3/glm's 3 leftover experts run at per_core_M 2 on the rows that idle today",
+  "tags": [
+    "runtime-schedule",
+    "two-phase",
+    "row-groups",
+    "load-balance",
+    "mixed-height",
+    "planner",
+    "rebase-onto-best",
+    "kernel-only"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5697,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/binary_act_sfpu.h",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 44,
+  "finished_at": "2026-10-08T21:46:11+00:00"
+}

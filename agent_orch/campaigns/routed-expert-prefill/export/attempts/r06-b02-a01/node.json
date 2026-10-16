@@ -1,0 +1,31 @@
+{
+  "node_id": "r06-b02-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 6,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "5d961ca906c29b86081f6c09d5b3063a71bfa868",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T02:20:11+00:00",
+  "mechanism": "plan-aware start-up stagger: each lower row group holds its first DRAM read 2.5 us per grid row below the top group (unless it has more modelled work than the top group), so the top groups' first gate/up blocks are not starved by the synchronized start-up burst",
+  "tags": [
+    "data-movement",
+    "start-up",
+    "stagger",
+    "row-gradient",
+    "dram-contention",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "finished_at": "2026-10-09T02:42:51+00:00",
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.64,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 48
+}

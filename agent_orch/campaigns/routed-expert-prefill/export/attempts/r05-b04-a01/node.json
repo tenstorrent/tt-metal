@@ -1,0 +1,34 @@
+{
+  "node_id": "r05-b04-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 5,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "23a0c81920c2b34fe967d79d471d784ade856bdc",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T01:26:35+00:00",
+  "mechanism": "torus-aware weight-sender rows: every group column's gate/up sender is the group's bottom row and its down sender the top row, so the writer's NoC-1 (-y) and the reader's NoC-0 (+y) column multicasts start at their rectangle corner instead of wrapping around the whole column of the torus",
+  "tags": [
+    "data-movement",
+    "noc-topology",
+    "multicast-geometry",
+    "sender-placement",
+    "torus-wrap",
+    "host+kernel",
+    "bit-identical"
+  ],
+  "valid": false,
+  "fail_class": "hang",
+  "score": 0.0,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 901,
+  "finished_at": "2026-10-09T02:11:17+00:00"
+}

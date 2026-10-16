@@ -1,0 +1,29 @@
+{
+  "node_id": "r01-b04-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 4,
+  "attempt": 2,
+  "parent": "r01-b04-a01",
+  "parent_commit": "a517c3ef07ced7716d5a36c85251fc46b38ef44e",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T18:57:37+00:00",
+  "mechanism": "halve gate/up K-block count: in0_block_w_gu 16->32 paid by per_core_M_max 4->2, drop M-doubling step (reverts parent read-ahead)",
+  "tags": [
+    "k-block-geometry",
+    "l1-budget",
+    "host-config",
+    "revert-parent"
+  ],
+  "valid": false,
+  "fail_class": "accuracy_fail",
+  "score": 0.0,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 42,
+  "finished_at": "2026-10-08T19:05:55+00:00"
+}

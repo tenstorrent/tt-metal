@@ -1,0 +1,32 @@
+{
+  "node_id": "r02-b03-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 3,
+  "attempt": 2,
+  "parent": "r02-b03-a01",
+  "parent_commit": "c311b55b398471ca06f03961a918ab10db945971",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T20:53:53+00:00",
+  "mechanism": "combine r02-b04-a01's mixed-height row-group layouts with the two-phase schedule, taking two-phase only when the leftover experts fit in one phase-B round",
+  "tags": [
+    "runtime-schedule",
+    "row-groups",
+    "combination",
+    "load-balance",
+    "repair"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5278,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 24,
+  "eval_seconds": 44,
+  "finished_at": "2026-10-08T21:00:23+00:00"
+}

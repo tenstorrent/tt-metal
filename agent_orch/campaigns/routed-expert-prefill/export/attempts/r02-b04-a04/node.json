@@ -1,0 +1,30 @@
+{
+  "node_id": "r02-b04-a04",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 4,
+  "attempt": 4,
+  "parent": "r02-b04-a03",
+  "parent_commit": "d5a15c4cf3274b40c013e55f28f1eb967bc6cbfc",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T21:38:22+00:00",
+  "mechanism": "same-math SFPU activations in fewer instructions for every activation: port r02-b03-a03's op-local SwiGLU-OAI / SiTU-GLU / clamped SiLU-GLU bodies and give the plain-SiLU gate pass the same treatment (constants in LRegs / Prgm1-2 CRegs, unrolled for sfpi replay)",
+  "tags": [
+    "compute",
+    "sfpu",
+    "activation",
+    "instruction-count",
+    "kernel-only",
+    "port"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5427,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/binary_act_sfpu.h",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 44,
+  "finished_at": "2026-10-08T21:48:08+00:00"
+}

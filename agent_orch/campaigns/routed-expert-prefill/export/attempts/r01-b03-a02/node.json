@@ -1,0 +1,31 @@
+{
+  "node_id": "r01-b03-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 3,
+  "attempt": 2,
+  "parent": "r01-b03-a01",
+  "parent_commit": "7ef138f2be08e03768e4b6257245128e8cbbf381",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T18:57:37+00:00",
+  "mechanism": "batch x over up to 4 gate/up K-blocks per x CB block at small per_core_M (one stick read, mcast, tilize init and matmul re-init per batch; RM path), reverting the parent read-ahead",
+  "tags": [
+    "compute",
+    "x-path",
+    "tilize",
+    "handshake-amortization",
+    "revert-parent"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 0.9626,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 44,
+  "finished_at": "2026-10-08T19:07:12+00:00"
+}

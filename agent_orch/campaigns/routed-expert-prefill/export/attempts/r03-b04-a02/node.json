@@ -1,0 +1,30 @@
+{
+  "node_id": "r03-b04-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 4,
+  "attempt": 2,
+  "parent": "r03-b04-a01",
+  "parent_commit": "2182147fe6550be18c92e6f88b9d5d79d9e4ff37",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T22:22:42+00:00",
+  "mechanism": "take the row-shared x look-ahead DRAM read off the gate/up weight path: x reads get their own NoC transaction id so the gate sender's weight barrier and each reader's per-block weight push no longer wait for them, and the x block is pushed as soon as it lands",
+  "tags": [
+    "data-movement",
+    "x-path",
+    "noc-trid",
+    "barrier-scope",
+    "row-major-path",
+    "kernel-only",
+    "measurement"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5761,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-08T22:38:18+00:00"
+}

@@ -1,0 +1,30 @@
+{
+  "node_id": "r02-b02-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 2,
+  "attempt": 2,
+  "parent": "r02-b02-a01",
+  "parent_commit": "ad97d3ef2fc3723caeaac923003c9937fe403e7c",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T20:53:53+00:00",
+  "mechanism": "per-sender NoC request VCs for the weight DRAM reads ((column + row group) & 3) so concurrent column/group weight streams are arbitrated round-robin instead of FCFS on one VC",
+  "tags": [
+    "data-movement",
+    "noc-vc",
+    "dram-fairness",
+    "group-tail",
+    "kernel-only"
+  ],
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5191,
+  "build_seconds": 20,
+  "eval_seconds": 42,
+  "finished_at": "2026-10-08T21:07:39+00:00"
+}

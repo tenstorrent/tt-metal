@@ -1,0 +1,31 @@
+{
+  "node_id": "r01-b02-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 2,
+  "attempt": 3,
+  "parent": "r01-b02-a02",
+  "parent_commit": "3dc8d82103df351d416e24de67e19d758a3c21f6",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T19:24:09+00:00",
+  "mechanism": "port r01-b01-a02 row-shared x tilize (one owner core per M-row tilizes each RM x K-block and multicasts bf8 tiles) onto the collision-free row-group schedule",
+  "tags": [
+    "compute",
+    "tilize",
+    "x-multicast",
+    "dedup",
+    "row-major-path",
+    "combination"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4665,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 43,
+  "finished_at": "2026-10-08T19:28:05+00:00"
+}

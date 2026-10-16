@@ -1,0 +1,36 @@
+{
+  "node_id": "r06-b04-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 6,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "5d961ca906c29b86081f6c09d5b3063a71bfa868",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T02:20:14+00:00",
+  "mechanism": "wrap-free down-weight multicasts: weight senders sit only on their group's top or bottom row (alternating by column), and a bottom-row sender's down multicast runs on its writer's NoC 1 (-y) instead of the reader's NoC 0 (+y), so no down multicast wraps around the column torus through the other groups' rows",
+  "tags": [
+    "data-movement",
+    "noc-topology",
+    "multicast-geometry",
+    "torus-wrap",
+    "sender-placement",
+    "down-phase",
+    "host+kernel",
+    "bit-identical",
+    "repair"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6931,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 47,
+  "finished_at": "2026-10-09T03:38:58+00:00"
+}

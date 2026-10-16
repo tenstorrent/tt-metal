@@ -1,0 +1,28 @@
+{
+  "node_id": "r02-b01-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 1,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "ff0bcd951efdb912ba0acbd56fd88f57f260bd60",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T20:28:37+00:00",
+  "mechanism": "DRAM-aware group-size picker: model groups as sharing DRAM (fluid phases) so few-tile expert sets run 2 groups of 5 rows at per_core_M 1 instead of 5 groups of 2 rows with a compute-bound tail",
+  "tags": [
+    "runtime-schedule",
+    "cost-model",
+    "dram-bandwidth",
+    "row-groups",
+    "work-partition"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4854,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 42,
+  "finished_at": "2026-10-08T20:38:32+00:00"
+}

@@ -1,0 +1,505 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index df39641a2bb..be82f7c12ad 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -146,6 +146,138 @@ FORCE_INLINE void drain_packer_before_reaccumulate() {
+ #endif
+ }
+ 
++// ---- Matmul groups: 1 x W subblocks, or column streaming (weight tile held in SrcA) ----------
++//
++// A 1 x W subblock (ct >= rt, the LLK's reuse_a mode) holds one in0 (x / activated, bf8) tile in
++// SrcB and streams a bf4 weight tile through SrcA for EVERY tile-mult. Measured with r03-b02-a03's
++// MATH perf counters: the FPU is busy 16 cycles per mult, the SrcA unpacker ~17.5, and the two
++// barely overlap, so a mult costs ~30-33 cycles on the compute-bound shapes. With ct < rt the LLK
++// runs the other way round: each weight tile is unpacked into SrcA once and the rt in0 tiles of its
++// column stream through SrcB (the mode big BH GEMMs run in, out_subblock_h > out_subblock_w). Every
++// output tile still accumulates the same K-tiles in the same order through the same MVMUL sequence,
++// so dst -- and the packed partials -- are bit-identical; only operand delivery and pack order move.
++//
++// "Column streaming" (CS) groups take all per_core_M rows at once and are used for the non-last
++// gate/up K-blocks and the down K-loop when per_core_M >= kCsMinRows. Rows per weight-tile unpack
++// is what pays; at 2 rows the per-call unpack bookkeeping (one context round per 2 mults) likely
++// costs more than it saves, so those keep the 1 x W walk.
++constexpr uint32_t kCsMinRows = 3;
++constexpr uint32_t kDstHalfTiles = (FP32_DEST_ACC_EN != 0) ? 4u : 8u;
++
++// CS group width for `rows` streamed rows: the widest ct with ct < rows (keeps the LLK in its
++// SrcA-reuse mode) and rows * ct <= one dst half. 0 = column streaming not used at this height.
++FORCE_INLINE uint32_t cs_cols(uint32_t rows) {
++    if (rows < kCsMinRows || rows > kDstHalfTiles) {
++        return 0;
++    }
++    const uint32_t ct = kDstHalfTiles / rows;
++    return ct < rows ? ct : rows - 1;
++}
++
++// Kernel config buffer: the h7168 programs sit at its limit, and every inlined matmul_block /
++// matmul_block_init expands the dynamic-throttle re-init path on MATH and the address setup on
++// UNPACK. So every matmul call and init in this kernel goes through mm_init / mm_kloop below: one
++// out-of-line copy of each per TRISC.
++//
++// matmul_block_init for (ct, rows, kt_dim) blocks. For a CS shape (ct < rows) the SrcB MOP steps
++// through the rows by TILE_SIZE_B * KT_DIM, and TILE_SIZE_B is only refreshed by a format-changing
++// reconfig, so pin it to this in0 CB's tile size.
++__attribute__((noinline, noclone)) void mm_init(
++    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t ct, uint32_t rows, uint32_t kt_dim) {
++    matmul_block_init(in0_cb_id, in1_cb_id, /*transpose=*/0, ct, rows, kt_dim);
++    if (ct < rows) {
++        UNPACK(({
++            const uint32_t in0_tile_size = get_local_cb_interface(get_operand_id(in0_cb_id)).fifo_page_size;
++            TT_SETDMAREG(0, LOWER_HALFWORD(in0_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
++        }));
++    }
++}
++
++// k_steps matmul_block calls into dst[dst_base, dst_base + rows * ct): in0 rows [0, rows) from tile
++// in0_base (row stride kt_dim) x in1 columns [in1_base, in1_base + ct) (row stride in1_w), walking K.
++__attribute__((noinline, noclone)) void mm_kloop(
++    uint32_t in0_cb_id,
++    uint32_t in1_cb_id,
++    uint32_t in0_base,
++    uint32_t in1_base,
++    uint32_t dst_base,
++    uint32_t ct,
++    uint32_t rows,
++    uint32_t k_steps,
++    uint32_t kt_dim,
++    uint32_t in1_w) {
++    uint32_t in0_index = in0_base;
++    uint32_t in1_index = in1_base;
++    for (uint32_t k = 0; k < k_steps; ++k) {
++        matmul_block(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_base, /*transpose=*/0, ct, rows, kt_dim);
++        in0_index += 1;
++        in1_index += in1_w;
++    }
++}
++
++// One dst acquire of matmul work: in0 rows [0, rows) (first tile in0_base, row stride kt_dim) x in1
++// columns [n0, n0 + ct) (row stride in1_w) over k_steps K-tiles, packed (absolute slots, L1_ACC as
++// configured) to partials slot slot_base + m * n_row + j. rows == 1 is one 1 x ct subblock; ct < rows
++// is a CS group (needs the CS mm_init). dst tile (m, j) sits at m * ct + j in both LLK modes.
++__attribute__((noinline, noclone)) void mm_group(
++    uint32_t in0_cb_id,
++    uint32_t in1_cb_id,
++    uint32_t partials_cb_id,
++    uint32_t in0_base,
++    uint32_t rows,
++    uint32_t n0,
++    uint32_t ct,
++    uint32_t k_steps,
++    uint32_t kt_dim,
++    uint32_t in1_w,
++    uint32_t slot_base,
++    uint32_t n_row) {
++    tile_regs_acquire();
++    mm_kloop(in0_cb_id, in1_cb_id, in0_base, n0, /*dst_base=*/0, ct, rows, k_steps, kt_dim, in1_w);
++    tile_regs_commit();
++    tile_regs_wait();
++    uint32_t d = 0;
++    for (uint32_t m = 0; m < rows; ++m) {
++        for (uint32_t j = 0; j < ct; ++j) {
++            pack_tile<true>(d++, partials_cb_id, slot_base + m * n_row + j);
++        }
++    }
++    tile_regs_release();
++}
++
++// All matmul groups of one K-block: rows [0, eff_m) in g_rows-row groups (in0 row stride kt_dim) x
++// columns [0, real_cols) in g_w-wide groups (narrower last group), each group packed to slot
++// m * n_row + n. Per group the in1_a product goes to partials_a, then -- when n_in1 == 2 -- the
++// in1_b product (same in0 rows) to partials_b. Columns past real_cols (phantom subblocks) get no MAC
++// and no pack; every surviving tile keeps its absolute slot.
++__attribute__((noinline, noclone)) void mm_block(
++    uint32_t in0_cb_id,
++    uint32_t in1_a_cb_id,
++    uint32_t partials_a_cb_id,
++    uint32_t in1_b_cb_id,
++    uint32_t partials_b_cb_id,
++    uint32_t n_in1,
++    uint32_t eff_m,
++    uint32_t g_rows,
++    uint32_t g_w,
++    uint32_t real_cols,
++    uint32_t k_steps,
++    uint32_t kt_dim,
++    uint32_t in1_w,
++    uint32_t n_row) {
++    for (uint32_t r0 = 0; r0 < eff_m; r0 += g_rows) {
++        for (uint32_t n0 = 0; n0 < real_cols; n0 += g_w) {
++            const uint32_t ct = (real_cols - n0) < g_w ? (real_cols - n0) : g_w;
++            const uint32_t in0_base = r0 * kt_dim;
++            const uint32_t slot_base = r0 * n_row + n0;
++            mm_group(in0_cb_id, in1_a_cb_id, partials_a_cb_id, in0_base, g_rows, n0, ct, k_steps, kt_dim, in1_w, slot_base, n_row);
++            if (n_in1 == 2) {
++                mm_group(in0_cb_id, in1_b_cb_id, partials_b_cb_id, in0_base, g_rows, n0, ct, k_steps, kt_dim, in1_w, slot_base, n_row);
++            }
++        }
++    }
++}
++
+ template <
+     uint32_t in0_block_w,
+     uint32_t in0_num_subblocks,
+@@ -232,6 +364,18 @@ FORCE_INLINE void matmul_phase(
+     // the unpacked tail is drained by the pointer-only pop after the copy loop.
+     partials_cb.reserve_back(out_block_num_tiles);
+ 
++    // Matmul groups (see mm_group): CS groups of all EFF_M rows x cs_ct columns at
++    // per_core_M >= kCsMinRows, else the 1 x out_subblock_w subblock walk. Real columns end where
++    // the real subblocks end (phantom subblocks: no MAC, no pack; slots keep their absolute index).
++    // A ragged grid's narrower last subblock is just the last, shorter step of the column walk.
++    const uint32_t cs_ct = cs_cols(EFF_M);
++    const uint32_t g_rows = (cs_ct != 0) ? EFF_M : 1;
++    const uint32_t g_w = (cs_ct != 0) ? cs_ct : out_subblock_w;
++    const uint32_t real_cols = (n_subblocks >= in1_num_subblocks) ? N_PER_ROW : n_subblocks * out_subblock_w;
++    if (cs_ct != 0) {
++        mm_init(in0_cb_id, in1_cb_id, cs_ct, EFF_M, in0_block_w);
++    }
++
+     for (uint32_t block = 0; block < num_blocks; ++block) {
+         RE_HW_SAMPLE_THROTTLE();
+         // The reader pushes the FULL compile-time-max activated block (filling only
+@@ -255,49 +399,21 @@ FORCE_INLINE void matmul_phase(
+         // the accumulator). Its CBs are still drained below — the reader and writer
+         // push every padded block unconditionally.
+         if (k_steps > 0) {
+-            int in0_index_subblock_offset = 0;
+-            uint32_t partials_slot_idx = 0;
+-            for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
+-                int in1_index_subblock_offset = 0;
+-                for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
+-                    // Phantom-column subblocks: no MAC, no pack. The slot counters still
+-                    // advance so the surviving subblocks keep their absolute partials slots.
+-                    // Ragged grid: the last N-subblock is narrower, so it MACs and packs fewer
+-                    // tiles. Identical to out_subblock_w on an exact grid.
+-                    const uint32_t this_w = (sb_n + 1 == in1_num_subblocks) ? out_subblock_w_tail : out_subblock_w;
+-                    if (sb_n < n_subblocks) {
+-                        tile_regs_acquire();
+-                        {
+-                            uint32_t in0_index = in0_index_subblock_offset;
+-                            uint32_t in1_index = in1_index_subblock_offset;
+-                            for (uint32_t inner_dim = 0; inner_dim < k_steps; ++inner_dim) {
+-                                matmul_block(
+-                                    in0_cb_id,
+-                                    in1_cb_id,
+-                                    in0_index,
+-                                    in1_index,
+-                                    /*dst_index=*/0,
+-                                    /*transpose=*/0,
+-                                    this_w,
+-                                    out_subblock_h,
+-                                    in0_block_w);
+-                                in0_index += 1;
+-                                in1_index += in1_per_core_w;
+-                            }
+-                        }
+-                        tile_regs_commit();
+-                        tile_regs_wait();
+-                        for (uint32_t i = 0; i < this_w * out_subblock_h; ++i) {
+-                            pack_tile<true>(i, partials_cb_id, partials_slot_idx + i);
+-                        }
+-                        tile_regs_release();
+-                    }
+-                    partials_slot_idx += this_w * out_subblock_h;
+-
+-                    in1_index_subblock_offset += out_subblock_w;
+-                }
+-                in0_index_subblock_offset += in0_subblock_num_tiles;
+-            }
++            mm_block(
++                in0_cb_id,
++                in1_cb_id,
++                partials_cb_id,
++                in1_cb_id,
++                partials_cb_id,
++                /*n_in1=*/1,
++                EFF_M,
++                g_rows,
++                g_w,
++                real_cols,
++                k_steps,
++                in0_block_w,
++                in1_per_core_w,
++                N_PER_ROW);
+         }
+ 
+ #ifdef PACKER_L1_ACC
+@@ -555,7 +671,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+                 x_tl_cb.push_back(x_pad);
+             }
+             reconfig_data_format_srca(gate_cb_id);
+-            matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
++            mm_init(x_cb_id, gate_cb_id, out_subblock_w, out_subblock_h, in0_block_w);
+             pack_reconfig_data_format(x_tl_cb_id, partials_gu_cb_id);
+ #ifdef PACKER_L1_ACC
+             PACK((llk_pack_reconfig_l1_acc(l1_acc)));
+@@ -575,6 +691,15 @@ FORCE_INLINE void matmul_phase_fused_gu(
+         }
+     }
+ 
++    // Non-last K-blocks run in matmul groups (see mm_group): CS groups at per_core_M >= kCsMinRows,
++    // else the 1 x out_subblock_w subblock walk. The phase is entered with the 1 x out_subblock_w
++    // init and the owner tilize restores that init, so the CS init is re-issued lazily after
++    // either. The last block keeps the 1 x LW walk its activation pipeline is built on.
++    const uint32_t cs_ct = cs_cols(EFF_M);
++    const uint32_t g_rows = (cs_ct != 0) ? EFF_M : 1;
++    const uint32_t g_w = (cs_ct != 0) ? cs_ct : out_subblock_w;
++    bool cs_init_pending = true;
++
+     // ---- Activation pipelined into the last K-block ------------------------------------------
+     // Subblock s of the output is final once the LAST K-block has packed it, so its activation
+     // (bias add + binary SFPU op -> cb_activated, or silu -> cb_gate_intermed) can run while the
+@@ -655,7 +780,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+             return;
+         }
+         reconfig_data_format(gate_cb_id, x_cb_id);  // in1 -> SrcA, in0 -> SrcB
+-        matmul_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
++        mm_init(x_cb_id, gate_cb_id, LW, out_subblock_h, in0_block_w);
+         pack_reconfig_data_format(partials_gu_cb_id);
+ #ifdef PACKER_L1_ACC
+         PACK((llk_pack_reconfig_l1_acc(l1_acc_last)));
+@@ -728,13 +853,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     };
+     // Last-block matmul of one LW-subblock into dst[dst_base, dst_base + LW).
+     auto mm_last = [&](uint32_t in1_cb, uint32_t in0_base, uint32_t in1_base, uint32_t dst_base) {
+-        uint32_t in0_index = in0_base;
+-        uint32_t in1_index = in1_base;
+-        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+-            matmul_block(x_cb_id, in1_cb, in0_index, in1_index, dst_base, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
+-            in0_index += 1;
+-            in1_index += in1_per_core_w;
+-        }
++        mm_kloop(x_cb_id, in1_cb, in0_base, in1_base, dst_base, LW, out_subblock_h, in0_block_w, in0_block_w, in1_per_core_w);
+     };
+ 
+     for (uint32_t block = 0; block < num_blocks; ++block) {
+@@ -745,6 +864,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+             }
+             if (block + 1 < num_blocks && x_slot == x_rank) {
+                 tilize_owned_x_block(block == 0 ? 0 : 1);
++                cs_init_pending = true;
+             }
+         }
+         x_cb.wait_front(X_BLOCK_TILES_MAX);
+@@ -755,77 +875,29 @@ FORCE_INLINE void matmul_phase_fused_gu(
+             break;  // the last block runs pipelined with the activation, below
+         }
+ 
+-        int in0_index_subblock_offset = 0;
+-        uint32_t partials_slot_idx = 0;
+-        for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
+-            int in1_index_subblock_offset = 0;
+-            for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
+-                // Phantom-column subblocks (col >= N_gate_tiles_full): the reader/writer
+-                // never fetched those weight tiles, so both matmuls would just multiply
+-                // stale L1. Skip the MAC and the pack; the slot counters still advance so
+-                // the surviving subblocks keep their absolute partials slots, and the
+-                // pushed EFF_OUT stays full width for the activated mcast.
+-                if (sb_n < n_subblocks) {
+-                    // --- Gate matmul: x * gate -> partials_gu ---
+-                    tile_regs_acquire();
+-                    {
+-                        uint32_t in0_index = in0_index_subblock_offset;
+-                        uint32_t in1_index = in1_index_subblock_offset;
+-                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+-                            matmul_block(
+-                                x_cb_id,
+-                                gate_cb_id,
+-                                in0_index,
+-                                in1_index,
+-                                /*dst_index=*/0,
+-                                /*transpose=*/0,
+-                                out_subblock_w,
+-                                out_subblock_h,
+-                                in0_block_w);
+-                            in0_index += 1;
+-                            in1_index += in1_per_core_w;
+-                        }
+-                    }
+-                    tile_regs_commit();
+-                    tile_regs_wait();
+-                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+-                        pack_tile<true>(i, partials_gu_cb_id, partials_slot_idx + i);
+-                    }
+-                    tile_regs_release();
+-
+-                    // --- Up matmul: x * up -> partials_up (same x, different in1) ---
+-                    tile_regs_acquire();
+-                    {
+-                        uint32_t in0_index = in0_index_subblock_offset;
+-                        uint32_t in1_index = in1_index_subblock_offset;
+-                        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
+-                            matmul_block(
+-                                x_cb_id,
+-                                up_cb_id,
+-                                in0_index,
+-                                in1_index,
+-                                /*dst_index=*/0,
+-                                /*transpose=*/0,
+-                                out_subblock_w,
+-                                out_subblock_h,
+-                                in0_block_w);
+-                            in0_index += 1;
+-                            in1_index += in1_per_core_w;
+-                        }
+-                    }
+-                    tile_regs_commit();
+-                    tile_regs_wait();
+-                    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+-                        pack_tile<true>(i, partials_up_cb_id, partials_slot_idx + i);
+-                    }
+-                    tile_regs_release();
+-                }
+-                partials_slot_idx += out_subblock_num_tiles;
+-
+-                in1_index_subblock_offset += out_subblock_w;
+-            }
+-            in0_index_subblock_offset += in0_subblock_num_tiles;
++        if (cs_ct != 0 && cs_init_pending) {
++            mm_init(x_cb_id, gate_cb_id, cs_ct, EFF_M, in0_block_w);
++            cs_init_pending = false;
+         }
++        // Phantom-column subblocks (col >= N_gate_tiles_full): the reader/writer never fetched those
++        // weight tiles, so both matmuls would just multiply stale L1. Skip the MAC and the pack; the
++        // surviving columns keep their absolute partials slots (m * per_core_N + n), and the pushed
++        // EFF_OUT stays full width for the activated mcast. Gate then up per group, same x rows.
++        mm_block(
++            x_cb_id,
++            gate_cb_id,
++            partials_gu_cb_id,
++            up_cb_id,
++            partials_up_cb_id,
++            /*n_in1=*/2,
++            EFF_M,
++            g_rows,
++            g_w,
++            real_cols,
++            /*k_steps=*/in0_block_w,
++            in0_block_w,
++            in1_per_core_w,
++            LN * LW);
+ 
+ #ifdef PACKER_L1_ACC
+         if (block == 0) {
+@@ -845,8 +917,9 @@ FORCE_INLINE void matmul_phase_fused_gu(
+ 
+     // ---- Last K-block (its x / gate / up are waited on above) ----
+     // Packs keep the L1_ACC state the K-loop left (on for num_blocks > 1, off for a single block).
+-    if constexpr (LW != out_subblock_w) {
+-        matmul_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
++    // CS groups left their init in place: restore the 1 x LW one.
++    if (LW != out_subblock_w || (cs_ct != 0 && num_blocks > 1)) {
++        mm_init(x_cb_id, gate_cb_id, LW, out_subblock_h, in0_block_w);
+     }
+     bool pend = false;
+     bool pend_real = false;
+@@ -1274,13 +1347,7 @@ void kernel_main() {
+             // chunk >= 1 the unpacker is left on multiply_phase's operands, so reset it
+             // to the gate/up inputs here (in1 -> SrcA, in0 -> SrcB).
+             reconfig_data_format(cb_in1_gate, cb_in0_x);
+-            matmul_block_init(
+-                cb_in0_x,
+-                cb_in1_gate,
+-                /*transpose=*/0,
+-                gu_out_subblock_w,
+-                gu_out_subblock_h,
+-                g_in0_block_w);
++            mm_init(cb_in0_x, cb_in1_gate, gu_out_subblock_w, gu_out_subblock_h, g_in0_block_w);
+ 
+             // Phases 1 & 2 fused: gate matmul + up matmul share the same per-K-block
+             // x push from the reader, so x DRAM mcast bytes are halved (one x read
+@@ -1365,13 +1432,7 @@ void kernel_main() {
+ #endif
+             RE_HW_BEGIN(1);
+             reconfig_data_format(cb_in1_down, cb_in0_down_full);
+-            matmul_block_init(
+-                cb_in0_down_full,
+-                cb_in1_down,
+-                /*transpose=*/0,
+-                d_out_subblock_w,
+-                d_out_subblock_h,
+-                d_in0_block_w);
++            mm_init(cb_in0_down_full, cb_in1_down, d_out_subblock_w, d_out_subblock_h, d_in0_block_w);
+             matmul_phase<
+                 d_in0_block_w,
+                 d_in0_num_subblocks,
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp
+index afcda1ab048..7f1d4d969f2 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp
+@@ -12,13 +12,16 @@
+ // MATH thread only. Compiled in only under the device profiler (PROFILE_KERNEL); otherwise every
+ // macro is empty and nothing here exists.
+ //
+-// Each expert's gate/up window (RE-GU) and down window (RE-DN) starts the FPU, TDMA_UNPACK and
+-// INSTRN_THREAD counter banks, stops them at the window end and adds the selected counters into a
+-// per-phase total. These are the registers tools/profiler/perf_counters.hpp drives when
++// Each expert's gate/up window (RE-GU) and down window (RE-DN) starts the FPU and TDMA_UNPACK
++// counter banks, stops them at the window end and adds the selected counters into a per-phase
++// total. These are the registers tools/profiler/perf_counters.hpp drives when
+ // TT_METAL_PROFILE_PERF_COUNTERS is set; without it the firmware never touches them, so this
+-// kernel owns them for the launch. The FW matmul-throttle word (MEM_L1_ARC_FW_SCRATCH, odd =
+-// matmul_block runs its MM_THROTTLE_MAX MOP) is sampled once per K-block. At kernel end MATH emits
+-// the totals as 16 "RE-HW" DeviceTimestampedData records (layout at emit()).
++// kernel owns them for the launch. At kernel end MATH emits the totals as 16 "RE-HW"
++// DeviceTimestampedData records (layout at emit()).
++//
++// Trimmed in r03-b02-a04 to fit the kernel config buffer: the INSTRN_THREAD bank (per-thread stalls,
++// SrcA/SrcB-valid waits, which read 0 on BH) and the FW matmul-throttle samples (measured never
++// set) are no longer read; their slots stay in the record layout and emit 0.
+ #if defined(PROFILE_KERNEL) && defined(TRISC_MATH)
+ namespace re_hw {
+ 
+@@ -98,21 +101,17 @@ inline __attribute__((noinline, noclone)) void begin(uint32_t phase) {
+     cur_phase = phase;
+     start_bank(RISCV_DEBUG_REG_PERF_CNT_FPU0);
+     start_bank(RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0);
+-    start_bank(RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0);
+ }
+ 
+ inline __attribute__((noinline, noclone)) void end(uint32_t phase, uint32_t mults) {
+     stop_bank(RISCV_DEBUG_REG_PERF_CNT_FPU0);
+     stop_bank(RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0);
+-    stop_bank(RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0);
+     uint32_t* a = acc[phase];
+     uint32_t ref = 0;
+     constexpr uint32_t F = RISCV_DEBUG_REG_PERF_CNT_FPU0;
+     constexpr uint32_t FO = RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU;
+     constexpr uint32_t U = RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0;
+     constexpr uint32_t UO = RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK;
+-    constexpr uint32_t I = RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0;
+-    constexpr uint32_t IO = RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD;
+     a[kFpu] += read_counter(F, FO, 0, &ref);
+     a[kRef] += ref;
+     a[kSfpu] += read_counter(F, FO, 1, nullptr);
+@@ -121,20 +120,9 @@ inline __attribute__((noinline, noclone)) void end(uint32_t phase, uint32_t mult
+     a[kSrcAWr] += read_counter(U, UO, 6, nullptr);
+     a[kUnp0] += read_counter(U, UO, 7, nullptr);
+     a[kUnp1] += read_counter(U, UO, 8, nullptr);
+-    a[kStall0] += read_counter(I, IO, 24, nullptr);
+-    a[kStall1] += read_counter(I, IO, 25, nullptr);
+-    a[kStall2] += read_counter(I, IO, 26, nullptr);
+-    a[kWaitAValid] += read_counter(I, IO, 29, nullptr);
+-    a[kWaitBValid] += read_counter(I, IO, 30, nullptr);
+     a[kMults] += mults;
+ }
+ 
+-inline __attribute__((always_inline)) void sample_throttle() {
+-    const uint32_t w = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
+-    acc[cur_phase][kThrOn] += (w & 1u);
+-    acc[cur_phase][kThrN] += 1u;
+-}
+-
+ // One record per (phase, slot pair): bits [63:56] = phase * 8 + pair index, [55:28] = first slot,
+ // [27:0] = second slot (28 bits each: a launch is well under 2^28 cycles per core). One call site,
+ // so the profiler write is inlined once.
+@@ -168,7 +156,7 @@ inline __attribute__((noinline)) void emit() {
+ #define RE_HW_INIT() re_hw::init()
+ #define RE_HW_BEGIN(phase) re_hw::begin(phase)
+ #define RE_HW_END(phase, mults) re_hw::end(phase, mults)
+-#define RE_HW_SAMPLE_THROTTLE() re_hw::sample_throttle()
++#define RE_HW_SAMPLE_THROTTLE()
+ #define RE_HW_EMIT() re_hw::emit()
+ #else
+ #define RE_HW_INIT()

@@ -1,0 +1,240 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index 9df7bd30e8a..e43fd82df35 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -249,6 +249,45 @@ inline uint32_t layout_group(const GroupLayout& l, uint32_t gy, uint32_t& base,
+     return l.groups - 1;
+ }
+ 
++// Row-shared x tilize (row-major x): the grid column that reads, tilizes and multicasts gate/up
++// K-block j of an M-row. That row is row `my_mt` of a `rows`-row group, whose weight sender for
++// column c is the group's row c % rows (the host's placement). Columns whose core is this row's
++// weight sender are skipped: its reader streams the column's weights, and x duty there (the stick
++// reads under the same read barrier as the gate block, the tilize wait and the row multicast)
++// would delay the column's weight multicast on every block. The remaining columns take the blocks
++// in turn. Every core of the row shares (j, rows, my_mt), so all agree on the owner.
++//
++// Owner slots: the number of eligible columns (block j goes to slot j % slots).
++inline uint32_t x_owner_slots(uint32_t grid_x, uint32_t rows, uint32_t my_mt) {
++    if (rows < 2 || my_mt >= rows) {
++        return grid_x;
++    }
++    const uint32_t senders = (my_mt < grid_x) ? (grid_x - 1 - my_mt) / rows + 1 : 0;
++    return grid_x - senders;
++}
++// Slot of column `col` (its rank among the eligible columns), or `slots` if it is never an owner.
++inline uint32_t x_owner_rank(uint32_t col, uint32_t rows, uint32_t my_mt, uint32_t slots) {
++    if (rows < 2 || my_mt >= rows) {
++        return col;
++    }
++    if (col % rows == my_mt) {
++        return slots;
++    }
++    return col - ((col > my_mt) ? (col - 1 - my_mt) / rows + 1 : 0);
++}
++// Owner column of block j. Out of line: the reader calls it a few times per K-block.
++inline __attribute__((noinline)) uint32_t x_owner_col(uint32_t j, uint32_t grid_x, uint32_t rows, uint32_t my_mt) {
++    const uint32_t r = j % x_owner_slots(grid_x, rows, my_mt);
++    if (rows < 2 || my_mt >= rows) {
++        return r;
++    }
++    // r-th column c (ascending) with c % rows != my_mt: each run of `rows` columns holds rows - 1.
++    const uint32_t per = rows - 1;
++    const uint32_t q = r / per;
++    const uint32_t rem = r - q * per;
++    return q * rows + rem + (rem >= my_mt ? 1u : 0u);
++}
++
+ // Modelled cost of one expert on a group of `rows` M-rows, in units of one per-core tile-row of
+ // work: the per_core_M summed over its chunks, plus one unit per chunk for the chunk's fixed
+ // pipeline fill/drain and its full re-read of the expert's weights. 0 for an expert with no rows.
+@@ -282,6 +321,15 @@ inline uint32_t group_cost(uint32_t count_tiles, uint32_t rows, uint32_t per_cor
+     return per_core_M + 1;
+ }
+ 
++// The launch planner below runs once per kernel, before any work. On the compute kernel (UNPACK) it
++// is built at -O2, as the dataflow kernels build it, not at the compute kernels' -O3: -O3 roughly
++// doubles its code (~9.5 KB vs ~4.5 KB) for no measurable gain, and every RISC binary of a core has
++// to fit the kernel config buffer together (r03-b01-a01 overflowed it). The reader's -O2 copy plans
++// at the same speed, and compute waits for the reader's first weight multicast anyway.
++#if defined(COMPILE_FOR_TRISC)
++#pragma GCC push_options
++#pragma GCC optimize("O2")
++#endif
+ constexpr uint8_t kNoGroup = 0xFF;
+ constexpr uint32_t kNoSchedule = 0xFFFFFFFFu;
+ 
+@@ -790,4 +838,8 @@ inline LaunchPlan plan_launch(const TilesOfL1& tiles_of_l1, uint32_t per_core_M_
+     return lp;
+ }
+ 
++#if defined(COMPILE_FOR_TRISC)
++#pragma GCC pop_options
++#endif
++
+ }  // namespace adaptive_chunk
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index 8726cf7e30e..7acc58c2680 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -459,12 +459,13 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     uint32_t up_bias_cb_id,
+     uint32_t m_subblocks,
+     uint32_t n_subblocks,
+-    // Row-shared tilize (tilize_x only): this chunk's first gate/up block number, this core's
+-    // grid column and the row width. Block x_blk_base + b is tilized by column
+-    // (x_blk_base + b) % grid_x alone; the reader multicasts the tiles to the rest of the row.
++    // Row-shared tilize (tilize_x only): this chunk's first gate/up block number, the row's owner
++    // slot count and this core's slot. Block x_blk_base + b is tilized by the core in slot
++    // (x_blk_base + b) % x_slots alone (adaptive_chunk::x_owner_col: never the column's weight
++    // sender); the reader multicasts the tiles to the rest of the row.
+     uint32_t x_blk_base = 0,
+-    uint32_t my_gx = 0,
+-    uint32_t grid_x = 1) {
++    uint32_t x_slots = 1,
++    uint32_t x_rank = 0) {
+     // No real_k_tiles bound here, unlike the down phase: the host asserts
+     // K_gate_tiles % in0_block_w == 0, so the gate/up K-loop covers the reduction
+     // dim exactly and there is no padded K position to skip. This phase's padding
+@@ -562,8 +563,11 @@ FORCE_INLINE void matmul_phase_fused_gu(
+             (void)l1_acc;
+         }
+     };
++    // Owner slot of the next block to tilize (block 0 here, block + 1 in the loop).
++    [[maybe_unused]] uint32_t x_slot = 0;
+     if constexpr (tilize_x) {
+-        if (x_blk_base % grid_x == my_gx) {
++        x_slot = x_blk_base % x_slots;
++        if (x_slot == x_rank) {
+             tilize_owned_x_block(0);
+         }
+     }
+@@ -732,7 +736,10 @@ FORCE_INLINE void matmul_phase_fused_gu(
+ 
+     for (uint32_t block = 0; block < num_blocks; ++block) {
+         if constexpr (tilize_x) {
+-            if (block + 1 < num_blocks && (x_blk_base + block + 1) % grid_x == my_gx) {
++            if (++x_slot == x_slots) {
++                x_slot = 0;
++            }
++            if (block + 1 < num_blocks && x_slot == x_rank) {
+                 tilize_owned_x_block(block == 0 ? 0 : 1);
+             }
+         }
+@@ -1202,7 +1209,10 @@ void kernel_main() {
+         // Next expert this group works on: its tile-row count, already band-filtered and clamped
+         // (0 = no more experts). UNPACK scans, MATH/PACK receive.
+         uint32_t count_tiles = 0;
+-        uint32_t group_rows = 0;
++        // Group height in the low half, this core's row within the group (the x tilize owner
++        // rotation skips its weight-sender columns, see adaptive_chunk::x_owner_col) in the high
++        // half: one mailbox word per expert.
++        uint32_t group_word = 0;
+         UNPACK(({
+             while (count_tiles == 0) {
+                 if (next_expert == experts_per_chip || plan.layout[phase] == adaptive_chunk::kNoLayout) {
+@@ -1219,15 +1229,15 @@ void kernel_main() {
+                     adaptive_chunk::layout_at(adaptive_chunk::kGridY, plan.layout[phase]), my_gy, group_base, rows);
+                 if (expert_group[phase][next_expert] == my_group) {
+                     count_tiles = tiles_of(next_expert);
+-                    group_rows = rows;
++                    group_word = rows | ((my_gy - group_base) << 16);
+                 }
+                 ++next_expert;
+             }
+             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_tiles);
+             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_tiles);
+             if (count_tiles != 0) {
+-                ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, group_rows);
+-                ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, group_rows);
++                ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, group_word);
++                ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, group_word);
+             }
+         }));
+         MATH(count_tiles = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+@@ -1235,8 +1245,13 @@ void kernel_main() {
+         if (count_tiles == 0) {
+             break;
+         }
+-        MATH(group_rows = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+-        PACK(group_rows = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
++        MATH(group_word = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
++        PACK(group_word = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
++        const uint32_t group_rows = group_word & 0xFFFF;
++        const uint32_t my_mt = group_word >> 16;
++        // Row-shared tilize owners of this row (adaptive_chunk::x_owner_col): slot count, my slot.
++        const uint32_t x_slots = adaptive_chunk::x_owner_slots(grid_x, group_rows, my_mt);
++        const uint32_t x_rank = adaptive_chunk::x_owner_rank(my_gx, group_rows, my_mt, x_slots);
+         const uint32_t chunk_M = per_core_M_max * group_rows;
+         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M);
+ 
+@@ -1305,8 +1320,8 @@ void kernel_main() {
+                 /*m_subblocks=*/re_m_valid,
+                 /*n_subblocks=*/gu_valid_n_subblocks,
+                 /*x_blk_base=*/x_blk,
+-                my_gx,
+-                grid_x);
++                x_slots,
++                x_rank);
+             }
+             x_blk += g_num_blocks;
+ 
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 786da1282c6..585abf4955b 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -416,9 +416,10 @@ void kernel_main() {
+     uint32_t mc_seq = 0;
+ 
+     // Row-shared tilize (row-major x). Gate/up K-blocks are numbered across every chunk and
+-    // expert this row works on (x_blk = number of earlier blocks); block x_blk + kb belongs to row
+-    // column (x_blk + kb) % GRID_X. The compute kernel keeps the same counter, and all cores of a
+-    // row run the same experts and chunks, so every core of the row agrees on each block's owner.
++    // expert this row works on (x_blk = number of earlier blocks); block x_blk + kb belongs to the
++    // row column adaptive_chunk::x_owner_col(x_blk + kb, ...). The compute kernel keeps the same
++    // counter, and all cores of a row run the same experts and chunks in the same group row, so
++    // every core of the row agrees on each block's owner.
+     uint32_t x_blk = 0;
+     // The whole M-row: the row-shared x multicast and the phase-4 activated multicast both span it.
+     const uint32_t mrow_first_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 0);
+@@ -623,12 +624,18 @@ void kernel_main() {
+                 }
+             }
+         };
+-        [[maybe_unused]] auto owns_x_block = [&](uint32_t kb_x) { return (x_blk + kb_x) % GRID_X_NOC == my_nt_gu; };
++        // Owner column of this chunk's x block kb_x: never this row's weight sender for that column
++        // (adaptive_chunk::x_owner_col), so the weight stream's RISC carries no x duty.
++        [[maybe_unused]] auto x_owner = [&](uint32_t kb_x) {
++            return adaptive_chunk::x_owner_col(x_blk + kb_x, GRID_X_NOC, group_rows, my_mt);
++        };
++        [[maybe_unused]] auto owns_x_block = [&](uint32_t kb_x) { return x_owner(kb_x) == my_nt_gu; };
+ 
+         // Row-shared tilize, row-major x. Every core of an M-row needs the same x K-block. Instead
+         // of each of the GRID_X cores tilizing it, block x_blk + kb is read, tilized and multicast
+-        // by ONE owner core of the row, column (x_blk + kb) % GRID_X, so each core tilizes ~1/GRID_X
+-        // of the blocks and skips the per-block tilize/matmul reconfig on the rest:
++        // by ONE owner core of the row, x_owner(kb) (the row's non-weight-sender columns in turn),
++        // so each core tilizes a few of the blocks and skips the per-block tilize/matmul reconfig
++        // on the rest:
+         //   * this RISC on the owner reads the raw block into cb_x_rm TWO blocks ahead (below), so
+         //     it is in L1 when the owner's compute tilizes it one block ahead (cb_x_rm -> cb_x_tl,
+         //     before that compute's matmul of the previous block);
+@@ -661,7 +668,8 @@ void kernel_main() {
+         //   overhead dominates compute.
+         for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+             // This block's x source: the rotating owner (row-major) or the row's fixed x sender (TILE).
+-            const bool is_x_src = (x_is_row_major != 0) ? owns_x_block(kb) : is_in0_sender;
++            const uint32_t x_owner_kb = (x_is_row_major != 0) ? x_owner(kb) : 0;
++            const bool is_x_src = (x_is_row_major != 0) ? (x_owner_kb == my_nt_gu) : is_in0_sender;
+             [[maybe_unused]] bool x_rm_pending = false;
+             if constexpr (x_is_row_major != 0) {
+                 if (kb + 2 < num_blocks_gu && owns_x_block(kb + 2)) {
+@@ -692,7 +700,7 @@ void kernel_main() {
+             if (!is_x_src) {
+                 in0_valid_sem.set(0);
+                 if constexpr (x_is_row_major != 0) {
+-                    const uint32_t owner = (x_blk + kb) % GRID_X_NOC;
++                    const uint32_t owner = x_owner_kb;
+                     in0_ready_sem.up(
+                         noc,
+                         get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * owner + 0),

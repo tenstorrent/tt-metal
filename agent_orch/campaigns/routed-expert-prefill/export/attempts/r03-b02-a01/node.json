@@ -1,0 +1,30 @@
+{
+  "node_id": "r03-b02-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "cb2514ebcd5a184ca65ee0478a7315579ee2c682",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T21:57:43+00:00",
+  "mechanism": "combine r02-b02-a04's planner (mixed-height phase B) with r02-b01-a04's PACK-thread pipelined activation, and trim the planner prologue (counts cached once per RISC, uniform layouts scheduled once, divide-free cost model)",
+  "tags": [
+    "combination",
+    "planner-prologue",
+    "pack-thread-sfpu",
+    "sfpu-fpu-overlap",
+    "runtime-schedule",
+    "kernel-only"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5887,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 47,
+  "finished_at": "2026-10-08T22:02:41+00:00"
+}

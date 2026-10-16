@@ -1,0 +1,30 @@
+{
+  "node_id": "r04-b03-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 4,
+  "branch": 3,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "e7b91709fcfc71c51a862e0e55ef4be7dd743452",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T23:56:01+00:00",
+  "mechanism": "measurement node: an in-situ, data-independent gate/up matmul probe at kernel start (perf-counter window on MATH) plus UNPACK-thread wall-clock tallies of every input-CB wait (x, gate, up, activated, down) and the owner's x tilize, to decide whether the ~31 cycles per tile-mult is the matmul pipeline or the compute waiting for data",
+  "tags": [
+    "measurement",
+    "profiler-only",
+    "compute",
+    "in-situ-probe",
+    "cb-wait",
+    "kernel-only"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5945,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 47,
+  "finished_at": "2026-10-09T00:26:20+00:00"
+}

@@ -1,0 +1,67 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 42586b16d34..a2bf6978fe1 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -171,8 +171,10 @@ void kernel_main() {
+     // whole gate block; the writer reads the rest on NoC 1. Same NoC balance reason. The host
+     // sets it only when `up` has gate's exact accessor layout and tile size, so those rows are
+     // read through a gate-layout accessor at up's base address (one read loop, one code copy).
++    // The count is tilted by grid row around the host's value (weight_runs.hpp).
+ #ifdef RE_UP_HEAD_ROWS
+-    constexpr uint32_t up_head_rows = RE_UP_HEAD_ROWS;
++    const uint32_t up_head_rows = unified_routed_expert_ffn::up_head_rows_for_row(
++        RE_UP_HEAD_ROWS, in0_block_w_gu, my_gy, adaptive_chunk::kGridY);
+ #else
+     constexpr uint32_t up_head_rows = 0;
+ #endif
+@@ -691,7 +693,7 @@ void kernel_main() {
+         // UP_SPLIT also issues the first up_head_rows K-rows of the `up` block into its slot at
+         // l1_up_slot here, on NoC 0 (the writer reads the remaining rows on NoC 1); the same
+         // barrier covers them before mcast_go. Rows [0, w) are gate, [w, w + up_head_rows) up.
+-        constexpr uint32_t gu_rows_read = in0_block_w_gu + (up_split ? up_head_rows : 0);
++        const uint32_t gu_rows_read = in0_block_w_gu + (up_split ? up_head_rows : 0);
+         auto issue_gate_read = [&](uint32_t kb_rd, uint32_t l1_slot, uint32_t l1_up_slot) {
+             uint32_t l1_w = l1_slot;
+             for (uint32_t k = 0; k < gu_rows_read; ++k) {
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 8f77860b03e..0aecbdf8b2c 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -117,9 +117,10 @@ void kernel_main() {
+     constexpr uint32_t d_head_tiles = get_compile_time_arg_val(25);
+     constexpr bool writer_split_down = d_head_tiles < per_core_N_d;
+     // UP_SPLIT: the reader reads the leading up_head_rows K-rows of each `up` block on NoC 0;
+-    // this RISC reads the rest.
++    // this RISC reads the rest. Same per-row count as the reader's (weight_runs.hpp).
+ #ifdef RE_UP_HEAD_ROWS
+-    constexpr uint32_t up_head_rows = RE_UP_HEAD_ROWS;
++    const uint32_t up_head_rows = unified_routed_expert_ffn::up_head_rows_for_row(
++        RE_UP_HEAD_ROWS, in0_block_w_gu, my_gy, adaptive_chunk::kGridY);
+ #else
+     constexpr uint32_t up_head_rows = 0;
+ #endif
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp
+index b0764e56ae9..b57876f75d7 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp
+@@ -26,6 +26,20 @@
+ // contiguous run exists: run() collapses to 1 and this degenerates to the per-tile read.
+ namespace unified_routed_expert_ffn {
+ 
++// UP_SPLIT: leading `up` K-rows of each gate/up block that grid row `gy`'s reader issues on NoC 0
++// (its writer reads the rest on NoC 1). The host picks `avg_rows` for the ~60/40 NoC balance; this
++// tilts it by row, 0 on the top row to 2 * avg_rows on the bottom one, with the same mean. With
++// all groups streaming gate/up at once, NoC 0 serves the bottom rows' reads first and the top
++// groups ran the first expert up to ~3x slower than the bottom ones for the same work (r06-b01-a01).
++// The reader and writer of a core both call this with their own gy, so they agree on the split.
++inline uint32_t up_head_rows_for_row(uint32_t avg_rows, uint32_t block_w, uint32_t gy, uint32_t grid_y) {
++    if (grid_y < 2) {
++        return avg_rows;
++    }
++    const uint32_t h = (2 * avg_rows * gy + (grid_y - 1) / 2) / (grid_y - 1);
++    return (h < block_w) ? h : block_w;
++}
++
+ template <uint32_t SHARD_W = 0>
+ struct WeightRuns {
+     // Length of the maximal contiguous run starting at tile column j, clipped to end.

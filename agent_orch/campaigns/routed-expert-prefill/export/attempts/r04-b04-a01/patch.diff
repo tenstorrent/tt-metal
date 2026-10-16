@@ -1,0 +1,128 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 585abf4955b..3e4dd1a94bc 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -666,10 +666,39 @@ void kernel_main() {
+         //   Receivers wait for BOTH valid semaphores at the end. Halves the
+         //   per-K-block elapsed time at small per_core_M where mcast/handshake
+         //   overhead dominates compute.
++        //
++        // The x and weight streams are decoupled per receiver: block kb+1's ack on one stream runs
++        // as soon as THAT stream's block kb has landed and the next slot is free, instead of after
++        // both streams' block kb (see step 3). Each receiver still holds at most one outstanding ack
++        // per stream, so every sender's ready/valid handshake is unchanged. x_pre / w_pre: block
++        // kb's x / weight ack already went out in step 3 of block kb-1.
++        bool x_pre = false;
++        bool w_pre = false;
++        // Receiver's x ack for a block whose source is `owner` (row-major) or the fixed x sender.
++        auto ack_x = [&](uint32_t owner) __attribute__((noinline)) {
++            in0_valid_sem.set(0);
++            if constexpr (x_is_row_major != 0) {
++                in0_ready_sem.up(
++                    noc,
++                    get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * owner + 0),
++                    get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * owner + 1),
++                    1);
++            } else {
++                in0_ready_sem.up(noc, in0_sender_nx, in0_sender_ny, 1);
++            }
++        };
++        auto ack_w = [&]() __attribute__((noinline)) {
++            in1_valid_sem.set(0);
++            in1_ready_sem.up(noc, in1_sender_nx, in1_sender_ny, 1);
++        };
+         for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+             // This block's x source: the rotating owner (row-major) or the row's fixed x sender (TILE).
+             const uint32_t x_owner_kb = (x_is_row_major != 0) ? x_owner(kb) : 0;
+             const bool is_x_src = (x_is_row_major != 0) ? (x_owner_kb == my_nt_gu) : is_in0_sender;
++            const bool x_early = x_pre;
++            const bool w_early = w_pre;
++            x_pre = false;
++            w_pre = false;
+             [[maybe_unused]] bool x_rm_pending = false;
+             if constexpr (x_is_row_major != 0) {
+                 if (kb + 2 < num_blocks_gu && owns_x_block(kb + 2)) {
+@@ -696,23 +725,13 @@ void kernel_main() {
+             // Step 1: receivers ack BOTH senders upfront so both senders can
+             // proceed in parallel. The senders are usually disjoint sets of
+             // cores; the only core that's both senders is (0,0) which doesn't
+-            // self-inc (it's its own sender for both).
+-            if (!is_x_src) {
+-                in0_valid_sem.set(0);
+-                if constexpr (x_is_row_major != 0) {
+-                    const uint32_t owner = x_owner_kb;
+-                    in0_ready_sem.up(
+-                        noc,
+-                        get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * owner + 0),
+-                        get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * owner + 1),
+-                        1);
+-                } else {
+-                    in0_ready_sem.up(noc, in0_sender_nx, in0_sender_ny, 1);
+-                }
++            // self-inc (it's its own sender for both). Skipped for a stream whose ack for this
++            // block already went out early (step 3 of the previous block).
++            if (!is_x_src && !x_early) {
++                ack_x(x_owner_kb);
+             }
+-            if (!is_in1_sender) {
+-                in1_valid_sem.set(0);
+-                in1_ready_sem.up(noc, in1_sender_nx, in1_sender_ny, 1);
++            if (!is_in1_sender && !w_early) {
++                ack_w();
+             }
+ 
+             // Step 2: senders run their work. in0 sender path and in1 sender
+@@ -973,16 +992,43 @@ void kernel_main() {
+                 }
+             }
+ 
+-            // Step 3: receivers wait for both valid semaphores and push.
+-            if (!is_x_src) {
+-                in0_valid_sem.wait(IN0_VALID);
+-                x_stage_obj.push_back(g_in0_block_tiles_max);
+-            }
+-            if (!is_in1_sender) {
+-                in1_valid_sem.wait(IN1_VALID);
+-                cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
+-                if constexpr (reader_mcasts_up) {
+-                    cb_in1_up_obj.push_back(g_in1_block_num_tiles);
++            // Step 3: receivers wait for both valid semaphores and push, in whichever order the
++            // blocks land. While one stream's block is still in flight, the stream that already
++            // landed acks its block kb+1 (same chunk only) if this core receives that block and its
++            // next slot is already free. The ack goes out after this stream's block kb landed and its
++            // valid flag is reset, the same state step 1 sends it from, so no sender ever sees an ack
++            // it is not waiting for. Anything not acked here is acked in step 1 of block kb+1.
++            {
++                const bool has_next = kb + 1 < num_blocks_gu;
++                const uint32_t x_owner_next = (x_is_row_major != 0 && has_next) ? x_owner(kb + 1) : 0;
++                const bool x_recv_next =
++                    has_next && !((x_is_row_major != 0) ? (x_owner_next == my_nt_gu) : is_in0_sender);
++                const bool w_recv_next = has_next && !is_in1_sender;
++                bool x_in = is_x_src;
++                bool w_in = is_in1_sender;
++                while (!(x_in && w_in)) {
++                    if (!x_in && in0_valid_sem.value() == IN0_VALID) {
++                        x_stage_obj.push_back(g_in0_block_tiles_max);
++                        x_in = true;
++                    }
++                    if (!w_in && in1_valid_sem.value() == IN1_VALID) {
++                        cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
++                        if constexpr (reader_mcasts_up) {
++                            cb_in1_up_obj.push_back(g_in1_block_num_tiles);
++                        }
++                        w_in = true;
++                    }
++                    if (x_in && !w_in && x_recv_next && !x_pre &&
++                        x_stage_obj.pages_reservable_at_back(g_in0_block_tiles_max)) {
++                        ack_x(x_owner_next);
++                        x_pre = true;
++                    }
++                    if (w_in && !x_in && w_recv_next && !w_pre &&
++                        cb_in1_gate_obj.pages_reservable_at_back(g_in1_block_num_tiles) &&
++                        (reader_mcasts_up == 0 || cb_in1_up_obj.pages_reservable_at_back(g_in1_block_num_tiles))) {
++                        ack_w();
++                        w_pre = true;
++                    }
+                 }
+             }
+         }

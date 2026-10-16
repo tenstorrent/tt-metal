@@ -1,0 +1,242 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp
+index afcda1ab048..3dd7acc3d38 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp
+@@ -19,7 +19,9 @@
+ // kernel owns them for the launch. The FW matmul-throttle word (MEM_L1_ARC_FW_SCRATCH, odd =
+ // matmul_block runs its MM_THROTTLE_MAX MOP) is sampled once per K-block. At kernel end MATH emits
+ // the totals as 16 "RE-HW" DeviceTimestampedData records (layout at emit()).
+-#if defined(PROFILE_KERNEL) && defined(TRISC_MATH)
++// Opt-in (define RE_HWPROF as well): the counters cost MATH-binary space in every profiled build, and
++// every RISC binary of a core shares the kernel config buffer, which the h7168 programs fill.
++#if defined(PROFILE_KERNEL) && defined(TRISC_MATH) && defined(RE_HWPROF)
+ namespace re_hw {
+ 
+ constexpr uint32_t kPhaseGu = 0;
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 25b38cd97b2..057cefb3632 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -261,6 +261,13 @@ void kernel_main() {
+     uint8_t expert_group[2][experts_per_chip];
+     const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
+     constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + adaptive_chunk::num_layouts(adaptive_chunk::kGridY) * GROUP_TOPO_ARGS;
++#ifdef RE_DRAM_EP_REMAP
++    // NoC-1 DRAM port remap for this core's row (weight_runs.hpp dram_port_remap_toggle), four words
++    // right after the phase-A sems. Toggled in and out around both NoC-1 weight read loops below.
++#define RE_REMAP_SWAP() unified_routed_expert_ffn::dram_port_remap_toggle<PHASE_A_SEM_RT + 2>()
++#else
++#define RE_REMAP_SWAP()
++#endif
+     // Gate/up and down blocks this core has consumed so far, sender or not. The writer never pushes,
+     // so it indexes the reader's live ring slot off these. They must count EVERY block: the sender
+     // role can change between phases, while the reader's write pointer advanced on all of them.
+@@ -352,6 +359,7 @@ void kernel_main() {
+                         // a down K position the down matmul never reduces (the compute bounds
+                         // its K-loop by real_k_tiles), so stale L1 is dropped.
+                         // Rows [0, up_head_rows) are the reader's (NoC 0).
++                        RE_REMAP_SWAP();
+                         for (uint32_t k = up_head_rows; k < in0_block_w_gu; ++k) {
+                             GuRuns::read(
+                                 noc_up,
+@@ -364,6 +372,7 @@ void kernel_main() {
+                                 up_tile_bytes);
+                             l1_w_up += per_core_N_gu * up_tile_bytes;
+                         }
++                        RE_REMAP_SWAP();
+                         noc_up.async_read_barrier();
+                         up_done_sem.set(up_seq);
+ 
+@@ -461,6 +470,7 @@ void kernel_main() {
+                         // Both OOB directions left UNWRITTEN, matching the reader: the compute
+                         // bounds its down K-loop by real_k_tiles and the writer's col guard drops
+                         // phantom output columns (a tail past down_col_end reads nothing).
++                        RE_REMAP_SWAP();
+                         for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                             const uint32_t row = kb * in0_block_w_d + k;
+                             if (row < K_down_tiles) {
+@@ -476,6 +486,7 @@ void kernel_main() {
+                             }
+                             l1_w += per_core_N_d * down_tile_bytes;
+                         }
++                        RE_REMAP_SWAP();
+                         noc_up.async_read_barrier();
+                         down_done_sem.set(down_seq);
+ 
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp
+index b0764e56ae9..9f152734dfe 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp
+@@ -26,6 +26,29 @@
+ // contiguous run exists: run() collapses to 1 and this degenerates to the per-tile read.
+ namespace unified_routed_expert_ffn {
+ 
++// NoC-1 DRAM port remap (RE_DRAM_EP_REMAP, writer only). A Blackhole DRAM bank has three NoC tiles in
++// its DRAM column, all forwarding to the same GDDR controller. The accessors always target the soc
++// descriptor's NoC-1 endpoint tile (UMD port 1), whose response first runs north along the DRAM column
++// and wraps round it for most grid rows. The host picks, per core, the tile each bank is read through
++// (its NoC-1 endpoint or its free tile, never its NoC-0 endpoint). The writer toggles those
++// coordinates into its own (BRISC-local) NoC-1 row of the firmware's bank -> NoC xy table around each
++// weight read loop and back right after, so the reads cost nothing per tile and every other NoC-1
++// DRAM access keeps the default endpoint. The table row is 8 uint16 = 4 words; runtime args
++// [ArgIdx, ArgIdx + 4) hold (remapped word - default word) mod 2^32. Each call adds them and negates
++// them in place, so calls must come in pairs (the second restores the table and the args).
++template <uint32_t ArgIdx>
++__attribute__((noinline)) void dram_port_remap_toggle() {
++    // Dependent on ArgIdx so it only fires where the toggle is instantiated (Blackhole, 8 banks).
++    static_assert(ArgIdx == ~0u || sizeof(dram_bank_to_noc_xy[1]) == 4 * sizeof(uint32_t), "8 x uint16 NoC-1 DRAM bank table");
++    typedef uint32_t __attribute__((may_alias)) word_t;
++    word_t* table = reinterpret_cast<word_t*>(&dram_bank_to_noc_xy[1][0]);
++    tt_l1_ptr uint32_t* delta = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(ArgIdx));
++    for (uint32_t i = 0; i < 4; ++i) {
++        table[i] += delta[i];
++        delta[i] = 0u - delta[i];
++    }
++}
++
+ template <uint32_t SHARD_W = 0>
+ struct WeightRuns {
+     // Length of the maximal contiguous run starting at tile column j, clipped to end.
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index 0ebfe82c5c0..45cbf2ecd47 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -8,6 +8,7 @@
+ #include <cstdint>
+ #include <cstdlib>
+ #include <initializer_list>
++#include <string>
+ #include <tuple>
+ #include <utility>
+ #include <vector>
+@@ -20,6 +21,7 @@
+ #include <tt-metalium/math.hpp>
+ #include <tt-metalium/program_descriptors.hpp>
+ #include <tt-metalium/tensor_accessor_args.hpp>
++#include <tt-metalium/experimental/tensor_prefetcher.hpp>
+ 
+ #include "ttnn/operation.hpp"
+ #include "kernels/adaptive_chunk.hpp"
+@@ -716,11 +718,84 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     const uint32_t mcast_go_sem_id = kWriterMcastsIn1 ? add_semaphore() : 0;
+     const uint32_t mcast_done_sem_id = kWriterMcastsIn1 ? add_semaphore() : 0;
+ 
++    // NoC-1 DRAM port remap (kernels/weight_runs.hpp DramPortRemap). A Blackhole DRAM bank has three
++    // NoC tiles in its DRAM column, all in front of the same GDDR controller: the soc descriptor's
++    // NoC-0 endpoint, its NoC-1 endpoint (UMD port 1, physical rows 1/10/4/7) and one FREE tile that
++    // no accessor addresses. NoC-1 responses run NORTH along the DRAM column first, so from the fixed
++    // NoC-1 endpoint they wrap round the column for most grid rows -- that is what makes NoC 1's
++    // column links the hot ones in the balance note above. With the remap, each writer reads a bank
++    // through its free tile whenever that is fewer north hops above the writer's row than the NoC-1
++    // endpoint, which takes ~20% off NoC 1's hottest link, so the split moves from ~60% to ~56% NoC 0.
++    // Never through the NoC-0 endpoint tile: that tile's port already carries the bank's NoC-0
++    // stream, and r06-b03-a01 lost 10-17% gate/up by stacking NoC-1 reads on it too.
++    // Only where the other tiles forward NoC-1 reads to DRAM: NIUs come up in NOC2AXI mode and only
++    // DRISC firmware (programmable DRAM cores, which the tensor prefetcher / streaming profiler
++    // use) turns the non-endpoint ones into stream mode. NoC 0 is never remapped (its endpoint is
++    // pinned to CMFW's telemetry tile, SYS-1419). DS_NO_DRAM_EP_REMAP=1 forces it off.
++    // Physical row of each bank's tiles in UMD port order (blackhole_140_arch.yaml `dram:`), banks
++    // 0-3 in DRAM column x = 0 and 4-7 in x = 9; translated coords are (17 + b / 4, 12 + 3 (b % 4) + port).
++    // Metal's logical DRAM core (b, i) is bank b's [NoC-0 endpoint, NoC-1 endpoint, free tile][i].
++    constexpr uint32_t kBhDramPortRow[4][3] = {{0, 1, 11}, {2, 10, 3}, {9, 4, 8}, {5, 7, 6}};
++    constexpr uint32_t kBhNocRows = 12;
++    constexpr uint32_t kDramBanks = 8;
++    auto bh_dram_xy = [](uint32_t bank, uint32_t port) -> uint32_t {
++        return ((12 + 3 * (bank % 4) + port) << 6) | (17 + bank / 4);
++    };
++    bool dram_ep_remap = false;
++    uint32_t free_port[kDramBanks] = {};
++    {
++        auto* dev = t.x.device();
++        const char* sprof = std::getenv("TT_METAL_STREAMING_PROFILER");
++        if (std::getenv("DS_NO_DRAM_EP_REMAP") == nullptr && (sprof == nullptr || std::string(sprof) == "0") &&
++            dev->arch() == tt::ARCH::BLACKHOLE && dev->num_dram_channels() == static_cast<int>(kDramBanks) &&
++            // One bank per channel: the allocator then maps bank b to channel b, the table's lane b.
++            dev->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM) == kDramBanks &&
++            !tt::tt_metal::experimental::IsTensorPrefetcherSupported(*dev)) {
++            dram_ep_remap = true;
++            for (uint32_t b = 0; b < kDramBanks && dram_ep_remap; ++b) {
++                const auto v1 = dev->virtual_core_from_logical_core(CoreCoord{b, 1}, tt::CoreType::DRAM);
++                const auto vf = dev->virtual_core_from_logical_core(CoreCoord{b, 2}, tt::CoreType::DRAM);
++                const uint32_t xy_free = (vf.y << 6) | vf.x;
++                dram_ep_remap = ((v1.y << 6) | v1.x) == bh_dram_xy(b, 1);
++                free_port[b] = 1;  // = no free tile found
++                for (uint32_t port = 0; port < 3; ++port) {
++                    if (port != 1 && bh_dram_xy(b, port) == xy_free) {
++                        free_port[b] = port;
++                    }
++                }
++                dram_ep_remap = dram_ep_remap && free_port[b] != 1;
++            }
++        }
++    }
++    // The writer's firmware bank table row for NoC 1 is 8 uint16 entries (bank b's xy, low half first)
++    // = 4 words; per word, (remapped - default) mod 2^32 for a writer in physical row `row`, the tile
++    // being the free one when it is fewer north hops above the row than the NoC-1 endpoint.
++    auto dram_remap_deltas = [&](uint32_t row) {
++        std::vector<uint32_t> deltas(kDramBanks / 2);
++        for (uint32_t w = 0; w < kDramBanks / 2; ++w) {
++            uint32_t def = 0;
++            uint32_t alt = 0;
++            for (uint32_t h = 0; h < 2; ++h) {
++                const uint32_t b = 2 * w + h;
++                const uint32_t hops_free = (kBhDramPortRow[b % 4][free_port[b]] + kBhNocRows - row) % kBhNocRows;
++                const uint32_t hops_default = (kBhDramPortRow[b % 4][1] + kBhNocRows - row) % kBhNocRows;
++                def |= bh_dram_xy(b, 1) << (16 * h);
++                alt |= bh_dram_xy(b, hops_free < hops_default ? free_port[b] : 1u) << (16 * h);
++            }
++            deltas[w] = alt - def;
++        }
++        return deltas;
++    };
++
+     const bool kEnableSplitDown = per_core_N_d >= 2;
+     // Tile columns of every down K-row the READER keeps; the writer takes the rest of the row.
+-    // ~60% to NoC 0, at least one tile each way (see the NoC balance note above).
++    // ~60% to NoC 0 (~55% with the NoC-1 port remap), at least one tile each way (see the NoC
++    // balance note above).
+     const uint32_t d_head_tiles =
+-        kEnableSplitDown ? std::clamp<uint32_t>((per_core_N_d * 3 + 2) / 5, 1u, per_core_N_d - 1) : per_core_N_d;
++        kEnableSplitDown
++            ? std::clamp<uint32_t>(
++                  dram_ep_remap ? (per_core_N_d * 11 + 10) / 20 : (per_core_N_d * 3 + 2) / 5, 1u, per_core_N_d - 1)
++            : per_core_N_d;
+     // Leading up K-rows of each gate/up block the READER reads on NoC 0 (UP_SPLIT only), so it
+     // carries (w + up_head_rows) / 2w of the gate/up bytes: ~0.2 w rows, i.e. ~60%. The reader
+     // reads them through gate's accessor layout (one read loop for both), so this needs `up` to
+@@ -728,7 +803,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     const bool up_shares_gate_layout =
+         up_tile_size == gate_tile_size && tt::tt_metal::TensorAccessorArgs(gate_buffer).get_compile_time_args() ==
+                                               tt::tt_metal::TensorAccessorArgs(up_buffer).get_compile_time_args();
+-    const uint32_t up_head_rows = (up_mode == 2 && up_shares_gate_layout) ? (in0_block_w_gu + 2) / 5 : 0;
++    // With the NoC-1 port remap: ~1/8 w rows, i.e. ~56%.
++    const uint32_t up_head_rows = (up_mode == 2 && up_shares_gate_layout)
++                                      ? (dram_ep_remap ? (in0_block_w_gu + 4) / 8 : (in0_block_w_gu + 2) / 5)
++                                      : 0;
+     // DEDICATED sems, not up_go/up_done: the UP_SPLIT writer indexes its cb_in1_up slot
+     // off (up_seq - 1) % slots, which only holds while up_seq counts gate/up blocks
+     // alone. Adding down blocks to that counter shifts the up slot by num_blocks_d per
+@@ -1106,6 +1184,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         {"RE_UP_HEAD_ROWS", std::to_string(up_head_rows)},
+         {"UNIFIED_RE_GRID_Y", std::to_string(GRID_Y)},
+     };
++    if (dram_ep_remap) {
++        writer_kernel_desc.defines.emplace_back("RE_DRAM_EP_REMAP", "1");
++    }
+     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+ 
+     // Compute kernel compile-time args: positional + named CB ids.
+@@ -1464,6 +1545,13 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         // Phase-A weight-multicast sems (PHASE_A_SEM_RT, right after the topologies).
+         writer_args.push_back(in1_ready_a_sem_id);
+         writer_args.push_back(in1_valid_a_sem_id);
++        // NoC-1 DRAM port remap for this core's physical row (DRAM_REMAP_RT, right after).
++        if (dram_ep_remap) {
++            const uint32_t row = device->worker_core_from_logical_core(core).y;
++            TT_FATAL(row < kBhNocRows, "unexpected worker row {} for the DRAM port remap", row);
++            const auto deltas = dram_remap_deltas(row);
++            writer_args.insert(writer_args.end(), deltas.begin(), deltas.end());
++        }
+         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
+         writer_rt_args.append(writer_args);
+         writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);

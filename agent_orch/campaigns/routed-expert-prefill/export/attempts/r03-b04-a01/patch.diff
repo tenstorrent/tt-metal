@@ -1,0 +1,850 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index 5d981deec70..0f09335e908 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -133,8 +133,10 @@ inline uint32_t count_in_band(uint32_t count_value, uint32_t min_tokens, uint32_
+ 
+ // Number of chunks for `count_tiles`: full chunks of max_chunk + one tail chunk.
+ inline uint32_t num_chunks(uint32_t count_tiles, uint32_t max_chunk) {
+-    if (count_tiles < 1) {
+-        return 0;
++    // Prefill experts nearly always fit one chunk; skip the divide (the planner calls this per
++    // expert per modelled layout on every RISC before any work starts).
++    if (count_tiles <= max_chunk) {
++        return (count_tiles != 0) ? 1u : 0u;
+     }
+     const uint32_t num_full = count_tiles / max_chunk;
+     const uint32_t tail = count_tiles - num_full * max_chunk;
+@@ -249,15 +251,21 @@ inline uint32_t layout_group(const GroupLayout& l, uint32_t gy, uint32_t& base,
+     return l.groups - 1;
+ }
+ 
+-// Modelled cost of one expert on a group of `rows` M-rows, in units of one per-core tile-row of
+-// work: the per_core_M summed over its chunks, plus one unit per chunk for the chunk's fixed
+-// pipeline fill/drain and its full re-read of the expert's weights. 0 for an expert with no rows.
+-inline uint32_t expert_cost(uint32_t count_tiles, uint32_t rows, uint32_t per_core_M_max) {
++// ceil(count_tiles / rows) for 0 < count_tiles <= per_core_M_max * rows (a single-chunk expert's
++// per_core_M), by at most per_core_M_max additions instead of a divide.
++__attribute__((always_inline)) inline uint32_t single_chunk_per_core_M(uint32_t count_tiles, uint32_t rows) {
++    uint32_t per_core_M = 1;
++    for (uint32_t covered = rows; covered < count_tiles; covered += rows) {
++        ++per_core_M;
++    }
++    return per_core_M;
++}
++
++// expert_cost below for an expert that needs more than one chunk.
++__attribute__((noinline)) inline uint32_t multi_chunk_expert_cost(
++    uint32_t count_tiles, uint32_t rows, uint32_t per_core_M_max) {
+     const uint32_t max_chunk = per_core_M_max * rows;
+     const uint32_t chunks = num_chunks(count_tiles, max_chunk);
+-    if (chunks == 0) {
+-        return 0;
+-    }
+     uint32_t units = (count_tiles / max_chunk) * per_core_M_max;
+     if (count_tiles % max_chunk != 0) {
+         units += per_core_M_for_chunk(chunks - 1, count_tiles, max_chunk, rows);
+@@ -265,26 +273,81 @@ inline uint32_t expert_cost(uint32_t count_tiles, uint32_t rows, uint32_t per_co
+     return units + chunks;
+ }
+ 
+-// expert_cost without a divide for the usual single-chunk expert (these RISC-Vs have no hardware
+-// divider, and the schedule runs on every RISC before any work starts): ceil(tiles / rows) + 1 by
+-// at most per_core_M_max additions. Identical values; larger experts take the general path.
+-inline uint32_t group_cost(uint32_t count_tiles, uint32_t rows, uint32_t per_core_M_max) {
+-    if (count_tiles == 0) {
+-        return 0;
+-    }
+-    if (count_tiles > per_core_M_max * rows) {
+-        return expert_cost(count_tiles, rows, per_core_M_max);
+-    }
+-    uint32_t per_core_M = 1;
+-    for (uint32_t covered = rows; covered < count_tiles; covered += rows) {
+-        ++per_core_M;
+-    }
+-    return per_core_M + 1;
++// Modelled cost of one expert on a group of `rows` M-rows, in units of one per-core tile-row of
++// work: the per_core_M summed over its chunks, plus one unit per chunk for the chunk's fixed
++// pipeline fill/drain and its full re-read of the expert's weights. 0 for an expert with no rows.
++// Prefill experts nearly always fit one chunk: that case is ceil(count_tiles / rows) + 1 with no
++// divide (the general path's tail rule; a full chunk is per_core_M_max either way).
++__attribute__((always_inline)) inline uint32_t expert_cost(
++    uint32_t count_tiles, uint32_t rows, uint32_t per_core_M_max) {
++    if (count_tiles <= per_core_M_max * rows) {
++        return (count_tiles != 0) ? single_chunk_per_core_M(count_tiles, rows) + 1 : 0u;
++    }
++    return multi_chunk_expert_cost(count_tiles, rows, per_core_M_max);
++}
++
++// The schedulers' name for expert_cost.
++__attribute__((always_inline)) inline uint32_t group_cost(
++    uint32_t count_tiles, uint32_t rows, uint32_t per_core_M_max) {
++    return expert_cost(count_tiles, rows, per_core_M_max);
+ }
+ 
+ constexpr uint8_t kNoGroup = 0xFF;
+ constexpr uint32_t kNoSchedule = 0xFFFFFFFFu;
+ 
++// ---------------------------------------------------------------------------------------------
++// Planner input.
++//
++// Every RISC plans before its first DRAM read, so the planner sits on the critical path of every
++// call, and it walks the experts' tile counts a few dozen times (uniform, mixed and two-phase
++// candidates). The caller's `tiles_of` reads two L1 words and band-filters / clamps them, so
++// PlanTiles reads every count ONCE into a local byte array, and also keeps the active experts in
++// largest-first order (tile-rows descending, expert index ascending), the order every
++// largest-first walk below needs. A count that does not fit a byte (kTilesEscape) is re-read
++// through `tiles_of`, so the plan is the same for any count.
++template <bool FitsByte>
++struct ExpertIndexType {
++    using type = uint16_t;
++};
++template <>
++struct ExpertIndexType<true> {
++    using type = uint8_t;
++};
++
++template <uint32_t NumExperts, typename TilesOf>
++struct PlanTiles {
++    static constexpr uint32_t kNumExperts = NumExperts;
++    static constexpr uint32_t kTilesEscape = 0xFF;
++    using Index = typename ExpertIndexType<(NumExperts <= 256)>::type;
++
++    const TilesOf& tiles_of_l1;
++    uint8_t cache[NumExperts];
++    Index order[NumExperts];  // [0, active): active experts, largest first, index order on ties
++    uint32_t active = 0;
++    uint32_t t_max = 0;
++
++    explicit PlanTiles(const TilesOf& tiles_of) : tiles_of_l1(tiles_of) {
++        for (uint32_t e = 0; e < NumExperts; ++e) {
++            const uint32_t t = tiles_of_l1(e);
++            cache[e] = static_cast<uint8_t>((t < kTilesEscape) ? t : kTilesEscape);
++            if (t == 0) {
++                continue;
++            }
++            t_max = (t > t_max) ? t : t_max;
++            // Stable insertion: e goes after every expert with at least as many tile-rows.
++            uint32_t i = active++;
++            for (; i > 0 && (*this)(order[i - 1]) < t; --i) {
++                order[i] = order[i - 1];
++            }
++            order[i] = static_cast<Index>(e);
++        }
++    }
++    __attribute__((always_inline)) inline uint32_t operator()(uint32_t e) const {
++        const uint32_t t = cache[e];
++        return (t != kTilesEscape) ? t : tiles_of_l1(e);
++    }
++};
++
+ // Uniform layouts: list scheduling in expert order, each expert to the least-loaded group (lowest
+ // index on a tie). Returns the makespan; fills owner[] when given.
+ template <typename TilesOf>
+@@ -313,58 +376,76 @@ inline uint32_t schedule_in_order(
+     return makespan;
+ }
+ 
+-// Mixed layouts: largest expert first (ties by index), each to the group where it is cheapest
+-// among those it fits in under `cap` (ties -> lower load -> lower index). Returns the makespan, or
+-// kNoSchedule when some expert fits nowhere. Distinct tile counts are walked largest-first instead
+-// of sorting, so no per-expert buffer beyond owner[] is needed.
++// In-order makespans of the kNumUniformLayouts uniform layouts (schedule_in_order without an owner
++// map), all three in ONE walk of the experts: make_plan's uniform pick and plan_groups both start
++// from them, so the planner schedules each uniform layout once instead of twice.
+ template <typename TilesOf>
+-inline uint32_t schedule_lpt(
+-    const GroupLayout& l,
+-    const TilesOf& tiles_of,
+-    uint32_t num_experts,
+-    uint32_t per_core_M_max,
+-    uint32_t cap,
+-    uint8_t* owner) {
+-    uint32_t loads[kLayoutMaxGroups] = {0};
+-    uint32_t cur = 0;
++inline void uniform_makespans(
++    const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max, uint32_t (&makespan)[kNumUniformLayouts]) {
++    uint32_t loads[kNumUniformLayouts][kLayoutMaxGroups] = {};
+     for (uint32_t e = 0; e < num_experts; ++e) {
+         const uint32_t t = tiles_of(e);
+-        cur = (t > cur) ? t : cur;
+-        if (owner != nullptr) {
+-            owner[e] = kNoGroup;
++        if (t == 0) {
++            continue;
++        }
++        for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
++            const GroupLayout& l = layout_at(kGridY, li);
++            uint32_t best = 0;
++            for (uint32_t g = 1; g < l.groups; ++g) {
++                if (loads[li][g] < loads[li][best]) {
++                    best = g;
++                }
++            }
++            loads[li][best] += group_cost(t, l.rows[0], per_core_M_max);
+         }
+     }
+-    while (cur > 0) {
+-        uint32_t cost[kLayoutMaxGroups];
+-        for (uint32_t g = 0; g < l.groups; ++g) {
+-            cost[g] = group_cost(cur, l.rows[g], per_core_M_max);
++    for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
++        uint32_t m = 0;
++        for (uint32_t g = 0; g < layout_at(kGridY, li).groups; ++g) {
++            m = (loads[li][g] > m) ? loads[li][g] : m;
+         }
+-        uint32_t next = 0;
+-        for (uint32_t e = 0; e < num_experts; ++e) {
+-            const uint32_t t = tiles_of(e);
+-            if (t != cur) {
+-                next = (t < cur && t > next) ? t : next;
+-                continue;
+-            }
+-            uint32_t best = kLayoutMaxGroups;
++        makespan[li] = m;
++    }
++}
++
++// Mixed layouts: largest expert first (ties by index), each to the group where it is cheapest
++// among those it fits in under `cap` (ties -> lower load -> lower index). Returns the makespan, or
++// kNoSchedule when some expert fits nowhere. Walks PlanTiles' largest-first order once.
++template <typename Tiles>
++inline uint32_t schedule_lpt(const GroupLayout& l, const Tiles& tiles, uint32_t per_core_M_max, uint32_t cap, uint8_t* owner) {
++    uint32_t loads[kLayoutMaxGroups] = {0};
++    if (owner != nullptr) {
++        for (uint32_t e = 0; e < Tiles::kNumExperts; ++e) {
++            owner[e] = kNoGroup;
++        }
++    }
++    uint32_t cur = 0;
++    uint32_t cost[kLayoutMaxGroups] = {0};
++    for (uint32_t i = 0; i < tiles.active; ++i) {
++        const uint32_t e = tiles.order[i];
++        const uint32_t t = tiles(e);
++        if (t != cur) {
++            cur = t;
+             for (uint32_t g = 0; g < l.groups; ++g) {
+-                if (loads[g] + cost[g] > cap) {
+-                    continue;
+-                }
+-                if (best == kLayoutMaxGroups || cost[g] < cost[best] ||
+-                    (cost[g] == cost[best] && loads[g] < loads[best])) {
+-                    best = g;
+-                }
++                cost[g] = group_cost(t, l.rows[g], per_core_M_max);
+             }
+-            if (best == kLayoutMaxGroups) {
+-                return kNoSchedule;
++        }
++        uint32_t best = kLayoutMaxGroups;
++        for (uint32_t g = 0; g < l.groups; ++g) {
++            if (loads[g] + cost[g] > cap) {
++                continue;
+             }
+-            loads[best] += cost[best];
+-            if (owner != nullptr) {
+-                owner[e] = static_cast<uint8_t>(best);
++            if (best == kLayoutMaxGroups || cost[g] < cost[best] || (cost[g] == cost[best] && loads[g] < loads[best])) {
++                best = g;
+             }
+         }
+-        cur = next;
++        if (best == kLayoutMaxGroups) {
++            return kNoSchedule;
++        }
++        loads[best] += cost[best];
++        if (owner != nullptr) {
++            owner[e] = static_cast<uint8_t>(best);
++        }
+     }
+     uint32_t makespan = 0;
+     for (uint32_t g = 0; g < l.groups; ++g) {
+@@ -373,21 +454,55 @@ inline uint32_t schedule_lpt(
+     return makespan;
+ }
+ 
++// False when NO assignment of the experts to `l`'s groups keeps every group's load within `cap`:
++// some expert costs more than `cap` on every group, or the cheapest placements already sum past
++// `cap` on every group. schedule_lpt can only succeed under `cap` when an assignment exists, so
++// skipping it then changes nothing; it saves a whole scheduling pass per hopeless layout.
++template <typename Tiles>
++inline bool lpt_may_fit(const GroupLayout& l, const Tiles& tiles, uint32_t per_core_M_max, uint32_t cap) {
++    uint32_t sum = 0;
++    uint32_t cur = 0;
++    uint32_t cheapest = 0;
++    for (uint32_t i = 0; i < tiles.active; ++i) {
++        const uint32_t t = tiles(tiles.order[i]);
++        if (t != cur) {
++            cur = t;
++            cheapest = kNoSchedule;
++            for (uint32_t g = 0; g < l.groups; ++g) {
++                const uint32_t c = group_cost(t, l.rows[g], per_core_M_max);
++                cheapest = (c < cheapest) ? c : cheapest;
++            }
++            if (cheapest > cap) {
++                return false;
++            }
++        }
++        sum += cheapest;
++    }
++    uint32_t total_cap = 0;
++    for (uint32_t g = 0; g < l.groups; ++g) {
++        total_cap += cap;
++    }
++    return sum <= total_cap;
++}
++
+ // The layout with the smallest modelled makespan, and owner[e] = the group (within that layout)
+-// that runs local expert e, kNoGroup for an expert with no rows. `tiles_of(e)` returns local expert
+-// e's (band-filtered, clamped) tile-row count.
++// that runs local expert e, kNoGroup for an expert with no rows. `uniform` holds the uniform
++// layouts' in-order makespans (uniform_makespans).
+ //
+ // Uniform layouts are compared first, ties keeping the larger groups, so a single expert or large
+ // token counts stay on the whole-grid schedule. A mixed layout replaces the winner only when it is
+ // STRICTLY better: it is scheduled under a cap one below the best makespan so far.
+-template <uint32_t NumExperts, typename TilesOf>
+-inline uint32_t plan_groups(const TilesOf& tiles_of, uint32_t per_core_M_max, uint8_t (&owner)[NumExperts]) {
++template <uint32_t NumExperts, typename Tiles>
++inline uint32_t plan_groups(
++    const Tiles& tiles,
++    uint32_t per_core_M_max,
++    const uint32_t (&uniform)[kNumUniformLayouts],
++    uint8_t (&owner)[NumExperts]) {
+     uint32_t best_layout = 0;
+     uint32_t best = kNoSchedule;
+     for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
+-        const uint32_t m = schedule_in_order(layout_at(kGridY, li), tiles_of, NumExperts, per_core_M_max, nullptr);
+-        if (m < best) {
+-            best = m;
++        if (uniform[li] < best) {
++            best = uniform[li];
+             best_layout = li;
+         }
+     }
+@@ -397,7 +512,11 @@ inline uint32_t plan_groups(const TilesOf& tiles_of, uint32_t per_core_M_max, ui
+             break;  // no rows at all: nothing to improve on
+         }
+         const uint32_t cap = best - 1;
+-        const uint32_t m = schedule_lpt(layout_at(kGridY, li), tiles_of, NumExperts, per_core_M_max, cap, nullptr);
++        const GroupLayout& l = layout_at(kGridY, li);
++        if (!lpt_may_fit(l, tiles, per_core_M_max, cap)) {
++            continue;  // no assignment fits under the cap, so schedule_lpt would fail too
++        }
++        const uint32_t m = schedule_lpt(l, tiles, per_core_M_max, cap, nullptr);
+         if (m < best) {
+             best = m;
+             best_layout = li;
+@@ -405,14 +524,13 @@ inline uint32_t plan_groups(const TilesOf& tiles_of, uint32_t per_core_M_max, ui
+         }
+     }
+     if (best_layout < kNumUniformLayouts) {
+-        schedule_in_order(layout_at(kGridY, best_layout), tiles_of, NumExperts, per_core_M_max, owner);
++        schedule_in_order(layout_at(kGridY, best_layout), tiles, NumExperts, per_core_M_max, owner);
+     } else {
+-        schedule_lpt(layout_at(kGridY, best_layout), tiles_of, NumExperts, per_core_M_max, best_cap, owner);
++        schedule_lpt(layout_at(kGridY, best_layout), tiles, per_core_M_max, best_cap, owner);
+     }
+     return best_layout;
+ }
+ 
+-
+ // ---------------------------------------------------------------------------------------------
+ // Two-phase schedule.
+ //
+@@ -433,7 +551,8 @@ inline uint32_t plan_groups(const TilesOf& tiles_of, uint32_t per_core_M_max, ui
+ // semaphore pair, so an early phase-B ack never reaches a core still sending for phase A.
+ 
+ // Membership and order. Phase A takes the n_a experts with the most tile-rows: every expert with
+-// more than `thresh`, then the first `quota_eq` (in expert order) with exactly `thresh`.
++// more than `thresh`, then the first `quota_eq` (in expert order) with exactly `thresh` -- i.e. the
++// first n_a experts of PlanTiles' largest-first order. Phase B takes the rest of that order.
+ // rows_a == 0 means there is no phase A and phase B is today's single-phase schedule.
+ struct Plan {
+     uint32_t rows_a = 0;
+@@ -443,101 +562,45 @@ struct Plan {
+     // Two-phase plans only: phase B's layout (uniform or mixed-height). Phase B runs each leftover
+     // expert alone on one group, the k-th largest on group k (taller groups come first in a layout).
+     uint32_t layout_b = 0;
++    // Two-phase plans only: phase A's expert count (= the first n_a experts of the largest-first order).
++    uint32_t n_a = 0;
+ };
+ 
+ // Index of the uniform layout with `rows` rows per group (the first kNumUniformLayouts table
+ // entries are kGridY, kGridY / 2, kGridY / 4 rows per group; layouts_valid checks that order).
+ inline uint32_t uniform_layout_index(uint32_t rows) { return (rows >= kGridY) ? 0u : (rows >= kGridY / 2) ? 1u : 2u; }
+ 
+-// List scheduling in expert order: each expert goes to the least-loaded group (lowest index on a
+-// tie), as schedule_in_order does for a uniform layout.
+-struct GroupScheduler {
+-    uint32_t groups = 1;
+-    uint32_t loads[kMaxGroups] = {0};
+-
+-    void init(uint32_t num_groups) {
+-        groups = num_groups;
+-        for (uint32_t g = 0; g < kMaxGroups; ++g) {
+-            loads[g] = 0;
+-        }
+-    }
+-    // Charge `cost` (> 0) to the least-loaded group and return that group.
+-    uint32_t assign(uint32_t cost) {
+-        uint32_t best = 0;
+-        for (uint32_t g = 1; g < groups; ++g) {
+-            if (loads[g] < loads[best]) {
+-                best = g;
+-            }
+-        }
+-        loads[best] += cost;
+-        return best;
+-    }
+-};
+-
+ // Uniform group size (rows per group) with the smallest in-order makespan; ties keep the larger
+-// group. The same pick plan_groups makes among its uniform layouts.
+-template <typename TilesOf>
+-inline uint32_t pick_group_rows(const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max) {
++// group. The same pick plan_groups makes among its uniform layouts. `uniform` holds their
++// makespans (uniform_makespans).
++inline uint32_t pick_group_rows(const uint32_t (&uniform)[kNumUniformLayouts]) {
+     uint32_t best_rows = kGridY;
+     uint32_t best = kNoSchedule;
+     for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
+-        const GroupLayout& l = layout_at(kGridY, li);
+-        const uint32_t m = schedule_in_order(l, tiles_of, num_experts, per_core_M_max, nullptr);
+-        if (m < best) {
+-            best = m;
+-            best_rows = l.rows[0];
++        if (uniform[li] < best) {
++            best = uniform[li];
++            best_rows = layout_at(kGridY, li).rows[0];
+         }
+     }
+     return best_rows;
+ }
+ 
+-// Deals one phase's experts to that phase's groups. Feed it EVERY local expert's tile count, in
+-// expert order; it returns the group that runs the expert in this phase, or kNoGroup. Every kernel
+-// walks it identically, so all agree on the owner of every expert.
+-struct PhaseDealer {
+-    Plan plan;
+-    uint32_t phase = 0;  // 0 = phase A, 1 = phase B
+-    uint32_t rows = 0;   // this phase's group size; 0 = the phase is empty
+-    uint32_t groups = 0;
+-    uint32_t per_core_M_max = 1;
+-    uint32_t pos = 0;      // phase-A round-robin position
+-    uint32_t eq_seen = 0;  // experts with exactly plan.thresh tile-rows seen so far
+-    GroupScheduler sched;
+-
+-    void begin(const Plan& p, uint32_t ph, uint32_t pm_max) {
+-        plan = p;
+-        phase = ph;
+-        rows = (ph == 0) ? p.rows_a : p.rows_b;
+-        groups = (rows > 0) ? kGridY / rows : 0;
+-        per_core_M_max = pm_max;
+-        pos = 0;
+-        eq_seen = 0;
+-        sched.init(groups > 0 ? groups : 1);
+-    }
+-    bool active() const { return rows > 0; }
+-
+-    uint32_t deal(uint32_t tiles) {
+-        if (tiles == 0) {
+-            return kNoGroup;
+-        }
+-        bool in_a = false;
+-        if (plan.rows_a != 0) {
+-            if (tiles > plan.thresh) {
+-                in_a = true;
+-            } else if (tiles == plan.thresh) {
+-                in_a = eq_seen < plan.quota_eq;
+-                ++eq_seen;
+-            }
+-        }
+-        if (in_a != (phase == 0)) {
+-            return kNoGroup;
+-        }
+-        if (phase == 0) {
+-            return pos++ % groups;
++// Phase A's deal: walking the experts in expert order, the j-th phase-A member goes to group
++// j % groups_a. Membership: more than `thresh` tile-rows, or exactly `thresh` and among the first
++// `quota_eq` such experts in expert order. Calls deal(e, tiles, group) for every member.
++template <typename Tiles, typename Deal>
++inline void deal_phase_a(const Plan& plan, const Tiles& tiles, uint32_t num_experts, uint32_t groups_a, const Deal& deal) {
++    uint32_t eq_seen = 0;
++    uint32_t g = 0;
++    for (uint32_t e = 0; e < num_experts; ++e) {
++        const uint32_t t = tiles(e);
++        if (t == 0 || t < plan.thresh || (t == plan.thresh && eq_seen++ >= plan.quota_eq)) {
++            continue;
+         }
+-        return sched.assign(expert_cost(tiles, rows, per_core_M_max));
++        deal(e, t, g);
++        g = (g + 1 == groups_a) ? 0 : g + 1;
+     }
+-};
++}
+ 
+ // Time model used to choose the plan, in hundredths of `c` = the time to stream one expert's
+ // weights at the full DRAM rate. An expert costs its per-core compute (kModelRow per tile-row of
+@@ -553,47 +616,55 @@ constexpr uint32_t kModelMarginPct = 5;
+ 
+ inline uint32_t model_expert(uint32_t tiles, uint32_t rows, uint32_t per_core_M_max, uint32_t streams) {
+     const uint32_t chunks = num_chunks(tiles, per_core_M_max * rows);
+-    const uint32_t row_units = expert_cost(tiles, rows, per_core_M_max) - chunks;  // sum of per_core_M
++    const uint32_t row_units = (chunks == 1) ? single_chunk_per_core_M(tiles, rows)  // sum of per_core_M
++                                             : expert_cost(tiles, rows, per_core_M_max) - chunks;
+     const uint32_t compute = kModelRow * row_units + kModelChunk * chunks;
+     const uint32_t dram = kModelStream * streams * chunks;
+     return (compute > dram) ? compute : dram;
+ }
+ 
+-// Modelled makespan of one phase of `plan`. The i-th expert of a group overlaps with the i-th of
+-// every other group that has one, so it streams alongside that many groups.
+-template <typename TilesOf>
+-inline uint32_t model_phase(
+-    const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max, const Plan& plan, uint32_t phase) {
+-    PhaseDealer d;
+-    d.begin(plan, phase, per_core_M_max);
+-    if (!d.active()) {
+-        return 0;
+-    }
+-    uint32_t count[kMaxGroups] = {0};
+-    for (uint32_t e = 0; e < num_experts; ++e) {
+-        const uint32_t g = d.deal(tiles_of(e));
+-        if (g != kNoGroup) {
+-            ++count[g];
++// Modelled makespan of the single-phase schedule on the uniform layout of `rows` rows per group:
++// experts dealt in expert order to the least-loaded group (schedule_in_order's deal). The i-th
++// expert of a group overlaps with the i-th of every other group that has one, so it streams
++// alongside that many groups.
++template <uint32_t NumExperts, typename Tiles>
++inline uint32_t model_single_phase(const Tiles& tiles, uint32_t rows, uint32_t per_core_M_max) {
++    const uint32_t groups = layout_at(kGridY, uniform_layout_index(rows)).groups;
++    uint8_t group_of[NumExperts];
++    uint32_t loads[kLayoutMaxGroups] = {0};
++    uint32_t count[kLayoutMaxGroups] = {0};
++    for (uint32_t e = 0; e < NumExperts; ++e) {
++        const uint32_t t = tiles(e);
++        if (t == 0) {
++            continue;
++        }
++        uint32_t best = 0;
++        for (uint32_t g = 1; g < groups; ++g) {
++            if (loads[g] < loads[best]) {
++                best = g;
++            }
+         }
++        loads[best] += expert_cost(t, rows, per_core_M_max);
++        ++count[best];
++        group_of[e] = static_cast<uint8_t>(best);
+     }
+-    uint32_t time[kMaxGroups] = {0};
+-    uint32_t seen[kMaxGroups] = {0};
+-    d.begin(plan, phase, per_core_M_max);
+-    for (uint32_t e = 0; e < num_experts; ++e) {
+-        const uint32_t tiles = tiles_of(e);
+-        const uint32_t g = d.deal(tiles);
+-        if (g == kNoGroup) {
++    uint32_t time[kLayoutMaxGroups] = {0};
++    uint32_t seen[kLayoutMaxGroups] = {0};
++    for (uint32_t e = 0; e < NumExperts; ++e) {
++        const uint32_t t = tiles(e);
++        if (t == 0) {
+             continue;
+         }
++        const uint32_t g = group_of[e];
+         ++seen[g];
+         uint32_t streams = 0;
+-        for (uint32_t h = 0; h < d.groups; ++h) {
++        for (uint32_t h = 0; h < groups; ++h) {
+             streams += (count[h] >= seen[g]) ? 1u : 0u;
+         }
+-        time[g] += model_expert(tiles, d.rows, per_core_M_max, streams);
++        time[g] += model_expert(t, rows, per_core_M_max, streams);
+     }
+     uint32_t m = 0;
+-    for (uint32_t g = 0; g < d.groups; ++g) {
++    for (uint32_t g = 0; g < groups; ++g) {
+         m = (time[g] > m) ? time[g] : m;
+     }
+     return m;
+@@ -609,87 +680,80 @@ inline uint32_t model_phase(
+ // A phase-B group's stream rate is capped by its 11 column senders, not by DRAM (r02-b03-a01:
+ // a lone 5-row group pulls ~250 GB/s), so a second phase-B round on a big group runs far slower
+ // than the model's DRAM share says, and loses to the uniform layout's one-round tail.
+-template <typename TilesOf>
+-inline Plan make_plan(const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max) {
++template <uint32_t NumExperts, typename Tiles>
++inline Plan make_plan(const Tiles& tiles, uint32_t per_core_M_max, const uint32_t (&uniform)[kNumUniformLayouts]) {
+     Plan single;
+-    single.rows_b = pick_group_rows(tiles_of, num_experts, per_core_M_max);
++    single.rows_b = pick_group_rows(uniform);
+     const uint32_t rows_a = single.rows_b;
+     if (rows_a >= kGridY) {
+         return single;
+     }
+-    const uint32_t groups_a = kGridY / rows_a;
+-    uint32_t active = 0;
+-    uint32_t t_max = 0;
+-    for (uint32_t e = 0; e < num_experts; ++e) {
+-        const uint32_t t = tiles_of(e);
+-        active += (t > 0) ? 1u : 0u;
+-        t_max = (t > t_max) ? t : t_max;
++    const uint32_t layout_a = uniform_layout_index(rows_a);
++    const uint32_t groups_a = layout_at(kGridY, layout_a).groups;
++    const uint32_t active = tiles.active;
++    uint32_t n_a = 0;
++    while (n_a + groups_a <= active) {
++        n_a += groups_a;
+     }
+-    const uint32_t n_a = (active / groups_a) * groups_a;
+     if (n_a == 0 || n_a == active) {
+         return single;
+     }
+     // thresh = the n_a-th largest tile count; `above` experts have more.
+-    uint32_t thresh = t_max;
+-    uint32_t above = 0;
+-    while (true) {
+-        uint32_t at = 0;
+-        uint32_t next = 0;
+-        for (uint32_t e = 0; e < num_experts; ++e) {
+-            const uint32_t t = tiles_of(e);
+-            if (t == thresh) {
+-                ++at;
+-            } else if (t < thresh && t > next) {
+-                next = t;
+-            }
+-        }
+-        if (above + at >= n_a || next == 0) {
+-            break;
+-        }
+-        above += at;
+-        thresh = next;
++    const uint32_t thresh = tiles(tiles.order[n_a - 1]);
++    uint32_t above = n_a - 1;
++    while (above > 0 && tiles(tiles.order[above - 1]) == thresh) {
++        --above;
+     }
+     // Ring alignment at the phase switch needs equal units per phase-A group: every phase-A expert
+     // must take the same number of chunks (monotonic in tiles, so compare the extremes).
+     const uint32_t chunk_a = per_core_M_max * rows_a;
+-    if (num_chunks(t_max, chunk_a) != num_chunks(thresh, chunk_a)) {
++    if (num_chunks(tiles.t_max, chunk_a) != num_chunks(thresh, chunk_a)) {
+         return single;
+     }
+     Plan two;
+     two.rows_a = rows_a;
+     two.thresh = thresh;
+     two.quota_eq = n_a - above;
++    two.n_a = n_a;
+ 
+-    // The leftover experts (phase B), largest first. n_left < groups_a <= kMaxGroups.
++    // The leftover experts (phase B), largest first: the tail of the largest-first order.
++    // n_left < groups_a <= kMaxGroups.
++    const uint32_t n_left = active - n_a;
+     uint32_t left[kMaxGroups];
+-    uint32_t n_left = 0;
+-    {
+-        uint32_t eq_seen = 0;
+-        for (uint32_t e = 0; e < num_experts; ++e) {
+-            const uint32_t t = tiles_of(e);
+-            if (t == 0 || t > thresh || (t == thresh && eq_seen++ < two.quota_eq)) {
+-                continue;
+-            }
+-            uint32_t i = n_left++;
+-            for (; i > 0 && left[i - 1] < t; --i) {
+-                left[i] = left[i - 1];
+-            }
+-            left[i] = t;
+-        }
++    for (uint32_t k = 0; k < n_left; ++k) {
++        left[k] = tiles(tiles.order[n_a + k]);
++    }
++    // Phase-B candidates: every layout with a group per leftover expert (one round), other than phase
++    // A's own. Uniform layouts come first, so a mixed one must be strictly better to replace them.
++    auto candidate = [&](uint32_t li) {
++        const GroupLayout& l = layout_at(kGridY, li);
++        return !(li == layout_a || l.groups < n_left || (li < kNumUniformLayouts && l.rows[0] < rows_a));
++    };
++    bool any_candidate = false;
++    for (uint32_t li = 0; li < num_layouts(kGridY); ++li) {
++        any_candidate = any_candidate || candidate(li);
++    }
++    if (!any_candidate) {
++        return single;
+     }
+ 
+-    const uint32_t t_single = model_phase(tiles_of, num_experts, per_core_M_max, single, 1);
+-    const uint32_t t_a = model_phase(tiles_of, num_experts, per_core_M_max, two, 0);
++    const uint32_t t_single = model_single_phase<NumExperts>(tiles, rows_a, per_core_M_max);
++    // Phase A: every group runs n_a / groups_a experts, so each streams alongside all groups_a.
++    uint32_t time_a[kLayoutMaxGroups] = {0};
++    deal_phase_a(two, tiles, NumExperts, groups_a, [&](uint32_t, uint32_t t, uint32_t g) {
++        time_a[g] += model_expert(t, rows_a, per_core_M_max, groups_a);
++    });
++    uint32_t t_a = 0;
++    for (uint32_t g = 0; g < groups_a; ++g) {
++        t_a = (time_a[g] > t_a) ? time_a[g] : t_a;
++    }
+     Plan best = single;
+     uint32_t best_t = t_single * (100 - kModelMarginPct);
+-    // Phase-B candidates: every layout with a group per leftover expert (one round), other than phase
+-    // A's own. Uniform layouts come first, so a mixed one must be strictly better to replace them.
+-    const uint32_t layout_a = uniform_layout_index(rows_a);
+     for (uint32_t li = 0; li < num_layouts(kGridY); ++li) {
+-        const GroupLayout& l = layout_at(kGridY, li);
+-        if (li == layout_a || l.groups < n_left || (li < kNumUniformLayouts && l.rows[0] < rows_a)) {
++        if (!candidate(li)) {
+             continue;
+         }
++        const GroupLayout& l = layout_at(kGridY, li);
+         uint32_t t_b = 0;
+         for (uint32_t k = 0; k < n_left; ++k) {
+             const uint32_t t = model_expert(left[k], l.rows[k], per_core_M_max, n_left);
+@@ -721,42 +785,31 @@ struct LaunchPlan {
+ 
+ template <uint32_t NumExperts, typename TilesOf>
+ inline LaunchPlan plan_launch(const TilesOf& tiles_of, uint32_t per_core_M_max, uint8_t (&owner)[2][NumExperts]) {
++    const PlanTiles<NumExperts, TilesOf> tiles(tiles_of);
++    uint32_t uniform[kNumUniformLayouts];
++    uniform_makespans(tiles, NumExperts, per_core_M_max, uniform);
++
+     LaunchPlan lp;
+-    const Plan two = make_plan(tiles_of, NumExperts, per_core_M_max);
++    const Plan two = make_plan<NumExperts>(tiles, per_core_M_max, uniform);
++    for (uint32_t e = 0; e < NumExperts; ++e) {
++        owner[0][e] = kNoGroup;
++    }
+     if (two.rows_a == 0) {
+-        for (uint32_t e = 0; e < NumExperts; ++e) {
+-            owner[0][e] = kNoGroup;
+-        }
+-        lp.layout[1] = plan_groups(tiles_of, per_core_M_max, owner[1]);
++        lp.layout[1] = plan_groups(tiles, per_core_M_max, uniform, owner[1]);
+         return lp;
+     }
+     lp.layout[0] = uniform_layout_index(two.rows_a);
+     lp.layout[1] = two.layout_b;
+-    PhaseDealer d;
+-    d.begin(two, 0, per_core_M_max);
+-    for (uint32_t e = 0; e < NumExperts; ++e) {
+-        owner[0][e] = static_cast<uint8_t>(d.deal(tiles_of(e)));
+-    }
+-    // Phase B: the leftover experts (fewer than phase A's groups) in expert order; the k-th largest
+-    // (ties -> lower index) runs on group k, matching make_plan's model.
+-    uint32_t left[kMaxGroups];
+-    uint32_t left_tiles[kMaxGroups];
+-    uint32_t n_left = 0;
++    deal_phase_a(two, tiles, NumExperts, layout_at(kGridY, lp.layout[0]).groups, [&](uint32_t e, uint32_t, uint32_t g) {
++        owner[0][e] = static_cast<uint8_t>(g);
++    });
++    // Phase B: the leftover experts (fewer than phase A's groups); the k-th largest (ties -> lower
++    // index) runs on group k, matching make_plan's model.
+     for (uint32_t e = 0; e < NumExperts; ++e) {
+         owner[1][e] = kNoGroup;
+-        const uint32_t t = tiles_of(e);
+-        if (t != 0 && owner[0][e] == kNoGroup && n_left < kMaxGroups) {
+-            left[n_left] = e;
+-            left_tiles[n_left] = t;
+-            ++n_left;
+-        }
+     }
+-    for (uint32_t i = 0; i < n_left; ++i) {
+-        uint32_t rank = 0;
+-        for (uint32_t j = 0; j < n_left; ++j) {
+-            rank += (left_tiles[j] > left_tiles[i] || (left_tiles[j] == left_tiles[i] && j < i)) ? 1u : 0u;
+-        }
+-        owner[1][left[i]] = static_cast<uint8_t>(rank);
++    for (uint32_t k = 0; two.n_a + k < tiles.active; ++k) {
++        owner[1][tiles.order[two.n_a + k]] = static_cast<uint8_t>(k);
+     }
+     return lp;
+ }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index 1014888de0d..f81a3910fdb 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -1069,7 +1069,10 @@ void kernel_main() {
+     [[maybe_unused]] uint8_t expert_group[2][experts_per_chip];
+     [[maybe_unused]] uint32_t phase = 0;
+     [[maybe_unused]] uint32_t next_expert = 0;
+-    UNPACK(({ plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group); }));
++    UNPACK(({
++        DeviceZoneScopedN("RE-PLAN");
++        plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
++    }));
+     // Gate/up K-blocks done so far, counted exactly as the reader counts them (x_blk there):
+     // every core of a row runs the same experts and chunks, so they agree on each block's owner.
+     uint32_t x_blk = 0;
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 786da1282c6..425b7f87792 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -30,6 +30,7 @@
+ #include "api/dataflow/endpoints.h"
+ #include "api/core_local_mem.h"
+ #include "api/debug/assert.h"
++#include "tools/profiler/kernel_profiler.hpp"
+ #include "../adaptive_chunk.hpp"
+ #include "../weight_runs.hpp"
+ 
+@@ -363,13 +364,12 @@ void kernel_main() {
+     // is the shared dispatched buffer; each expert's rows begin at
+     // start[global_id]. Indexed per expert in the loop below (must agree with
+     // the writer's row_offset_tiles so x is read and y is written to the same
+-    // region).
++    // region). Only issued here: the launch plan below needs only counts/idx, so the
++    // read's DRAM latency runs under the planning and the barrier follows the plan.
+     cb_start_scratch_obj.reserve_back(1);
+     const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
+     noc_read.async_read(
+         start_acc, CoreLocalMem<uint32_t>(start_l1), start_acc.get_aligned_page_size(), {.page_id = 0}, {});
+-    noc_read.async_read_barrier();
+-    cb_start_scratch_obj.push_back(1);
+     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
+ 
+     // -------- expert-parallel row groups (adaptive_chunk.hpp) --------
+@@ -387,7 +387,14 @@ void kernel_main() {
+     // (uniform or mixed-height). The layout, this core's group and row within it, and the
+     // weight-multicast topology are per phase.
+     uint8_t expert_group[2][experts_per_chip];
+-    const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
++    adaptive_chunk::LaunchPlan plan;
++    {
++        DeviceZoneScopedN("RE-PLAN");
++        plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
++    }
++    // The `start` page issued above.
++    noc_read.async_read_barrier();
++    cb_start_scratch_obj.push_back(1);
+     // Phase A's own weight-multicast semaphore pair follows the per-layout topologies.
+     constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + adaptive_chunk::num_layouts(adaptive_chunk::kGridY) * GROUP_TOPO_ARGS;
+ 
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 117803e894a..fefe3016b06 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -200,12 +200,12 @@ void kernel_main() {
+     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1);
+ 
+     // Read the `start` (= expert_region_offsets) page ONCE into resident L1;
+-    // each expert's output slice begins at start[global_id] (token row).
++    // each expert's output slice begins at start[global_id] (token row). Only issued
++    // here: its DRAM latency runs under the launch planning below, which barriers it.
+     const uint32_t start_l1 = cb_start_scratch_buf.get_write_ptr();
+     {
+         const uint32_t start_page_size = start_acc.get_aligned_page_size();
+         noc.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
+-        noc.async_read_barrier();
+     }
+     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
+ 
+@@ -252,6 +252,8 @@ void kernel_main() {
+     // group, row within the group, topology and in1 semaphore pair are per phase (see the reader).
+     uint8_t expert_group[2][experts_per_chip];
+     const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
++    // The `start` page issued above.
++    noc.async_read_barrier();
+     constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + adaptive_chunk::num_layouts(adaptive_chunk::kGridY) * GROUP_TOPO_ARGS;
+     // Gate/up and down blocks this core has consumed so far, sender or not. The writer never pushes,
+     // so it indexes the reader's live ring slot off these. They must count EVERY block: the sender

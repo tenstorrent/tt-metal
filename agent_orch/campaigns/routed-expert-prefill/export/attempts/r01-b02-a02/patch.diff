@@ -1,0 +1,132 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index e9e2b9c257b..c48ff30606d 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -163,16 +163,23 @@ inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t
+ // and different groups never synchronise with each other. rows == kGridY is the
+ // classic schedule (every expert on the whole grid, one after another).
+ //
+-// rows is the smallest power of two whose single chunk (rows * per_core_M_max
+-// tile-rows) holds the LARGEST local expert, so with rows < kGridY every expert is
+-// exactly one chunk and its weights are read exactly once, as in the classic
+-// schedule. It then grows while there would be more groups than active experts
+-// (an idle group buys nothing, a wider one splits the work further).
++// rows is the smallest power of two (>= kMinGroupRows) whose single chunk
++// (rows * per_core_M_max tile-rows) holds the LARGEST local expert, so with
++// rows < kGridY every expert is exactly one chunk and its weights are read exactly
++// once, as in the classic schedule. It then grows while there would be more groups
++// than active experts (an idle group buys nothing, a wider one splits the work
++// further).
+ //
+ // Every RISC of every core derives this from the same counts vector, so all of
+ // them agree on the groups, the expert -> group assignment and the row mapping.
++//
++// Groups have at least two rows: a one-row group makes every core its own weight
++// reader, so the row's x reads can no longer sit on a core without weight reads
++// (the host's fixed x sender at column gy + 1 is collision-free with the group
++// weight sender group_base + gx % rows only for rows >= 2).
++constexpr uint32_t kMinGroupRows = 2;
+ inline uint32_t group_rows(uint32_t max_count_tiles, uint32_t num_active, uint32_t per_core_M_max) {
+-    uint32_t rows = 1;
++    uint32_t rows = kMinGroupRows;
+     while (rows < kGridY && max_count_tiles > rows * per_core_M_max) {
+         rows <<= 1;
+     }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index 0a04fc998c6..12b5ad80f79 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -1201,10 +1201,13 @@ void kernel_main() {
+         }  // end chunk loop
+ 
+ #ifdef FUSE_BIAS
+-        // Pop this expert's biases so the reader can refill for the next expert.
+-        CircularBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
+-        CircularBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
+-        CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
++        // Pop this expert's biases so the reader can refill for the next expert. The
++        // reader pushes them only for experts this row group runs (effective_chunks > 0).
++        if (effective_chunks > 0) {
++            CircularBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
++            CircularBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
++            CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
++        }
+ #endif
+     }  // end per-local-expert loop
+ }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index e17f70b103f..b71f7476821 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -50,10 +50,11 @@ void kernel_main() {
+     const uint32_t in1_ready_sem_id = get_arg_val<uint32_t>(4);
+     const uint32_t in1_valid_sem_id = get_arg_val<uint32_t>(5);
+ 
+-    // x (in0) multicast runtime args (indices 13..22).
+-    // Fixed x sender of the classic (full-grid) schedule; row groups rotate it per
+-    // K-block instead (see the gate/up loop).
+-    const bool is_in0_sender_fixed = get_arg_val<uint32_t>(13) != 0;
++    // x (in0) multicast runtime args (indices 13..22). The sender is fixed per M-row at
++    // column gy + 1, which never holds a weight sender for any row-group size >= 2 (see
++    // adaptive_chunk::group_rows), so x and weight DRAM reads stay on different cores.
++    const uint32_t is_in0_sender_u32 = get_arg_val<uint32_t>(13);
++    const bool is_in0_sender = is_in0_sender_u32 != 0;
+     const uint32_t in0_ready_sem_id = get_arg_val<uint32_t>(14);
+     const uint32_t in0_valid_sem_id = get_arg_val<uint32_t>(15);
+     const uint32_t in0_num_receivers = get_arg_val<uint32_t>(16);
+@@ -61,8 +62,8 @@ void kernel_main() {
+     const uint32_t in0_mcast_ny_start = get_arg_val<uint32_t>(18);
+     const uint32_t in0_mcast_nx_end = get_arg_val<uint32_t>(19);
+     const uint32_t in0_mcast_ny_end = get_arg_val<uint32_t>(20);
+-    const uint32_t in0_sender_nx_fixed = get_arg_val<uint32_t>(21);
+-    const uint32_t in0_sender_ny_fixed = get_arg_val<uint32_t>(22);
++    const uint32_t in0_sender_nx = get_arg_val<uint32_t>(21);
++    const uint32_t in0_sender_ny = get_arg_val<uint32_t>(22);
+ 
+     // Activated L1 mcast sems. Sender (gx == kb at phase-4 K-block kb) waits
+     // on its act_ready_sem for GRID_X - 1 incs from the receivers; then
+@@ -383,7 +384,6 @@ void kernel_main() {
+             (cv + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
+     };
+     const uint32_t group_rows = adaptive_chunk::plan_group_rows(count_tiles_of, experts_per_chip, per_core_M_max);
+-    const bool full_grid = group_rows == adaptive_chunk::kGridY;
+     // A group's chunk: group_rows rows of up to per_core_M_max tile-rows each.
+     const uint32_t chunk_M_grp = per_core_M_max * group_rows;
+     const uint32_t group_first_row = (my_mt / group_rows) * group_rows;
+@@ -484,14 +484,16 @@ void kernel_main() {
+ #ifdef FUSE_BIAS
+         // This expert's N-column slice of its (1, N) biases. The compute
+         // kernel wait_fronts then pops at the end of this expert so the next
+-        // expert can reuse the single-buffered bias CBs. Bias is a single
++        // expert can reuse the single-buffered bias CBs. Only for an expert
++        // this row group runs (effective_chunks > 0): the compute kernel pops
++        // under the same condition, so skipped experts cost no DRAM reads. Bias is a single
+         // tile-row tensor, so the DRAM page index == tile column. Phantom
+         // columns (col >= actual N) are zero-filled: unlike the per-K-block
+         // weight reads this runs once per expert, so the fill is cheap, and it
+         // keeps the bias add from turning a phantom column into Inf/NaN. Those
+         // columns are discarded either way — the gate/up ones by the down
+         // phase's K bound, the down ones by the writer.
+-        {
++        if (effective_chunks > 0) {
+             const uint32_t gbias_addr =
+                 get_common_arg_val<uint32_t>(COMMON_BIAS + 0 * experts_per_chip + local_expert_id);
+             const uint32_t ubias_addr =
+@@ -571,17 +573,6 @@ void kernel_main() {
+         //   per-K-block elapsed time at small per_core_M where mcast/handshake
+         //   overhead dominates compute.
+         for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+-            // x sender. The classic schedule keeps one fixed sender per row (staggered
+-            // off the weight senders by the host). In a row group the row owns its
+-            // experts' whole x, so a fixed sender would issue all of it on one core next
+-            // to its own weight reads; rotate it across the row per K-block instead.
+-            const uint32_t in0_sender_col = (my_mt + 1 + kb) % GRID_X_NOC;
+-            const bool is_in0_sender = full_grid ? is_in0_sender_fixed : (my_nt_gu == in0_sender_col);
+-            const uint32_t in0_sender_nx =
+-                full_grid ? in0_sender_nx_fixed : get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * in0_sender_col + 0);
+-            const uint32_t in0_sender_ny =
+-                full_grid ? in0_sender_ny_fixed : get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * in0_sender_col + 1);
+-
+             x_stage_obj.reserve_back(g_in0_block_tiles_max);
+             cb_in1_gate_obj.reserve_back(g_in1_block_num_tiles);
+             if constexpr (reader_mcasts_up) {

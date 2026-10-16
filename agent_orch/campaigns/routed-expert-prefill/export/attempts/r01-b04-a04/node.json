@@ -1,0 +1,30 @@
+{
+  "node_id": "r01-b04-a04",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 4,
+  "attempt": 4,
+  "parent": "r01-b04-a03",
+  "parent_commit": "e340454bd4c95f4211615f1c22dd69349f62570a",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T19:47:35+00:00",
+  "mechanism": "use all 10 Blackhole worker rows: 11x10 grid with expert row groups of 10/5/2 rows (was 11x8 with 8/4/2)",
+  "tags": [
+    "work-partition",
+    "grid-size",
+    "expert-parallel",
+    "row-groups",
+    "host-config"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5011,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp"
+  ],
+  "build_seconds": 21,
+  "eval_seconds": 43,
+  "finished_at": "2026-10-08T19:55:22+00:00"
+}

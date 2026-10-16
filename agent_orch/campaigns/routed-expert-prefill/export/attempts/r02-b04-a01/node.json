@@ -1,0 +1,32 @@
+{
+  "node_id": "r02-b04-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "ff0bcd951efdb912ba0acbd56fd88f57f260bd60",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T20:28:42+00:00",
+  "mechanism": "mixed-height row-group layouts (3+3+2+2 etc.) with a height-aware LPT expert assignment, taken only when the cost model says they strictly beat the uniform 10/5/2 layouts",
+  "tags": [
+    "work-partition",
+    "row-groups",
+    "runtime-schedule",
+    "expert-parallel",
+    "non-uniform-groups"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5314,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 43,
+  "finished_at": "2026-10-08T20:53:47+00:00"
+}

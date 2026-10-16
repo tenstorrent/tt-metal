@@ -1,0 +1,29 @@
+{
+  "node_id": "r03-b01-a04",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 1,
+  "attempt": 4,
+  "parent": "r03-b01-a03",
+  "parent_commit": "e92a7b7f51c0f8a1f2022db4b2c33ff5361c67ea",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T23:26:36+00:00",
+  "mechanism": "stream x through SrcB instead of the bf4 weights through SrcA: at per_core_M >= 3 the non-last gate/up K-blocks and the down K-loop call matmul_block with rt = per_core_M, ct = 1 (reuse the weight tile, stream x), bit-identical",
+  "tags": [
+    "compute",
+    "matmul-reuse",
+    "unpack-bound",
+    "srcb-streaming",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5952,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-08T23:37:11+00:00"
+}

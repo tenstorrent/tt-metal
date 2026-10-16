@@ -1,0 +1,12 @@
+{
+  "valid": false,
+  "fail_class": "hang",
+  "error": "/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:89:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'\n   89 |     DeviceZoneScopedMainChildN(\"TRISC-KERNEL\");\n      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~\n\u001b[94m Starting reset on devices at PCI indices: 0, 1, 2, 3 \u001b[0m\n\u001b[94m Waiting for 2 seconds for potential hotplug removal. \u001b[0m\n\u001b[94m Waiting for devices to reappear on pci bus... \u001b[0m\n\u001b[92m Reset successfully completed for device at PCI index 0. \u001b[0m\n\u001b[94m Waiting for devices to reappear on pci bus... \u001b[0m\n\u001b[92m Reset successfully completed for device at PCI index 1. \u001b[0m\n\u001b[94m Waiting for devices to reappear on pci bus... \u001b[0m\n\u001b[92m Reset successfully completed for device at PCI index 2. \u001b[0m\n\u001b[94m Waiting for devices to reappear on pci bus... \u001b[0m\n\u001b[92m Reset successfully completed for device at PCI index 3. \u001b[0m\n\u001b[94m Finishing reset on devices at PCI indices: 0, 1, 2, 3 \u001b[0m\n\u001b[95m Re-initializing boards after reset.... \u001b[0m",
+  "score": 0.0,
+  "score_def": "geomean over shapes of baseline_us / attempt_us; per-chip mean device kernel time, measured calls only",
+  "noise_pct": 1.0,
+  "commit_under_test": "83266f533dbcdcedb0773cc58c0f5286397c1100",
+  "build_seconds": 19,
+  "eval_seconds": 901,
+  "report_dir": "/localdev/nstamatovic/dream/routed-expert-prefill/reports/r05-b04-a01"
+}

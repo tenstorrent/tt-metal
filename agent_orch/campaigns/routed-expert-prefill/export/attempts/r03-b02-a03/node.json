@@ -1,0 +1,30 @@
+{
+  "node_id": "r03-b02-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 2,
+  "attempt": 3,
+  "parent": "r03-b02-a02",
+  "parent_commit": "68a4a993f9a6a7cee81a221179e48b037b9f219e",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T22:51:43+00:00",
+  "mechanism": "measurement node: profiler-only Tensix hardware perf counters (FPU/SFPU busy, unpacker busy, SrcA/SrcB write and valid-wait, per-thread stalls) and FW matmul-throttle samples on the MATH thread, accumulated per gate/up and down window, to find what sets the ~30-40 cycles per tile-mult on the compute-bound shapes",
+  "tags": [
+    "measurement",
+    "perf-counters",
+    "fw-throttle",
+    "compute",
+    "profiler-only",
+    "kernel-only"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6103,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-08T23:22:58+00:00"
+}

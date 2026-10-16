@@ -1,0 +1,248 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index df39641a2bb..bf32e3fd294 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -236,8 +236,8 @@ FORCE_INLINE void matmul_phase(
+         RE_HW_SAMPLE_THROTTLE();
+         // The reader pushes the FULL compile-time-max activated block (filling only
+         // its first per_core_M tile-rows), so this wait/pop stays compile-time sized.
+-        in0_cb.wait_front(in0_block_num_tiles);
+-        in1_cb.wait_front(in1_block_num_tiles);
++        RE_UW_TIME(kAct, in0_cb.wait_front(in0_block_num_tiles));
++        RE_UW_TIME(kDown, in1_cb.wait_front(in1_block_num_tiles));
+ 
+         // Reduce only the REAL K-tiles this block covers. Neither operand is
+         // zero-filled past real_k_tiles — the down weights hold stale L1 and the
+@@ -571,7 +571,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     if constexpr (tilize_x) {
+         x_slot = x_blk_base % x_slots;
+         if (x_slot == x_rank) {
+-            tilize_owned_x_block(0);
++            RE_UW_TIME(kTilize, tilize_owned_x_block(0));
+         }
+     }
+ 
+@@ -744,12 +744,12 @@ FORCE_INLINE void matmul_phase_fused_gu(
+                 x_slot = 0;
+             }
+             if (block + 1 < num_blocks && x_slot == x_rank) {
+-                tilize_owned_x_block(block == 0 ? 0 : 1);
++                RE_UW_TIME(kTilize, tilize_owned_x_block(block == 0 ? 0 : 1));
+             }
+         }
+-        x_cb.wait_front(X_BLOCK_TILES_MAX);
+-        gate_cb.wait_front(in1_block_num_tiles);
+-        up_cb.wait_front(in1_block_num_tiles);
++        RE_UW_TIME(kX, x_cb.wait_front(X_BLOCK_TILES_MAX));
++        RE_UW_TIME(kGate, gate_cb.wait_front(in1_block_num_tiles));
++        RE_UW_TIME(kUp, up_cb.wait_front(in1_block_num_tiles));
+ 
+         if (block + 1 == num_blocks) {
+             break;  // the last block runs pipelined with the activation, below
+@@ -1051,6 +1051,41 @@ FORCE_INLINE uint32_t expert_count_tiles(uint32_t cb_counts, uint32_t cb_idx, ui
+ 
+ }  // namespace
+ 
++#if defined(PROFILE_KERNEL)
++// Profiler-only in-situ matmul probe, run once per launch before the counts handshake, while the reader
++// is still fetching counts and planning (this kernel's compute has nothing to do then). It is one gate and
++// one up subblock of the gate/up K-loop exactly as matmul_phase_fused_gu issues them -- same init, the
++// same 1 x out_subblock_w matmul_block calls over in0_block_w K-steps, the gate -> up CB switch, one dst
++// acquire each -- on whatever L1 the x / gate / up CBs hold. No wait_front, so no wait for the reader can
++// enter the window: MATH's perf-counter window (re_hw phase kPhaseProbe) is the matmul pipeline alone,
++// unpacker + FPU + dst hand-off. Its cycles per tile-mult against the RE-GU window's tells how much of the
++// gate/up time is the matmul and how much is waiting for data. The products are dropped: PACK releases
++// each dst half without packing, and the release zeroes it (clear_dest) before any real subblock uses it.
++template <uint32_t in0_block_w, uint32_t out_subblock_w, uint32_t in1_per_core_w>
++FORCE_INLINE void re_probe_gu(uint32_t x_cb_id, uint32_t gate_cb_id, uint32_t up_cb_id) {
++    matmul_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, out_subblock_w, /*rt=*/1, in0_block_w);
++    RE_HW_BEGIN(re_hw::kPhaseProbe);
++#pragma GCC unroll 1
++    for (uint32_t s = 0; s < 2; ++s) {
++        const uint32_t in1_cb_id = (s == 0) ? gate_cb_id : up_cb_id;
++        tile_regs_acquire();
++        uint32_t in1_index = 0;
++#pragma GCC unroll 1
++        for (uint32_t k = 0; k < in0_block_w; ++k) {
++            matmul_block(
++                x_cb_id, in1_cb_id, k, in1_index, /*dst_index=*/0, /*transpose=*/0, out_subblock_w, /*rt=*/1, in0_block_w);
++            in1_index += in1_per_core_w;
++        }
++        tile_regs_commit();
++        tile_regs_wait();
++        tile_regs_release();
++    }
++    // The MATH RISC only issues; hold the counter window open until the last MVMUL has retired.
++    MATH(ckernel::tensix_sync());
++    RE_HW_END(re_hw::kPhaseProbe, 2 * in0_block_w * out_subblock_w);
++}
++#endif
++
+ void kernel_main() {
+     // Per-core valid N-subblock counts. per_core_N is the GRID-ceil'd width, so the
+     // highest-gx cores own phantom output columns whose weights were never fetched;
+@@ -1166,6 +1201,10 @@ void kernel_main() {
+     // the vConstFloatPrgm registers the activation reads back on every tile).
+     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
+     RE_HW_INIT();
++    RE_UW_INIT();
++#if defined(PROFILE_KERNEL)
++    re_probe_gu<g_in0_block_w, gu_out_subblock_w, g_in1_per_core_w>(cb_in0_x, cb_in1_gate, cb_in1_up);
++#endif
+ 
+     CircularBuffer counts_scratch_cb(cb_counts_scratch);
+     CircularBuffer idx_scratch_cb(cb_idx_scratch);
+@@ -1297,7 +1336,7 @@ void kernel_main() {
+             DeviceZoneScopedN("RE-GU");
+ #endif
+             RE_HW_BEGIN(0);
+-            matmul_phase_fused_gu<
++            RE_UW_TIME(kGuWin, matmul_phase_fused_gu<
+                 g_in0_block_w,
+                 g_in0_num_subblocks,
+                 g_in0_block_num_tiles,
+@@ -1327,7 +1366,7 @@ void kernel_main() {
+                 /*n_subblocks=*/gu_valid_n_subblocks,
+                 /*x_blk_base=*/x_blk,
+                 x_slots,
+-                x_rank);
++                x_rank));
+             // Tile-mults this window issued: per_core_M rows x real N columns x K, gate and up.
+             RE_HW_END(0, re_m_valid * gu_valid_n_subblocks * gu_out_subblock_w * g_in0_block_w * g_num_blocks * 2);
+             }
+@@ -1364,6 +1403,7 @@ void kernel_main() {
+             DeviceZoneScopedN("RE-DN");
+ #endif
+             RE_HW_BEGIN(1);
++            RE_UW_TIME(kDnWin, {
+             reconfig_data_format(cb_in1_down, cb_in0_down_full);
+             matmul_block_init(
+                 cb_in0_down_full,
+@@ -1396,6 +1436,7 @@ void kernel_main() {
+                 /*m_subblocks=*/re_m_valid,
+                 /*n_subblocks=*/d_valid_n_subblocks,
+                 cb_down_bias);
++            });
+             RE_HW_END(
+                 1,
+                 re_m_valid * d_K_down_tiles *
+@@ -1414,4 +1455,5 @@ void kernel_main() {
+ #endif
+     }  // end per-local-expert loop
+     RE_HW_EMIT();
++    RE_UW_EMIT();
+ }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp
+index afcda1ab048..3a6c6e9b7f4 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp
+@@ -24,6 +24,10 @@ namespace re_hw {
+ 
+ constexpr uint32_t kPhaseGu = 0;
+ constexpr uint32_t kPhaseDn = 1;
++// In-situ matmul probe at kernel start (see re_probe_gu in fused_swiglu.cpp): the gate/up matmul pattern
++// on L1 already in the CBs, so no wait for data can enter its window.
++constexpr uint32_t kPhaseProbe = 2;
++constexpr uint32_t kNumPhases = 3;
+ 
+ // Counter slots per phase.
+ enum Slot : uint32_t {
+@@ -46,7 +50,7 @@ enum Slot : uint32_t {
+     kNumSlots
+ };
+ 
+-inline uint32_t acc[2][kNumSlots];
++inline uint32_t acc[kNumPhases][kNumSlots];
+ inline uint32_t cur_phase = 0;
+ 
+ #define RE_HW_PERF_CNT_CONTINUOUS_MODE 0
+@@ -86,7 +90,7 @@ inline __attribute__((noinline)) uint32_t read_counter(uint32_t cntl, uint32_t o
+ 
+ inline __attribute__((noinline)) void init() {
+     // Kernel globals are not re-zeroed between launches of a cached binary.
+-    for (uint32_t p = 0; p < 2; ++p) {
++    for (uint32_t p = 0; p < kNumPhases; ++p) {
+         for (uint32_t i = 0; i < kNumSlots; ++i) {
+             acc[p][i] = 0;
+         }
+@@ -137,7 +141,7 @@ inline __attribute__((always_inline)) void sample_throttle() {
+ 
+ // One record per (phase, slot pair): bits [63:56] = phase * 8 + pair index, [55:28] = first slot,
+ // [27:0] = second slot (28 bits each: a launch is well under 2^28 cycles per core). One call site,
+-// so the profiler write is inlined once.
++// so the profiler write is inlined once. The probe phase (16..19) sends pairs 0-3 only.
+ inline __attribute__((noinline)) void emit_one(uint64_t data) { DeviceTimestampedData("RE-HW", data); }
+ 
+ inline __attribute__((noinline)) void emit() {
+@@ -152,9 +156,9 @@ inline __attribute__((noinline)) void emit() {
+         {kThrOn, kThrN}};
+     constexpr uint64_t kMask = (1ull << 28) - 1;
+ #pragma GCC unroll 1
+-    for (uint32_t p = 0; p < 2; ++p) {
++    for (uint32_t p = 0; p < kNumPhases; ++p) {
+ #pragma GCC unroll 1
+-        for (uint32_t i = 0; i < 8; ++i) {
++        for (uint32_t i = 0; i < ((p == kPhaseProbe) ? 4u : 8u); ++i) {
+             const uint64_t data = (static_cast<uint64_t>(p * 8 + i) << 56) |
+                                   ((static_cast<uint64_t>(acc[p][kPairs[i][0]]) & kMask) << 28) |
+                                   (static_cast<uint64_t>(acc[p][kPairs[i][1]]) & kMask);
+@@ -177,3 +181,59 @@ inline __attribute__((noinline)) void emit() {
+ #define RE_HW_SAMPLE_THROTTLE()
+ #define RE_HW_EMIT()
+ #endif
++
++// Profiler-only wall-clock tally of where the UNPACK thread waits, per call: cycles inside each input
++// CB's wait_front (row-shared x, gate, up in the gate/up phase; activated and down weights in the down
++// phase), inside the owner's x tilize (its cb_x_rm wait included), and the UNPACK-side length of the
++// gate/up and down phases. UNPACK is the only compute thread that waits on the reader's CBs and it
++// runs at most two unpack contexts ahead of MATH, so a cycle spent here is a cycle the FPU has no data
++// queued. At kernel end UNPACK emits 4 "RE-UW" records: [63:56] pair index, [55:28] and [27:0] the
++// pair's two slots.
++#if defined(PROFILE_KERNEL) && defined(TRISC_UNPACK)
++namespace re_uw {
++
++enum Slot : uint32_t { kX = 0, kGate, kUp, kTilize, kAct, kDown, kGuWin, kDnWin, kNumSlots };
++
++inline uint32_t acc[kNumSlots];
++
++inline __attribute__((always_inline)) uint32_t now() {
++    return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
++}
++
++inline __attribute__((noinline)) void init() {
++    for (uint32_t i = 0; i < kNumSlots; ++i) {
++        acc[i] = 0;
++    }
++}
++
++inline __attribute__((noinline)) void emit_one(uint64_t data) { DeviceTimestampedData("RE-UW", data); }
++
++inline __attribute__((noinline)) void emit() {
++    constexpr uint64_t kMask = (1ull << 28) - 1;
++#pragma GCC unroll 1
++    for (uint32_t i = 0; i < kNumSlots / 2; ++i) {
++        emit_one(
++            (static_cast<uint64_t>(i) << 56) | ((static_cast<uint64_t>(acc[2 * i]) & kMask) << 28) |
++            (static_cast<uint64_t>(acc[2 * i + 1]) & kMask));
++    }
++}
++
++}  // namespace re_uw
++
++#define RE_UW_INIT() re_uw::init()
++// Run `stmt` and add its UNPACK wall-clock cycles to `slot`.
++#define RE_UW_TIME(slot, ...)                     \
++    do {                                          \
++        const uint32_t re_uw_t0 = re_uw::now();   \
++        __VA_ARGS__;                              \
++        re_uw::acc[re_uw::slot] += re_uw::now() - re_uw_t0; \
++    } while (0)
++#define RE_UW_EMIT() re_uw::emit()
++#else
++#define RE_UW_INIT()
++#define RE_UW_TIME(slot, ...) \
++    do {                      \
++        __VA_ARGS__;          \
++    } while (0)
++#define RE_UW_EMIT()
++#endif

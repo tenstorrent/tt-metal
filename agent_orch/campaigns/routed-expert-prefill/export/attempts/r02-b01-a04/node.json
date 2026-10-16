@@ -1,0 +1,34 @@
+{
+  "node_id": "r02-b01-a04",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 1,
+  "attempt": 4,
+  "parent": "r02-b01-a03",
+  "parent_commit": "5d84d0524bbfeee4e00c0217c69a86d9416653ac",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T21:38:22+00:00",
+  "mechanism": "combine r02-b03-a03's lineage (mixed-height layouts, single-round two-phase plan, op-local short binary SFPU bodies) with this branch's PACK-thread activation pipelined into the last gate/up K-block, running the short SFPU bodies on PACK",
+  "tags": [
+    "combination",
+    "sfpu-fpu-overlap",
+    "pack-thread-sfpu",
+    "runtime-schedule",
+    "row-groups",
+    "sfpu"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5657,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/binary_act_sfpu.h",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-08T21:43:10+00:00"
+}

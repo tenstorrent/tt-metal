@@ -1,0 +1,33 @@
+{
+  "node_id": "r04-b04-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 4,
+  "branch": 4,
+  "attempt": 2,
+  "parent": "r04-b04-a01",
+  "parent_commit": "2e00aaee79f72e004434056a46689ab6489a4e87",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T00:26:28+00:00",
+  "mechanism": "activated-stream run-ahead in the down phase: row cores grant an activated ring slot (ack its sender) as soon as it is free and senders multicast as soon as all grants are in, with per-slot valid flags and an activated ring of up to 4 slots from leftover L1 (on r04-b02-a01's reader)",
+  "tags": [
+    "data-movement",
+    "down-phase",
+    "activated-stream",
+    "run-ahead",
+    "handshake",
+    "cb-depth",
+    "host+kernel",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6037,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 47,
+  "finished_at": "2026-10-09T00:45:15+00:00"
+}

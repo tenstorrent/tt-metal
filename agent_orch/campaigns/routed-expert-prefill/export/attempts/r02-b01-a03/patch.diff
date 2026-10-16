@@ -1,0 +1,675 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index e107c5024e8..75dc3ad92f2 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -21,9 +21,10 @@
+ //     read-modify-write can overtake block N's pack of the same slot and
+ //     silently drop that contribution.
+ //   * After the K-loop the partials CB is pushed once, holding the final
+-//     accumulated sum, and a second pass copies each subblock back into dst,
+-//     optionally applies SILU, and packs into the final CB (cb_gate_intermed /
+-//     cb_out).
++//     accumulated sum, and a second pass copies each subblock back into dst
++//     and packs it into the final CB (cb_out). The fused gate/up phase instead
++//     pushes subblock by subblock during its last K-block and activates each one
++//     on the PACK thread as it lands (see matmul_phase_fused_gu).
+ //
+ // Cross-K-block accumulation is handled by the packer (PACKER_L1_ACC), not by
+ // reloading dst between K-blocks — a dst-reload approach produced Inf outputs.
+@@ -99,11 +100,66 @@
+ // Computes (beta_gate*tanh(gate/beta_gate)*sigmoid(gate)) * (beta_up*tanh(up/beta_up)).
+ // Bakes SituGluConfigKimi (beta_gate=4.0, beta_up=25.0), Kimi K3's config.
+ #include "api/compute/situ_glu.h"
++#ifdef TRISC_PACK
++// situ_glu.h pulls the sfpi op in for MATH only; this kernel runs the activation on PACK.
++#include "ckernel_sfpu_situ_glu.h"
++#include "llk_math_eltwise_binary_sfpu_macros.h"
++#endif
+ #endif
+ 
+ #ifdef CLAMPED_SILU_GLU
+ // Computes silu(min(gate,L)) * clamp(up,±L). Bakes ClampedSiluGluConfigDsV4 (limit=10.0).
+ #include "api/compute/clamped_silu_glu.h"
++#ifdef TRISC_PACK
++#include "ckernel_sfpu_clamped_silu_glu.h"
++#include "llk_math_eltwise_binary_sfpu_macros.h"
++#endif
++#endif
++
++// Dst-accumulator mode (fp32 dest accum on/off) from the host ComputeConfig,
++// passed via -DFP32_DEST_ACC_EN. Defaults to bf16 dst (0) if not passed.
++#ifndef FP32_DEST_ACC_EN
++#define FP32_DEST_ACC_EN 0
++#endif
++
++// The gate/up activation runs its SFPU op on the PACK thread (the apply_activation_from_pack /
++// moe_gpt pattern), so it overlaps the FPU work of the last gate/up K-block on MATH (see
++// matmul_phase_fused_gu). Same sfpi functions and template arguments as the MATH-thread API calls
++// (situ_glu_tile, clamped_silu_glu_tile, silu_tile), so the numerics are unchanged. Each variant
++// is named explicitly rather than left to an #else, so a new one fails the build instead of
++// silently compiling as whichever variant owned the fallback.
++#if defined(SWIGLU_OAI)
++#define PACK_ACT_INIT() PACK((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()))
++#define PACK_ACT_TILE(g, u, o) \
++    PACK((ckernel::llk_math_eltwise_binary_sfpu_swiglu<(FP32_DEST_ACC_EN != 0)>(g, u, o)))
++#elif defined(SITU_GLU)
++#define PACK_ACT_INIT() PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, ckernel::sfpu::situ_glu_init)))
++#define PACK_ACT_TILE(g, u, o)                                                    \
++    PACK((SFPU_BINARY_CALL(                                                       \
++        DST_SYNC_MODE,                                                            \
++        DST_ACCUM_MODE,                                                           \
++        calculate_situ_glu,                                                       \
++        (DST_ACCUM_MODE, 8 /* ITERATIONS */, ckernel::sfpu::SituGluConfigKimi),   \
++        g,                                                                        \
++        u,                                                                        \
++        o,                                                                        \
++        ::ckernel::VectorMode::RC)))
++#elif defined(CLAMPED_SILU_GLU)
++#define PACK_ACT_INIT() PACK((SFPU_BINARY_INIT_FN_NO_ARGS(unused, ckernel::sfpu::clamped_silu_glu_init)))
++#define PACK_ACT_TILE(g, u, o)                                                           \
++    PACK((SFPU_BINARY_CALL(                                                              \
++        DST_SYNC_MODE,                                                                   \
++        DST_ACCUM_MODE,                                                                  \
++        calculate_clamped_silu_glu,                                                      \
++        (DST_ACCUM_MODE, 8 /* ITERATIONS */, ckernel::sfpu::ClampedSiluGluConfigDsV4),   \
++        g,                                                                               \
++        u,                                                                               \
++        o,                                                                               \
++        ::ckernel::VectorMode::RC)))
++#elif defined(FUSED_BINARY_ACT)
++#error "FUSED_BINARY_ACT is set but no activation variant matched"
++#else
++#define PACK_ACT_INIT() silu_tile_init_pack()
+ #endif
+ 
+ namespace {
+@@ -403,9 +459,10 @@ FORCE_INLINE void matmul_phase(
+ //      the SAME for both partials (PACKER_L1_ACC is a global packer state).
+ //   3. Pop x, gate, up once per K-block (the same x K-block feeds both
+ //      matmuls, so x is read from DRAM once per K-block instead of twice).
+-// After the K-loop, copy partials_gu → gate_intermed (with silu fused on
+-// the pack), then partials_up → up_intermed (no activation). Both partials
+-// CBs are Float16_b so switching between them needs no format reconfig.
++// The LAST K-block is different: it is walked subblock by subblock, and each subblock's
++// activation (binary op -> cb_activated, or silu -> cb_gate_intermed) runs on the PACK thread's
++// SFPU while MATH computes the next subblock's last-block matmul. See the pipeline comment at
++// the K-loop.
+ template <
+     uint32_t in0_block_w,
+     uint32_t in0_num_subblocks,
+@@ -432,6 +489,11 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     uint32_t partials_up_cb_id,
+     uint32_t gate_intermed_cb_id,
+     uint32_t up_intermed_cb_id,
++    // Binary activations write cb_activated directly (bias-added first on gpt-oss); SiLU writes
++    // gate_intermed_cb_id. See the activation pipeline at the K-loop.
++    uint32_t activated_cb_id,
++    uint32_t gate_bias_cb_id,
++    uint32_t up_bias_cb_id,
+     uint32_t m_subblocks,
+     uint32_t n_subblocks,
+     // Row-shared tilize (tilize_x only): this chunk's first gate/up block number, this core's
+@@ -543,6 +605,168 @@ FORCE_INLINE void matmul_phase_fused_gu(
+         }
+     }
+ 
++    // ---- Activation pipelined into the last K-block ------------------------------------------
++    // Subblock s of the output is final once the LAST K-block has packed it, so its activation
++    // (bias add + binary SFPU op -> cb_activated, or silu -> cb_gate_intermed) can run while the
++    // FPU computes the last-block matmuls of the next subblock. The SFPU op runs on the PACK thread
++    // (apply_activation_from_pack pattern), MATH only moves the partials into dst, so the FPU and
++    // SFPU work overlap instead of running back to back after the K-loop.
++    //
++    // The last block is walked in LW-wide subblocks (LW = out_subblock_w, halved when gate + up of a
++    // full subblock would not fit one dst half), so each activation chunk has a matmul to hide
++    // behind. A MATH commit waits for the SFPU to go idle (dest_section_flip), so each SFPU chunk
++    // overlaps exactly one dst acquire of matmul work: gate and up share that acquire when 2 * LW
++    // fits a dst half.
++    //
++    // Hand-off: after its last-block packs, subblock s's LW slots are pushed on both partials CBs,
++    // so pack_tile<true> indices are relative to the pushed pointer (always 0..LW-1 here) and the
++    // slot addresses are the same ones blocks 0..N-2 accumulated into. The activation pops what it
++    // read. Pads (pointer-only) keep every CB moving the constant max block, as before.
++#ifdef FUSED_BINARY_ACT
++    const uint32_t act_out_cb_id = activated_cb_id;
++    (void)gate_intermed_cb_id;
++#ifndef FUSE_BIAS
++    (void)gate_bias_cb_id;
++    (void)up_bias_cb_id;
++#endif
++    constexpr uint32_t kActSlots = 2;  // gate and up pinned in dst together per activated tile
++#else
++    // SiLU: silu(gate) -> cb_gate_intermed (bf8); multiply_phase pairs it with cb_partials_up, which
++    // therefore stays resident here (pushed, never popped).
++    const uint32_t act_out_cb_id = gate_intermed_cb_id;
++    (void)activated_cb_id;
++    (void)gate_bias_cb_id;
++    (void)up_bias_cb_id;
++    constexpr uint32_t kActSlots = 1;
++#endif
++    // Up partials are NOT copied to a separate cb_up_intermed (see multiply_phase).
++    (void)up_intermed_cb_id;
++    CircularBuffer act_out_cb(act_out_cb_id);
++
++    static_assert(out_subblock_h == 1, "the last-block walk indexes tile-rows by sb_m");
++    constexpr uint32_t kDstHalf = (FP32_DEST_ACC_EN != 0) ? 4u : 8u;
++    constexpr uint32_t kActChunk = kDstHalf / kActSlots;
++    constexpr uint32_t LW = (2 * out_subblock_w <= kDstHalf || (out_subblock_w % 2) != 0) ? out_subblock_w
++                                                                                           : out_subblock_w / 2;
++    constexpr bool kFusedGU = (2 * LW <= kDstHalf);
++    constexpr uint32_t LN = (in1_num_subblocks * out_subblock_w) / LW;  // LW-subblocks per tile-row
++    static_assert(LN * LW == in1_num_subblocks * out_subblock_w, "LW must tile per_core_N");
++    static_assert(((LW + 1) / 2) * kActSlots <= kDstHalf, "activation half-chunk must fit a dst half");
++    // Phantom columns end on an out_subblock_w boundary, so an LW-subblock is real iff it starts below it.
++    const uint32_t real_cols = n_subblocks * out_subblock_w;
++    const uint32_t l1_acc_last = (num_blocks > 1) ? 1u : 0u;  // L1_ACC state of the last block's packs
++
++    // Mode switches between the last-block matmul and the activation's partials -> dst pass. Every
++    // thread runs the same control flow, so `in_act` agrees across UNPACK / MATH / PACK.
++    bool in_act = false;
++    auto enter_act = [&]() {
++        if (in_act) {
++            return;
++        }
++#if defined(FUSED_BINARY_ACT) && defined(FUSE_BIAS)
++        // Gate/up bias, broadcast across rows (gpt-oss). Read once per expert by the reader and
++        // popped by the caller at the expert's end.
++        CircularBuffer(gate_bias_cb_id).wait_front(in1_per_core_w);
++        CircularBuffer(up_bias_cb_id).wait_front(in1_per_core_w);
++        reconfig_data_format(partials_gu_cb_id, gate_bias_cb_id);
++        add_bcast_rows_init(partials_gu_cb_id, gate_bias_cb_id);
++#else
++        reconfig_data_format_srca(partials_gu_cb_id);
++        copy_init(partials_gu_cb_id);
++#endif
++#ifdef PACKER_L1_ACC
++        PACK((llk_pack_reconfig_l1_acc(0)));  // activation packs overwrite
++#endif
++        pack_reconfig_data_format(act_out_cb_id);
++        in_act = true;
++    };
++    auto leave_act = [&]() {
++        if (!in_act) {
++            return;
++        }
++        reconfig_data_format(gate_cb_id, x_cb_id);  // in1 -> SrcA, in0 -> SrcB
++        matmul_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
++        pack_reconfig_data_format(partials_gu_cb_id);
++#ifdef PACKER_L1_ACC
++        PACK((llk_pack_reconfig_l1_acc(l1_acc_last)));
++#endif
++        in_act = false;
++    };
++    // Activate tiles [lo, hi) of the oldest handed-off subblock (rd pointer of the partials sits on
++    // its first tile; flat_base = its first flat (m, n) index, for the bias column).
++    auto act_tiles = [&](uint32_t lo, uint32_t hi, [[maybe_unused]] uint32_t flat_base) {
++        partials_gu_cb.wait_front(LW);
++#ifdef FUSED_BINARY_ACT
++        partials_up_cb.wait_front(LW);
++#endif
++        for (uint32_t base = lo; base < hi; base += kActChunk) {
++            const uint32_t c = (hi - base) < kActChunk ? (hi - base) : kActChunk;
++            tile_regs_acquire();
++            for (uint32_t j = 0; j < c; ++j) {
++#ifdef FUSED_BINARY_ACT
++#ifdef FUSE_BIAS
++                const uint32_t ncol = (flat_base + base + j) % in1_per_core_w;
++                add_tiles_bcast_rows(partials_gu_cb_id, gate_bias_cb_id, base + j, ncol, j);
++                add_tiles_bcast_rows(partials_up_cb_id, up_bias_cb_id, base + j, ncol, c + j);
++#else
++                copy_tile(partials_gu_cb_id, base + j, j);
++                copy_tile(partials_up_cb_id, base + j, c + j);
++#endif
++#else
++                copy_tile(partials_gu_cb_id, base + j, j);
++#endif
++            }
++            tile_regs_commit();
++            // PACK: wait for MATH's commit, point the SFPU at the packer's dst half, activate in
++            // place (out == gate slot), and let the packer start only once the SFPU is done.
++            PACK(TTI_SEMWAIT(
++                p_stall::STALL_TDMA | p_stall::STALL_CFG,
++                semaphore::t6_sem(semaphore::MATH_PACK),
++                p_stall::STALL_ON_ZERO));
++            PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
++            for (uint32_t j = 0; j < c; ++j) {
++#ifdef FUSED_BINARY_ACT
++                PACK_ACT_TILE(j, c + j, j);
++#else
++                silu_tile_pack(j);
++#endif
++            }
++            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
++            act_out_cb.reserve_back(c);
++            for (uint32_t j = 0; j < c; ++j) {
++                pack_tile(j, act_out_cb_id);
++            }
++            act_out_cb.push_back(c);
++            tile_regs_release();
++        }
++    };
++    // Retire the oldest handed-off subblock's partials slots.
++    auto pop_pending = [&]() {
++        partials_gu_cb.wait_front(LW);
++        partials_gu_cb.pop_front(LW);
++#ifdef FUSED_BINARY_ACT
++        partials_up_cb.wait_front(LW);
++        partials_up_cb.pop_front(LW);
++#endif
++    };
++    // A phantom subblock (no real columns) was never MAC'd: retire its slots and hand the activated
++    // stream pointer-only slots, exactly as the old pad did.
++    auto skip_pending = [&]() {
++        pop_pending();
++        act_out_cb.reserve_back(LW);
++        act_out_cb.push_back(LW);
++    };
++    // Last-block matmul of one LW-subblock into dst[dst_base, dst_base + LW).
++    auto mm_last = [&](uint32_t in1_cb, uint32_t in0_base, uint32_t in1_base, uint32_t dst_base) {
++        uint32_t in0_index = in0_base;
++        uint32_t in1_index = in1_base;
++        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
++            matmul_block(x_cb_id, in1_cb, in0_index, in1_index, dst_base, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
++            in0_index += 1;
++            in1_index += in1_per_core_w;
++        }
++    };
++
+     for (uint32_t block = 0; block < num_blocks; ++block) {
+         if constexpr (tilize_x) {
+             if (block + 1 < num_blocks && (x_blk_base + block + 1) % grid_x == my_gx) {
+@@ -553,6 +777,10 @@ FORCE_INLINE void matmul_phase_fused_gu(
+         gate_cb.wait_front(in1_block_num_tiles);
+         up_cb.wait_front(in1_block_num_tiles);
+ 
++        if (block + 1 == num_blocks) {
++            break;  // the last block runs pipelined with the activation, below
++        }
++
+         int in0_index_subblock_offset = 0;
+         uint32_t partials_slot_idx = 0;
+         for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
+@@ -640,213 +868,135 @@ FORCE_INLINE void matmul_phase_fused_gu(
+         gate_cb.pop_front(in1_block_num_tiles);
+         up_cb.pop_front(in1_block_num_tiles);
+     }
+-    // Make the accumulated partials visible to the second-pass copy loops.
+-    partials_gu_cb.push_back(EFF_OUT_MAX);
+-    partials_up_cb.push_back(EFF_OUT_MAX);
+-
+-    // After K-loop: partials_gu holds gate-matmul accumulator,
+-    // partials_up holds up-matmul accumulator. Copy each to its intermed
+-    // CB, fusing silu on the gate copy's final pack.
+-#ifdef PACKER_L1_ACC
+-    PACK((llk_pack_reconfig_l1_acc(0)));
+-#endif
+ 
+-#ifdef FUSED_BINARY_ACT
+-    // Leave both partials pushed (bf16) so binary_activation_phase() can read raw gate and
+-    // up together. Activating off the bf8 gate_intermed would lose precision first.
+-    (void)gate_intermed_cb_id;
+-    (void)up_intermed_cb_id;
+-#else
+-    // Gate partials → gate_intermed (silu applied via MATH-thread SFPU on dst,
+-    // NOT packer-fused). Per subblock:
+-    //   * copy partials_gu → dst (UNPACK reads bf16, MATH stores in dst regs).
+-    //   * silu_tile on each dst tile — runs on the MATH thread's SFPU,
+-    //     overlapping with the next subblock's UNPACK rather than gating the
+-    //     pack pipeline as apply_activation_from_pack would.
+-    //   * pack dst → gate_intermed without per-tile SFPU.
+-    pack_reconfig_data_format(gate_intermed_cb_id);
+-    // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
+-    // to partials_gu so copy_tile reads the accumulator.
+-    reconfig_data_format_srca(up_cb_id, partials_gu_cb_id);
+-    copy_init(partials_gu_cb_id);
+-    for (uint32_t sb = 0; sb < (EFF_OUT / out_subblock_num_tiles); ++sb) {
+-        tile_regs_acquire();
+-        partials_gu_cb.wait_front(out_subblock_num_tiles);
+-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+-            copy_tile(partials_gu_cb_id, i, i);
+-        }
+-        partials_gu_cb.pop_front(out_subblock_num_tiles);
+-        // MATH-thread SFPU pass: apply silu to each dst tile before pack.
+-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+-            silu_tile(i);
++    // ---- Last K-block (its x / gate / up are waited on above) ----
++    // Packs keep the L1_ACC state the K-loop left (on for num_blocks > 1, off for a single block).
++    if constexpr (LW != out_subblock_w) {
++        matmul_block_init(x_cb_id, gate_cb_id, /*transpose=*/0, LW, out_subblock_h, in0_block_w);
++    }
++    bool pend = false;
++    bool pend_real = false;
++    uint32_t pend_flat = 0;
++    uint32_t flat = 0;
++    for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
++        const uint32_t in0_base = sb_m * in0_subblock_num_tiles;
++        for (uint32_t j = 0; j < LN; ++j) {
++            const bool real = j * LW < real_cols;
++            const uint32_t in1_base = j * LW;
++            if constexpr (kFusedGU) {
++                // Previous subblock's activation, then this subblock's gate + up in ONE acquire, which
++                // MATH runs while PACK's SFPU works on the activation.
++                if (pend) {
++                    if (pend_real) {
++                        enter_act();
++                        act_tiles(0, LW, pend_flat);
++                        pop_pending();
++                    } else {
++                        skip_pending();
++                    }
++                }
++                if (real) {
++                    leave_act();
++                    tile_regs_acquire();
++                    mm_last(gate_cb_id, in0_base, in1_base, /*dst_base=*/0);
++                    mm_last(up_cb_id, in0_base, in1_base, /*dst_base=*/LW);
++                    tile_regs_commit();
++                    tile_regs_wait();
++                    for (uint32_t i = 0; i < LW; ++i) {
++                        pack_tile<true>(i, partials_gu_cb_id, i);
++                    }
++                    for (uint32_t i = 0; i < LW; ++i) {
++                        pack_tile<true>(LW + i, partials_up_cb_id, i);
++                    }
++                    tile_regs_release();
++                }
++            } else {
++                // Gate and up need a dst half each: split the previous subblock's activation in two,
++                // one half in front of each matmul.
++                constexpr uint32_t kHalf = (LW + 1) / 2;
++                if (pend && pend_real) {
++                    enter_act();
++                    act_tiles(0, kHalf, pend_flat);
++                }
++                if (real) {
++                    leave_act();
++                    tile_regs_acquire();
++                    mm_last(gate_cb_id, in0_base, in1_base, /*dst_base=*/0);
++                    tile_regs_commit();
++                    tile_regs_wait();
++                    for (uint32_t i = 0; i < LW; ++i) {
++                        pack_tile<true>(i, partials_gu_cb_id, i);
++                    }
++                    tile_regs_release();
++                }
++                if (pend) {
++                    if (pend_real) {
++                        enter_act();
++                        act_tiles(kHalf, LW, pend_flat);
++                        pop_pending();
++                    } else {
++                        skip_pending();
++                    }
++                }
++                if (real) {
++                    leave_act();
++                    tile_regs_acquire();
++                    mm_last(up_cb_id, in0_base, in1_base, /*dst_base=*/0);
++                    tile_regs_commit();
++                    tile_regs_wait();
++                    for (uint32_t i = 0; i < LW; ++i) {
++                        pack_tile<true>(i, partials_up_cb_id, i);
++                    }
++                    tile_regs_release();
++                }
++            }
++            // Hand this subblock's (now final) slots to the activation. The push waits for the packer,
++            // so the unpacker reads the accumulated values.
++            partials_gu_cb.push_back(LW);
++            partials_up_cb.push_back(LW);
++            pend = true;
++            pend_real = real;
++            pend_flat = flat;
++            flat += LW;
+         }
+-        tile_regs_commit();
+-        tile_regs_wait();
+-        gate_intermed_cb.reserve_back(out_subblock_num_tiles);
+-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+-            pack_tile(i, gate_intermed_cb_id);
++    }
++    // The last block's operands are done: free them before the trailing activation so the reader
++    // and writer can refill.
++    x_cb.pop_front(X_BLOCK_TILES_MAX);
++    gate_cb.pop_front(in1_block_num_tiles);
++    up_cb.pop_front(in1_block_num_tiles);
++
++    if (pend) {
++        if (pend_real) {
++            enter_act();
++            act_tiles(0, LW, pend_flat);
++            pop_pending();
++        } else {
++            skip_pending();
+         }
+-        gate_intermed_cb.push_back(out_subblock_num_tiles);
+-        tile_regs_release();
+     }
+-    // The copy loop above did real work only for the runtime rows. Settle the rest
+-    // of the constant-size block with pointer-only bumps: drop the stale tail of
+-    // partials_gu and pad gate_intermed so multiply_phase sees a full max block.
++
++    // Settle the rest of the constant-size blocks with pointer-only bumps: the partials slots past
++    // the runtime rows were never packed, and the activation stream gets the matching pad.
+     {
+         const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
+         if (pad > 0) {
++            partials_gu_cb.push_back(pad);
++            partials_up_cb.push_back(pad);
+             partials_gu_cb.wait_front(pad);
+             partials_gu_cb.pop_front(pad);
+-            gate_intermed_cb.reserve_back(pad);
+-            gate_intermed_cb.push_back(pad);
+-        }
+-    }
+-
+-    // Up partials are NOT copied to a separate cb_up_intermed: the multiply
+-    // phase reads cb_partials_up directly (bf16) and pairs each tile with
+-    // cb_gate_intermed (bf8 after silu+pack). Skipping the copy saves 48KB of
+-    // L1 and lets cb_in0_down_full stay double-buffered.
+-    (void)up_intermed_cb_id;
+-#endif
+-}
+-
+ #ifdef FUSED_BINARY_ACT
+-// Dst-accumulator mode (fp32 dest accum on/off) from the host ComputeConfig,
+-// passed via -DFP32_DEST_ACC_EN. Defaults to bf16 dst (0) if not passed.
+-#ifndef FP32_DEST_ACC_EN
+-#define FP32_DEST_ACC_EN 0
+-#endif
+-
+-// Both ops share the (gate, up, out) dst-index signature and bake their constants into a
+-// config struct, so only these lines differ. Each variant is named explicitly rather than
+-// left to an #else, so a new one fails the build instead of silently compiling as whichever
+-// variant owned the fallback.
+-#if defined(SWIGLU_OAI)
+-#define BINARY_ACT_INIT() MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()))
+-#define BINARY_ACT_TILE(fp32, g, u, o) MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu<fp32>(g, u, o)))
+-#elif defined(SITU_GLU)
+-// situ_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
+-#define BINARY_ACT_INIT() situ_glu_tile_init()
+-#define BINARY_ACT_TILE(fp32, g, u, o) situ_glu_tile(g, u, o)
+-#elif defined(CLAMPED_SILU_GLU)
+-// clamped_silu_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
+-#define BINARY_ACT_INIT() clamped_silu_glu_tile_init()
+-#define BINARY_ACT_TILE(fp32, g, u, o) clamped_silu_glu_tile(g, u, o)
+-#else
+-#error "FUSED_BINARY_ACT is set but no activation variant matched"
+-#endif
+-
+-// Replaces gate-silu + multiply_phase: reads the raw bf16 gate/up accumulators from their
+-// partials CBs and writes the activated result to activated_cb. Runs on MATH (between
+-// tile_regs_acquire/commit), matching this kernel's silu_tile structure.
+-//
+-// The binary op pins BOTH gate and up in dst, so each output tile costs 2 dst slots. With
+-// 8 dst tiles available we stream in chunks of <=4 output tiles. The activated CB is
+-// drained count-based, so push granularity need not match out_subblock_num_tiles.
+-template <uint32_t out_block_num_tiles, uint32_t per_core_N_gu = 0>
+-FORCE_INLINE void binary_activation_phase(
+-    uint32_t prev_srcA_cb_id,
+-    uint32_t gate_partials_cb_id,
+-    uint32_t up_partials_cb_id,
+-    uint32_t activated_cb_id,
+-    uint32_t eff_out_tiles,
+-    uint32_t gate_bias_cb_id = 0,
+-    uint32_t up_bias_cb_id = 0) {
+-    // Adaptive per_core_M: this core produces eff_out_tiles = per_core_M * pcN
+-    // activated tiles this chunk (0 if it owns no row -> nothing to do).
+-    const uint32_t EFF_OUT = eff_out_tiles;
+-    // CB blocks are the constant compile-time max (see matmul_phase_fused_gu);
+-    // only the activation work below is bounded by the runtime EFF_OUT.
+-    constexpr uint32_t EFF_OUT_MAX = out_block_num_tiles;
+-    // Dst budget derived from the host ComputeConfig (via -DFP32_DEST_ACC_EN) so
+-    // it and the SFPU op's fp32-dest template below stay in sync with the
+-    // program factory's DST_CAPACITY / fp32_dest_acc_en (no silent drift). The
+-    // 16-tile dst reg file halves under fp32 dest accum. Each output tile pins
+-    // gate+up simultaneously -> 2 dst slots -> kActChunk output tiles / acquire.
+-    constexpr bool kFp32DestAccEn = (FP32_DEST_ACC_EN != 0);
+-    // SiTU-GLU's op reads DST_ACCUM_MODE instead of the define; both come from the same
+-    // host fp32_dest_acc_en, so assert they agree rather than trusting it.
+-    static_assert(kFp32DestAccEn == DST_ACCUM_MODE, "FP32_DEST_ACC_EN disagrees with DST_ACCUM_MODE");
+-    constexpr uint32_t kDstCapacity = kFp32DestAccEn ? 4u : 8u;
+-    constexpr uint32_t kActChunk = kDstCapacity / 2;
+-
+-    CircularBuffer gate_partials_cb(gate_partials_cb_id);
+-    CircularBuffer up_partials_cb(up_partials_cb_id);
+-    CircularBuffer activated_cb(activated_cb_id);
+-
+-    gate_partials_cb.wait_front(EFF_OUT_MAX);
+-    up_partials_cb.wait_front(EFF_OUT_MAX);
+-
+-    pack_reconfig_data_format(activated_cb_id);
+-    // SrcA was last configured for the up matmul's in1 weights (prev_srcA_cb_id,
+-    // e.g. bf4). Reconfig to the Float16_b partials so copy_tile reads the
+-    // accumulator with the right format. Both partials CBs are Float16_b, so this
+-    // single init covers reads from gate AND up partials. (Passing a Float16_b CB
+-    // as the "old" operand would no-op the reconfig and leave SrcA on bf4.)
+-#ifdef FUSE_BIAS
+-    // Add gate/up bias (broadcast across rows) before the activation. The
+-    // bias CBs were read once by the reader (per_core_N_gu tiles each) and are
+-    // NOT popped here (reused across chunks). add_bcast_rows sets SrcA=partials,
+-    // SrcB=bias — same format for gate and up, so one init covers both.
+-    (void)prev_srcA_cb_id;
+-    CircularBuffer gate_bias_cb(gate_bias_cb_id);
+-    CircularBuffer up_bias_cb(up_bias_cb_id);
+-    gate_bias_cb.wait_front(per_core_N_gu);
+-    up_bias_cb.wait_front(per_core_N_gu);
+-    // The gate/up matmul left SrcA on the up weights (bf4) and SrcB on x (bf8).
+-    // The bcast add reads SrcA=partials (Float16_b), SrcB=bias — reconfig both
+-    // before the init (add_bcast uses both operands, unlike the copy path).
+-    reconfig_data_format(gate_partials_cb_id, gate_bias_cb_id);
+-    add_bcast_rows_init(gate_partials_cb_id, gate_bias_cb_id);
+-#else
+-    (void)gate_bias_cb_id;
+-    (void)up_bias_cb_id;
+-    reconfig_data_format_srca(prev_srcA_cb_id, gate_partials_cb_id);
+-    copy_init(gate_partials_cb_id);
+-#endif
+-
+-    for (uint32_t base = 0; base < EFF_OUT; base += kActChunk) {
+-        const uint32_t remaining = EFF_OUT - base;
+-        const uint32_t c = remaining < kActChunk ? remaining : kActChunk;
+-        tile_regs_acquire();
+-        // gate -> dst[0..c), up -> dst[c..2c) (bias-added when FUSE_BIAS)
+-        for (uint32_t j = 0; j < c; ++j) {
+-#ifdef FUSE_BIAS
+-            const uint32_t ncol = (base + j) % per_core_N_gu;
+-            add_tiles_bcast_rows(gate_partials_cb_id, gate_bias_cb_id, base + j, ncol, j);
+-            add_tiles_bcast_rows(up_partials_cb_id, up_bias_cb_id, base + j, ncol, c + j);
+-#else
+-            copy_tile(gate_partials_cb_id, base + j, j);
+-            copy_tile(up_partials_cb_id, base + j, c + j);
++            partials_up_cb.wait_front(pad);
++            partials_up_cb.pop_front(pad);
+ #endif
++            act_out_cb.reserve_back(pad);
++            act_out_cb.push_back(pad);
+         }
+-        // Fused gate/up activation; result written in place to dst[j]
+-        // (out == gate slot, mirroring moe_gpt's swiglu(0,1,0)).
+-        for (uint32_t j = 0; j < c; ++j) {
+-            BINARY_ACT_TILE(kFp32DestAccEn, j, c + j, j);
+-        }
+-        tile_regs_commit();
+-        tile_regs_wait();
+-        activated_cb.reserve_back(c);
+-        for (uint32_t j = 0; j < c; ++j) {
+-            pack_tile(j, activated_cb_id);
+-        }
+-        activated_cb.push_back(c);
+-        tile_regs_release();
+     }
+-    // Pad cb_activated up to the constant block (pointer-only); the reader drains
+-    // the full max block and mcasts only the runtime rows.
+-    {
+-        const uint32_t pad = EFF_OUT_MAX - EFF_OUT;
+-        if (pad > 0) {
+-            activated_cb.reserve_back(pad);
+-            activated_cb.push_back(pad);
+-        }
+-    }
+-    gate_partials_cb.pop_front(EFF_OUT_MAX);
+-    up_partials_cb.pop_front(EFF_OUT_MAX);
+-}
++#ifdef PACKER_L1_ACC
++    PACK((llk_pack_reconfig_l1_acc(0)));  // later phases' packs overwrite
+ #endif
++}
+ 
+ // eff_out_tiles = number of valid output tiles this core produces this chunk
+ // (= per_core_M * per_core_N_gu, runtime-adaptive). Precomputed by the caller so
+@@ -1050,22 +1200,13 @@ void kernel_main() {
+     counts_scratch_cb.wait_front(1);
+     idx_scratch_cb.wait_front(1);
+ 
+-    // SiLU is applied as a MATH-thread SFPU pass on dst (silu_tile) between
+-    // copy_tile and pack_tile — not packer-fused via apply_activation_from_pack.
+-    // Empirically the packer-fused variant serialises the pack pipeline against
+-    // the SFPU, slowing down the gate-intermed write. silu_tile_init() configures
+-    // the MATH-side SFPU for silu; the pack then runs plain (no per-tile SFPU on
+-    // the pack thread). Same total compute, better pipelining.
+-    // Init once — shared across all experts.
+-#ifdef FUSED_BINARY_ACT
+-    // The binary activations init their own SFPU tables (recip for SwiGLU-OAI and clamped
+-    // SiLU-GLU, tanh for SiTU-GLU) instead of silu's. The recip table sets
+-    // vConstFloatPrgm0 = 2.0f, which nothing between here and the tile calls reprograms.
+-    BINARY_ACT_INIT();
+-#else
+-    silu_tile_init();
+-#endif
+-
++    // The gate/up activation (SiLU, or the binary SwiGLU-OAI / SiTU-GLU / clamped SiLU-GLU op)
++    // runs its SFPU work on the PACK thread, pipelined into the last gate/up K-block (see
++    // matmul_phase_fused_gu), so the SFPU is initialised on PACK. Init once, shared across all
++    // experts: the binary ops' tables (recip for SwiGLU-OAI and clamped SiLU-GLU, tanh for
++    // SiTU-GLU) live in the vConstFloatPrgm registers, which nothing between here and the tile
++    // calls reprograms. MATH runs no SFPU op in this kernel.
++    PACK_ACT_INIT();
+ 
+     // ======================= per-local-expert loop =======================
+     // Run the full gate/up/down FFN for every local expert this core's row group owns.
+@@ -1184,6 +1325,9 @@ void kernel_main() {
+                 cb_partials_up,
+                 cb_gate_intermed,
+                 cb_up_intermed,
++                cb_activated,
++                cb_gate_bias,
++                cb_up_bias,
+                 /*m_subblocks=*/re_m_valid,
+                 /*n_subblocks=*/gu_valid_n_subblocks,
+                 /*x_blk_base=*/x_blk,
+@@ -1197,11 +1341,9 @@ void kernel_main() {
+             DeviceZoneScopedN("RE-ACT");
+ #endif
+ #ifdef FUSED_BINARY_ACT
+-            // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.
+-            // cb_in1_up is the unpacker's last SrcA operand, passed so the partials reconfig
+-            // (weights df -> Float16_b) actually fires.
+-            binary_activation_phase<gu_out_block_num_tiles, g_in1_per_core_w>(
+-                cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated, re_eff_out_gu, cb_gate_bias, cb_up_bias);
++            // Phase 3: the binary activation already ran inside the gate/up phase (pipelined into
++            // its last K-block) and pushed cb_activated.
++            (void)re_eff_out_gu;
+             (void)cb_gate_intermed;
+             (void)cb_up_intermed;
+ #else

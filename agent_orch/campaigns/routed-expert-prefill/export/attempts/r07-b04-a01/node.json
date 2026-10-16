@@ -1,0 +1,30 @@
+{
+  "node_id": "r07-b04-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 7,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a7291294eddeb8d28e7cdeb8468aa0dd060c53fa",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T03:48:20+00:00",
+  "mechanism": "mirror the uniform-layout expert deal: list scheduling breaks load ties toward the bottom row group, so kimi-k3's extra experts go to the faster lower groups and mistral / minimax-m3 leave the slow top group idle instead of the bottom one",
+  "tags": [
+    "planner",
+    "runtime-schedule",
+    "row-groups",
+    "row-gradient",
+    "load-balance",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.7036,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 47,
+  "finished_at": "2026-10-09T03:54:10+00:00"
+}

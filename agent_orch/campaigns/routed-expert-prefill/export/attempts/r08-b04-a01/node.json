@@ -1,0 +1,34 @@
+{
+  "node_id": "r08-b04-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 8,
+  "branch": 4,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a13919e548ea2f1b8dbaede82e0ad5c6fcb73f46",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T04:27:14+00:00",
+  "mechanism": "cross-group weight-stream pacing: each row group's weight senders hold their next block's DRAM reads while the group is more than one gate/up block of weight tiles ahead of any unfinished group, read from a per-group progress board on core (0,0) (one atomic + one 32-B read per block; first phase only)",
+  "tags": [
+    "data-movement",
+    "pacing",
+    "row-gradient",
+    "dram-fairness",
+    "group-tail",
+    "closed-loop",
+    "host+kernel",
+    "bit-identical",
+    "kernel-size"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.7812,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-09T04:48:29+00:00"
+}

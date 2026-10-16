@@ -1,0 +1,86 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index e43fd82df35..1786ea2a0e3 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -321,14 +321,16 @@ inline uint32_t group_cost(uint32_t count_tiles, uint32_t rows, uint32_t per_cor
+     return per_core_M + 1;
+ }
+ 
+-// The launch planner below runs once per kernel, before any work. On the compute kernel (UNPACK) it
+-// is built at -O2, as the dataflow kernels build it, not at the compute kernels' -O3: -O3 roughly
+-// doubles its code (~9.5 KB vs ~4.5 KB) for no measurable gain, and every RISC binary of a core has
+-// to fit the kernel config buffer together (r03-b01-a01 overflowed it). The reader's -O2 copy plans
+-// at the same speed, and compute waits for the reader's first weight multicast anyway.
+-#if defined(COMPILE_FOR_TRISC)
++// The launch planner below runs once per kernel, before any work. On the compute kernel (UNPACK) and
++// the writer (BRISC) it is built at -Os, not at -O3 / -O2: -O3 roughly doubles its code (~9.5 KB vs
++// ~4.5 KB) and -Os is ~1.1 KB under -O2, and every RISC binary of a core has to fit the kernel config
++// buffer together (r03-b01-a01 overflowed it; the h7168 programs sit at its limit). Only the reader's
++// copy is on the critical path (it releases the first DRAM reads and multicasts); it stays at -O2.
++// Compute waits for the reader's first weight multicast, and the weight senders' writers for its
++// release, anyway.
++#if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_BRISC)
+ #pragma GCC push_options
+-#pragma GCC optimize("O2")
++#pragma GCC optimize("Os")
+ #endif
+ constexpr uint8_t kNoGroup = 0xFF;
+ constexpr uint32_t kNoSchedule = 0xFFFFFFFFu;
+@@ -459,6 +461,48 @@ inline uint32_t plan_groups(
+             best_cap = cap;
+         }
+     }
++    // Idle rows on a tie. When the uniform winner leaves groups idle (fewer active experts than groups,
++    // e.g. 4 experts on 5 two-row groups), a mixed layout of the same makespan can still put every row to
++    // work: 5/6/6/5 tile-rows on 3+3+2+2 rows run the 6-tile experts at per_core_M 2 instead of 3. The
++    // chip time is the max over the groups' end times, so groups that finish early drop out of it. Taken
++    // only with one expert per group (no group pays a second expert's fixed cost) and a strictly lower
++    // summed expert cost; owner[] is scratch until the final deal below.
++    if (best_layout < kNumUniformLayouts && best >= 2) {
++        const uint32_t urows = layout_at(kGridY, best_layout).rows[0];
++        uint32_t active = 0;
++        uint32_t best_sum = 0;
++        for (uint32_t e = 0; e < NumExperts; ++e) {
++            const uint32_t t = tiles_of(e);
++            active += (t > 0) ? 1u : 0u;
++            best_sum += group_cost(t, urows, per_core_M_max);
++        }
++        if (active < layout_at(kGridY, best_layout).groups) {
++            for (uint32_t li = kNumUniformLayouts; li < num_layouts(kGridY); ++li) {
++                const GroupLayout& l = layout_at(kGridY, li);
++                if (l.groups < active ||
++                    schedule_lpt(l, tiles_of, NumExperts, per_core_M_max, best, owner) > best) {
++                    continue;
++                }
++                uint32_t used = 0;
++                uint32_t sum = 0;
++                for (uint32_t e = 0; e < NumExperts; ++e) {
++                    if (owner[e] != kNoGroup) {
++                        used |= 1u << owner[e];
++                        sum += group_cost(tiles_of(e), l.rows[owner[e]], per_core_M_max);
++                    }
++                }
++                uint32_t groups_used = 0;
++                for (uint32_t g = 0; g < l.groups; ++g) {
++                    groups_used += (used >> g) & 1u;
++                }
++                if (groups_used == active && sum < best_sum) {
++                    best_sum = sum;
++                    best_layout = li;
++                    best_cap = best;
++                }
++            }
++        }
++    }
+     if (best_layout < kNumUniformLayouts) {
+         schedule_in_order(layout_at(kGridY, best_layout), tiles_of, NumExperts, per_core_M_max, owner);
+     } else {
+@@ -838,7 +882,7 @@ inline LaunchPlan plan_launch(const TilesOfL1& tiles_of_l1, uint32_t per_core_M_
+     return lp;
+ }
+ 
+-#if defined(COMPILE_FOR_TRISC)
++#if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_BRISC)
+ #pragma GCC pop_options
+ #endif
+ 

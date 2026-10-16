@@ -1,0 +1,95 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index d11cbd70e90..362fa48f61b 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -234,23 +234,85 @@ struct GroupScheduler {
+     }
+ };
+ 
++// DRAM-aware makespan model used to pick the group size (the expert -> group deal itself stays the
++// expert_cost list schedule above).
++//
++// Every group streams each chunk's full gate/up/down weights, and all groups share DRAM. A group's
++// solo time is its compute: per chunk, per_core_M tile-rows of per-core matmul work plus a fixed
++// fill/drain. Its weight demand is one expert's weights per chunk. Per core and tile-row of work,
++// an expert's weights are GRID_X x (the core's tile-mults per tile-row) tiles, so both scale with
++// the same per-shape factor and the model is shape-free in these units:
++//   solo(group) = kModelRowTime * units + kModelChunkTime * chunks
++//   demand      = chunks / solo(group)      (expert-weight reads per time unit)
++//   DRAM        = kModelBwNum / kModelBwDen expert-weight reads per kModelRowTime time units
++// While the active groups together demand more than DRAM delivers, every active group slows down
++// by the same factor, so the groups still finish in order of solo time. The makespan is the sum of
++// those phases (fluid sharing with per-group average demand). Constants are calibrated on the
++// Blackhole profiles: ~30 cycles per bf4 LoFi tile-mult, ~420 GB/s weight streaming, and a chunk
++// fill/drain worth ~0.4 tile-rows. Without the DRAM term the old units + chunks model kept
++// few-tile experts on 2-row groups whose last round runs compute-bound with most of the grid idle.
++constexpr uint32_t kModelRowTime = 16;
++constexpr uint32_t kModelChunkTime = 6;
++constexpr uint32_t kModelBwNum = 3;
++constexpr uint32_t kModelBwDen = 2;
++constexpr uint32_t kModelFracBits = 14;
++
++// Modelled makespan, in units of 2^-kModelFracBits model time, of groups with the given per-group
++// work (`units` = summed per_core_M, `chunks` = weight streams).
++inline uint64_t modelled_makespan(const uint32_t* units, const uint32_t* chunks, uint32_t groups) {
++    uint32_t solo[kMaxGroups];
++    for (uint32_t g = 0; g < groups; ++g) {
++        solo[g] = kModelRowTime * units[g] + kModelChunkTime * chunks[g];
++    }
++    uint64_t t = 0;
++    uint32_t done = 0;  // solo time every still-active group has completed
++    while (true) {
++        uint32_t next = 0xFFFFFFFFu;
++        uint32_t demand = 0;  // sum of chunks / solo over active groups, kModelFracBits fraction bits
++        for (uint32_t g = 0; g < groups; ++g) {
++            if (solo[g] > done) {
++                demand += (chunks[g] << kModelFracBits) / solo[g];
++                next = (solo[g] < next) ? solo[g] : next;
++            }
++        }
++        if (next == 0xFFFFFFFFu) {
++            break;
++        }
++        // Slow-down factor: demand over DRAM bandwidth, at least 1 (compute-bound).
++        uint32_t factor = demand * kModelRowTime * kModelBwDen / kModelBwNum;
++        if (factor < (1u << kModelFracBits)) {
++            factor = 1u << kModelFracBits;
++        }
++        t += static_cast<uint64_t>(next - done) * factor;
++        done = next;
++    }
++    return t;
++}
++
+ // Group size (rows per group) with the smallest modelled makespan; ties keep the larger group, so
+ // a single expert or large token counts stay on the whole-grid schedule. `tiles_of(e)` returns
+ // local expert e's (band-filtered, clamped) tile-row count.
+ template <typename TilesOf>
+ inline uint32_t pick_group_rows(const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max) {
+     uint32_t best_rows = kGridY;
+-    uint32_t best = 0xFFFFFFFFu;
++    uint64_t best = 0xFFFFFFFFFFFFFFFFull;
+     for (uint32_t rows = kGridY; rows >= kMinGroupRows; rows /= 2) {
++        const uint32_t groups = kGridY / rows;
+         GroupScheduler sched;
+-        sched.init(kGridY / rows);
++        sched.init(groups);
++        uint32_t units[kMaxGroups] = {0};
++        uint32_t chunks[kMaxGroups] = {0};
+         for (uint32_t e = 0; e < num_experts; ++e) {
+-            const uint32_t cost = expert_cost(tiles_of(e), rows, per_core_M_max);
++            const uint32_t tiles = tiles_of(e);
++            const uint32_t cost = expert_cost(tiles, rows, per_core_M_max);
+             if (cost > 0) {
+-                sched.assign(cost);
++                const uint32_t g = sched.assign(cost);
++                const uint32_t c = num_chunks(tiles, per_core_M_max * rows);
++                chunks[g] += c;
++                units[g] += cost - c;
+             }
+         }
+-        const uint32_t m = sched.makespan();
++        const uint64_t m = modelled_makespan(units, chunks, groups);
+         if (m < best) {
+             best = m;
+             best_rows = rows;

@@ -1,0 +1,187 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 425b7f87792..5042cada8ce 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -120,6 +120,16 @@ void kernel_main() {
+     static_assert(chunk_M_max == per_core_M_max * adaptive_chunk::kGridY, "chunk_M_max must be per_core_M_max * GRID_Y");
+     constexpr uint32_t cb_activated = get_compile_time_arg_val(20);
+     constexpr uint32_t GRID_X_NOC = get_compile_time_arg_val(21);  // M-row mcast group size
++    // Row-major x look-ahead decoupling (see the gate/up loop): only with >= 2 row columns, where
++    // a core never owns two consecutive x blocks.
++    constexpr bool kDeferXRm = GRID_X_NOC >= 2;
++    constexpr uint32_t kNoXPending = 0xFFFFFFFFu;
++    // NoC-0 read transaction ids (sticky NOC_PACKET_TAG on the read command buffer, as in
++    // moe_fused_swiglu_reader.cpp): x look-ahead reads and gate weight reads. Every other read keeps
++    // id 0 and the global barrier.
++    constexpr uint32_t NOC_READ_ID = 0;
++    constexpr uint32_t X_RM_TRID = 15;
++    constexpr uint32_t GATE_TRID = 14;
+     // Per-layout weight-multicast topologies follow the M-row NoC table: one set of
+     // GROUP_TOPO_ARGS per row-group layout (adaptive_chunk layout table order), each for this
+     // core's group: {is_sender, num_receivers, mcast nx_start, ny_start, nx_end, ny_end, sender nx, sender ny}.
+@@ -632,6 +642,39 @@ void kernel_main() {
+         };
+         [[maybe_unused]] auto owns_x_block = [&](uint32_t kb_x) { return (x_blk + kb_x) % GRID_X_NOC == my_nt_gu; };
+ 
++        // x look-ahead reads off the weight path. The raw block x(j) an owner reads two blocks ahead is
++        // needed only by its own compute's tilize before matmul j-1, a whole block after the
++        // iteration that issues it. So its reads carry their own transaction id (X_RM_TRID) and the
++        // block is pushed into cb_x_rm as soon as they have landed (non-blocking polls through
++        // iterations j-2 and j-1), or, at the latest, by a blocking wait at the END of iteration j-1,
++        // after that iteration's x and weights have been pushed. Neither the gate-sender's barrier
++        // (GATE_TRID, below) nor this core's weight push of block j-2 waits for x(j) any more. One
++        // cb_x_rm slot and one owned block every GRID_X: with GRID_X >= 2 at most one block is
++        // pending per core, and the previous one was pushed before the next is issued.
++        [[maybe_unused]] uint32_t x_rm_pending_blk = kNoXPending;
++        [[maybe_unused]] auto issue_x_rm_tagged = [&](uint32_t kb_rm) {
++            noc_async_read_set_trid(X_RM_TRID, NOC_READ_ID);
++            issue_x_rm_read(kb_rm);
++            noc_async_read_set_trid(0, NOC_READ_ID);
++            x_rm_pending_blk = kb_rm;
++        };
++        [[maybe_unused]] auto try_push_x_rm = [&]() {
++            if (x_rm_pending_blk != kNoXPending && ncrisc_noc_read_with_transaction_id_flushed(NOC_READ_ID, X_RM_TRID)) {
++                cb_x_rm_obj.push_back(g_in0_block_tiles_max);
++                x_rm_pending_blk = kNoXPending;
++            }
++        };
++        [[maybe_unused]] auto force_push_x_rm = [&]() {
++            if (x_rm_pending_blk != kNoXPending) {
++                {
++                    DeviceZoneScopedN("RE-XW");
++                    noc_async_read_barrier_with_trid(X_RM_TRID, NOC_READ_ID);
++                }
++                cb_x_rm_obj.push_back(g_in0_block_tiles_max);
++                x_rm_pending_blk = kNoXPending;
++            }
++        };
++
+         // Row-shared tilize, row-major x. Every core of an M-row needs the same x K-block. Instead
+         // of each of the GRID_X cores tilizing it, block x_blk + kb is read, tilized and multicast
+         // by ONE owner core of the row, column (x_blk + kb) % GRID_X, so each core tilizes ~1/GRID_X
+@@ -643,12 +686,18 @@ void kernel_main() {
+         //     core, itself included. Every core pushes cb_in0_x one constant block per K-block
+         //     from kernel start, so the slot sits at the same L1 address on all of them.
+         // Blocks 0 and 1 of the chunk are read up front; the loop reads block kb + 2.
++        // Block 0 is pushed here (the compute tilizes it before its first matmul); block 1 is pending
++        // like a loop look-ahead block and is pushed by the end of iteration 0.
+         if constexpr (x_is_row_major != 0) {
+             for (uint32_t kb_x = 0; kb_x < 2 && kb_x < num_blocks_gu; ++kb_x) {
+                 if (owns_x_block(kb_x)) {
+-                    issue_x_rm_read(kb_x);
+-                    noc_read.async_read_barrier();
+-                    cb_x_rm_obj.push_back(g_in0_block_tiles_max);
++                    if (kDeferXRm && kb_x == 1) {
++                        issue_x_rm_tagged(kb_x);
++                    } else {
++                        issue_x_rm_read(kb_x);
++                        noc_read.async_read_barrier();
++                        cb_x_rm_obj.push_back(g_in0_block_tiles_max);
++                    }
+                 }
+             }
+         }
+@@ -670,10 +719,21 @@ void kernel_main() {
+             // This block's x source: the rotating owner (row-major) or the row's fixed x sender (TILE).
+             const bool is_x_src = (x_is_row_major != 0) ? owns_x_block(kb) : is_in0_sender;
+             [[maybe_unused]] bool x_rm_pending = false;
++            // A gate sender issues its look-ahead x read right after its gate reads (below), so the
++            // gate requests reach the DRAM queues first.
++            [[maybe_unused]] bool x_rm_after_gate = false;
+             if constexpr (x_is_row_major != 0) {
+                 if (kb + 2 < num_blocks_gu && owns_x_block(kb + 2)) {
+-                    issue_x_rm_read(kb + 2);
+-                    x_rm_pending = true;
++                    if constexpr (kDeferXRm) {
++                        if (is_in1_sender) {
++                            x_rm_after_gate = true;
++                        } else {
++                            issue_x_rm_tagged(kb + 2);
++                        }
++                    } else {
++                        issue_x_rm_read(kb + 2);
++                        x_rm_pending = true;
++                    }
+                 }
+             }
+ 
+@@ -807,7 +867,9 @@ void kernel_main() {
+                     in1_ready_sem.set(0);
+                 }
+ 
+-                // DRAM read gate region first.
++                // DRAM read gate region first, tagged GATE_TRID so its barrier below waits for the
++                // weight reads alone, not for an x look-ahead read in flight on the same NoC.
++                noc_async_read_set_trid(GATE_TRID, NOC_READ_ID);
+                 uint32_t l1_w_gate = cb_in1_gate_obj.get_write_ptr();
+                 const uint32_t gate_block_start = l1_w_gate;
+                 // N-OOB hidden padding columns (col >= N_gate_tiles_full == down's K_down_tiles)
+@@ -853,7 +915,16 @@ void kernel_main() {
+                         l1_w_up += per_core_N_gu * up_tile_bytes;
+                     }
+                 }
+-                noc_read.async_read_barrier();
++                noc_async_read_set_trid(0, NOC_READ_ID);
++                if constexpr (x_is_row_major != 0 && kDeferXRm) {
++                    if (x_rm_after_gate) {
++                        issue_x_rm_tagged(kb + 2);
++                    }
++                }
++                {
++                    DeviceZoneScopedN("RE-GW");
++                    noc_async_read_barrier_with_trid(GATE_TRID, NOC_READ_ID);
++                }
+ 
+                 // IN1_WRITER_MCAST: gate is in L1 -- hand this slot to the writer, which
+                 // multicasts it (and `up`, which it read itself) on NoC 1. Signalled BEFORE
+@@ -970,22 +1041,49 @@ void kernel_main() {
+                     noc_read.async_read_barrier();
+                     cb_x_rm_obj.push_back(g_in0_block_tiles_max);
+                 }
++                if constexpr (kDeferXRm) {
++                    try_push_x_rm();
++                }
+             }
+ 
+-            // Step 3: receivers wait for both valid semaphores and push.
++            // Step 3: receivers wait for both valid semaphores and push. While an x look-ahead block
++            // is in flight the waits poll, so the block is pushed the moment it lands.
+             if (!is_x_src) {
++                if constexpr (x_is_row_major != 0 && kDeferXRm) {
++                    while (x_rm_pending_blk != kNoXPending && in0_valid_sem.value() != IN0_VALID) {
++                        try_push_x_rm();
++                    }
++                }
+                 in0_valid_sem.wait(IN0_VALID);
+                 x_stage_obj.push_back(g_in0_block_tiles_max);
+             }
+             if (!is_in1_sender) {
++                if constexpr (x_is_row_major != 0 && kDeferXRm) {
++                    while (x_rm_pending_blk != kNoXPending && in1_valid_sem.value() != IN1_VALID) {
++                        try_push_x_rm();
++                    }
++                }
+                 in1_valid_sem.wait(IN1_VALID);
+                 cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
+                 if constexpr (reader_mcasts_up) {
+                     cb_in1_up_obj.push_back(g_in1_block_num_tiles);
+                 }
+             }
++            // x(kb + 1) must be in cb_x_rm before the owner's compute tilizes it, ahead of its matmul
++            // of block kb, whose inputs were all pushed above.
++            if constexpr (x_is_row_major != 0 && kDeferXRm) {
++                try_push_x_rm();
++                if (x_rm_pending_blk == kb + 1) {
++                    force_push_x_rm();
++                }
++            }
+         }
+         x_blk += num_blocks_gu;
++        // Nothing is pending here (the last look-ahead block went out at the end of iteration
++        // num_blocks_gu - 2); kept so a pending block can never leak into the next chunk.
++        if constexpr (x_is_row_major != 0 && kDeferXRm) {
++            force_push_x_rm();
++        }
+ 
+         // IN1_WRITER_MCAST: drain the decoupled weight-multicast pipeline before phase 4.
+         // in1_ready_sem is SHARED by phase 3 (gate/up mcast) and phase 4 (down mcast):

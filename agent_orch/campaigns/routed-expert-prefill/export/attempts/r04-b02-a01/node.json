@@ -1,0 +1,31 @@
+{
+  "node_id": "r04-b02-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 4,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "e7b91709fcfc71c51a862e0e55ef4be7dd743452",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T23:56:00+00:00",
+  "mechanism": "weight senders start block kb+1's DRAM reads as soon as their own ring slot is free in both phases: gate/up (reader gate read + writer up_go) no longer waits for the sender row's x block kb, and r03-b04-a04's down look-ahead is ported with a re-check while the sender spins on act_valid",
+  "tags": [
+    "data-movement",
+    "weight-delivery",
+    "lookahead",
+    "decoupling",
+    "lock-step",
+    "port",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6275,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 45,
+  "finished_at": "2026-10-09T00:07:41+00:00"
+}

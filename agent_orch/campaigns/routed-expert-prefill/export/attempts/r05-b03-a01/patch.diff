@@ -1,0 +1,125 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index e43fd82df35..0f9b5a059c0 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -275,6 +275,14 @@ inline uint32_t x_owner_rank(uint32_t col, uint32_t rows, uint32_t my_mt, uint32
+     }
+     return col - ((col > my_mt) ? (col - 1 - my_mt) / rows + 1 : 0);
+ }
++// Per-row phase of the owner rotation: callers pass block j + x_owner_offset(...) as `j`. Without it
++// slot j % slots is the same on every row, so for a given block all rows' owners sit in the same one
++// or two columns (5 x 2 rows: the five top rows in column 2r + 1, the five bottom rows in 2r; 10 rows:
++// 7-9 rows in one column). Their x stick reads then all return down those columns' NoC links, which
++// also carry those columns' gate-weight reads. Group index + 2 x row-in-group puts the ten owners of a
++// 5 x 2 block in ten distinct columns and caps the other layouts at 2-3 rows per column. Every core
++// of a row shares (group, my_mt), so they still agree on each block's owner.
++inline uint32_t x_owner_offset(uint32_t group, uint32_t my_mt) { return group + 2 * my_mt; }
+ // Owner column of block j. Out of line: the reader calls it a few times per K-block.
+ inline __attribute__((noinline)) uint32_t x_owner_col(uint32_t j, uint32_t grid_x, uint32_t rows, uint32_t my_mt) {
+     const uint32_t r = j % x_owner_slots(grid_x, rows, my_mt);
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index df39641a2bb..8fc66d5507d 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -1215,8 +1215,9 @@ void kernel_main() {
+         // (0 = no more experts). UNPACK scans, MATH/PACK receive.
+         uint32_t count_tiles = 0;
+         // Group height in the low half, this core's row within the group (the x tilize owner
+-        // rotation skips its weight-sender columns, see adaptive_chunk::x_owner_col) in the high
+-        // half: one mailbox word per expert.
++        // rotation skips its weight-sender columns, see adaptive_chunk::x_owner_col) in bits 16-23
++        // and the group index (the rotation's per-row phase, adaptive_chunk::x_owner_offset) in bits
++        // 24-31: one mailbox word per expert.
+         uint32_t group_word = 0;
+         UNPACK(({
+             while (count_tiles == 0) {
+@@ -1234,7 +1235,7 @@ void kernel_main() {
+                     adaptive_chunk::layout_at(adaptive_chunk::kGridY, plan.layout[phase]), my_gy, group_base, rows);
+                 if (expert_group[phase][next_expert] == my_group) {
+                     count_tiles = tiles_of(next_expert);
+-                    group_word = rows | ((my_gy - group_base) << 16);
++                    group_word = rows | ((my_gy - group_base) << 16) | (my_group << 24);
+                 }
+                 ++next_expert;
+             }
+@@ -1253,10 +1254,12 @@ void kernel_main() {
+         MATH(group_word = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+         PACK(group_word = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+         const uint32_t group_rows = group_word & 0xFFFF;
+-        const uint32_t my_mt = group_word >> 16;
+-        // Row-shared tilize owners of this row (adaptive_chunk::x_owner_col): slot count, my slot.
++        const uint32_t my_mt = (group_word >> 16) & 0xFF;
++        // Row-shared tilize owners of this row (adaptive_chunk::x_owner_col): slot count, my slot, and
++        // the row's rotation phase (the reader adds the same x_owner_offset to its block numbers).
+         const uint32_t x_slots = adaptive_chunk::x_owner_slots(grid_x, group_rows, my_mt);
+         const uint32_t x_rank = adaptive_chunk::x_owner_rank(my_gx, group_rows, my_mt, x_slots);
++        const uint32_t x_off = adaptive_chunk::x_owner_offset(group_word >> 24, my_mt);
+         const uint32_t chunk_M = per_core_M_max * group_rows;
+         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M);
+ 
+@@ -1325,7 +1328,7 @@ void kernel_main() {
+                 cb_up_bias,
+                 /*m_subblocks=*/re_m_valid,
+                 /*n_subblocks=*/gu_valid_n_subblocks,
+-                /*x_blk_base=*/x_blk,
++                /*x_blk_base=*/x_blk + x_off,
+                 x_slots,
+                 x_rank);
+             // Tile-mults this window issued: per_core_M rows x real N columns x K, gate and up.
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 6e808ac2930..fc4169aa0e2 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -30,6 +30,7 @@
+ #include "api/dataflow/endpoints.h"
+ #include "api/core_local_mem.h"
+ #include "api/debug/assert.h"
++#include "tools/profiler/kernel_profiler.hpp"
+ #include "../adaptive_chunk.hpp"
+ #include "../weight_runs.hpp"
+ 
+@@ -417,7 +418,7 @@ void kernel_main() {
+ 
+     // Row-shared tilize (row-major x). Gate/up K-blocks are numbered across every chunk and
+     // expert this row works on (x_blk = number of earlier blocks); block x_blk + kb belongs to the
+-    // row column adaptive_chunk::x_owner_col(x_blk + kb, ...). The compute kernel keeps the same
++    // row column adaptive_chunk::x_owner_col(x_blk + x_off + kb, ...). The compute kernel keeps the same
+     // counter, and all cores of a row run the same experts and chunks in the same group row, so
+     // every core of the row agrees on each block's owner.
+     uint32_t x_blk = 0;
+@@ -442,6 +443,8 @@ void kernel_main() {
+         adaptive_chunk::layout_at(adaptive_chunk::kGridY, layout), my_gy, group_base, group_rows);
+     const uint32_t my_mt = my_gy - group_base;  // M-row within the group
+     const uint32_t chunk_M = per_core_M_max * group_rows;
++    // This row's phase of the x owner rotation (adaptive_chunk::x_owner_offset); the compute adds the same.
++    const uint32_t x_off = adaptive_chunk::x_owner_offset(my_group, my_mt);
+ 
+     // This group's weight (in1) multicast topology: sender row, rectangle over the group's rows.
+     const uint32_t topo = GROUP_TOPO_RT + GROUP_TOPO_ARGS * layout;
+@@ -627,7 +630,7 @@ void kernel_main() {
+         // Owner column of this chunk's x block kb_x: never this row's weight sender for that column
+         // (adaptive_chunk::x_owner_col), so the weight stream's RISC carries no x duty.
+         [[maybe_unused]] auto x_owner = [&](uint32_t kb_x) {
+-            return adaptive_chunk::x_owner_col(x_blk + kb_x, GRID_X_NOC, group_rows, my_mt);
++            return adaptive_chunk::x_owner_col(x_blk + x_off + kb_x, GRID_X_NOC, group_rows, my_mt);
+         };
+         [[maybe_unused]] auto owns_x_block = [&](uint32_t kb_x) { return x_owner(kb_x) == my_nt_gu; };
+ 
+@@ -1012,6 +1015,17 @@ void kernel_main() {
+ 
+             // Step 3: receivers wait for both valid semaphores and push.
+             if (!is_x_src) {
++#if defined(PROFILE_KERNEL)
++                // Profiler-only: a chunk's first x block lands at this zone's end (per-row fill time).
++                if (kb == 0) {
++                    DeviceZoneScopedN("RE-X0");
++                    while (in0_valid_sem.value() != IN0_VALID) {
++                        if (gu_lookahead && is_in1_sender) {
++                            try_gu_lookahead(1);
++                        }
++                    }
++                }
++#endif
+                 if (gu_lookahead && is_in1_sender) {
+                     // The sender's compute frees the look-ahead slot while this core waits for
+                     // its x block, so keep re-checking until x lands.

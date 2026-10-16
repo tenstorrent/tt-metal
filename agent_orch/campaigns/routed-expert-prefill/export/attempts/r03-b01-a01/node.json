@@ -1,0 +1,30 @@
+{
+  "node_id": "r03-b01-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 1,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "cb2514ebcd5a184ca65ee0478a7315579ee2c682",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T21:57:41+00:00",
+  "mechanism": "combine r02-b02-a04's mixed-height phase-B planner with r02-b03-a04's PACK-thread activation pipelined into the last gate/up K-block (short op-local SFPU bodies on PACK)",
+  "tags": [
+    "combination",
+    "sfpu-fpu-overlap",
+    "pack-thread-sfpu",
+    "two-phase",
+    "mixed-height",
+    "kernel-only"
+  ],
+  "valid": false,
+  "fail_class": "runtime_error",
+  "score": 0.0,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/binary_act_sfpu.h",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp"
+  ],
+  "build_seconds": 19,
+  "eval_seconds": 48,
+  "finished_at": "2026-10-08T22:01:48+00:00"
+}

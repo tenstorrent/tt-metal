@@ -1,0 +1,12 @@
+{
+  "round": 4,
+  "policy": "v1",
+  "beta": 0.6,
+  "W": 4,
+  "R": 4,
+  "reason": "campaign defaults: every recorded round ran 4 x 4 and the next round re-roots on the best node",
+  "round_root": "dream/routed-expert-prefill/n/r03-b02-a03",
+  "round_root_commit": "e7b91709fcfc71c51a862e0e55ef4be7dd743452",
+  "max_steps": 30,
+  "started_at": "2026-10-08T23:55:56+00:00"
+}

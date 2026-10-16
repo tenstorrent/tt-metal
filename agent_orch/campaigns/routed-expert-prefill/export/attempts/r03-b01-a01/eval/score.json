@@ -1,0 +1,111 @@
+{
+  "valid": false,
+  "fail_class": "runtime_error",
+  "error": "2026-10-08 23:59:51.116 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)\n2026-10-08 23:59:51.116 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1731)\n2026-10-08 23:59:51.116 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)\n2026-10-08 23:59:51.117 | INFO     | conftest:mesh_device:650 - No trace region size for (1, 1)\nBuilding subordinate_active_erisc, compile step:\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -Os -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/common -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tools/include -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hostdevcommon/api -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/api/ -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/ethernet -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx -include /localdev/nstamatovic/dream/routed-expert-prefill/jitcache/tt-metal-cache/pch/a6d55b53740ddcf5/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_ERISC -DERISC -DRISC_B0_HW -DCOMPILE_FOR_AERISC=1 -DPROGRAMMABLE_CORE_TYPE=1 -DARCH_BLACKHOLE -DENABLE_2_ERISC_MODE -DPHYSICAL_AERISC_ID=1 -DAERISC_PTP_TRACE_SUPPORTED -DDISPATCH_MESSAGE_ADDR=4290184248 -DFW_BUILD -c -o /localdev/nstamatovic/dream/routed-expert-prefill/jitcache/tt-metal-cache3179443263078316084/firmware/subordinate_active_erisc/subordinate_erisc.6412229516211460680_1795566.o /localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc -MF /localdev/nstamatovic/dream/routed-expert-prefill/jitcache/tt-metal-cache3179443263078316084/firmware/subordinate_active_erisc/subordinate_erisc.6412229516211460680_1795566.d\nIn file included from /localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc:12:\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc: In function 'int main()':\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SUBORDINATE-ACTIVE-ERISC1-FW,/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc,139,KERNEL_PROFILER'\n   32 | #define DO_PRAGMA(x) _Pragma(#x)\n      |                      ^~~~~~~\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:1042:5: note: in expansion of macro 'DO_PRAGMA'\n 1042 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \\\n      |     ^~~~~~~~~\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc:139:9: note: in expansion of macro 'DeviceZoneScopedMainN'\n  139 |         DeviceZoneScopedMainN(PROFILER_NAME);\n      |         ^~~~~~~~~~~~~~~~~~~~~\nBuilding ncrisc, compile step:\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -Os -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/common -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tools/include -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hostdevcommon/api -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/api/ -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx -include /localdev/nstamatovic/dream/routed-expert-prefill/jitcache/tt-metal-cache/pch/a6d55b53740ddcf5/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DFW_BUILD -c -o /localdev/nstamatovic/dream/routed-expert-prefill/jitcache/tt-metal-cache3179443263078316084/firmware/ncrisc/ncrisc.6412229516211460680_1795566.o /localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc -MF /localdev/nstamatovic/dream/routed-expert-prefill/jitcache/tt-metal-cache3179443263078316084/firmware/ncrisc/ncrisc.6412229516211460680_1795566.d\nIn file included from /localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc:13:\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp,633,KERNEL_PROFILER'\n   32 | #define DO_PRAGMA(x) _Pragma(#x)\n      |                      ^~~~~~~\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'\n   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \\\n      |     ^~~~~~~~~\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'\n  633 |     SrcLocNameToHash(\"PROFILER-NOC-QUICK-PUSH\");\n      |     ^~~~~~~~~~~~~~~~\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc: In function 'int main(int, char**)':\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-FW,/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc,129,KERNEL_PROFILER'\n   32 | #define DO_PRAGMA(x) _Pragma(#x)\n      |                      ^~~~~~~\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:1042:5: note: in expansion of macro 'DO_PRAGMA'\n 1042 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \\\n      |     ^~~~~~~~~\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc:129:9: note: in expansion of macro 'DeviceZoneScopedMainN'\n  129 |         DeviceZoneScopedMainN(\"NCRISC-FW\");\n      |         ^~~~~~~~~~~~~~~~~~~~~\nBuilding subordinate_idle_erisc, compile step:\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -Os -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/common -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tools/include -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hostdevcommon/api -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/api/ -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx -include /localdev/nstamatovic/dream/routed-expert-prefill/jitcache/tt-metal-cache/pch/a6d55b53740ddcf5/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_IDLE_ERISC=1 -DERISC -DRISC_B0_HW -DPROGRAMMABLE_CORE_TYPE=2 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DFW_BUILD -c -o /localdev/nstamatovic/dream/routed-expert-prefill/jitcache/tt-metal-cache3179443263078316084/firmware/subordinate_idle_erisc/subordinate_erisc.6412229516211460680_1795566.o /localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc -MF /localdev/nstamatovic/dream/routed-expert-prefill/jitcache/tt-metal-cache3179443263078316084/firmware/subordinate_idle_erisc/subordinate_erisc.6412229516211460680_1795566.d\nIn file included from /localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc:12:\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp,481,KERNEL_PROFILER'\n   32 | #define DO_PRAGMA(x) _Pragma(#x)\n      |                      ^~~~~~~\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'\n   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \\\n      |     ^~~~~~~~~\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:481:17: note: in expansion of macro 'SrcLocNameToHash'\n  481 |                 SrcLocNameToHash(\"PROFILER-NOC-FLUSH\");\n      |                 ^~~~~~~~~~~~~~~~\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp,490,KERNEL_PROFILER'\n   32 | #define DO_PRAGMA(x) _Pragma(#x)\n      |                      ^~~~~~~\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'\n   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \\\n      |     ^~~~~~~~~\n/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:490:17: note: in expansion of macro 'SrcLocNameToHash'",
+  "score": 0.0,
+  "shapes": {
+    "deepseek-v3-h7168-i2048": {
+      "pytest": "FAILED",
+      "pcc": null,
+      "max_abs": null,
+      "mean_abs": null,
+      "us_chip_mean": 1386.331,
+      "us_chip_max": 1386.331,
+      "us_chip_p50": 1393.352,
+      "us_min": 1351.776,
+      "us_max": 1407.196,
+      "n_rows": 10,
+      "core_count": 110
+    },
+    "kimi-k2-7-h7168-i2048": {
+      "pytest": "FAILED",
+      "pcc": null,
+      "max_abs": null,
+      "mean_abs": null,
+      "us_chip_mean": 454.776,
+      "us_chip_max": 454.776,
+      "us_chip_p50": 449.094,
+      "us_min": 439.964,
+      "us_max": 474.378,
+      "n_rows": 10,
+      "core_count": 110
+    },
+    "kimi-k3-latent-h3584-i3072": {
+      "pytest": "PASSED",
+      "pcc": 0.9804434106531542,
+      "max_abs": 0.993449,
+      "mean_abs": 0.146626,
+      "us_chip_mean": 189.609,
+      "us_chip_max": 189.609,
+      "us_chip_p50": 189.815,
+      "us_min": 174.593,
+      "us_max": 207.688,
+      "n_rows": 10,
+      "core_count": 110
+    },
+    "glm-5-3-h6144-i2048": {
+      "pytest": "PASSED",
+      "pcc": 0.9802854616113968,
+      "max_abs": 1.609396,
+      "mean_abs": 0.232011,
+      "us_chip_mean": 326.175,
+      "us_chip_max": 326.175,
+      "us_chip_p50": 325.433,
+      "us_min": 316.41,
+      "us_max": 343.11,
+      "n_rows": 10,
+      "core_count": 110
+    },
+    "mistral-small-4-h4096-i2048": {
+      "pytest": "PASSED",
+      "pcc": 0.9802601253434263,
+      "max_abs": 1.013836,
+      "mean_abs": 0.149542,
+      "us_chip_mean": 365.095,
+      "us_chip_max": 365.095,
+      "us_chip_p50": 363.59,
+      "us_min": 355.561,
+      "us_max": 377.699,
+      "n_rows": 10,
+      "core_count": 110
+    },
+    "deepseek-v4-flash-h4096-i2048": {
+      "pytest": "PASSED",
+      "pcc": 0.9804867801077508,
+      "max_abs": 0.997776,
+      "mean_abs": 0.151036,
+      "us_chip_mean": 264.327,
+      "us_chip_max": 264.328,
+      "us_chip_p50": 265.226,
+      "us_min": 251.795,
+      "us_max": 275.407,
+      "n_rows": 10,
+      "core_count": 110
+    },
+    "deepseek-v4-pro-h7168-i3072": {
+      "pytest": "FAILED",
+      "pcc": null,
+      "max_abs": null,
+      "mean_abs": null
+    },
+    "minimax-m3-h6144-i3072": {
+      "pytest": "PASSED",
+      "pcc": 0.9824444075624631,
+      "max_abs": 2.351124,
+      "mean_abs": 0.346576
+    },
+    "gpt-oss-120b-h2880-i2880": {
+      "pytest": "PASSED",
+      "pcc": 0.9835043928689363,
+      "max_abs": 1.109722,
+      "mean_abs": 0.168411
+    }
+  },
+  "ops_csv": "/localdev/nstamatovic/dream/routed-expert-prefill/reports/r03-b01-a01/reports/2026_10_09_00_00_34/ops_perf_results_2026_10_09_00_00_34.csv",
+  "score_def": "geomean over shapes of baseline_us / attempt_us; per-chip mean device kernel time, measured calls only",
+  "noise_pct": 1.0,
+  "commit_under_test": "d85f7e8e5d01d493d7ddd4d73cc5d5c1563ceac0",
+  "build_seconds": 19,
+  "eval_seconds": 48,
+  "report_dir": "/localdev/nstamatovic/dream/routed-expert-prefill/reports/r03-b01-a01"
+}

@@ -1,0 +1,34 @@
+{
+  "node_id": "r08-b03-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 8,
+  "branch": 3,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a13919e548ea2f1b8dbaede82e0ad5c6fcb73f46",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T04:27:12+00:00",
+  "mechanism": "dynamic cross-group pacing of the weight stream: each row group's column-0 weight sender holds its next DRAM block while another group of the phase is more than 2 blocks behind (per-peer NoC-atomic board in one semaphore slot), so the groups that win the shared DRAM/NoC race back off and the starved top groups get the bandwidth",
+  "tags": [
+    "data-movement",
+    "pacing",
+    "dram-fairness",
+    "row-gradient",
+    "dynamic-share",
+    "feedback",
+    "host+kernel",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.7478,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/group_pacer.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 47,
+  "finished_at": "2026-10-09T04:47:13+00:00"
+}

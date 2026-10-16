@@ -1,0 +1,29 @@
+{
+  "node_id": "r01-b02-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 2,
+  "attempt": 2,
+  "parent": "r01-b02-a01",
+  "parent_commit": "aa00b569811e82ec51ce3c4f1a7718d9ebc74b13",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T18:57:37+00:00",
+  "mechanism": "collision-free DM reader placement for row groups: fixed staggered x sender, groups >= 2 rows, no bias reads for other groups' experts",
+  "tags": [
+    "data-movement",
+    "sender-placement",
+    "expert-parallel",
+    "repair"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.446,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 42,
+  "finished_at": "2026-10-08T19:04:51+00:00"
+}

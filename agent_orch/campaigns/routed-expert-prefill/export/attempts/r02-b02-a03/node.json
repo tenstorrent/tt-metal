@@ -1,0 +1,33 @@
+{
+  "node_id": "r02-b02-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 2,
+  "attempt": 3,
+  "parent": "r02-b02-a02",
+  "parent_commit": "b6d2955f052dea4222df4ebc5895bc6271e7019c",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T21:15:46+00:00",
+  "mechanism": "down-weight look-ahead across the activation gap: the reader streams down K-blocks Dw-2 ahead of the activated multicast from a deeper, down-weight-only cb_in1_down ring sized from leftover L1 (reverts parent request VCs)",
+  "tags": [
+    "data-movement",
+    "down-phase",
+    "prefetch",
+    "activation-gap",
+    "cb-depth",
+    "l1-budget",
+    "revert-parent"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5059,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 45,
+  "finished_at": "2026-10-08T21:30:37+00:00"
+}

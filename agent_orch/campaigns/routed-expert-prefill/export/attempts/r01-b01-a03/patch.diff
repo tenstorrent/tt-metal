@@ -1,0 +1,186 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index d65953e3bfc..1a1085e6151 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -30,6 +30,7 @@
+ #include "api/dataflow/endpoints.h"
+ #include "api/core_local_mem.h"
+ #include "api/debug/assert.h"
++#include "risc_common.h"  // get_timestamp_32b (expert-group pacing)
+ #include "../adaptive_chunk.hpp"
+ #include "../weight_runs.hpp"
+ 
+@@ -282,6 +283,20 @@ void kernel_main() {
+     Semaphore<> act_ready_sem(act_ready_sem_id);
+     Semaphore<> act_valid_sem(act_valid_sem_id);
+ 
++    // Expert-group pacing board (see the pacing block after the group schedule). CB L1 carries
++    // whatever the previous program left there, so clear the group slots before anything can be
++    // published: a publisher only publishes after the counts handshake below, which this core has
++    // not even started waiting on yet.
++    // The board's CB id follows the three per-group-size topologies.
++    constexpr uint32_t PACE_RT = GROUP_TOPO_RT + 3 * GROUP_TOPO_ARGS;
++    constexpr uint32_t kPaceSlotWords = 4;  // one 16 B (L1-aligned) slot per group
++    constexpr uint32_t kPaceStagingWord = adaptive_chunk::kMaxGroups * kPaceSlotWords;
++    const uint32_t pace_base = CircularBuffer(get_arg_val<uint32_t>(PACE_RT)).get_write_ptr();
++    volatile tt_l1_ptr uint32_t* pace_board = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pace_base);
++    for (uint32_t g = 0; g < adaptive_chunk::kMaxGroups; ++g) {
++        pace_board[g * kPaceSlotWords] = 0;
++    }
++
+     // Look up active token count for this expert from device-side buffers.
+     // Reserve+read+push so the compute kernel (TRISC) and writer kernel
+     // (BRISC) can cb_wait_front on these CBs and read the same L1 data.
+@@ -402,6 +417,92 @@ void kernel_main() {
+     const uint32_t in1_sender_nx = get_arg_val<uint32_t>(topo + 6);
+     const uint32_t in1_sender_ny = get_arg_val<uint32_t>(topo + 7);
+ 
++    // -------- expert-group pacing --------
++    // Row groups run disjoint experts but share DRAM, and identical work finishes up to ~15% apart
++    // from call to call: whichever groups win the bandwidth early finish early, and the rest then
++    // run the tail with fewer streams than DRAM needs to stay busy. So keep every group's
++    // FRACTIONAL progress within a small slack of the slowest one: a group that is ahead holds its
++    // weight reads, handing the bandwidth to the groups behind it.
++    //   * Progress is counted in weight K-blocks (gate/up and down) out of the group's total for
++    //     this call, which every core derives from the same counts and schedule.
++    //   * One publisher per group -- its (column 0, first row) core -- multicasts the number of
++    //     blocks it has started into that group's board slot on every core, at the top of each
++    //     block and BEFORE it may wait itself, so a waiting group's published value is current.
++    //   * Weight senders wait at the top of a block while their group's published progress is
++    //     more than the slack ahead of some other group's. All senders compare the same
++    //     published values, so the group furthest behind never waits; it advances, so no cycle of
++    //     waiting groups can form. The wait is also bounded in time, so even a stale slot (a
++    //     publish overtaking the clear above) can only slow a block, never hang.
++    const uint32_t num_groups = adaptive_chunk::kGridY / group_rows;
++    uint32_t pace_total[adaptive_chunk::kMaxGroups] = {0};
++    {
++        adaptive_chunk::GroupScheduler totals_sched;
++        totals_sched.init(num_groups);
++        for (uint32_t e = 0; e < experts_per_chip; ++e) {
++            const uint32_t tiles = tiles_of(e);
++            const uint32_t cost = adaptive_chunk::expert_cost(tiles, group_rows, per_core_M_max);
++            if (cost > 0) {
++                pace_total[totals_sched.assign(cost)] +=
++                    adaptive_chunk::num_chunks(tiles, chunk_M) * (num_blocks_gu + num_blocks_d);
++            }
++        }
++    }
++    const bool pace_on = num_groups > 1;
++    const bool is_pace_publisher = pace_on && my_nt_gu == 0 && my_mt == 0;
++    // Slack in this group's own blocks: ~3% of its work, never under 2 blocks.
++    const uint32_t pace_slack = (pace_total[my_group] / 32 > 2) ? pace_total[my_group] / 32 : 2;
++    constexpr uint32_t kPaceMaxWaitCycles = 64 * 1024;  // per block; hang guard, not a tuning knob
++    uint32_t pace_started = 0;
++    auto pace_block = [&]() {
++        if (!pace_on) {
++            return;
++        }
++        if (is_pace_publisher) {
++            ++pace_started;
++            pace_board[my_group * kPaceSlotWords] = pace_started;
++            pace_board[kPaceStagingWord] = pace_started;
++            // Whole grid, publisher included in the rectangle; non-loopback, so its own slot is the
++            // local store above (the counts broadcast uses the same rectangle and dest count).
++            noc_semaphore_set_multicast(
++                pace_base + kPaceStagingWord * sizeof(uint32_t),
++                get_noc_multicast_addr(
++                    get_arg_val<uint32_t>(COUNTS_BCAST_RT + 1),
++                    get_arg_val<uint32_t>(COUNTS_BCAST_RT + 2),
++                    get_arg_val<uint32_t>(COUNTS_BCAST_RT + 3),
++                    get_arg_val<uint32_t>(COUNTS_BCAST_RT + 4),
++                    pace_base + my_group * kPaceSlotWords * sizeof(uint32_t),
++                    noc.get_noc_id()),
++                get_arg_val<uint32_t>(COUNTS_BCAST_RT + 6),
++                /*linked=*/false,
++                noc.get_noc_id());
++        }
++        if (!is_in1_sender) {
++            return;
++        }
++        const uint64_t my_total = pace_total[my_group];
++        const uint32_t t0 = get_timestamp_32b();
++        while (get_timestamp_32b() - t0 < kPaceMaxWaitCycles) {
++            invalidate_l1_cache();
++            const uint64_t mine = pace_board[my_group * kPaceSlotWords];
++            bool ahead = false;
++            for (uint32_t g = 0; g < num_groups; ++g) {
++                const uint64_t other_total = pace_total[g];
++                if (g == my_group || other_total == 0) {
++                    continue;
++                }
++                const uint64_t other = pace_board[g * kPaceSlotWords];
++                // mine / my_total - other / other_total > slack / my_total, cross-multiplied.
++                if (mine * other_total > other * my_total + pace_slack * other_total) {
++                    ahead = true;
++                    break;
++                }
++            }
++            if (!ahead) {
++                break;
++            }
++        }
++    };
++
+     const uint32_t x_tile_bytes = get_tile_size(cb_in0_x);
+     const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
+     const uint32_t up_tile_bytes = get_tile_size(cb_in1_up);
+@@ -645,6 +746,7 @@ void kernel_main() {
+         //   per-K-block elapsed time at small per_core_M where mcast/handshake
+         //   overhead dominates compute.
+         for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
++            pace_block();
+             // This block's x source: the rotating owner (row-major) or the row's fixed x sender (TILE).
+             const bool is_x_src = (x_is_row_major != 0) ? owns_x_block(kb) : is_in0_sender;
+             [[maybe_unused]] bool x_rm_pending = false;
+@@ -994,6 +1096,7 @@ void kernel_main() {
+         const uint32_t intermed_tile_bytes = cb_in0_down_full_obj.get_tile_size();
+ 
+         for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
++            pace_block();
+             const bool is_act_sender = (my_nt_d == kb);
+ 
+             cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
+@@ -1183,4 +1286,9 @@ void kernel_main() {
+     // is a posted atomic; without an explicit barrier it can still be in
+     // flight at kernel exit, leading to timing-dependent corruption.
+     noc.async_atomic_barrier();
++    // Pacing publishes are non-posted multicasts into CB L1; they must land before the next
++    // program can reuse that L1.
++    if (is_pace_publisher) {
++        noc.async_write_barrier();
++    }
+ }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index fb7eb87454f..623b39bc2e0 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -71,6 +71,11 @@ constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
+ // Row-shared tilize (x_is_row_major only): one gate/up K-block of x, tilized to bf8 by the core
+ // that owns that block in its M-row and multicast from here into every row core's CB_IN0_X.
+ constexpr uint32_t CB_X_TL = tt::CBIndex::c_20;
++// Expert-group pacing board (reader only): one progress word per expert row group, written by
++// that group's publisher core over a whole-grid multicast, plus the publisher's staging word.
++// Uniform L1 address on every core, which is what lets a publisher write the same slot grid-wide.
++constexpr uint32_t CB_PACE = tt::CBIndex::c_21;
++constexpr uint32_t kPaceBoardBytes = 128;  // 4 group slots + staging, 16 B apart (kernels: kPace*)
+ 
+ // Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
+ // interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
+@@ -852,6 +857,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     // Reader's `start` scratch. Same sizing; separate CB so
+     // reader (NCRISC) and writer (BRISC) never share one scratch page.
+     make_cb(CB_START_SCRATCH_READER, tt::DataFormat::UInt32, /*tiles=*/1, start_scratch_bytes);
++    // Expert-group pacing board (see CB_PACE). Never pushed or popped; the reader uses its L1.
++    make_cb(CB_PACE, tt::DataFormat::UInt32, /*tiles=*/1, kPaceBoardBytes);
+ 
+     // Bias CBs (FUSE_BIAS): one full per-core N-column slice each; single-buffered
+     // (read once, reused across all chunks). gate/up: per_core_N_gu tiles; down:
+@@ -1357,6 +1364,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         // Expert-parallel row groups: one weight-multicast topology per group size, picked by
+         // the kernels at runtime (adaptive_chunk::pick_group_rows / group_rows_index).
+         reader_args.insert(reader_args.end(), group_topologies.begin(), group_topologies.end());
++        // Expert-group pacing board CB (after the 3 topologies).
++        reader_args.push_back(CB_PACE);
+         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
+         reader_rt_args.append(reader_args);
+         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);

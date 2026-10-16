@@ -1,0 +1,31 @@
+{
+  "node_id": "r04-b03-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 4,
+  "branch": 3,
+  "attempt": 3,
+  "parent": "r04-b03-a02",
+  "parent_commit": "5b91a8f68f4882cd8fd587315b4dd8fe9221cfce",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T01:02:30+00:00",
+  "mechanism": "put the idle rows to work on a tie: when the best uniform row-group layout leaves groups idle, the planner takes a mixed-height layout with one expert per group, the same modelled makespan and a lower summed expert cost, so mistral / minimax-m3 run 3+3+2+2 rows (6-tile experts at per_core_M 2) instead of 2x5 with rows y10-11 idle",
+  "tags": [
+    "planner",
+    "runtime-schedule",
+    "row-groups",
+    "idle-rows",
+    "tail",
+    "mixed-height",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6066,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 47,
+  "finished_at": "2026-10-09T01:13:26+00:00"
+}

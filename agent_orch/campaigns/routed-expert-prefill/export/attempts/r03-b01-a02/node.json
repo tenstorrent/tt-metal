@@ -1,0 +1,34 @@
+{
+  "node_id": "r03-b01-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 1,
+  "attempt": 2,
+  "parent": "r03-b01-a01",
+  "parent_commit": "95af87ed5cf17fbdde91c44197e4c925f6d7c5b8",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T22:22:42+00:00",
+  "mechanism": "repair r03-b01-a01's kernel-config-buffer overflow by planning once per core: the reader runs plan_launch and publishes the plan in a new L1 scratch CB that the writer and compute (UNPACK) read instead of planning themselves",
+  "tags": [
+    "repair",
+    "binary-size",
+    "planner",
+    "plan-sharing",
+    "combination",
+    "pack-thread-sfpu",
+    "host-config"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5882,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 45,
+  "finished_at": "2026-10-08T22:29:45+00:00"
+}

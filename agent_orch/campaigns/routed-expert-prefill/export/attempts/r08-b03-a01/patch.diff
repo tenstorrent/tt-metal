@@ -1,0 +1,296 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp
+index afcda1ab048..3dd7acc3d38 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp
+@@ -19,7 +19,9 @@
+ // kernel owns them for the launch. The FW matmul-throttle word (MEM_L1_ARC_FW_SCRATCH, odd =
+ // matmul_block runs its MM_THROTTLE_MAX MOP) is sampled once per K-block. At kernel end MATH emits
+ // the totals as 16 "RE-HW" DeviceTimestampedData records (layout at emit()).
+-#if defined(PROFILE_KERNEL) && defined(TRISC_MATH)
++// Opt-in (define RE_HWPROF as well): the counters cost MATH-binary space in every profiled build, and
++// every RISC binary of a core shares the kernel config buffer, which the h7168 programs fill.
++#if defined(PROFILE_KERNEL) && defined(TRISC_MATH) && defined(RE_HWPROF)
+ namespace re_hw {
+ 
+ constexpr uint32_t kPhaseGu = 0;
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 6e5e7eefa6f..8eb82779a3b 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -32,6 +32,7 @@
+ #include "api/debug/assert.h"
+ #include "../adaptive_chunk.hpp"
+ #include "../weight_runs.hpp"
++#include "../group_pacer.hpp"
+ 
+ void kernel_main() {
+     // -------------------------- runtime args ------------------------------
+@@ -265,6 +266,14 @@ void kernel_main() {
+     Noc noc;
+     Noc noc_read(0);
+ 
++#ifdef RE_PACE_SEM
++    // Cross-group pacing board (group_pacer.hpp), cleared before any peer can count into it.
++    static_assert(L1_ALIGNMENT >= 16, "the pace board is the four words of one semaphore slot");
++    const uint32_t pace_l1 = get_semaphore(RE_PACE_SEM);
++    unified_routed_expert_ffn::GroupPacer::clear_board(pace_l1);
++    unified_routed_expert_ffn::GroupPacer pacer;
++#endif
++
+     // D2.0 CircularBuffer wrappers for method-form access. Compile-time CB
+     // indices are unchanged.
+     CircularBuffer cb_in0_x_obj(cb_in0_x);
+@@ -544,6 +553,26 @@ void kernel_main() {
+     };
+     // The row-shared x owners skip this row's sender columns (adaptive_chunk::x_owner_key).
+     [[maybe_unused]] const uint32_t x_key = adaptive_chunk::x_owner_key(group_base, group_rows, my_mt);
++    // Cross-group pacing (group_pacer.hpp): each group's column-0 weight sender takes every weight block
++    // it issues from the pacer, which holds it while another group of this phase is too far behind.
++#ifdef RE_PACE_SEM
++    pacer.begin(
++        is_in1_sender && my_nt_gu == 0,
++        pace_l1,
++        phase,
++        adaptive_chunk::layout_at(adaptive_chunk::kGridY, layout),
++        my_group,
++        get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 0),
++        get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 1),
++        my_gy,
++        expert_group[phase],
++        tiles_of,
++        per_core_M_max,
++        num_blocks_gu + num_blocks_d);
++    auto pace_take = [&pacer](bool wait) { return pacer.take(wait); };
++#else
++    auto pace_take = [](bool) { return true; };
++#endif
+ 
+     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+         // Per-expert weight accessors, built from the shared layout descriptors
+@@ -802,7 +831,7 @@ void kernel_main() {
+                 if (!gu_read_issued && kb_next < num_blocks_gu &&
+                     (!wmc_gu || mc_seq + 1 < 3 || mcast_done_sem.value() >= mc_seq - 1) &&
+                     cb_in1_gate_obj.pages_reservable_at_back(g_in1_block_num_tiles) &&
+-                    cb_in1_up_obj.pages_reservable_at_back(g_in1_block_num_tiles)) {
++                    cb_in1_up_obj.pages_reservable_at_back(g_in1_block_num_tiles) && pace_take(false)) {
+                     ++up_seq;
+                     up_go_sem.set(up_seq);
+                     if (wmc_gu) {
+@@ -833,9 +862,10 @@ void kernel_main() {
+ 
+             // UP_SPLIT: slot reserved -> release writer to read `up` on NoC 1,
+             // concurrent with the reader's NoC-0 `gate` read below (unless the look-ahead in
+-            // iteration kb - 1 already did both).
+-            if constexpr (up_split) {
+-                if (is_in1_sender && !gu_read_issued) {
++            // iteration kb - 1 already did both). Both reads of the block are taken from the pacer first.
++            if (is_in1_sender && !gu_read_issued) {
++                pace_take(true);
++                if constexpr (up_split) {
+                     ++up_seq;
+                     up_go_sem.set(up_seq);
+                 }
+@@ -1158,7 +1188,7 @@ void kernel_main() {
+         auto try_down_lookahead = [&](uint32_t kb_cur, uint32_t cur_slot) __attribute__((noinline)) {
+             if (!down_read_issued && kb_cur + 1 < num_blocks_d &&
+                 cb_in1_down_obj.pages_reservable_at_back(2 * d_in1_block_num_tiles) &&
+-                (!wmc_down || mcast_done_sem.value() >= mc_seq - 1)) {
++                (!wmc_down || mcast_done_sem.value() >= mc_seq - 1) && pace_take(false)) {
+                 const auto& down_cbi = get_local_cb_interface(cb_in1_down_obj.get_cb_id());
+                 uint32_t next_slot = cur_slot + d_in1_block_num_tiles * down_cbi.fifo_page_size;
+                 if (next_slot == down_cbi.fifo_limit) {
+@@ -1182,6 +1212,7 @@ void kernel_main() {
+             // no extra down weight is fetched during the activation gap, where it would only take
+             // DRAM share from groups still in gate/up.
+             if (is_in1_sender && !down_read_issued) {
++                pace_take(true);
+                 release_writer_down();
+                 if (kb > 0) {
+                     // Writer-multicast slots: block kb - 2 left this slot (in-order multicasts).
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/group_pacer.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/group_pacer.hpp
+new file mode 100644
+index 00000000000..7e1bca7b9d4
+--- /dev/null
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/group_pacer.hpp
+@@ -0,0 +1,144 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++//
++// SPDX-License-Identifier: Apache-2.0
++
++#pragma once
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++#include "adaptive_chunk.hpp"
++
++// Cross-group pacing of the weight stream (reader only).
++//
++// The row groups of a layout stream their experts' weights at once and share the DRAM/NoC
++// bandwidth unevenly by grid position: on identical first experts the topmost active group's
++// gate/up ran 1.4-3x longer than the bottom group's (r07-b02-a01 profile), and which group loses
++// depends on the live set of streams, so a static plan or offset cannot follow it (r06-b02-a01,
++// r07-b04-a01). Instead the column-0 weight sender of every group issues its next weight block
++// (gate/up or down; every group walks the same block sequence per chunk) only while no other group
++// of the phase is more than kSlack blocks behind it. A group that is ahead backs off, its reads
++// leave the shared links, and the groups behind take the bandwidth. One column per group is enough:
++// the group's row (x / activated) and column (weight) streams hold its other columns within about
++// a block of column 0.
++//
++// The group furthest behind never waits, so the pacing cannot deadlock; a wait also gives up after
++// kTimeout cycles. A group that has finished (or has no expert) is waited for only up to its own
++// block total, which every core derives from the shared plan. Only the issue time of a read moves:
++// the same bytes land in the same slots.
++//
++// Board: the four words of one semaphore's 16-byte L1 slot. Word s counts the blocks issued by the
++// s-th OTHER group of the layout (groups in order, skipping this one), phase A in the low 16 bits
++// and phase B in the high 16. Peers increment it with NoC atomics. The dispatcher only re-inits word
++// 0 per launch, so the kernel clears all four at its start, before the counts broadcast; no peer can
++// count into them before then, because its first block follows the counts and its plan.
++namespace unified_routed_expert_ffn {
++
++// Built at -Os: it runs once per weight block, and every RISC binary of a core shares the kernel
++// config buffer, which the h7168 programs nearly fill.
++#pragma GCC push_options
++#pragma GCC optimize("Os")
++struct GroupPacer {
++    static constexpr uint32_t kSlack = 2;
++    static constexpr uint32_t kTimeout = 32768;  // cycles, ~24 us
++
++    uint32_t board_l1 = 0;
++    uint32_t nx = 0;
++    uint32_t shift = 0;
++    uint32_t groups = 0;  // 0 = this core does not pace in this phase
++    uint32_t me = 0;
++    uint32_t taken = 0;
++    uint32_t total[adaptive_chunk::kLayoutMaxGroups];
++    uint32_t ny[adaptive_chunk::kLayoutMaxGroups];
++
++    static void clear_board(uint32_t l1) {
++        volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
++        for (uint32_t s = 0; s < 4; ++s) {
++            w[s] = 0;
++        }
++    }
++
++    // Phase setup on a group's column-0 weight sender (other cores pass pacing = false). (nx, my_ny)
++    // is this core's NoC coordinate, grid row my_gy; the host checked that column 0's NoC y steps
++    // with the grid row. owner[e] / tiles_of(e) are the phase's expert -> group map and tile-rows.
++    template <uint32_t NumExperts, typename TilesOf>
++    __attribute__((noinline)) void begin(
++        bool pacing,
++        uint32_t l1,
++        uint32_t phase,
++        const adaptive_chunk::GroupLayout& l,
++        uint32_t my_group,
++        uint32_t my_nx,
++        uint32_t my_ny,
++        uint32_t my_gy,
++        const uint8_t (&owner)[NumExperts],
++        const TilesOf& tiles_of,
++        uint32_t per_core_M_max,
++        uint32_t blocks_per_chunk) {
++        groups = (pacing && l.groups > 1) ? l.groups : 0;
++        board_l1 = l1;
++        nx = my_nx;
++        shift = 16 * phase;
++        me = my_group;
++        taken = 0;
++        uint32_t b = 0;
++        for (uint32_t g = 0; g < groups; ++g) {
++            total[g] = 0;
++            ny[g] = my_ny + b + adaptive_chunk::sender_row_in_group(0, b, l.rows[g]) - my_gy;
++            b += l.rows[g];
++        }
++        for (uint32_t e = 0; e < NumExperts && groups > 0; ++e) {
++            const uint32_t g = owner[e];
++            if (g < groups) {
++                total[g] += adaptive_chunk::num_chunks(tiles_of(e), per_core_M_max * l.rows[g]) * blocks_per_chunk;
++            }
++        }
++    }
++
++    // Take the next weight block. With wait == false, returns false instead of waiting while another
++    // group is more than kSlack blocks behind; call it last in a look-ahead's condition.
++    __attribute__((noinline)) bool take(bool wait) {
++        if (groups == 0) {
++            return true;
++        }
++        if (taken >= kSlack) {
++            const uint32_t floor = taken - kSlack;
++            volatile tt_l1_ptr uint32_t* board = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(board_l1);
++            volatile tt_reg_ptr uint32_t* clock_lo =
++                reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
++            const uint32_t t0 = clock_lo[0];
++            while (true) {
++                bool ok = true;
++                for (uint32_t g = 0, s = 0; g < groups; ++g) {
++                    if (g != me) {
++                        const uint32_t need = (total[g] < floor) ? total[g] : floor;
++                        ok = ok && ((board[s] >> shift) & 0xFFFFu) >= need;
++                        ++s;
++                    }
++                }
++                if (ok) {
++                    break;
++                }
++                if (!wait) {
++                    return false;
++                }
++                if (clock_lo[0] - t0 > kTimeout) {
++                    break;
++                }
++            }
++        }
++        ++taken;
++        // This group's word on each peer's board is its rank among that peer's other groups. The
++        // caller issues this outside any open linked multicast on NoC 0, as it does its DRAM reads.
++        for (uint32_t g = 0; g < groups; ++g) {
++            if (g != me) {
++                const uint32_t s = (me < g) ? me : me - 1;
++                noc_semaphore_inc(get_noc_addr(nx, ny[g], board_l1 + 4 * s, 0), 1u << shift, 0);
++            }
++        }
++        return true;
++    }
++};
++#pragma GCC pop_options
++
++}  // namespace unified_routed_expert_ffn
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index 0ebfe82c5c0..4b7159a6be1 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -743,6 +743,22 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     // shared in1 pair that early ack would be counted by a phase-A wait.
+     const uint32_t in1_ready_a_sem_id = add_semaphore();
+     const uint32_t in1_valid_a_sem_id = add_semaphore();
++    // Cross-group pacing board (reader pace_take): the column-0 weight sender of each row group
++    // counts the other groups' issued weight blocks in four words of this semaphore's L1 slot and
++    // holds its own next block while another group is too far behind. Peers address each other's
++    // board by stepping the NoC y down column 0, so pacing needs that column's NoC y to follow the
++    // grid row one-to-one (it does on Blackhole); otherwise, or with DS_NO_PACE=1, it is off.
++    constexpr size_t kMaxSemaphores = 16;  // tt_metal NUM_SEMAPHORES (not in the public API)
++    bool pace_enabled = std::getenv("DS_NO_PACE") == nullptr && desc.semaphores.size() < kMaxSemaphores;
++    {
++        auto* pace_device = t.x.device();
++        const auto col0 = pace_device->worker_core_from_logical_core(CoreCoord{0, 0});
++        for (uint32_t gy = 1; gy < GRID_Y && pace_enabled; ++gy) {
++            const auto c = pace_device->worker_core_from_logical_core(CoreCoord{0, gy});
++            pace_enabled = c.x == col0.x && c.y == col0.y + gy;
++        }
++    }
++    const uint32_t pace_sem_id = pace_enabled ? add_semaphore() : 0;
+ 
+     // -------------------------- circular buffers --------------------------
+     // Double-buffered DRAM-streamed inputs.
+@@ -1016,6 +1032,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+     reader_defines.emplace_back("UNIFIED_RE_GRID_Y", std::to_string(GRID_Y));
+     // UP_SPLIT: leading up K-rows of each gate/up block this RISC reads on NoC 0.
+     reader_defines.emplace_back("RE_UP_HEAD_ROWS", std::to_string(up_head_rows));
++    if (pace_enabled) {
++        reader_defines.emplace_back("RE_PACE_SEM", std::to_string(pace_sem_id));
++    }
+     tt::tt_metal::KernelDescriptor reader_kernel_desc;
+     reader_kernel_desc.kernel_source =
+         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"

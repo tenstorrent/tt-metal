@@ -1,0 +1,32 @@
+{
+  "node_id": "r04-b02-a02",
+  "campaign": "routed-expert-prefill",
+  "round": 4,
+  "branch": 2,
+  "attempt": 2,
+  "parent": "r04-b02-a01",
+  "parent_commit": "23a0c81920c2b34fe967d79d471d784ade856bdc",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T00:26:27+00:00",
+  "mechanism": "the phase-4 activated row stream runs on its own: a non-blocking pump (spun in every down-loop wait) lets receivers ack activated block a+1 as soon as a is in and a slot is free and senders multicast as soon as acked, with a running-count act_valid, instead of one block per slowest column's down-weight arrival; profiler-only MATH counters made opt-in for kernel-config headroom",
+  "tags": [
+    "data-movement",
+    "down-phase",
+    "activated-stream",
+    "decoupling",
+    "handshake",
+    "kernel-only",
+    "bit-identical",
+    "kernel-size"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.6093,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-09T00:46:03+00:00"
+}

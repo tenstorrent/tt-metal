@@ -1,0 +1,31 @@
+{
+  "node_id": "r03-b02-a04",
+  "campaign": "routed-expert-prefill",
+  "round": 3,
+  "branch": 2,
+  "attempt": 4,
+  "parent": "r03-b02-a03",
+  "parent_commit": "e7b91709fcfc71c51a862e0e55ef4be7dd743452",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T23:26:36+00:00",
+  "mechanism": "column-streaming matmul groups: at per_core_M >= 3 the non-last gate/up K-blocks and the down K-loop hold each bf4 weight tile in SrcA and stream the per_core_M x/activated tiles through SrcB (LLK ct < rt mode) instead of unpacking a weight tile per tile-mult; all matmul calls go through out-of-line helpers so the binaries shrink",
+  "tags": [
+    "compute",
+    "matmul-operand-streaming",
+    "unpack-bound",
+    "llk-reuse-mode",
+    "kernel-size",
+    "kernel-only",
+    "bit-identical"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5717,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp"
+  ],
+  "build_seconds": 0,
+  "eval_seconds": 47,
+  "finished_at": "2026-10-08T23:45:51+00:00"
+}

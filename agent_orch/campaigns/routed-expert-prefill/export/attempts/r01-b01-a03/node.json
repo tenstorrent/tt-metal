@@ -1,0 +1,29 @@
+{
+  "node_id": "r01-b01-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 1,
+  "branch": 1,
+  "attempt": 3,
+  "parent": "r01-b01-a02",
+  "parent_commit": "ccc18a698664b8c537caf39a3ceba9c3d385a70e",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T19:24:09+00:00",
+  "mechanism": "expert-group pacing: a row group more than ~3% ahead (fraction of its weight K-blocks) holds its weight reads until the slowest group catches up, via a grid-multicast progress board",
+  "tags": [
+    "scheduling",
+    "load-balance",
+    "expert-parallel",
+    "dram-fairness",
+    "data-movement"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.0363,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 43,
+  "finished_at": "2026-10-08T19:46:44+00:00"
+}

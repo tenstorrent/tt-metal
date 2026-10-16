@@ -1,0 +1,80 @@
+|     ^~~~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,89,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:89:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   89 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/common -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tools/include -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hostdevcommon/api -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/api/ -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/runtime/sfpi/include -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx -I/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute -include /localdev/nstamatovic/dream/routed-expert-prefill/jitcache/tt-metal-cache/pch/b313df8e738a7630/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="fused_swiglu/5310762928805328795/" -DKERNEL_COMPILE_TIME_ARGS=16,4,64,16,1,96,6,14,16,4,64,16,1,96,6,14,6,4,24,6,3,126,21,11,1,6,24,1,7,7,84,20,8,40,1,64,0,4294967295 -include named_ct_arg_map_generated.h -c -o /localdev/nstamatovic/dream/routed-expert-prefill/jitcache/tt-metal-cache3179443263078316084/kernels/fused_swiglu/5310762928805328795/trisc1/trisck.2425816798360132807_2229878.o /localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/nstamatovic/dream/routed-expert-prefill/jitcache/tt-metal-cache3179443263078316084/kernels/fused_swiglu/5310762928805328795/trisc1/trisck.2425816798360132807_2229878.d
+In file included from /localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp:65,
+                 from ../chlkc_math.cpp:5,
+                 from /localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:14:
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp: In function 'void re_hw::emit_one(uint64_t)':
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RE-HW,/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp,141,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:994:9: note: in expansion of macro 'DO_PRAGMA'
+  994 |         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |         ^~~~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/re_hwprof.hpp:141:65: note: in expansion of macro 'DeviceTimestampedData'
+  141 | inline __attribute__((noinline)) void emit_one(uint64_t data) { DeviceTimestampedData("RE-HW", data); }
+      |                                                                 ^~~~~~~~~~~~~~~~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp: In function 'void kernel_main()':
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RE-GU,/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp,1297,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp:1297:13: note: in expansion of macro 'DeviceZoneScopedN'
+ 1297 |             DeviceZoneScopedN("RE-GU");
+      |             ^~~~~~~~~~~~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RE-ACT,/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp,1338,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp:1338:13: note: in expansion of macro 'DeviceZoneScopedN'
+ 1338 |             DeviceZoneScopedN("RE-ACT");
+      |             ^~~~~~~~~~~~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RE-DN,/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp,1364,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp:1364:13: note: in expansion of macro 'DeviceZoneScopedN'
+ 1364 |             DeviceZoneScopedN("RE-DN");
+      |             ^~~~~~~~~~~~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,89,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/tools/profiler/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/nstamatovic/dream/routed-expert-prefill/eval/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:89:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   89 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+[94m Starting reset on devices at PCI indices: 0, 1, 2, 3 [0m
+[94m Waiting for 2 seconds for potential hotplug removal. [0m
+[94m Waiting for devices to reappear on pci bus... [0m
+[92m Reset successfully completed for device at PCI index 0. [0m
+[94m Waiting for devices to reappear on pci bus... [0m
+[92m Reset successfully completed for device at PCI index 1. [0m
+[94m Waiting for devices to reappear on pci bus... [0m
+[92m Reset successfully completed for device at PCI index 2. [0m
+[94m Waiting for devices to reappear on pci bus... [0m
+[92m Reset successfully completed for device at PCI index 3. [0m
+[94m Finishing reset on devices at PCI indices: 0, 1, 2, 3 [0m
+[95m Re-initializing boards after reset.... [0m

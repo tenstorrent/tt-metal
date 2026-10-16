@@ -1,0 +1,239 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index 5d981deec70..64d02005bf5 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -380,17 +380,34 @@ inline uint32_t schedule_lpt(
+ // Uniform layouts are compared first, ties keeping the larger groups, so a single expert or large
+ // token counts stay on the whole-grid schedule. A mixed layout replaces the winner only when it is
+ // STRICTLY better: it is scheduled under a cap one below the best makespan so far.
+-template <uint32_t NumExperts, typename TilesOf>
+-inline uint32_t plan_groups(const TilesOf& tiles_of, uint32_t per_core_M_max, uint8_t (&owner)[NumExperts]) {
++//
++// The uniform comparison is best_uniform_layout()'s; a caller that already ran it (make_plan does,
++// as its single-phase pick) passes its result in instead of scheduling the uniform layouts again.
++template <typename TilesOf>
++inline uint32_t best_uniform_layout(
++    const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max, uint32_t& makespan) {
+     uint32_t best_layout = 0;
+     uint32_t best = kNoSchedule;
+     for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
+-        const uint32_t m = schedule_in_order(layout_at(kGridY, li), tiles_of, NumExperts, per_core_M_max, nullptr);
++        const uint32_t m = schedule_in_order(layout_at(kGridY, li), tiles_of, num_experts, per_core_M_max, nullptr);
+         if (m < best) {
+             best = m;
+             best_layout = li;
+         }
+     }
++    makespan = best;
++    return best_layout;
++}
++
++template <uint32_t NumExperts, typename TilesOf>
++inline uint32_t plan_groups(
++    const TilesOf& tiles_of,
++    uint32_t per_core_M_max,
++    uint8_t (&owner)[NumExperts],
++    uint32_t uniform_layout,
++    uint32_t uniform_makespan) {
++    uint32_t best_layout = uniform_layout;
++    uint32_t best = uniform_makespan;
+     uint32_t best_cap = 0;
+     for (uint32_t li = kNumUniformLayouts; li < num_layouts(kGridY); ++li) {
+         if (best < 2) {
+@@ -412,6 +429,13 @@ inline uint32_t plan_groups(const TilesOf& tiles_of, uint32_t per_core_M_max, ui
+     return best_layout;
+ }
+ 
++template <uint32_t NumExperts, typename TilesOf>
++inline uint32_t plan_groups(const TilesOf& tiles_of, uint32_t per_core_M_max, uint8_t (&owner)[NumExperts]) {
++    uint32_t makespan = 0;
++    const uint32_t layout = best_uniform_layout(tiles_of, NumExperts, per_core_M_max, makespan);
++    return plan_groups(tiles_of, per_core_M_max, owner, layout, makespan);
++}
++
+ 
+ // ---------------------------------------------------------------------------------------------
+ // Two-phase schedule.
+@@ -443,6 +467,10 @@ struct Plan {
+     // Two-phase plans only: phase B's layout (uniform or mixed-height). Phase B runs each leftover
+     // expert alone on one group, the k-th largest on group k (taller groups come first in a layout).
+     uint32_t layout_b = 0;
++    // The best uniform layout and its in-order makespan (best_uniform_layout), which every plan
++    // starts from; plan_groups reuses them for a single-phase plan instead of rescheduling.
++    uint32_t uniform_layout = 0;
++    uint32_t uniform_makespan = 0;
+ };
+ 
+ // Index of the uniform layout with `rows` rows per group (the first kNumUniformLayouts table
+@@ -478,17 +506,8 @@ struct GroupScheduler {
+ // group. The same pick plan_groups makes among its uniform layouts.
+ template <typename TilesOf>
+ inline uint32_t pick_group_rows(const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max) {
+-    uint32_t best_rows = kGridY;
+-    uint32_t best = kNoSchedule;
+-    for (uint32_t li = 0; li < kNumUniformLayouts; ++li) {
+-        const GroupLayout& l = layout_at(kGridY, li);
+-        const uint32_t m = schedule_in_order(l, tiles_of, num_experts, per_core_M_max, nullptr);
+-        if (m < best) {
+-            best = m;
+-            best_rows = l.rows[0];
+-        }
+-    }
+-    return best_rows;
++    uint32_t makespan = 0;
++    return layout_at(kGridY, best_uniform_layout(tiles_of, num_experts, per_core_M_max, makespan)).rows[0];
+ }
+ 
+ // Deals one phase's experts to that phase's groups. Feed it EVERY local expert's tile count, in
+@@ -500,7 +519,7 @@ struct PhaseDealer {
+     uint32_t rows = 0;   // this phase's group size; 0 = the phase is empty
+     uint32_t groups = 0;
+     uint32_t per_core_M_max = 1;
+-    uint32_t pos = 0;      // phase-A round-robin position
++    uint32_t pos = 0;      // phase-A round-robin position (next group, wraps at groups)
+     uint32_t eq_seen = 0;  // experts with exactly plan.thresh tile-rows seen so far
+     GroupScheduler sched;
+ 
+@@ -533,9 +552,12 @@ struct PhaseDealer {
+             return kNoGroup;
+         }
+         if (phase == 0) {
+-            return pos++ % groups;
++            // Round-robin, pos % groups without the divide.
++            const uint32_t g = pos;
++            pos = (pos + 1 == groups) ? 0u : pos + 1;
++            return g;
+         }
+-        return sched.assign(expert_cost(tiles, rows, per_core_M_max));
++        return sched.assign(group_cost(tiles, rows, per_core_M_max));
+     }
+ };
+ 
+@@ -552,8 +574,10 @@ constexpr uint32_t kModelPhaseSwitch = 20;
+ constexpr uint32_t kModelMarginPct = 5;
+ 
+ inline uint32_t model_expert(uint32_t tiles, uint32_t rows, uint32_t per_core_M_max, uint32_t streams) {
+-    const uint32_t chunks = num_chunks(tiles, per_core_M_max * rows);
+-    const uint32_t row_units = expert_cost(tiles, rows, per_core_M_max) - chunks;  // sum of per_core_M
++    // num_chunks / expert_cost, without their divides for the usual single-chunk expert.
++    const uint32_t max_chunk = per_core_M_max * rows;
++    const uint32_t chunks = (tiles == 0) ? 0u : (tiles <= max_chunk) ? 1u : num_chunks(tiles, max_chunk);
++    const uint32_t row_units = group_cost(tiles, rows, per_core_M_max) - chunks;  // sum of per_core_M
+     const uint32_t compute = kModelRow * row_units + kModelChunk * chunks;
+     const uint32_t dram = kModelStream * streams * chunks;
+     return (compute > dram) ? compute : dram;
+@@ -612,7 +636,8 @@ inline uint32_t model_phase(
+ template <typename TilesOf>
+ inline Plan make_plan(const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max) {
+     Plan single;
+-    single.rows_b = pick_group_rows(tiles_of, num_experts, per_core_M_max);
++    single.uniform_layout = best_uniform_layout(tiles_of, num_experts, per_core_M_max, single.uniform_makespan);
++    single.rows_b = layout_at(kGridY, single.uniform_layout).rows[0];
+     const uint32_t rows_a = single.rows_b;
+     if (rows_a >= kGridY) {
+         return single;
+@@ -655,7 +680,7 @@ inline Plan make_plan(const TilesOf& tiles_of, uint32_t num_experts, uint32_t pe
+     if (num_chunks(t_max, chunk_a) != num_chunks(thresh, chunk_a)) {
+         return single;
+     }
+-    Plan two;
++    Plan two = single;
+     two.rows_a = rows_a;
+     two.thresh = thresh;
+     two.quota_eq = n_a - above;
+@@ -719,15 +744,38 @@ struct LaunchPlan {
+     uint32_t layout[2] = {kNoLayout, 0};
+ };
+ 
+-template <uint32_t NumExperts, typename TilesOf>
+-inline LaunchPlan plan_launch(const TilesOf& tiles_of, uint32_t per_core_M_max, uint8_t (&owner)[2][NumExperts]) {
++// Smallest unsigned type that holds every tile-row count up to `MaxTiles` (the clamp bound the
++// kernels' tiles_of never exceeds), for plan_launch's per-RISC copy of the counts.
++template <bool Small, typename A, typename B>
++struct PickType {
++    using type = A;
++};
++template <typename A, typename B>
++struct PickType<false, A, B> {
++    using type = B;
++};
++template <uint32_t MaxTiles>
++using TileCount = typename PickType<(MaxTiles <= 0xFFFFu), uint16_t, uint32_t>::type;
++
++// The plan is built on every RISC before its first DRAM read or matmul, so its cost is on every
++// core's critical path. tiles_of() reads the counts L1 twice through volatile pointers (and
++// band-filters and clamps), and the planner walks the experts a few dozen times, so it reads each
++// count ONCE into a local array and plans on that. Pass the kernels' clamp bound (M_tiles_full) as
++// MaxTiles to store 16-bit counts; the default keeps 32-bit ones. The plan is the same either way.
++template <uint32_t MaxTiles = 0xFFFFFFFFu, uint32_t NumExperts, typename TilesOf>
++inline LaunchPlan plan_launch(const TilesOf& tiles_of_l1, uint32_t per_core_M_max, uint8_t (&owner)[2][NumExperts]) {
++    TileCount<MaxTiles> tiles[NumExperts];
++    for (uint32_t e = 0; e < NumExperts; ++e) {
++        tiles[e] = static_cast<TileCount<MaxTiles>>(tiles_of_l1(e));
++    }
++    const auto tiles_of = [&tiles](uint32_t e) -> uint32_t { return tiles[e]; };
+     LaunchPlan lp;
+     const Plan two = make_plan(tiles_of, NumExperts, per_core_M_max);
+     if (two.rows_a == 0) {
+         for (uint32_t e = 0; e < NumExperts; ++e) {
+             owner[0][e] = kNoGroup;
+         }
+-        lp.layout[1] = plan_groups(tiles_of, per_core_M_max, owner[1]);
++        lp.layout[1] = plan_groups(tiles_of, per_core_M_max, owner[1], two.uniform_layout, two.uniform_makespan);
+         return lp;
+     }
+     lp.layout[0] = uniform_layout_index(two.rows_a);
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index 1014888de0d..e7916d48ea7 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -1069,7 +1069,10 @@ void kernel_main() {
+     [[maybe_unused]] uint8_t expert_group[2][experts_per_chip];
+     [[maybe_unused]] uint32_t phase = 0;
+     [[maybe_unused]] uint32_t next_expert = 0;
+-    UNPACK(({ plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group); }));
++    UNPACK(({
++        DeviceZoneScopedN("RE-PLAN");
++        plan = adaptive_chunk::plan_launch<m_tiles_full>(tiles_of, per_core_M_max, expert_group);
++    }));
+     // Gate/up K-blocks done so far, counted exactly as the reader counts them (x_blk there):
+     // every core of a row runs the same experts and chunks, so they agree on each block's owner.
+     uint32_t x_blk = 0;
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index 786da1282c6..1ce5c759a69 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -32,6 +32,7 @@
+ #include "api/debug/assert.h"
+ #include "../adaptive_chunk.hpp"
+ #include "../weight_runs.hpp"
++#include "tools/profiler/kernel_profiler.hpp"
+ 
+ void kernel_main() {
+     // -------------------------- runtime args ------------------------------
+@@ -387,7 +388,11 @@ void kernel_main() {
+     // (uniform or mixed-height). The layout, this core's group and row within it, and the
+     // weight-multicast topology are per phase.
+     uint8_t expert_group[2][experts_per_chip];
+-    const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
++    adaptive_chunk::LaunchPlan plan;
++    {
++        DeviceZoneScopedN("RE-PLAN");
++        plan = adaptive_chunk::plan_launch<M_tiles_full>(tiles_of, per_core_M_max, expert_group);
++    }
+     // Phase A's own weight-multicast semaphore pair follows the per-layout topologies.
+     constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + adaptive_chunk::num_layouts(adaptive_chunk::kGridY) * GROUP_TOPO_ARGS;
+ 
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 117803e894a..7a2ba64c2b1 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -251,7 +251,7 @@ void kernel_main() {
+     // Launch plan, identical to the reader's and compute's (adaptive_chunk::plan_launch); the layout,
+     // group, row within the group, topology and in1 semaphore pair are per phase (see the reader).
+     uint8_t expert_group[2][experts_per_chip];
+-    const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch(tiles_of, per_core_M_max, expert_group);
++    const adaptive_chunk::LaunchPlan plan = adaptive_chunk::plan_launch<M_tiles_full>(tiles_of, per_core_M_max, expert_group);
+     constexpr uint32_t PHASE_A_SEM_RT = GROUP_TOPO_RT + adaptive_chunk::num_layouts(adaptive_chunk::kGridY) * GROUP_TOPO_ARGS;
+     // Gate/up and down blocks this core has consumed so far, sender or not. The writer never pushes,
+     // so it indexes the reader's live ring slot off these. They must count EVERY block: the sender

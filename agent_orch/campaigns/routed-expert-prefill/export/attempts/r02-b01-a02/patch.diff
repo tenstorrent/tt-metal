@@ -1,0 +1,291 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index 362fa48f61b..d11cbd70e90 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -234,85 +234,23 @@ struct GroupScheduler {
+     }
+ };
+ 
+-// DRAM-aware makespan model used to pick the group size (the expert -> group deal itself stays the
+-// expert_cost list schedule above).
+-//
+-// Every group streams each chunk's full gate/up/down weights, and all groups share DRAM. A group's
+-// solo time is its compute: per chunk, per_core_M tile-rows of per-core matmul work plus a fixed
+-// fill/drain. Its weight demand is one expert's weights per chunk. Per core and tile-row of work,
+-// an expert's weights are GRID_X x (the core's tile-mults per tile-row) tiles, so both scale with
+-// the same per-shape factor and the model is shape-free in these units:
+-//   solo(group) = kModelRowTime * units + kModelChunkTime * chunks
+-//   demand      = chunks / solo(group)      (expert-weight reads per time unit)
+-//   DRAM        = kModelBwNum / kModelBwDen expert-weight reads per kModelRowTime time units
+-// While the active groups together demand more than DRAM delivers, every active group slows down
+-// by the same factor, so the groups still finish in order of solo time. The makespan is the sum of
+-// those phases (fluid sharing with per-group average demand). Constants are calibrated on the
+-// Blackhole profiles: ~30 cycles per bf4 LoFi tile-mult, ~420 GB/s weight streaming, and a chunk
+-// fill/drain worth ~0.4 tile-rows. Without the DRAM term the old units + chunks model kept
+-// few-tile experts on 2-row groups whose last round runs compute-bound with most of the grid idle.
+-constexpr uint32_t kModelRowTime = 16;
+-constexpr uint32_t kModelChunkTime = 6;
+-constexpr uint32_t kModelBwNum = 3;
+-constexpr uint32_t kModelBwDen = 2;
+-constexpr uint32_t kModelFracBits = 14;
+-
+-// Modelled makespan, in units of 2^-kModelFracBits model time, of groups with the given per-group
+-// work (`units` = summed per_core_M, `chunks` = weight streams).
+-inline uint64_t modelled_makespan(const uint32_t* units, const uint32_t* chunks, uint32_t groups) {
+-    uint32_t solo[kMaxGroups];
+-    for (uint32_t g = 0; g < groups; ++g) {
+-        solo[g] = kModelRowTime * units[g] + kModelChunkTime * chunks[g];
+-    }
+-    uint64_t t = 0;
+-    uint32_t done = 0;  // solo time every still-active group has completed
+-    while (true) {
+-        uint32_t next = 0xFFFFFFFFu;
+-        uint32_t demand = 0;  // sum of chunks / solo over active groups, kModelFracBits fraction bits
+-        for (uint32_t g = 0; g < groups; ++g) {
+-            if (solo[g] > done) {
+-                demand += (chunks[g] << kModelFracBits) / solo[g];
+-                next = (solo[g] < next) ? solo[g] : next;
+-            }
+-        }
+-        if (next == 0xFFFFFFFFu) {
+-            break;
+-        }
+-        // Slow-down factor: demand over DRAM bandwidth, at least 1 (compute-bound).
+-        uint32_t factor = demand * kModelRowTime * kModelBwDen / kModelBwNum;
+-        if (factor < (1u << kModelFracBits)) {
+-            factor = 1u << kModelFracBits;
+-        }
+-        t += static_cast<uint64_t>(next - done) * factor;
+-        done = next;
+-    }
+-    return t;
+-}
+-
+ // Group size (rows per group) with the smallest modelled makespan; ties keep the larger group, so
+ // a single expert or large token counts stay on the whole-grid schedule. `tiles_of(e)` returns
+ // local expert e's (band-filtered, clamped) tile-row count.
+ template <typename TilesOf>
+ inline uint32_t pick_group_rows(const TilesOf& tiles_of, uint32_t num_experts, uint32_t per_core_M_max) {
+     uint32_t best_rows = kGridY;
+-    uint64_t best = 0xFFFFFFFFFFFFFFFFull;
++    uint32_t best = 0xFFFFFFFFu;
+     for (uint32_t rows = kGridY; rows >= kMinGroupRows; rows /= 2) {
+-        const uint32_t groups = kGridY / rows;
+         GroupScheduler sched;
+-        sched.init(groups);
+-        uint32_t units[kMaxGroups] = {0};
+-        uint32_t chunks[kMaxGroups] = {0};
++        sched.init(kGridY / rows);
+         for (uint32_t e = 0; e < num_experts; ++e) {
+-            const uint32_t tiles = tiles_of(e);
+-            const uint32_t cost = expert_cost(tiles, rows, per_core_M_max);
++            const uint32_t cost = expert_cost(tiles_of(e), rows, per_core_M_max);
+             if (cost > 0) {
+-                const uint32_t g = sched.assign(cost);
+-                const uint32_t c = num_chunks(tiles, per_core_M_max * rows);
+-                chunks[g] += c;
+-                units[g] += cost - c;
++                sched.assign(cost);
+             }
+         }
+-        const uint64_t m = modelled_makespan(units, chunks, groups);
++        const uint32_t m = sched.makespan();
+         if (m < best) {
+             best = m;
+             best_rows = rows;
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index 4177bd53bcc..e107c5024e8 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -1153,6 +1153,14 @@ void kernel_main() {
+             // own partials CB; after the K-loop, partials_gu -> gate_intermed (with
+             // silu) and partials_up -> up_intermed are produced by the same fused
+             // function.
++            //
++            // Phase zones (MATH thread only, so one marker pair per phase per core): RE-GU, RE-ACT
++            // and RE-DN tile the per-expert timeline, waits included, to split the per-expert
++            // fixed cost between gate/up fill, activation and the down phase.
++            {
++#ifdef TRISC_MATH
++            DeviceZoneScopedN("RE-GU");
++#endif
+             matmul_phase_fused_gu<
+                 g_in0_block_w,
+                 g_in0_num_subblocks,
+@@ -1181,8 +1189,13 @@ void kernel_main() {
+                 /*x_blk_base=*/x_blk,
+                 my_gx,
+                 grid_x);
++            }
+             x_blk += g_num_blocks;
+ 
++            {
++#ifdef TRISC_MATH
++            DeviceZoneScopedN("RE-ACT");
++#endif
+ #ifdef FUSED_BINARY_ACT
+             // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.
+             // cb_in1_up is the unpacker's last SrcA operand, passed so the partials reconfig
+@@ -1201,11 +1214,16 @@ void kernel_main() {
+                 cb_gate_intermed, cb_partials_up, cb_activated, re_eff_out_gu);
+             (void)cb_up_intermed;
+ #endif
++            }
+ 
+             // Phase 4: down matmul, output to cb_out.
+             // multiply_phase left the unpacker on (cb_gate_intermed, cb_partials_up);
+             // matmul_block_init does not re-program data formats, so reset the down
+             // operands here (in1 -> SrcA, in0 -> SrcB) before the matmul.
++            {
++#ifdef TRISC_MATH
++            DeviceZoneScopedN("RE-DN");
++#endif
+             reconfig_data_format(cb_in1_down, cb_in0_down_full);
+             matmul_block_init(
+                 cb_in0_down_full,
+@@ -1238,6 +1256,7 @@ void kernel_main() {
+                 /*m_subblocks=*/re_m_valid,
+                 /*n_subblocks=*/d_valid_n_subblocks,
+                 cb_down_bias);
++            }
+         }  // end chunk loop
+ 
+ #ifdef FUSE_BIAS
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index f46b8f98a0d..f7cc0d04f0b 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -30,6 +30,7 @@
+ #include "api/dataflow/endpoints.h"
+ #include "api/core_local_mem.h"
+ #include "api/debug/assert.h"
++#include "tools/profiler/kernel_profiler.hpp"
+ #include "../adaptive_chunk.hpp"
+ #include "../weight_runs.hpp"
+ 
+@@ -294,11 +295,20 @@ void kernel_main() {
+     // (DeepSeek V3 256, Kimi 384, ... up to 1024).
+     cb_counts_scratch_obj.reserve_back(1);
+     cb_idx_scratch_obj.reserve_back(1);
++    cb_start_scratch_obj.reserve_back(1);
+     const uint32_t counts_l1 = cb_counts_scratch_obj.get_write_ptr();
+     const uint32_t idx_l1 = cb_idx_scratch_obj.get_write_ptr();
+     const uint32_t counts_page_size = counts_acc.get_aligned_page_size();
+     const uint32_t idx_page_size = idx_acc.get_aligned_page_size();
++    // `start` (= expert_region_offsets) rides the same broadcast: it is one page that every reader AND
++    // every writer needs, so ~2 * cores RISCs reading it from one DRAM bank was the same hotspot the
++    // counts broadcast removes. It lands in this RISC's start CB and in the writer's (the writer waits
++    // on cb_counts_scratch, which is pushed only after the broadcast is valid).
++    const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
++    const uint32_t start_w_l1 = CircularBuffer(UNIFIED_RE_CB_START_WRITER).get_write_ptr();
++    const uint32_t start_page_size = start_acc.get_aligned_page_size();
+     {
++        DeviceZoneScopedN("RE-PRO");
+         // COUNTS_BCAST: one core reads the two pages and multicasts them to the grid.
+         // Every core needs counts/idx to derive its chunking, but all of them hitting the
+         // same two DRAM pages at once serialises on a single bank. One read plus one L1
+@@ -313,6 +323,8 @@ void kernel_main() {
+         if (is_counts_reader) {
+             noc_read.async_read(counts_acc, CoreLocalMem<uint32_t>(counts_l1), counts_page_size, {.page_id = 0}, {});
+             noc_read.async_read(idx_acc, CoreLocalMem<uint32_t>(idx_l1), idx_page_size, {.page_id = 0}, {});
++            noc_read.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
++            noc_read.async_read(start_acc, CoreLocalMem<uint32_t>(start_w_l1), start_page_size, {.page_id = 0}, {});
+             noc_read.async_read_barrier();
+             if (counts_num_receivers > 0) {
+                 // linked=true so the valid-sem multicast is ordered behind both data
+@@ -341,6 +353,31 @@ void kernel_main() {
+                      .noc_y_end = cb_ny_end,
+                      .addr = idx_l1},
+                     /*linked=*/true);
++                // Both start copies on the same linked path, so they too land before the sem.
++                noc.async_write_multicast(
++                    CoreLocalMem<uint32_t>(start_l1),
++                    MulticastEndpoint{},
++                    start_page_size,
++                    counts_num_receivers,
++                    {.offset_bytes = 0},
++                    {.noc_x_start = cb_nx_start,
++                     .noc_y_start = cb_ny_start,
++                     .noc_x_end = cb_nx_end,
++                     .noc_y_end = cb_ny_end,
++                     .addr = start_l1},
++                    /*linked=*/true);
++                noc.async_write_multicast(
++                    CoreLocalMem<uint32_t>(start_w_l1),
++                    MulticastEndpoint{},
++                    start_page_size,
++                    counts_num_receivers,
++                    {.offset_bytes = 0},
++                    {.noc_x_start = cb_nx_start,
++                     .noc_y_start = cb_ny_start,
++                     .noc_x_end = cb_nx_end,
++                     .noc_y_end = cb_ny_end,
++                     .addr = start_w_l1},
++                    /*linked=*/true);
+                 noc.async_writes_flushed();
+                 counts_valid_sem.set(1);
+                 counts_valid_sem.set_multicast<NocOptions::DEFAULT>(
+@@ -357,21 +394,15 @@ void kernel_main() {
+     }
+     cb_counts_scratch_obj.push_back(1);
+     cb_idx_scratch_obj.push_back(1);
++    cb_start_scratch_obj.push_back(1);
+ 
+     const volatile tt_l1_ptr uint32_t* counts_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1);
+     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
+ 
+-    // Read the `start` (= expert_region_offsets) page ONCE into resident L1. x
+-    // is the shared dispatched buffer; each expert's rows begin at
+-    // start[global_id]. Indexed per expert in the loop below (must agree with
+-    // the writer's row_offset_tiles so x is read and y is written to the same
+-    // region).
+-    cb_start_scratch_obj.reserve_back(1);
+-    const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
+-    noc_read.async_read(
+-        start_acc, CoreLocalMem<uint32_t>(start_l1), start_acc.get_aligned_page_size(), {.page_id = 0}, {});
+-    noc_read.async_read_barrier();
+-    cb_start_scratch_obj.push_back(1);
++    // The `start` (= expert_region_offsets) page, resident in L1 from the broadcast above. x is the
++    // shared dispatched buffer; each expert's rows begin at start[global_id]. Indexed per expert in
++    // the loop below (must agree with the writer's row_offset_tiles so x is read and y is written to
++    // the same region).
+     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
+ 
+     // -------- expert-parallel row groups (adaptive_chunk.hpp) --------
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 7a21eb66275..d3d6fed61f6 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -199,14 +199,12 @@ void kernel_main() {
+     const uint32_t idx_l1 = cb_idx_scratch_buf.get_read_ptr();
+     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1);
+ 
+-    // Read the `start` (= expert_region_offsets) page ONCE into resident L1;
+-    // each expert's output slice begins at start[global_id] (token row).
++    // The `start` (= expert_region_offsets) page; each expert's output slice begins at
++    // start[global_id] (token row). The reader's counts broadcast already multicast it into this
++    // CB's slot on every core, ahead of the counts it pushed, so the wait above covers it too and
++    // no core reads the page from DRAM itself.
+     const uint32_t start_l1 = cb_start_scratch_buf.get_write_ptr();
+-    {
+-        const uint32_t start_page_size = start_acc.get_aligned_page_size();
+-        noc.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
+-        noc.async_read_barrier();
+-    }
++    (void)start_acc;
+     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
+ 
+     // ---- UP_SPLIT up-weight read setup (see header) ----
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+index 4e06734a3a5..51797f18dbd 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
+@@ -985,6 +985,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
+         reader_defines.emplace_back("FUSE_BIAS", "1");
+     }
+     reader_defines.emplace_back("UNIFIED_RE_GRID_Y", std::to_string(GRID_Y));
++    // The reader's counts broadcast also multicasts the `start` page into the WRITER's start CB.
++    reader_defines.emplace_back("UNIFIED_RE_CB_START_WRITER", std::to_string(CB_START_SCRATCH));
+     tt::tt_metal::KernelDescriptor reader_kernel_desc;
+     reader_kernel_desc.kernel_source =
+         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"

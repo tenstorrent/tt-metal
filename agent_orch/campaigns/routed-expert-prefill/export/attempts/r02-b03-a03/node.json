@@ -1,0 +1,29 @@
+{
+  "node_id": "r02-b03-a03",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 3,
+  "attempt": 3,
+  "parent": "r02-b03-a02",
+  "parent_commit": "7cb63aac77ba2d86de8b6f42f23df4e14582226e",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T21:15:46+00:00",
+  "mechanism": "same-math binary SFPU activations in fewer instructions: op-local SwiGLU-OAI / SiTU-GLU / clamped SiLU-GLU with constants hoisted into LRegs / spare CRegs, SFPSWAP clamps, and replayed unrolled bodies",
+  "tags": [
+    "compute",
+    "sfpu",
+    "activation",
+    "instruction-count",
+    "kernel-only"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.5435,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/binary_act_sfpu.h",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 43,
+  "finished_at": "2026-10-08T21:33:39+00:00"
+}

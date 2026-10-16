@@ -1,0 +1,443 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index e9791d53fd8..6e5e7eefa6f 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -437,6 +437,32 @@ void kernel_main() {
+     const uint32_t mrow_first_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 1);
+     const uint32_t mrow_last_nx = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * (GRID_X_NOC - 1) + 0);
+     const uint32_t mrow_last_ny = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * (GRID_X_NOC - 1) + 1);
++    // Row multicast (x in gate/up, activated in down): `bytes` from src into dst on every core of this
++    // M-row, this one included, then its valid sem (value 1) on the same linked path, so the sem cannot
++    // overtake the data at any receiver. A zero-byte block sends the sem alone. Out of line and captured
++    // by value: both row streams share one copy and pin no kernel_main locals.
++    auto mcast_row = [mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny](
++                         uint32_t src, uint32_t dst, uint32_t bytes, Semaphore<> valid_sem) __attribute__((noinline)) {
++        Noc noc_mc;
++        if (bytes > 0) {
++            noc_mc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
++                CoreLocalMem<uint32_t>(src),
++                MulticastEndpoint{},
++                bytes,
++                GRID_X_NOC,
++                {.offset_bytes = 0},
++                {.noc_x_start = mrow_first_nx,
++                 .noc_y_start = mrow_first_ny,
++                 .noc_x_end = mrow_last_nx,
++                 .noc_y_end = mrow_last_ny,
++                 .addr = dst},
++                /*linked=*/true);
++        }
++        noc_mc.async_writes_flushed();
++        valid_sem.set(1);
++        valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
++            noc_mc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
++    };
+ 
+     // ======================= per-phase, per-local-expert loop =======================
+     // Per expert we resolve its global id (idx_table[e]), token count
+@@ -475,6 +501,47 @@ void kernel_main() {
+     // pair and sequence as the gate/up multicast, which the writer walks in the same block order).
+     // The writer must already read the down tail (DOWN_SPLIT) to own the slot's multicast.
+     const bool wmc_down = writer_mcasts_in1 && split_down && is_in1_sender && my_mt + 1 == group_rows;
++    // Gate/up, the mirror image: the writer's NoC-1 multicast starts at the rectangle's bottom corner, so
++    // only a bottom sender keeps it. A top sender's would wrap around the column, so THIS RISC multicasts
++    // its gate/up blocks on NoC 0 instead, and its writer only reads. The writer computes the same
++    // predicate; mc_seq / mcast_go / mcast_done count writer multicasts only.
++    const bool wmc_gu = writer_mcasts_in1 && my_mt + 1 == group_rows;
++    // One linked data multicast into the same L1 address on every column receiver of this group.
++    // Captured by value: a by-reference capture would pin these kernel_main locals to the stack. The
++    // Noc is this RISC's default one, built here so its id stays a compile-time constant.
++    auto mcast_in1 = [in1_num_receivers,
++                      in1_mcast_nx_start,
++                      in1_mcast_ny_start,
++                      in1_mcast_nx_end,
++                      in1_mcast_ny_end](uint32_t l1, uint32_t bytes) __attribute__((noinline)) {
++        Noc noc_mc;
++        noc_mc.async_write_multicast(
++            CoreLocalMem<uint32_t>(l1),
++            MulticastEndpoint{},
++            bytes,
++            in1_num_receivers,
++            {.offset_bytes = 0},
++            {.noc_x_start = in1_mcast_nx_start,
++             .noc_y_start = in1_mcast_ny_start,
++             .noc_x_end = in1_mcast_nx_end,
++             .noc_y_end = in1_mcast_ny_end,
++             .addr = l1},
++            /*linked=*/true);
++    };
++    // Close a column multicast: once the data left this core, the valid sem follows it on the same
++    // reserved path (linked above), so it cannot overtake the data at any receiver.
++    auto mcast_in1_valid = [in1_valid_sem,
++                            in1_num_receivers,
++                            in1_mcast_nx_start,
++                            in1_mcast_ny_start,
++                            in1_mcast_nx_end,
++                            in1_mcast_ny_end]() mutable __attribute__((noinline)) {
++        Noc noc_mc;
++        noc_mc.async_writes_flushed();
++        in1_valid_sem.set(IN1_VALID);
++        in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
++            noc_mc, in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, in1_num_receivers);
++    };
+     // The row-shared x owners skip this row's sender columns (adaptive_chunk::x_owner_key).
+     [[maybe_unused]] const uint32_t x_key = adaptive_chunk::x_owner_key(group_base, group_rows, my_mt);
+ 
+@@ -723,8 +790,9 @@ void kernel_main() {
+         // Weight look-ahead (IN1_WRITER_MCAST + UP_SPLIT): once block kb is pushed, the sender
+         // starts block kb + 1 -- releases the writer's NoC-1 `up` read and issues its own NoC-0
+         // gate read -- as soon as THIS core's ring slot is free (its compute has popped the slot's
+-        // previous block) and the writer has finished multicasting from that slot, instead of at
+-        // the top of iteration kb + 1, i.e. after the row's x block kb has also reached this core.
++        // previous block) and the slot's earlier multicast has drained (the writer's, when it
++        // multicasts; this RISC's own is flushed before its valid sem), instead of at the top of
++        // iteration kb + 1, i.e. after the row's x block kb has also reached this core.
+         // So the column's weight stream no longer waits for the sender row's x stream. Same slots,
+         // same per-RISC order of reads and multicasts, same bytes: the data is unchanged.
+         constexpr bool gu_lookahead = writer_mcasts_in1 && up_split;
+@@ -732,12 +800,14 @@ void kernel_main() {
+         auto try_gu_lookahead = [&](uint32_t kb_next) __attribute__((noinline)) {
+             if constexpr (gu_lookahead) {
+                 if (!gu_read_issued && kb_next < num_blocks_gu &&
+-                    (mc_seq + 1 < 3 || mcast_done_sem.value() >= mc_seq - 1) &&
++                    (!wmc_gu || mc_seq + 1 < 3 || mcast_done_sem.value() >= mc_seq - 1) &&
+                     cb_in1_gate_obj.pages_reservable_at_back(g_in1_block_num_tiles) &&
+                     cb_in1_up_obj.pages_reservable_at_back(g_in1_block_num_tiles)) {
+                     ++up_seq;
+                     up_go_sem.set(up_seq);
+-                    ++mc_seq;
++                    if (wmc_gu) {
++                        ++mc_seq;
++                    }
+                     issue_gate_read(kb_next, cb_in1_gate_obj.get_write_ptr(), cb_in1_up_obj.get_write_ptr());
+                     gu_read_issued = true;
+                 }
+@@ -869,7 +939,7 @@ void kernel_main() {
+             }
+ 
+             if (is_in1_sender) {
+-                if constexpr (writer_mcasts_in1) {
++                if (wmc_gu) {
+                     // The writer multicasts, so it owns the receivers' ready handshake. This
+                     // RISC only needs its own slot back: block mc_seq reuses the slot block
+                     // mc_seq-slots used (slots = the host ring depth, 2 or 3), and THAT block's
+@@ -884,10 +954,9 @@ void kernel_main() {
+                             mcast_done_sem.wait_min(mc_seq - 2);
+                         }
+                     }
+-                } else {
+-                    in1_ready_sem.wait(in1_num_receivers);
+-                    in1_ready_sem.set(0);
+                 }
++                // This RISC multicasts (top sender): its own slot is free, so the read goes out now and
++                // only the multicast below waits for the receivers' acks.
+ 
+                 // `up` slot. LEGACY: reader reads it on NoC 0. UP_SPLIT: the writer reads all
+                 // but its first up_head_rows K-rows on NoC 1 (this RISC issues those with the
+@@ -924,7 +993,7 @@ void kernel_main() {
+                 // IN1_WRITER_MCAST: gate is in L1 -- hand this slot to the writer, which
+                 // multicasts it (and `up`, which it read itself) on NoC 1. Signalled BEFORE
+                 // the up_done wait below so the writer starts as early as possible.
+-                if constexpr (writer_mcasts_in1) {
++                if (wmc_gu) {
+                     mcast_go_sem.set(mc_seq);
+                 }
+ 
+@@ -934,9 +1003,11 @@ void kernel_main() {
+                 }
+                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the
+                 // locally-read weights go straight to compute via cb_push_back.
+-                // IN1_WRITER_MCAST moves this whole multicast to the writer's NoC 1.
+-                if (!writer_mcasts_in1 && in1_num_receivers > 0) {
+-                    const uint32_t gate_block_bytes = g_in1_block_num_tiles * gate_tile_bytes;
++                // A bottom sender's writer runs this multicast on NoC 1 (wmc_gu).
++                const bool rmc_gu = !wmc_gu && in1_num_receivers > 0;
++                if (rmc_gu) {
++                    in1_ready_sem.wait(in1_num_receivers);
++                    in1_ready_sem.set(0);
+                     // The LAST in1 data multicast before the in1_valid sem must
+                     // be linked=true so the (posted) valid-sem multicast travels
+                     // the SAME reserved path and lands AFTER the data at every
+@@ -945,54 +1016,23 @@ void kernel_main() {
+                     // receiver pushes cb_in1_{gate,up} and compute reads STALE
+                     // weights -> wrong matmul output (rare, timing-dependent;
+                     // a flush/barrier does not fix posted multicast writes on
+-                    // Blackhole). Mirrors the phase-4 activated mcast. When `up`
+-                    // is mcast (LEGACY/UP_SPLIT) it is the last write, so gate
+-                    // links into it and up holds the path for the sem; in the
+-                    // retired UP_WRITER_MCAST mode (no up mcast) gate is last and
+-                    // holds the path itself.
+-                    noc.async_write_multicast(
+-                        CoreLocalMem<uint32_t>(gate_block_start),
+-                        MulticastEndpoint{},
+-                        gate_block_bytes,
+-                        in1_num_receivers,
+-                        {.offset_bytes = 0},
+-                        {.noc_x_start = in1_mcast_nx_start,
+-                         .noc_y_start = in1_mcast_ny_start,
+-                         .noc_x_end = in1_mcast_nx_end,
+-                         .noc_y_end = in1_mcast_ny_end,
+-                         .addr = gate_block_start},
+-                        /*linked=*/true);
+-
++                    // Blackhole). Mirrors the phase-4 activated mcast. Both data
++                    // multicasts are linked, so `up` holds the path for the sem.
++                    mcast_in1(gate_block_start, g_in1_block_num_tiles * gate_tile_bytes);
+                     if constexpr (reader_mcasts_up) {
+-                        const uint32_t up_block_bytes = g_in1_block_num_tiles * up_tile_bytes;
+-                        noc.async_write_multicast(
+-                            CoreLocalMem<uint32_t>(up_block_start),
+-                            MulticastEndpoint{},
+-                            up_block_bytes,
+-                            in1_num_receivers,
+-                            {.offset_bytes = 0},
+-                            {.noc_x_start = in1_mcast_nx_start,
+-                             .noc_y_start = in1_mcast_ny_start,
+-                             .noc_x_end = in1_mcast_nx_end,
+-                             .noc_y_end = in1_mcast_ny_end,
+-                             .addr = up_block_start},
+-                            /*linked=*/true);
++                        mcast_in1(up_block_start, g_in1_block_num_tiles * up_tile_bytes);
+                     }
+                 }
+                 cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
+                 if constexpr (reader_mcasts_up) {
+                     cb_in1_up_obj.push_back(g_in1_block_num_tiles);
+                 }
+-                if (!writer_mcasts_in1 && in1_num_receivers > 0) {
+-                    noc.async_writes_flushed();
+-                    in1_valid_sem.set(IN1_VALID);
+-                    in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+-                        noc,
+-                        in1_mcast_nx_start,
+-                        in1_mcast_ny_start,
+-                        in1_mcast_nx_end,
+-                        in1_mcast_ny_end,
+-                        in1_num_receivers);
++                if (rmc_gu) {
++                    // Close the multicast before any read: a unicast (DRAM read included) issued while
++                    // a linked multicast is open on this NoC deadlocks it (watcher's
++                    // DebugSanitizeNocLinkedTransactionViolation), so block kb + 1's look-ahead below
++                    // waits for this block's data to leave the core.
++                    mcast_in1_valid();
+                 }
+                 // Block kb is pushed: start kb + 1 now if its slot is already free.
+                 try_gu_lookahead(kb + 1);
+@@ -1010,25 +1050,8 @@ void kernel_main() {
+                     in0_ready_sem.set(0);
+                     // Whole valid tile-rows only; rows past the token count stay stale downstream.
+                     const uint32_t x_mcast_bytes = valid_tile_rows * in0_block_w_gu * x_tile_bytes;
+-                    const uint32_t x_dst = x_stage_obj.get_write_ptr();
+-                    if (x_mcast_bytes > 0) {
+-                        noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+-                            CoreLocalMem<uint32_t>(cb_x_tl_obj.get_read_ptr()),
+-                            MulticastEndpoint{},
+-                            x_mcast_bytes,
+-                            GRID_X_NOC,
+-                            {.offset_bytes = 0},
+-                            {.noc_x_start = mrow_first_nx,
+-                             .noc_y_start = mrow_first_ny,
+-                             .noc_x_end = mrow_last_nx,
+-                             .noc_y_end = mrow_last_ny,
+-                             .addr = x_dst},
+-                            /*linked=*/true);
+-                    }
+-                    noc.async_writes_flushed();
+-                    in0_valid_sem.set(IN0_VALID);
+-                    in0_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
+-                        noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
++                    static_assert(IN0_VALID == 1, "mcast_row sets the valid sem to 1");
++                    mcast_row(cb_x_tl_obj.get_read_ptr(), x_stage_obj.get_write_ptr(), x_mcast_bytes, in0_valid_sem);
+                     noc.async_write_barrier();
+                     cb_x_tl_obj.pop_front(g_in0_block_tiles_max);
+                     x_stage_obj.push_back(g_in0_block_tiles_max);
+@@ -1228,32 +1251,11 @@ void kernel_main() {
+                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
+                 // core consumes the locally-read down weight directly.
+                 if (!wmc_down && in1_num_receivers > 0) {
+-                    const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
+                     // linked=true so the in1_valid-sem multicast is ordered behind
+                     // the weight data on the same reserved path (see the activated
+                     // mcast below for the full rationale).
+-                    noc.async_write_multicast(
+-                        CoreLocalMem<uint32_t>(in1_block_start),
+-                        MulticastEndpoint{},
+-                        block_bytes,
+-                        in1_num_receivers,
+-                        {.offset_bytes = 0},
+-                        {.noc_x_start = in1_mcast_nx_start,
+-                         .noc_y_start = in1_mcast_ny_start,
+-                         .noc_x_end = in1_mcast_nx_end,
+-                         .noc_y_end = in1_mcast_ny_end,
+-                         .addr = in1_block_start},
+-                        /*linked=*/true);
+-                    noc.async_writes_flushed();
+-
+-                    in1_valid_sem.set(IN1_VALID);
+-                    in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+-                        noc,
+-                        in1_mcast_nx_start,
+-                        in1_mcast_ny_start,
+-                        in1_mcast_nx_end,
+-                        in1_mcast_ny_end,
+-                        in1_num_receivers);
++                    mcast_in1(in1_block_start, d_in1_block_num_tiles * down_tile_bytes);
++                    mcast_in1_valid();
+                 }
+ 
+                 // Look-ahead: start block kb + 1 now, while the activated multicast of kb and the
+@@ -1298,25 +1300,8 @@ void kernel_main() {
+                 // needs exactly that for the sender's own loopback copy.) Mirrors the
+                 // canonical matmul in0 sender
+                 // (reader_bmm_tile_layout_in0_sender_padding.cpp).
+-                if (mcast_bytes > 0) {
+-                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+-                        CoreLocalMem<uint32_t>(src_l1),
+-                        MulticastEndpoint{},
+-                        mcast_bytes,
+-                        GRID_X_NOC,
+-                        {.offset_bytes = 0},
+-                        {.noc_x_start = mrow_first_nx,
+-                         .noc_y_start = mrow_first_ny,
+-                         .noc_x_end = mrow_last_nx,
+-                         .noc_y_end = mrow_last_ny,
+-                         .addr = dst_l1},
+-                        /*linked=*/true);
+-                }
+-                noc.async_writes_flushed();
+-
+-                act_valid_sem.set(ACT_VALID);
+-                act_valid_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
+-                    noc, mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, GRID_X_NOC);
++                static_assert(ACT_VALID == 1, "mcast_row sets the valid sem to 1");
++                mcast_row(src_l1, dst_l1, mcast_bytes, act_valid_sem);
+ 
+                 cb_activated_obj.pop_front(act_tiles_max);
+             }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 25b38cd97b2..d8db59e18be 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -297,6 +297,38 @@ void kernel_main() {
+         (phase == 0) ? get_arg_val<uint32_t>(PHASE_A_SEM_RT + 0) : get_arg_val<uint32_t>(IN1_WM_RT + 5));
+     Semaphore<> in1_valid_sem(
+         (phase == 0) ? get_arg_val<uint32_t>(PHASE_A_SEM_RT + 1) : get_arg_val<uint32_t>(IN1_WM_RT + 6));
++    // IN1_WRITER_MCAST covers a bottom-row sender's gate/up blocks only: NoC 1 multicasts -y from the
++    // rectangle's bottom corner. A top-row sender's would wrap around the column of the torus, so its
++    // reader multicasts them on NoC 0 and this RISC only reads `up`. Same predicate as the reader's.
++    const bool wmc_gu = writer_mcasts_in1 && my_mt + 1 == group_rows;
++    // One linked NoC-1 data multicast into the same L1 address on every column receiver of this group,
++    // and the valid sem that closes it (same reserved path, so it cannot overtake the data). Out of line
++    // and captured by value, so the gate, up and down multicasts share one copy and pin no locals.
++    auto mcast_in1 = [in1_num_receivers, in1_mc_nx_start, in1_mc_ny_start, in1_mc_nx_end, in1_mc_ny_end](
++                         uint32_t l1, uint32_t bytes) __attribute__((noinline)) {
++        Noc noc_mc(1);
++        noc_mc.async_write_multicast(
++            CoreLocalMem<uint32_t>(l1),
++            MulticastEndpoint{},
++            bytes,
++            in1_num_receivers,
++            {.offset_bytes = 0},
++            {.noc_x_start = in1_mc_nx_start,
++             .noc_y_start = in1_mc_ny_start,
++             .noc_x_end = in1_mc_nx_end,
++             .noc_y_end = in1_mc_ny_end,
++             .addr = l1},
++            /*linked=*/true);
++    };
++    auto mcast_in1_valid =
++        [in1_valid_sem, in1_num_receivers, in1_mc_nx_start, in1_mc_ny_start, in1_mc_nx_end, in1_mc_ny_end]() mutable
++        __attribute__((noinline)) {
++            Noc noc_mc(1);
++            noc_mc.async_writes_flushed();
++            in1_valid_sem.set(1);
++            in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
++                noc_mc, in1_mc_nx_start, in1_mc_ny_start, in1_mc_nx_end, in1_mc_ny_end, in1_num_receivers);
++        };
+ 
+     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+         const auto up_acc =
+@@ -367,13 +399,13 @@ void kernel_main() {
+                         noc_up.async_read_barrier();
+                         up_done_sem.set(up_seq);
+ 
+-                        // IN1_WRITER_MCAST: wait for the reader's gate read (mcast_go), then
++                        // IN1_WRITER_MCAST, bottom sender: wait for the reader's gate read (mcast_go), then
+                         // for the receivers to free their slots (in1_ready), multicast
+                         // gate+up on NoC 1, and signal mcast_done so the reader may
+                         // eventually REUSE this slot. The reader does not block on
+                         // mcast_done until it needs the slot again, so its next block's DRAM
+                         // read overlaps this multicast -- which is the whole point.
+-                        if constexpr (writer_mcasts_in1) {
++                        if (wmc_gu) {
+                             ++mc_seq;
+                             mcast_go_sem.wait_min(mc_seq);
+                             in1_ready_sem.wait(in1_num_receivers);
+@@ -386,39 +418,9 @@ void kernel_main() {
+                             // linked=true on both data multicasts and the sem, so the posted
+                             // valid-sem write cannot overtake the data (same rationale as the
+                             // reader's NoC-0 version this replaces).
+-                            noc_up.async_write_multicast(
+-                                CoreLocalMem<uint32_t>(gate_block_start),
+-                                MulticastEndpoint{},
+-                                gate_slot_bytes,
+-                                in1_num_receivers,
+-                                {.offset_bytes = 0},
+-                                {.noc_x_start = in1_mc_nx_start,
+-                                 .noc_y_start = in1_mc_ny_start,
+-                                 .noc_x_end = in1_mc_nx_end,
+-                                 .noc_y_end = in1_mc_ny_end,
+-                                 .addr = gate_block_start},
+-                                /*linked=*/true);
+-                            noc_up.async_write_multicast(
+-                                CoreLocalMem<uint32_t>(l1_w_up_block_start),
+-                                MulticastEndpoint{},
+-                                up_slot_bytes,
+-                                in1_num_receivers,
+-                                {.offset_bytes = 0},
+-                                {.noc_x_start = in1_mc_nx_start,
+-                                 .noc_y_start = in1_mc_ny_start,
+-                                 .noc_x_end = in1_mc_nx_end,
+-                                 .noc_y_end = in1_mc_ny_end,
+-                                 .addr = l1_w_up_block_start},
+-                                /*linked=*/true);
+-                            noc_up.async_writes_flushed();
+-                            in1_valid_sem.set(1);
+-                            in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+-                                noc_up,
+-                                in1_mc_nx_start,
+-                                in1_mc_ny_start,
+-                                in1_mc_nx_end,
+-                                in1_mc_ny_end,
+-                                in1_num_receivers);
++                            mcast_in1(gate_block_start, gate_slot_bytes);
++                            mcast_in1(l1_w_up_block_start, up_slot_bytes);
++                            mcast_in1_valid();
+                             mcast_done_sem.set(mc_seq);
+                         }
+                     }
+@@ -488,22 +490,8 @@ void kernel_main() {
+                             mcast_go_sem.wait_min(mc_seq);
+                             in1_ready_sem.wait(in1_num_receivers);
+                             in1_ready_sem.set(0);
+-                            noc_up.async_write_multicast(
+-                                CoreLocalMem<uint32_t>(down_slot_start),
+-                                MulticastEndpoint{},
+-                                down_slot_bytes,
+-                                in1_num_receivers,
+-                                {.offset_bytes = 0},
+-                                {.noc_x_start = in1_mc_nx_start,
+-                                 .noc_y_start = in1_mc_ny_start,
+-                                 .noc_x_end = in1_mc_nx_end,
+-                                 .noc_y_end = in1_mc_ny_end,
+-                                 .addr = down_slot_start},
+-                                /*linked=*/true);
+-                            noc_up.async_writes_flushed();
+-                            in1_valid_sem.set(1);
+-                            in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+-                                noc_up, in1_mc_nx_start, in1_mc_ny_start, in1_mc_nx_end, in1_mc_ny_end, in1_num_receivers);
++                            mcast_in1(down_slot_start, down_slot_bytes);
++                            mcast_in1_valid();
+                             mcast_done_sem.set(mc_seq);
+                         }
+                     }

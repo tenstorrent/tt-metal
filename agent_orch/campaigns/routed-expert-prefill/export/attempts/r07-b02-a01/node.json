@@ -1,0 +1,32 @@
+{
+  "node_id": "r07-b02-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 7,
+  "branch": 2,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "a7291294eddeb8d28e7cdeb8468aa0dd060c53fa",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-09T03:48:17+00:00",
+  "mechanism": "wrap-free gate/up weight multicasts: a top-row sender's gate/up multicast runs on its reader's NoC 0 (+y) instead of the writer's NoC 1 (-y), with its DRAM read issued before the receivers' acks and the next block's read issued under the multicast drain",
+  "tags": [
+    "data-movement",
+    "noc-topology",
+    "multicast-geometry",
+    "torus-wrap",
+    "gate-up",
+    "kernel-only",
+    "bit-identical",
+    "kernel-size"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.7387,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 46,
+  "finished_at": "2026-10-09T04:18:06+00:00"
+}

@@ -1,0 +1,541 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+index ed5bdb3a7fb..ff8ea516fa4 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp
+@@ -153,4 +153,21 @@ inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t
+     return (need < per_core_M_max) ? need : per_core_M_max;
+ }
+ 
++// Gate/up K-blocks of x carried per x CB block (row-major x path). The x CBs are sized for
++// per_core_M_max tile-rows of one K-block; a chunk with fewer rows leaves the rest of the block as
++// padding, so it fits floor(per_core_M_max / per_core_M) K-blocks instead. Batching them pays the
++// x handshake/multicast and the compute's tilize init + matmul re-init once per batch rather than
++// once per K-block. Capped at kMaxXKBlockBatch (the compute instantiates one tilize width per
++// batch size). Reader and compute both call this with the same per_core_M, so they agree on the
++// batch boundaries; the last batch of the K-loop may be shorter (min(batch, blocks left)).
++constexpr uint32_t kMaxXKBlockBatch = 4;
++
++inline uint32_t x_kblock_batch(uint32_t per_core_M, uint32_t per_core_M_max) {
++    uint32_t b = (per_core_M > 0) ? per_core_M_max / per_core_M : 1u;
++    if (b > kMaxXKBlockBatch) {
++        b = kMaxXKBlockBatch;
++    }
++    return (b < 1) ? 1u : b;
++}
++
+ }  // namespace adaptive_chunk
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+index a1cf9b7bd8a..53e48c4fee3 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp
+@@ -394,6 +394,32 @@ FORCE_INLINE void matmul_phase(
+     }
+ }
+ 
++// Tilize one x batch: n_strips tile-row strips, each nb K-blocks (nb * in0_block_w tiles) wide.
++// The strip width is the tilize's compile-time row width, so each batch size gets its own
++// instantiation; nb is bounded by adaptive_chunk::kMaxXKBlockBatch.
++template <uint32_t in0_block_w, uint32_t x_rm_cb_id, uint32_t x_cb_id>
++FORCE_INLINE void tilize_x_batch(uint32_t nb, uint32_t n_strips) {
++    static_assert(adaptive_chunk::kMaxXKBlockBatch == 4, "tilize_x_batch instantiates nb = 1..4");
++    constexpr auto kInit = compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit;
++    constexpr auto kWait = compute_kernel_lib::tilize_config::WaitMode::WaitBlock;
++    constexpr auto kReconfig =
++        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure;
++    switch (nb) {
++        case 4:
++            compute_kernel_lib::tilize<4 * in0_block_w, x_rm_cb_id, x_cb_id, kInit, kWait, kReconfig>(n_strips);
++            break;
++        case 3:
++            compute_kernel_lib::tilize<3 * in0_block_w, x_rm_cb_id, x_cb_id, kInit, kWait, kReconfig>(n_strips);
++            break;
++        case 2:
++            compute_kernel_lib::tilize<2 * in0_block_w, x_rm_cb_id, x_cb_id, kInit, kWait, kReconfig>(n_strips);
++            break;
++        default:
++            compute_kernel_lib::tilize<in0_block_w, x_rm_cb_id, x_cb_id, kInit, kWait, kReconfig>(n_strips);
++            break;
++    }
++}
++
+ // Fused gate+up matmul phase. Per K-block, we:
+ //   1. Wait on x, gate, up (cb_wait_front all three).
+ //   2. For each (sb_m, sb_n) subblock: do TWO matmul_block sequences using
+@@ -477,56 +503,69 @@ FORCE_INLINE void matmul_phase_fused_gu(
+     partials_gu_cb.reserve_back(EFF_OUT_MAX);
+     partials_up_cb.reserve_back(EFF_OUT_MAX);
+ 
++    // x K-block batching (row-major x only, see adaptive_chunk::x_kblock_batch): one x CB block
++    // carries x_nb K-blocks, laid out as m_subblocks strips of x_nb*in0_block_w tiles, so K-block
++    // j of the batch starts at tile j*in0_block_w and its rows are x_nb*in0_block_w apart. The
++    // reader uses the identical batch boundaries. TILE x keeps one K-block per x block.
++    const uint32_t x_batch =
++        tilize_x ? adaptive_chunk::x_kblock_batch(m_subblocks, X_BLOCK_TILES_MAX / in0_block_w) : 1u;
++    uint32_t x_nb = 0;  // K-blocks in the current x batch
++    uint32_t x_j = 0;   // position of this K-block within it
+     for (uint32_t block = 0; block < num_blocks; ++block) {
++        if (x_j == x_nb) {
++            x_j = 0;
++            x_nb = (num_blocks - block < x_batch) ? (num_blocks - block) : x_batch;
++        }
++        const bool x_batch_start = (x_j == 0);
++        const bool x_batch_end = (x_j + 1 == x_nb);
++        const uint32_t x_row_stride = x_nb * in0_block_w;
+         if constexpr (tilize_x) {
+-            //  Row-major x: tilize this K-block's cb_x_rm strips (bf16) -> x_cb
+-            //  (cb_in0_x, bf8_b) before the matmul consumes it. L1_ACC is turned
+-            //  off so the tilize packs OVERWRITE x_cb rather than accumulate; the
+-            //  shared tilize helper (same one conv_bmm_tilize.cpp uses) then
+-            //  reconfigures unpack SrcA + pack format, drives the per-strip
+-            //  wait/reserve/tilize/push/pop over the runtime x_block_tiles /
+-            //  in0_block_w tile-rows (adaptive per_core_M), and restores init on
+-            //  exit. The helper left SrcA pointing at the bf16 row-major input, so
+-            //  restore it to the gate/up weight format before resuming the matmul
+-            //  (SrcB still holds x_cb_id — the BH tilize path never touches it);
+-            //  then restore the partials packer + L1_ACC state for this block.
++            if (x_batch_start) {
++                //  Row-major x: tilize this batch's cb_x_rm strips (bf16) -> x_cb
++                //  (cb_in0_x, bf8_b) before the matmul consumes it. L1_ACC is turned
++                //  off so the tilize packs OVERWRITE x_cb rather than accumulate; the
++                //  shared tilize helper (same one conv_bmm_tilize.cpp uses) then
++                //  reconfigures unpack SrcA + pack format, drives the per-strip
++                //  wait/reserve/tilize/push/pop over the runtime x_block_tiles /
++                //  in0_block_w tile-rows (adaptive per_core_M), and restores init on
++                //  exit. The helper left SrcA pointing at the bf16 row-major input, so
++                //  restore it to the gate/up weight format before resuming the matmul
++                //  (SrcB still holds x_cb_id — the BH tilize path never touches it);
++                //  then restore the partials packer + L1_ACC state for this block.
+ #ifdef PACKER_L1_ACC
+-            PACK((llk_pack_reconfig_l1_acc(0)));
++                PACK((llk_pack_reconfig_l1_acc(0)));
+ #endif
+-            const uint32_t n_strips = x_block_tiles / in0_block_w;
+-            compute_kernel_lib::tilize<
+-                in0_block_w,
+-                x_rm_cb_id,
+-                x_cb_id,
+-                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+-                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+-                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(n_strips);
+-            // The helper consumed/produced only the runtime rows, but the reader
+-            // pushed a full max cb_x_rm block and the matmul below pops a full max
+-            // cb_in0_x block. Settle both with pointer-only bumps (no tilize work
+-            // on the stale rows) so every CB moves a constant-size block.
+-            {
+-                const uint32_t x_pad = X_BLOCK_TILES_MAX - x_block_tiles;
+-                if (x_pad > 0) {
+-                    CircularBuffer x_rm_cb(x_rm_cb_id);
+-                    x_rm_cb.wait_front(x_pad);
+-                    x_rm_cb.pop_front(x_pad);
+-                    x_cb.reserve_back(x_pad);
+-                    x_cb.push_back(x_pad);
++                const uint32_t n_strips = x_block_tiles / in0_block_w;
++                tilize_x_batch<in0_block_w, x_rm_cb_id, x_cb_id>(x_nb, n_strips);
++                // The helper consumed/produced only the runtime rows, but the reader
++                // pushed a full max cb_x_rm block and the matmul below pops a full max
++                // cb_in0_x block. Settle both with pointer-only bumps (no tilize work
++                // on the stale rows) so every CB moves a constant-size block.
++                {
++                    const uint32_t x_pad = X_BLOCK_TILES_MAX - x_nb * x_block_tiles;
++                    if (x_pad > 0) {
++                        CircularBuffer x_rm_cb(x_rm_cb_id);
++                        x_rm_cb.wait_front(x_pad);
++                        x_rm_cb.pop_front(x_pad);
++                        x_cb.reserve_back(x_pad);
++                        x_cb.push_back(x_pad);
++                    }
+                 }
+-            }
+-            reconfig_data_format_srca(gate_cb_id);
+-            matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+-            pack_reconfig_data_format(x_cb_id, partials_gu_cb_id);
++                reconfig_data_format_srca(gate_cb_id);
++                matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, x_row_stride);
++                pack_reconfig_data_format(x_cb_id, partials_gu_cb_id);
+ #ifdef PACKER_L1_ACC
+-            PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
++                PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+ #endif
++            }
++        }
++        if (x_batch_start) {
++            x_cb.wait_front(X_BLOCK_TILES_MAX);
+         }
+-        x_cb.wait_front(X_BLOCK_TILES_MAX);
+         gate_cb.wait_front(in1_block_num_tiles);
+         up_cb.wait_front(in1_block_num_tiles);
+ 
+-        int in0_index_subblock_offset = 0;
++        int in0_index_subblock_offset = x_j * in0_block_w;
+         uint32_t partials_slot_idx = 0;
+         for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
+             int in1_index_subblock_offset = 0;
+@@ -552,7 +591,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+                                 /*transpose=*/0,
+                                 out_subblock_w,
+                                 out_subblock_h,
+-                                in0_block_w);
++                                x_row_stride);
+                             in0_index += 1;
+                             in1_index += in1_per_core_w;
+                         }
+@@ -579,7 +618,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+                                 /*transpose=*/0,
+                                 out_subblock_w,
+                                 out_subblock_h,
+-                                in0_block_w);
++                                x_row_stride);
+                             in0_index += 1;
+                             in1_index += in1_per_core_w;
+                         }
+@@ -595,7 +634,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
+ 
+                 in1_index_subblock_offset += out_subblock_w;
+             }
+-            in0_index_subblock_offset += in0_subblock_num_tiles;
++            in0_index_subblock_offset += out_subblock_h * x_row_stride;
+         }
+ 
+ #ifdef PACKER_L1_ACC
+@@ -609,7 +648,10 @@ FORCE_INLINE void matmul_phase_fused_gu(
+         // out_subblock_w == 1 it is a single pack.
+         drain_packer_before_reaccumulate();
+ 
+-        x_cb.pop_front(X_BLOCK_TILES_MAX);
++        if (x_batch_end) {
++            x_cb.pop_front(X_BLOCK_TILES_MAX);
++        }
++        ++x_j;
+         gate_cb.pop_front(in1_block_num_tiles);
+         up_cb.pop_front(in1_block_num_tiles);
+     }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+index ad889d8fe7e..73afd5cae72 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp
+@@ -536,8 +536,22 @@ void kernel_main() {
+         //   Receivers wait for BOTH valid semaphores at the end. Halves the
+         //   per-K-block elapsed time at small per_core_M where mcast/handshake
+         //   overhead dominates compute.
++        //
++        // x K-block batching (row-major x only): at a small per_core_M the x block has room
++        // for x_batch K-blocks (adaptive_chunk::x_kblock_batch), so the x reserve / ready-ack /
++        // read / mcast / valid / push run only at a batch start and carry x_nb K-blocks laid
++        // out as per_core_M strips of x_nb*in0_block_w_gu tiles. The weight blocks still move
++        // one K-block per iteration. The compute derives the same batch boundaries.
++        const uint32_t x_batch =
++            (x_is_row_major != 0) ? adaptive_chunk::x_kblock_batch(per_core_M, per_core_M_max) : 1u;
++        uint32_t x_next_kb = 0;
+         for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+-            x_stage_obj.reserve_back(g_in0_block_tiles_max);
++            const bool x_step = (kb == x_next_kb);
++            const uint32_t x_nb = x_step ? ((num_blocks_gu - kb < x_batch) ? (num_blocks_gu - kb) : x_batch) : 0u;
++            x_next_kb += x_nb;
++            if (x_step) {
++                x_stage_obj.reserve_back(g_in0_block_tiles_max);
++            }
+             cb_in1_gate_obj.reserve_back(g_in1_block_num_tiles);
+             if constexpr (reader_mcasts_up) {
+                 cb_in1_up_obj.reserve_back(g_in1_block_num_tiles);
+@@ -556,7 +570,7 @@ void kernel_main() {
+             // proceed in parallel. The senders are usually disjoint sets of
+             // cores; the only core that's both senders is (0,0) which doesn't
+             // self-inc (it's its own sender for both).
+-            if (!is_in0_sender) {
++            if (x_step && !is_in0_sender) {
+                 in0_valid_sem.set(0);
+                 in0_ready_sem.up(noc, in0_sender_nx, in0_sender_ny, 1);
+             }
+@@ -570,7 +584,7 @@ void kernel_main() {
+             // for the common case where a core is one type of sender, the
+             // work begins immediately. For core (0,0) (both senders), in0
+             // runs first then in1, ~60µs sequentially — same as before.
+-            if (is_in0_sender) {
++            if (x_step && is_in0_sender) {
+                 in0_ready_sem.wait(in0_num_receivers);
+                 in0_ready_sem.set(0);
+ 
+@@ -588,8 +602,12 @@ void kernel_main() {
+                     // TILE_HEIGHT x (in0_block_w_gu*32) strip for tilize_block.
+                     // page_id is the token-row stick; offset_bytes is the K-block
+                     // column window within the emb-wide stick.
++                    // A batch reads x_nb consecutive K-blocks of each stick in ONE read
++                    // (they are contiguous in the emb-wide stick); the strip is x_nb K-blocks
++                    // wide in L1.
+                     constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
+                     const uint32_t col_off_bytes = kb * rm_kblock_bytes;
++                    const uint32_t rm_read_bytes = x_nb * rm_kblock_bytes;
+                     for (uint32_t m = 0; m < per_core_M; ++m) {
+                         const uint32_t tile_row = this_core_first_row + m;
+                         if (tile_row < count_tiles) {
+@@ -611,17 +629,17 @@ void kernel_main() {
+                                 noc_read.async_read(
+                                     x_acc_rm,
+                                     CoreLocalMem<uint32_t>(l1_x),
+-                                    rm_kblock_bytes,
++                                    rm_read_bytes,
+                                     {.page_id = stick, .offset_bytes = col_off_bytes},
+                                     {});
+-                                l1_x += rm_kblock_bytes;
++                                l1_x += rm_read_bytes;
+                             }
+                             // Skip the padding sticks in this tile-row (stale L1, dropped).
+-                            l1_x += (TILE_HEIGHT - real_r) * rm_kblock_bytes;
++                            l1_x += (TILE_HEIGHT - real_r) * rm_read_bytes;
+                         } else {
+                             // Invalid row (>= count_tiles): skip the read, advance the
+                             // write ptr. Stale L1 here is dropped by the writer (see above).
+-                            l1_x += TILE_HEIGHT * rm_kblock_bytes;
++                            l1_x += TILE_HEIGHT * rm_read_bytes;
+                         }
+                     }
+                 } else {
+@@ -669,7 +687,7 @@ void kernel_main() {
+                             (last_valid == count_tiles - 1) ? (count_value - last_valid * TILE_HEIGHT) : TILE_HEIGHT;
+                         real_sticks = (valid_tile_rows - 1) * TILE_HEIGHT + real_r_last;
+                     }
+-                    mcast_bytes = real_sticks * rm_kblock_bytes;
++                    mcast_bytes = real_sticks * x_nb * rm_kblock_bytes;
+                 } else {
+                     mcast_bytes = valid_tile_rows * in0_block_w_gu * x_tile_bytes;
+                 }
+@@ -779,26 +797,7 @@ void kernel_main() {
+ 
+                 // UP_SPLIT: wait for the writer's NoC-1 `up` read before mcast.
+                 if constexpr (up_split) {
+-                    if constexpr (writer_mcasts_in1) {
+-                        // READ-AHEAD grant: while waiting, hand the writer the NEXT up slot as soon
+-                        // as it is free, so the writer can issue block kb+1's read before it
+-                        // multicasts block kb. Slot kb is reserved (not yet pushed), so "2 blocks
+-                        // reservable" means this core's compute has also popped block kb-1, whose
+-                        // slot kb+1 reuses. The grant at the top of the next iteration sets the
+-                        // same value again, which is harmless.
+-                        bool granted_next = !(kb + 1 < num_blocks_gu);
+-                        while (up_done_sem.value() < up_seq) {
+-                            if (!granted_next && cb_in1_up_obj.pages_reservable_at_back(2 * g_in1_block_num_tiles)) {
+-                                up_go_sem.set(up_seq + 1);
+-                                granted_next = true;
+-                            }
+-                        }
+-                        if (!granted_next && cb_in1_up_obj.pages_reservable_at_back(2 * g_in1_block_num_tiles)) {
+-                            up_go_sem.set(up_seq + 1);
+-                        }
+-                    } else {
+-                        up_done_sem.wait_min(up_seq);
+-                    }
++                    up_done_sem.wait_min(up_seq);
+                 }
+                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the
+                 // locally-read weights go straight to compute via cb_push_back.
+@@ -865,7 +864,7 @@ void kernel_main() {
+             }
+ 
+             // Step 3: receivers wait for both valid semaphores and push.
+-            if (!is_in0_sender) {
++            if (x_step && !is_in0_sender) {
+                 in0_valid_sem.wait(IN0_VALID);
+                 x_stage_obj.push_back(g_in0_block_tiles_max);
+             }
+@@ -910,33 +909,6 @@ void kernel_main() {
+         constexpr uint32_t ACT_VALID = 1;
+         const uint32_t intermed_tile_bytes = cb_in0_down_full_obj.get_tile_size();
+ 
+-        // This RISC's rows [0, down_split_k) of down K-block `blk`, issued (not barriered) into
+-        // the slot at `l1_base`. Both OOB directions are left UNWRITTEN.
+-        //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds its K-loop
+-        //     by real_k_tiles, so these are never reduced. Were they reduced, stale L1
+-        //     decoding to Inf would NaN every valid output column — the bound is what
+-        //     makes the skip safe.
+-        //   * N-OOB (col >= N_down_tiles_full, free dim): the output column is dropped
+-        //     by the writer's col guard.
+-        const uint32_t down_col0 = my_nt_d * per_core_N_d;
+-        const uint32_t down_col_end =
+-            (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
+-        auto issue_down_rows = [&](uint32_t blk, uint32_t l1_base) {
+-            uint32_t l1_w = l1_base;
+-            for (uint32_t k = 0; k < down_split_k; ++k) {
+-                const uint32_t row = blk * in0_block_w_d + k;
+-                if (row < K_down_tiles) {
+-                    DRuns::read(
+-                        noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
+-                }
+-                l1_w += per_core_N_d * down_tile_bytes;
+-            }
+-        };
+-        // READ-AHEAD (in1 sender only): set when K-block kb's DRAM reads -- this RISC's rows AND,
+-        // under DOWN_SPLIT, the writer's grant -- were already issued during block kb-1, ahead of
+-        // kb-1's multicast. Never crosses the K-block loop.
+-        bool down_prefetched = false;
+-
+         for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
+             const bool is_act_sender = (my_nt_d == kb);
+ 
+@@ -944,15 +916,12 @@ void kernel_main() {
+             cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
+ 
+             // DOWN_SPLIT: slot reserved -> release the writer to read the block on NoC 1.
+-            // Already granted (and down_seq already advanced) when the block was read ahead.
+             if constexpr (split_down) {
+-                if (is_in1_sender && !down_prefetched) {
++                if (is_in1_sender) {
+                     ++down_seq;
+                     down_go_sem.set(down_seq);
+                 }
+             }
+-            // This block's DOWN_SPLIT sequence number (down_seq may advance past it below).
+-            const uint32_t block_down_seq = down_seq;
+ 
+             // Step 1: receivers ack BOTH senders (in1_down and act) at the
+             // top of the K-block iter. The in1_down ack lets the in1_down
+@@ -974,18 +943,32 @@ void kernel_main() {
+             // Step 2: in1_down sender kicks off DRAM reads (NoC 0) without
+             // barriering — reads run concurrently with the activated mcast
+             // below on NoC 1.
+-            //
+-            // The receivers' ready only gates the MULTICAST (step 3), not this read into the
+-            // sender's own slot, so it is waited on there rather than before the read.
+             uint32_t in1_block_start = 0;
+             if (is_in1_sender) {
+-                in1_block_start = cb_in1_down_obj.get_write_ptr();
++                in1_ready_sem.wait(in1_num_receivers);
++                in1_ready_sem.set(0);
++                uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
++                in1_block_start = l1_w;
+                 // DOWN_SPLIT: only the rows this RISC keeps; the writer reads the rest on
+                 // NoC 1 into the upper part of the same slot.
+-                if (!down_prefetched) {
+-                    issue_down_rows(kb, in1_block_start);
++                // Both OOB directions are left UNWRITTEN.
++                //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds its K-loop
++                //     by real_k_tiles, so these are never reduced. Were they reduced, stale L1
++                //     decoding to Inf would NaN every valid output column — the bound is what
++                //     makes the skip safe.
++                //   * N-OOB (col >= N_down_tiles_full, free dim): the output column is dropped
++                //     by the writer's col guard.
++                const uint32_t down_col0 = my_nt_d * per_core_N_d;
++                const uint32_t down_col_end =
++                    (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
++                for (uint32_t k = 0; k < down_split_k; ++k) {
++                    const uint32_t row = kb * in0_block_w_d + k;
++                    if (row < K_down_tiles) {
++                        DRuns::read(
++                            noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
++                    }
++                    l1_w += per_core_N_d * down_tile_bytes;
+                 }
+-                down_prefetched = false;
+             }
+ 
+             // Step 3: in1_down sender finishes — barrier on the DRAM reads it
+@@ -997,33 +980,11 @@ void kernel_main() {
+             // longer hidden under the activated wait — measure before keeping.
+             if (is_in1_sender) {
+                 noc_read.async_read_barrier();
+-                // READ-AHEAD: if this core's compute has already released block kb-1 (slot kb is
+-                // reserved but unpushed, so "2 blocks reservable" means the other slot is free too),
+-                // start block kb+1's reads now -- the writer's half via its go, ours directly into
+-                // the other slot -- so their DRAM latency overlaps this block's multicast and the
+-                // activated hand-off below instead of following them. The other slot last held
+-                // block kb-1, whose multicast this RISC flushed in the previous iteration.
+-                // Non-blocking: when compute still holds kb-1, block kb+1 is read as before.
+-                if (kb + 1 < num_blocks_d &&
+-                    cb_in1_down_obj.pages_reservable_at_back(2 * d_in1_block_num_tiles)) {
+-                    if constexpr (split_down) {
+-                        ++down_seq;
+-                        down_go_sem.set(down_seq);
+-                    }
+-                    const auto& down_iface = get_local_cb_interface(cb_in1_down);
+-                    const uint32_t next_slot = in1_block_start + d_in1_block_num_tiles * down_tile_bytes;
+-                    issue_down_rows(
+-                        kb + 1,
+-                        (next_slot >= down_iface.fifo_limit) ? next_slot - down_iface.fifo_size : next_slot);
+-                    down_prefetched = true;
+-                }
+                 // DOWN_SPLIT: the writer's block must have landed before it is multicast
+                 // (or consumed locally at GRID_Y == 1).
+                 if constexpr (split_down) {
+-                    down_done_sem.wait_min(block_down_seq);
++                    down_done_sem.wait_min(down_seq);
+                 }
+-                in1_ready_sem.wait(in1_num_receivers);
+-                in1_ready_sem.set(0);
+                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
+                 // core consumes the locally-read down weight directly.
+                 if (in1_num_receivers > 0) {
+diff --git a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+index 9596c9c581a..0d7df0363f3 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp
+@@ -279,17 +279,19 @@ void kernel_main() {
+                     CircularBuffer cb_in1_up_buf(cb_in1_up);
+                     const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
+                     const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
+-                    // Issue (do not barrier) the `up` DRAM reads of K-block `blk` into `l1_base`.
+-                    // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
+-                    // a down K position the down matmul never reduces (the compute bounds
+-                    // its K-loop by real_k_tiles), so stale L1 is dropped.
+-                    auto issue_up_block = [&](uint32_t blk, uint32_t l1_base) {
+-                        uint32_t l1_w_up = l1_base;
++                    for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
++                        ++up_seq;
++                        up_go_sem.wait_min(up_seq);
++                        const uint32_t l1_w_up_block_start = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
++                        uint32_t l1_w_up = l1_w_up_block_start;
++                        // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
++                        // a down K position the down matmul never reduces (the compute bounds
++                        // its K-loop by real_k_tiles), so stale L1 is dropped.
+                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                             GuRuns::read(
+                                 noc_up,
+                                 up_acc,
+-                                blk * in0_block_w_gu + k,
++                                kb * in0_block_w_gu + k,
+                                 N_gate_tiles_full,
+                                 up_col0,
+                                 up_col_end,
+@@ -297,18 +299,6 @@ void kernel_main() {
+                                 up_tile_bytes);
+                             l1_w_up += per_core_N_gu * up_tile_bytes;
+                         }
+-                    };
+-                    // READ-AHEAD: set when block kb's reads were already issued during block kb-1's
+-                    // multicast (see below). Never crosses the K-block loop.
+-                    bool up_prefetched = false;
+-                    for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
+-                        ++up_seq;
+-                        const uint32_t l1_w_up_block_start = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
+-                        if (!up_prefetched) {
+-                            up_go_sem.wait_min(up_seq);
+-                            issue_up_block(kb, l1_w_up_block_start);
+-                        }
+-                        up_prefetched = false;
+                         noc_up.async_read_barrier();
+                         up_done_sem.set(up_seq);
+ 
+@@ -319,26 +309,10 @@ void kernel_main() {
+                         // mcast_done until it needs the slot again, so its next block's DRAM
+                         // read overlaps this multicast -- which is the whole point.
+                         if constexpr (writer_mcasts_in1) {
+-                            // READ-AHEAD: if the reader has ALREADY granted the next slot (it grants
+-                            // early once this core's compute has released block kb-1 -- see the
+-                            // reader's up_done wait), issue block kb+1's DRAM reads now so their
+-                            // latency overlaps this block's multicast instead of following it. The
+-                            // slot is the one block kb-1 used: its multicast was flushed last
+-                            // iteration and the compute has popped it, so nothing still reads it.
+-                            // Non-blocking: when the grant is not in yet (compute-bound), fall back
+-                            // to the serial read at the top of the next iteration.
+-                            auto try_read_ahead = [&]() {
+-                                if (!up_prefetched && kb + 1 < num_blocks_gu && up_go_sem.value() >= up_seq + 1) {
+-                                    issue_up_block(kb + 1, up_cb_base + (up_seq % kUpNumSlots) * up_slot_bytes);
+-                                    up_prefetched = true;
+-                                }
+-                            };
+                             ++mc_seq;
+                             mcast_go_sem.wait_min(mc_seq);
+-                            try_read_ahead();
+                             in1_ready_sem.wait(in1_num_receivers);
+                             in1_ready_sem.set(0);
+-                            try_read_ahead();
+                             CircularBuffer cb_in1_gate_buf(cb_in1_gate);
+                             const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
+                             const uint32_t gate_slot_bytes = g_in1_block_num_tiles * gate_tile_bytes;

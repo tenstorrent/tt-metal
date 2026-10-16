@@ -1,0 +1,32 @@
+{
+  "node_id": "r02-b03-a01",
+  "campaign": "routed-expert-prefill",
+  "round": 2,
+  "branch": 3,
+  "attempt": 1,
+  "parent": "root",
+  "parent_commit": "ff0bcd951efdb912ba0acbd56fd88f57f260bd60",
+  "worker": "claude-opus-5-5",
+  "started_at": "2026-10-08T20:28:40+00:00",
+  "mechanism": "two-phase expert schedule: full waves on the small row groups, then the leftover experts on larger (5/10-row) groups so the tail runs at lower per_core_M instead of leaving groups idle",
+  "tags": [
+    "scheduling",
+    "expert-parallel",
+    "row-groups",
+    "load-balance",
+    "runtime-schedule"
+  ],
+  "valid": true,
+  "fail_class": "ok",
+  "score": 1.4973,
+  "files_changed": [
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_writer.cpp",
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp"
+  ],
+  "build_seconds": 20,
+  "eval_seconds": 43,
+  "finished_at": "2026-10-08T20:44:37+00:00"
+}
