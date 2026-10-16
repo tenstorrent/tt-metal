@@ -29,7 +29,9 @@ reference: |
   {"start": ..., "end": ...}}}` for every step of every layer, `_state` being the layer's state as the official run
   had it at the chunk's start and end in the reference's own state format (what `state_tensors` returns): stateful
   steps read their prefix from it (testing/official_floor.py checks the map: the fp32 step on the tapped inputs and
-  state must give the official output within its input-nudge floor).
+  state must give the official output within its input-nudge floor; a step whose official code rounds more inside
+  than that passes only with `explained: "<why, and the evidence: e.g. the fp32 step with those roundings emulated
+  reproduces the official output>"` in official_taps.yaml, which the overseer reviews).
 plan: |
   Role: plan. Map every component to TTNN and shard the model over the $mesh mesh ($chips chips, $dram GB each). Write
   `$bringup_dir/plan.yaml` (schema in `models/demos/common/bringup/plan/memory.py`), `$bringup_dir/plan.md`, and
