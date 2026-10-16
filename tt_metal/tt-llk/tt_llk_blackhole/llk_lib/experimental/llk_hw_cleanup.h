@@ -22,14 +22,14 @@ namespace hw_cleanup
 // Software-only mailbox payloads. Cleanup uses T0/T1/T2 mailboxes and does not
 // borrow a Tensix protocol semaphore.
 //
-// Protocol (Math coordinates; Config RAM is thread-shared so configure is
-// serialized T0 → T1 → T2). CFG_STATE_ID itself is per-thread, so bank flips do
-// not need a separate lock:
+// Protocol (Math coordinates). The three configures run concurrently: the Config
+// words two threads share are written only by RMWCIB on disjoint fields, and
+// CFG_STATE_ID is per-thread, so bank flips need no lock:
 //
 //   Unpack/Pack: drain → READY → wait CONFIGURE → <caller configures> →
 //                drain → CONFIGURED → wait DONE
-//   Math:        drain → wait both READY → grant Unpack and wait CONFIGURED →
-//                <caller configures> → grant Pack and wait CONFIGURED → DONE
+//   Math:        drain → wait both READY → grant both → <caller configures> →
+//                drain → wait both CONFIGURED → DONE
 constexpr std::uint32_t UNPACK_READY      = 0x434C4E01;
 constexpr std::uint32_t PACK_READY        = 0x434C4E02;
 constexpr std::uint32_t UNPACK_CONFIGURE  = 0x434C4E21;
@@ -37,6 +37,63 @@ constexpr std::uint32_t UNPACK_CONFIGURED = 0x434C4E22;
 constexpr std::uint32_t PACK_CONFIGURE    = 0x434C4E31;
 constexpr std::uint32_t PACK_CONFIGURED   = 0x434C4E32;
 constexpr std::uint32_t CLEANUP_DONE      = 0x434C4E40;
+
+// The canonical configuration is fixed per kernel build, so its writes are encoded at compile time. They skip the
+// hw_configure drains (start() leaves all three threads idle) and the REG_RMW mutex (each RMWCIB is atomic).
+template <std::uint32_t CfgAddr32, std::uint32_t Shamt, std::uint32_t Mask, std::uint32_t Val>
+inline void cfg_rmw()
+{
+    constexpr std::uint32_t data = Val << Shamt;
+    if constexpr ((Mask & 0xff) != 0)
+    {
+        TTI_RMWCIB0(Mask & 0xff, data & 0xff, CfgAddr32);
+    }
+    if constexpr (((Mask >> 8) & 0xff) != 0)
+    {
+        TTI_RMWCIB1((Mask >> 8) & 0xff, (data >> 8) & 0xff, CfgAddr32);
+    }
+    if constexpr (((Mask >> 16) & 0xff) != 0)
+    {
+        TTI_RMWCIB2((Mask >> 16) & 0xff, (data >> 16) & 0xff, CfgAddr32);
+    }
+    if constexpr (((Mask >> 24) & 0xff) != 0)
+    {
+        TTI_RMWCIB3((Mask >> 24) & 0xff, (data >> 24) & 0xff, CfgAddr32);
+    }
+}
+
+template <typename Fields>
+struct cfg_words
+{
+    std::uint32_t val[sizeof(Fields) / sizeof(std::uint32_t)];
+};
+
+// The register words of a configuration struct, folded at compile time.
+template <typename Fields>
+constexpr cfg_words<Fields> words_of(const Fields &fields)
+{
+    return __builtin_bit_cast(cfg_words<Fields>, fields);
+}
+
+inline volatile std::uint32_t tt_reg_ptr *bank0_cfg()
+{
+    return reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE);
+}
+
+// ckernel_template(1, 1).program() without its mop_sync.
+inline void program_nop_mop()
+{
+    volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+    mop_cfg[0]                      = 1;
+    mop_cfg[1]                      = 1;
+    mop_cfg[2]                      = TT_OP_NOP;
+    mop_cfg[3]                      = TT_OP_NOP;
+    mop_cfg[4]                      = TT_OP_NOP;
+    mop_cfg[5]                      = TT_OP_NOP;
+    mop_cfg[6]                      = TT_OP_NOP;
+    mop_cfg[7]                      = TT_OP_NOP;
+    mop_cfg[8]                      = TT_OP_NOP;
+}
 
 inline void select_cfg_state(const std::uint32_t state_id)
 {
@@ -50,11 +107,10 @@ inline void select_cfg_state(const std::uint32_t state_id)
 }
 
 /**
- * Enter cleanup and wait until this thread owns the configure turn.
+ * Enter cleanup and wait until every TRISC has drained.
  *
  * @note Drain every operation-owned message from the incoming mailboxes before calling this.
- * @note On return the pipelines are drained and Unpack/Pack may configure; Math has already
- *       waited for Unpack to finish configuring.
+ * @note On return every thread's pipeline is drained and this thread may configure.
  */
 template <ThreadId thread_id>
 inline void start()
@@ -83,15 +139,13 @@ inline void start()
         LLK_ASSERT(unpack_ready == UNPACK_READY, "Unexpected cleanup message from unpack thread.");
         LLK_ASSERT(pack_ready == PACK_READY, "Unexpected cleanup message from pack thread.");
 
-        // Unpack configures while Math blocks on CONFIGURED.
         mailbox_write(UnpackThreadId, UNPACK_CONFIGURE);
-        const std::uint32_t configured = mailbox_read(UnpackThreadId);
-        LLK_ASSERT(configured == UNPACK_CONFIGURED, "Unexpected unpack cleanup configuration completion.");
+        mailbox_write(PackThreadId, PACK_CONFIGURE);
     }
 }
 
 /**
- * Leave the configure turn and wait until every TRISC has finished cleanup.
+ * Report this thread's configuration done and wait until every TRISC has finished cleanup.
  *
  * @note Finish this thread's configuration (including any mop/tensix side effects) before
  *       calling this.
@@ -123,10 +177,10 @@ inline void finish()
     }
     else
     {
-        // Pack configures while Math blocks on CONFIGURED.
-        mailbox_write(PackThreadId, PACK_CONFIGURE);
-        const std::uint32_t configured = mailbox_read(PackThreadId);
-        LLK_ASSERT(configured == PACK_CONFIGURED, "Unexpected pack cleanup configuration completion.");
+        const std::uint32_t unpack_configured = mailbox_read(UnpackThreadId);
+        const std::uint32_t pack_configured   = mailbox_read(PackThreadId);
+        LLK_ASSERT(unpack_configured == UNPACK_CONFIGURED, "Unexpected unpack cleanup configuration completion.");
+        LLK_ASSERT(pack_configured == PACK_CONFIGURED, "Unexpected pack cleanup configuration completion.");
 
         mailbox_write(UnpackThreadId, CLEANUP_DONE);
         mailbox_write(PackThreadId, CLEANUP_DONE);
