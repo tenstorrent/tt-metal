@@ -1,0 +1,1 @@
+{ "env": { "PREFILL_MODEL": "llama_3_1_8b", "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32" } }

@@ -508,6 +508,8 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
         return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+    if ADAPTER.name == "llama_3_1_8b":
+        return _read_slot_kv_and_check_pcc_llama(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -529,6 +531,69 @@ def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_
         raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
         rows.append(decode(raw, head_dim))
     return torch.cat(rows, dim=0)[:read_len]
+
+
+def _read_slot_kv_and_check_pcc_llama(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    from models.demos.llama_3_1_8b.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    mc = ADAPTER.model_config
+    n_kv, head_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM
+    half = head_dim // 2
+    perm = list(range(head_dim))
+    for m in range(head_dim):
+        perm[m] = half * (m % 2) + (m // 2)
+    perm = torch.tensor(perm, dtype=torch.long)
+
+    read_len = ((real_len + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK - 1) // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK) * (
+        NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    )
+    kv_dir = Path(trace_dir) / "kv_cache"
+    mins = {"k": 1.0, "v": 1.0}
+    checked = 0
+    for layer in range(NUM_LAYERS):
+        loc0 = table.lookup(layer, 0, slot_id, 0)
+        try:
+            _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
+        except KeyError:
+            continue
+        checked += 1
+        dev_k = torch.stack(
+            [
+                _read_kv_slice(table, device_map, h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
+                for h in range(n_kv)
+            ],
+            dim=0,
+        )[:, :real_len]
+        dev_v = torch.stack(
+            [
+                _read_kv_slice(table, device_map, n_kv + h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
+                for h in range(n_kv)
+            ],
+            dim=0,
+        )[:, :real_len]
+
+        with safe_open(str(kv_dir / f"layer_{layer}.safetensors"), framework="pt") as h:
+            g_k = h.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len, :][..., perm]
+            g_v = h.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len, :]
+
+        pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
+        pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
+        mins["k"], mins["v"] = min(mins["k"], pcc_k), min(mins["v"], pcc_v)
+        logger.info(f"  layer {layer:>2}: K={pcc_k:.5f} V={pcc_v:.5f}")
+
+    min_pcc = min(mins.values())
+    logger.info(
+        f"[producer] slot {slot_id} Llama KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
+        f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
+    )
+    if checked == 0:
+        raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
+    return mins
 
 
 def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):

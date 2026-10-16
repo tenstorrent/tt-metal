@@ -287,6 +287,8 @@ ADAPTER_PATHS = {
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
+    # Llama 3.1 8B: GQA (not MLA), dense SwiGLU MLP (not MoE), Llama3 RoPE, BH Galaxy 8x4.
+    "llama_3_1_8b": "models.demos.llama_3_1_8b.tt.runners.adapters.llama_3_1_8b:Llama31PrefillAdapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}
