@@ -272,7 +272,7 @@ tt_metal/tt-llk/tools/python/tt_llk_perf/ @mvlahovicTT @skrsmanovicTT @nvelickov
 tt_metal/tt-llk/perf/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @skrsmanovicTT @sstanisicTT @mvlahovicTT @nstojicTT
 tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
-tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+tt_metal/tt-llk/tests/hardware_free/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tests/pipeline_reorg/llk_perf_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tt_llk_blackhole/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01
