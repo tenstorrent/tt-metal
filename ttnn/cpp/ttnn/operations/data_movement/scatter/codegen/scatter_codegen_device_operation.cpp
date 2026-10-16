@@ -179,6 +179,29 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+// The program key already pins every attribute and every tensor spec (shape, dtype, layout, tile,
+// memory config), so a hit cannot have changed anything supported_by_codegen() or the structural
+// checks above look at. What the key does not carry is where the tensors live: a deallocated or
+// host-resident operand, or one on another device, hashes the same and must still be rejected.
+void ScatterCodegenDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& index_tensor = tensor_args.index_tensor;
+    const auto& src_tensor = tensor_args.src_tensor;
+    TT_FATAL(
+        input_tensor.buffer() != nullptr && index_tensor.buffer() != nullptr && src_tensor.buffer() != nullptr,
+        "scatter_codegen: operands need to be allocated in buffers on the device.");
+    TT_FATAL(
+        input_tensor.device() == index_tensor.device() && input_tensor.device() == src_tensor.device(),
+        "scatter_codegen: input, index and src tensors must all be on the same device.");
+    if (tensor_args.output_tensor.has_value()) {
+        const auto& out = tensor_args.output_tensor.value();
+        TT_FATAL(
+            out.buffer() != nullptr && out.device() == input_tensor.device(),
+            "scatter_codegen: preallocated output tensor must be allocated on the input's device.");
+    }
+}
+
 ScatterCodegenDeviceOperation::spec_return_value_t ScatterCodegenDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensor.has_value()) {
