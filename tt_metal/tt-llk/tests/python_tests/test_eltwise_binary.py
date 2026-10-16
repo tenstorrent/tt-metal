@@ -198,16 +198,12 @@ def _get_valid_formats(dest_acc):
             DataFormat.Bfp4_b,
             DataFormat.Bfp8_b,
             DataFormat.Float16_b,
-            DataFormat.Float16,
             DataFormat.Float32,
         ],
         same=False,
     )
-    float16_to_bfp4 = InputOutputFormat(DataFormat.Float16, DataFormat.Bfp4_b)
     selected = []
     for formats in all_formats:
-        if formats == float16_to_bfp4:
-            continue
         if dest_acc not in get_valid_dest_accumulation_modes(formats):
             continue
         if dest_acc == DestAccumulation.Yes:

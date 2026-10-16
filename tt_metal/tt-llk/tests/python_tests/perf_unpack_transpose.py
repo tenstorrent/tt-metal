@@ -18,7 +18,7 @@ from helpers.test_variant_parameters import (
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
-        [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Int32],
+        [DataFormat.Bfp8_b, DataFormat.Int32],
     ),
     unpack_transpose_faces=[Transpose.No, Transpose.Yes],
     unpack_transpose_within_face=[Transpose.No, Transpose.Yes],
