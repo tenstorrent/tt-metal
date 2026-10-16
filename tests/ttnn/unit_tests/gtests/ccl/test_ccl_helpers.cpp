@@ -853,6 +853,12 @@ const std::vector<MeshShape>& all_meshes() {
     return meshes;
 }
 
+// mesh_partition of tensor dim 3, as the op's hook calls the helper (the MeshPartition cases below).
+std::optional<TensorTopology> partition_dim3(
+    const TensorTopology& input, const MeshShape& mesh, std::optional<uint32_t> cluster_axis) {
+    return topo::mesh_partition_output_topology(input, cluster_axis, mesh, kRank, /*out_dim=*/3);
+}
+
 }  // namespace
 
 TEST(CclTopologyUtils, UncollapseExpandsCollapsedLabelsPerMeshAxis) {
@@ -1461,6 +1467,228 @@ TEST(CclTopologyUtils, OpsRefuseALabelThatDoesNotCoverTheDevicesTheyReach) {
     EXPECT_NE(
         message_of([&] { topo::all_gather_output_topology(square, 1, mesh, kRank, 3); }).find("covers"),
         std::string::npos);
+}
+
+// mesh_partition's own cases: the scatter rule's partition kind (a Shard of another dim is kept, not consumed), as the
+// op's hook calls it for tensor dim 3; warn-only, so a refusal is a nullopt. The device twins are the mesh_partition
+// section of tests/nightly/t3000/ccl/test_ccl_topology_labels.py.
+
+// An N-D label takes Shard{dim} on the partitioned axis and keeps the input's placement elsewhere -- unless the
+// partitioned axis itself held a Shard of another dim: each device would then keep its chunk of that dim next to its
+// new piece of dim, two dims on one axis, which no label states, so that case is refused.
+TEST(CclTopologyUtils, MeshPartitionNdLabelTakesShardDimOnThePartitionedAxisUnlessItHeldAnotherShard) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(2, 4);
+    const auto input = nd_label(mesh, {TopoShard{2}, TopoReplicate{}});
+    EXPECT_EQ(partition_dim3(input, mesh, 1), nd_label(mesh, {TopoShard{2}, TopoShard{3}}));
+    EXPECT_FALSE(partition_dim3(input, mesh, 0).has_value());  // axis 0 holds Shard{2}
+}
+
+// One chunk along a size-1 axis is the whole extent.
+TEST(CclTopologyUtils, MeshPartitionSameDimOnASizeOneAxisBecomesReplicate) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(1, 8);
+    EXPECT_EQ(
+        partition_dim3(nd_label(mesh, {TopoShard{3}, TopoReplicate{}}), mesh, 1),
+        nd_label(mesh, {TopoReplicate{}, TopoShard{3}}));
+}
+
+// An outer axis already holding Shard{dim} composes with the partitioned axis into row-major hierarchical sharding,
+// which the collapsed label states exactly when the partitioned axis held Replicate; when it already held Shard{dim}
+// (a label the mappers refuse to build) the collapsed label describes the output bytes, as for a whole-mesh partition
+// of a sharded input.
+TEST(CclTopologyUtils, MeshPartitionSameDimOnAnOuterAxisCollapsesRowMajor) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(2, 4);
+    for (const TopoPlacement& partitioned : {TopoPlacement{TopoReplicate{}}, TopoPlacement{TopoShard{3}}}) {
+        const auto input = nd_label(mesh, {TopoShard{3}, partitioned});
+        EXPECT_EQ(partition_dim3(input, mesh, 1), collapsed_label(mesh, TopoShard{3})) << input;
+    }
+    // Shard dims in the label are compared normalised: -1 is dim 3 at rank 4.
+    const auto negative = partition_dim3(nd_label(mesh, {TopoShard{-1}, TopoReplicate{}}), mesh, 1);
+    ASSERT_TRUE(negative.has_value());
+    EXPECT_EQ(negative->distribution_shape(), MeshShape(8));
+    // An out-of-range Shard dim (left behind by a rank-changing op) does not count as sharding dim.
+    EXPECT_EQ(
+        partition_dim3(nd_label(mesh, {TopoShard{7}, TopoReplicate{}}), mesh, 1),
+        nd_label(mesh, {TopoShard{7}, TopoShard{3}}));
+}
+
+// Everything else that would shard dim on two axes has no label.
+TEST(CclTopologyUtils, MeshPartitionSameDimOnAnInnerAxisOrAnotherShardOnThePartitionedAxisIsRefused) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(2, 4);
+    // Columns hold fine slices of dim; partitioning across rows cuts them again: column-major, not expressible.
+    EXPECT_FALSE(partition_dim3(nd_label(mesh, {TopoReplicate{}, TopoShard{3}}), mesh, 0).has_value());
+    // The outer axis shards dim but the partitioned axis held a different Shard.
+    EXPECT_FALSE(partition_dim3(nd_label(mesh, {TopoShard{3}, TopoShard{2}}), mesh, 1).has_value());
+    // A third non-trivial axis would make the collapsed label over-claim N distinct slices.
+    const MeshShape mesh3(2, 2, 2);
+    EXPECT_FALSE(
+        partition_dim3(nd_label(mesh3, {TopoShard{3}, TopoReplicate{}, TopoReplicate{}}), mesh3, 1).has_value());
+}
+
+// A whole-mesh partition of a replicated input is {N},[Shard{dim}] in row-major device order, whether the input
+// label is N-D or collapsed.
+TEST(CclTopologyUtils, MeshPartitionWholeMeshCollapsesAReplicatedInput) {
+    StrictCclTopologyScope warn_only(false);
+    for (const MeshShape& mesh : {MeshShape(1, 8), MeshShape(2, 4), MeshShape(8, 4)}) {
+        const auto expected = collapsed_label(mesh, TopoShard{3});
+        EXPECT_EQ(partition_dim3(nd_label(mesh, {TopoReplicate{}, TopoReplicate{}}), mesh, std::nullopt), expected)
+            << mesh;
+        EXPECT_EQ(partition_dim3(collapsed_label(mesh, TopoReplicate{}), mesh, std::nullopt), expected) << mesh;
+    }
+}
+
+// A whole-mesh partition of an input already sharded: Shard{dim} on a non-trivial axis is overwritten (the label then
+// describes the output bytes: device k holds chunk k of its own input shard, not a re-slicing of the input's global
+// view); a Shard of another dim on a non-trivial axis has no label, N-D or collapsed; a Shard on a size-1 axis is the
+// whole extent and does not block.
+TEST(CclTopologyUtils, MeshPartitionWholeMeshOverwritesShardDimButNotAnotherDim) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(2, 4);
+    EXPECT_EQ(
+        partition_dim3(nd_label(mesh, {TopoShard{3}, TopoReplicate{}}), mesh, std::nullopt),
+        collapsed_label(mesh, TopoShard{3}));
+    EXPECT_FALSE(partition_dim3(nd_label(mesh, {TopoShard{2}, TopoReplicate{}}), mesh, std::nullopt).has_value());
+    EXPECT_FALSE(partition_dim3(collapsed_label(mesh, TopoShard{2}), mesh, std::nullopt).has_value());
+    const MeshShape line(1, 8);
+    EXPECT_EQ(
+        partition_dim3(nd_label(line, {TopoShard{2}, TopoReplicate{}}), line, std::nullopt),
+        collapsed_label(line, TopoShard{3}));
+}
+
+// On a line the collapsed label's only axis is the partitioned axis; whatever it held is overwritten.
+TEST(CclTopologyUtils, MeshPartitionCollapsedLabelOnALineTakesShardDimWhateverItHeld) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(1, 8);
+    for (const TopoPlacement& held :
+         {TopoPlacement{TopoReplicate{}}, TopoPlacement{TopoShard{1}}, TopoPlacement{TopoShard{3}}}) {
+        const auto input = collapsed_label(mesh, held);
+        EXPECT_EQ(partition_dim3(input, mesh, 1), collapsed_label(mesh, TopoShard{3})) << input;
+    }
+}
+
+// A collapsed Replicate over a multi-axis mesh is spelled out per axis so that one axis can be Shard{dim}.
+TEST(CclTopologyUtils, MeshPartitionCollapsedReplicateOnAMultiAxisMeshUncollapses) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(2, 4);
+    const auto input = collapsed_label(mesh, TopoReplicate{});
+    EXPECT_EQ(partition_dim3(input, mesh, 0), nd_label(mesh, {TopoShard{3}, TopoReplicate{}}));
+    EXPECT_EQ(partition_dim3(input, mesh, 1), nd_label(mesh, {TopoReplicate{}, TopoShard{3}}));
+}
+
+// A collapsed Shard over a multi-axis mesh is read per axis as row-major hierarchical sharding of its dim. A Shard
+// of another dim is refused along either axis (the partitioned axis holds a piece of two dims). A Shard of dim itself
+// collapses again along the inner axis (each device keeps a sub-piece of its piece: N distinct, ordered slices, the
+// same spelling as the input) and is refused along the outer axis (column-major).
+TEST(CclTopologyUtils, MeshPartitionCollapsedShardOnAMultiAxisMeshIsReadPerAxis) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(2, 4);
+    for (uint32_t axis : {0U, 1U}) {
+        EXPECT_FALSE(partition_dim3(collapsed_label(mesh, TopoShard{2}), mesh, axis).has_value()) << "axis " << axis;
+    }
+    EXPECT_EQ(partition_dim3(collapsed_label(mesh, TopoShard{3}), mesh, 1), collapsed_label(mesh, TopoShard{3}));
+    EXPECT_FALSE(partition_dim3(collapsed_label(mesh, TopoShard{3}), mesh, 0).has_value());
+}
+
+// A collapsed label has no axes, so one over fewer devices than the mesh says nothing about where its devices sit;
+// the fewer-shards label whose N equals the column count merely looks like a line's label.
+TEST(CclTopologyUtils, MeshPartitionCollapsedLabelOverFewerDevicesThanTheMeshIsRefusedForEveryClusterAxis) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(2, 4);
+    auto coords = row_major_coords(mesh);
+    coords.erase(coords.begin() + 4, coords.end());
+    const TensorTopology fewer_shards(MeshShape(4), {TopoShard{2}}, coords);
+    for (const auto& axis : {std::optional<uint32_t>{0}, std::optional<uint32_t>{1}, std::optional<uint32_t>{}}) {
+        EXPECT_FALSE(partition_dim3(fewer_shards, mesh, axis).has_value())
+            << "cluster_axis " << (axis.has_value() ? static_cast<int>(*axis) : -1);
+    }
+}
+
+// N-D sub-mesh labels (a mesh_shape_override that fits per axis; the coordinates are the block's own): the label is
+// kept, and the partition labelled within the block, only when the cluster axis spans the mesh along that axis, so
+// that every partition group lies inside the block. Otherwise a group reaches a device the label does not describe.
+TEST(CclTopologyUtils, MeshPartitionSubMeshLabelIsPartitionedWithinItsBlockOnlyAlongAFullAxis) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(2, 4);
+    auto row0 = row_major_coords(mesh);
+    row0.erase(row0.begin() + 4, row0.end());
+    const auto row_block = nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, row0);
+    EXPECT_EQ(  // 4 == 4
+        partition_dim3(row_block, mesh, 1),
+        nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoShard{3}}, row0));
+    EXPECT_FALSE(partition_dim3(row_block, mesh, 0).has_value());             // 1 < 2
+    EXPECT_FALSE(partition_dim3(row_block, mesh, std::nullopt).has_value());  // 4 < 8
+
+    // A {2,2} block at an offset (mesh_offset_override): axis 0 spans the mesh, axis 1 does not.
+    const std::vector<MeshCoordinate> block{
+        MeshCoordinate(0, 2), MeshCoordinate(0, 3), MeshCoordinate(1, 2), MeshCoordinate(1, 3)};
+    const auto square = nd_label(MeshShape(2, 2), {TopoReplicate{}, TopoShard{2}}, block);
+    EXPECT_EQ(partition_dim3(square, mesh, 0), nd_label(MeshShape(2, 2), {TopoShard{3}, TopoShard{2}}, block));
+    EXPECT_FALSE(partition_dim3(square, mesh, 1).has_value());
+}
+
+// Row-major reshapes of the whole mesh ({1,8} or {4,2} over 2x4; a mesh_shape_override that does not fit per axis):
+// the coordinates enumerate the mesh row-major, so a whole-mesh partition has its exact collapsed label, but the
+// label's axes are not the mesh axes the op partitions along.
+TEST(CclTopologyUtils, MeshPartitionRowMajorReshapeOfTheMeshPartitionsAsAWholeOnly) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(2, 4);
+    const auto all = row_major_coords(mesh);
+    const auto reshaped = nd_label(MeshShape(1, 8), {TopoReplicate{}, TopoReplicate{}}, all);
+    EXPECT_EQ(partition_dim3(reshaped, mesh, std::nullopt), collapsed_label(mesh, TopoShard{3}));
+    for (uint32_t axis : {0U, 1U}) {
+        EXPECT_FALSE(partition_dim3(reshaped, mesh, axis).has_value()) << "axis " << axis;
+    }
+    const auto transposed = nd_label(MeshShape(4, 2), {TopoReplicate{}, TopoReplicate{}}, all);
+    EXPECT_FALSE(partition_dim3(transposed, mesh, 1).has_value());
+}
+
+// The coordinates must agree with the partition, which the factory computes from the device's own coordinate, not
+// from the label. The mappers always write agreeing coordinates (SUBMESH: an axis-aligned block; ROW_MAJOR: the
+// mesh's row-major enumeration); a label put together by hand with update_tensor_topology need not. Addressing an
+// axis requires the whole label to be a row-major block of the mesh; a whole-mesh partition takes the label's
+// coordinates as its order (the Tensor overload respells that label over the storage's row-major coordinates, the
+// order the factory partitions in).
+TEST(CclTopologyUtils, MeshPartitionLabelWhoseCoordinatesDisagreeWithThePartitionIsRefused) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(2, 4);
+    // A block shape over a row of devices: every device has global row 0 and takes chunk 0; a per-axis label would
+    // have said tensor row 1 holds chunk 1.
+    const std::vector<MeshCoordinate> row{
+        MeshCoordinate(0, 0), MeshCoordinate(0, 1), MeshCoordinate(0, 2), MeshCoordinate(0, 3)};
+    EXPECT_FALSE(
+        partition_dim3(nd_label(MeshShape(2, 2), {TopoReplicate{}, TopoReplicate{}}, row), mesh, 0).has_value());
+
+    // A full-mesh N-D label with two coordinates swapped across rows is not a row-major block: refused along either
+    // axis; over the whole mesh the pure rule keeps the label's order (see above).
+    auto swapped = row_major_coords(mesh);
+    std::swap(swapped[1], swapped[5]);  // (0,1) <-> (1,1)
+    const auto permuted_nd = nd_label(mesh, {TopoReplicate{}, TopoReplicate{}}, swapped);
+    EXPECT_FALSE(partition_dim3(permuted_nd, mesh, 0).has_value());
+    EXPECT_FALSE(partition_dim3(permuted_nd, mesh, 1).has_value());
+    EXPECT_EQ(partition_dim3(permuted_nd, mesh, std::nullopt), collapsed_label(mesh, TopoShard{3}, swapped));
+
+    // Collapsed labels: a line with reversed coordinates, the 2x4 with the swap above.
+    const MeshShape line(1, 8);
+    auto reversed = row_major_coords(line);
+    std::reverse(reversed.begin(), reversed.end());
+    EXPECT_FALSE(partition_dim3(collapsed_label(line, TopoReplicate{}, reversed), line, 1).has_value());
+    const auto permuted_collapsed = collapsed_label(mesh, TopoReplicate{}, swapped);
+    EXPECT_FALSE(partition_dim3(permuted_collapsed, mesh, 0).has_value());
+    EXPECT_FALSE(partition_dim3(permuted_collapsed, mesh, 1).has_value());
+}
+
+// Inputs validation rejects right after the hook, or that carry no placements, leave the input's label in place (the
+// hook runs before validation and must not crash first).
+TEST(CclTopologyUtils, MeshPartitionOutOfRangeClusterAxisOrEmptyLabelLeavesTheInputLabel) {
+    StrictCclTopologyScope warn_only(false);
+    const MeshShape mesh(2, 4);
+    EXPECT_FALSE(partition_dim3(nd_label(mesh, {TopoReplicate{}, TopoReplicate{}}), mesh, 2).has_value());
+    const TensorTopology no_placements(mesh, {}, row_major_coords(mesh));
+    EXPECT_FALSE(partition_dim3(no_placements, mesh, 1).has_value());
+    EXPECT_FALSE(partition_dim3(no_placements, mesh, std::nullopt).has_value());
 }
 
 TEST(CclTopologyUtils, SilenceIntermediateRefusalsReturnsNulloptQuietly) {

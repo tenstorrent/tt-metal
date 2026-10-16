@@ -485,7 +485,8 @@ def test_reduce_scatter_nd_same_dim_outer_axis_is_refused(mesh_device, strict_cc
 # consumed, which is one refusal more than reduce_scatter has: neither the partitioned axis nor, for a whole-mesh
 # partition, any non-trivial axis may already shard another dim. The op needs no fabric, so these tests take no
 # device_params. Besides the label and the bytes it composes to, each test checks that device (r, c) holds its own
-# chunk. The device-free twin is tests/ttnn/unit_tests/gtests/ccl/test_mesh_partition_topology_rules.cpp.
+# chunk. The device-free twins are the MeshPartition cases of CclTopologyUtils in
+# tests/ttnn/unit_tests/gtests/ccl/test_ccl_helpers.cpp.
 
 _LINE_MESHES = [2, 8]
 _LINE_MESH_IDS = ["1x2", "1x8"]
