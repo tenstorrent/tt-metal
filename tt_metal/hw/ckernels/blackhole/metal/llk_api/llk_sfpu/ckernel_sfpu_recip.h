@@ -17,7 +17,8 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-// The 8b reciprocal sits on macro 2 so that macros 0 and 1 stay with the exp on the pack thread.
+// The 7b and 8b reciprocals sit on macro 2 so that macros 0 and 1 stay with the exp on the pack thread.
+constexpr int kReciprocal7bMacro = 2;
 constexpr int kReciprocal8bMacro = 2;
 
 // Computes the reciprocal of a floating point value x.
@@ -66,7 +67,7 @@ inline void _calculate_reciprocal_fast_7b_(const int iterations) {
 #else
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++) {
-        TTI_SFPLOADMACRO((0 << 2) | 0, 0, ADDR_MOD_6, 0);
+        TTI_SFPLOADMACRO((kReciprocal7bMacro << 2) | 0, 0, ADDR_MOD_6, 0);
     }
     TTI_SFPNOP;
     TTI_SFPNOP;
@@ -235,10 +236,11 @@ inline void _init_reciprocal_fast_7b_() {
     TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
     TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
 
-    TTI_SFPCONFIG(0, 4, 0);
+    TTI_SFPCONFIG(0, 4 + kReciprocal7bMacro, 0);
 
-    // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for macro 0.
-    TTI_SFPCONFIG(0x110, 8, 1);
+    // Misc: {StoreMod0: 0, UsesLoadMod0ForStore: {0,0,0,0}, UnitDelayKind: {1,1,1,1}}. Load mod0 is DEFAULT (0), so
+    // the store mode is the same.
+    TTI_SFPCONFIG(0xF00, 8, 1);
 #endif
 }
 
