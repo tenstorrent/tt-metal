@@ -400,21 +400,34 @@ def cast_to_dest_dtype(values: torch.Tensor, dtype) -> torch.Tensor:
     return torch.where(nan, top_half, out.view(torch.int16)).view(torch.bfloat16)
 
 
-def convert_inf_to_value(operand, inf_value: float):
-    """Replace every +inf with *inf_value*, preserving the input type.
+def widen_to_float32(values: torch.Tensor) -> torch.Tensor:
+    """*values* as float32, keeping the sign of any NaN: torch's fp16 -> fp32 cast drops it
+    (0xFE00 -> 0x7FFFFFFF), its bf16 -> fp32 cast keeps it."""
+    out = values.to(torch.float32)
+    if values.dtype is not torch.float16:
+        return out
+    nan = torch.isnan(values)
+    if not bool(nan.any()):
+        return out
+    negative = (values.view(torch.int16) < 0) & nan
+    return torch.where(negative, torch.full_like(out, -math.nan), out)
 
-    Accepts a torch.Tensor or a plain list of floats and returns the same
-    type so that downstream code (e.g. `result.to(...)`) does not break
-    when the caller passes a tensor.
+
+def convert_inf_to_value(operand, inf_value: float):
+    """Replace every infinity with *inf_value* of its sign, preserving the input type.
+
+    An fp16 Dest has no infinity: its top exponent is a normal one, so an overflow of
+    either sign packs out as that magnitude (Sinh's -inf at x=-65504 reads -130560).
+    Accepts a torch.Tensor or a plain list of floats and returns the same type.
     """
     if isinstance(operand, torch.Tensor):
         return torch.where(
-            operand == math.inf,
-            torch.full_like(operand, inf_value),
+            torch.isinf(operand),
+            torch.copysign(torch.full_like(operand, inf_value), operand),
             operand,
         )
 
-    return [inf_value if x == math.inf else x for x in operand]
+    return [math.copysign(inf_value, x) if math.isinf(x) else x for x in operand]
 
 
 def calculate_fractional_part(mantissa_value):
@@ -2652,12 +2665,9 @@ class UnarySFPUGolden:
             whole_tensor_res = self.ops[operation](result, dimensions)
 
         if not skip_tilize:
-            # As Float32, like the cumsum path below and the untilize after the op: this
-            # is a permutation, and `result` is also where the op's Dest-rounded output is
-            # stored. Tilized in the *input* format, that store rounded every result to
-            # the input dtype a second time.
+            # Permute in Float32 so only the output cast rounds.
             result = tilize_block(
-                result,
+                widen_to_float32(result),
                 dimensions,
                 DataFormat.Float32,
                 tile_dimensions=tile_dimensions,
@@ -2716,18 +2726,13 @@ class UnarySFPUGolden:
                 torch.zeros_like(op_tensor),
                 op_tensor,
             )
-        # Two casts, both NaN-sign preserving: the Dest write's own rounding, then the store
-        # into `result`, whose dtype is not always the Dest dtype.
+        # The Dest write's own rounding; the store rounds again only on the skip_tilize
+        # path, where `result` keeps the caller's dtype. Both keep a NaN's sign.
         op_rounded = cast_to_dest_dtype(op_tensor, op_dtype).float()
         result[window] = cast_to_dest_dtype(op_rounded, result.dtype)
 
         if not skip_tilize:
-            # As Float32: untilize_block casts to the format it is handed, and this is a
-            # pure permutation. Handed the *input* format, it rounded the Dest result to
-            # it -- a Float16 input's golden overflowed at 65504 (cosh(-89.4) read inf
-            # against the kernel's correct 3.27e38), and a bfloat16 input's Float32
-            # golden kept bf16 precision, one bf16 step (65536 fp32 steps) from a kernel
-            # that kept fp32. The one rounding is the output cast at the end.
+            # Permute in Float32 so only the output cast rounds.
             result = untilize_block(
                 result,
                 DataFormat.Float32,
@@ -3169,8 +3174,17 @@ class UnarySFPUGolden:
                 if dtype.is_floating_point
                 else tensor.to(dtype)
             )
+        # A 32-bit Dest holds the op's result in fp32: keep the tile there so only the
+        # output cast rounds, as in the elementwise path.
+        layout_format = input_format
+        if dtype.is_floating_point and self.dest_acc == DestAccumulation.Yes:
+            tensor, dtype, layout_format = (
+                widen_to_float32(tensor),
+                torch.float32,
+                DataFormat.Float32,
+            )
         if not skip_tilize:
-            tensor = tilize_block(tensor, dimensions, input_format).flatten()
+            tensor = tilize_block(tensor, dimensions, layout_format).flatten()
         result = tensor.clone()
         start = dest_idx * ELEMENTS_PER_TILE
         # Tilized order is face-major (faces 0 | 1 over 2 | 3), each face row-major.
@@ -3191,7 +3205,7 @@ class UnarySFPUGolden:
             tile.reshape(2, 16, 2, 16).permute(0, 2, 1, 3).reshape(-1).to(dtype)
         )
         if not skip_tilize:
-            result = untilize_block(result, input_format, dimensions).flatten()
+            result = untilize_block(result, layout_format, dimensions).flatten()
         return result
 
     @staticmethod
@@ -4247,15 +4261,24 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 data_format,
             )
 
+        # With the Dest modelled, the tile is held in Float32 so the op's Dest-rounded
+        # result is not rounded again to the operand format; only the output cast rounds.
+        float_dest = (
+            dest_acc is not None
+            and not data_format.is_integer()
+            and data_format in format_dict
+            and format_dict[data_format].is_floating_point
+        )
+        layout_format = DataFormat.Float32 if float_dest else data_format
         if not skip_tilize and data_format not in (
             DataFormat.Bfp8_b,
             DataFormat.Bfp4_b,
             DataFormat.Bfp2_b,
         ):
             result = tilize_block(
-                tensor.flatten(),
+                widen_to_float32(tensor.flatten()) if float_dest else tensor.flatten(),
                 dimensions,
-                data_format,
+                layout_format,
                 tile_dimensions=tile_dimensions,
             ).flatten()
         else:
@@ -4348,9 +4371,9 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 generated_nan[dst_row_start : dst_row_start + elements_per_row] = (
                     generated_row
                 )
-                # Two casts, both NaN-sign preserving, for the reason UnarySFPUGolden records:
-                # the Dest write's own rounding, then the store into `result`, whose dtype is
-                # not always the Dest dtype.
+                # The Dest write's own rounding, then the store into `result` (a no-op
+                # unless `result` is narrower, as on the skip_tilize path); both keep a
+                # NaN's sign.
                 result_row = cast_to_dest_dtype(
                     result_row, format_dict[dst_format]
                 ).float()
@@ -4369,7 +4392,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         ):
             result = untilize_block(
                 result,
-                data_format,
+                layout_format,
                 dimensions,
                 tile_dimensions=tile_dimensions,
             )
