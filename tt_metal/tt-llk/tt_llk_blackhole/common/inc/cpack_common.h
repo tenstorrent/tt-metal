@@ -649,6 +649,7 @@ inline void configure_pack(
 
     cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]                = pck_edge_offset.val;
     cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
+    cfg[PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32]     = 0x0;
 
     regfile[p_gpr_pack::TILE_HEADER]     = tile_size;
     regfile[p_gpr_pack::TILE_HEADER + 1] = 0;
