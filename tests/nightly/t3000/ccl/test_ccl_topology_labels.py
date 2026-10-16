@@ -924,7 +924,7 @@ def test_all_reduce_async_collapsed_shard(mesh_device, cluster_axis, rs_ag_branc
     control: before this change the composite branch returned {N}, [Replicate] for either axis (the inner
     all_broadcast edited index 0, the local sum kept it) -- along the columns that claims the two rows identical, and
     the same over-claim is what tt-train's force_replicate_axes papered over. Along the rows the gather itself would
-    now be refused as interleaving; all_reduce runs its intermediates inside the helper's CallerRelabelsScope because
+    now be refused as interleaving; all_reduce runs its intermediates inside the helper's SilenceIntermediateRefusals because
     it sums the gathered pieces rather than keeping them and labels the result itself."""
     torch.manual_seed(12)
     rows, cols, num_devices = _mesh(mesh_device)
@@ -956,7 +956,7 @@ def test_all_reduce_async_collapsed_shard_scattered_on_the_sharded_dim(mesh_devi
     tiles per device along dim 3 the reduce_scatter + all_gather branch scatters the sharded dim. The intermediates
     have no honest label -- the reduce_scatter leaves device (r, c) with piece c * R + r (column-major) and the
     all_gather of it interleaves -- but the result is labelled from the input: [Replicate, Shard(3)], one column sum
-    per column. Negative control: before CallerRelabelsScope the prim all_gather hook refused the intermediate
+    per column. Negative control: before SilenceIntermediateRefusals the prim all_gather hook refused the intermediate
     ("would interleave") and this call failed under strict mode although the label it returns is right."""
     torch.manual_seed(15)
     rows, cols, num_devices = _mesh(mesh_device)
