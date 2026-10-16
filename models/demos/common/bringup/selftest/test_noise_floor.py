@@ -192,3 +192,19 @@ def test_a_stateful_step_reads_the_official_runs_state(gspec, monkeypatch):  # n
     monkeypatch.setattr(hooks, "official_taps", _fake_official(s, state="stale"), raising=False)
     bad = OF.generate(s, write=False)["errors"]
     assert bad and all("attention" in e for e in bad), bad  # the stateful step read a prefix that is not its own
+
+
+def test_an_explained_step_passes_the_tap_check(gspec, monkeypatch):  # noqa: F811
+    """A step whose official arithmetic exceeds calib x its nudge passes R.5 only with an explanation."""
+    from models.demos.common.bringup.testing import official_floor as OF
+
+    s = gspec()
+    hooks = s.hooks()
+    monkeypatch.setattr(hooks, "official_taps", _fake_official(s, wrong="attn_norm"), raising=False)
+    assert OF.generate(s, write=False)["errors"]
+    s.bringup_dir.mkdir(parents=True, exist_ok=True)
+    (s.bringup_dir / NF.TAPS_FILE).write_text(
+        "steps:\n  attn_norm: {explained: 'the official code rounds inside; emulated, it reproduces the output'}\n"
+    )
+    doc = OF.generate(s, write=False)
+    assert not doc["errors"] and any("explained" in v[str(doc["chunk"])]["check"] for v in doc["steps"].values())

@@ -21,7 +21,8 @@ For every tapped step this runs the fp32 CPU step on the official inputs and rec
 - vs_step: the official output vs the fp32 step on the same inputs (rel, worst row, row-norm ratios, median bias);
 - vs_golden: the official output vs the golden (the same, plus pcc_vs_golden).
 It also checks the tap map: the fp32 step on the official inputs must give the official output within calib x the
-step's input-nudge floor (a mis-mapped input or output is far outside it). Gate metrics: official_taps_steps (>= 1),
+step's input-nudge floor (a mis-mapped input or output is far outside it), unless official_taps.yaml explains why the
+official code rounds more inside the step (`explained`, with the evidence; the overseer reviews each). Gate metrics: official_taps_steps (>= 1),
 official_taps_errors (== 0), official_taps_unmapped (== 0: every step of every golden layer is tapped).
 """
 
@@ -121,11 +122,19 @@ def generate(s, write: bool = True) -> dict:
             res = CC.rel(NF.round_to(y32, NF.output_dtype(s, bt, st.name)), y32)
             lim = k * max(nud, res)
             rec["check"] = {"rel": rec["vs_step"]["rel"], "limit": lim, "nudge": nud}
-            if not rec["vs_step"]["rel"] <= lim:
+            why = NF.explanation(s, bt, st.name)
+            if not rec["vs_step"]["rel"] <= lim and why:
+                rec["check"]["explained"] = why  # the official arithmetic is the floor: the overseer reviews `why`
+                print(
+                    f"note L{L:02d}.{st.name}: official arithmetic rel {rec['vs_step']['rel']:.3g} > {lim:.3g} "
+                    f"({k} x the input nudge), explained: {why[:200]}"
+                )
+            elif not rec["vs_step"]["rel"] <= lim:
                 errors.append(
                     f"L{L:02d}.{st.name}: official output vs the fp32 step on the official inputs rel "
                     f"{rec['vs_step']['rel']:.3g} > {lim:.3g} ({k} x the input nudge {nud:.3g}): a mis-mapped input "
-                    "or output, or the official code is not what the step computes"
+                    "or output, or the official code rounds inside the step more than its inputs' nudge shows; if "
+                    "so, say why with the evidence in official_taps.yaml (`explained`)"
                 )
             out[f"L{L:02d}.{st.name}"] = {str(c): rec}
             n += 1

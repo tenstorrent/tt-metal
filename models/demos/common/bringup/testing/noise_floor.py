@@ -109,6 +109,17 @@ def input_dtypes(s, block_type: str | None, step: str, n: int) -> list[str]:
     return (got + ["bf16"] * n)[:n]
 
 
+def explanation(s, block_type: str | None, step: str) -> str:
+    """official_taps.yaml `explained`: why the official arithmetic of a step exceeds calib x its input nudge (its own
+    internal roundings, with the evidence, e.g. the fp32 step with them emulated reproduces the official output). It
+    lets R.5's tap-map check pass that step; the floor then is the official arithmetic, so the overseer reviews it."""
+    import yaml
+
+    p = s.bringup_dir / TAPS_FILE
+    steps = ((yaml.safe_load(p.read_text()) if p.exists() else None) or {}).get("steps") or {}
+    return str((steps.get(f"{block_type}.{step}") or steps.get(step) or {}).get("explained") or "").strip()
+
+
 def output_dtype(s, block_type: str | None, step: str) -> str:
     """The dtype the official code hands a step's output on in (official_taps.yaml `out`; bf16 when not mapped): the
     resolution floor of the vs-CPU checks is one rounding to it (none for fp32)."""
