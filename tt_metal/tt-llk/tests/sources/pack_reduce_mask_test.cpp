@@ -82,7 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
         for (int i = 0; i < tiles_to_dest; ++i)
         {
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 i, formats.math, formats.math, num_faces);
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
