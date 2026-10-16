@@ -4,8 +4,11 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/fmt.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/tensor/types.hpp"
@@ -60,6 +63,18 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
         .buffer = tensor.buffer(),
         .address_offset = address_offset,
         .global_circular_buffer = nullptr};
+}
+
+uint32_t get_cb_address(const CBDescriptor& desc) {
+    const tt::tt_metal::Buffer* buffer = desc.buffer;
+    if (buffer == nullptr && desc.tensor != nullptr) {
+        buffer = desc.tensor->mesh_buffer().get_reference_buffer();
+    }
+    if (buffer == nullptr) {
+        return desc.address_offset;
+    }
+    return tt::tt_metal::experimental::per_core_allocation::get_shard_base_address(*buffer, desc.core_ranges) +
+           desc.address_offset;
 }
 
 std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor& tensor, NOC noc) {

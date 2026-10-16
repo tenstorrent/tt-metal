@@ -26,6 +26,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
+#include "multi_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -110,6 +111,25 @@ bool dram_ping(
         }
     }
     return pass;
+}
+
+// Checks the mesh-wide properties that MeshDevice establishes once its devices are open against
+// what the devices themselves report. Every device has to agree, so comparing each one also covers
+// the reference the mesh established from.
+void expect_properties_match_devices(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    const auto devices = mesh_device->get_devices();
+    ASSERT_FALSE(devices.empty());
+    for (auto* device : devices) {
+        EXPECT_EQ(mesh_device->num_hw_cqs(), device->num_hw_cqs());
+        EXPECT_EQ(mesh_device->compute_with_storage_grid_size(), device->compute_with_storage_grid_size());
+        EXPECT_EQ(mesh_device->grid_size(), device->grid_size());
+        EXPECT_EQ(mesh_device->logical_grid_size(), device->logical_grid_size());
+        EXPECT_EQ(mesh_device->dram_grid_size(), device->dram_grid_size());
+        EXPECT_EQ(mesh_device->l1_size_per_core(), device->l1_size_per_core());
+        EXPECT_EQ(mesh_device->dram_size_per_channel(), device->dram_size_per_channel());
+        EXPECT_EQ(mesh_device->ethernet_cores(), device->ethernet_cores());
+        EXPECT_EQ(mesh_device->storage_only_cores(), device->storage_only_cores());
+    }
 }
 }  // namespace unit_tests::basic::device
 
@@ -664,6 +684,19 @@ TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
         EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst_vec, mesh_buffer, true);
         EXPECT_EQ(dst_vec, src_vec) << "Buffer operations failed with full grid in slow dispatch mode";
     }
+}
+
+TEST_F(GenericMeshDeviceFixture, MeshPropertiesMatchDevices) {
+    unit_tests::basic::device::expect_properties_match_devices(mesh_device_);
+}
+
+TEST_F(GenericMeshDeviceFixture, MeshPropertiesMatchDevicesAfterReshape) {
+    // A reshape swaps the view out from under the established properties, so they have to be
+    // re-established against the new one. Any mesh reshapes to a line of the same size.
+    const distributed::MeshShape line_shape(1, mesh_device_->num_devices());
+    mesh_device_->reshape(line_shape);
+    ASSERT_EQ(mesh_device_->shape(), line_shape);
+    unit_tests::basic::device::expect_properties_match_devices(mesh_device_);
 }
 
 }  // namespace tt::tt_metal

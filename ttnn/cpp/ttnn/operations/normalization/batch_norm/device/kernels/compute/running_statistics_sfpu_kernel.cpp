@@ -17,30 +17,36 @@ using D = ckl::Dst;
 
 // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
 template <uint32_t dfb_batch_id, uint32_t dfb_old_id, uint32_t dfb_updated_id, bool AlsoOut0>
-ALWI void update_running_stat() {
+ALWI void update_running_stat(
+    DataflowBuffer& dfb_batch_obj,
+    DataflowBuffer& dfb_old_obj,
+    DataflowBuffer& dfb_updated_obj,
+    DataflowBuffer& dfb_one_obj,
+    DataflowBuffer& dfb_momentum_obj,
+    DataflowBuffer& dfb_out0_obj) {
     ckl::eltwise_chain(
         ckl::IterationShape::one_tile(),
-        ckl::CopyTile<ckl::input(dfb::one, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D0>{},
-        ckl::CopyTile<ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D1>{},
+        ckl::CopyTile<ckl::input(dfb::one, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D0>{dfb_one_obj},
+        ckl::CopyTile<ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D1>{dfb_momentum_obj},
         ckl::SubBinary<D::D0, D::D1, D::D0>{},  // D0 = 1 - momentum
-        ckl::CopyTile<ckl::input(dfb_old_id), D::D1>{},
+        ckl::CopyTile<ckl::input(dfb_old_id), D::D1>{dfb_old_obj},
         ckl::MulBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old_stat
-        ckl::CopyTile<ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D1>{},
-        ckl::CopyTile<ckl::input(dfb_batch_id, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D2>{},
+        ckl::CopyTile<ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D1>{dfb_momentum_obj},
+        ckl::CopyTile<ckl::input(dfb_batch_id, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D2>{dfb_batch_obj},
         ckl::MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
         ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
-        ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{},
+        ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{
+            dfb_updated_obj},
         // For the output tensor, return the same values as either of the stats.
-        ckl::Optional<
-            AlsoOut0,
-            ckl::PackTile<ckl::output(dfb::out, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{});
+        ckl::Optional<AlsoOut0, ckl::PackTile<ckl::output(dfb::out, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{
+            dfb_out0_obj});
 }
 
 template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcDfb, uint32_t DstDfb>
-ALWI void maybe_typecast_stat() {
+ALWI void maybe_typecast_stat(DataflowBuffer& src_dfb_obj, DataflowBuffer& dst_dfb_obj) {
     if constexpr (NeedsTypecast) {
         ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, ckl::input(SrcDfb), ckl::output(DstDfb)>(
-            ckl::IterationShape::one_tile());
+            ckl::IterationShape::one_tile(), src_dfb_obj, dst_dfb_obj);
     }
 }
 
@@ -82,6 +88,20 @@ void kernel_main() {
     DataflowBuffer dfb_momentum_obj(dfb::momentum);
     DataflowBuffer dfb_one_obj(dfb::one);  // holds 1, for the (1 - momentum) term
     DataflowBuffer dfb_out0_obj(dfb::out);
+    DataflowBuffer dfb_old_running_mean_obj(dfb::old_running_mean);
+    DataflowBuffer dfb_updated_mean_obj(dfb::updated_mean);
+    DataflowBuffer dfb_old_running_var_obj(dfb::old_running_var);
+    DataflowBuffer dfb_updated_var_obj(dfb::updated_var);
+#ifdef NEEDS_MEAN_TYPECAST
+    DataflowBuffer dfb_writer_updated_mean_obj(dfb_writer_updated_mean);
+#else
+    DataflowBuffer& dfb_writer_updated_mean_obj = dfb_updated_mean_obj;
+#endif
+#ifdef NEEDS_VAR_TYPECAST
+    DataflowBuffer dfb_writer_updated_var_obj(dfb_writer_updated_var);
+#else
+    DataflowBuffer& dfb_writer_updated_var_obj = dfb_updated_var_obj;
+#endif
 
     compute_kernel_hw_startup(dfb::batch_mean, dfb::out);
     constexpr uint32_t onetile = 1;
@@ -103,13 +123,15 @@ void kernel_main() {
                 dfb::batch_mean,
                 dfb::old_running_mean,
                 dfb::updated_mean,
-                /*AlsoOut0=*/!old_running_var_has_value>();
-            maybe_typecast_stat<
-                needs_mean_typecast,
-                tc_in_fmt,
-                tc_out_fmt,
-                dfb::updated_mean,
-                dfb_writer_updated_mean>();
+                /*AlsoOut0=*/!old_running_var_has_value>(
+                dfb_batch_mean_obj,
+                dfb_old_running_mean_obj,
+                dfb_updated_mean_obj,
+                dfb_one_obj,
+                dfb_momentum_obj,
+                dfb_out0_obj);
+            maybe_typecast_stat<needs_mean_typecast, tc_in_fmt, tc_out_fmt, dfb::updated_mean, dfb_writer_updated_mean>(
+                dfb_updated_mean_obj, dfb_writer_updated_mean_obj);
         }
 
         if constexpr (old_running_var_has_value) {
@@ -117,8 +139,15 @@ void kernel_main() {
                 dfb::batch_var,
                 dfb::old_running_var,
                 dfb::updated_var,
-                /*AlsoOut0=*/true>();
-            maybe_typecast_stat<needs_var_typecast, tc_in_fmt, tc_out_fmt, dfb::updated_var, dfb_writer_updated_var>();
+                /*AlsoOut0=*/true>(
+                dfb_batch_var_obj,
+                dfb_old_running_var_obj,
+                dfb_updated_var_obj,
+                dfb_one_obj,
+                dfb_momentum_obj,
+                dfb_out0_obj);
+            maybe_typecast_stat<needs_var_typecast, tc_in_fmt, tc_out_fmt, dfb::updated_var, dfb_writer_updated_var>(
+                dfb_updated_var_obj, dfb_writer_updated_var_obj);
         }
 
         dfb_out0_obj.push_back(onetile);

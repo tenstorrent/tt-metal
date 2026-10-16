@@ -25,9 +25,9 @@ namespace tt::tt_metal::experimental {
 //   remote resources for kernels. Placement cannot be inferred from kernel
 //   bindings.
 //
-// BINDING SCOPE: Any kernel can bind to any semaphore in the ProgramSpec,
-//   regardless of location. Any kernel instance can signal or wait on any
-//   semaphore instance.
+// BINDING SCOPE: Any DM kernel can bind to any semaphore in the ProgramSpec,
+//   regardless of location; any kernel instance can signal any semaphore
+//   instance.
 //
 // ============================================================================
 

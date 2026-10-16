@@ -54,13 +54,16 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_inp_id, dfb_inp_id, dfb_stats_reduced_id);
 
-    // combine_welford_partials takes DataflowBuffer&, while the eltwise chains require raw DFB ids.
+    // combine_welford_partials and the eltwise chains both take these DataflowBuffers by reference.
+    DataflowBuffer dfb_inp(dfb_inp_id);
     DataflowBuffer dfb_stats(dfb_stats_id);
     DataflowBuffer dfb_stats_reduced(dfb_stats_reduced_id);
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_recip_sqrt_var(dfb_recip_sqrt_var_id);
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_beta(dfb_beta_id);
+    DataflowBuffer dfb_intermediate(dfb_intermediate_id);
+    DataflowBuffer dfb_out(dfb_out_id);
 
     dfb_eps.wait_front(1);  // broadcast epsilon is ready
 
@@ -91,9 +94,9 @@ void kernel_main() {
                     ckl::InputTileMapping::Scalar,
                     ckl::DataFormatReconfig::Enabled,
                     ckl::TileAddressing::Offset),
-                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{1, 0u},
+                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{dfb_stats_reduced, dfb_eps, 1, 0u},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(dfb_recip_sqrt_var_id)>{});
+            ckl::PackTile<ckl::output(dfb_recip_sqrt_var_id)>{dfb_recip_sqrt_var});
 
         // Process tiles across width in blocks
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
@@ -102,10 +105,14 @@ void kernel_main() {
                 ckl::input(dfb_inp_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
                 ckl::input(dfb_stats_reduced_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::output(dfb_intermediate_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-                ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size));
+                ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size),
+                dfb_inp,
+                dfb_stats_reduced,
+                dfb_intermediate);
 
             // 2) normalize: (x-mean) * inv_std
             constexpr uint32_t norm_target_dfb_id = (do_gamma || do_beta) ? dfb_intermediate_id : dfb_out_id;
+            DataflowBuffer& norm_target_dfb = (do_gamma || do_beta) ? dfb_intermediate : dfb_out;
             dfb_recip_sqrt_var.wait_front(1);
             // Note that compute and pack are separated because it's possible that
             // norm_target_dfb_id == dfb_intermediate_id (in the case of no gamma/beta), so this
@@ -118,11 +125,15 @@ void kernel_main() {
                     ckl::InputTileMapping::Block),
                 ckl::input(dfb_recip_sqrt_var_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::output(norm_target_dfb_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-                ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size));
+                ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size),
+                dfb_intermediate,
+                dfb_recip_sqrt_var,
+                norm_target_dfb);
 
             // 3) optional gamma
             if constexpr (do_gamma) {
                 constexpr uint32_t gamma_out_dfb_id = do_beta ? dfb_intermediate_id : dfb_out_id;
+                DataflowBuffer& gamma_out_dfb = do_beta ? dfb_intermediate : dfb_out;
                 dfb_gamma.wait_front(col_tile + block_size);
                 ckl::eltwise_chain(
                     ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size),
@@ -140,9 +151,10 @@ void kernel_main() {
                             ckl::PopPolicy::None,
                             ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Enabled,
-                            ckl::TileAddressing::Offset)>{0u, col_tile},
+                            ckl::TileAddressing::Offset)>{norm_target_dfb, dfb_gamma, 0u, col_tile},
                     ckl::PackTile<ckl::output(
-                        gamma_out_dfb_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                        gamma_out_dfb_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{
+                        gamma_out_dfb});
             }
 
             // 4) optional beta (only if gamma was provided)
@@ -165,8 +177,9 @@ void kernel_main() {
                             ckl::PopPolicy::None,
                             ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Enabled,
-                            ckl::TileAddressing::Offset)>{0u, col_tile},
-                    ckl::PackTile<ckl::output(dfb_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{});
+                            ckl::TileAddressing::Offset)>{dfb_intermediate, dfb_beta, 0u, col_tile},
+                    ckl::PackTile<ckl::output(dfb_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{
+                        dfb_out});
             }
         }
 
