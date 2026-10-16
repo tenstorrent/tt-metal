@@ -119,7 +119,8 @@ DEVICE_STEPS = {
         "attention",
     },
     # attn_hc .. kv: the swa modules (C.enc_source.* and S.enc_source.01-05 passed on them, DS41-28); the compressor
-    # writes the served compressed caches and updates the reference state the CPU indexer / attention read
+    # writes the served compressed caches and updates the reference state the CPU attention reads; the indexer reads
+    # its keys from the served index-key cache and updates the reference state's topk_idx
     "enc_source": {
         "attn_hc",
         "attn_collapse",
@@ -127,6 +128,7 @@ DEVICE_STEPS = {
         "q_a",
         "kv",
         "compressor",
+        "indexer",
     },
 }
 
@@ -400,6 +402,57 @@ def _compressor_host_fn(mesh, module, cfg, layer):
     return fn
 
 
+def _indexer_host_fn(mesh, module, cfg, layer, tables):
+    """fn(ctx, x_host [S, H], qr_host [S, q_lora], compressed_host [S / r, head_dim + index_dim]) -> top-k host
+    [S, topk] int32 (key positions, -1 = none) (harness boundary: attn_norm rows over axis 0 and hidden columns over
+    axis 1, q_resid row-split and TP-replicated, in; the row-split, TP-replicated top-k back from mesh column 0).
+    The keys are read on the device from the layer's served index-key cache: ctx.extra["compress_cache"].index_k
+    (the hybrid model's, which the device compressor wrote this chunk into); without one (component tests) a cache
+    for the call is made and loaded with the golden prefix (state_prefix index_k) and this chunk's keys
+    (``compressed``'s last index_dim columns). With a reference state carrying the layer (the hybrid model), its
+    topk_idx rows of the chunk are updated as the reference step does (for the ladder state and reader layers)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.compressor import TtServedRows
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_device, row_split_to_device
+
+    r, hd = module.ratio, cfg.head_dim
+
+    def fn(ctx, x, qr, compressed=None):
+        start, s = int(ctx.start), x.shape[0]
+        caches = ctx.extra.get("compress_cache")
+        own = caches is None
+        if own:
+            max_seq = max(int(ctx.extra.get("max_seq") or 0), start + s)
+            cache = TtServedRows(mesh, tables, max_seq, cfg.index_dim, r, dedup=False)
+            prefix = (ctx.extra.get("state_prefix") or {}).get("index_k")
+            keys = [prefix[: start // r].float()] if start else []
+            keys.append(compressed[:, hd:].float())
+            cache.load_host(torch.cat(keys), 0)
+        else:
+            cache = caches.index_k
+        module.setup(cache)
+        xd = hidden_split_to_device(mesh, x)
+        qd = row_split_to_device(mesh, qr)
+        od = module(xd, qd, start, cache)
+        full = ttnn.to_torch(
+            od, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, mesh_shape=tuple(mesh.shape), dims=(2, 3))
+        )
+        k = od.shape[-1]
+        idx = full[..., :k].reshape(-1, k).to(torch.int64) & 0xFFFFFFFF  # mesh column 0's copy, as uint32
+        out = torch.where(idx >= 0xFFFFFFFF, torch.full_like(idx, -1), idx).to(torch.int32)
+        for t in (xd, qd, od):
+            ttnn.deallocate(t)
+        if own:
+            cache.free()
+        st = ctx.state
+        if st is not None and layer in getattr(st, "topk", {}):
+            st.topk[layer][start : start + s] = out
+        return out
+
+    fn.module = module
+    return fn
+
+
 def _router_host_fn(mesh, module):
     """fn(ctx, x_host [S, H]) -> dense routing host [S, E] fp32 (harness boundary: ffn_norm's gathered rows split over
     axis 0, replicated over axis 1, in; the dense [S/SP, E] fp32 ROW_MAJOR routing back from mesh column 0)."""
@@ -604,6 +657,15 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
 
         tables = _window_tables(mesh, spec, shared)
         return _compressor_host_fn(mesh, build_compressor(mesh, ck, cfg, layer, _max_seq(spec), tables), cfg, layer)
+    if step == "indexer":
+        from models.demos.deepseek_v41_flash_d_p.tt.indexer import build_indexer
+
+        own_keys = cfg.is_kv_source(layer) and cfg.is_index_source(layer)
+        if not own_keys or cfg.uses_candidates(layer) or cfg.is_cand_source(layer):
+            return None  # only the indexer over its own keys without a candidate pool (enc_source) so far
+        tables = _window_tables(mesh, spec, shared)
+        module = build_indexer(mesh, ck, cfg, layer, _max_seq(spec), _chunk(spec))
+        return _indexer_host_fn(mesh, module, cfg, layer, tables)
     if step == "kv":
         from models.demos.deepseek_v41_flash_d_p.tt.kv import build_kv
 

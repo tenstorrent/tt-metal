@@ -181,6 +181,9 @@ ttnn::Tensor ring_indexer_score_dsa(
     // user_id * index_cache_num_layers + index_cache_layer_idx. Mutually exclusive with cache_batch_idx.
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor = std::nullopt,
     uint32_t index_cache_num_layers = 1,
-    uint32_t index_cache_layer_idx = 0);
+    uint32_t index_cache_layer_idx = 0,
+    // Bring-up fork option: natural (contiguous) query blocks with a block-cyclic key cache; see
+    // operation_attributes_t::natural_query_blocks. Default false = the source's rotation-exact geometry.
+    bool natural_query_blocks = false);
 
 }  // namespace ttnn::experimental::bringup

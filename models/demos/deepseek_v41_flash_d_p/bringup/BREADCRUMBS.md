@@ -1224,3 +1224,35 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   compress_kv PCC 0.99988, index_k 0.99991, partial exact; served caches == the reference state bit for bit.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_compressor.py`;
   probes `scripts/tt-probe.sh ds41_compressor < tests/ttnn/unit_tests/operations/ds41_compressor/probes/probe_00{2,3,4}.py`.
+
+## C.enc_source.indexer implement (attempt 1)
+- New `tt/indexer.py` (TtIndexer, build_indexer), hooks `_indexer_host_fn` + device step "indexer" (only a layer with
+  its own keys and no candidate pool: enc_source), DEVICE_STEPS["enc_source"] += indexer. Fork `indexer_score`
+  extended (DS41-49): key_compression_ratio 2 accepted; ring opt-in `natural_query_blocks` (default off, hashed).
+- Chain per chip (r, c), Sq = W / TP query rows = positions start + r W + c Sq + i: gates = round_tf32(attn_norm)
+  (COMPRESSOR_X, the compressor's fused fp32 projection) @ (weights_proj / 64)^T K-split (bf16, exact) -> tp_sum
+  (exact) -> mesh_partition (TP) -> bf16; q = mesh_partition(q_resid) -> fp8_qdq -> @ wq_b^T (replicated, every
+  head's rope rows de-interleaved at load) HiFi4 fp32 acc -> [1, 32, Sq, 128] -> rope_heads(interleave=True, fp32
+  SFPU) -> fp4_qdq(32, ue8m0) bf16; keys = the served 2_index_k_r2 cache (TtServedRows, RM token units [rows, 64])
+  -> to_memory_config(interleaved) -> reshape [rows / 2, 128] -> TILE (block-cyclic W / 2 keys per SP rank per chunk:
+  the ring's k_local as is); ring_indexer_score_dsa(cluster_axis 0, seq_subshard_axis 1, block_cyclic_chunk_local W,
+  ratio 2, natural_query_blocks, kv_len = ceil32((start + S) / 2), HiFi4 + fp32 DEST, q 64 x k 32, K-13 / K-14) ->
+  topk_large_indices(512, valid_length kv_len) -> all_gather axis 1 (uint32 RM [512, 512] per chip: no K-17 hang).
+- Why the fork: the source refuses ratio 2, and its block-cyclic query geometry is rotation-exact (the server's order
+  at a mid-slab start), while DS41 computes natural blocks at every 32-aligned start: at start 32, 16384 future
+  columns of chip (0, 1) came out finite with the option off (fork test). chunk-aligned starts agree either way.
+- Harness boundary: component tests build a TtServedRows index cache per call (golden prefix + compressed's last 128
+  columns via load_host); the hybrid reads state.compress[layer].index_k (the device compressor wrote the chunk) and
+  writes the reference state's topk_idx rows (reader layers, ladder state). Output pads 0xFFFFFFFF -> -1, int32.
+- Gate: PASS, err_indexer_L02 0.0174 <= 0.0329 (2 x the nudge floor's miss 0.0165); vs CPU overlap 0.9944 (worst row
+  0.9805), vs golden 0.9826 / 0.9434, chunk0 0.9985 / 0.9844, layer14 0.9957 / 0.9297; A,B,A bit-identical.
+- Hybrid probe (tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_002.py: device_model [2], golden chunks
+  0, 1): block out PCC 0.999643 / 0.999550 (compressor-only hybrid: 0.99964 / 0.99957), topk_idx state vs golden
+  overlap 0.98778 (worst row 0.95117), valid counts equal on every row.
+- Fork regression (option off): tests/unit 17 passed + 1 skipped (2x4), tests/test_indexer_score.py 2 passed,
+  fork_source 134 tests, 0 regressions. New op test 6 starts exact masks, PCC 0.9999985.
+- Perf notes for later: the key view converts the whole served index cache capacity per chunk (32 MiB per chip at 1M
+  on 4x4), and weights_proj has its own exchange (the plan fuses it into the compressor's projection).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_indexer.py`;
+  op test `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/indexer_score/tests/unit/test_natural_query_blocks.py`;
+  hybrid `scripts/tt-probe.sh ds41_indexer < tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_002.py`.

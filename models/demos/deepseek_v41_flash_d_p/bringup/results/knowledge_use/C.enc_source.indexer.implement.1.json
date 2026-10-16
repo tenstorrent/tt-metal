@@ -1,0 +1,103 @@
+{
+ "overseer": [],
+ "used": [
+  {
+   "id": "K-13",
+   "how": "score by ttnn.bringup.ring_indexer_score_dsa with fp32_dest_acc_en=True (HiFi4), not the source op (tt/indexer.py score_ckc)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-14",
+   "how": "k_chunk_size 32 (q 64) for bf16 q / k at fp32 DEST (tt/indexer.py Q_CHUNK, K_CHUNK)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "weights_proj K-split partials summed exactly by tt/common.tp_sum (all_gather + SFPU add), not all_reduce",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-31",
+   "how": "attn_norm rounded to TF32 nearest before the weights_proj matmul (round_tf32 under COMPRESSOR_X)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-15",
+   "how": "every index head's rope rows of wq_b de-interleaved at load; tt/rope.rope_heads(interleave=True) in fp32 SFPU before fp4_qdq",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-48",
+   "how": "reused tt/quant.fp4_qdq(32, ue8m0) for the index query; keys read from the token-unit served index cache TtServedRows (reshaped to [rows/2, 128])",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-13",
+   "how": "reused tt/quant.fp8_qdq for fp8_linear's act quant of q_resid before wq_b",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-28",
+   "how": "added indexer to hooks DEVICE_STEPS['enc_source'] so the hybrid model runs it",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-1",
+   "how": "TtIndexer._keys never frees the cache tensor if to_memory_config returns its input",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "probes only as tests/ttnn/unit_tests/operations/ds41_indexer/probes/probe_NNN.py",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "ring_indexer_score_dsa's block-cyclic query geometry (seq_shard_axes / seq_subshard_axis) assumes the server's rotated query order at a mid-slab start; a model computing natural blocks at any 32-aligned start gets unmasked future columns (now DS41-49, fork option natural_query_blocks)",
+  "indexer_score refused key_compression_ratio 2 although its mask / work split are generic for ratios dividing 32 (DS41-49)",
+  "the served index-key cache is ROW_MAJOR (contract) while the ring op needs a TILE k_local: a per-chunk view + tilize is needed (tt/indexer.py:_keys)"
+ ],
+ "cited_only": [
+  "DS41-49",
+  "K-42",
+  "K-52"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.enc_source.indexer",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T19:56:47",
+  "head": "e9ed36f97ee",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.enc_source.indexer.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_host_common.hpp",
+   "ttnn/ttnn/bringup/indexer_score/indexer_score_nanobind.cpp",
+   "ttnn/ttnn/bringup/indexer_score/tests/unit/test_natural_query_blocks.py"
+  ]
+ }
+}

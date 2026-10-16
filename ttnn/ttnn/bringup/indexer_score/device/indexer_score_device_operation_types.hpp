@@ -132,6 +132,13 @@ struct operation_attributes_t {
     // KV dedup: KEYS striped this many times finer than the queries are sharded. Deliberately NOT folded into
     // block_cyclic -- device_causal_geometry indexes by SP-ring rank, so that would shift the causal diagonal.
     uint32_t key_stripe_split{1};  // 1 = pre-dedup. HASHED: it bakes the reader's invP divisors.
+    // Bring-up fork option (default false = the source's rotation-exact query geometry). true: the queries are
+    // NATURAL contiguous blocks of the chunk, whatever the start -- device (SP rank d, TP rank c) holds query
+    // positions chunk_start_idx + d*chunk_local + c*Sq + [0, Sq) (chunk_local in query tokens) -- while the KEYS
+    // keep the block-cyclic cache layout (the invP remap is position-based, independent of the start). Linear
+    // causal diagonal, no straddle. Host-scalar chunk_start_idx only (the metadata path derives the rotated
+    // geometry on device). HASHED (it selects the causal geometry; cheap insurance against a stale override).
+    bool natural_query_blocks{false};
     // The (stripes, per-stripe chunk) pair the invP remap decodes with; the product is the global chunk either way.
     uint32_t key_stripes() const { return block_cyclic.has_value() ? block_cyclic->sp * key_stripe_split : 1; }
     uint32_t key_stripe_chunk() const {

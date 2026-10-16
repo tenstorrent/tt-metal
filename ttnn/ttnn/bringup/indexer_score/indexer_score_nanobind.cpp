@@ -57,7 +57,7 @@ void bind_indexer_score(nb::module_& mod) {
                 as T*key_compression_ratio - sp_ring*Sq (sp_ring = mesh extent along the SP axis,
                 whole mesh if unset). Single device: set to history + rank*Sq per rank.
             key_compression_ratio: query tokens represented by one K-cache row. 1
-                (default) preserves legacy behavior; 4 enables compressed-key DSA.
+                (default) preserves legacy behavior; 4 (and 2, bring-up fork) enable compressed-key DSA.
                 K sequence/output/kv_len are compressed rows, while query and
                 chunk_start_idx geometry remain token units.
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
@@ -270,7 +270,7 @@ void bind_indexer_score(nb::module_& mod) {
             ag_sub_device_id: optional ttnn.SubDeviceId scoping the AG worker cores (kept disjoint from the
                 compute grid so transport and compute cores do not collide)
             chunk_start_idx: optional int, rank 0's global query start; see indexer_score_dsa
-            key_compression_ratio: 1 (default) for legacy DSA, or 4 for compressed keys.
+            key_compression_ratio: 1 (default) for legacy DSA, or 2 / 4 for compressed keys (2: bring-up fork).
                 Query/chunk geometry is in token units; k, k_local, output width, and
                 kv_len are compressed-key rows.
             program_config: IndexerScoreProgramConfig work-unit knobs; see indexer_score_dsa.
@@ -297,6 +297,14 @@ void bind_indexer_score(nb::module_& mod) {
                 decodes (sp*tp, block_cyclic_chunk_local/tp) while the causal geometry stays on the query
                 pair (sp, block_cyclic_chunk_local). Requires block_cyclic_sp_axis, and a per-stripe chunk
                 that is tile-aligned. k_local must hold whole stripes. See indexer_score_dsa.
+
+            natural_query_blocks: optional bool (default False; bring-up fork option). True: the queries are
+                NATURAL contiguous blocks of the chunk at any tile-aligned start -- the device at SP rank d and
+                seq_subshard (TP) rank c holds positions chunk_start_idx + d*block_cyclic_chunk_local + c*Sq +
+                [0, Sq) -- while the keys keep the block-cyclic cache layout (position-based remap). Linear causal
+                diagonal, no rotation or straddle. Needs block_cyclic_sp_axis / block_cyclic_chunk_local, an
+                axis ring (cluster_axis set) and the host-scalar chunk_start_idx. False = the rotation-exact
+                geometry of a mid-slab start (the source's).
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -325,7 +333,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("valid_end_tensor") = nb::none(),
         nb::arg("cache_batch_idx_tensor") = nb::none(),
         nb::arg("index_cache_num_layers") = 1,
-        nb::arg("index_cache_layer_idx") = 0);
+        nb::arg("index_cache_layer_idx") = 0,
+        nb::arg("natural_query_blocks") = false);
 }
 
 }  // namespace ttnn::operations::bringup::indexer_score::detail
