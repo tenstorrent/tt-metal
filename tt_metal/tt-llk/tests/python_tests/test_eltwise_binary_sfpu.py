@@ -1960,6 +1960,8 @@ def _run_sfpu_add_top_row(
     dest_acc,
     mathop,
     *,
+    src_A_override=None,
+    twos_complement=False,
     is_perf=False,
     perf_report=None,
     run_types=None,
@@ -1974,6 +1976,17 @@ def _run_sfpu_add_top_row(
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
+
+    # The kernel only consumes buffer_A (tile 0 = operand 0, tile 1 = operand 1), so an
+    # explicit src_A fully controls the inputs; src_B stays random but unused.
+    if src_A_override is not None:
+        override = src_A_override.to(src_A.dtype).flatten()
+        if override.numel() != src_A.numel():
+            raise ValueError(
+                "add_top_row override must hold exactly one tile pair "
+                f"({src_A.numel()} elements), got {override.numel()}"
+            )
+        src_A = override
 
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_tensor = generate_golden(
@@ -2029,6 +2042,7 @@ def _run_sfpu_add_top_row(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
         "dest_acc": dest_acc,
         "unpack_to_dest": formats.input_format.is_32_bit(),
@@ -2070,6 +2084,44 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
     _run_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs)
+
+
+def _build_add_top_row_int32_across_zero_src():
+    """One Int32 tile pair whose every lane takes either sign.
+
+    Tile 0 cycles -8..7 by position and tile 1 cycles the same range at a coprime stride,
+    so the added lanes pair negative with negative, negative with positive and positive
+    with positive, with sums in [-16, 14]. Magnitudes stay small so nothing overflows: the
+    sign is the point. The default sweep draws Int32 from [0, 2**30), where sign-magnitude
+    and two's complement are the same bits, so it cannot tell which one the kernel assumes.
+    """
+    positions = torch.arange(_ELEMENTS_PER_TILE, dtype=torch.int64)
+    tile_0 = (positions % 16) - 8
+    tile_1 = ((positions * 7) % 16) - 8
+    return torch.cat([tile_0, tile_1]).to(torch.int32)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuAddTopRow],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_add_top_row_int32_across_zero(formats, dest_acc, mathop):
+    """Negative and mixed-sign Int32 operands, which the positive-only sweep never reaches.
+
+    A native Int32 tile is two's complement in L1, and unpack-to-dest moves its bits to
+    Dst unchanged, so the kernel must load and store the raw word. A kernel that applied
+    the sign-magnitude conversion on the way in and out would pass the sweep and fail
+    here on every lane with a negative operand or sum. twos_complement=True is required
+    for the same reason as in test_eltwise_binary_sfpu_int_extremes.
+    """
+    _run_sfpu_add_top_row(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_add_top_row_int32_across_zero_src(),
+        twos_complement=True,
+    )
 
 
 # =============================================================================
