@@ -40,11 +40,13 @@ notes:
 - id: OV-4
   tasks:
   - '*'
-  status: open
+  status: closed
   t: '2026-10-15T16:19:25'
   text: 'DS41-20 is fixed in the framework (F73): a swapped step''s limit is now 2 x its own component error (no 2 % cap).
     Update DS41-20 to say so (or remove it if nothing model-specific remains) the next time you touch known_issues.md; answer
     n/a if your task does not touch it.'
+  closed: '2026-10-16T07:41:26'
+  why_closed: answered done by every agent since; DS41-20 says F73
 - id: OV-5
   tasks:
   - C.*.experts
@@ -62,7 +64,7 @@ notes:
 - id: OV-6
   tasks:
   - FIX.1
-  status: open
+  status: closed
   t: '2026-10-16T06:43:41'
   text: 'The overseer stopped attempt 1 (implement): Your brief left out what FIX.1 is for (a framework bug, not yours).
     This is it: OVERSEER FIX (not a failing test: the code passes today; this step changes it). Today the routed experts
@@ -78,6 +80,8 @@ notes:
     mode) and put both numbers in BREADCRUMBS.md and the setting''s description. The gate reruns both frozen experts component
     tests and both full-block swap tests (swa layer 0, swa_engram layer 1); all must pass. Update known_issues/repo_map
     entries that describe the per-chunk decode.'
+  closed: '2026-10-16T07:41:26'
+  why_closed: FIX.1 passed (6bdacef2561)
 fixes:
 - id: FIX.2
   title: attention back to the reference's precision (no fp32 scores raised for a fixed bar)
@@ -87,7 +91,7 @@ fixes:
   - S.swa.11
   - S.swa.15
   - S.swa_engram.18
-  status: queued
+  status: placed
   t: '2026-10-16T07:02:44'
   text: 'Attention back to the reference''s precision. The fp32 scores of the window attention (WINDOW_SDPA_SCORES=fp32:
     q rounded to TF32 and kept fp32 through the reshard, Float32 scores and probabilities in ttnn.bringup.sparse_sdpa, DS41-31)
@@ -106,6 +110,7 @@ fixes:
     that evidence. Update DS41-18, DS41-19, DS41-30 and DS41-31 in known_issues.md to say what holds now.'
   hold: F76 (noise-floor limits) installed in the live tree
   released: '2026-10-16T07:41:10'
+  placed: '2026-10-16T07:41:28'
 - id: FIX.3
   title: the reference's dtypes per step (precision.yaml) and a device that meets them
   gate:
@@ -113,7 +118,7 @@ fixes:
   - C.swa_engram.router
   - S.swa.15
   - S.swa_engram.18
-  status: queued
+  status: cancelled
   t: '2026-10-16T07:15:25'
   text: 'Record the reference''s own precision per block step, and make the device match it. Owner rule: match the reference
     precision (never above it, never below it). Every accuracy limit now derives from the CPU step run at the reference''s
@@ -132,3 +137,28 @@ fixes:
     entry against the official code). Steps of block types not yet implemented only need their entries.'
   hold: F76 + F78 installed in the live tree
   released: '2026-10-16T07:41:10'
+  placed: '2026-10-16T07:41:28'
+  why: 'obsolete: the input-nudge floor (precision brainstorm, handoff section 7) explains the device router''s flips; no
+    exact router matmul'
+- id: FIX.4
+  title: 'the hc mixes (attn_hc, ffn_hc): find and fix the device''s -4e-4 bias and 4-34x excess error'
+  gate:
+  - C.swa.attn_hc
+  - C.swa.ffn_hc
+  - C.swa_engram.attn_hc
+  - C.swa_engram.ffn_hc
+  - C.enc_source.attn_hc
+  - S.swa.15
+  - S.swa_engram.18
+  status: held
+  t: '2026-10-16T09:58:47'
+  text: 'The device hc mixes (attn_hc, ffn_hc: tt/mhc.py) are 3.8-34x above their noise floor with a steady bias of -4e-4
+    (the official code computes them in fp32; measured by the precision brainstorm, /localdev/dnijemcevic/bringup/handoff_precision_noise_floor_2026-10-16.md
+    section 6, table and finding 3). A CPU emulation of the FPU''s TF32 rounding (in-tile partial dots, TF32 weights) accounts
+    for only 5e-6 - 6e-5, so the cause is elsewhere in tt/mhc.py (rsqrt, sigmoid, the Sinkhorn iterations, a bf16 intermediate,
+    a constant). Dump the device''s mix outputs (pre, post, comb) once for layer 0 chunk 1, compare each with the fp32 CPU
+    step on the same inputs, locate the stage where the bias and the excess appear, and fix it on the device at the reference''s
+    precision (the official code is fp32 here). Do not loosen any check. Record the stage-by-stage numbers in BREADCRUMBS.md
+    and the mechanism in known_issues.md. The gate reruns the passed mix component tests and both whole-block swap tests
+    under the new floor.'
+  hold: the official-arithmetic + input-nudge floor installed (handoff section 7, steps 1-3)
