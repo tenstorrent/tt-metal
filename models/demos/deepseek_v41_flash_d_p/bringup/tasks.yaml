@@ -2214,6 +2214,14 @@ tasks:
     kind: residual
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-10-16T06:04:49'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_residual.py: 5e91716757c5c44556a83b91446e172a02ee10568bac9f0d48061328ac3d9c8c
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: S.swa_engram.18
   title: 'swa_engram block with steps 1-18 on device (last: ffn_residual)'
   step: implement
