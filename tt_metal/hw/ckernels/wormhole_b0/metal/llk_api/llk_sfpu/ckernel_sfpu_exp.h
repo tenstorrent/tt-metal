@@ -355,8 +355,12 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
 
     if constexpr (SCALE_EN) {
-        // Multiply LREG0 by the BF16 scale immediate in-place.
-        TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
+        // Multiply LREG0 by the BF16 scale in-place. The scale is a runtime argument
+        // (exp_tile's uint16_t scale), so the encoding is built at runtime and pushed
+        // through the instruction buffer (TT_ form); TTI_ would need a compile-time
+        // immediate and fails to build for a runtime scale. REPLAY records it like
+        // any other instruction of the body.
+        TT_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
         TTI_SFPNOP;
     }
 

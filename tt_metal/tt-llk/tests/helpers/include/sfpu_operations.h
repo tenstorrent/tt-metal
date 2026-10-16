@@ -121,8 +121,8 @@
 namespace ckernel::sfpu
 {
 
-// exp_with_base's scale, 0.5 (base b = e^0.5). bf16 for the calculate call's SFPMULI
-// immediate; the same bits shifted into fp32 for exp_init, which bakes the scale into the
+// exp_with_base's scale, 0.5 (base b = e^0.5). bf16 for the calculate call's runtime scale
+// argument; the same bits shifted into fp32 for exp_init, which bakes the scale into the
 // approximate clamp path's constants. Mirrored as EXP_WITH_BASE_SCALE in
 // sfpu_dispatch_constants.py, which the golden reads.
 constexpr std::uint32_t EXP_WITH_BASE_SCALE_BF16 = 0x3F00u;
@@ -132,10 +132,14 @@ constexpr std::uint32_t EXP_WITH_BASE_SCALE_FP32 = EXP_WITH_BASE_SCALE_BF16 << 1
 // ignores ITERATIONS (tt-llk#1486), so its callers run it per face over all four faces.
 constexpr int EXP_APPROX_CLAMP_ITERATIONS = 8;
 
-template <bool APPROXIMATION_MODE, bool IS_FP32_DEST_ACC_EN, int ITERATIONS, bool CLAMP_NEGATIVE, std::uint32_t EXP_BASE_SCALE_FACTOR>
-inline __attribute__((always_inline)) void calculate_exponential_const_scale()
+// The scale the way production hands it to calculate_exponential: exp_tile's uint16_t
+// scale argument is a kernel runtime value (a runtime arg or an L1 read), not a constant.
+// Read through volatile so the compiler cannot fold it into an instruction immediate and
+// every SCALE_EN path is instantiated with a genuinely runtime scale.
+inline std::uint32_t exp_with_base_runtime_scale()
 {
-    calculate_exponential<APPROXIMATION_MODE, IS_FP32_DEST_ACC_EN, true /* SCALE_EN */, ITERATIONS, CLAMP_NEGATIVE>(EXP_BASE_SCALE_FACTOR);
+    volatile std::uint32_t scale = EXP_WITH_BASE_SCALE_BF16;
+    return scale;
 }
 
 } // namespace ckernel::sfpu
@@ -926,31 +930,35 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     // because the adapter's signature carries it.
     else if constexpr (OPERATION == SfpuType::exp_with_base && APPROX_MODE && CLAMP_NEGATIVE)
     {
+        const std::uint32_t exp_base_scale_factor = exp_with_base_runtime_scale();
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            calculate_exponential_const_scale,
-            (APPROX_MODE, is_fp32_dest_acc_en, EXP_APPROX_CLAMP_ITERATIONS, CLAMP_NEGATIVE, EXP_WITH_BASE_SCALE_BF16),
+            calculate_exponential,
+            (APPROX_MODE, is_fp32_dest_acc_en, true /* scale_en */, EXP_APPROX_CLAMP_ITERATIONS, CLAMP_NEGATIVE),
             dst_index,
-            VectorMode::RC);
+            VectorMode::RC,
+            exp_base_scale_factor);
     }
     // exp_with_base = b^x = exp(x * ln b): the only op that drives calculate_exponential
     // with SCALE_EN=true. The bf16 scale EXP_WITH_BASE_SCALE_BF16 == 0.5 selects base
     // b = e^0.5, so the golden is exp(0.5*x); 0.5 is exact in bf16 so no scale-rounding
     // error is added.
     //
-    // The bf16-accurate path (_sfpu_exp_21f_bf16_tti_) lowers the scale via TTI_SFPMULI,
-    // whose immediate operand must be a compile-time constant. Pass the scale through the
-    // test-only adapter's template arguments so SFPU_UNARY_CALL preserves that constness.
+    // The scale is passed as a runtime value, as exp_tile passes its uint16_t scale
+    // argument: every SCALE_EN path, including the bf16-accurate TTI kernel, must accept
+    // a scale the compiler cannot fold into an instruction immediate.
     else if constexpr (OPERATION == SfpuType::exp_with_base)
     {
+        const std::uint32_t exp_base_scale_factor = exp_with_base_runtime_scale();
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            calculate_exponential_const_scale,
-            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, CLAMP_NEGATIVE, EXP_WITH_BASE_SCALE_BF16),
+            calculate_exponential,
+            (APPROX_MODE, is_fp32_dest_acc_en, true /* scale_en */, ITERATIONS, CLAMP_NEGATIVE),
             dst_index,
-            vector_mode);
+            vector_mode,
+            exp_base_scale_factor);
     }
     else if constexpr (OPERATION == SfpuType::fill)
     {
