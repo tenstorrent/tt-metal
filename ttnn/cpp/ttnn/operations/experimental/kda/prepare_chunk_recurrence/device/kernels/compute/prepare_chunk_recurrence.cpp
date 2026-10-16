@@ -7,7 +7,10 @@
 // exp(G_i-G_j) inside each q/k dot as exp(G_i)*exp(-G_j):
 //   qd=q*exp(G), kl=k*exp(G), kr=k*exp(-G)
 //   Akk=strictly_lower((beta*kl)@kr^T), Aqk=tril(qd@kr^T)
-//   kd=beta*kl, k_dec_t=(kr*exp(G_last))^T, dl=expm1(G_last)=exp(G_last)-1 (complement-form decay).
+//   kd=beta*kl, k_dec_t=(k*exp(G_last-G))^T, dl=expm1(G_last)=exp(G_last)-1 (complement-form decay).
+// The suffix sum G_last-G = strict_upper@g is formed and exponentiated in DST (FP32), so k_dec_t's exponent never
+// passes through a TF32 source register and is exactly 0 at the chunk end. Formed from the anchored factors as
+// k*exp(a-G)*exp(a), it came out biased low by about one TF32 ulp of |G_last|/2 (tt_metal_tracker-g1b.4.18).
 // dl is logically [K,1]: only its column 0 is defined, and consumers broadcast that column.
 // T_inv uses a face-blocked polynomial inverse so large gate magnitudes remain stable.
 
@@ -234,6 +237,37 @@ inline void multiply_by_half(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) 
         tile_regs_release();
     }
     o.push_back(n);
+}
+
+// o[Ct,Kt] = exp(mask @ g) for Ct = 1, with the product kept in DST (FP32) through the exponential, so the exponent
+// never passes through a source register.
+template <uint32_t Kt>
+inline void exponential_of_mask_products(DataflowBuffer& mask, DataflowBuffer& g, DataflowBuffer& o) {
+    const uint32_t mask_id = mask.get_id();
+    const uint32_t g_id = g.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(Kt);
+    for (uint32_t block_start = 0; block_start < Kt; block_start += max_dst_tiles) {
+        const uint32_t block_tiles = (Kt - block_start < max_dst_tiles) ? Kt - block_start : max_dst_tiles;
+        tile_regs_acquire();
+        reconfig_data_format(g_id, mask_id);  // matmul: mask->srcB, g->srcA
+        matmul_block_init(mask_id, g_id, false, 1, 1, 1);
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            matmul_block(mask_id, g_id, 0, block_start + tile, tile, false, 1, 1, 1);
+        }
+        exp_tile_init();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            exp_tile<false, false, InputClamping::ClampToNegative>(tile);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            pack_tile(tile, o_id, block_start + tile);
+        }
+        tile_regs_release();
+    }
+    o.push_back(Kt);
 }
 
 inline void reciprocal_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
@@ -492,10 +526,12 @@ inline void prepare_gate_factors(
     DataflowBuffer& g,
     DataflowBuffer& prefix_sum_mask,
     DataflowBuffer& sum_broadcast_matrix,
+    DataflowBuffer& strict_upper_mask,
     DataflowBuffer& centered_decay,
     DataflowBuffer& centered_inverse_decay,
     DataflowBuffer& g_last,
     DataflowBuffer& anchor_decay,
+    DataflowBuffer& key_suffix_decay,
 
     // intermediate
     DataflowBuffer& anchor_g) {
@@ -509,6 +545,8 @@ inline void prepare_gate_factors(
 
     matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, g, g_last);  // replicated G_last
     g_last.wait_front(chunk_key_tiles);
+    exponential_of_mask_products<Kt>(strict_upper_mask, g, key_suffix_decay);  // exp(G_last - G)
+    key_suffix_decay.wait_front(chunk_key_tiles);
     g.pop_front(chunk_key_tiles);
 
     multiply_by_half(g_last, anchor_g, chunk_key_tiles);  // anchor = G_last/2
@@ -571,18 +609,28 @@ inline void prepare_scan_and_pairwise_inputs(
 
 // expm1(G_last) from the replicated G_last rows, of which the transpose to dl reads row 0.
 template <uint32_t Ct, uint32_t Kt>
-inline void prepare_final_decay_rows(DataflowBuffer& g_last, DataflowBuffer& final_decay_rows) {
+inline void prepare_final_decay_rows(
+    DataflowBuffer& g_last, DataflowBuffer& anchor_decay, DataflowBuffer& final_decay_rows) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     expm1_tiles(g_last, final_decay_rows, chunk_key_tiles);
     final_decay_rows.wait_front(chunk_key_tiles);
     g_last.pop_front(chunk_key_tiles);
+    anchor_decay.pop_front(chunk_key_tiles);  // its last consumer
 }
 
+// k_dec = k * exp(G_last - G) (scan-facing) and the anchored k_pairwise = k * exp(anchor - G).
 template <uint32_t Ct, uint32_t Kt>
-inline void prepare_k_pairwise(
-    DataflowBuffer& normalized_k, DataflowBuffer& centered_inverse_decay, DataflowBuffer& k_pairwise) {
+inline void prepare_key_decays(
+    DataflowBuffer& normalized_k,
+    DataflowBuffer& key_suffix_decay,
+    DataflowBuffer& centered_inverse_decay,
+    DataflowBuffer& k_dec,
+    DataflowBuffer& k_pairwise) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
+    elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_k, key_suffix_decay, k_dec, chunk_key_tiles);
+    k_dec.wait_front(chunk_key_tiles);
+    key_suffix_decay.pop_front(chunk_key_tiles);
     elementwise_binary<ElementwiseBinaryOp::Multiply>(
         normalized_k, centered_inverse_decay, k_pairwise, chunk_key_tiles);
     k_pairwise.wait_front(chunk_key_tiles);  // k*exp(anchor-G)
@@ -658,32 +706,20 @@ inline void prepare_t_inv(
         /*product=*/product);
 }
 
+// PACK must enter in final_decay's format and leaves in k_dec_t's.
 template <uint32_t Ct, uint32_t Kt>
 inline void prepare_decay_outputs(
-    DataflowBuffer& k_pairwise,
-    DataflowBuffer& anchor_decay,
-    DataflowBuffer& final_decay_rows,
-    DataflowBuffer& k_dec_t,
-    DataflowBuffer& final_decay) {
+    DataflowBuffer& k_dec, DataflowBuffer& final_decay_rows, DataflowBuffer& k_dec_t, DataflowBuffer& final_decay) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
     // dl [K,1] is the transpose of any replicated exp(G_last) row.
     transpose_tile_row_to_column(final_decay_rows, final_decay, Kt);
     final_decay_rows.pop_front(chunk_key_tiles);
 
-    {
-        DataflowBuffer& k_dec = final_decay_rows;
-
-        // k_dec_t = (kr * exp(G_last))^T.
-        pack_reconfig_data_format(final_decay.get_id(), k_dec.get_id());
-        multiply_by_row(k_pairwise, anchor_decay, k_dec, chunk_key_tiles);
-        k_dec.wait_front(chunk_key_tiles);
-        k_pairwise.pop_front(chunk_key_tiles);
-        anchor_decay.pop_front(chunk_key_tiles);
-        pack_reconfig_data_format(k_dec.get_id(), k_dec_t.get_id());
-        transpose_tile_row_to_column(k_dec, k_dec_t, Kt);
-        k_dec.pop_front(chunk_key_tiles);
-    }
+    // k_dec_t = (k * exp(G_last - G))^T.
+    pack_reconfig_data_format(final_decay.get_id(), k_dec_t.get_id());
+    transpose_tile_row_to_column(k_dec, k_dec_t, Kt);
+    k_dec.pop_front(chunk_key_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t SCALE_BITS, uint32_t EPS_BITS>
@@ -723,6 +759,8 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     // Semantic intermediates.
     DataflowBuffer centered_inverse_decay(dfb::centered_inverse_decay);
     DataflowBuffer anchor_decay(dfb::anchor_decay);
+    DataflowBuffer key_suffix_decay(dfb::key_suffix_decay);
+    DataflowBuffer gate_strict_upper(dfb::gate_strict_upper);
     DataflowBuffer normalized_q(dfb::normalized_q);
     DataflowBuffer normalized_k(dfb::normalized_k);
     DataflowBuffer tile_workspace_0(dfb::tile_workspace_0);
@@ -744,6 +782,10 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     ones.wait_front(chunk_matrix_tiles);
     gate_tril.wait_front(chunk_matrix_tiles);
     gate_ones.wait_front(chunk_matrix_tiles);
+    // The gate-scaled strictly upper mask (gate_ones - gate_tril, exact in FP32) forms the suffix sum G_last - G;
+    // held for the whole kernel. PACK is in the FP32 workspace format from the startup.
+    elementwise_binary<ElementwiseBinaryOp::Subtract>(gate_ones, gate_tril, gate_strict_upper, chunk_matrix_tiles);
+    gate_strict_upper.wait_front(chunk_matrix_tiles);
 
     for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
         if ((work_item_start + work_item) % num_chunks >= valid_chunks) {
@@ -784,10 +826,12 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             g,
             gate_tril,
             gate_ones,
+            gate_strict_upper,
             centered_decay,
             centered_inverse_decay,
             g_last,
             anchor_decay,
+            key_suffix_decay,
             /*anchor_g=*/workspace_2);
 
         DataflowBuffer& k_beta_pairwise = workspace_1;
@@ -796,12 +840,15 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             normalized_q, normalized_k, beta, anchor_decay, centered_decay, q_decay, kd, k_beta_pairwise, q_pairwise);
 
         DataflowBuffer& final_decay_rows = workspace_0;
-        prepare_final_decay_rows<Ct, Kt>(g_last, final_decay_rows);
+        prepare_final_decay_rows<Ct, Kt>(g_last, anchor_decay, final_decay_rows);
 
+        // anchor_decay's storage is free once final_decay_rows has consumed it; k_dec holds there until k_dec_t.
+        DataflowBuffer& k_dec = anchor_decay;
         DataflowBuffer& k_pairwise = workspace_3;
-        prepare_k_pairwise<Ct, Kt>(normalized_k, centered_inverse_decay, k_pairwise);
+        prepare_key_decays<Ct, Kt>(normalized_k, key_suffix_decay, centered_inverse_decay, k_dec, k_pairwise);
 
         prepare_pairwise_matrices<Ct, Kt>(k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra, tile_workspace_0);
+        k_pairwise.pop_front(chunk_key_tiles);
 
         // All inverse scratch transactions are one tile. tile_workspace_1 has two entries so each
         // level can enqueue its replacement before popping the old value; its four transactions
@@ -817,7 +864,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             /*product=*/tile_workspace_2);
 
         pack_reconfig_data_format(t_inv.get_id(), final_decay.get_id());
-        prepare_decay_outputs<Ct, Kt>(k_pairwise, anchor_decay, final_decay_rows, k_decay_transposed, final_decay);
+        prepare_decay_outputs<Ct, Kt>(k_dec, final_decay_rows, k_decay_transposed, final_decay);
         pack_reconfig_data_format(k_decay_transposed.get_id(), workspace_3.get_id());
         // v_beta, kd, q_decay, intra, k_dec_t, dl, T_inv stay pushed for the writer.
     }

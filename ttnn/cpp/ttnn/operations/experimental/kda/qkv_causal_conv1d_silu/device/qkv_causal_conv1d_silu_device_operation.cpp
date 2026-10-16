@@ -79,9 +79,12 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
         channels % attrs.channel_chunk_size == 0,
         "qkv_causal_conv1d_silu: channel_chunk_size must divide Q+K+V width exactly");
     const auto* mesh = in.input.device();
+    const auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(in.input.dtype());
     const uint64_t required_l1_bytes = qkv_causal_conv1d_silu_l1_bytes(
         attrs.channel_chunk_size / tt::constants::TILE_WIDTH,
-        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(in.input.dtype())),
+        tt::tile_size(input_data_format),
+        tt::tile_size(qkv_causal_conv1d_silu_partial_format(
+            input_data_format, ttnn::get_fp32_dest_acc_en(attrs.compute_kernel_config))),
         in.input.element_size());
     const uint64_t available_l1_bytes =
         mesh->l1_size_per_core() - mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);

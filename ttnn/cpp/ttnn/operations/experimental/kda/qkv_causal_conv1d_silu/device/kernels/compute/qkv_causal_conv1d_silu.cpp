@@ -10,7 +10,9 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
-template <uint32_t block_ct, uint32_t Mt>
+// fp32_partial: the running tap sum is carried in an FP32 DFB (fp32_dest_acc_en), so the packer switches between the
+// partial and the output formats.
+template <uint32_t block_ct, uint32_t Mt, uint32_t fp32_partial>
 TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     // Kimi-K3 uses a fixed four-tap causal convolution, with three preceding rows supplied by history.
     constexpr uint32_t tap_count = 4;
@@ -40,12 +42,16 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             const bool is_final_tap = tap + 1 == tap_count;
             const uint32_t destination_dfb = is_final_tap ? dfb::output : dfb::partial;
             DataflowBuffer& destination = is_final_tap ? output : partial;
+            if constexpr (fp32_partial) {
+                // The tilize above leaves the packer configured for the activation format.
+                pack_reconfig_data_format(destination_dfb);
+            }
             if (tap != 0) {
                 partial.wait_front(block_ct);
             }
 
             // Process dst_tiles channel tiles per destination acquire; every tile still sees the
-            // same multiply, BF16 partial add and final SiLU as a one-tile loop.
+            // same multiply, partial add and final SiLU as a one-tile loop.
             for (uint32_t ct = 0; ct < block_ct; ct += dst_tiles) {
                 destination.reserve_back(dst_tiles);
                 tile_regs_acquire();
@@ -56,7 +62,12 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
                     mul_tiles_bcast_rows(dfb::act_tile, dfb::weights, ct + i, tap * block_ct + ct + i, i);
                 }
                 if (tap != 0) {
-                    reconfig_data_format_srca(dfb::partial);
+                    if constexpr (fp32_partial) {
+                        // SrcB receives the FP32 product from DST; give it the carry's 19-bit format, not BF16.
+                        reconfig_data_format(dfb::partial, dfb::partial);
+                    } else {
+                        reconfig_data_format_srca(dfb::partial);
+                    }
                     add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb::partial);
                     for (uint32_t i = 0; i < dst_tiles; ++i) {
                         add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb::partial, ct + i, i);
