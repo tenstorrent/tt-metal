@@ -42,10 +42,13 @@ namespace sfpu {
 
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
-    // Normalise a (-0.0 and subnormals become +0.0: SFPMAD treats subnormal
-    // inputs as zero and flushes a -0.0 result to +0.0). This must run before
-    // the exponent read below so that -0.0 follows the same path as +0.0 and
-    // log(±0.0) returns -inf, matching torch. It runs in the fast path too:
+    // Normalise a (-0.0 and subnormals become +0.0): SFPMAD treats subnormal
+    // inputs as zero, and adding +0.0 turns a -0.0 product into +0.0 on both
+    // Wormhole and Blackhole (Wormhole also makes every zero result +0.0;
+    // Blackhole keeps the sign of a zero only when both addends share it).
+    // This must run before the exponent read below so that -0.0 follows the
+    // same path as +0.0 and log(±0.0) returns -inf, matching torch. It runs in
+    // the fast path too:
     // without it the sign test below excludes the -0.0 lane, which then keeps
     // the NaN that result is initialised with, and a positive subnormal reaches
     // addexp(a, -1) with a zero exponent field and a non-zero mantissa, where
