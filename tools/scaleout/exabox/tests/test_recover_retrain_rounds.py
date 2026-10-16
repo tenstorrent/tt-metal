@@ -273,6 +273,24 @@ class RecoverRetrainRoundsTest(unittest.TestCase):
         for argv in resets:
             self.assertEqual(argv[-2:], ["_", "site-glx-reset"])
 
+    def test_glx_reset_cmd_flag_overrides_the_environment(self):
+        code, _ = self.run_recover(
+            "--max-retrains",
+            "4",
+            "--reset-every",
+            "4",
+            "--glx-reset-cmd",
+            "flag-glx-reset",
+            pass_after_resets=1,
+            env_extra={"GLX_RESET_CMD": "site-glx-reset"},
+        )
+
+        self.assertEqual(code, 0)
+        resets = [launch["argv"] for launch in self.launches if any("script -qefc" in arg for arg in launch["argv"])]
+        self.assertTrue(resets)
+        for argv in resets:
+            self.assertEqual(argv[-2:], ["_", "flag-glx-reset"])
+
     def test_mpi_environment_picks_the_interface(self):
         # Open MPI refuses btl_tcp_if_include alongside an exclude from the environment, so no
         # launch may add one, and no interface is probed for.

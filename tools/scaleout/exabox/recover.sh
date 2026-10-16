@@ -131,11 +131,11 @@ Optional:
                                             and <directory>/cluster_<YYYY-MM-DD>_<HHMMSS>.jsonl merged
                                             (default: $CLUSTER_DEBUG_LOG_ROOT_DEFAULT; if that is not
                                             writable, <output>/cluster_debug_attempt_<N>/)
+    --glx-reset-cmd <command>               Command each host runs to reset its Galaxy
+                                            (default: \$GLX_RESET_CMD, else tt-smi -glx_reset)
     --help                                  Display this help message and exit
 
 Environment:
-    GLX_RESET_CMD                           Command each host runs to reset its Galaxy
-                                            (default: tt-smi -glx_reset)
     OMPI_MCA_btl_tcp_if_exclude             When set and --use-docker is not, the MPI interface
                                             is left to it: no auto-detection, and no
                                             btl_tcp_if_include. --mpi-if or --use-docker pins
@@ -367,6 +367,14 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             BMC_API_URL="$2"
+            shift 2
+            ;;
+        --glx-reset-cmd)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --glx-reset-cmd requires a non-empty value"
+                exit 1
+            fi
+            GLX_RESET_CMD="$2"
             shift 2
             ;;
         --bmc-user)
@@ -714,6 +722,7 @@ echo "=========================================="
 echo "Cluster recovery"
 echo "Using hosts: $HOSTS"
 echo "Configuration: $CONFIG"
+echo "Reset command: $GLX_RESET_CMD"
 echo "MPI interface: ${MPI_IF:-set by the MPI environment}"
 if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
     echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
@@ -1067,7 +1076,7 @@ hosts_from_unretrainable_yaml() {
 }
 
 # Note: tt-smi -glx_reset is deprecated as of tt-smi 3.1.1; use tt-smi -r if available.
-# GLX_RESET_CMD replaces it where tt-smi cannot reach the BMC, e.g. a container without sudo.
+# --glx-reset-cmd replaces it where tt-smi cannot reach the BMC, e.g. a container without sudo.
 run_glx_reset() {
     local reset_hosts="$1"
     local reset_cmd
