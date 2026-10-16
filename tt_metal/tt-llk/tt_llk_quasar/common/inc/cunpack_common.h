@@ -170,8 +170,11 @@ __attribute__((noinline, optimize("no-jump-tables"))) constexpr bool is_quasar_u
     }
 }
 
-// Compile-time check of the integer rows, evaluated on every build of each variant (the table
-// is otherwise only read by the reconfig path's LLK_ASSERT). Holds for both dest modes.
+// Compile-time tests of the integer rows of the table above. The static_asserts below are
+// evaluated by the compiler (nothing runs on device and no code is emitted) whenever a kernel
+// including this header is built, for each arch variant; a wrong row fails the build. At runtime
+// the table is only consulted by the reconfig path's LLK_ASSERT.
+// Helper: true only if the pair is supported in both dest modes (fp16 and fp32 Dest).
 constexpr bool unpack_pair_supported_both_dest_modes_(const DataFormat src, const DataFormat dst, const bool unpack_to_dest)
 {
     const bool fp16_dest = is_quasar_unpack_reconfig_pair_supported<false>(static_cast<std::uint32_t>(src), static_cast<std::uint32_t>(dst), unpack_to_dest);
