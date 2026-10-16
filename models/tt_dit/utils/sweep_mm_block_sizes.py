@@ -510,6 +510,16 @@ SHAPES = [
     (1152, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # SNG proj_mlp / xc-merged
     (1024, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # DBL ff spatial
     (128, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # DBL ff_context (prompt)
+    # -----------------------------------------------------------------------
+    # Wan2.2 TI2V-5B ff1 on the strided AGMM (bh_4x8_sp1_tp0): K global 3072, N = ffn/TP = 3584,
+    # M = 2336 (720p) / 1024 (480p) per SP rank. ff1 is the only 5B AGMM call site the strided op
+    # can take: qkv is chunks=3 and to_out has M > N plus a fused addcmul. Sweep in the model's
+    # precision with WAN5B_SWEEP_DTYPE=bfloat8_b WAN5B_SWEEP_FIDELITY=LoFi.
+    # -----------------------------------------------------------------------
+    (2336, 3072, 3584, 12, 8, True, "ff1_gelu_tanh", "sagmm"),
+    (2336, 3072, 3584, 12, 7, True, "ff1_gelu_tanh", "sagmm"),
+    (1024, 3072, 3584, 12, 8, True, "ff1_gelu_tanh", "sagmm"),
+    (1024, 3072, 3584, 12, 7, True, "ff1_gelu_tanh", "sagmm"),
 ]
 
 
@@ -546,6 +556,10 @@ USE_CASE_CONFIGS = {
     },
     "ff1_gelu": {
         "fused_activation": (ttnn.UnaryOpType.GELU, True),
+    },
+    # Wan2.2 ff1: tanh-approximated GELU fused into the matmul (ColParallelLinear "gelu_tanh").
+    "ff1_gelu_tanh": {
+        "fused_activation": ttnn.UnaryOpType.GELU_TANH,
     },
     # Like "plain" but with exact (non-approx) GELU fused — matches the
     # activation="gelu" config in test_all_gather_minimal_matmul_async.py.
@@ -633,6 +647,12 @@ L1_BUDGET_KB = 1400
 # values fabric_agmm_configs ships and the device-validated LTX entries use.
 SAGMM_NUM_WORKERS_PER_LINK = 3
 SAGMM_NUM_BUFFERS_PER_CHANNEL = 8
+
+# Operand dtype and math fidelity of the swept op. The defaults (bf16, HiFi2) are the historical
+# sweep precision; a model that runs block-float weights and activations at LoFi (the Wan 5B
+# default preset) ranks blockings differently, so sweep it in its own precision.
+_SWEEP_DTYPE = getattr(ttnn, os.environ.get("WAN5B_SWEEP_DTYPE", "bfloat16"))
+_SWEEP_FIDELITY = getattr(ttnn.MathFidelity, os.environ.get("WAN5B_SWEEP_FIDELITY", "HiFi2"))
 
 CSV_FILE = "sweep_results_mm.csv"
 CSV_COLUMNS = [
@@ -996,7 +1016,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     """
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=_SWEEP_FIDELITY,
         math_approx_mode=uc_cfg.get("math_approx_mode", False),
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -1492,7 +1512,7 @@ def test_mm_sweep_worker(device_config, shape):
     parent_mesh, mesh_device = open_mesh(cfg, trace_region_size=4194304)  # 4MB trace region (one trace at a time)
     try:
         run_op = _build_op_runner(
-            cfg, mesh_device, M, K, N, ttnn.bfloat16, is_agmm, uc_cfg, ttnn.CoreCoord(cgx, cgy), op_kind=op_kind
+            cfg, mesh_device, M, K, N, _SWEEP_DTYPE, is_agmm, uc_cfg, ttnn.CoreCoord(cgx, cgy), op_kind=op_kind
         )
 
         valid_combos, skipped = _execute_sweep(mesh_device, run_op, combos)
