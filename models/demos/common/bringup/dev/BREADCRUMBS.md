@@ -1259,3 +1259,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   (0.026); DeepSeek-V4.1 S.enc_source.07 failed 6 attempts at 0.023 (DS41-50, the debugger's probe_006).
 - F93 (owner): heartbeat in three layers, set up by every overseer session: the watch (default --timeout 1800, 30 min), a 30-min CronCreate timer, and the Stop hook skill/bringup/heartbeat_stop.py (no idle session on an unwatched or silently stopped run). The skill says to check the run on every
   wake and re-arm after every event. A stop at 20:33 went unseen: a DASHBOARD STALE wake was not re-armed.
+- F91 fix: the sweep's "within limit" compares with the limit check() applies (second inputs: at least
+  component_second_rel), not the bare rel_lim (DeepSeek-V4.1 attention: `small` rel_lim 0.0057, check limit 0.03).
+- F94: after the overseer aborts a test agent, the orchestrator re-renders the template and retries the freeze
+  without review before any further test agent (the overseer may have fixed the check that sent it there).
