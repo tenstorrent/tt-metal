@@ -141,7 +141,7 @@ template <uint32_t channel_tiles_per_block>
 // acc[tap][tile_column] += dc * view_tap. The running sum is kept in an fp32 DFB and packed as fp32 (grad_tap too),
 // but each
 // add unpacks acc into SrcA, which holds tf32 (10-bit mantissa), so the accumulation is tf32 rather than full fp32.
-// The last own tile writes the sum to grad_tap instead of acc.
+// The last own step writes the sum to grad_tap instead of acc.
 template <uint32_t channel_tiles_per_block, bool first, bool last>
 [[gnu::noinline]] void accumulate_grad_tap(DataflowBuffer& acc, DataflowBuffer& grad_tap) {
     constexpr uint32_t total = tap_count * channel_tiles_per_block;
@@ -206,17 +206,17 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     for (uint32_t item = 0; item < wi_count; ++item) {
         const uint32_t work = wi_start + item;
         const uint32_t split = work % row_splits;
-        const uint32_t m0 = split * tile_rows / row_splits;
-        const uint32_t m1 = (split + 1) * tile_rows / row_splits;
-        const uint32_t own = m1 - m0;
-        const bool has_halo = m1 < tile_rows;
-        const uint32_t dc_tiles = own + (has_halo ? 1 : 0);
+        const uint32_t first_tile_row = split * tile_rows / row_splits;
+        const uint32_t end_tile_row = (split + 1) * tile_rows / row_splits;
+        const uint32_t own_steps = end_tile_row - first_tile_row;
+        const bool has_halo = end_tile_row < tile_rows;
+        const uint32_t step_count = own_steps + (has_halo ? 1 : 0);
 
         weights.wait_front(tap_count * channel_tiles_per_block);
         if (item == 0) {
             ones.wait_front(1);
         }
-        for (uint32_t k = 0; k < dc_tiles; ++k) {
+        for (uint32_t step = 0; step < step_count; ++step) {
             compute_kernel_lib::tilize<channel_tiles_per_block, dfb::act_rm, dfb::act_tile>(tap_count);
             activation.wait_front(tap_count * channel_tiles_per_block);
             grad_out.wait_front(channel_tiles_per_block);
@@ -226,9 +226,9 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             silu_backward<channel_tiles_per_block>(sigmoid, dc_tile);
             dc_tile.wait_front(channel_tiles_per_block);
             preact.pop_front(channel_tiles_per_block);
-            if (k < own) {
-                const bool first = k == 0;
-                const bool last = k + 1 == own;
+            if (step < own_steps) {
+                const bool first = step == 0;
+                const bool last = step + 1 == own_steps;
                 if (first && last) {
                     accumulate_grad_tap<channel_tiles_per_block, true, true>(acc, grad_tap);
                 } else if (first) {
@@ -243,7 +243,7 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             activation.pop_front(tap_count * channel_tiles_per_block);
             grad_out.pop_front(channel_tiles_per_block);
 
-            if (k > 0) {
+            if (step > 0) {
                 grad_input_tile<channel_tiles_per_block>(dc_views, output);
             }
         }

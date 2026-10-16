@@ -63,14 +63,14 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
         // second pass over the cores whenever it saves one step per item, and that loses on hardware: at
         // T=4096, chunk 256, 4 splits (1 pass) beat 9 (2 passes) by 2% at C=6144, and 2 splits beat 16 (7 passes)
         // by 12% at C=12288. Two steps of overhead reproduces both choices.
-        constexpr uint64_t item_overhead_tiles = 2;
+        constexpr uint64_t item_overhead_steps = 2;
         uint64_t best_cost = ~0ULL;
         for (uint32_t candidate = 1; candidate <= tile_rows; ++candidate) {
             const uint64_t items = static_cast<uint64_t>(channel_blocks) * candidate;
             const uint64_t rounds = (items + cores - 1) / cores;
-            const uint64_t halo_tiles = candidate > 1 ? 1 : 0;
-            const uint64_t tiles_per_item = (tile_rows + candidate - 1) / candidate + halo_tiles + item_overhead_tiles;
-            const uint64_t cost = rounds * tiles_per_item;
+            const uint64_t halo_steps = candidate > 1 ? 1 : 0;
+            const uint64_t steps_per_item = (tile_rows + candidate - 1) / candidate + halo_steps + item_overhead_steps;
+            const uint64_t cost = rounds * steps_per_item;
             if (cost < best_cost) {
                 best_cost = cost;
                 row_splits = candidate;

@@ -15,7 +15,7 @@ constexpr uint32_t tap_count = 4;
 constexpr uint32_t halo_rows = tap_count - 1;
 constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
-// Per work item (channel_block, split): weights, then for every dc tile a 35-row input window (3 rows of history or
+// Per work item (channel_block, split): weights, then for every 32-row step a 35-row input window (3 rows of history or
 // previous rows + 32 new rows), 4 shifted views of it, and the matching grad_q/k/v tiles.
 template <
     uint32_t channel_tiles_per_block,
@@ -63,9 +63,9 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         const uint32_t split = work % row_splits;
         const uint32_t first_tile_column = channel_block * channel_tiles_per_block;
         const uint32_t col_bytes = first_tile_column * tt::constants::TILE_WIDTH * sizeof(uint16_t);
-        const uint32_t m0 = split * tile_rows / row_splits;
-        const uint32_t m1 = (split + 1) * tile_rows / row_splits;
-        const uint32_t dc_tiles = m1 - m0 + (m1 < tile_rows ? 1 : 0);
+        const uint32_t first_tile_row = split * tile_rows / row_splits;
+        const uint32_t end_tile_row = (split + 1) * tile_rows / row_splits;
+        const uint32_t step_count = end_tile_row - first_tile_row + (end_tile_row < tile_rows ? 1 : 0);
 
         weights.reserve_back(tap_count * channel_tiles_per_block);
         for (uint32_t tile_column = 0; tile_column < channel_tiles_per_block; ++tile_column) {
@@ -93,12 +93,12 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         noc.async_read_barrier();
         weights.push_back(tap_count * channel_tiles_per_block);
 
-        for (uint32_t k = 0; k < dc_tiles; ++k) {
-            const uint32_t mt = m0 + k;
+        for (uint32_t step = 0; step < step_count; ++step) {
+            const uint32_t tile_row = first_tile_row + step;
             uint32_t first_new_row = 0;
-            if (k == 0) {
+            if (step == 0) {
                 for (uint32_t row = 0; row < halo_rows; ++row) {
-                    const int32_t source_row = static_cast<int32_t>(mt * tile_height + row) - halo_rows;
+                    const int32_t source_row = static_cast<int32_t>(tile_row * tile_height + row) - halo_rows;
                     if (source_row < 0) {
                         noc.async_read(
                             history,
@@ -129,7 +129,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                     input,
                     window,
                     row_bytes,
-                    {.page_id = mt * tile_height + row, .offset_bytes = col_bytes},
+                    {.page_id = tile_row * tile_height + row, .offset_bytes = col_bytes},
                     {.offset_bytes = (halo_rows + row) * row_bytes});
             }
             noc.async_read_barrier();
@@ -152,21 +152,21 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                         grad_q,
                         grad_out,
                         tile_bytes,
-                        {.page_id = mt * q_tiles + tile_column},
+                        {.page_id = tile_row * q_tiles + tile_column},
                         {.offset_bytes = tile_column_in_block * tile_bytes});
                 } else if (tile_column < q_tiles + k_tiles) {
                     noc.async_read(
                         grad_k,
                         grad_out,
                         tile_bytes,
-                        {.page_id = mt * k_tiles + (tile_column - q_tiles)},
+                        {.page_id = tile_row * k_tiles + (tile_column - q_tiles)},
                         {.offset_bytes = tile_column_in_block * tile_bytes});
                 } else {
                     noc.async_read(
                         grad_v,
                         grad_out,
                         tile_bytes,
-                        {.page_id = mt * v_tiles + (tile_column - q_tiles - k_tiles)},
+                        {.page_id = tile_row * v_tiles + (tile_column - q_tiles - k_tiles)},
                         {.offset_bytes = tile_column_in_block * tile_bytes});
                 }
             }
