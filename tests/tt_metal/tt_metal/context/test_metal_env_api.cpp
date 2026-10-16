@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <array>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <limits>
@@ -351,6 +352,20 @@ TEST(MetalEnv, FailedCreateUnitMeshesDoesNotLeakContext) {
     for (int i = 0; i < 3; ++i) {
         MetalEnv env({.mock_cluster_desc_path = mock_path});
         EXPECT_THROW(env.create_unit_meshes({}), std::runtime_error);
+    }
+
+    EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
+}
+
+// Destroying a UnitMeshGroup without closing it releases the context it owns.
+TEST(MetalEnv, DestroyedUnitMeshGroupDoesNotLeakContext) {
+    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1);
+    const ContextId baseline = next_free_context_id(mock_path);
+
+    for (int i = 0; i < 3; ++i) {
+        MetalEnv env({.mock_cluster_desc_path = mock_path});
+        auto group = env.create_unit_meshes(std::array<ChipId, 1>{0});
+        EXPECT_EQ(group.size(), 1u);
     }
 
     EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());

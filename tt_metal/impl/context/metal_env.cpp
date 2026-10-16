@@ -833,23 +833,16 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh(
     return mesh_device;
 }
 
-std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_meshes(
+distributed::UnitMeshGroup MetalEnv::create_unit_meshes(
     ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options) {
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
     TransitContextGuard context_guard(context_id, env_owns_context);
-    auto result = distributed::MeshDeviceImpl::create_unit_meshes(
-        context_id,
-        std::vector<ChipId>(device_ids.begin(), device_ids.end()),
-        options.l1_small_size,
-        options.trace_region_size,
-        options.num_command_queues,
-        options.dispatch_core_config,
-        /*l1_bank_remap=*/{},
-        options.worker_l1_size);
+    auto result = distributed::MeshDeviceImpl::create_unit_mesh_group(
+        context_id, std::vector<ChipId>(device_ids.begin(), device_ids.end()), options);
     if (context_guard.holds_context() && !result.empty()) {
-        const auto& parent = result.begin()->second->get_parent_mesh();
+        const auto& parent = (*result.begin()).second.get_parent_mesh();
         TT_FATAL(parent != nullptr, "Unit meshes are submeshes, so they always have a parent to own the context");
         parent->impl().set_destroy_metal_context_instance_on_close(true);
         context_guard.release();

@@ -169,6 +169,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/mesh_config.hpp
     api/tt-metalium/mesh_coord.hpp
     api/tt-metalium/mesh_device.hpp
+    api/tt-metalium/mesh_device_options.hpp
     api/tt-metalium/mesh_device_view.hpp
     api/tt-metalium/mesh_event.hpp
     api/tt-metalium/mesh_trace_id.hpp
@@ -199,6 +200,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tt_metal.hpp
     api/tt-metalium/tt_metal_profiler.hpp
     api/tt-metalium/uint8.hpp
+    api/tt-metalium/unit_mesh_group.hpp
     api/tt-metalium/work_split.hpp
 )
 

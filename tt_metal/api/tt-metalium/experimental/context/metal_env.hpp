@@ -19,6 +19,8 @@
 #include <hostdevcommon/common_values.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_device_options.hpp>
+#include <tt-metalium/unit_mesh_group.hpp>
 
 namespace tt::tt_metal {
 
@@ -52,13 +54,7 @@ struct MetalEnvDescriptor {
 //
 // num_command_queues, dispatch_core_config and worker_l1_size apply to the whole MetalEnv: while a MeshDevice created
 // from it is open, other create_* calls must pass the same values.
-struct CreateMeshDeviceOptions {
-    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
-    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
-    uint8_t num_command_queues = 1;
-    DispatchCoreConfig dispatch_core_config;
-    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
-};
+using CreateMeshDeviceOptions = MeshDeviceOptions;
 
 class MetalEnvImpl;
 
@@ -144,8 +140,10 @@ public:
     std::shared_ptr<distributed::MeshDevice> create_unit_mesh(
         ChipId device_id, const CreateMeshDeviceOptions& options = {});
 
-    // Create a unit mesh for each physical device ID in the list which will use this MetalEnv
-    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> create_unit_meshes(
+    // Create a unit mesh for each physical device ID in the list which will use this MetalEnv. The returned group owns
+    // the unit meshes (and the MetalContext when this MetalEnv does not own one); destroy or close() it before the
+    // MetalEnv.
+    distributed::UnitMeshGroup create_unit_meshes(
         ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options = {});
 
 private:

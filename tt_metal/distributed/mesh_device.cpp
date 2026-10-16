@@ -645,6 +645,19 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     return result;
 }
 
+UnitMeshGroup MeshDeviceImpl::create_unit_mesh_group(
+    ContextId context_id, const std::vector<ChipId>& chip_ids, const MeshDeviceOptions& options) {
+    return UnitMeshGroup(create_unit_meshes(
+        context_id,
+        chip_ids,
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size));
+}
+
 std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
     int device_id,
     size_t l1_small_size,

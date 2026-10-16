@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <array>
 #include <cstdlib>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -604,16 +605,57 @@ TEST(MetalContextIntegrationTest, MockDeviceCreateUnitMeshes) {
     ASSERT_EQ(meshes.size(), device_ids.size());
     for (ChipId device_id : device_ids) {
         ASSERT_TRUE(meshes.contains(device_id));
-        EXPECT_EQ(meshes.at(device_id)->num_devices(), 1u);
+        EXPECT_EQ(meshes.at(device_id).num_devices(), 1u);
     }
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 
     // The parent mesh owns the context. Its devices must be closed before the context is destroyed; a failure
     // there is caught in ~ScopedDevices and only logged.
     testing::internal::CaptureStdout();
-    meshes.clear();
+    meshes.close();
     const std::string teardown_log = testing::internal::GetCapturedStdout();
     EXPECT_EQ(teardown_log.find("Exception during device close"), std::string::npos) << teardown_log;
+}
+
+TEST(MetalContextIntegrationTest, MockDeviceUnitMeshGroupAccess) {
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
+
+    const std::array<ChipId, 2> device_ids{1, 0};
+    auto group = mock_env.create_unit_meshes(device_ids);
+    EXPECT_FALSE(group.empty());
+    EXPECT_EQ(group.size(), 2u);
+    EXPECT_FALSE(group.contains(2));
+    EXPECT_THROW(group.at(2), std::runtime_error);
+
+    // Members are ordered by chip id regardless of the order they were requested in.
+    EXPECT_EQ(group.chip_ids(), (std::vector<ChipId>{0, 1}));
+    std::vector<ChipId> visited;
+    for (auto [chip_id, mesh] : group) {
+        EXPECT_EQ(&mesh, &group.at(chip_id));
+        EXPECT_EQ(mesh.num_devices(), 1u);
+        visited.push_back(chip_id);
+    }
+    EXPECT_EQ(visited, group.chip_ids());
+}
+
+TEST(MetalContextIntegrationTest, MockDeviceUnitMeshGroupMoveAndClose) {
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
+
+    const std::array<ChipId, 2> device_ids{0, 1};
+    auto group = mock_env.create_unit_meshes(device_ids);
+    const distributed::MeshDevice* chip_0 = &group.at(0);
+
+    // Moving the group moves ownership; the members stay where they are.
+    distributed::UnitMeshGroup moved = std::move(group);
+    EXPECT_TRUE(group.empty());  // NOLINT(bugprone-use-after-move): a moved-from group is specified to be empty
+    ASSERT_EQ(moved.size(), 2u);
+    EXPECT_EQ(&moved.at(0), chip_0);
+
+    moved.close();
+    EXPECT_TRUE(moved.empty());
+    EXPECT_FALSE(moved.contains(0));
+    EXPECT_NO_THROW(moved.close());
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 }
 
 // Changing env-wide options while a MeshDevice is open must fail rather than tear down the context underneath it.

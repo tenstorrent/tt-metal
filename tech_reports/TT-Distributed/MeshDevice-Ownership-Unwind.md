@@ -334,6 +334,14 @@ for (ChipId id : group->chip_ids()) {
 
 So either land steps 5 and 6 together, or land step 5 first while the group still creates its members through `std::shared_ptr` internally, so `shared_from_this()` keeps working until step 7.
 
+**Step 5 as implemented (first PR).** Step 5 landed in its "group first" form:
+- `UnitMeshGroup` (`tt-metalium/unit_mesh_group.hpp`) holds its members as `shared_ptr` internally, so behavior is unchanged and `shared_from_this()` keeps working.
+- The group offers `open(chip_ids, options)`, `size` / `empty` / `contains`, `at(ChipId)` returning `MeshDevice&`, `chip_ids()`, iteration yielding `pair<ChipId, MeshDevice&>`, `close()`, and move-only semantics (plus a default-constructed empty group to move-assign into). Destroying a group closes what is left.
+- Options are a new stable `MeshDeviceOptions` (`tt-metalium/mesh_device_options.hpp`): the five settings `MeshDevice::create` already takes positionally. It had to be stable because the API-tier check forbids a stable header from including an experimental one. `CreateMeshDeviceOptions` stays in `metal_env.hpp` as an alias, so `MetalEnv` callers are unaffected.
+- `MetalEnv::create_unit_meshes` returns the group. This changes an experimental API, and the only in-repo callers were two tests.
+- `MeshDevice::create_unit_meshes` / `create_unit_mesh` are untouched for now. They become wrappers (with the aliasing and closing deleter described above) in the change that removes shared ownership of the members, so the wrapper is written once.
+- The Python binding is deferred to step 7. Before that, a handle returned for a member would co-own it through `enable_shared_from_this`, which contradicts the documented `reference_internal` contract. Binding it later avoids shipping transitional semantics.
+
 **Scope: only `create_unit_meshes` for now.** There is a second, incompatible kind of "unit mesh group" today: an opened, initialized mesh carved with `create_submeshes(MeshShape(1, 1))`. It is the only kind `unit_mesh::aggregate` works with, because `aggregate` needs the parent's allocator. On `create_unit_meshes` results it throws, with a misleading "remote-only MeshDevice" message, because the hidden parent was never initialized.
 - **Possible later extension:** something like `mesh.create_unit_mesh_group()` could return the same type. All its members would still be 1x1, so the name still fits. The group would *borrow* the parent instead of owning it, which is why the type doesn't expose its parent.
 - **Not this type:** general `create_submeshes(shape)` / `create_submesh(shape, offset)` results (1x4, 2x2, possibly overlapping) are not unit meshes. Arbitrary submesh sets are already modeled by the parent/submesh tree. A uniform tiling into equal tiles would be a separate type, of which `UnitMeshGroup` could become the 1x1 special case. It would not be a rename.

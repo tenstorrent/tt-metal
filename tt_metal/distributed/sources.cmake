@@ -20,6 +20,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/pinned_memory_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh_translation_map.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/unit_mesh_group.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multihost/distributed_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch_context.cpp

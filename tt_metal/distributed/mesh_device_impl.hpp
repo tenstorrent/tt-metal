@@ -36,6 +36,7 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/unit_mesh_group.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -628,6 +629,9 @@ public:
         const DispatchCoreConfig& dispatch_core_config,
         ttsl::Span<const std::uint32_t> l1_bank_remap,
         size_t worker_l1_size);
+    // Same as create_unit_meshes, owned by a UnitMeshGroup. Friend of UnitMeshGroup, so it can construct one.
+    static UnitMeshGroup create_unit_mesh_group(
+        ContextId context_id, const std::vector<ChipId>& chip_ids, const MeshDeviceOptions& options);
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDeviceImpl& mesh_device);
