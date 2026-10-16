@@ -307,6 +307,18 @@ def strict_ccl_topology():
         ttnn.CONFIG.strict_ccl_topology = previous
 
 
+@pytest.fixture
+def warn_only_ccl_topology():
+    """Run one test in the shipping default (a refusal logs and keeps the input's label) under the module's strict
+    ``pytestmark``: requested in the test's signature, so it applies after the module-wide fixture and restores it."""
+    previous = ttnn.CONFIG.strict_ccl_topology
+    ttnn.CONFIG.strict_ccl_topology = False
+    try:
+        yield
+    finally:
+        ttnn.CONFIG.strict_ccl_topology = previous
+
+
 def _collapsed_tensor(shape: tuple[int, ...], make_mapper, *, seed: int = 0):
     """Tensor distributed by a 1-D mapper (``ttnn.shard_tensor_to_mesh_mapper`` / ``ttnn.replicate_tensor_to_mesh_mapper``
     -- the raw ``TensorToMesh`` that ``Tensor.from_numpy`` takes, not the ``ttnn.ReplicateTensorToMesh`` Python
@@ -559,13 +571,21 @@ class TestMeshPartitionTopology:
         assert tuple(int(d) for d in result.tensor_topology().distribution_shape()) == MESH_SHAPE_2X2
         assert np.array_equal(_compose_by_label(result), data)
 
-    def test_collapsed_shard_input_keeps_the_input_label(self):
-        """`{4}, [Shard(2)]` partitioned on dim 3 along one axis: device (r, c) keeps column c of its own row chunk, a
-        layout no TensorTopology states (Shard(2) on both axes plus Shard(3) on one). The hook falls back to the
-        input's label, so this pins the documented fallback and the per-device shape; the bytes are not composable
-        by that label and are not checked."""
+    def test_collapsed_shard_of_another_dim_is_refused(self, expect_error):
+        """`{4}, [Shard(2)]` partitioned on dim 3 along axis 1: device (r, c) would keep column c of its own row chunk,
+        a piece of dim 2 next to a piece of dim 3 on one axis, which no TensorTopology states. The helper refuses: an
+        error under strict mode (the op's former inline hook fell back with a warning)."""
         tensor, _ = _collapsed_tensor((1, 1, 64, 128), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 2), seed=45)
         assert list(tensor.shape) == [1, 1, 64 // (self.ROWS * self.COLS), 128]
+
+        with expect_error(RuntimeError, "not expressible"):
+            ttml.core.distributed.mesh_partition(tensor, 3, cluster_axis=CLUSTER_AXIS)
+
+    def test_collapsed_shard_of_another_dim_warn_only_keeps_the_input_label(self, warn_only_ccl_topology):
+        """The same case in the shipping default: the op runs, the output keeps the input's label (which does not
+        describe it: the documented fallback) and has the partitioned per-device shape; the bytes are not composable
+        by that label and are not checked."""
+        tensor, _ = _collapsed_tensor((1, 1, 64, 128), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 2), seed=45)
 
         result = ttml.core.distributed.mesh_partition(tensor, 3, cluster_axis=CLUSTER_AXIS)
 

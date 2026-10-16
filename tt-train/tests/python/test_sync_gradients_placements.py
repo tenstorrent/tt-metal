@@ -63,10 +63,12 @@ is_sharded_on_axis = ttml.core.distributed.is_sharded_on_axis
 # --- local meshes ----------------------------------------------------------------------------------------------
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# The descriptors conftest.py bundles (its _BUNDLED_MGD); a 2x2 needs its own, since a path left set for a line (the
+# conftest's module-scoped 1x2 fixtures restore it only at module teardown) describes a different mesh.
 _MGD_FOR_ARCH_AND_SHAPE = {
-    ("blackhole", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
+    ("blackhole", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_1_2_line_line.textproto"),
     ("wormhole_b0", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "n300_1_2_line_line.textproto"),
-    ("blackhole", (2, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_2_2_line_line.textproto"),
+    ("blackhole", (2, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_2_2_line_line.textproto"),
 }
 
 
