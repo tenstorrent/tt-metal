@@ -493,11 +493,14 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const PadRoute route) {
     namespace pc = ttnn::operations::data_movement::pad_codegen;
-    if (route == PadRoute::Auto && !pc::supported_execution_controls(use_multicore, sub_core_grids)) {
+    const auto output_mem_config = memory_config_arg.value_or(input_tensor.memory_config());
+    // Declined before to_4d: on a sharded tensor below rank 4 it reshards through DRAM, which the native fallback
+    // would then pay for nothing, since the gate rejects sharded I/O.
+    if (route == PadRoute::Auto && (!pc::supported_execution_controls(use_multicore, sub_core_grids) ||
+                                    input_tensor.memory_config().is_sharded() || output_mem_config.is_sharded())) {
         return std::nullopt;
     }
     const auto rank = static_cast<int>(input_tensor.logical_shape().rank());
-    const auto output_mem_config = memory_config_arg.value_or(input_tensor.memory_config());
     const ttnn::Tensor input_4d = to_4d(input_tensor);
     const auto after = trailing_4d_after_padding(padding_vec, rank);
 
