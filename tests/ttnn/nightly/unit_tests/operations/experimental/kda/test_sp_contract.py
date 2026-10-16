@@ -43,7 +43,7 @@ def test_reset_replaces_large_carry_exactly(mesh_device):
     for tensor in host:
         tensor.zero_()
     host[2][:] = torch.eye(32)
-    host[5].fill_(1)
+    host[5].fill_(0)  # complement form: final_decay = expm1(0) means no decay
     host[6][:] = torch.eye(32)
     inputs = device_protocol(host, mesh_device)
     seed = to_device(torch.full((1, 32, 32), float(2**26)), mesh_device)

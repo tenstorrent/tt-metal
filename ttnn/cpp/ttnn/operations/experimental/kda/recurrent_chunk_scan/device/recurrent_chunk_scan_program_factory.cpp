@@ -80,8 +80,9 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const tt::tt_metal::experimental::DFBSpecName k_decay_transposed_dfb_name{"k_decay_transposed"};
     const tt::tt_metal::experimental::DFBSpecName final_state_dfb_name{"final_state"};
     const tt::tt_metal::experimental::DFBSpecName scratch_dfb_name{"scratch"};
-    const tt::tt_metal::experimental::DFBSpecName state_update_dfb_name{"state_update"};
-    const tt::tt_metal::experimental::DFBSpecName state_temporary_dfb_name{"state_temporary"};
+    const tt::tt_metal::experimental::DFBSpecName state_carry_dfb_name{"state_carry"};
+    const tt::tt_metal::experimental::DFBSpecName identity_dfb_name{"identity"};
+    const tt::tt_metal::experimental::DFBSpecName decay_diagonal_dfb_name{"decay_diagonal"};
     const tt::tt_metal::experimental::DFBSpecName summary_head_output_dfb_name{"summary_head_output"};
     const tt::tt_metal::experimental::DFBSpecName summary_head_state_dfb_name{"summary_head_state"};
     const tt::tt_metal::experimental::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
@@ -137,9 +138,11 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         make_dfb(final_state_dfb_name, state_tiles, fp32),
         make_dfb(transport_state_dfb_name, summary ? kv : 1, tt::DataFormat::Float16_b),
         make_dfb(scratch_dfb_name, scratch_entries, fp32),
-        // The state update and the decayed state, each kept in FP32 until they are added.
-        make_dfb(state_update_dfb_name, state_tiles, fp32),
-        make_dfb(state_temporary_dfb_name, state_tiles, fp32),
+        // FP32 view of the running state for the exact complement-form update (UnpackToDest): one state plus one
+        // tile row, so each updated row is reserved before its old row is released. The ring feeds the matmuls.
+        make_dfb(state_carry_dfb_name, state_tiles + paths * Vt, fp32),
+        make_dfb(identity_dfb_name, 2, fp32),  // [I, 0], seeded by the reader
+        make_dfb(decay_diagonal_dfb_name, Kt, fp32),
         // ProgramSpec names must exist even when if-constexpr discards their
         // users. Give inactive-mode buffers one tile instead of reserving every
         // summary and recurrent restart payload simultaneously.
@@ -164,6 +167,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ProducerOf(q_decay_dfb_name, "q_decay"),
                 tt::tt_metal::experimental::ProducerOf(intra_dfb_name, "intra"),
                 tt::tt_metal::experimental::ProducerOf(tail_entry_states_dfb_name, "tail_entry_states"),
+                tt::tt_metal::experimental::ProducerOf(identity_dfb_name, "identity"),
             },
         .tensor_bindings =
             {
@@ -282,8 +286,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
     auto& unpack_modes = compute_hw.unpack_modes;
     for (const auto& name :
-         {state_dfb_name,
-          t_inv_dfb_name,
+         {t_inv_dfb_name,
           v_beta_dfb_name,
           kd_dfb_name,
           q_decay_dfb_name,
@@ -296,12 +299,15 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
           k_decay_transposed_dfb_name,
           final_state_dfb_name,
           scratch_dfb_name,
-          state_update_dfb_name,
-          state_temporary_dfb_name,
+          identity_dfb_name,
+          decay_diagonal_dfb_name,
           summary_head_output_dfb_name,
-          summary_head_state_dfb_name,
-          tail_entry_states_dfb_name}) {
+          summary_head_state_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
+    }
+    // Seeds and the carry reach DST unrounded: they are only copied, never FPU operands, so the FP32 state is exact.
+    for (const auto& name : {state_dfb_name, tail_entry_states_dfb_name, state_carry_dfb_name}) {
+        unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToDest;
     }
     tt::tt_metal::experimental::KernelSpec compute{
         .unique_id = compute_kernel_name,
@@ -329,10 +335,11 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ProducerOf(transport_state_dfb_name, "transport_state"),
                 tt::tt_metal::experimental::ProducerOf(scratch_dfb_name, "scratch"),
                 tt::tt_metal::experimental::ConsumerOf(scratch_dfb_name, "scratch"),
-                tt::tt_metal::experimental::ProducerOf(state_update_dfb_name, "state_update"),
-                tt::tt_metal::experimental::ConsumerOf(state_update_dfb_name, "state_update"),
-                tt::tt_metal::experimental::ProducerOf(state_temporary_dfb_name, "state_temporary"),
-                tt::tt_metal::experimental::ConsumerOf(state_temporary_dfb_name, "state_temporary"),
+                tt::tt_metal::experimental::ProducerOf(state_carry_dfb_name, "state_carry"),
+                tt::tt_metal::experimental::ConsumerOf(state_carry_dfb_name, "state_carry"),
+                tt::tt_metal::experimental::ConsumerOf(identity_dfb_name, "identity"),
+                tt::tt_metal::experimental::ProducerOf(decay_diagonal_dfb_name, "decay_diagonal"),
+                tt::tt_metal::experimental::ConsumerOf(decay_diagonal_dfb_name, "decay_diagonal"),
                 tt::tt_metal::experimental::ProducerOf(summary_head_output_dfb_name, "summary_head_output"),
                 tt::tt_metal::experimental::ProducerOf(summary_head_state_dfb_name, "summary_head_state"),
                 tt::tt_metal::experimental::ConsumerOf(tail_entry_states_dfb_name, "tail_entry_states"),
