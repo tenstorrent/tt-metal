@@ -1,0 +1,59 @@
+{
+ "used": [
+  {
+   "id": "DS41-3",
+   "how": "official taps pack every block boundary like the reference: streams + the pending pre (Block.forward's pre_mix arg; ffn_residual packed with the FFN pre)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-1",
+   "how": "the official side is hf_oracle.build_oracle (kernels.py GEMM tiling installed), so the bf16 emulation of the compressor could be checked bit for bit",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-11",
+   "how": "the scaled checkpoint has no inference/config.json: capture reads Config.from_dir (inference_config derives it)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "testing/official_floor builds stateful steps' ctx from the golden (fp32 chain) state, not the official's: attention in KV / top-k readers cannot meet 2 x the input nudge (DS41-39)",
+  "the tap check's limit (calib x input nudge) does not cover a step whose official code rounds intermediates to bf16 ahead of a quantizer (compressor, DS41-38)",
+  "the gate command in the brief has no --spec and stops in Spec.load(None); BRINGUP_SPEC is not read by official_floor.main"
+ ],
+ "overseer": [
+  {
+   "id": "OV-7",
+   "answer": "done",
+   "evidence": "only reference/official_taps.py (+ the diagnosis official_taps_check.py), the hooks.py official_taps hook and bringup/official_taps.yaml; ds41_ref.py unchanged. Every step of every layer is mapped (129 steps, 0 unmapped); 7 tap-check errors are framework limits shown by official_taps_check.py: compressor bit-equal to the step with model.py's bf16 points; attention passes with the official prefix state (0.032-0.036)"
+  }
+ ],
+ "cited_only": [
+  "DS41-38",
+  "DS41-39"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "R.5",
+  "role": "reference",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T11:30:06",
+  "head": "a0abe712230",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/official_taps.yaml",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/R.5.reference.2.json",
+   "models/demos/deepseek_v41_flash_d_p/reference/official_taps.py",
+   "models/demos/deepseek_v41_flash_d_p/reference/official_taps_check.py"
+  ]
+ }
+}
