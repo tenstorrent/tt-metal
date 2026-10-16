@@ -18,7 +18,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_OP,
@@ -30,10 +30,7 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-
-# Has a compilation error on coverage, https://github.com/tenstorrent/tt-llk/issues/884
-@skip_for_coverage
-@parametrize(
+SDPA_REDUCE_PARAMS = dict(
     formats=input_output_formats(
         [DataFormat.Float16_b],  # Only Float16_b is supported for SDPA reduce
         same=True,
@@ -45,6 +42,11 @@ from helpers.utils import passed_test
         [512, 64],  # four independent 4x2 subblocks
     ],
 )
+
+
+# Has a compilation error on coverage, https://github.com/tenstorrent/tt-llk/issues/884
+@skip_for_coverage
+@parametrize(**SDPA_REDUCE_PARAMS)
 def test_sfpu_reduce_sdpa(
     formats,
     dest_acc,
@@ -52,12 +54,52 @@ def test_sfpu_reduce_sdpa(
     reduce_pool,
     input_dimensions,
 ):
+    _run_sfpu_reduce_sdpa(formats, dest_acc, mathop, reduce_pool, input_dimensions)
+
+
+# Has a compilation error on coverage, https://github.com/tenstorrent/tt-llk/issues/884
+@skip_for_coverage
+@parametrize(**SDPA_REDUCE_PARAMS)
+def test_sfpu_reduce_sdpa_all_negative(
+    formats,
+    dest_acc,
+    mathop,
+    reduce_pool,
+    input_dimensions,
+):
+    """Every column maximum is negative.
+
+    The kernel seeds its running maxima with a -inf immediate before folding the
+    column in. With the default stimuli (0.1 .. 1.1) any seed below 0.1 is
+    indistinguishable from -inf, so this is the case that checks the seed really
+    is -inf: a seed of +0 (or any positive value) would win every swap against
+    all-negative data and the column maximum would come back as 0.0.
+    """
+    _run_sfpu_reduce_sdpa(
+        formats,
+        dest_acc,
+        mathop,
+        reduce_pool,
+        input_dimensions,
+        spec_A=StimuliSpec.uniform(low=-2.0, high=-0.5),
+    )
+
+
+def _run_sfpu_reduce_sdpa(
+    formats,
+    dest_acc,
+    mathop,
+    reduce_pool,
+    input_dimensions,
+    spec_A=None,
+):
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        spec_A=spec_A,
     )
 
     src_A = tilize_block(src_A, input_dimensions).flatten()
