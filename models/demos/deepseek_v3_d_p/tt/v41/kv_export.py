@@ -72,6 +72,9 @@ class V41KvExport:
     max_seq_len: int
     sources2: tuple  # (2, 8, 14)
     n_win: int = 19  # window rings held: layers 2..20, or 2..39 with the decoder (DS41F-0073)
+    # the KV table's slot count when it differs from the physical slots (PREFILL_V41_ALIAS_SLOTS: one prefilled slot fanned out
+    # to every ring slot -- the engine asserts the remote and local tables have the same num_slots); 0 = num_users
+    table_slots: int = 0
 
     def tensors(self) -> dict:
         return dict(
@@ -282,7 +285,7 @@ def build_v41_kv_chunk_table(exp: V41KvExport, cfg, mesh_device, path: str) -> s
         c = D.KvChunkAddressTableConfig()
         c.num_layers = int(cfg.n_layers)
         c.max_sequence_length = int(extents[g])
-        c.num_slots = int(exp.num_users)
+        c.num_slots = int(exp.table_slots or exp.num_users)
         c.chunk_n_tokens = TILE
         c.chunk_size_bytes = int(CHUNK_BYTES[g])
         configs.append(c)
@@ -294,8 +297,9 @@ def build_v41_kv_chunk_table(exp: V41KvExport, cfg, mesh_device, path: str) -> s
         table.set_fabric_node_host(fid, host_name="host-00000000")
     n_banks = int(get_num_dram_banks(mesh_device))
     n = 0
-    for slot in range(exp.num_users):
-        for g, L, pos, t, b, row in table_rows(exp, cfg, slot=slot):
+    # table slots past the physical ones alias physical slot 0 (only it is ever a migration source with PREFILL_V41_ALIAS_SLOTS)
+    for slot in range(int(exp.table_slots or exp.num_users)):
+        for g, L, pos, t, b, row in table_rows(exp, cfg, slot=slot if slot < exp.num_users else 0):
             loc = D.KvCacheLocation()
             loc.noc_addr = _chunk_addr(t, b, row, n_banks, CHUNK_BYTES[g])
             loc.size_bytes = int(CHUNK_BYTES[g])
