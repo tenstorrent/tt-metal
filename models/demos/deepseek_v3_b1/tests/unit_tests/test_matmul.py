@@ -190,6 +190,7 @@ def _run_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
         (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA Q @ K.T (KV_chunk_size=512)
         (8, 576, 256, ttnn.bfloat16, ttnn.bfloat8_b, True, None, False),  # SDPA Q @ K.T transposed (KV_chunk_size=256)
         (8, 576, 512, ttnn.bfloat16, ttnn.bfloat8_b, True, None, False),  # SDPA Q @ K.T transposed (KV_chunk_size=512)
+        (8, 576, 32, ttnn.bfloat16, ttnn.bfloat8_b, True, None, False),  # transposed, one output tile
         (8, 256, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA S @ V (KV_chunk_size=256)
         (8, 512, 512, ttnn.bfloat16, ttnn.bfloat8_b, False, None, False),  # SDPA S @ V (KV_chunk_size=512)
         # After SDPA (bfloat16 srcB/in0, bfloat8_b srcA/in1)
