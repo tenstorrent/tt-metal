@@ -677,6 +677,115 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_consumed_memory_bytes_per_bank = 5 * 5 * 32 * 32 * 2,
         }));
 
+// compute_buffer_sharding_args skips the legacy from_shard_spec call when the nd_shard_spec is copied from the
+// legacy shard_spec relying on the nd branch to build the same distribution. This test checks if a layout
+// holding only the legacy shard_spec gives the same sharding args as the normalised TensorSpec built from it.
+struct LegacyShardingArgsTestParams {
+    Shape shape;
+    Layout layout;
+    TensorMemoryLayout memory_layout;
+    ShardSpec shard_spec;
+};
+
+class TensorLayoutLegacyShardingArgsTests : public ::testing::TestWithParam<LegacyShardingArgsTestParams> {};
+
+TEST_P(TensorLayoutLegacyShardingArgsTests, NormalisedSpecMatchesLegacyOnlyLayout) {
+    const auto& params = GetParam();
+    const MemoryConfig legacy_config(params.memory_layout, BufferType::L1, params.shard_spec);
+
+    const TensorLayout legacy_only_layout(DataType::BFLOAT16, PageConfig(params.layout), legacy_config);
+    EXPECT_EQ(legacy_only_layout.get_memory_config().nd_shard_spec().has_value(), false);
+    const BufferShardingArgs legacy = legacy_only_layout.impl().compute_buffer_sharding_args(params.shape);
+
+    const TensorSpec spec(params.shape, TensorLayout(DataType::BFLOAT16, PageConfig(params.layout), legacy_config));
+    EXPECT_EQ(spec.memory_config().nd_shard_spec().has_value(), true);
+    EXPECT_EQ(spec.memory_config().created_with_nd_shard_spec(), false);
+    const BufferShardingArgs normalised = spec.compute_buffer_sharding_args();
+    EXPECT_EQ(normalised.buffer_layout(), legacy.buffer_layout());
+
+    // value() throws, failing the test, if either side has no distribution or shard spec.
+    const auto& legacy_distribution = legacy.buffer_distribution_spec().value();
+    const auto& normalised_distribution = normalised.buffer_distribution_spec().value();
+    EXPECT_EQ(normalised_distribution.tensor_shape_in_pages(), legacy_distribution.tensor_shape_in_pages());
+    EXPECT_EQ(normalised_distribution.shard_shape_in_pages(), legacy_distribution.shard_shape_in_pages());
+    EXPECT_EQ(normalised_distribution.cores(), legacy_distribution.cores());
+    EXPECT_EQ(normalised_distribution.shard_distribution_strategy(), legacy_distribution.shard_distribution_strategy());
+
+    const auto& legacy_shard_spec = legacy.shard_spec().value();
+    const auto& normalised_shard_spec = normalised.shard_spec().value();
+    EXPECT_EQ(normalised_shard_spec.tensor_shard_spec, legacy_shard_spec.tensor_shard_spec);
+    EXPECT_EQ(normalised_shard_spec.page_shape, legacy_shard_spec.page_shape);
+    EXPECT_EQ(normalised_shard_spec.tensor2d_shape_in_pages, legacy_shard_spec.tensor2d_shape_in_pages);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorLayoutTests,
+    TensorLayoutLegacyShardingArgsTests,
+    ::testing::Values(
+        // Height sharded: one shard per core
+        LegacyShardingArgsTestParams{
+            .shape = Shape{1, 1, 128, 64},
+            .layout = Layout::TILE,
+            .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+            .shard_spec = ShardSpec(CoreRangeSet(CoreRange({0, 0}, {3, 0})), {32, 64}, ShardOrientation::ROW_MAJOR),
+        },
+        // Width sharded
+        LegacyShardingArgsTestParams{
+            .shape = Shape{1, 1, 64, 128},
+            .layout = Layout::TILE,
+            .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
+            .shard_spec = ShardSpec(CoreRangeSet(CoreRange({0, 0}, {3, 0})), {64, 32}, ShardOrientation::ROW_MAJOR),
+        },
+        // Block sharded: 2x2 grid (GRID_2D)
+        LegacyShardingArgsTestParams{
+            .shape = Shape{1, 1, 64, 128},
+            .layout = Layout::TILE,
+            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .shard_spec = ShardSpec(CoreRangeSet(CoreRange({0, 0}, {1, 1})), {32, 64}, ShardOrientation::ROW_MAJOR),
+        },
+        // Block sharded where GRID_2D trims a 2x2 grid to 1x2 cores that the shards occupy.
+        LegacyShardingArgsTestParams{
+            .shape = Shape{1, 1, 64, 64},
+            .layout = Layout::TILE,
+            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .shard_spec = ShardSpec(CoreRangeSet(CoreRange({0, 0}, {1, 1})), {32, 64}, ShardOrientation::ROW_MAJOR),
+        },
+        // Block sharded: column-major orientation
+        LegacyShardingArgsTestParams{
+            .shape = Shape{1, 1, 128, 64},
+            .layout = Layout::TILE,
+            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .shard_spec = ShardSpec(CoreRangeSet(CoreRange({0, 0}, {1, 1})), {64, 32}, ShardOrientation::COL_MAJOR),
+        },
+        // Height sharded: uneven last shard
+        LegacyShardingArgsTestParams{
+            .shape = Shape{1, 1, 96, 64},
+            .layout = Layout::TILE,
+            .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+            .shard_spec = ShardSpec(CoreRangeSet(CoreRange({0, 0}, {1, 0})), {64, 64}, ShardOrientation::ROW_MAJOR),
+        },
+        // Rank 5: leading dims fold into sharded height
+        LegacyShardingArgsTestParams{
+            .shape = Shape{2, 3, 1, 32, 64},
+            .layout = Layout::TILE,
+            .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+            .shard_spec = ShardSpec(CoreRangeSet(CoreRange({0, 0}, {2, 0})), {64, 64}, ShardOrientation::ROW_MAJOR),
+        },
+        // Row-major pages
+        LegacyShardingArgsTestParams{
+            .shape = Shape{1, 1, 64, 32},
+            .layout = Layout::ROW_MAJOR,
+            .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+            .shard_spec = ShardSpec(CoreRangeSet(CoreRange({0, 0}, {3, 0})), {16, 32}, ShardOrientation::ROW_MAJOR),
+        },
+        // Rank 1: the legacy call pads the shape to 2D while the nd spec keeps a 1D shard
+        LegacyShardingArgsTestParams{
+            .shape = Shape{128},
+            .layout = Layout::ROW_MAJOR,
+            .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
+            .shard_spec = ShardSpec(CoreRangeSet(CoreRange({0, 0}, {1, 0})), {1, 64}, ShardOrientation::ROW_MAJOR),
+        }));
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 }  // namespace tt::tt_metal
