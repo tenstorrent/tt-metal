@@ -290,6 +290,6 @@ def test_mpwi_32_bit_index(device, ttnn_dtype, input_spec):
         sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         memory_config=None,
-        run_twice=False,
+        run_twice=True,
         config_tensor_in_dram=True,
     )
