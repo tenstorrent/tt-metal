@@ -295,6 +295,15 @@ static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(
     return tt::tt_metal::TensorSpec(tt::tt_metal::Shape{total_entries, entry_size_words}, tensor_layout);
 }
 
+// Packs floats as bf16, two per word, in the order given.
+std::vector<std::uint32_t> pack_floats_as_bf16_words(const std::vector<float>& floats) {
+    std::vector<std::uint32_t> words(floats.size() / 2);
+    for (size_t i = 0; i < words.size(); i++) {
+        words[i] = pack_two_bfloat16_into_uint32({bfloat16(floats[2 * i]), bfloat16(floats[2 * i + 1])});
+    }
+    return words;
+}
+
 void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const ReduceConfig& test_config) {
     const experimental::NodeCoord node{0, 0};
 
@@ -551,10 +560,7 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
         // Decode the quantized values back (tile-major) and repack as bf16 for the golden source.
         std::vector<float> quantized = tt::tt_metal::unpack_mxfp4_tiles_into_float_vec(
             ttsl::make_const_span(mxfp4_packed), /*row_major_output=*/false);
-        src_vec.resize(quantized.size() / 2);
-        for (size_t i = 0; i < src_vec.size(); i++) {
-            src_vec[i] = pack_two_bfloat16_into_uint32({bfloat16(quantized[2 * i]), bfloat16(quantized[2 * i + 1])});
-        }
+        src_vec = pack_floats_as_bf16_words(quantized);
     } else {
         slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), src_vec);
     }
@@ -583,9 +589,9 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
 // through UNP_A and UNP_B on the op-agnostic Float16_b formats, so it is only right if reduce_uninit put
 // both unpackers and the ALU back. The scaler is laid out like the bf16 scaler the other readers generate
 // (1.0 in the first row of each face, 0 elsewhere), which MxFp4 encodes exactly, so gold_reduce_h applies.
-void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_device) {
+void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_device, bool fp32_dest_acc_en) {
     const experimental::NodeCoord node{0, 0};
-    constexpr std::uint32_t num_elements = TILE_HEIGHT * TILE_WIDTH;
+    constexpr std::uint32_t num_input_tiles = 1;
     const std::uint32_t mxfp4_tile_bytes = tt::tile_size(tt::DataFormat::MxFp4);
     const std::uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     constexpr std::uint32_t num_output_tiles = 2;  // tile 0: reduce, tile 1: add
@@ -601,13 +607,16 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
         .rtol = 0.1f,
         .golden_function = ::unit_tests::compute::gold_reduce_h,
         .result_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
-        // ttsim accepts a single fidelity phase for these formats; see TensixComputeReduceColumnMxFp4.
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        // One fidelity phase multiplies FP4 by FP4 in full; a second would add nothing and cancel the 2x saving.
         .math_fidelity = MathFidelity::LoFi,
-        .input_format = tt::DataFormat::MxFp4,
     };
+    const float scaler = get_scaler(reduce_config);
 
-    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(mxfp4_tile_bytes, 1));
-    auto scaler_tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(mxfp4_tile_bytes, 1));
+    auto in_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(mxfp4_tile_bytes, num_input_tiles));
+    auto scaler_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(mxfp4_tile_bytes, num_input_tiles));
     auto out_tensor =
         MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(bf16_tile_bytes, num_output_tiles));
 
@@ -706,7 +715,7 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
         .hw_config =
             experimental::ComputeHardwareConfig{
                 .fpu_math_fidelity = reduce_config.math_fidelity,
-                .enable_32_bit_dest = false,
+                .enable_32_bit_dest = reduce_config.fp32_dest_acc_en,
                 .double_buffer_dest = true,
             },
     };
@@ -747,15 +756,15 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
     experimental::SetProgramRunArgs(program, params);
 
     // Data: the same seeded stimulus as the other MxFp4 reduce tests, quantized to MxFp4 (tile-major).
-    // Scaler: 1.0 in the first row of each face, 0 elsewhere (tile-major).
+    // Scaler: the SUM scaler (1.0) in the first row of each face, 0 elsewhere (tile-major).
     const std::vector<std::uint32_t> data_bf16 = create_random_vector_of_bfloat16(
         bf16_tile_bytes, reduce_config.data_gen_rand_max, reduce_config.data_gen_seed, reduce_config.data_gen_offset);
     const std::vector<bfloat16> data_native = unpack_uint32_vec_into_bfloat16_vec(data_bf16);
     const std::vector<float> data_floats(data_native.begin(), data_native.end());
-    std::vector<float> scaler_floats(num_elements, 0.0f);
-    for (std::uint32_t face = 0; face < 4; face++) {
-        for (std::uint32_t col = 0; col < 16; col++) {
-            scaler_floats[face * 256 + col] = 1.0f;
+    std::vector<float> scaler_floats(TILE_HW, 0.0f);
+    for (std::uint32_t face = 0; face < TILE_HW / FACE_HW; face++) {
+        for (std::uint32_t col = 0; col < FACE_WIDTH; col++) {
+            scaler_floats[face * FACE_HW + col] = scaler;
         }
     }
     const std::vector<std::uint32_t> data_mxfp4 =
@@ -774,25 +783,20 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
 
     std::vector<std::uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), result_vec);
-    const std::uint32_t words_per_tile = num_elements / 2;
+    const std::uint32_t words_per_tile = TILE_HW / 2;
     ASSERT_EQ(result_vec.size(), num_output_tiles * words_per_tile);
 
     // Tile 0: the 2x column reduce, against the same golden the other column reduce tests use.
-    std::vector<std::uint32_t> data_quantized_bf16(words_per_tile);
-    for (std::uint32_t i = 0; i < words_per_tile; i++) {
-        data_quantized_bf16[i] =
-            pack_two_bfloat16_into_uint32({bfloat16(data_quantized[2 * i]), bfloat16(data_quantized[2 * i + 1])});
-    }
     const std::vector<std::uint32_t> reduce_result(result_vec.begin(), result_vec.begin() + words_per_tile);
-    validate_reduce_result(reduce_result, words_per_tile, reduce_config, data_quantized_bf16, 1.0f);
+    validate_reduce_result(
+        reduce_result, words_per_tile, reduce_config, pack_floats_as_bf16_words(data_quantized), scaler);
 
     // Tile 1: data + scaler on the restored Float16_b formats (both inputs tile-major, as is the output).
-    std::vector<std::uint32_t> add_golden(words_per_tile);
-    for (std::uint32_t i = 0; i < words_per_tile; i++) {
-        add_golden[i] = pack_two_bfloat16_into_uint32(
-            {bfloat16(data_quantized[2 * i] + scaler_quantized[2 * i]),
-             bfloat16(data_quantized[2 * i + 1] + scaler_quantized[2 * i + 1])});
+    std::vector<float> add_floats(TILE_HW);
+    for (std::uint32_t i = 0; i < TILE_HW; i++) {
+        add_floats[i] = data_quantized[i] + scaler_quantized[i];
     }
+    const std::vector<std::uint32_t> add_golden = pack_floats_as_bf16_words(add_floats);
     const std::vector<std::uint32_t> add_result(result_vec.begin() + words_per_tile, result_vec.end());
     int argfail = -1;
     const bool add_pass = packed_uint32_t_vector_comparison(
@@ -1182,13 +1186,21 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4) {
 
 // Quasar-only: MxFp4 column-reduce (SUM) with an MxFp4 scaler, which runs the 2x-packed src-register
 // format (both operands MxFp4), then an ordinary add on the same buffers to check that reduce_uninit
-// restores both unpackers and the ALU. Mirrors the LLK test_reduce_quasar_mxfp4_2x_gapool python test at
-// the metal layer, which drives the LLK directly and so does not exercise the llk_api init/uninit.
+// restores both unpackers and the ALU. The metal-layer counterpart of the LLK test_reduce_quasar_mxfp4_2x_gapool
+// python test (which drives the LLK directly, not the llk_api init/uninit), for SUM with 16- and 32-bit Dest.
+// AVG takes the same GAPOOL path with a different scaler value, so SUM covers it.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
     if (MetalContext::instance().get_cluster().get_quasar_ip_variant() == tt::IpVariant::TRINITY) {
         GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
     }
-    run_single_core_reduce_h_mxfp4_2x_then_add(this->device());
+    run_single_core_reduce_h_mxfp4_2x_then_add(this->device(), /*fp32_dest_acc_en=*/false);
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2Fp32Dest) {
+    if (MetalContext::instance().get_cluster().get_quasar_ip_variant() == tt::IpVariant::TRINITY) {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
+    }
+    run_single_core_reduce_h_mxfp4_2x_then_add(this->device(), /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================
