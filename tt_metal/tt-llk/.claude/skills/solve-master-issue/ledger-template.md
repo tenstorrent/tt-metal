@@ -33,6 +33,11 @@ Status values: triage · repro · fix · verify · pr · bot-review(rN) · ci-qu
 | PR | bot re-dispatches (per SHA) | CI reruns (per cause) | rebase+retrigger (≤3) | code-change CI cycles (≤4) | main-wait started |
 |---|---|---|---|---|---|
 
+## Perf A/B (§3b — one row per item × arch on a measured path)
+
+| item | arch | perf module / -k / --op | base sha | verdict (exit) | median Δ% | worst variant Δ% | evidence dir |
+|---|---|---|---|---|---|---|---|
+
 ## CI verdicts
 
 | PR | workflow | run | job | verdict | evidence |

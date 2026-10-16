@@ -58,6 +58,8 @@ older `gh` (2.4) lacks.
 | `main_job_status.sh "<workflow>" "<job>"` | is the same job failing on main — on the same tests? |
 | `bot_threads.sh <pr>` | bot feedback still unanswered; ack handled summaries by URL |
 | `bots_pending.sh <pr>` | what must still finish before the head SHA is "bots quiet"; exit 0 + empty = quiet |
+| `perf_ab.sh <fix-wt> <base-sha> <arch> <perf-module> <out-dir> [-k …] [--op …] [--goal …]` | same-board perf A/B of one tt-llk perf module, fix vs base, judged by `perf_eval.py` (§3b); exit 0 pass · 1 regression · 2 not comparable · 3 run failed |
+| `perf_eval.py --current <csv> --baseline <csv> …` | the judge: variant-matched cycle deltas, ±0.5 % noise band, intent-aware verdict; vendored from the LLK issue solver, `test_perf_eval.py` guards it (run with `pytest -c /dev/null --noconftest`) |
 | `findings.py list\|mark\|reconcile\|sync <file> …` | the findings file as source: open items as JSON; write state + links per item (dups follow); GitHub-vs-file drift on resume; commit+push or `--sync-cmd` |
 | `run_unattended.sh <run-name> <args…>` | detached headless driver: `claude -p` turns, resumed every 15 min until `DONE` (§2) |
 
@@ -306,7 +308,41 @@ collects it — and check the **lane** that runs it is one the fixed file's path
 
 **Verify, 3 ways, before any push:** fail-without + pass-with output captured to the ledger dir;
 build succeeds; adversarial self-review of the diff. Run the neighboring tests too (no collateral
-breakage). Pre-commit hooks: if a hook rewrites and aborts, re-add and make a **fresh** commit, never
+breakage). Then the perf A/B below, when the change is on a measured path.
+
+### 3b. Perf A/B — a correctness fix must not get slower
+
+**When:** the diff touches code a tt-llk perf module exercises — anything under
+`tt_llk_*/common/inc/sfpu/`, `tt_llk_*/llk_lib/`, the ckernels `llk_api/llk_sfpu/` or `llk_math_*` /
+`llk_unpack_*` / `llk_pack_*` wrappers, or `hw/inc/api/compute/` — and a perf module covers the op
+(`grep -l '<MathOperation or op name>' tests/python_tests/perf_*.py`; the pack/unpack/tilize/matmul/reduce
+modules are named for their op). Assert-only, host-side, test-only and doc changes need none; say so in
+the ledger. A perf-motivated item uses `--goal improve`; everything else `--goal no_regress`.
+
+**How** (the board must be in this box; `perf_ab.sh` creates and reuses a detached baseline worktree
+at the PR's merge-base, runs current then baseline back to back under the device lock, and judges):
+```bash
+base=$(git -C <fix-wt> merge-base HEAD origin/main)
+$SKILL/scripts/perf_ab.sh <fix-wt> $base <wormhole|blackhole> <perf-module> $LEDGER_DIR/perf/<item>-<arch> \
+    [-k '<pytest expr narrowing to the op>'] [--op <mathop substring>] [--primary-metric 'mean(MATH_ISOLATE)']
+```
+`-k` narrows what runs (a full module is 10–40 min); `--op` narrows what is compared. Modules that
+declare only `MATH_ISOLATE` (`perf_sfpu_binop_scalar`, `perf_sfpu_reduce`, `perf_sfpu_ternary`) need
+`--primary-metric 'mean(MATH_ISOLATE)'`; the evaluator never picks a kinder metric by itself. Run it once
+per architecture you have; an architecture you lack is **"perf not measured on <arch>"** in the PR body,
+never a blocker (CI silicon runs no perf).
+
+**Verdict → action:** exit 0 (neutral or improved) → quote the summary line in the PR body and link
+the two CSVs in the ledger dir. Exit 1 (regression past the noise band, median variant by default) →
+a failure of class `PERF_REGRESSION`: fix it (counts as a code change: §5 bots, then §6 CI again), or,
+if the slowdown is inherent to the correct behavior, keep the fix and say so in the PR with the numbers —
+that is a decision the reviewer sees, not one you hide. Exit 2 (not comparable) → read
+`verdict.json: reason_code`; `no_matching_baseline_variants` / `current_selection_empty` mean the
+selector is wrong, fix the `-k` / `--op`; a schema mismatch means the module changed between base and
+fix, measure a narrower selection. Exit 3 → the perf run itself failed; that is an environment or plan
+problem (card, timeout, a variant that cannot compile), recorded as such, not a verdict on the fix.
+Re-run the A/B after any later code change to the measured path (review fix, CI fix); a pure rebase
+needs it only if main touched that path. Pre-commit hooks: if a hook rewrites and aborts, re-add and make a **fresh** commit, never
 `--amend`. Never stage `tt_metal/third_party/*` submodule pointers or symlinked `sfpi`/`.venv`.
 
 ## 4. Open the DRAFT PR
@@ -321,7 +357,9 @@ In order:
    a standalone issue, assign `<me>`, and one `audit-key: <key>` line per item at the end of the body
    (what `findings.py reconcile` matches on). Then `findings.py mark … --state issue --issue <url>`.
 2. Push the branch; `gh pr create --draft`. Body: problem, fix, the test and its fail-without /
-   pass-with result, what was and wasn't run on hardware (be exact — name the board), `Fixes <issue>`.
+   pass-with result, what was and wasn't run on hardware (be exact — name the board), the perf A/B
+   summary line per architecture or "perf not measured on <arch>" / "not on a measured path" (§3b),
+   `Fixes <issue>`.
    A group's body: a table (item · file:line · defect · test · fail-without/pass-with), then one short
    section per item; `Fixes` each issue; the `audit-key:` lines at the end. Comment on the issue with
    the PR link. Then `findings.py mark … --state pr --pr <url> --sha <sha>` and `findings.py sync`.
@@ -527,9 +565,10 @@ only because its board is not on this box is not parked — it is waiting on a C
 
 ## 8. Final report (and the end state of the ledger)
 
-One table: item · group · class · status · sub-issue · PR · fail-without/pass-with evidence · CI
-verdict (green / unrelated failures with links) · bot comments: fixed / pushed back / left for the user
-(counts) · time spent in `ci-queue`.
+One table: item · group · class · status · sub-issue · PR · fail-without/pass-with evidence · perf A/B
+(verdict + worst delta per arch, or not measured / not applicable) · CI verdict (green / unrelated
+failures with links) · bot comments: fixed / pushed back / left for the user (counts) · time spent in
+`ci-queue`.
 Then, separately:
 - PRs frozen by a human request, with the quote;
 - items parked for the user — each with the exact decision needed and the options;
