@@ -53,6 +53,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Short initialization for face_compressed_mm_block operation. Must be called before face_compressed_mm_block and is safe to call at any point in the kernel.
+ * Call it again after any other op has run, in particular one that writes SrcB.
  * At the beginning of a kernel, bring the op up by hand: the unpack, math and pack hw configures, the math
  * pack-sync init and the pack dest init, then pack_init_mutex_ADC as the only pack init.
  * deepseek_compute_kernel_hw_startup cannot stand in for that until it takes a mutex_ADC option.
@@ -74,15 +75,16 @@ namespace ckernel {
  * |----------------|----------------------------------------------------------------------------------------|----------|---------------------------------------|-----------------------|
  * | ct_dim         | The width of the output matrix in tiles                                                | uint32_t | 1 to 16 (compile-time)                | False (default 1)     |
  * | transpose      | The transpose flag for performing transpose operation on in1                           | bool     | true/false                            | False (default false) |
+ * | clear_src      | Whether to clear SrcB here (the activation fills only part of SrcB)                    | bool     | true/false                            | False (default true)  |
  * | in0_cb_id      | The identifier of the input activation circular buffer (CB)                            | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id      | The identifier of the compressed-weight circular buffer (CB)                           | uint32_t | 0 to 31                               | True                  |
  * | out_cb_id      | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
  */
 // clang-format on
-template <std::uint32_t ct_dim = 1, bool transpose = false>
+template <std::uint32_t ct_dim = 1, bool transpose = false, bool clear_src = true>
 ALWI void face_compressed_mm_block_init_short(
     const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id, const std::uint32_t out_cb_id) {
-    UNPACK((llk_unpack_AB_face_compressed_mm_init<transpose>(in0_cb_id, in1_cb_id)));
+    UNPACK((llk_unpack_AB_face_compressed_mm_init<transpose, clear_src>(in0_cb_id, in1_cb_id)));
 
     MATH((llk_math_face_compressed_mm_init<ct_dim>(in0_cb_id, in1_cb_id)));
 
@@ -118,7 +120,6 @@ ALWI void face_compressed_mm_block_init_short(
  * |--------------------|------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | ct_dim             | The width of the output matrix in tiles                                                        | uint32_t | 1 to 16 (compile-time)                           | False (default 1)     |
  * | finalize           | Whether to merge the split-accumulation partials (applied only when ct_dim == 1)               | bool     | true/false                                       | False (default true)  |
- * | clear_src          | Whether to clear SrcB before unpacking (the activation fills only part of SrcB)                | bool     | true/false                                       | False (default true)  |
  * | in0_cb_id          | The identifier of the input activation circular buffer (CB)                                    | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id          | The identifier of the compressed-weight circular buffer (CB)                                   | uint32_t | 0 to 31                                          | True                  |
  * | base_address_meta  | The L1 address of the compressed-weight meta buffer                                            | uint32_t | Valid L1 address                                 | True                  |
@@ -126,15 +127,14 @@ ALWI void face_compressed_mm_block_init_short(
  * | kt_dim             | The inner dimension in tiles                                                                   | uint32_t | Must be an even number from 2 to 256 (inclusive) | True                  |
  */
 // clang-format on
-template <std::uint32_t ct_dim = 1, bool finalize = true, bool clear_src = true>
+template <std::uint32_t ct_dim = 1, bool finalize = true>
 ALWI void face_compressed_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
     const std::uint32_t base_address_meta,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim) {
-    UNPACK((llk_unpack_AB_face_compressed_mm<ct_dim, clear_src, finalize>(
-        in0_cb_id, in1_cb_id, base_address_meta, kt_dim)));
+    UNPACK((llk_unpack_AB_face_compressed_mm<ct_dim, finalize>(in0_cb_id, in1_cb_id, base_address_meta, kt_dim)));
     MATH((llk_math_face_compressed_mm<ct_dim, finalize>(in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim)));
 }
 
@@ -159,7 +159,6 @@ ALWI void face_compressed_mm_block(
  * | Argument           | Description                                                                                    | Type     | Valid Range                                      | Required              |
  * |--------------------|------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | ct_dim             | The width of the output matrix in tiles                                                        | uint32_t | 1 to 16 (compile-time)                           | False (default 1)     |
- * | clear_src          | Whether to clear SrcB before unpacking (the activation fills only part of SrcB)                | bool     | true/false                                       | False (default true)  |
  * | finalize           | Whether this unpack performs the split-accumulation finalize (ct_dim == 1)                     | bool     | true/false                                       | False (default true)  |
  * | in0_cb_id          | The identifier of the input activation circular buffer (CB)                                    | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id          | The identifier of the compressed-weight circular buffer (CB)                                   | uint32_t | 0 to 31                                          | True                  |
@@ -167,14 +166,13 @@ ALWI void face_compressed_mm_block(
  * | kt_dim             | The inner dimension in tiles                                                                   | uint32_t | Must be an even number from 2 to 256 (inclusive) | True                  |
  */
 // clang-format on
-template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true>
+template <std::uint32_t ct_dim = 1, bool finalize = true>
 ALWI void face_compressed_mm_block_unpack(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
     const std::uint32_t base_address_meta,
     const std::uint32_t kt_dim) {
-    UNPACK((llk_unpack_AB_face_compressed_mm<ct_dim, clear_src, finalize>(
-        in0_cb_id, in1_cb_id, base_address_meta, kt_dim)));
+    UNPACK((llk_unpack_AB_face_compressed_mm<ct_dim, finalize>(in0_cb_id, in1_cb_id, base_address_meta, kt_dim)));
 }
 
 // clang-format off
