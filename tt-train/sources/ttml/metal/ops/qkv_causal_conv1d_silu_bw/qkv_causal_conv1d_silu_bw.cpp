@@ -56,16 +56,17 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
         const auto grid = input.device()->compute_with_storage_grid_size();
         const uint32_t cores = grid.x * grid.y;
         const uint32_t blocks = std::max<uint32_t>(channels / std::max<uint32_t>(channel_chunk_size, 1), 1);
-        const uint32_t Mt = std::max<uint32_t>(sequence / tt::constants::TILE_HEIGHT, 1);
+        const uint32_t sequence_tiles = std::max<uint32_t>(sequence / tt::constants::TILE_HEIGHT, 1);
         uint64_t best_cost = ~0ULL;
-        for (uint32_t splits = 1; splits <= Mt; ++splits) {
-            const uint64_t items = static_cast<uint64_t>(blocks) * splits;
+        for (uint32_t candidate = 1; candidate <= sequence_tiles; ++candidate) {
+            const uint64_t items = static_cast<uint64_t>(blocks) * candidate;
             const uint64_t rounds = (items + cores - 1) / cores;
-            const uint64_t tiles_per_item = (Mt + splits - 1) / splits + (splits > 1 ? 1 : 0);
+            const uint64_t halo_tiles = candidate > 1 ? 1 : 0;
+            const uint64_t tiles_per_item = (sequence_tiles + candidate - 1) / candidate + halo_tiles;
             const uint64_t cost = rounds * tiles_per_item;
             if (cost < best_cost) {
                 best_cost = cost;
-                sequence_splits = splits;
+                sequence_splits = candidate;
             }
         }
     }
@@ -87,7 +88,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
 
     auto outputs = ttnn::prim::ttml_qkv_causal_conv1d_silu_bw(
         grad_q, grad_k, grad_v, input, history, tap0, tap1, tap2, tap3, params);
-    // Partials are fp32 [4, splits*32, C]: one fp32 row reduction (reducing an outer dim in fp32 is ~20x slower),
+    // Partials are fp32 [4, sequence_splits*32, C]: one fp32 row reduction (reducing an outer dim in fp32 is ~20x
+    // slower),
     // then cast the [4, 1, C] result once.
     auto grad_taps =
         ttnn::typecast(ttnn::sum(outputs[1], ttsl::SmallVector<int>{1}, /*keepdim=*/true), ttnn::DataType::BFLOAT16);

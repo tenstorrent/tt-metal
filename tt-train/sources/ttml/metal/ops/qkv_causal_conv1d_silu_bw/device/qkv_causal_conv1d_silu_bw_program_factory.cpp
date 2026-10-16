@@ -91,15 +91,15 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     const auto& grad_input = outputs[0].mesh_tensor();
     const auto& grad_tap_partial = outputs[1].mesh_tensor();
 
-    const uint32_t Mt = attrs.sequence / tt::constants::TILE_HEIGHT;
-    const uint32_t Qt = attrs.q_width / tt::constants::TILE_WIDTH;
-    const uint32_t Kt = attrs.k_width / tt::constants::TILE_WIDTH;
-    const uint32_t Vt = attrs.v_width / tt::constants::TILE_WIDTH;
-    const uint32_t Ct = Qt + Kt + Vt;
-    const uint32_t block_ct = attrs.channel_chunk_size / tt::constants::TILE_WIDTH;
-    const uint32_t num_blocks = Ct / block_ct;
-    const uint32_t splits = attrs.sequence_splits;
-    const auto dist = distribute(input.device().compute_with_storage_grid_size(), num_blocks * splits);
+    const uint32_t sequence_tiles = attrs.sequence / tt::constants::TILE_HEIGHT;
+    const uint32_t q_tiles = attrs.q_width / tt::constants::TILE_WIDTH;
+    const uint32_t k_tiles = attrs.k_width / tt::constants::TILE_WIDTH;
+    const uint32_t v_tiles = attrs.v_width / tt::constants::TILE_WIDTH;
+    const uint32_t channel_tiles = q_tiles + k_tiles + v_tiles;
+    const uint32_t channel_tiles_per_block = attrs.channel_chunk_size / tt::constants::TILE_WIDTH;
+    const uint32_t num_blocks = channel_tiles / channel_tiles_per_block;
+    const uint32_t sequence_splits = attrs.sequence_splits;
+    const auto dist = distribute(input.device().compute_with_storage_grid_size(), num_blocks * sequence_splits);
 
     const m2::DFBSpecName ACT_RM{"act_rm"}, ACT_TILE{"act_tile"}, WEIGHTS{"weights"}, GRAD_OUT{"grad_out"},
         PREACT{"preact"}, SIGMOID{"sigmoid"}, DC_TILE{"dc_tile"}, DC_RM{"dc_rm"}, ACC{"acc"}, GRAD_TAP{"grad_tap"},
@@ -110,10 +110,11 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
 
     const auto bf16 = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     m2::Group<m2::DataflowBufferSpec> dfbs;
-    for (const auto& dfb : qkv_conv_bw_dfbs(block_ct, bf16)) {
+    for (const auto& dfb : qkv_conv_bw_dfbs(channel_tiles_per_block, bf16)) {
         dfbs.push_back(make_dfb(m2::DFBSpecName{std::string(dfb.name)}, dfb.tiles, dfb.format));
     }
-    const auto window_bytes = static_cast<uint32_t>(qkv_conv_bw_window_bytes(block_ct, input.element_size()));
+    const auto window_bytes =
+        static_cast<uint32_t>(qkv_conv_bw_window_bytes(channel_tiles_per_block, input.element_size()));
 
     m2::KernelSpec reader{
         .unique_id = READER,
@@ -131,7 +132,12 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
              tensor(TAP2),
              tensor(TAP3)},
         .compile_time_args =
-            {{"block_ct", block_ct}, {"Mt", Mt}, {"splits", splits}, {"Qt", Qt}, {"Kt", Kt}, {"Vt", Vt}},
+            {{"channel_tiles_per_block", channel_tiles_per_block},
+             {"sequence_tiles", sequence_tiles},
+             {"sequence_splits", sequence_splits},
+             {"q_tiles", q_tiles},
+             {"k_tiles", k_tiles},
+             {"v_tiles", v_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
@@ -141,7 +147,11 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
         .dfb_bindings = {consumer(DC_RM), producer(DCV_RM), consumer(OUTPUT), consumer(GRAD_TAP)},
         .scratchpad_bindings = {{DC_WINDOW, "dc_window"}},
         .tensor_bindings = {tensor(GRAD_INPUT), tensor(GRAD_TAP_PARTIAL)},
-        .compile_time_args = {{"block_ct", block_ct}, {"Mt", Mt}, {"splits", splits}, {"Ct", Ct}},
+        .compile_time_args =
+            {{"channel_tiles_per_block", channel_tiles_per_block},
+             {"sequence_tiles", sequence_tiles},
+             {"sequence_splits", sequence_splits},
+             {"channel_tiles", channel_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -155,7 +165,10 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
                          consumer(SIGMOID),  producer(DC_TILE),  consumer(DC_TILE),  producer(DC_RM),
                          producer(ACC),      consumer(ACC),      producer(GRAD_TAP), consumer(DCV_RM),
                          producer(DCV_TILE), consumer(DCV_TILE), producer(OUTPUT),   consumer(ONES)},
-        .compile_time_args = {{"block_ct", block_ct}, {"Mt", Mt}, {"splits", splits}},
+        .compile_time_args =
+            {{"channel_tiles_per_block", channel_tiles_per_block},
+             {"sequence_tiles", sequence_tiles},
+             {"sequence_splits", sequence_splits}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = compute_hw,
     };

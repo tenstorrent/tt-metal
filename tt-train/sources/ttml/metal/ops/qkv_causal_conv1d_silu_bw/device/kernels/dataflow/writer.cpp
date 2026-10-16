@@ -17,7 +17,7 @@ constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
 // Keeps the previous dc tile as rows in a 35-row window. When the next dc tile arrives, its first 3 rows complete
 // the window, 4 shifted views are pushed for the grad_input conv of the previous tile, then grad_input is written.
-template <uint32_t block_ct, uint32_t Mt, uint32_t splits, uint32_t Ct>
+template <uint32_t channel_tiles_per_block, uint32_t sequence_tiles, uint32_t sequence_splits, uint32_t channel_tiles>
 TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     const auto grad_input = TensorAccessor(tensor::grad_input);
     const auto grad_tap_partial = TensorAccessor(tensor::grad_tap_partial);
@@ -28,7 +28,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     Scratchpad<uint16_t> window(scratch::dc_window);
     Noc noc;
 
-    constexpr uint32_t row_bytes = block_ct * tt::constants::TILE_WIDTH * sizeof(uint16_t);
+    constexpr uint32_t row_bytes = channel_tiles_per_block * tt::constants::TILE_WIDTH * sizeof(uint16_t);
     constexpr uint32_t view_bytes = tile_height * row_bytes;
     const uint32_t tile_bytes = output.get_entry_size();
     const uint32_t grad_tap_tile_bytes = grad_tap.get_entry_size();  // fp32 tiles
@@ -38,7 +38,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     const uint32_t self_y = my_y[noc.get_noc_id()];
 
     const auto push_views = [&]() {
-        dc_views.reserve_back(tap_count * block_ct);
+        dc_views.reserve_back(tap_count * channel_tiles_per_block);
         for (uint32_t tap = 0; tap < tap_count; ++tap) {
             noc.async_read(
                 self,
@@ -48,34 +48,34 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
                 {.offset_bytes = tap * view_bytes});
         }
         noc.async_read_barrier();
-        dc_views.push_back(tap_count * block_ct);
+        dc_views.push_back(tap_count * channel_tiles_per_block);
     };
     const auto write_output = [&](uint32_t mt, uint32_t ct_start) {
-        output.wait_front(block_ct);
-        for (uint32_t ct = 0; ct < block_ct; ++ct) {
+        output.wait_front(channel_tiles_per_block);
+        for (uint32_t ct = 0; ct < channel_tiles_per_block; ++ct) {
             noc.async_write(
                 output,
                 grad_input,
                 tile_bytes,
                 {.offset_bytes = ct * tile_bytes},
-                {.page_id = mt * Ct + ct_start + ct});
+                {.page_id = mt * channel_tiles + ct_start + ct});
         }
         noc.async_write_barrier();
-        output.pop_front(block_ct);
+        output.pop_front(channel_tiles_per_block);
     };
 
     for (uint32_t item = 0; item < wi_count; ++item) {
         const uint32_t work = wi_start + item;
-        const uint32_t block = work / splits;
-        const uint32_t split = work % splits;
-        const uint32_t ct_start = block * block_ct;
-        const uint32_t m0 = split * Mt / splits;
-        const uint32_t m1 = (split + 1) * Mt / splits;
-        const bool has_halo = m1 < Mt;
+        const uint32_t block = work / sequence_splits;
+        const uint32_t split = work % sequence_splits;
+        const uint32_t ct_start = block * channel_tiles_per_block;
+        const uint32_t m0 = split * sequence_tiles / sequence_splits;
+        const uint32_t m1 = (split + 1) * sequence_tiles / sequence_splits;
+        const bool has_halo = m1 < sequence_tiles;
         const uint32_t dc_tiles = m1 - m0 + (has_halo ? 1 : 0);
 
         for (uint32_t k = 0; k < dc_tiles; ++k) {
-            dc_rm.wait_front(block_ct);
+            dc_rm.wait_front(channel_tiles_per_block);
             const uint32_t dc_addr = dc_rm.get_read_ptr();
             if (k > 0) {
                 noc.async_read(
@@ -89,7 +89,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
             }
             noc.async_read(self, window, view_bytes, {.noc_x = self_x, .noc_y = self_y, .addr = dc_addr}, {});
             noc.async_read_barrier();
-            dc_rm.pop_front(block_ct);
+            dc_rm.pop_front(channel_tiles_per_block);
             if (k > 0) {
                 write_output(m0 + k - 1, ct_start);
             }
@@ -103,19 +103,19 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
             write_output(m1 - 1, ct_start);
         }
 
-        grad_tap.wait_front(tap_count * block_ct);
+        grad_tap.wait_front(tap_count * channel_tiles_per_block);
 
         for (uint32_t tap = 0; tap < tap_count; ++tap) {
-            for (uint32_t ct = 0; ct < block_ct; ++ct) {
+            for (uint32_t ct = 0; ct < channel_tiles_per_block; ++ct) {
                 noc.async_write(
                     grad_tap,
                     grad_tap_partial,
                     grad_tap_tile_bytes,
-                    {.offset_bytes = (tap * block_ct + ct) * grad_tap_tile_bytes},
-                    {.page_id = (tap * splits + split) * Ct + ct_start + ct});
+                    {.offset_bytes = (tap * channel_tiles_per_block + ct) * grad_tap_tile_bytes},
+                    {.page_id = (tap * sequence_splits + split) * channel_tiles + ct_start + ct});
             }
         }
         noc.async_write_barrier();
-        grad_tap.pop_front(tap_count * block_ct);
+        grad_tap.pop_front(tap_count * channel_tiles_per_block);
     }
 }

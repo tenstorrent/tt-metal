@@ -17,7 +17,13 @@ constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
 // Per work item (block, split): weights, then for every dc tile a 35-row input window (3 rows of history or
 // previous rows + 32 new rows), 4 shifted views of it, and the matching grad_q/k/v tiles.
-template <uint32_t block_ct, uint32_t Mt, uint32_t splits, uint32_t Qt, uint32_t Kt, uint32_t Vt>
+template <
+    uint32_t channel_tiles_per_block,
+    uint32_t sequence_tiles,
+    uint32_t sequence_splits,
+    uint32_t q_tiles,
+    uint32_t k_tiles,
+    uint32_t v_tiles>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
@@ -34,7 +40,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     Scratchpad<uint16_t> window(scratch::act_window);
     Noc noc;
 
-    constexpr uint32_t row_bytes = block_ct * tt::constants::TILE_WIDTH * sizeof(uint16_t);
+    constexpr uint32_t row_bytes = channel_tiles_per_block * tt::constants::TILE_WIDTH * sizeof(uint16_t);
     constexpr uint32_t view_bytes = tile_height * row_bytes;
     static_assert(row_bytes % L1_ALIGNMENT == 0 && row_bytes % DRAM_ALIGNMENT == 0);
     const uint32_t tile_bytes = weights.get_entry_size();
@@ -53,27 +59,39 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
 
     for (uint32_t item = 0; item < wi_count; ++item) {
         const uint32_t work = wi_start + item;
-        const uint32_t block = work / splits;
-        const uint32_t split = work % splits;
-        const uint32_t ct_start = block * block_ct;
+        const uint32_t block = work / sequence_splits;
+        const uint32_t split = work % sequence_splits;
+        const uint32_t ct_start = block * channel_tiles_per_block;
         const uint32_t col_bytes = ct_start * tt::constants::TILE_WIDTH * sizeof(uint16_t);
-        const uint32_t m0 = split * Mt / splits;
-        const uint32_t m1 = (split + 1) * Mt / splits;
-        const uint32_t dc_tiles = m1 - m0 + (m1 < Mt ? 1 : 0);
+        const uint32_t m0 = split * sequence_tiles / sequence_splits;
+        const uint32_t m1 = (split + 1) * sequence_tiles / sequence_splits;
+        const uint32_t dc_tiles = m1 - m0 + (m1 < sequence_tiles ? 1 : 0);
 
-        weights.reserve_back(tap_count * block_ct);
-        for (uint32_t ct = 0; ct < block_ct; ++ct) {
+        weights.reserve_back(tap_count * channel_tiles_per_block);
+        for (uint32_t ct = 0; ct < channel_tiles_per_block; ++ct) {
             const uint32_t page = ct_start + ct;
             noc.async_read(tap0, weights, tile_bytes, {.page_id = page}, {.offset_bytes = ct * tile_bytes});
             noc.async_read(
-                tap1, weights, tile_bytes, {.page_id = page}, {.offset_bytes = (block_ct + ct) * tile_bytes});
+                tap1,
+                weights,
+                tile_bytes,
+                {.page_id = page},
+                {.offset_bytes = (channel_tiles_per_block + ct) * tile_bytes});
             noc.async_read(
-                tap2, weights, tile_bytes, {.page_id = page}, {.offset_bytes = (2 * block_ct + ct) * tile_bytes});
+                tap2,
+                weights,
+                tile_bytes,
+                {.page_id = page},
+                {.offset_bytes = (2 * channel_tiles_per_block + ct) * tile_bytes});
             noc.async_read(
-                tap3, weights, tile_bytes, {.page_id = page}, {.offset_bytes = (3 * block_ct + ct) * tile_bytes});
+                tap3,
+                weights,
+                tile_bytes,
+                {.page_id = page},
+                {.offset_bytes = (3 * channel_tiles_per_block + ct) * tile_bytes});
         }
         noc.async_read_barrier();
-        weights.push_back(tap_count * block_ct);
+        weights.push_back(tap_count * channel_tiles_per_block);
 
         for (uint32_t k = 0; k < dc_tiles; ++k) {
             const uint32_t mt = m0 + k;
@@ -116,7 +134,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             }
             noc.async_read_barrier();
 
-            activation.reserve_back(tap_count * block_ct);
+            activation.reserve_back(tap_count * channel_tiles_per_block);
             for (uint32_t tap = 0; tap < tap_count; ++tap) {
                 noc.async_read(
                     self,
@@ -125,35 +143,35 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                     {.noc_x = self_x, .noc_y = self_y, .addr = window_base + tap * row_bytes},
                     {.offset_bytes = tap * view_bytes});
             }
-            grad_out.reserve_back(block_ct);
-            for (uint32_t local_ct = 0; local_ct < block_ct; ++local_ct) {
+            grad_out.reserve_back(channel_tiles_per_block);
+            for (uint32_t local_ct = 0; local_ct < channel_tiles_per_block; ++local_ct) {
                 const uint32_t ct = ct_start + local_ct;
-                if (ct < Qt) {
+                if (ct < q_tiles) {
                     noc.async_read(
                         grad_q,
                         grad_out,
                         tile_bytes,
-                        {.page_id = mt * Qt + ct},
+                        {.page_id = mt * q_tiles + ct},
                         {.offset_bytes = local_ct * tile_bytes});
-                } else if (ct < Qt + Kt) {
+                } else if (ct < q_tiles + k_tiles) {
                     noc.async_read(
                         grad_k,
                         grad_out,
                         tile_bytes,
-                        {.page_id = mt * Kt + (ct - Qt)},
+                        {.page_id = mt * k_tiles + (ct - q_tiles)},
                         {.offset_bytes = local_ct * tile_bytes});
                 } else {
                     noc.async_read(
                         grad_v,
                         grad_out,
                         tile_bytes,
-                        {.page_id = mt * Vt + (ct - Qt - Kt)},
+                        {.page_id = mt * v_tiles + (ct - q_tiles - k_tiles)},
                         {.offset_bytes = local_ct * tile_bytes});
                 }
             }
             noc.async_read_barrier();
-            activation.push_back(tap_count * block_ct);
-            grad_out.push_back(block_ct);
+            activation.push_back(tap_count * channel_tiles_per_block);
+            grad_out.push_back(channel_tiles_per_block);
         }
     }
 }
