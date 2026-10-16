@@ -20,6 +20,8 @@ from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
     apply_logical_pad_mask,
     ALIGNMENT,
     test_conv3d_fp32_operand_split as run_conv3d_fp32_operand_split,
+    test_conv3d_cache_address as run_conv3d_cache_address,
+    test_conv3d_cache_hash as run_conv3d_cache_hash,
 )
 
 # Test configuration constants
@@ -1593,3 +1595,22 @@ def test_conv3d_qwen_shapes(
 )
 def test_conv3d_fp32_operand_split_full_length(device, C_in, C_out, kernel, T):
     run_conv3d_fp32_operand_split(device, C_in, C_out, kernel, T)
+
+
+# The original 64-channel 16^3 shapes; the unit tests run a 32-channel 6x8x8 one.
+CACHE_SHAPES = [
+    [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "replicate"],
+    [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), 2, (0, 1, 1), "replicate"],
+]
+
+
+@pytest.mark.parametrize("input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode", CACHE_SHAPES)
+def test_conv3d_cache_address_large(
+    device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode
+):
+    run_conv3d_cache_address(device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode)
+
+
+@pytest.mark.parametrize("input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode", CACHE_SHAPES)
+def test_conv3d_cache_hash_large(device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode):
+    run_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode)
