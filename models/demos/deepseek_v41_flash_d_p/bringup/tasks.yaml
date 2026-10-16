@@ -3224,6 +3224,13 @@ tasks:
     - ffn_norm
     - router
     layer: 2
+  frozen:
+    at: '2026-10-16T22:52:31'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_13_router.py: 347d3922b0585a5ff7481f1f7042914b8b5ef385a501841cc4b38da537c843bb
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_source.experts
   title: enc_source experts (moe) on device, layer 2
   step: implement
