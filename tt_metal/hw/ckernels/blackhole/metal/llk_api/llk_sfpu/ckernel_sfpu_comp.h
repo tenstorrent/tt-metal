@@ -233,7 +233,8 @@ inline void calculate_nez_uint32() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
-#pragma GCC unroll 8
+    // Full unroll: the compiler records the row in the replay buffer once per call, not once per 8 rows.
+#pragma GCC unroll 32
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];
         vInt val = 0;

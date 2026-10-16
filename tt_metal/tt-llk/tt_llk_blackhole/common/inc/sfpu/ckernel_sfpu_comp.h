@@ -336,7 +336,8 @@ sfpi_inline sfpi::vInt _int_sign_bit_(const sfpi::vInt x)
 template <bool SCALAR_NEGATIVE, int ITERATIONS>
 sfpi_inline void _comp_unary_int_lt_rows_(const sfpi::vInt s)
 {
-#pragma GCC unroll 8
+    // Full unroll: the compiler records the row in the replay buffer once per call, not once per 8 rows.
+#pragma GCC unroll 32
     for (int d = 0; d < ITERATIONS; d++)
     {
         const sfpi::vInt v    = sfpi::dst_reg[0];
@@ -356,7 +357,7 @@ sfpi_inline void _comp_unary_int_lt_rows_(const sfpi::vInt s)
 template <bool SCALAR_NEGATIVE, int ITERATIONS>
 sfpi_inline void _comp_unary_int_gt_rows_(const sfpi::vInt s)
 {
-#pragma GCC unroll 8
+#pragma GCC unroll 32
     for (int d = 0; d < ITERATIONS; d++)
     {
         const sfpi::vInt v     = sfpi::dst_reg[0];
@@ -414,7 +415,7 @@ sfpi_inline void _comp_unary_int_all_true_()
 {
     _comp_unary_int_set_store_step_();
     const sfpi::vInt one = 1;
-#pragma GCC unroll 8
+#pragma GCC unroll 32
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::dst_reg[0].mode(ADDR_MOD_6) = one;
