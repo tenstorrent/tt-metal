@@ -6,22 +6,21 @@
 #include "api/compute/matmul.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/qkv_causal_conv1d_silu_layout.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
-
-static_assert(qkv_conv::max_dest_tiles <= compute_kernel_lib::DEST_AUTO_LIMIT);
 
 // The reader supplies, per channel tile, the four tap-shifted input tiles and, per channel block, the tap tiles
 // (weights in row 0). Scaling a tile's columns by a tap is a matmul with that tap's diagonal, so the four taps
 // accumulate in the destination registers with no partial round trip; SiLU then runs in place. The diagonals are
 // built here once per channel block, as the identity times the row-broadcast tap.
-template <uint32_t block_ct, uint32_t Mt, uint32_t group, uint32_t defer_first_rows>
+template <uint32_t block_ct, uint32_t Mt, uint32_t group, uint32_t dest_limit, uint32_t defer_first_rows>
 TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     using qkv_conv::tap_count;
+    static_assert(dest_limit <= compute_kernel_lib::DEST_AUTO_LIMIT);
     constexpr uint32_t weight_tiles = tap_count * block_ct;
     // Diagonals built per destination acquire.
-    constexpr uint32_t diag_group = qkv_conv::dest_group(weight_tiles);
+    constexpr uint32_t diag_group = qkv_conv::dest_group(weight_tiles, dest_limit);
     DataflowBuffer activation(dfb::act_tile);
     DataflowBuffer taps(dfb::taps);
     DataflowBuffer eye(dfb::eye);

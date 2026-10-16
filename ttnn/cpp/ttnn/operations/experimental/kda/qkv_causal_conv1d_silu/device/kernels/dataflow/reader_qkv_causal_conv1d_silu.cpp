@@ -10,7 +10,7 @@
 // shifted tile is four contiguous face copies out of the two strips.
 
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/qkv_conv_dataflow.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/qkv_causal_conv1d_silu_layout.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
@@ -23,6 +23,9 @@
 using namespace qkv_conv;
 
 static_assert(read_alignment % DRAM_ALIGNMENT == 0 && read_alignment % L1_ALIGNMENT == 0);
+
+// The face loops below are unrolled by hand: the reader is the bound on wide channel blocks, and without the pragmas
+// the single-block production case (48 channel tiles per block) takes 6% longer.
 
 template <
     uint32_t block_ct,
