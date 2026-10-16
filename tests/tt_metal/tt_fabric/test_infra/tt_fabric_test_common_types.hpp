@@ -157,6 +157,15 @@ enum class MeshTrafficScope { ALL, INTRA_MESH, INTER_MESH };
 // Channel trimming mode for test config expansion
 enum class ChannelTrimmingMode { NONE, CAPTURE, REPLAY };
 
+// Trimming rtoptions a test group's fabric is built with (see TestFixture::resolve_channel_trimming_settings)
+struct ChannelTrimmingSettings {
+    ChannelTrimmingMode mode = ChannelTrimmingMode::NONE;
+    bool capture_enabled = false;
+    std::string profile_path;
+
+    bool operator==(const ChannelTrimmingSettings&) const = default;
+};
+
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
     std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;

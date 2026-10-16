@@ -47,7 +47,7 @@ int get_channel_trimming_capture_rank() {
     if (!multihost::DistributedContext::is_initialized()) {
         return 0;
     }
-    return *multihost::DistributedContext::get_current_world()->rank();
+    return *multihost::DistributedContext::get_world_context()->rank();
 }
 
 std::filesystem::path get_channel_trimming_capture_dir(const std::string& logs_dir) {
