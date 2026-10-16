@@ -17,6 +17,7 @@ from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    LayerNrmseThresholds,
     assert_matches_reference,
     check_kimi_k3_accuracy,
     collect_mesh_accuracy_and_determinism_results,
@@ -143,6 +144,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             label=f"Synthetic Kimi-K3 T{_SEQUENCE} {layout} {interval} start={actual_start} length={length}",
             state_linf_threshold=None,
             pcc_threshold=_PCC_THRESHOLD,
+            nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.05, convolution=0.007),
         )
         assert all(
             marker.item() == 0 for marker in mismatch_markers
@@ -240,6 +242,7 @@ def test_kimi_k3_layer_1_real_weights_accuracy(
             tensor_parallel_axis,
             pcc_threshold=0.9995,
             valid_length=length,
+            nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.02, convolution=0.007),
         )
         for tensor in (hidden_tt, end_tt, output, state.recurrent, state.convolution):
             ttnn.deallocate(tensor)

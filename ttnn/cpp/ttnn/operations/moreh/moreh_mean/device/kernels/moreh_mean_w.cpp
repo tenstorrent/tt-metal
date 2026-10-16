@@ -84,16 +84,15 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::IterationShape::tiles(onetile),
                     ckl::CopyTile<ckl::input(
-                        dfb::input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+                        dfb::input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{
+                        dfb_input_obj},
                     ckl::CopyTile<
                         ckl::input(dfb::mask_w, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
-                        ckl::Dst::D1>{},
+                        ckl::Dst::D1>{dfb_mask_w_obj},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<ckl::output(
-                        dfb::masked_input,
-                        ckl::ReservePolicy::PerTile,
-                        ckl::PushPolicy::PerTile,
-                        kDataFormatReconfig)>{});
+                        dfb::masked_input, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{
+                        dfb_masked_input_obj});
                 dfb_input_id = dfb::masked_input;
             }
 
