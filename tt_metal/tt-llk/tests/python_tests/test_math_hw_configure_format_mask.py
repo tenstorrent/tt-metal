@@ -14,6 +14,8 @@ MATH programs each (srcA, srcB) pair through each writer and reads the config wo
 sources/math_hw_configure_format_mask_test.cpp for the result layout.
 """
 
+from collections import namedtuple
+
 from conftest import wormhole_only
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
@@ -44,6 +46,10 @@ INT8_MATH_SHAMT, INT8_MATH_MASK = 31, 0x80000000
 FIELD_WIDTH_MASK = 0xF  # DATA_FORMAT_BIT_COUNT = 4
 INT8 = 14
 INT32 = 8
+
+# One result record: the writer index, the (srcA, srcB) formats it was given, and the
+# ALU_FORMAT_SPEC_REG config word read back after it ran.
+Record = namedtuple("Record", ["writer", "srca", "srcb", "word"])
 
 
 def _int8_math_enabled(raw_format):
@@ -89,20 +95,24 @@ def test_math_alu_format_writers_mask_to_field_width():
         num_records == len(WRITERS) * NUM_PAIRS
     ), f"unexpected record count {num_records}"
 
+    records = [
+        Record(*words[base : base + words_per_record])
+        for base in range(
+            HEADER_WORDS,
+            HEADER_WORDS + num_records * words_per_record,
+            words_per_record,
+        )
+    ]
+
     # The pair table must keep at least one SrcA whose value does not fit the field, or the
     # spill this test exists for is never exercised.
-    srca_values = [
-        words[HEADER_WORDS + r * words_per_record + 1] for r in range(num_records)
-    ]
+    srca_values = [record.srca for record in records]
     assert any(
         srca > FIELD_WIDTH_MASK for srca in srca_values
     ), f"no SrcA format wider than the field in the pair table: {srca_values}"
 
     failures = []
-    for r in range(num_records):
-        base = HEADER_WORDS + r * words_per_record
-        writer, srca, srcb, word = words[base : base + words_per_record]
-
+    for writer, srca, srcb, word in records:
         got_srca = (word & SRCA_MASK) >> SRCA_SHAMT
         got_srcb = (word & SRCB_MASK) >> SRCB_SHAMT
         got_int8 = (word & INT8_MATH_MASK) >> INT8_MATH_SHAMT
