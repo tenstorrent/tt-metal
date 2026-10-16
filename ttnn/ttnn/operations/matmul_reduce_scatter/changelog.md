@@ -140,3 +140,129 @@
   - The first W 2 build missed one `core_m → win_m` in the multicast sender plan (a static_assert caught it at compile time).
   - The positional deadlock assertion holds only for mirrored orders. Under the shared descending-key order (line), an arrival can be produced at the same entry index and is lagged, so the assertion stays mirror-only (as at W 1).
 - **Tests added**: `test_every_partial_exactly_once_waves` (acceptance file): the exact-integer partial check with the wave split engaged (scatter -1 with 2 and 3 waves, ragged; scatter -2 with 2 waves), asserting `_LAST_PLAN["waves"] > 1`. `_LAST_PLAN` gained `waves`. Perf-only env knobs: `MRS_WAVES`, `MRS_INC_PER_WAVE`, `MRS_PORT_GROUP`, `MRS_LAG=fin`.
+
+## Perf 1 — perf tournament round 1 (focus: Kimi K2.7 o_proj, 640x2048x7168, scatter -1)
+- **Date**: 2026-10-16
+- **Config**: the flagged LOOSE_CASES[0] exactly: A bf16 (1,1,640,2048), W bf8b (2048,7168), scatter -1, Ring, cluster_axis 1, 2 links, HiFi2, user `fp32_dest_acc_en=False`. The op's own fp32 full-sync DEST stays as is; no precision knob was touched.
+- **Setup**: QB2 1x4 TORUS_XY, traced (`MRS_PERF_TRACE=1`). Op latency = max over the 4 chips of DEVICE KERNEL DURATION. The new permanent stage zones are on in every number below unless noted.
+
+### Instrumentation (permanent)
+- Restored `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp`. `MaybeDeviceZoneScope` is `DeviceZoneScopedN`, so it is free when the profiler is off.
+- The opt-in `MRS_ZONES` / `MRS_ZONE` macros in all 5 kernels became permanent `MaybeDeviceZoneScope` zones, and the `MRS_ZONES` define plumbing was removed from the descriptor.
+- New zones: `RD_BARRIER` (the reader's read barrier, split out of `RD_RESV`), `WR_BARRIER` (the fin write barrier) and `PORT_GATHER_UNIT` (the port reader, per unit).
+- Two per-core / per-chunk zones were removed because they could silently exhaust the 250-marker budget: `MBOX_WAIT` and `CHUNK_WAIT`. Max markers per RISC is now 140.
+- Tools:
+  - `tests/.../matmul_reduce_scatter/perf_zone_report.py`: per-zone and per-occurrence timeline, plus a marker-budget check.
+  - `perf_summary.py`: per-case traced replay maxima.
+  - `test_matmul_reduce_scatter_perf.py` gained `MRS_PERF_GUARD=1`, which adds 6 guard cells.
+
+### Measured breakdown (focus, before)
+- **Whole op**: 125.9-126.8 µs with zones on; 124.3 µs median with zones off.
+- **Cumulative peel**:
+
+  | Variant | µs |
+  |---|---|
+  | full | 126.8 |
+  | no DRAM | 118.3 |
+  | + no mcast (the compute floor) | 112.6 |
+  | + no compute (transport only) | 59.9 |
+  | compute only stubbed | 100.8 |
+
+  The reader DM path alone takes ~100 µs, so compute and DM are close to balanced.
+- **Matmul zone (MM)** per entry: 36.6 / 24.4 / 27.5 / 24.4 µs.
+  - The pure compute is 24.4 µs per entry: 896 tile-mults per core at 36.8 cycles each, against a HiFi2 peak of ~32, so ~87% FPU utilization.
+  - The gap is consistent with full-sync fp32 packing, since math stalls for each of the 56 per-window L1-acc packs.
+- **Fill**: the step-0 reads landed by 6.5 µs, but the step-0 multicast ended at 12.7 µs.
+- **Entry 2**: +3 µs, from a reader blocked in `land_arrivals_block` on a late arrival (ARR_WAIT max 63.5 vs median 57.6), which stalled its multicast lines.
+- **Ranked bottleneck**:
+  1. MM payload: 97.6 µs, ~13% headroom to FPU peak.
+  2. Input-DM exposure: ~14 µs on top of the compute floor, mostly the fill.
+  3. FIN adds plus write tail: ~10 µs.
+  4. Transport: 60 µs alone, hidden.
+- **Roofline gate**: the matmul has ~13% left before FPU peak. The DM fill has headroom: the first window (1.6 MB) needs about 4 µs at 400 GB/s, but takes 12.7 µs.
+
+### Portfolio (hard cap: 2 experiments)
+1. **`entry0_fill`** (reader): cut the entry-0 fill and the reader's per-step cost, including non-blocking arrival landing.
+2. **`dest_resident_k`** (compute): amortize the full-sync fp32 pack by keeping each output subblock in DEST across K-windows.
+
+Considered but not tested (cap):
+- More matmul cores (the column strip). It measured 21.3 µs per entry in Refinement 2, but transport became binding.
+- FIN / tail work.
+
+### Verdicts
+- **`entry0_fill` — WIN.** Focus 126.1-126.6 → 123.1-124.0 µs.
+  - Cause: `ReceiverPipe::receive()` fuses the consumer-ready ack with the data wait. The walk is a → a2 → b → b2, so an A sender waited for W-reading receivers' DRAM barriers, and W waited for the slowest A column.
+  - Winner: A receivers ack right after reserving their slot, and W keeps the fused order. Arrivals are landed by polling in every loader wait (`try_land`), so the loader never blocks on the fabric.
+  - Nulls and regressions from the menu:
+
+    | Variant | Focus µs |
+    |---|---|
+    | full 4-family split | 142-159 (concurrent A-column / W-row multicasts stalled in the NoC) |
+    | per-operand split | 134.3 |
+    | look-ahead after own send | 126.8-127.0 |
+    | deferred step-0 W look-ahead | 124.8 (net loss) |
+    | fast DRAM address table | null |
+    | early ack for all families | 125.7 (noisy) |
+
+  - Domain, standalone: GLM −5.0, MiMo −2.3, Linear −7.7..−11, 1 link −1.8 µs; stream regime flat.
+- **`dest_resident_k` — WIN.** Subblock-outer / K-inner raw-LLK matmul over super-blocks of S windows.
+
+  | Option | Compute floor µs | Focus whole op µs |
+  |---|---|---|
+  | helper (baseline) | 112.8 | 126.4 |
+  | raw S=1 | 111.6 | 124.7 |
+  | **raw S=2, cap 4** | 109.1 | 121.9-123.8 |
+  | raw S=2, cap 3 | — | 133.3 (regression: no look-ahead room) |
+  | raw S=4 (full K) | 106.4 | 124.4-125.9 |
+
+  - S=4 also regressed Linear (+3..+6.6 µs) and bf16 W (+10.5 µs). The bursts consumed windows faster than the ~4.5 µs-per-window W stream could supply them, so S=2 was chosen.
+  - The "late credit" reader variant was null.
+  - Precision was identical in every option (rel-RMS 0.00486).
+
+### What graduated (both; they touch disjoint stages)
+- **One unqualified path for both changes. No predicate and no dual path. The replaced code was deleted.**
+- **Reader** (`kernels/matmul_reduce_scatter_reader.cpp`):
+  - split `rx_ack` / `rx_wait` with A acked early;
+  - polled `try_land`, plus a final `ARR_WAIT` drain;
+  - `land_arrivals_block` and the reader's lag handling were deleted. Compute still uses the lag bit.
+- **Compute** (`kernels/matmul_reduce_scatter_compute.cpp`): the `matmul_block` helper call was replaced by the raw `matmul_entry`.
+  - It packs once per super-block of `super_block` K-windows (CT arg 13).
+  - Entry 0 always uses 1, because its windows arrive at DRAM pace.
+  - It honors `SKIP_COMPUTE`, so `MRS_ABLATE=compute` still works.
+- **Descriptor**: `super_block_plan()` sets `SUPER_BLOCK = 2` when `Kt/kb` is even and the streamed windows deepened to 4 still fit L1. Otherwise it uses S = 1 at the old depths. The S=1 fallback is the "cannot" case: an odd K-block count, or no L1 room.
+  - `footprint()` takes a `depths` override.
+  - `_LAST_PLAN` gains `super_block`.
+- **No carve-outs.**
+- **Docs**: `l1_ledger.md` (focus 837 → 956 KiB, MiMo 1328 KiB) and the `op_design.md` buffer-depth table were updated.
+
+### Whole op, before → after (traced, median of 3 replays, max over chips, zones on in both)
+| Cell (guard set: one per kernel path x placement) | before | after | Δ |
+|---|---|---|---|
+| **Focus** 640x2048x7168, ring, 2 links (resident A) | 126.0 | **119.3** | −6.7 (−5.3%) |
+| GLM 640x4096x6144 (resident A) | 200.1 | 186.0 | −14.1 |
+| MiMo 2048x2048x4096 sd -2, fp32acc (resident W) | 219.9 | 205.8 | −14.1 |
+| Focus, Linear | 168.3 | 152.9 | −15.4 |
+| Focus, 1 link | 155.7 | 151.3 | −4.4 |
+| K3 FFN 640x8448x7168 (stream regime, kb 12) | 539.1 | 540.8 | +1.7 (+0.3%, noise) |
+| 640x1536x2048 (one 2x2 subblock, S=1) | 55.8 | 54.5 | −1.3 |
+| 640x1536x128 (grid 10x1, S=1) | 30.3-30.4 | 31.0-31.3 | +0.8 (+2.6%) |
+| A bf8b x W bf16 640x2048x6144 | 138.6 | 137.6 | −1.0 |
+
+- **Zones off** (shipping default): focus 124.3 → ≤119.3 µs, against a target of 124.8. The "after" column was measured with zones on, so this is conservative.
+- **The narrow-N cell's +0.8 µs** reproduced in 3 sessions. It comes from the reader change: the new reader with the old compute gave 31.4 µs.
+  - At 2.6% it is inside the ±3% noise band, so it is not a measured material regression and does not earn a carve-out. A carve-out would mean a second reader path.
+  - It is recorded here for round 2.
+- **Accuracy**: unchanged.
+  - Precision baseline 6/6: focus rel-RMS 0.00454, MiMo 0.00455, A bf8b × W bf4b 0.00238.
+  - Perf harness: rel-RMS 0.00486 / 0.00487 / 0.00487.
+- **Golden** (EVAL_CAPTURE_L1=0):
+  - `test_golden.py` 939/939 (run in shape slices), `test_regression.py` 6/6, `test_fabric_configs.py` 24/24, `test_ring_mock.py` 72/72.
+  - Acceptance file: 41 + 12 + 12, run per placement group. That covers line, ring and test_ring linear, including `test_every_partial_exactly_once_waves` at S=2.
+  - When the acceptance file runs as one session, 12 fixture errors appear (`SetFabricConfig ... while devices are still open`). The baseline shows the same errors, so they come from the harness, not the op.
+- **SUPPORTED unchanged.**
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::matmul_block` | capability | The loop order is fixed K-block-outer / subblock-inner. It acquires and packs DEST per (K-block, subblock), so there is no mode that keeps an output subblock in DEST across several K-blocks and packs it once. It also cannot address a fronted multi-window region that the CB ring wrapped: the caller has to rewrite the UNPACK `fifo_rd_ptr` per window and pop the windows on the last subblock. | 112800 (focus compute floor); 126400 whole op | 109100 floor (S=2); 123500 whole op | `matmul_reduce_scatter_compute.cpp:99` (`matmul_entry`, raw `ckernel::matmul_block` at :150) |
+| `dataflow_kernel_lib` mcast `ReceiverPipe::receive()` | capability | `receive()` fuses the consumer-ready ack (semaphore up to the sender) with the blocking data-valid wait. There is no split ack / wait API, so a receiver cannot ack as soon as its slot is reserved and wait later, and the wait cannot run a caller poll hook (here, landing fabric arrivals). | 126100-126600 (focus whole op) | 123100-124000 | `matmul_reduce_scatter_reader.cpp:44` (`rx_ack`), `:51` (`rx_wait`) |

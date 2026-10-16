@@ -49,6 +49,13 @@ DEPTH_IN1 = 3  # stream regime: W K-block windows
 # shape whose resident operand misses the budget at depth 3 (MiMo: W 816 KiB per core) becomes resident at depth 2
 # (one window computing, one landing / prefetched) instead of falling back to re-reading the resident operand G times
 RESIDENT_STREAM_DEPTHS = tuple(int(d) for d in os.environ.get("MRS_RESIDENT_DEPTHS", "3,2").split(","))  # env: perf
+# DEST-resident K (Perf 1): each output subblock accumulates over a super-block of SUPER_BLOCK K-windows in fp32 DEST
+# and is packed once per super-block (half the full-sync fp32 L1-acc packs of a per-window pack). The super-block stays
+# fronted until its last subblock, so the streamed window CBs need SUPER_BLOCK + SUPER_BLOCK_EXTRA windows (the extra
+# ones are the loader's look-ahead; with none, focus 133 us vs 123). Falls back to 1 (pack per window, old depths)
+# when Kt / kb is odd or the deeper windows do not fit L1.
+SUPER_BLOCK = 2
+SUPER_BLOCK_EXTRA = 2
 DEPTH_HOLD = 2  # fp32 partial slots when some entry lags (lag 1 + current); a walk with no lagged entry needs 1
 # (each finish pops its slot before the next entry reserves one): hold_depth() derives it from the schedule
 DEPTH_HANDOFF = 2  # finished slots (a port gathers entry e while compute finishes e+1)
@@ -395,6 +402,7 @@ def footprint(
     hold_depths,
     waves_of,
     staging_floor_tiles=0,
+    depths=None,
 ):
     """Per matmul core L1 bytes (l1_ledger.md): operand windows + fp32 hold + the staging slice. The staging tensor is
     cached grow-only per mesh, so it is counted at max(what this call needs, what is already allocated).
@@ -404,7 +412,7 @@ def footprint(
     P = wv["P"]
     rA = resident and scatter_dim == -1
     rW = resident and scatter_dim == -2
-    dA, dW = window_depths(resident, depth if depth is not None else RESIDENT_STREAM_DEPTHS[0])
+    dA, dW = depths or window_depths(resident, depth if depth is not None else RESIDENT_STREAM_DEPTHS[0])
     a = tA * (core_m * Kt if rA else dA * wv["win_m"] * kb)
     w = tW * (Kt * core_n if rW else dW * kb * wv["win_n"])
     hold = HOLD_TILE_BYTES * hold_depths[resident] * P
@@ -441,6 +449,20 @@ def choose_k_block(Kt, budget, force_resident, **geo):
     raise NotImplementedError(
         "matmul_reduce_scatter: even kb=1 exceeds the L1 budget (regime DRAM-landing is deferred)"
     )
+
+
+def super_block_plan(Kt, kb, resident, depth, budget, geo):
+    """(S, (dA, dW)): the compute's DEST-resident super-block (K-windows per pack) and the operand window depths. S =
+    SUPER_BLOCK when it divides Kt / kb and the streamed windows deepened to S + SUPER_BLOCK_EXTRA still fit L1; else
+    1 at the regime's own depths. The resident operand's depth is unused (its CB holds the whole Kt slice)."""
+    base = window_depths(resident, depth)
+    S = SUPER_BLOCK
+    if S > 1 and (Kt // kb) % S == 0:
+        d = S + SUPER_BLOCK_EXTRA
+        deep = (max(d, base[0]), max(d, base[1]))
+        if footprint(kb, resident, depth=depth, Kt=Kt, depths=deep, **geo) <= budget:
+            return S, deep
+    return 1, base
 
 
 def _place_ports(strip, gx, gy, L):
@@ -690,6 +712,7 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
     resident, kb, depth = choose_k_block(Kt, _l1_budget(mesh), getattr(hooks, "_FORCE_XBLOCK_RESIDENCY", None), **geo)
     if os.environ.get("MRS_KB"):  # perf experiments only: cap the K-block (largest divisor of Kt <= MRS_KB)
         kb = max(d for d in range(1, kb + 1) if Kt % d == 0 and d <= int(os.environ["MRS_KB"]))
+    super_block, depths = super_block_plan(Kt, kb, resident, depth, _l1_budget(mesh), geo)
     half_split = mirror_split if resident else "k"
     chips_sched, slots = sched_of[resident]
     waves = waves_of[resident]
@@ -698,7 +721,8 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         "xblock": "resident" if resident else "stream",
         "schedule": kind,
         "kb": kb,
-        "depths": window_depths(resident, depth),
+        "depths": depths,
+        "super_block": super_block,
         "hold_depth": hold_depths[resident],
         "grid": (gd["grid_m"], gd["grid_n"]),
         "strip": gd["strip"],
@@ -738,7 +762,8 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         gd=gd,
         P=P,
         kb=kb,
-        depths=window_depths(resident, depth),
+        depths=depths,
+        super_block=super_block,
         depth_hold=hold_depths[resident],
         resident=resident,
         slots=slots,
@@ -904,6 +929,7 @@ def create_mesh_program_descriptor(ctx):
         num_entries,
         int(os.environ.get("MRS_FIN_ADD_FPU", FIN_ADD_FPU)),  # env: perf experiments only
         W,
+        ctx["super_block"],  # K-windows a subblock accumulates in DEST per pack (entry 0 packs per window)
     ]
     writer_ct = [CB_FINISHED, P, W, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, num_entries] + o_ct
     max_port_cores = -(-n_cores // L)  # matmul cores one port serves (link(k) = k mod L)
@@ -926,9 +952,6 @@ def create_mesh_program_descriptor(ctx):
     ablate_compute = [("SKIP_COMPUTE", "1"), ("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1")] if "compute" in ablate else []
     ablate_reader = [("MRS_SKIP_DRAM", "1")] if "dram" in ablate else []
     ablate_reader += [("MRS_SKIP_MCAST", "1")] if "mcast" in ablate else []
-    zones = [("MRS_ZONES", "1")] if os.environ.get("MRS_ZONES") else []
-    ablate_compute = ablate_compute + zones
-    ablate_reader = ablate_reader + zones
     dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
         processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
     )
@@ -1053,7 +1076,7 @@ def create_mesh_program_descriptor(ctx):
                 core_ranges=mm_crs,
                 compile_time_args=writer_ct,
                 runtime_args=w_rt,
-                defines=zones,
+                defines=[],
                 config=dm("RISCV_0", NOC1),
             )
             mc_cfg = ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True)
@@ -1128,7 +1151,7 @@ def create_mesh_program_descriptor(ctx):
                 core_ranges=used_port_crs,
                 compile_time_args=port_ct,
                 runtime_args=pr_rt,
-                defines=zones,
+                defines=[],
                 config=dm("RISCV_1", NOC0),
             )
             port_sender = ttnn.KernelDescriptor(
@@ -1137,7 +1160,7 @@ def create_mesh_program_descriptor(ctx):
                 core_ranges=used_port_crs,
                 compile_time_args=port_ct,
                 runtime_args=ps_rt,
-                defines=zones,
+                defines=[],
                 config=dm("RISCV_0", NOC1),
             )
             program.kernels = [reader, compute, writer, port_reader, port_sender]

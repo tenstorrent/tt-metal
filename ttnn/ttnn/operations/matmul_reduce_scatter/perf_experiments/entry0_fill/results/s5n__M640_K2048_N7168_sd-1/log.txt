@@ -1,0 +1,879 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (narrow) — kernels compile on demand
+SAFE_PYTEST: python -m tracy -r -m pytest -x /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/test_fill_perf.py::test_fill_case\[M640_K2048_N7168_sd-1\] -s --rootdir=/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill
+========================================
+2026-10-16 14:29:46.334 | INFO     | __main__:main:364 - Using port 8086
+2026-10-16 14:29:46.335 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-10-16 14:29:46.377 | INFO     | __main__:run_workload:399 - Test process started
+2026-10-16 14:29:47.299 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/malimpic/.cache/ttnn,model_cache_path=/home/malimpic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill
+configfile: ../../../../../../pytest.ini
+plugins: timeout-2.4.0, split-0.11.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, benchmark-5.2.3, dash-2.15.0, anyio-4.15.1
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/test_fill_perf.py::test_fill_case[M640_K2048_N7168_sd-1] 2026-10-16 14:29:49.039 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-10-16 14:29:49.039 | info     |             UMD | Cluster constructor started. (cluster.cpp:405)
+2026-10-16 14:29:49.039 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-10-16 14:29:49.039 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-10-16 14:29:49.044 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:654)
+2026-10-16 14:29:49.045 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-10-16 14:29:49.188 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-10-16 14:29:49.326 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-10-16 14:29:49.460 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-10-16 14:29:49.591 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-10-16 14:29:49.591 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:172)
+2026-10-16 14:29:49.591 | info     |             UMD | IOMMU: enabled (cluster.cpp:146)
+2026-10-16 14:29:49.591 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:149)
+2026-10-16 14:29:49.591 | info     |             UMD | Cluster constructor completed. (cluster.cpp:719)
+2026-10-16 14:29:49.593 | info     |             UMD | Starting devices in cluster (cluster.cpp:1305)
+2026-10-16 14:29:49.841 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1314)
+2026-10-16 14:29:49.874 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:435)
+2026-10-16 14:29:49.874 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:497)
+2026-10-16 14:29:49.874 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-10-16 14:29:49.874 | info     |          Fabric | Loaded physical groupings from: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-16 14:29:49.874 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:897)
+2026-10-16 14:29:49.875 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-10-16 14:29:49.875 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-10-16 14:29:49.875 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1731)
+2026-10-16 14:29:49.875 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-10-16 14:29:49.875 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_2D_TORUS_XY, reinitializing control plane (metal_env.cpp:331)
+2026-10-16 14:29:49.875 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:435)
+2026-10-16 14:29:49.875 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:497)
+2026-10-16 14:29:49.876 | warning  |          Fabric | TopologyMapper auto-discovery: requested fabric type TORUS_XY could not be realized on the discovered physical topology; using MESH which maps all 4 physical chips. This is expected on galaxies that do not have wrap-around (torus) cabling on every axis. (topology_mapper.cpp:1737)
+2026-10-16 14:29:49.876 | info     |          Fabric | Loaded physical groupings from: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-16 14:29:49.876 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:897)
+2026-10-16 14:29:49.876 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-10-16 14:29:49.876 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-10-16 14:29:49.876 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1731)
+2026-10-16 14:29:49.876 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-10-16 14:29:49.924 | warning  |           Metal | Failed to create shared memory /tt_device_154095681932321_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-16 14:29:49.924 | warning  |           Metal | Failed to create shared memory /tt_device_154095681932320_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-16 14:29:49.924 | warning  |           Metal | Failed to create shared memory /tt_device_154095681931329_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-16 14:29:49.924 | warning  |           Metal | Failed to create shared memory /tt_device_154095681931328_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-16 14:29:49.936 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-10-16 14:29:49.942 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
+2026-10-16 14:29:49.948 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:49)
+2026-10-16 14:29:49.953 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-10-16 14:29:49.953 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-16 14:29:50.004 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-16 14:29:50.004 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D_TORUS_XY (fabric_firmware_initializer.cpp:336)
+Building ncrisc, compile step:
+ccache sloppiness=pch_defines,time_macros /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/inc -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tt-llk/common -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tt-llk/tools/include -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hostdevcommon/api -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/api/ -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels -include /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/built/tt-metal-cache/pch/bc06e2df098bc9c8/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE=35 -DMRS_FILL_SPLIT=5 -DROUTING_MODE=194 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="matmul_reduce_scatter_reader/14968325845301627696/" -DKERNEL_COMPILE_TIME_ARGS=0,1,4,5,2,7,16,4,64,224,0,56,1,0,14,4,2048,1088,4,3,1,8,1,1,0,1,1,2,2048,2,1088,1,1,2,3,7,1,0,3,7,8,1,1,1,4,5,7,1,0,3,7,8,1,1,1,6,7,9,1,0,3,9,10,1,1,1,8,9,9,1,0,3,9,10,1 -include named_ct_arg_map_generated.h -c -o /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/built/tt-metal-cache13590364760572067383/kernels/matmul_reduce_scatter_reader/14968325845301627696/ncrisc/ncrisck.17376209972072743927_168753.o /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/built/tt-metal-cache13590364760572067383/kernels/matmul_reduce_scatter_reader/14968325845301627696/ncrisc/ncrisck.17376209972072743927_168753.d
+In file included from /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:24,
+                 from /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp: In lambda function:
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RD_DRAM,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,221,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:221:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+  221 |         MaybeDeviceZoneScope("RD_DRAM");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp: In lambda function:
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RD_DRAM,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,247,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:247:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+  247 |         MaybeDeviceZoneScope("RD_DRAM");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp: In lambda function:
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RD_RESV,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,401,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:401:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+  401 |             MaybeDeviceZoneScope("RD_RESV");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RD_BARRIER,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,433,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:433:17: note: in expansion of macro 'MaybeDeviceZoneScope'
+  433 |                 MaybeDeviceZoneScope("RD_BARRIER");
+      |                 ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RD_MCAST,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,448,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:448:13: note: in expansion of macro 'MaybeDeviceZoneScope'
+  448 |             MaybeDeviceZoneScope("RD_MCAST");
+      |             ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_A,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,458,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:458:29: note: in expansion of macro 'FZ'
+  458 |                 if (a_tx) { FZ("SND_A", (a_tx->template send<SourceL1Guard::CallerManaged>(a_dst + a_part_off[0], a_dst + a_part_off[0], a_part_bytes[0]))); } else { FZ("RCV_A", rx_wait(mc_a, poll_arrivals)); }
+      |                             ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_A,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,458,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:458:167: note: in expansion of macro 'FZ'
+  458 |                 if (a_tx) { FZ("SND_A", (a_tx->template send<SourceL1Guard::CallerManaged>(a_dst + a_part_off[0], a_dst + a_part_off[0], a_part_bytes[0]))); } else { FZ("RCV_A", rx_wait(mc_a, poll_arrivals)); }
+      |                                                                                                                                                                       ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_A2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,460,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:460:34: note: in expansion of macro 'FZ'
+  460 |                     if (a2_tx) { FZ("SND_A2", (a2_tx->template send<SourceL1Guard::CallerManaged>(a_dst + a_part_off[1], a_dst + a_part_off[1], a_part_bytes[1]))); } else { FZ("RCV_A2", rx_wait(mc_a2, poll_arrivals)); }
+      |                                  ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_A2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,460,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:460:174: note: in expansion of macro 'FZ'
+  460 |                     if (a2_tx) { FZ("SND_A2", (a2_tx->template send<SourceL1Guard::CallerManaged>(a_dst + a_part_off[1], a_dst + a_part_off[1], a_part_bytes[1]))); } else { FZ("RCV_A2", rx_wait(mc_a2, poll_arrivals)); }
+      |                                                                                                                                                                              ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RD_LA,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,464,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:464:17: note: in expansion of macro 'FZ'
+  464 |                 FZ("RD_LA", look_ahead_both(s));
+      |                 ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_B,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,467,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:467:29: note: in expansion of macro 'FZ'
+  467 |                 if (w_tx) { FZ("SND_B", (w_tx->template send<SourceL1Guard::CallerManaged>(w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]))); } else { FZ("RCV_B", (rx_ack(mc_b, noc), rx_wait(mc_b, poll_arrivals))); }
+      |                             ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_B,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,467,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:467:167: note: in expansion of macro 'FZ'
+  467 |                 if (w_tx) { FZ("SND_B", (w_tx->template send<SourceL1Guard::CallerManaged>(w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]))); } else { FZ("RCV_B", (rx_ack(mc_b, noc), rx_wait(mc_b, poll_arrivals))); }
+      |                                                                                                                                                                       ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_B2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,469,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:469:34: note: in expansion of macro 'FZ'
+  469 |                     if (w2_tx) { FZ("SND_B2", (w2_tx->template send<SourceL1Guard::CallerManaged>(w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]))); } else { FZ("RCV_B2", (rx_ack(mc_b2, noc), rx_wait(mc_b2, poll_arrivals))); }
+      |                                  ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_B2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,469,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:469:174: note: in expansion of macro 'FZ'
+  469 |                     if (w2_tx) { FZ("SND_B2", (w2_tx->template send<SourceL1Guard::CallerManaged>(w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]))); } else { FZ("RCV_B2", (rx_ack(mc_b2, noc), rx_wait(mc_b2, poll_arrivals))); }
+      |                                                                                                                                                                              ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_A,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,475,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:475:29: note: in expansion of macro 'FZ'
+  475 |                 if (a_tx) { FZ("SND_A", (a_tx->template send<SourceL1Guard::CallerManaged>(a_dst + a_part_off[0], a_dst + a_part_off[0], a_part_bytes[0]))); } else { FZ("RCV_A", rx_wait(mc_a, poll_arrivals)); }
+      |                             ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_A,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,475,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:475:167: note: in expansion of macro 'FZ'
+  475 |                 if (a_tx) { FZ("SND_A", (a_tx->template send<SourceL1Guard::CallerManaged>(a_dst + a_part_off[0], a_dst + a_part_off[0], a_part_bytes[0]))); } else { FZ("RCV_A", rx_wait(mc_a, poll_arrivals)); }
+      |                                                                                                                                                                       ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_A2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,477,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:477:34: note: in expansion of macro 'FZ'
+  477 |                     if (a2_tx) { FZ("SND_A2", (a2_tx->template send<SourceL1Guard::CallerManaged>(a_dst + a_part_off[1], a_dst + a_part_off[1], a_part_bytes[1]))); } else { FZ("RCV_A2", rx_wait(mc_a2, poll_arrivals)); }
+      |                                  ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_A2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,477,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:477:174: note: in expansion of macro 'FZ'
+  477 |                     if (a2_tx) { FZ("SND_A2", (a2_tx->template send<SourceL1Guard::CallerManaged>(a_dst + a_part_off[1], a_dst + a_part_off[1], a_part_bytes[1]))); } else { FZ("RCV_A2", rx_wait(mc_a2, poll_arrivals)); }
+      |                                                                                                                                                                              ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RD_LA,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,481,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:481:17: note: in expansion of macro 'FZ'
+  481 |                 FZ("RD_LA", look_ahead_both(s));
+      |                 ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_B,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,484,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:484:29: note: in expansion of macro 'FZ'
+  484 |                 if (w_tx) { FZ("SND_B", (w_tx->template send<SourceL1Guard::CallerManaged>(w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]))); } else { FZ("RCV_B", rx_wait(mc_b, poll_arrivals)); }
+      |                             ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_B,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,484,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:484:167: note: in expansion of macro 'FZ'
+  484 |                 if (w_tx) { FZ("SND_B", (w_tx->template send<SourceL1Guard::CallerManaged>(w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]))); } else { FZ("RCV_B", rx_wait(mc_b, poll_arrivals)); }
+      |                                                                                                                                                                       ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_B2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,486,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:486:34: note: in expansion of macro 'FZ'
+  486 |                     if (w2_tx) { FZ("SND_B2", (w2_tx->template send<SourceL1Guard::CallerManaged>(w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]))); } else { FZ("RCV_B2", rx_wait(mc_b2, poll_arrivals)); }
+      |                                  ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_B2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,486,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:486:174: note: in expansion of macro 'FZ'
+  486 |                     if (w2_tx) { FZ("SND_B2", (w2_tx->template send<SourceL1Guard::CallerManaged>(w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]))); } else { FZ("RCV_B2", rx_wait(mc_b2, poll_arrivals)); }
+      |                                                                                                                                                                              ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_A,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,494,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:494:29: note: in expansion of macro 'FZ'
+  494 |                 if (a_tx) { FZ("SND_A", (a_tx->template send<SourceL1Guard::CallerManaged>(a_dst + a_part_off[0], a_dst + a_part_off[0], a_part_bytes[0]))); }
+      |                             ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_A2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,496,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:496:34: note: in expansion of macro 'FZ'
+  496 |                     if (a2_tx) { FZ("SND_A2", (a2_tx->template send<SourceL1Guard::CallerManaged>(a_dst + a_part_off[1], a_dst + a_part_off[1], a_part_bytes[1]))); }
+      |                                  ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_A,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,498,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:498:29: note: in expansion of macro 'FZ'
+  498 |                 if (a_rx) { FZ("RCV_A", rx_wait(mc_a, poll_arrivals)); }
+      |                             ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_A2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,500,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:500:34: note: in expansion of macro 'FZ'
+  500 |                     if (a2_rx) { FZ("RCV_A2", rx_wait(mc_a2, poll_arrivals)); }
+      |                                  ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_B,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,504,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:504:29: note: in expansion of macro 'FZ'
+  504 |                 if (w_tx) { FZ("SND_B", (w_tx->template send<SourceL1Guard::CallerManaged>(w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]))); }
+      |                             ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_B2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,506,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:506:34: note: in expansion of macro 'FZ'
+  506 |                     if (w2_tx) { FZ("SND_B2", (w2_tx->template send<SourceL1Guard::CallerManaged>(w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]))); }
+      |                                  ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RD_LA,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,510,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:510:17: note: in expansion of macro 'FZ'
+  510 |                 FZ("RD_LA", look_ahead_both(s));
+      |                 ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_B,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,513,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:513:29: note: in expansion of macro 'FZ'
+  513 |                 if (w_rx) { FZ("RCV_B", rx_wait(mc_b, poll_arrivals)); }
+      |                             ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_B2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,515,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:515:34: note: in expansion of macro 'FZ'
+  515 |                     if (w2_rx) { FZ("RCV_B2", rx_wait(mc_b2, poll_arrivals)); }
+      |                                  ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_A,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,525,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:525:29: note: in expansion of macro 'FZ'
+  525 |                 if (a_tx) { FZ("SND_A", (a_tx->template send<SourceL1Guard::CallerManaged>(a_dst + a_part_off[0], a_dst + a_part_off[0], a_part_bytes[0]))); }
+      |                             ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_A2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,527,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:527:34: note: in expansion of macro 'FZ'
+  527 |                     if (a2_tx) { FZ("SND_A2", (a2_tx->template send<SourceL1Guard::CallerManaged>(a_dst + a_part_off[1], a_dst + a_part_off[1], a_part_bytes[1]))); }
+      |                                  ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_B,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,531,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:531:29: note: in expansion of macro 'FZ'
+  531 |                 if (w_tx) { FZ("SND_B", (w_tx->template send<SourceL1Guard::CallerManaged>(w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]))); }
+      |                             ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_B2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,533,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:533:34: note: in expansion of macro 'FZ'
+  533 |                     if (w2_tx) { FZ("SND_B2", (w2_tx->template send<SourceL1Guard::CallerManaged>(w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]))); }
+      |                                  ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RD_LA,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,537,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:537:17: note: in expansion of macro 'FZ'
+  537 |                 FZ("RD_LA", look_ahead_both(s));
+      |                 ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_A,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,540,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:540:29: note: in expansion of macro 'FZ'
+  540 |                 if (a_rx) { FZ("RCV_A", rx_wait(mc_a, poll_arrivals)); }
+      |                             ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_A2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,542,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:542:34: note: in expansion of macro 'FZ'
+  542 |                     if (a2_rx) { FZ("RCV_A2", rx_wait(mc_a2, poll_arrivals)); }
+      |                                  ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_B,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,546,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:546:29: note: in expansion of macro 'FZ'
+  546 |                 if (w_rx) { FZ("RCV_B", rx_wait(mc_b, poll_arrivals)); }
+      |                             ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_B2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,548,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:548:34: note: in expansion of macro 'FZ'
+  548 |                     if (w2_rx) { FZ("RCV_B2", rx_wait(mc_b2, poll_arrivals)); }
+      |                                  ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_A,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,554,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:554:21: note: in expansion of macro 'FZ'
+  554 |                     FZ("SND_A", (a_tx->template send<SourceL1Guard::CallerManaged>( a_dst + a_part_off[0], a_dst + a_part_off[0], a_part_bytes[0])));
+      |                     ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_A,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,556,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:556:21: note: in expansion of macro 'FZ'
+  556 |                     FZ("RCV_A", a_rx->receive());
+      |                     ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_A2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,560,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:560:25: note: in expansion of macro 'FZ'
+  560 |                         FZ("SND_A2", (a2_tx->template send<SourceL1Guard::CallerManaged>( a_dst + a_part_off[1], a_dst + a_part_off[1], a_part_bytes[1])));
+      |                         ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_A2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,562,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:562:25: note: in expansion of macro 'FZ'
+  562 |                         FZ("RCV_A2", a2_rx->receive());
+      |                         ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_B,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,568,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:568:21: note: in expansion of macro 'FZ'
+  568 |                     FZ("SND_B", (w_tx->template send<SourceL1Guard::CallerManaged>( w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0])));
+      |                     ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_B,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,570,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:570:21: note: in expansion of macro 'FZ'
+  570 |                     FZ("RCV_B", w_rx->receive());
+      |                     ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: SND_B2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,574,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:574:25: note: in expansion of macro 'FZ'
+  574 |                         FZ("SND_B2", (w2_tx->template send<SourceL1Guard::CallerManaged>( w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1])));
+      |                         ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: RCV_B2,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,576,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:51:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+   51 |         MaybeDeviceZoneScope(name);     \
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:576:25: note: in expansion of macro 'FZ'
+  576 |                         FZ("RCV_B2", w2_rx->receive());
+      |                         ^~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp: In lambda function:
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: ARR_WAIT,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,594,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:594:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+  594 |         MaybeDeviceZoneScope("ARR_WAIT");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp: In function 'void kernel_main()':
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: ARR_WAIT,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp,632,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp:25:36: note: in expansion of macro 'DeviceZoneScopedN'
+   25 | #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+      |                                    ^~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_fill/kernels/matmul_reduce_scatter_reader.cpp:632:9: note: in expansion of macro 'MaybeDeviceZoneScope'
+  632 |         MaybeDeviceZoneScope("ARR_WAIT");
+      |         ^~~~~~~~~~~~~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+FILL_RESULT M640_K2048_N7168_sd-1 variant='MRS_FILL_SPLIT=5' worst_rel_rms 0.00486 plan {'xblock': 'resident', 'schedule': 'ring_balanced', 'kb': 16, 'depths': (3, 3), 'hold_depth': 1, 'grid': (10, 8), 'strip': 'row', 'half_split': 'n', 'waves': 1}
+PASSED
+
+- generated xml file: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.94s call     test_fill_perf.py::test_fill_case[M640_K2048_N7168_sd-1]
+1.63s setup    test_fill_perf.py::test_fill_case[M640_K2048_N7168_sd-1]
+0.24s teardown test_fill_perf.py::test_fill_case[M640_K2048_N7168_sd-1]
+============================== 1 passed in 3.99s ===============================
+2026-10-16 14:29:53.790 | info     |    BuildKernels | JIT cache stats: 61/62 hits (98.4%) [61 cached, 36 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-16 14:29:53.790 | info     |    BuildKernels | JIT telemetry: 28 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-16 14:29:53.804 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-10-16 14:29:53.804 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+2026-10-16 14:29:54.308 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-10-16 14:29:54.308 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-10-16 14:29:54.308 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+2026-10-16 14:29:54.444 | INFO     | __main__:main:463 - Copying /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/build/profiler/build_wasm/traces/entry0_fill_2026_10_16_14_29_54.tracy
+2026-10-16 14:29:54.446 | INFO     | __main__:main:466 - Copied /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/build/profiler/build_wasm/traces/entry0_fill_2026_10_16_14_29_54.tracy
+2026-10-16 14:29:54.446 | INFO     | __main__:main:475 - embed.tracy -> traces/entry0_fill_2026_10_16_14_29_54.tracy
+2026-10-16 14:29:54.446 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-10-16 14:29:54.446 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-10-16 14:29:54.446 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-10-16 14:29:55.010 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-10-16 14:29:55.034 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-10-16 14:29:55.035 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-10-16 14:29:56.448 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2107 - Getting device ops
+2026-10-16 14:29:56.448 | INFO     | tracy.process_ops_logs:append_device_data:1081 - Appending device data
+2026-10-16 14:29:56.843 | INFO     | tracy.process_ops_logs:generate_reports:1412 - OPs' perf analysis is finished! Generating reports ...
+2026-10-16 14:29:56.843 | INFO     | tracy.process_ops_logs:generate_reports:1432 - Copying runtime artifacts
+2026-10-16 14:29:56.863 | INFO     | tracy.process_ops_logs:generate_reports:1441 - Generating OPs CSV
+2026-10-16 14:29:56.874 | INFO     | tracy.process_ops_logs:generate_reports:1897 - OPs csv generated at: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/profiler/reports/2026_10_16_14_29_56/ops_perf_results_2026_10_16_14_29_56.csv
+========================================
+SAFE_PYTEST: PROFILER CSV: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/profiler/reports/2026_10_16_14_29_56/ops_perf_results_2026_10_16_14_29_56.csv
+SAFE_PYTEST_RESULT: PASS

@@ -3,22 +3,29 @@
 
 // matmul_reduce_scatter — matmul-core compute (TRISCs). fp32 DEST + full sync (8-tile subblocks).
 //
-// Per entry (one wave of a block): matmul_block_entry — the wave's rows x cols x Kt through matmul_block, K-blocks of
-// kb, packer L1 accumulation into ONE caller-reserved fp32 slot of cb_partial_hold (TileRowMajor + Interm +
-// caller_owns_pack_target). The wave's tiles are dense at the front of the P-tile slot (out_row_width = cols); the W
-// window keeps its nominal row stride (in1_per_core_w), so a ragged last wave reads and pops the nominal window.
+// Per entry (one wave of a block): matmul_entry — the wave's rows x cols x Kt, K-windows of kb, into ONE reserved fp32
+// slot of cb_partial_hold. DEST-resident K (Perf 1): the entry's K-windows are grouped into super-blocks of S windows
+// (CT arg; entry 0 uses 1: its windows arrive at DRAM pace); subblock-outer / K-inner, each output subblock accumulates
+// a whole super-block in fp32 DEST and is packed ONCE per super-block (plain pack for the first, packer L1-acc after).
+// The wave's tiles are dense at the front of the P-tile slot (row width = cols); the W window keeps its nominal row
+// stride (win_n), so a ragged last wave reads and pops the nominal window.
+//
+// RAW LLK — measured helper bypass (do NOT "fix" back to compute_kernel_lib::matmul_block): the helper's loop is
+// K-block-outer / subblock-inner and acquires + packs DEST per (K-block, subblock), so it cannot keep a subblock in
+// DEST across K-blocks; it also cannot address a fronted window that the CB ring wrapped. In fp32 full-sync DEST math
+// stalls for every pack, and the per-window fp32 L1-acc packs were ~13% of the matmul. Measured (focus 640x2048x7168,
+// QB2, traced, compute floor with MRS_ABLATE=dram,mcast): helper 112.8 us, this path at S=1 111.6, at S=2 109.1; whole
+// op 126.4 -> 123.5 us; GLM 200.3 -> 194.6; MiMo 219.2 -> 208.0 (perf_experiments/dest_resident_k, changelog Perf 1).
+// The windows of a super-block stay fronted until its last subblock; a wrapped window is addressed by pointing the
+// UNPACK thread's fifo_rd_ptr at it, and the last subblock pops each window right after consuming it, so the read
+// pointer is exact again at the end.
 // Then finish_block for the lagged entry (or this one): copy (chain start), hold + arrival (relay / fin with one
 // upstream), or hold + fwd + bwd (fin with two upstreams). FIN_ADD_FPU: FPU adds (hold + arrival, then the second
 // arrival through DEST reuse); else SFPU fp32 adds (FPU fwd+bwd into D1, SFPU D0 += D1).
 // Every cross-device add runs in fp32 DEST; the result is packed to bf16 into cb_finished.
 
 #include <cstdint>
-#ifdef MRS_ZONES  // perf instrumentation only
-#include <tools/profiler/kernel_profiler.hpp>
-#define MRS_ZONE(name) DeviceZoneScopedN(name)
-#else
-#define MRS_ZONE(name)
-#endif
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"  // permanent stage zones (free when the profiler is off)
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
@@ -31,7 +38,7 @@ constexpr uint32_t ROLE_COPY = 0, ROLE_ADD_FWD = 1, ROLE_ADD_BWD = 2, ROLE_ADD_B
 
 template <uint32_t cb_hold, uint32_t cb_finished, uint32_t cb_arr_fwd, uint32_t cb_arr_bwd, uint32_t P, bool fpu_add>
 ALWI void finish_block(uint32_t role) {
-    MRS_ZONE("FIN");
+    MaybeDeviceZoneScope("FIN");
     using namespace ckl;
     constexpr auto shape = IterationShape::tiles(P);
     if (role == ROLE_COPY) {
@@ -80,6 +87,8 @@ void kernel_main() {
     constexpr uint32_t num_entries = get_compile_time_arg_val(10);   // G x num_waves
     constexpr bool fin_add_fpu = get_compile_time_arg_val(11) != 0;  // finish adds on the FPU (else SFPU fp32 adds)
     constexpr uint32_t num_waves = get_compile_time_arg_val(12);
+    constexpr uint32_t super_block = get_compile_time_arg_val(13);  // K-windows per DEST-resident pack (divides nkb)
+    static_assert(super_block >= 1 && num_k_blocks % super_block == 0, "super-block must divide the K-blocks");
     // runtime args: per wave rows | cols << 8 | sb_h << 16 | sb_w << 24, then per entry role | lag << 8
     constexpr uint32_t roles_idx = num_waves;
 
@@ -87,47 +96,84 @@ void kernel_main() {
 
     CircularBuffer act_buf(cb_act_k_window), weight_buf(cb_weight_k_window), hold_buf(cb_partial_hold);
 
-    auto matmul_block_entry = [&](uint32_t e) {
-        MRS_ZONE("MM");
+    auto matmul_entry = [&](uint32_t e) {
+        MaybeDeviceZoneScope("MM");
         const uint32_t wave = get_arg_val<uint32_t>(e % num_waves);
         const uint32_t rows = wave & 0xFF, cols = (wave >> 8) & 0xFF;
         const uint32_t sb_h = (wave >> 16) & 0xFF, sb_w = wave >> 24;
-        const auto mm_shape = ckl::MatmulBlockShape::of(rows / sb_h, cols / sb_w, sb_h, sb_w, kb, num_k_blocks);
-        hold_buf.reserve_back(P);  // caller-owned pack target: one fp32 slot per entry
-        ckl::matmul_block<
-            /*transpose=*/false,
-            /*packer_l1_acc=*/true,
-            ckl::LastBlockTarget::Interm,
-            ckl::OutputCBLayout::TileRowMajor,
-            ckl::matmul_config::InitMode::Short,
-            ckl::InputPolicy::WaitAndPopPerKBlock,
-            ckl::InputPolicy::WaitAndPopPerKBlock,
-            ckl::NoPostCompute,
-            ckl::NoPreKBlock,
-            ckl::NoPostKBlock,
-            0,
-            ckl::NoKBlockInnerDimFn,
-            ckl::NoIn0Source,
-            ckl::NoIn1BaseOffset,
-            /*caller_owns_pack_target=*/true>(
-            act_buf,
-            weight_buf,
-            hold_buf,
-            hold_buf,
-            mm_shape,
-            {},
-            {},
-            /*in1_per_core_w=*/win_n,
-            /*out_row_width=*/cols);
+        const uint32_t n_sb_r = rows / sb_h, n_sb_c = cols / sb_w;
+        const uint32_t a_win = rows * kb, w_win = win_n * kb;  // window tiles, as the reader pushes them
+        const uint32_t row_group = sb_h * cols;
+        reconfig_data_format(cb_weight_k_window, cb_act_k_window);  // matmul: srcA = in1, srcB = in0
+        PACK((pack_reconfig_data_format(cb_partial_hold)));
+        ckernel::matmul_block_init(cb_act_k_window, cb_weight_k_window, false, sb_w, sb_h, kb);
+        const uint32_t S = e == 0 ? 1 : super_block;
+        const uint32_t n_super = num_k_blocks / S;
+        hold_buf.reserve_back(P);  // one fp32 slot per entry
+        for (uint32_t g = 0; g < n_super; ++g) {
+            uint32_t a_rd0 = 0, w_rd0 = 0, a_step = 0, w_step = 0;
+            UNPACK(({
+                a_rd0 = get_local_cb_interface(cb_act_k_window).fifo_rd_ptr;
+                w_rd0 = get_local_cb_interface(cb_weight_k_window).fifo_rd_ptr;
+                a_step = a_win * get_local_cb_interface(cb_act_k_window).fifo_page_size;
+                w_step = w_win * get_local_cb_interface(cb_weight_k_window).fifo_page_size;
+            }));
+            for (uint32_t sr = 0; sr < n_sb_r; ++sr) {
+                for (uint32_t sc = 0; sc < n_sb_c; ++sc) {
+                    const bool first_sb = sr == 0 && sc == 0;
+                    const bool last_sb = sr == n_sb_r - 1 && sc == n_sb_c - 1;
+                    tile_regs_acquire();
+                    for (uint32_t wnd = 0; wnd < S; ++wnd) {
+                        if (first_sb) {  // progressive: the first subblock starts on the first window
+                            const uint32_t ahead = (last_sb ? 0 : wnd) + 1;  // a lone subblock pops as it goes
+                            act_buf.wait_front(ahead * a_win);
+                            weight_buf.wait_front(ahead * w_win);
+                        }
+                        UNPACK(({
+                            auto& ca = get_local_cb_interface(cb_act_k_window);
+                            auto& cw = get_local_cb_interface(cb_weight_k_window);
+                            uint32_t pa = a_rd0 + wnd * a_step;
+                            if (pa >= ca.fifo_limit) {
+                                pa -= ca.fifo_size;
+                            }
+                            uint32_t pw = w_rd0 + wnd * w_step;
+                            if (pw >= cw.fifo_limit) {
+                                pw -= cw.fifo_size;
+                            }
+                            ca.fifo_rd_ptr = pa;
+                            cw.fifo_rd_ptr = pw;
+                        }));
+                        uint32_t in0_index = sr * sb_h * kb;
+                        uint32_t in1_index = sc * sb_w;
+#ifndef SKIP_COMPUTE  // perf ablation (MRS_ABLATE=compute): stub the math, keep every CB wait / pop / pack
+                        for (uint32_t kk = 0; kk < kb; ++kk) {
+                            ckernel::matmul_block(
+                                cb_act_k_window, cb_weight_k_window, in0_index, in1_index, 0, false, sb_w, sb_h, kb);
+                            ++in0_index;
+                            in1_index += win_n;
+                        }
+#endif
+                        if (last_sb) {  // frees each window as soon as it is consumed (fifo_rd_ptr is exact here)
+                            act_buf.pop_front(a_win);
+                            weight_buf.pop_front(w_win);
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    PACK((llk_pack_reconfig_l1_acc(g == 0 ? 0 : 1)));
+                    ckl::pack_subblock_row_strided(0, cb_partial_hold, sr * row_group + sc * sb_w, cols, sb_h, sb_w);
+                    tile_regs_release();
+                }
+            }
+        }
         hold_buf.push_back(P);
-        // matmul_block leaves packer L1 accumulation on after its last K-block; the finish chains pack plainly.
-        PACK((llk_pack_reconfig_l1_acc(0)));
+        PACK((llk_pack_reconfig_l1_acc(0)));  // the finish chains pack plainly
     };
 
     constexpr uint32_t NONE = 0xFFFFFFFF;
     uint32_t pending = NONE;
     for (uint32_t e = 0; e < num_entries; ++e) {
-        matmul_block_entry(e);
+        matmul_entry(e);
         if (pending != NONE) {
             finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P, fin_add_fpu>(
                 get_arg_val<uint32_t>(roles_idx + pending) & 0xFF);

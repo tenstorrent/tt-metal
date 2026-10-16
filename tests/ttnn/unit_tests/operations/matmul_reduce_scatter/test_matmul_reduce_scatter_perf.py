@@ -10,12 +10,17 @@ Each case does WARMUP calls (compile + cache) then MEASURED calls; read the per-
 MAX over the group's devices of one call (the slowest chip finishes the reduce-scatter).
 Correctness is checked on the last call against each case's precision gate.
 
+MRS_PERF_GUARD=1 adds the perf guard set (one representative per distinct kernel path x placement beyond LOOSE_CASES:
+focus shape on Linear and on 1 link, the stream regime (K3 dense FFN, Kt=264), a single-subblock cell, a narrow-N cell,
+bf8b A x bf16 W) — the cells a perf change must not regress.
+
 MRS_PERF_TRACE=1 measures traced: WARMUP eager calls, then one call captured into a trace and replayed MEASURED times
 (the like-for-like comparison with the traced unfused baseline; it removes the host dispatch skew between chips).
 """
 
 from __future__ import annotations
 
+import copy
 import os
 
 import pytest
@@ -37,6 +42,32 @@ WARMUP = 2
 MEASURED = 3
 TRACE = os.environ.get("MRS_PERF_TRACE", "0") == "1"
 TRACE_REGION_BYTES = 1 << 20
+
+
+def _guard_cases():
+    base = LOOSE_CASES[0]
+
+    def cell(inputs=None, keep_gate=False, **over):
+        c = copy.deepcopy(base)
+        c["extras"] = dict(base["extras"])
+        if inputs is not None:
+            c["inputs"] = inputs
+        if not keep_gate:
+            c["extras"].pop("rel_rms_threshold", None)
+        c.update(over)
+        return c
+
+    return [
+        cell(keep_gate=True, topology=ttnn.Topology.Linear),
+        cell(keep_gate=True, num_links=1),
+        cell(((1, 1, 640, 8448), (8448, 7168))),  # stream regime
+        cell(((1, 1, 640, 1536), (1536, 2048))),  # one 2x2 subblock per core
+        cell(((1, 1, 640, 1536), (1536, 128))),  # narrow N
+        cell(((1, 1, 640, 2048), (2048, 6144)), dtype=ttnn.bfloat8_b, weight_dtype=ttnn.bfloat16),
+    ]
+
+
+CASES = list(LOOSE_CASES) + (_guard_cases() if os.environ.get("MRS_PERF_GUARD", "0") == "1" else [])
 
 
 def _open(mesh_shape, fabric_config):
@@ -75,10 +106,17 @@ def perf_mesh():
 
 def _id(case):
     (a, w) = case["inputs"]
-    return f"M{a[-2]}_K{a[-1]}_N{w[-1]}_sd{case['scatter_dim']}"
+    tag = "" if case["topology"] == ttnn.Topology.Ring else "_linear"
+    tag += "" if case["num_links"] == 2 else f"_L{case['num_links']}"
+    tag += (
+        ""
+        if case["weight_dtype"] == ttnn.bfloat8_b
+        else f"_{case['dtype']}x{case['weight_dtype']}".replace("DataType.", "")
+    )
+    return f"M{a[-2]}_K{a[-1]}_N{w[-1]}_sd{case['scatter_dim']}{tag}"
 
 
-@pytest.mark.parametrize("case", LOOSE_CASES, ids=[_id(c) for c in LOOSE_CASES])
+@pytest.mark.parametrize("case", CASES, ids=[_id(c) for c in CASES])
 def test_perf_case(perf_mesh, case):
     ex = case["extras"]
     a_shape, w_shape = case["inputs"]

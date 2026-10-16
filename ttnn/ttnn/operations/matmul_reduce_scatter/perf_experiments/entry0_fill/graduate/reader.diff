@@ -1,0 +1,214 @@
+--- kernels/matmul_reduce_scatter_reader.cpp	2026-10-16 14:06:46.158022697 +0000
++++ perf_experiments/entry0_fill/graduate/kernels/matmul_reduce_scatter_reader.cpp	2026-10-16 14:48:08.923307751 +0000
+@@ -10,12 +10,22 @@
+ // resident after entry 0: its windows are re-credited (reserve + push, no NoC) because the CB holds the whole Kt
+ // slice and the ring wraps exactly. Loading is software-pipelined: a sender issues step s+1's DRAM reads while step
+ // s's multicast drains (send<CallerManaged>; every slot is flushed before it is overwritten).
+-// Then land_arrivals_block for the lagged (pending) entry: wait the global arrival counter of each arriving direction
+-// until it covers this entry (host threshold), credit the zone slot (the upstream port's fabric writes already landed
+-// the bytes). At the end: re-arm both counters by decrementing what arrived.
++// Arrivals are landed by POLLING (try_land): at every step start and inside every wait of the loader, every entry
++// (in entry order) whose global arrival counter(s) already cover it (host threshold) gets its zone slot credited (the
++// upstream port's fabric writes already landed the bytes). The loader never blocks on the fabric, so a late arrival
++// no longer stalls this core's next-entry multicasts (and, through the handshakes, its lines). A final blocking drain
++// follows the last load. At the end: re-arm both counters by decrementing what arrived.
+ //
+-// Raw-API note (design "Helpers considered and rejected"): land_arrivals_block is a semaphore wait + CB credit of
+-// bytes a remote chip wrote; no helper covers a fabric fused-inc counter with host thresholds.
++// Multicast walk: the A parts' receivers ack (consumer-ready) right after reserving their slot, before this core's own
++// DRAM reads/barrier; an A receive is then a wait only. The W parts keep the fused ack + wait in the a, a2, b, b2
++// order, so every W multicast still starts after its whole line received A (grid-wide A-then-W phases): concurrent
++// multicasts on one line or crossing A-column / W-row multicasts stall in the NoC (measured up to 16 us).
++//
++// Raw-API notes (design "Helpers considered and rejected"): try_land is a semaphore poll + CB credit of bytes a remote
++// chip wrote; no helper covers a fabric fused-inc counter with host thresholds. rx_ack / rx_wait are the two halves
++// of ReceiverPipe::receive (Flag signal, pre-handshake, fixed sender) issued separately: the helper fuses them, and
++// the fused ack made every A sender wait for the slowest W-reading receiver's DRAM barrier (the fill chain), and a
++// fused wait cannot poll the arrival counters.
+
+ #include <cstdint>
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"  // permanent stage zones (free when the profiler is off)
+@@ -25,6 +35,25 @@
+
+ using namespace dataflow_kernel_lib;
+
++// split-phase halves of ReceiverPipe::receive (Flag signal, pre-handshake, fixed sender); no-ops for an absent family
++template <typename MC>
++FORCE_INLINE void rx_ack(const MC& mc, const Noc& noc) {
++    if constexpr (MC::active) {
++        static_assert(MC::pre_handshake && MC::signal == DataReadySignal::Flag && !MC::rotating);
++        Semaphore(detail::mcast_semaphore_id(MC::consumer_ready)).up(noc, mc.sender_x(), mc.sender_y(), 1);
++    }
++}
++template <typename MC, typename Poll>
++FORCE_INLINE void rx_wait(const MC&, Poll&& poll) {
++    if constexpr (MC::active) {
++        Semaphore sem(detail::mcast_semaphore_id(MC::data_ready));
++        while (sem.value() != VALID) {
++            poll();
++        }
++        sem.set(INVALID);
++    }
++}
++
+ void kernel_main() {
+     constexpr uint32_t cb_act_k_window = get_compile_time_arg_val(0);
+     constexpr uint32_t cb_weight_k_window = get_compile_time_arg_val(1);
+@@ -104,9 +133,35 @@
+     const auto w_acc = TensorAccessor(w_args, w_addr, w_tile_bytes);
+     volatile tt_l1_ptr uint32_t* arr_fwd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arr_fwd_addr);
+     volatile tt_l1_ptr uint32_t* arr_bwd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arr_bwd_addr);
++    // try_land: credit, in entry order, every entry whose arrival counter(s) already cover it; never blocks
++    uint32_t land_next = 0;
++    auto try_land = [&]() {
++        while (land_next < num_entries) {
++            const uint32_t word0 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * land_next);
++            const uint32_t word1 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * land_next + 1);
++            const uint32_t mask = (word0 >> 16) & 0x3;
++            invalidate_l1_cache();
++            if ((mask & 1) && (*arr_fwd < (word1 & 0xFFFF) || !cb_pages_reservable_at_back(cb_arrivals_fwd, P))) {
++                return;
++            }
++            if ((mask & 2) && (*arr_bwd < (word1 >> 16) || !cb_pages_reservable_at_back(cb_arrivals_bwd, P))) {
++                return;
++            }
++            if (mask & 1) {
++                cb_reserve_back(cb_arrivals_fwd, P);
++                cb_push_back(cb_arrivals_fwd, P);
++            }
++            if (mask & 2) {
++                cb_reserve_back(cb_arrivals_bwd, P);
++                cb_push_back(cb_arrivals_bwd, P);
++            }
++            ++land_next;
++        }
++    };
+
+     Noc noc;
+     auto a_tx = mc_a.optional_sender(noc);
++    // receiver pipes: constructed for their data-ready flag init; the receive halves are issued by rx_ack / rx_wait
+     auto a_rx = mc_a.optional_receiver(noc);
+     auto a2_tx = mc_a2.optional_sender(noc);
+     auto a2_rx = mc_a2.optional_receiver(noc);
+@@ -215,6 +270,9 @@
+                                uint32_t base,
+                                uint32_t win_bytes) {
+         if (issued == s) {
++            while (!cb_pages_reservable_at_back(cb, win_tiles)) {
++                try_land();  // compute may be waiting for an arrival credit before it frees this window
++            }
+             cb_reserve_back(cb, win_tiles);
+             if (sender && moves_s) {
+                 set_trid(trid_of(s));
+@@ -281,6 +339,7 @@
+         // Every earlier multicast has left L1 before this step issues any read: a slot read into at step s (for a
+         // step t <= s + cap - 1) was last a multicast source at step t - cap <= s - 1.
+         noc_async_writes_flushed();
++        try_land();
+         {
+             MaybeDeviceZoneScope("RD_RESV");
+             reserve_current(
+@@ -305,6 +364,18 @@
+                 issue_w,
+                 w_base,
+                 w_win_bytes);
++            if (a_moves(s)) {
++                // my A slot is reserved (free): ack the A senders now, before my own reads land, so no A multicast
++                // waits for a W reader's DRAM barrier
++                if (a_rx) {
++                    rx_ack(mc_a, noc);
++                }
++                if constexpr (mc_a2.active) {
++                    if (a2_rx) {
++                        rx_ack(mc_a2, noc);
++                    }
++                }
++            }
+             if constexpr (!lookahead_after_barrier) {
+                 look_ahead_both(s);
+             }
+@@ -333,14 +404,14 @@
+                     a_tx->template send<SourceL1Guard::CallerManaged>(
+                         a_dst + a_part_off[0], a_dst + a_part_off[0], a_part_bytes[0]);
+                 } else {
+-                    a_rx->receive();
++                    rx_wait(mc_a, try_land);  // acked after reserve
+                 }
+                 if constexpr (mc_a2.active) {
+                     if (a2_tx) {
+                         a2_tx->template send<SourceL1Guard::CallerManaged>(
+                             a_dst + a_part_off[1], a_dst + a_part_off[1], a_part_bytes[1]);
+                     } else {
+-                        a2_rx->receive();
++                        rx_wait(mc_a2, try_land);
+                     }
+                 }
+             }
+@@ -349,14 +420,16 @@
+                     w_tx->template send<SourceL1Guard::CallerManaged>(
+                         w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]);
+                 } else {
+-                    w_rx->receive();
++                    rx_ack(mc_b, noc);  // fused order: W is acked only once my A landed (A-then-W phases)
++                    rx_wait(mc_b, try_land);
+                 }
+                 if constexpr (mc_b2.active) {
+                     if (w2_tx) {
+                         w2_tx->template send<SourceL1Guard::CallerManaged>(
+                             w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]);
+                     } else {
+-                        w2_rx->receive();
++                        rx_ack(mc_b2, noc);
++                        rx_wait(mc_b2, try_land);
+                     }
+                 }
+             }
+@@ -368,42 +441,13 @@
+         w_slot = w_slot + 1 == w_cap_windows ? 0 : w_slot + 1;
+     };
+
+-    // land_arrivals_block: the zone slot(s) of this entry are credited once the counter covers them.
+-    auto land_arrivals_block = [&](uint32_t entry_idx) {
+-        const uint32_t word0 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * entry_idx);
+-        const uint32_t word1 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * entry_idx + 1);
+-        const uint32_t mask = (word0 >> 16) & 0x3;
+-        MaybeDeviceZoneScope("ARR_WAIT");
+-        if (mask & 1) {
+-            noc_semaphore_wait_min(arr_fwd, word1 & 0xFFFF);
+-            cb_reserve_back(cb_arrivals_fwd, P);
+-            cb_push_back(cb_arrivals_fwd, P);
+-        }
+-        if (mask & 2) {
+-            noc_semaphore_wait_min(arr_bwd, word1 >> 16);
+-            cb_reserve_back(cb_arrivals_bwd, P);
+-            cb_push_back(cb_arrivals_bwd, P);
+-        }
+-    };
+-    // host decision: finish this entry behind the next entry's matmul (its arrival is expected late)
+-    auto lagged = [&](uint32_t entry_idx) {
+-        return ((get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * entry_idx) >> 20) & 1) != 0;
+-    };
+-
+-    constexpr uint32_t NONE = 0xFFFFFFFF;
+-    uint32_t pending = NONE;
+-    for (uint32_t e = 0; e < num_entries; ++e) {
+-        for (uint32_t kblk = 0; kblk < num_k_blocks; ++kblk) {
+-            load_step(e * num_k_blocks + kblk);
+-        }
+-        if (pending != NONE) {
+-            land_arrivals_block(pending);
+-            pending = NONE;
+-        }
+-        if (lagged(e)) {
+-            pending = e;  // stall shadow: the add waits behind the next entry's matmul
+-        } else {
+-            land_arrivals_block(e);
++    for (uint32_t step = 0; step < num_steps; ++step) {
++        load_step(step);
++    }
++    {
++        MaybeDeviceZoneScope("ARR_WAIT");  // drain: the arrivals still outstanding after the last load
++        while (land_next < num_entries) {
++            try_land();
+         }
+     }

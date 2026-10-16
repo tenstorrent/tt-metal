@@ -15,12 +15,7 @@
 // count with a classic step schedule; the measured raw sender of fabric_reduce_scatter is the reference.
 
 #include <cstdint>
-#ifdef MRS_ZONES  // perf instrumentation only
-#include <tools/profiler/kernel_profiler.hpp>
-#define MRS_ZONE(name) DeviceZoneScopedN(name)
-#else
-#define MRS_ZONE(name)
-#endif
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"  // permanent stage zones (free when the profiler is off)
 #include "api/dataflow/dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -90,7 +85,7 @@ void kernel_main() {
         conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
     }
     if (num_units > 0) {
-        MRS_ZONE("READY_WAIT");
+        MaybeDeviceZoneScope("READY_WAIT");
         volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
         noc_semaphore_wait_min(ready, 1);
         noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
@@ -107,7 +102,7 @@ void kernel_main() {
         lim = group - rpos % group;
     };
     for (uint32_t un = 0; un < num_units; ++un) {
-        MRS_ZONE("SEND_UNIT");
+        MaybeDeviceZoneScope("SEND_UNIT");
         const uint32_t unit = get_arg_val<uint32_t>(units_idx + un);
         const uint32_t half_mask = (unit >> 8) & 0x3;
         const uint32_t slot0 = (unit >> 16) & 0xFF;
@@ -128,10 +123,7 @@ void kernel_main() {
             const uint32_t dst_base = zone_base + (hf ? slot1 : slot0) * slot_bytes;
             const uint64_t ctr = get_noc_addr(x, y, arrival_addr);
             for (uint32_t ci = 0; ci < chunks_per_core; ++ci) {
-                {
-                    MRS_ZONE("CHUNK_WAIT");
-                    cb_wait_front(cb_port_chunks, chunk_tiles * (u + 1));
-                }
+                cb_wait_front(cb_port_chunks, chunk_tiles * (u + 1));  // per-chunk: no zone (marker budget)
                 const uint32_t src = get_read_ptr(cb_port_chunks) + u * chunk_bytes;
                 const uint32_t n = (tiles - ci * chunk_tiles) < chunk_tiles ? (tiles - ci * chunk_tiles) : chunk_tiles;
                 const uint32_t bytes = n * tile_bytes;

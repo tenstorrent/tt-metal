@@ -102,6 +102,7 @@ Re-running the table on the intermediate data (the per-entry partial sums) gives
 |----|------------|---------------|---------------------|
 | `cb_act_k_window` (stream regime) | `depth_in0` | 2 | mcast of K-block t+1 overlaps the matmul of K-block t |
 | `cb_weight_k_window` (stream regime) | `depth_in1` | 2 | same, for W |
+| `cb_act_k_window` / `cb_weight_k_window`, streamed operand (Perf 1) | `SUPER_BLOCK + SUPER_BLOCK_EXTRA` | 4 when `Kt/kb` is even and it fits L1 (`super_block_plan()`), else the regime's depth | the compute accumulates each output subblock in fp32 DEST over a super-block of 2 K-windows (packs once per pair), so a super-block stays fronted until its last subblock; the 2 extra windows keep the loader's look-ahead (depth 3 with S=2 measured 133 vs 123 us on the focus case) |
 | `cb_partial_hold` | `depth_hold` | 2 (= lag 1 + 1); 1 when the schedule lags no entry (`hold_depth()`, Refinement 3) | entry e+1's matmul can pack while entry e (a relay or fin) still waits for its arrival |
 | `cb_finished` | `depth_handoff` | 2 | compute finishes entry e+1 while a port is still gathering entry e |
 | `cb_port_chunks` | `port_group` (chunks per batch). Capacity is 2·group. | 4 | a reader batch of reads overlaps a sender batch of packets. Measured best or within 10% at every size (fabric_* reports). |

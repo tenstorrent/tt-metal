@@ -14,12 +14,7 @@
 // Raw-API note (design "Helpers considered and rejected"): a pull with per-producer acks; no helper expresses it.
 
 #include <cstdint>
-#ifdef MRS_ZONES  // perf instrumentation only
-#include <tools/profiler/kernel_profiler.hpp>
-#define MRS_ZONE(name) DeviceZoneScopedN(name)
-#else
-#define MRS_ZONE(name)
-#endif
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"  // permanent stage zones (free when the profiler is off)
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
@@ -70,6 +65,7 @@ void kernel_main() {
     };
 
     for (uint32_t u = 0; u < num_units; ++u) {
+        MaybeDeviceZoneScope("PORT_GATHER_UNIT");  // gather of one unit: mailbox waits + chunk reads (occupancy)
         const uint32_t unit = get_arg_val<uint32_t>(units_idx + u);
         const uint32_t entry = unit & 0xFF;
         const uint32_t half_mask = (unit >> 8) & 0x3;
@@ -92,10 +88,7 @@ void kernel_main() {
             if (*mbox < target && c > 0) {
                 flush();  // never hold reads / acks while blocking on a producer
             }
-            {
-                MRS_ZONE("MBOX_WAIT");
-                noc_semaphore_wait_min(mbox, target);
-            }
+            noc_semaphore_wait_min(mbox, target);  // per-core wait: no zone here (marker budget, see header)
             const uint64_t src = get_noc_addr(cw & 0xFF, (cw >> 8) & 0xFF, finished_base + slot_off);
             for (uint32_t ci = 0; ci < chunks_per_core; ++ci) {
                 if (c == 0) {
