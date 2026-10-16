@@ -29,12 +29,14 @@ __attribute__((noinline)) void calculate_binary_remainder_fresh_cpp()
 #pragma GCC unroll 8
         for (int row = 0; row < ITERATIONS; ++row)
         {
-            const sfpi::vFloat a  = sfpi::dst_reg[0];
-            const sfpi::vFloat b  = sfpi::dst_reg[tile_rows];
-            const sfpi::vFloat aa = sfpi::abs(a);
-            const sfpi::vFloat ab = sfpi::abs(b);
+            const sfpi::vFloat a       = sfpi::dst_reg[0];
+            const sfpi::vFloat b       = sfpi::dst_reg[tile_rows];
+            const sfpi::vFloat ab      = sfpi::abs(b);
+            const sfpi::vFloat recip   = fresh_recip_hwseed(ab);
+            const sfpi::vFloat aa      = sfpi::abs(a);
+            const sfpi::vInt sign_diff = sfpi::as<sfpi::vInt>(a) ^ sfpi::as<sfpi::vInt>(b);
 
-            sfpi::vFloat r = fresh_mod_positive(aa, ab, fresh_recip_hwseed(ab));
+            sfpi::vFloat r = fresh_mod_positive(aa, ab, recip);
             v_if (r - ab == 0.0f)
             {
                 r = 0.0f;
@@ -42,7 +44,6 @@ __attribute__((noinline)) void calculate_binary_remainder_fresh_cpp()
             v_endif;
             // Opposite operand signs fold the non-zero residue to the other
             // end of the divisor interval (floor vs trunc quotient).
-            const sfpi::vInt sign_diff = sfpi::as<sfpi::vInt>(a) ^ sfpi::as<sfpi::vInt>(b);
             v_if (sign_diff < 0 && r != 0.0f)
             {
                 r = ab - r;
