@@ -111,7 +111,10 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_external_id = dfb::ex_external;  // partial E[x] from the other cores
 #endif
     constexpr uint32_t dfb_ex_partial2_id = dfb::ex_partial2;    // E[(x-E[x])^2] partial reduce
-    constexpr uint32_t dfb_ex2_id = dfb::ex2;                    // E[(x-E[x])^2] global reduce
+#ifdef TWO_STAGE_REDUCE
+    constexpr uint32_t dfb_ex2_id = dfb::ex2;  // E[(x-E[x])^2] first-stage reduce, for the reader
+#endif
+    constexpr uint32_t dfb_ex2_local_id = dfb::ex2_local;        // E[(x-E[x])^2] global reduce, kept here
     constexpr uint32_t dfb_ex_external2_id = dfb::ex_external2;  // partial Var[x] from the other cores
     constexpr uint32_t dfb_ex_global_id = dfb::ex_global;        // E[x] global reduce
     constexpr uint32_t dfb_xmm2_id = dfb_x;                      // xmm^2
@@ -157,7 +160,17 @@ void kernel_main() {
     DataflowBuffer dfb_ex_external(dfb_ex_external_id);
 #endif
     const DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
-    DataflowBuffer dfb_ex2(dfb_ex2_id);
+    // The combined Var[x] goes into ex2_local on the cores that turn it into 1/sqrt(Var[x] + eps): they read
+    // it back here, so it never leaves this kernel. With a two-stage reduce the other cores leave it in ex2 for
+    // the reader, which hands it to the second-stage reduce; ex2 exists only then. A single object for whichever
+    // applies, with a compile-time id where there is no choice, keeps the TRISC stack as it was (it has almost no
+    // headroom).
+#ifdef TWO_STAGE_REDUCE
+    const uint32_t dfb_var_id = enable_sqrt ? dfb_ex2_local_id : dfb_ex2_id;
+#else
+    constexpr uint32_t dfb_var_id = dfb_ex2_local_id;
+#endif
+    DataflowBuffer dfb_var(dfb_var_id);
     DataflowBuffer dfb_ex_external2(dfb_ex_external2_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_xmm2(dfb_xmm2_id);
@@ -470,17 +483,17 @@ void kernel_main() {
     reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
     dfb_xmm2.pop_front(num_tiles_per_block);
 
-    // global reduce, dfb_ex2_id <-- dfb_ex_external2_id, dfb_ex_partial2_id
+    // global reduce, dfb_ex2_id or dfb_ex2_local_id <-- dfb_ex_external2_id, dfb_ex_partial2_id
     if constexpr (is_allgather_worker) {
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external2_id);
-        reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb_ex_external2_id, dfb_scaler_global_id, dfb_ex2_id);
+        reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb_ex_external2_id, dfb_scaler_global_id, dfb_var_id);
         // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
         // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
         // hw_startup output ring and this DFB is never written (all-zero output).
 #ifdef ARCH_QUASAR
-        pack_init(dfb_ex2_id);
+        pack_init(dfb_var_id);
 #endif
-        dfb_ex2.reserve_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
+        dfb_var.reserve_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             dfb_scaler_global.wait_front(1);
@@ -501,11 +514,11 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, dfb_ex2_id);
+            pack_tile(dst0, dfb_var_id);
             tile_regs_release();
         }
         reduce_uninit();
-        dfb_ex2.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
+        dfb_var.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
 
         if (enable_sqrt) {
@@ -515,18 +528,17 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
             pack_init(dfb_ex2pe_id);
 #endif
-            // The reduction result above was packed into dfb_ex2 by this kernel. The loop below
-            // reads dfb_ex2 back by tile index across the whole count, so wait for the whole
-            // count.
-            dfb_ex2.wait_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
+            // The reduction result above was packed into dfb_ex2_local by this kernel. The loop below
+            // reads it back by tile index across the whole count, so wait for the whole count.
+            dfb_var.wait_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
             // eps is read by tile index below; wait for the writer's tile before the first read.
             dfb_eps_obj.wait_front(1);
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // 1/[sqrt(Var + eps)],
                 dfb_ex2pe.reserve_back(1);
                 tile_regs_acquire();
-                add_init(dfb_ex2_id, dfb_eps);
-                add_tiles(dfb_ex2_id, dfb_eps, i, 0, dst0);
+                add_init(dfb_ex2_local_id, dfb_eps);
+                add_tiles(dfb_ex2_local_id, dfb_eps, i, 0, dst0);
                 tile_regs_wait();
                 rsqrt_tile_init();
                 rsqrt_tile(dst0);
@@ -536,10 +548,8 @@ void kernel_main() {
                 dfb_ex2pe.push_back(1);
                 tile_regs_release();
             }
-            // Pop the count that the wait above claimed. enable_sqrt is the complement of the
-            // condition under which the receiver kernel waits and pops dfb_ex2 as its first-stage
-            // reduce buffer, so exactly one of the two kernels pops dfb_ex2.
-            dfb_ex2.pop_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
+            // Pop the count that the wait above claimed.
+            dfb_var.pop_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         }
     }
 
@@ -550,7 +560,7 @@ void kernel_main() {
     if constexpr (FLOAT32_DTYPE) {
         reconfig_data_format(dfb_xmm_id, dfb_ex_global_id);
     } else if constexpr (xmm_is_input_shard) {
-        reconfig_data_format_srca(dfb_ex2_id, dfb_xmm_id);
+        reconfig_data_format_srca(dfb_ex2_local_id, dfb_xmm_id);
     }
     mul_bcast_cols_init(dfb_xmm_id, dfb_ex_global_id);
     index_h_offset = 0;
