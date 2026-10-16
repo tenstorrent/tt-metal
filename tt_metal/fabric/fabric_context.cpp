@@ -123,7 +123,9 @@ void FabricContext::compute_packet_specifications(
     }
 
     // Compute actual packet sizes based on topology
-    packet_header_size_bytes_ = compute_packet_header_size_bytes(control_plane);
+    packet_header_config_ = compute_packet_header_config(control_plane);
+    packet_header_size_bytes_ = visit_packet_header_type(
+        packet_header_config_, [](auto header) { return sizeof(typename decltype(header)::type); });
     max_payload_size_bytes_ = compute_max_payload_size_bytes(hal, arch);
     channel_buffer_size_bytes_ = packet_header_size_bytes_ + max_payload_size_bytes_;
 }
@@ -144,13 +146,12 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     return tt::tt_fabric::Topology::Linear;
 }
 
-size_t FabricContext::compute_packet_header_size_bytes(const ControlPlane& control_plane) const {
-    const PacketHeaderConfig config{
+PacketHeaderConfig FabricContext::compute_packet_header_config(const ControlPlane& control_plane) const {
+    return {
         .is_2d = is_2D_routing_enabled_,
         .udm = control_plane.get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED,
         .extension_words = routing_1d_extension_words_,
         .route_buffer_size = routing_2d_buffer_size_};
-    return visit_packet_header_type(config, [](auto header) { return sizeof(typename decltype(header)::type); });
 }
 
 size_t FabricContext::compute_max_payload_size_bytes(const tt_metal::Hal& hal, tt::ARCH arch) const {

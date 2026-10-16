@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Verifies the struct layout helper (the coverage check, and how member types are classified and named), the
-// go_msg_t and launch_msg_t layouts built from the HAL, and the hand-listed EDMStatus enumerators.
+// go_msg_t and launch_msg_t layouts built from the HAL, the packet header layouts, and the hand-listed EDMStatus
+// enumerators.
 
 #include <gtest/gtest.h>
 
@@ -12,7 +13,11 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <set>
 #include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
 #include <llrt/hal.hpp>
@@ -20,6 +25,7 @@
 
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric::layout_test {
 
@@ -276,6 +282,42 @@ TEST(StructLayout, LaunchMsgLayoutFromHal) {
         EXPECT_EQ(read(base + host_assigned_id->offset, 4), 0x12345678u);
         const uint32_t rta_size = rta_offsets->type.size / rta_offsets->type.count;
         EXPECT_EQ(read(base + rta_offsets->offset + (last_rta * rta_size) + crta_offset->offset, 2), 0x5A6Bu);
+    }
+}
+
+// For every header FabricContext can choose, the manifest names the header the visitor picks, and every struct and
+// enum its layouts name is described: by those layouts, or by DescribedStructs and DescribedEnums.
+TEST(PacketHeaderLayouts, EveryConfig) {
+    const auto described = described_struct_types();
+    std::set<std::string_view> enums;
+    [&]<typename... Es>(std::type_identity<std::tuple<Es...>>) {
+        (enums.insert(enum_type<Es>().name), ...);
+    }(std::type_identity<DescribedEnums>{});
+
+    for (const auto& config : PACKET_HEADER_CONFIGS) {
+        const Type header = packet_header_type(config);
+        const auto* header_struct = std::get_if<element::Struct>(&header.element);
+        ASSERT_NE(header_struct, nullptr);
+        SCOPED_TRACE(header_struct->name);
+        const size_t size =
+            visit_packet_header_type(config, [](auto type) { return sizeof(typename decltype(type)::type); });
+        EXPECT_EQ(header.size, size);
+
+        const auto types = packet_header_struct_types(config);
+        const StructType* header_type = find_type(types, header_struct->name);
+        ASSERT_NE(header_type, nullptr);
+        EXPECT_EQ(header_type->size, size);
+        for (const auto& type : types) {
+            EXPECT_EQ(find_type(described, type.name), nullptr) << type.name << " is also in DescribedStructs";
+            for (const auto& member : type.members) {
+                if (const auto* s = std::get_if<element::Struct>(&member.type.element)) {
+                    EXPECT_TRUE(find_type(types, s->name) != nullptr || find_type(described, s->name) != nullptr)
+                        << type.name << "." << member.name << " names " << s->name;
+                } else if (const auto* e = std::get_if<element::Enum>(&member.type.element)) {
+                    EXPECT_TRUE(enums.contains(e->name)) << type.name << "." << member.name << " names " << e->name;
+                }
+            }
+        }
     }
 }
 
