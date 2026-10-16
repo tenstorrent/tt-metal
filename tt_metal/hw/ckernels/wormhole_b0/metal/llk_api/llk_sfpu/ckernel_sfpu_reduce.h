@@ -529,8 +529,9 @@ inline void horizontal_reduce_max_int32() {
  * 4. Use horizontal_reduce_max to consolidate 8 SFPU columns into column 0
  * 5. Store the per-row max into column 0
  *
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16).
- *         Int32 and UInt32 MAX/MIN do not use this helper; they take perform_reduce_row_max_tile_int32.
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, DEFAULT for Float16_b, LO16, or INT32 for UInt16
+ *         in a 32-bit dest). Int32 and UInt32 MAX/MIN do not use this helper; they take
+ *         perform_reduce_row_max_tile_int32.
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in a 32-bit dest).
  * @param tile_row_offset Base row offset for this tile in the dest register
  * @param result_store_mode SFPSTORE mode for the per-row result (plain instruction mode, or mode 9 for UInt16 output)
@@ -790,8 +791,9 @@ inline void sum_first_columns_across_tiles(
  * Mirrors sum_first_columns_across_tiles but uses SFPSWAP instead of SFPADD
  * to keep maximum values rather than sums.
  *
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16).
- *         Int32 and UInt32 MAX/MIN do not use this helper; they take max_first_columns_across_tiles_int32.
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, DEFAULT for Float16_b, LO16, or INT32 for UInt16
+ *         in a 32-bit dest). Int32 and UInt32 MAX/MIN do not use this helper; they take
+ *         max_first_columns_across_tiles_int32.
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in a 32-bit dest).
  * @tparam pack_low16 Whether the final store uses mode 9 (low->high 16-bit) for a UInt16 output.
  * @param tile_row_base Base address of the first tile in this row of tiles
@@ -899,7 +901,10 @@ inline void perform_reduce_row_sum_avg(std::uint32_t block_ct_dim, std::uint32_t
  * two's-complement path (perform_reduce_row_max_min_int32 / calculate_reduce_max_min_int32_col).
  *
  * @tparam pool_type MAX or MIN.
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16)
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, DEFAULT for Float16_b, LO16, or INT32 for UInt16
+ *         in a 32-bit dest).
+ * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in a 32-bit dest).
+ * @tparam pack_low16 Whether the final store uses mode 9 (low->high 16-bit) for a UInt16 output.
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
  * @param block_rt_dim Number of tiles along y axis of tensor (row tiles)
  */
