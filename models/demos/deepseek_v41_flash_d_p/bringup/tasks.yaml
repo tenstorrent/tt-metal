@@ -1155,6 +1155,13 @@ tasks:
     swapped:
     - engram_rows
     layer: 1
+  frozen:
+    at: '2026-10-16T02:10:29'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_01_engram_rows.py: 4578cce163738818f565344e8b09cb58a4eb5c375da4f0753f2edcabd01725ac
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.swa_engram.engram_kv
   title: swa_engram engram_kv (op) on device, layer 1
   step: implement
