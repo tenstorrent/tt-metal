@@ -303,33 +303,6 @@ void Logger::log_program_compile_finished(const ProgramData& program_data) noexc
     }
 }
 
-void Logger::log_program_binary_status_change(const ProgramData& program_data, std::size_t device_id, ProgramBinaryStatus status) noexcept {
-    if (!initialized) {
-        return;
-    }
-    try {
-        programs_ostream << "- program_binary_status_change:\n";
-        programs_ostream << "    id: " << program_data.program_id << "\n";
-        programs_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
-        programs_ostream << "    device_id: " << device_id << "\n";
-        programs_ostream << "    status: ";
-        switch (status) {
-            case ProgramBinaryStatus::NotSent:
-                programs_ostream << "NotSent" << "\n";
-                break;
-            case ProgramBinaryStatus::InFlight:
-                programs_ostream << "InFlight" << "\n";
-                break;
-            case ProgramBinaryStatus::Committed:
-                programs_ostream << "Committed" << "\n";
-                break;
-        }
-        programs_ostream.flush();
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log program enqueued: {}", e.what());
-    }
-}
-
 void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noexcept {
     if (!initialized) {
         return;
