@@ -496,9 +496,12 @@ def test_eltwise_unary_typecast_fp32_to_fp16b_rounding_specials():
     for b, g, r in zip(bits, golden_bits, result):
         got = struct.unpack("<I", struct.pack("<f", r))[0]
         if _fp32_is_nan(b):
-            # NaN in, NaN out with the input sign; the payload is not pinned.
-            ok = math.isnan(r) and (math.copysign(1.0, r) < 0) == bool(
-                b & _FP32_SIGN_BIT
+            # NaN in, NaN out with the input sign and the low 16 bits cleared like
+            # every other lane; the payload above them is not pinned.
+            ok = (
+                math.isnan(r)
+                and (math.copysign(1.0, r) < 0) == bool(b & _FP32_SIGN_BIT)
+                and (got & 0xFFFF) == 0
             )
             expected = "nan" if not b & _FP32_SIGN_BIT else "-nan"
         else:
