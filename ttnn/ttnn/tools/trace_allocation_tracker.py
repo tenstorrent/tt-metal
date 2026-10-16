@@ -6,13 +6,14 @@
 Tracks device buffer allocations made while traces are active, to catch
 buffers that would be silently corrupted on trace replay.
 
-Warning: validation checks tracked, non-exempt buffers before replay submission.
-It does not check for overlapping temporary memory used by concurrent traces,
-or overlapping allocations used by work on another subdevice during replay.
+Accounting includes allocations across subdevices of the capture manager.
+Validation checks tracked, non-exempt buffers still allocated before replay submission.
+
+Warning: released temporary allocations are no longer tracked. The checker does
+not compare their memory ranges across traces. Allocations made after the check
+are still recorded, without an immediate warning or error. They cannot stop a
+replay already submitted. If freed before the next check, they are not reported.
 These cases require separate code analysis of memory ownership and synchronization.
-With tracking enabled, non-exempt allocations made during replay are recorded
-without an immediate warning or error. If freed before the next check, they are
-not reported.
 
 Controlled by environment variables:
   TT_METAL_TRACE_ALLOC_TRACKING=1       Enable accounting and fail when unsafe
@@ -141,9 +142,11 @@ class TraceAllocationTracker:
         GC when the first check finds candidates, then checks again. Raises
         RuntimeError with details if any remain.
 
-        This check does not monitor a running replay. Concurrent traces and work
-        on other subdevices require separate analysis of memory ownership and
-        synchronization. Allocations freed before the next check are not reported.
+        Accounting includes allocations on other subdevices of the capture manager.
+        This check does not compare released temporary allocations across traces
+        or monitor a running replay. Allocations made after this check are still
+        recorded, but cannot stop an already submitted replay. Allocations freed
+        before the next check are not reported.
 
         Reports allocation context (op name + compile args) and Python-side referrers.
         """

@@ -65,6 +65,8 @@ When a new program is compiled, the compilation result is saved in program cache
 
 Memory safety must hold until all device accesses from a replay complete, including outstanding memory transfers. A return from `ttnn.execute_trace(..., blocking=False)` does not establish completion.
 
+Host-side overlap alone does not imply conflicting device accesses. For example, H2D and D2H copies submitted after a trace on the same command queue wait for earlier work on the subdevices in the copy's stall group. They need not wait for excluded subdevices. Copies on another command queue need explicit ordering when they access memory used by the trace. See [subdevice synchronization](../SubDevices/SubDevices.md#14-synchronization).
+
 Two unsafe scenarios are:
 
 - **Concurrent traces:** Traces captured at different times can use the same physical addresses for temporary memory after the original allocations have been released. Reusing this memory can be safe when the traces complete in sequence. Concurrent accesses can corrupt either trace if at least one access writes.
@@ -86,11 +88,16 @@ The environment variables are read once while TT-NN starts up, so they must be s
 
 Once a trace has been captured, the checker accounts for subsequent device-buffer allocations for that trace. Immediately before `ttnn.execute_trace`, it checks whether any buffers unsafe for the requested trace are still alive. If it finds candidates, it runs Python garbage collection and checks again. If unsafe buffers remain, `ttnn.execute_trace` raises a `RuntimeError` instead of replaying the trace and potentially corrupting them. Buffers that have already been released are removed from the accounting automatically.
 
-> **Warning: concurrent execution is not checked.** The check covers tracked, non-exempt buffers that remain allocated before replay submission. It does not establish the memory-safety requirements for [concurrent execution](#concurrent-execution).
->
-> With tracking enabled, non-exempt allocations made during replay are recorded without an immediate warning or error. They can be reported at the next replay check if they remain allocated. If they are released before that check, they are removed from tracking and will not be reported, even if corruption already occurred.
-
 Accounting is kept separately for each `(sub-device manager, trace ID)` pair. Trace IDs are interpreted under the currently active sub-device manager, so the manager used to capture a trace must also be active when the trace is ended, executed, or released. For example, given `capture(trace_a)`, `allocate(x)`, then `capture(trace_b)` under one manager, `x` is unsafe when executing `trace_a` but safe when executing `trace_b`, because it was already present in the allocator when `trace_b` was captured. An allocation made after both captures is unsafe for both traces.
+
+Accounting includes the global allocator and all subdevice allocators of the capture manager. It is not restricted to the subdevices used by the trace. For example, a tracked, non-exempt buffer allocated on subdevice 1 after capture of a trace on subdevice 2 is recorded as potentially unsafe for that trace. If the buffer remains allocated at that trace's pre-replay check, the checker rejects replay. This is conservative accounting; it does not prove that the physical memory ranges overlap.
+
+> **Warning: limits of the pre-replay check.** Accounting across subdevices does not establish all the memory-safety requirements for [concurrent execution](#concurrent-execution):
+>
+> - Released temporary allocations are removed from tracking. The checker does not compare the temporary memory ranges retained in two traces after those allocations have been released.
+> - Tracked, non-exempt allocations made after the pre-replay check are still recorded, without an immediate warning or error. They cannot stop an already submitted replay. They can be reported at the next replay check if they remain allocated. If released before that check, they will not be reported, even if corruption already occurred.
+>
+> These cases require separate code analysis of memory ownership and synchronization.
 
 Trace storage itself is excluded from accounting. Buffers in the reserved `BufferType::TRACE` region cannot overlap ordinary buffers. With `trace_region_size=0`, trace storage is instead allocated top-down in DRAM; capture validates its address against the current capture's DRAM high-water marks and the maximum high-water mark of every live trace. Capture fails rather than retaining a dynamic trace buffer that could be corrupted by replay.
 

@@ -139,10 +139,12 @@ if _trace_allocation_tracker.TRACE_ALLOC_TRACKING:
     def execute_trace(mesh_device, trace_id, *, cq_id=None, blocking=True):
         """Execute a captured trace after checking tracked, non-exempt allocations.
 
-        Warning: the check runs before replay submission. It does not check for
-        overlapping temporary memory used by concurrent traces, or overlapping
-        allocations used by work on another subdevice during replay. These cases
-        require separate code analysis of memory ownership and synchronization.
+        Accounting includes allocations on other subdevices of the capture manager.
+        Warning: the check runs before replay submission. Released temporary
+        allocations are no longer tracked or compared across traces. Allocations
+        made after this check are still recorded, but cannot stop an already
+        submitted replay. These cases require separate analysis of memory
+        ownership and synchronization.
         """
         _trace_allocation_tracker.TraceAllocationTracker.verify_before_replay(mesh_device, trace_id)
         return _ttnn_execute_trace(mesh_device, trace_id, cq_id=cq_id, blocking=blocking)

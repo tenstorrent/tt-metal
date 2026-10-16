@@ -119,8 +119,9 @@ void py_module(nb::module_& mod) {
 
             Warning:
                 The optional allocation checker checks tracked, non-exempt buffers before replay submission.
-                It does not check for overlapping temporary memory used by concurrent traces, or overlapping
-                allocations used by work on another subdevice during replay. These cases require separate code
+                Accounting includes allocations on other subdevices of the capture manager. Released temporary
+                allocations are no longer tracked or compared across traces. Allocations made after this check
+                are still recorded, but cannot stop an already submitted replay. These cases require separate
                 analysis of memory ownership and synchronization.
 
             Args:
