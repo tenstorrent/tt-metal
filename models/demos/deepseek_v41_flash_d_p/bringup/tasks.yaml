@@ -3020,6 +3020,13 @@ tasks:
     - attn_residual
     - ffn_hc
     layer: 2
+  frozen:
+    at: '2026-10-16T22:26:10'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_10_ffn_hc.py: 656e7ddcb5903346fd74b5fcb6101df80eb8bae5e28b60e623bc4f6979331b78
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.enc_source.ffn_collapse
   title: enc_source ffn_collapse (op) on device, layer 2
   step: implement
