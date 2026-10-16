@@ -1348,6 +1348,23 @@ void check_archs(const json& manifest) {
     if (base_fw_heartbeat != 0) {
         EXPECT_EQ(heartbeat.at("address").get<uint32_t>(), base_fw_heartbeat);
     }
+
+    // The routing table is laid out for the run's routing mode: its union holds that mode's table, only that table's
+    // struct is described, and only 2D reads exit_node_table.
+    const bool is_2d = manifest.at("fabric_context").at("is_2d_routing").get<bool>();
+    const auto& types = manifest.at("archs").at(lower_enum_name(BaseFabricFixture::arch_)).at("types");
+    EXPECT_EQ(areas.at("routing_table").at("schema"), "struct:routing_l1_info_t");
+    const auto& routing_members = types.at("routing_l1_info_t").at("members");
+    const auto schema_of = [&](const char* name) {
+        const auto it = std::find_if(
+            routing_members.begin(), routing_members.end(), [&](const json& m) { return m.at("name") == name; });
+        return it == routing_members.end() ? std::string("absent") : it->at("schema").get<std::string>();
+    };
+    EXPECT_EQ(schema_of("routing_path_table_1d"), is_2d ? "absent" : "struct:intra_mesh_routing_path_t<1,false>");
+    EXPECT_EQ(schema_of("route_table_2d"), is_2d ? "struct:route_table_2d_t" : "absent");
+    EXPECT_EQ(schema_of("exit_node_table"), is_2d ? "u8" : "pad");
+    EXPECT_EQ(types.contains("intra_mesh_routing_path_t<1,false>"), !is_2d);
+    EXPECT_EQ(types.contains("route_table_2d_t"), is_2d);
 }
 
 // The stream registers are where the HAL puts them, with the HAL's widths, and every register of every stream is in
@@ -1572,7 +1589,9 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(schema_name({element::Union{"NocCommandFields", "noc_send_type"}, 40, 0}), "union:NocCommandFields");
     EXPECT_EQ((layout::template_name<"HybridMeshPacketHeaderT", 36>), "HybridMeshPacketHeaderT<36>");
     EXPECT_EQ((layout::template_name<"T", 1, false>), "T<1,false>");
-    EXPECT_EQ(schema_name({element::Packed{"direction_table", 2}, 16, 64}), "packed:direction_table");
+    // A packed table's schema is the enum its entries hold; its bits_per_entry marks it as packed.
+    EXPECT_EQ(
+        schema_name({element::Packed{"compressed_routing_values", 3}, 96, 256}), "enum:compressed_routing_values");
     EXPECT_EQ(schema_name({element::Bytes{}, 1, 0}), "bytes");
     EXPECT_EQ(schema_name({element::Pad{}, 1, 0}), "pad");
     EXPECT_EQ(schema_name(layout::type_of<uint32_t>()), "u32");
