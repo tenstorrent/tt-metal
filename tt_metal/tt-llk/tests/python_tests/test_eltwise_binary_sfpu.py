@@ -650,6 +650,9 @@ def sfpu_binary(
 # Float ops
 # =============================================================================
 
+# The bf16/fp32 matrix most of the sweeps below share.
+_BF16_FP32_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+
 # Shared with perf_eltwise_binary_sfpu.py so the two sweeps stay aligned.
 FLOAT_SWEEP = dict(
     formats=input_output_formats(
@@ -708,22 +711,22 @@ FLOAT_EXTENDED_SWEEP = dict(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 MASK_SWEEP = dict(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=_BF16_FP32_FORMATS,
     mathop=[MathOperation.SfpuMask],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 ATAN2_SWEEP = dict(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=_BF16_FP32_FORMATS,
     mathop=[MathOperation.SfpuAtan2],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 EQ_NE_SWEEP = dict(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=_BF16_FP32_FORMATS,
     mathop=[MathOperation.SfpuElwEq, MathOperation.SfpuElwNe],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 FLOAT_COMPARISON_SWEEP = dict(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=_BF16_FP32_FORMATS,
     mathop=[
         MathOperation.SfpuElwLt,
         MathOperation.SfpuElwGt,
@@ -733,12 +736,12 @@ FLOAT_COMPARISON_SWEEP = dict(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 ISCLOSE_SWEEP = dict(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=_BF16_FP32_FORMATS,
     mathop=[MathOperation.SfpuIsclose],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 LOGSIGMOID_SWEEP = dict(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=_BF16_FP32_FORMATS,
     mathop=[MathOperation.SfpuLogsigmoid],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
@@ -1433,7 +1436,7 @@ assert _BINARY_EDGE_OPS, (
 
 @pytest.mark.nightly
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=_BF16_FP32_FORMATS,
     mathop=_BINARY_EDGE_OPS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     # runtime(): the class selects which values go in the override tensor and nothing
