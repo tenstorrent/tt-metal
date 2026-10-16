@@ -38,6 +38,14 @@ BATCHED_REDUCE_LINKS = 2
 
 _TILE_BYTES = {ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048, ttnn.float32: 4096}
 
+# chunks_per_sync of the prefill ring reduce-scatters (ring_reduce_scatter). The ring result does not depend on it
+# (bit-identical to the default in every case measured). Measured on BH 1x4, bf8, 2 links, ms per call, default -> 128
+# (l14/mb_ccl14.py, l14/logs/mb_ccl14.log):
+#   [32, 1, 2048, 2880] 2.816 -> 2.503; [16, 1, 4096, 2880] 2.807 -> 2.491; [8, 1, 8192, 2880] 2.773 -> 2.456;
+#   [32, 1, 512, 2880] 0.703 -> 0.647; [1, 1, 16384, 2880] 0.711 -> 0.647; [1, 1, 4096, 2880] 0.182 -> 0.184.
+# 64 / 256 are within 0.5% of 128; num_workers_per_link 6 and num_buffers_per_channel 8 on top: within 1-4%, mixed.
+RING_REDUCE_SCATTER_CHUNKS_PER_SYNC = 128
+
 
 def _user_view(x, batch_size):
     """[1, 1, B*R, W] rows stacked by user -> [B, 1, R, W] (a view when R is a multiple of the tile height)."""
@@ -58,6 +66,32 @@ def takes_direct_reduce_scatter(user_rows, width, dtype):
         return False
     tiles = -(-user_rows // ttnn.TILE_SIZE) * -(-width // ttnn.TILE_SIZE)
     return tiles * tile_bytes <= DIRECT_REDUCE_SCATTER_MAX_BYTES
+
+
+def _input_bytes(x):
+    """Per-device bytes of a TILE tensor of a dtype in _TILE_BYTES (None otherwise)."""
+    tile_bytes = _TILE_BYTES.get(x.dtype)
+    if tile_bytes is None or x.layout != ttnn.TILE_LAYOUT:
+        return None
+    shape = x.padded_shape
+    lead = 1
+    for d in range(len(shape) - 2):
+        lead *= shape[d]
+    return lead * (shape[-2] // ttnn.TILE_SIZE) * (shape[-1] // ttnn.TILE_SIZE) * tile_bytes
+
+
+def ring_reduce_scatter(x, cluster_axis, num_links, topology=ttnn.Topology.Ring, memory_config=None):
+    """ttnn.reduce_scatter (dim 2) of a prefill partial sum, with RING_REDUCE_SCATTER_CHUNKS_PER_SYNC where the call
+    takes the ring anyway. Any hyperparameter turns off the direct (one-shot) op in ttnn.reduce_scatter, which sums in
+    another order, so an input of at most DIRECT_REDUCE_SCATTER_MAX_BYTES per device (or of unknown size, or another
+    topology) keeps the plain call: same op, same rows as without this helper."""
+    kw = {}
+    nbytes = _input_bytes(x)
+    if topology == ttnn.Topology.Ring and nbytes is not None and nbytes > DIRECT_REDUCE_SCATTER_MAX_BYTES:
+        kw["chunks_per_sync"] = RING_REDUCE_SCATTER_CHUNKS_PER_SYNC
+    if memory_config is not None:
+        kw["memory_config"] = memory_config
+    return ttnn.reduce_scatter(x, 2, cluster_axis=cluster_axis, num_links=num_links, topology=topology, **kw)
 
 
 def _model_cache(ccl_manager):
@@ -91,7 +125,8 @@ def per_user_reduce(x, batch_size, cluster_axis, num_links, scatter=False):
     xb = _user_view(x, batch_size)
     user_rows = xb.shape[-2]
     direct = takes_direct_reduce_scatter(user_rows, xb.shape[-1], x.dtype)
-    if not scatter and not direct:
+    num_dev = xb.device().shape[cluster_axis]
+    if not scatter and not direct and (user_rows // ttnn.TILE_SIZE) % num_dev:
         out = ttnn.all_reduce(
             xb,
             num_links=num_links,
@@ -100,6 +135,10 @@ def per_user_reduce(x, batch_size, cluster_axis, num_links, scatter=False):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return _flat_view(out)
+    # ttnn.all_reduce of a [B, 1, S, H] whose S tiles divide by the mesh axis (H = 2880 is 90 tiles, which do not) is
+    # this ring ttnn.reduce_scatter over dim 2 plus ttnn.all_gather; run them here to set chunks_per_sync on the ring.
+    # Bit-identical, measured on BH 1x4, bf8, 2 links, ms per call (l14/logs/mb_ccl14.log): [32, 1, 512, 2880]
+    # all_reduce 1.301 -> 1.244, [32, 1, 256, 2880] 0.658 -> 0.638 (all_gather_async in place of all_gather: slower).
     if direct:
         rs = ttnn.experimental.reduce_scatter_minimal_direct(
             xb,
@@ -109,14 +148,7 @@ def per_user_reduce(x, batch_size, cluster_axis, num_links, scatter=False):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
     else:
-        rs = ttnn.reduce_scatter(
-            xb,
-            2,
-            cluster_axis=cluster_axis,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            num_links=num_links,
-            topology=ttnn.Topology.Ring,
-        )
+        rs = ring_reduce_scatter(xb, cluster_axis, num_links, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if scatter:
         return _flat_view(rs)
     out = ttnn.all_gather(rs, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)

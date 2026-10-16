@@ -44,7 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert, routed_expert_weight_memory_config
 from models.demos.gpt_oss.config import Mode
 
-from ..batched_prefill import batched_reduce_links, per_user_reduce
+from ..batched_prefill import batched_reduce_links, per_user_reduce, ring_reduce_scatter
 from .prefill_routed_placement import ROUTED_EXPERT_PLACEMENT, ROUTED_EXPERT_PLACEMENT_DEVICES
 
 ROUTED_PREFILL_ENV = "GPT_OSS_ROUTED_PREFILL"
@@ -280,6 +280,33 @@ class _SharedBlockedPrefix:
 
 
 _BLOCKED_PREFIX_CACHE = weakref.WeakValueDictionary()
+
+# Program configs of the two batched matmuls of the blocked prefix (within: tri [nb, b, b] @ [nb, b, E]; totals:
+# ones [nb, 1, b] @ [nb, b, E]). The ttnn default runs within on 16 cores and totals on 1. Measured on BH at
+# nb = 32, b = 512, E = 32, ms per call (l16/mb_prefix*.py, l16/logs/): within 0.247 -> 0.033 (8x8, per_core_M 8),
+# totals 0.158 -> 0.018 (8x4); exact (integer sums) over fresh inputs at C = 1024 .. 16384.
+# A config that puts more than one output block on a core returned wrong sums (within, per_core_M 4 on 8x8 at
+# nb >= 24; l16/logs/mb_prefix_iso*.log), so each is used only where the blocks fit one per core.
+_PREFIX_WITHIN_GRID, _PREFIX_WITHIN_PCM = (8, 8), 8
+_PREFIX_TOTALS_GRID = (8, 4)
+
+
+def _prefix_bmm_config(grid, device_grid, nb, m_tiles, k_tiles, n_tiles, per_core_m):
+    """MatmulMultiCoreReuseProgramConfig of a [nb, M, K] @ [nb, K, N] prefix matmul with one output block of
+    per_core_m x n_tiles tiles per core, or None (ttnn default) when the blocks do not fit one per core of grid."""
+    gx, gy = grid
+    if gx > device_grid.x or gy > device_grid.y or m_tiles % per_core_m:
+        return None
+    if nb * (m_tiles // per_core_m) > gx * gy:
+        return None
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=k_tiles,
+        out_subblock_h=next(h for h in (4, 2, 1) if per_core_m % h == 0),
+        out_subblock_w=1,
+        per_core_M=per_core_m,
+        per_core_N=n_tiles,
+    )
 
 
 def _shared_blocked_prefix(mesh_device, C, block):
@@ -752,8 +779,13 @@ class RoutedPrefillExperts:
             tri, ones, tri_blocks = holder.get()
             nb = C // b
             per_block = ttnn.reshape(per_token, (nb, b, E))
-            within = ttnn.matmul(tri, per_block, **mm)  # [nb, b, E]: pairs from earlier tokens of the same block
-            totals = ttnn.matmul(ones, per_block, **mm)  # [nb, 1, E]: pairs per block
+            device_grid = self.mesh_device.compute_with_storage_grid_size()
+            bt, et = b // ttnn.TILE_SIZE, -(-E // ttnn.TILE_SIZE)
+            within_pc = _prefix_bmm_config(_PREFIX_WITHIN_GRID, device_grid, nb, bt, bt, et, _PREFIX_WITHIN_PCM)
+            totals_pc = _prefix_bmm_config(_PREFIX_TOTALS_GRID, device_grid, nb, 1, bt, et, 1)
+            # [nb, b, E]: pairs from earlier tokens of the same block
+            within = ttnn.matmul(tri, per_block, program_config=within_pc, **mm)
+            totals = ttnn.matmul(ones, per_block, program_config=totals_pc, **mm)  # [nb, 1, E]: pairs per block
             totals = ttnn.reshape(totals, (nb, E))
             # Block totals reach b, so this operand needs more than LoFi's mantissa bits (HiFi4, as the slot selector).
             earlier = ttnn.matmul(
@@ -1047,13 +1079,7 @@ class RoutedPrefillExperts:
             ttnn.deallocate(out)
             return reduced
         if scatter:
-            reduced = ttnn.reduce_scatter(
-                out,
-                2,
-                cluster_axis=self.mesh_config.tp_axis,
-                num_links=links,
-                topology=ttnn.Topology.Ring,
-            )
+            reduced = ring_reduce_scatter(out, self.mesh_config.tp_axis, links)
             ttnn.deallocate(out)
             return reduced
         reduced = ttnn.all_reduce(

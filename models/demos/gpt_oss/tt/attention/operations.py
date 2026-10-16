@@ -5,7 +5,7 @@ import math
 
 import ttnn
 
-from ..batched_prefill import batched_reduce_links, per_user_reduce
+from ..batched_prefill import batched_reduce_links, per_user_reduce, ring_reduce_scatter
 from .weights import AttentionWeights
 
 
@@ -158,13 +158,8 @@ def apply_output_projection_allreduce_prefill(
         out.deallocate(True)
         return reduced
     if scatter:
-        reduced = ttnn.reduce_scatter(
-            out,
-            2,
-            cluster_axis=mesh_config.tp_axis,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            num_links=links,
-            topology=ccl_manager.topology,
+        reduced = ring_reduce_scatter(
+            out, mesh_config.tp_axis, links, topology=ccl_manager.topology, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         out.deallocate(True)
         return reduced
