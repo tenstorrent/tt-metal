@@ -251,6 +251,18 @@ def get_dest_reuse_formats(math_op):
     )
 
 
+def get_dest_reuse_dest_acc(formats):
+    """Float32 operands also run with a 32-bit Dest.
+
+    The dest-reuse kernel passes clear_fp32_dst_acc=false, so the 32-bit Dest
+    rows carry the ELWMUL accumulation across folds and the face clear must
+    follow the Dest geometry on its own.
+    """
+    if formats.input_format == DataFormat.Float32:
+        return [DestAccumulation.No, DestAccumulation.Yes]
+    return [DestAccumulation.No]
+
+
 def _get_valid_math_fidelity(formats, math_op=None):
     """
     Filter math fidelity based on input data format:
@@ -1024,7 +1036,7 @@ def _run_eltwise_binary_dest_reuse_test(
     ],
     math_op=DEST_REUSE_MATH_OPS,
     formats=get_dest_reuse_formats,
-    dest_acc=[DestAccumulation.No],
+    dest_acc=get_dest_reuse_dest_acc,
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),

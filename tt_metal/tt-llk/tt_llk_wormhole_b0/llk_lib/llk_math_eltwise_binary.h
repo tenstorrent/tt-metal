@@ -463,7 +463,7 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::Tensor
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param loop_count: Number of faces to process.
  * @param face_offset: Index of the first face within the tile.
- * @param clear_fp32_dst_acc: Clear the FP32 dest accumulator face when FP32 mode is enabled.
+ * @param clear_fp32_dst_acc: Ignored. The face clear follows is_fp32_dest_acc_en; kept for the caller's signature.
  * @param dst_index: Tile index into the destination register.
  * @param face_r_dim: Face row dimension; used for HiFi partial-face dest spacing.
  */
@@ -471,7 +471,7 @@ template <bool is_fp32_dest_acc_en, EltwiseBinaryReuseDestType binary_reuse_dest
 inline void eltwise_binary_run_with_dest_reuse(
     const std::uint32_t loop_count,
     const std::uint32_t face_offset,
-    const bool clear_fp32_dst_acc,
+    [[maybe_unused]] const bool clear_fp32_dst_acc,
     const std::uint32_t dst_index,
     const std::uint32_t face_r_dim)
 {
@@ -482,9 +482,13 @@ inline void eltwise_binary_run_with_dest_reuse(
     {
         eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
 
-        // Clear DEST face-by-face when reusing dest as source
-        auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << ((is_fp32_dest_acc_en && clear_fp32_dst_acc) ? 3 : 2));
-        if (is_fp32_dest_acc_en && clear_fp32_dst_acc)
+        // Clear DEST face-by-face when reusing dest as source. ZEROACC's 16-row mode clears a
+        // physical 16-row block; a 32-bit DEST face spans two of them (its 16 rows live in the
+        // lower halves of two consecutive blocks), so the clear geometry follows the DEST width
+        // alone. ELWMUL always accumulates into DEST, so the clear is never optional:
+        // clear_fp32_dst_acc has no say in it.
+        auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << (is_fp32_dest_acc_en ? 3 : 2));
+        if constexpr (is_fp32_dest_acc_en)
         {
             const std::uint32_t face_offset_fp32 = face_offset * 2;
             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (face_offset_fp32 + n * 2));
