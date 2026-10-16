@@ -33,7 +33,7 @@ import ttnn
 
 from loguru import logger as loguru_logger
 
-from models.common.utility_functions import is_wormhole_b0, skip_for_slow_dispatch
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0, skip_for_slow_dispatch
 
 
 @pytest.fixture

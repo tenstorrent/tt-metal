@@ -91,7 +91,7 @@ from .unpacker.unpack_ab import UnpackerAB
 
 
 def _validate_math_fidelities(operation, config):
-    wide_formats = {DataFormat.Float16, DataFormat.Tf32}
+    wide_formats = {DataFormat.Float16, DataFormat.Tf32, DataFormat.Float32}
     config.sentinel.prepare_operation(config, operation)
     output_format = operation._get_pack_nodes()[0].output.data_format
     errors = []
@@ -109,8 +109,10 @@ def _validate_math_fidelities(operation, config):
         allowed = [MathFidelity.LoFi]
         if src_a in wide_formats:
             allowed.append(MathFidelity.HiFi2)
+        if src_b in wide_formats:
+            allowed.append(MathFidelity.HiFi3)
         if src_a in wide_formats and src_b in wide_formats:
-            allowed.extend((MathFidelity.HiFi3, MathFidelity.HiFi4))
+            allowed.append(MathFidelity.HiFi4)
         if node.math_fidelity not in allowed:
             errors.append(
                 f"Math node {index} (Fpu)\n    Quasar "
@@ -462,6 +464,10 @@ UNARY_SFPU_OPS = {
     MathOperation.UnaryLe,
     MathOperation.UnaryEq,
     MathOperation.UnaryNe,
+    MathOperation.UnaryMax,
+    MathOperation.UnaryMin,
+    MathOperation.UnaryMaxInt32,
+    MathOperation.UnaryMinInt32,
     MathOperation.BitwiseNot,
     MathOperation.LeftShift,
     MathOperation.RightShift,
@@ -526,6 +532,8 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuSituGlu,
     MathOperation.SfpuLogaddexp,
     MathOperation.SfpuLogaddexp2,
+    MathOperation.SfpuGcd,
+    MathOperation.SfpuLcm,
     MathOperation.SfpuElwRightShift,
     MathOperation.SfpuElwLeftShift,
     MathOperation.SfpuElwLogicalRightShift,
@@ -551,6 +559,16 @@ class QuasarUnarySfpuMathSchema(UnarySfpuMathSchema):
 class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_cls: ClassVar = BinarySfpu
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
+    _sign_magnitude_ops: ClassVar = {
+        "SfpuElwadd",
+        "SfpuElwmul",
+        "SfpuElwGt",
+        "SfpuElwLt",
+        "SfpuElwLe",
+        "SfpuElwGe",
+        "SfpuGcd",
+        "SfpuLcm",
+    }
 
 
 class QuasarTernarySfpuMathSchema(TernarySfpuMathSchema):

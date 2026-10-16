@@ -140,15 +140,6 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
 
 // The qsr.s1 emulator model only routes device NoC traffic through the boot-programmed
 // address-translation tables, so tt-metal defaults it to the grendel_qsr1 ATT map.
-// The simulator directory basename, with any trailing separator stripped so filename() is not empty.
-std::string quasar_simulator_name(const llrt::RunTimeOptions& rtoptions) {
-    std::string simulator = rtoptions.get_simulator_path().string();
-    while (simulator.size() > 1 && simulator.back() == '/') {
-        simulator.pop_back();
-    }
-    return std::filesystem::path(simulator).filename().string();
-}
-
 // Set the qsr.s1 ATT default from the simulator path alone. Only called when the user did not set
 // TT_METAL_NOC_ATT.
 void default_quasar_noc_att_from_path(llrt::RunTimeOptions& rtoptions) {
@@ -158,8 +149,9 @@ void default_quasar_noc_att_from_path(llrt::RunTimeOptions& rtoptions) {
     rtoptions.set_noc_att_map("grendel_qsr1");
     log_info(
         tt::LogMetal,
-        "TT_METAL_NOC_ATT defaulted to grendel_qsr1 for the qsr.s1 simulator '{}' (set TT_METAL_NOC_ATT=off to opt out)",
-        quasar_simulator_name(rtoptions));
+        "TT_METAL_NOC_ATT defaulted to grendel_qsr1 for the qsr.s1 simulator '{}' (set TT_METAL_NOC_ATT=off to opt "
+        "out)",
+        rtoptions.get_simulator_name());
 }
 
 }  // namespace

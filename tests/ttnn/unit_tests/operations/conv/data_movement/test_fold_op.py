@@ -8,7 +8,7 @@ import torch
 import ttnn
 import math
 
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     _nearest_y,
     is_wormhole_b0,
     torch2tt_tensor,

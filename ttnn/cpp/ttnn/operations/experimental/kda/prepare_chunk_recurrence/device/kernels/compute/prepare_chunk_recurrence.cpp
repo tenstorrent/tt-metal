@@ -36,10 +36,13 @@ constexpr uint32_t max_dst_tiles =
 
 enum class ElementwiseBinaryOp { Add, Subtract, Multiply };
 
+// Code size: the whole program must fit the kernel config buffer. The helpers are not declared inline, so O3 weighs
+// each call site with its regular budget instead of the larger inline-declared one, and pack loops are not peeled.
+
 // Compute out[Mt,Nt] = A[Mt,Kt] @ (transpose_b ? B[Nt,Kt]^T : B[Kt,Nt]) in the largest rectangular
 // subblocks that exactly divide the output and fit in destination registers.
 template <uint32_t Mt, uint32_t Kt, uint32_t Nt, bool Tr>
-inline void matmul_blocks(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o) {
+void matmul_blocks(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o) {
     constexpr uint32_t subblock_columns = kda::MatmulSubblock<Mt, Nt>::columns;
     constexpr uint32_t subblock_rows = kda::MatmulSubblock<Mt, Nt>::rows;
     const uint32_t a_id = a.get_id();
@@ -63,6 +66,7 @@ inline void matmul_blocks(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& 
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t row = 0; row < subblock_rows; row++) {
+#pragma GCC unroll 1
                 for (uint32_t column = 0; column < subblock_columns; column++) {
                     pack_tile(row * subblock_columns + column, o_id, (mi + row) * Nt + ni + column);
                 }
@@ -75,7 +79,7 @@ inline void matmul_blocks(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& 
 
 // Apply a typed binary operation tilewise, batching each destination-register synchronization.
 template <ElementwiseBinaryOp Op>
-inline void elementwise_binary(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o, uint32_t n) {
+void elementwise_binary(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o, uint32_t n) {
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t o_id = o.get_id();
@@ -101,6 +105,7 @@ inline void elementwise_binary(DataflowBuffer& a, DataflowBuffer& b, DataflowBuf
         }
         tile_regs_commit();
         tile_regs_wait();
+#pragma GCC unroll 1
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
@@ -110,8 +115,7 @@ inline void elementwise_binary(DataflowBuffer& a, DataflowBuffer& b, DataflowBuf
 }
 
 // Multiply one selected source-tile pair and publish the result.
-inline void multiply_selected_tile(
-    DataflowBuffer& a, uint32_t a_tile, DataflowBuffer& b, uint32_t b_tile, DataflowBuffer& o) {
+void multiply_selected_tile(DataflowBuffer& a, uint32_t a_tile, DataflowBuffer& b, uint32_t b_tile, DataflowBuffer& o) {
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t o_id = o.get_id();
@@ -128,7 +132,7 @@ inline void multiply_selected_tile(
     o.push_back(1);
 }
 
-inline void square_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+void square_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
 
@@ -145,6 +149,7 @@ inline void square_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
+#pragma GCC unroll 1
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
@@ -157,7 +162,7 @@ inline void square_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
 // and 1, and two of a face's eight SFPU iterations span its first rows, row 0 included. The rest of each output tile
 // is then unspecified.
 template <VectorMode Mode = VectorMode::RC, int Iterations = 8>
-inline void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
 
@@ -174,6 +179,7 @@ inline void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n)
         }
         tile_regs_commit();
         tile_regs_wait();
+#pragma GCC unroll 1
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
@@ -182,7 +188,7 @@ inline void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n)
     o.push_back(n);
 }
 
-inline void multiply_by_half(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+void multiply_by_half(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     constexpr uint32_t fp32_half_bits = __builtin_bit_cast(uint32_t, 0.5F);
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
@@ -200,6 +206,7 @@ inline void multiply_by_half(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) 
         }
         tile_regs_commit();
         tile_regs_wait();
+#pragma GCC unroll 1
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
@@ -208,7 +215,7 @@ inline void multiply_by_half(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) 
     o.push_back(n);
 }
 
-inline void reciprocal_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+void reciprocal_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
 
@@ -227,6 +234,7 @@ inline void reciprocal_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) 
         }
         tile_regs_commit();
         tile_regs_wait();
+#pragma GCC unroll 1
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
@@ -236,7 +244,7 @@ inline void reciprocal_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) 
 }
 
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
-inline void multiply_by_column(DataflowBuffer& a, DataflowBuffer& col, DataflowBuffer& o, uint32_t Mt, uint32_t Nt) {
+void multiply_by_column(DataflowBuffer& a, DataflowBuffer& col, DataflowBuffer& o, uint32_t Mt, uint32_t Nt) {
     const uint32_t a_id = a.get_id();
     const uint32_t col_id = col.get_id();
     const uint32_t o_id = o.get_id();
@@ -255,6 +263,7 @@ inline void multiply_by_column(DataflowBuffer& a, DataflowBuffer& col, DataflowB
         }
         tile_regs_commit();
         tile_regs_wait();
+#pragma GCC unroll 1
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
@@ -264,7 +273,7 @@ inline void multiply_by_column(DataflowBuffer& a, DataflowBuffer& col, DataflowB
 }
 
 // out[n] = A[n] * row[n]  (broadcast row 0 of each `row` tile down its tile)
-inline void multiply_by_row(DataflowBuffer& a, DataflowBuffer& row, DataflowBuffer& o, uint32_t n) {
+void multiply_by_row(DataflowBuffer& a, DataflowBuffer& row, DataflowBuffer& o, uint32_t n) {
     const uint32_t a_id = a.get_id();
     const uint32_t row_id = row.get_id();
     const uint32_t o_id = o.get_id();
@@ -280,6 +289,7 @@ inline void multiply_by_row(DataflowBuffer& a, DataflowBuffer& row, DataflowBuff
         }
         tile_regs_commit();
         tile_regs_wait();
+#pragma GCC unroll 1
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
@@ -295,7 +305,7 @@ inline void multiply_by_row(DataflowBuffer& a, DataflowBuffer& row, DataflowBuff
 //   level 3: join the 8-row blocks. M3 = B L3 satisfies M3^4=0, so
 //            (I-N)^-1 = (I+M3)(I+M3^2)B.
 // Eight matmuls in total, two fewer than a single 8-row Horner series over the same input.
-inline void invert_block_nested(
+void invert_block_nested(
     DataflowBuffer& negative_strict_lower_akk,
     DataflowBuffer& inverse,
     DataflowBuffer& identity,
@@ -358,7 +368,7 @@ inline void invert_block_nested(
 }
 
 // Transpose a tiled row [1,row_tiles] into a tiled column [row_tiles,1].
-inline void transpose_tile_row_to_column(DataflowBuffer& in, DataflowBuffer& o, uint32_t row_tiles) {
+void transpose_tile_row_to_column(DataflowBuffer& in, DataflowBuffer& o, uint32_t row_tiles) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
 
@@ -374,6 +384,7 @@ inline void transpose_tile_row_to_column(DataflowBuffer& in, DataflowBuffer& o, 
         }
         tile_regs_commit();
         tile_regs_wait();
+#pragma GCC unroll 1
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, o_id, block_start + tile);
         }
@@ -385,7 +396,7 @@ inline void transpose_tile_row_to_column(DataflowBuffer& in, DataflowBuffer& o, 
 // Reduce each row of squared values directly to its inverse-L2 factor. Applying epsilon, rsqrt,
 // and optional scaling in DST avoids materializing row sums in a separate intermediate DFB.
 template <bool Scale, uint32_t SquaredDfb, uint32_t InverseNormsDfb>
-inline void reduce_squared_rows_to_inverse_norms(
+void reduce_squared_rows_to_inverse_norms(
     uint32_t row_tiles, uint32_t column_tiles, uint32_t eps_bits, uint32_t scale_bits) {
     auto inverse_norm = [eps_bits, scale_bits](uint32_t dst) {
         binop_with_scalar_tile_init();
@@ -407,7 +418,7 @@ inline void reduce_squared_rows_to_inverse_norms(
 }
 
 template <uint32_t RowTiles, uint32_t ColumnTiles, bool Scale, uint32_t SquaredDfb, uint32_t InverseNormsDfb>
-inline void normalize_l2_rows(
+void normalize_l2_rows(
     DataflowBuffer& input,
     DataflowBuffer& normalized,
     uint32_t eps_bits,
@@ -433,7 +444,7 @@ inline void normalize_l2_rows(
 // beta = sigmoid(logits) in FP32, from the BF16 logits the reader moved into column 0. The SFPU sigmoid is the
 // accurate one ttnn.sigmoid runs; BF16 widens exactly into the FP32 destination.
 template <uint32_t Ct>
-inline void activate_beta(DataflowBuffer& logits, DataflowBuffer& beta) {
+void activate_beta(DataflowBuffer& logits, DataflowBuffer& beta) {
     beta.reserve_back(Ct);
     reconfig_data_format_srca(logits.get_id());
     pack_reconfig_data_format(beta.get_id());
@@ -453,14 +464,14 @@ inline void activate_beta(DataflowBuffer& logits, DataflowBuffer& beta) {
 }
 
 template <uint32_t Ct, uint32_t Vt>
-inline void prepare_v_beta(DataflowBuffer& v, DataflowBuffer& beta, DataflowBuffer& v_beta) {
+void prepare_v_beta(DataflowBuffer& v, DataflowBuffer& beta, DataflowBuffer& v_beta) {
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
     multiply_by_column(v, beta, v_beta, Ct, Vt);
     v.pop_front(chunk_value_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt>
-inline void prepare_gate_factors(
+void prepare_gate_factors(
     DataflowBuffer& g,
     DataflowBuffer& prefix_sum_mask,
     DataflowBuffer& sum_broadcast_matrix,
@@ -507,7 +518,7 @@ inline void prepare_gate_factors(
 }
 
 template <uint32_t Ct, uint32_t Kt>
-inline void prepare_scan_and_pairwise_inputs(
+void prepare_scan_and_pairwise_inputs(
     DataflowBuffer& normalized_q,
     DataflowBuffer& normalized_k,
     DataflowBuffer& beta,
@@ -543,8 +554,7 @@ inline void prepare_scan_and_pairwise_inputs(
 
 // exp(G_last) = exp(G_last / 2)^2, squared in FP32 from the anchor's rows, of which the transpose to dl reads row 0.
 template <uint32_t Ct, uint32_t Kt>
-inline void prepare_final_decay_rows(
-    DataflowBuffer& g_last, DataflowBuffer& anchor_decay, DataflowBuffer& final_decay_rows) {
+void prepare_final_decay_rows(DataflowBuffer& g_last, DataflowBuffer& anchor_decay, DataflowBuffer& final_decay_rows) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     square_tiles(anchor_decay, final_decay_rows, chunk_key_tiles);
     final_decay_rows.wait_front(chunk_key_tiles);
@@ -552,7 +562,7 @@ inline void prepare_final_decay_rows(
 }
 
 template <uint32_t Ct, uint32_t Kt>
-inline void prepare_k_pairwise(
+void prepare_k_pairwise(
     DataflowBuffer& normalized_k, DataflowBuffer& centered_inverse_decay, DataflowBuffer& k_pairwise) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
@@ -564,7 +574,7 @@ inline void prepare_k_pairwise(
 }
 
 template <uint32_t Ct, uint32_t Kt>
-inline void prepare_pairwise_matrices(
+void prepare_pairwise_matrices(
     DataflowBuffer& k_beta_pairwise,
     DataflowBuffer& q_pairwise,
     DataflowBuffer& k_pairwise,
@@ -592,7 +602,7 @@ inline void prepare_pairwise_matrices(
 }
 
 template <uint32_t Ct>
-inline void prepare_t_inv(
+void prepare_t_inv(
     DataflowBuffer& akk,
     DataflowBuffer& causal_mask,
     DataflowBuffer& identity,
@@ -632,7 +642,7 @@ inline void prepare_t_inv(
 }
 
 template <uint32_t Ct, uint32_t Kt>
-inline void prepare_decay_outputs(
+void prepare_decay_outputs(
     DataflowBuffer& k_pairwise,
     DataflowBuffer& anchor_decay,
     DataflowBuffer& final_decay_rows,
