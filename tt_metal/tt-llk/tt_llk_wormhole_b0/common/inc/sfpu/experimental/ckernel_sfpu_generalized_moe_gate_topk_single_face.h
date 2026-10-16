@@ -27,6 +27,13 @@ constexpr std::uint32_t indices_offset  = scores_offset + dst_tile_offset;
 constexpr std::uint32_t bias_offset     = indices_offset + dst_tile_offset;
 constexpr std::uint32_t interm_offset   = bias_offset + dst_tile_offset;
 
+// Counterpart of _init_sfpu_config_reg(): set LaneConfig.ENABLE_DEST_INDEX so an SFPSWAP on LREG0-3 also swaps
+// the companion lanes in LREG4-7 (the idx|score concat follows the bias keys). Any SFPU init clears it again.
+inline void _gmg_enable_index_tracking()
+{
+    TTI_SFPCONFIG(0x4 /*imm16_math: ENABLE_DEST_INDEX*/, 0xF /*config_dest: LaneConfig*/, 1 /*instr_mod1: imm16 is the value*/);
+}
+
 template <bool is_fp32_dest_acc_en, std::uint32_t offset = 0>
 inline void bitonic_topk_load16_concat_indices_single_face()
 {
@@ -250,7 +257,7 @@ inline void _generalized_moe_gate_sum_top2()
     constexpr bool idir = false; // Sort descending order
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    TTI_SFPCONFIG(0x4, 0xF, 1);
+    _gmg_enable_index_tracking();
 
     // Phase 0-3 Even Columns
     bitonic_topk_load16_concat_indices_single_face<is_fp32_dest_acc_en, 0>();
@@ -354,7 +361,7 @@ inline void _gmg_merge4_runs_raw()
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG6, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
 
     // Re-enable index tracking
-    TTI_SFPCONFIG(0x4, 0xF, 1);
+    _gmg_enable_index_tracking();
     reverse_sort_order();
     bitonic_topk_load8_even_cols_concatted_indices_single_face<is_fp32_dest_acc_en>();
 
@@ -443,7 +450,7 @@ inline void _gmg_merge4_top8()
 {
     constexpr bool idir = false; // descending
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    TTI_SFPCONFIG(0x4, 0xF, 1); // enable index tracking (idx|score in LREG4-7 follow the bias swaps)
+    _gmg_enable_index_tracking();
 
     // Odd columns (read_base+6, read_base+2), reversed to form a bitonic sequence.
     TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + read_base + 6);
@@ -471,7 +478,7 @@ inline void _gmg_merge4_top8()
     TTI_SFPCONFIG(0, 0xF, 1);
     TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG6, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPCONFIG(0x4, 0xF, 1);
+    _gmg_enable_index_tracking();
     reverse_sort_order();
     bitonic_topk_load8_even_cols_concatted_indices_single_face<is_fp32_dest_acc_en>();
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
@@ -556,7 +563,7 @@ inline void _gmg_merge16_core()
 {
     constexpr bool idir = false; // descending -> top-8
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    TTI_SFPCONFIG(0x4, 0xF, 1); // enable index tracking (idx|score in LREG4-7 follow the bias swaps)
+    _gmg_enable_index_tracking();
 
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 2);

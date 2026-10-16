@@ -420,9 +420,11 @@ def test_generalized_moe_gate(topk, softmax, approx):
 @parametrize(rank=[4, 5])
 def test_generalized_moe_gate_topk_mask_keeps_block_ids(rank):
     rank = _one(rank)
+    topk = 6  # the only topk whose rank mask rewrites the kept ranks 4 and 5
+    block_id_base = 256  # block 1's expert-id base: the >256 path uploads b*256 + i
     payload, bias, keys = _gate_stimuli(seed=41)
-    # Block 1's ids: flat position i is expert 256 + i, so position 0 is expert 256.
-    ids = _ids_face() + 256
+    # Block 1's ids: flat position i is expert block_id_base + i, so position 0 is expert 256.
+    ids = _ids_face() + block_id_base
 
     # Put expert 256's key at `rank` by swapping it with the key that sits there, and rebuild the
     # bias so the FPU's payload+bias still lands exactly on the intended key (see _gate_stimuli).
@@ -435,7 +437,7 @@ def test_generalized_moe_gate_topk_mask_keeps_block_ids(rank):
     faces = _run(
         _config(
             GENERALIZED_MOE_GATE(
-                mode=MODE_GATE, topk=6, eps=_bits(EPS), scale=_bits(SCALE)
+                mode=MODE_GATE, topk=topk, eps=_bits(EPS), scale=_bits(SCALE)
             ),
             _gate_tiles(payload, ids),
             src_b=bias,
@@ -443,12 +445,12 @@ def test_generalized_moe_gate_topk_mask_keeps_block_ids(rank):
     )
 
     golden = get_golden_generator(GeneralizedMoeGateGolden)(
-        keys, payload, ids, topk=6, eps=EPS, scale=SCALE
+        keys, payload, ids, topk=topk, eps=EPS, scale=SCALE
     )
     assert (
-        int(golden[1][rank]) == 256
+        int(golden[1][rank]) == block_id_base
     ), "stimulus does not place expert 256 at the rank under test"
-    _assert_gate_output(faces, golden, 6, **_weight_tolerance(ApproximationMode.No))
+    _assert_gate_output(faces, golden, topk, **_weight_tolerance(ApproximationMode.No))
 
 
 def _sigmoid_stimuli(seed, grouped):
@@ -1325,21 +1327,23 @@ def _stored_run(faces, store_lo, store_hi):
 def test_generalized_moe_gate_merge4_top8():
     keys, ids, scores = _merge4_stimuli(seed=57)
     shifted = [torch.roll(t, shifts=8, dims=0) for t in (keys, ids, scores)]
+    store_lo, store_hi = 8, 10  # the run's home for the checks below
+    other_lo, other_hi = 12, 14  # a second store pair, to show the pair is honest
 
     at_zero, at_eight, stored_elsewhere = _run(
-        _merge4_config(0, (8, 10), keys, ids, scores),
-        _merge4_config(8, (8, 10), *shifted),
-        _merge4_config(0, (12, 14), keys, ids, scores),
+        _merge4_config(0, (store_lo, store_hi), keys, ids, scores),
+        _merge4_config(8, (store_lo, store_hi), *shifted),
+        _merge4_config(0, (other_lo, other_hi), keys, ids, scores),
     )
 
-    run = _stored_run(at_zero, 8, 10)
+    run = _stored_run(at_zero, store_lo, store_hi)
     # read_base names the first of the four offsets it reads, so base 8 reads {8,10,12,14}: rows
     # 8-15 rather than rows 0-7, which is the eight-row roll the shifted stimulus applies.
     assert run == _stored_run(
-        at_eight, 8, 10
+        at_eight, store_lo, store_hi
     ), "read_base did not move the read window by the eight rows it names"
     assert run == _stored_run(
-        stored_elsewhere, 12, 14
+        stored_elsewhere, other_lo, other_hi
     ), "the store pair did not move the run"
 
     # A merge may drop a candidate but never invent one, and every key it keeps has to come back
@@ -1359,7 +1363,7 @@ def test_generalized_moe_gate_merge4_top8():
     got_keys = _from_dst(at_zero[KEYS])
     got_scores = _from_dst(at_zero[SCORES])
     for instance in range(8):
-        for r, c in _run_slots(8, 10, instance):
+        for r, c in _run_slots(store_lo, store_hi, instance):
             stored_key = float(got_keys[r, c])
             assert (
                 stored_key in companion

@@ -222,6 +222,9 @@ static inline void gmg_sanitize_scratch()
     constexpr int IDS_LO        = IDS_TILE * DREG_PER_TILE;           // 32 (even cols of IDS row 0)
     constexpr int IDS_HI        = IDS_LO + 1;                         // 33 (odd  cols)
     constexpr int NUM_DREG      = NUM_DEST_TILES * DREG_PER_TILE;     // 128
+    // The answer is the top-8: cols 0..7 of a row are lanes 0..3 of each even/odd row-half, i.e. the lanes
+    // with vConstTileId below this; everything past it is residue. Both masks below use the same limit.
+    constexpr int ANSWER_LANE_LIMIT = 8;
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     for (int k = 0; k < NUM_DREG; ++k)
     {
@@ -231,12 +234,11 @@ static inline void gmg_sanitize_scratch()
         }
         sfpi::dst_reg[k] = 0.0f;
     }
-    // Mask each answer row-half to the top-8: with columns split even/odd, cols 0..7 are the first four
-    // even and first four odd columns -> lanes 0..3 -> vConstTileId < 8; zero the residue past them.
+    // Mask each answer row-half to the top-8; zero the residue past them.
     for (const int dreg : {SCORES_LO, SCORES_HI})
     {
         sfpi::vFloat v = sfpi::dst_reg[dreg];
-        v_if (sfpi::vConstTileId >= 8)
+        v_if (sfpi::vConstTileId >= ANSWER_LANE_LIMIT)
         {
             v = 0.0f;
         }
@@ -249,7 +251,7 @@ static inline void gmg_sanitize_scratch()
     for (const int dreg : {IDS_LO, IDS_HI})
     {
         sfpi::vUInt v = sfpi::dst_reg[dreg].mode<sfpi::DataLayout::U16>();
-        v_if (sfpi::vConstTileId >= 8)
+        v_if (sfpi::vConstTileId >= ANSWER_LANE_LIMIT)
         {
             v = 0;
         }
