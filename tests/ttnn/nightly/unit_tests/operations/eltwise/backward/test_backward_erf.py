@@ -46,9 +46,9 @@ def test_bw_erf(input_shapes, device):
 # The output is 0 wherever f'(x) alone is below the smallest normal BF16 value, as the composite this
 # program replaces computes it; torch keeps the exact product.
 # At a NaN input the output is, on Blackhole, NaN with grad's sign, stored as -inf where grad < 0 and
-# +inf otherwise; on Wormhole, +0, where the composite this program replaces returns blackhole: +0 for
-# a +0 grad, and otherwise NaN with grad's sign, stored as -inf where grad < 0 and +inf otherwise;
-# wormhole_b0: +0; torch returns NaN.
+# +inf otherwise; on Wormhole, +0. The composite this program replaces returns, on Blackhole, +0 for a
+# +0 grad, and otherwise NaN with grad's sign, stored as -inf where grad < 0 and +inf otherwise; on
+# Wormhole, +0. Torch returns NaN.
 ERF_BW_GRADS = [
     "1",
     "-1",

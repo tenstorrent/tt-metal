@@ -7,7 +7,7 @@
 #include <cstdint>
 #include "sfpi.h"
 
-namespace ckernel::sfpu::ttpoly {
+namespace ckernel::sfpu::ttpoly::erf_bw {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
 // Compile-time load indices are required by DST's immediate-row SFPLOAD.
@@ -73,4 +73,4 @@ inline void eval_polynomial_dual(const Coefficients& coeffs, vFloat x1, vFloat x
     }
 }
 
-}  // namespace ckernel::sfpu::ttpoly
+}  // namespace ckernel::sfpu::ttpoly::erf_bw
