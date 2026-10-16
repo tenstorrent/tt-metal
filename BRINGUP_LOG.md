@@ -538,3 +538,13 @@ Each step must keep PCC > 0.99, HF teacher-forced agreement, and the 105-suite a
 - Verified after the fix: test_repeat_determinism identical x6; 4 slice servers x4 repeats of the 34k video (300 tokens)
   identical on every server and across servers; suite 98/100 (4 servers, 55 s); HF teacher-forced unchanged (text 100%,
   image 97%, video 100%, 30-video suite 95.3%, long video [0.92, 0.97, 0.88, 0.95]).
+
+### Session 16: Docker image re-verification (image rebuilt from branch head ad627d167f8, `serve/Dockerfile.local`)
+Single-instance DP=4 container (`id_molmo2_Molmo2-8B_galaxy`), suite with local file:// media copied into the container:
+- Smoke: text, image data-URL, video file://, video https PASS; the two https *image* requests return 422 because
+  upload.wikimedia.org answers 403 to the vLLM user agent (environmental, same as the host servers).
+- 105-suite (4 concurrent requests): 98/100, 0 errors, 203 s wall (idx 22 and 84 miss as always).
+- Heavy requests (2 x 34k-token video + 2 x 20-image, concurrent): 4/4 OK (97-107 s), no device timeouts.
+- Context limit: 36,848+16 OK (14 s), +17 -> HTTP 400, 2048-token generation OK (51 s), 34,000-token prompt + 2048 OK (68 s).
+- Repeatability (the Session 16 bug): 4 concurrent identical 34k-token video requests all identical, and 3 sequential repeats
+  identical, same output length (1475 chars) as the single-slice servers.
