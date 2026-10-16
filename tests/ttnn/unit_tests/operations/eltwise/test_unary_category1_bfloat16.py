@@ -742,6 +742,9 @@ def test_lgamma_large_negative(device):
     reflection's Stirling term (z - 0.5) * log(z) also overflows to +inf, and the
     kernel must let the pole win instead of producing inf - inf.
     """
+    # -1e30 is a finite-Stirling control: (z - 0.5) * log(z) = 6.9e31 stays finite, so the
+    # old kernel already returned inf - finite = +inf there. The Stirling term overflows from
+    # about 4.04e36 onwards; -1e37 and -3e38 are the lanes that need the pole override.
     xs = torch.tensor([[-1e30, -1e37, -3e38]], dtype=torch.bfloat16)
     golden = ttnn.get_golden_function(ttnn.lgamma)(xs, device=device)
     result = ttnn.to_torch(ttnn.lgamma(to_tt_tensor(xs, device)))
