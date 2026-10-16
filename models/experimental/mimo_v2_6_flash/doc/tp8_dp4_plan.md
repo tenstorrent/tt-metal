@@ -145,6 +145,17 @@ Accuracy after the last row: teacher-forced top-1 vs the fp32 reference 0.975, l
 0.9930 (`test_model_tp8_dp4.py`; before this table: 0.950, 0.9693 / 0.9926). The GDDR6 of this Galaxy runs at 14 Gbps on every chip (tt-smi), so the
 attainable peak is ~448 GB/s; the table keeps the 512 GB/s spec peak as the denominator.
 
+**MiMo-V2.6-Flash-MOPD** (2026-10-16, branch `mimo-v2.6/decode-perf`, all of the above): device loop 16.50 ms/step on
+one row (42.3 %), 18.47 ms on all four rows (37.8 %); tokens equal to the host loop. `test_model_tp8_dp4.py` vs the
+MOPD fp32 golden: top-1 0.925, logits PCC min 0.9608 / mean 0.9926. With the original HiFi2 `sparse_matmul` experts
+on the same cache (A/B): top-1 0.950, PCC min 0.9608 / mean 0.9925, so the LoFi streaming experts leave the logits
+unchanged and the top-1 difference is one near-tie row of 40.
+
+Weight-cache generation: the full MOPD cache (48 layers, ~186 GB) took 2681 s with this branch's build. With
+tt-metal#59764 (host BFP preparation) merged on top, layers 0-2 into a fresh cache took 55.4 s instead of 110.1 s
+(`ttnn.as_tensor` 16.2 s instead of 69.7 s; checkpoint reading and dequantization unchanged at ~40 s), and every cache
+file was byte-identical.
+
 With B=4 x 1M allocated (`test_capacity_1m_tp8_dp4.py`, 16 users, 4 per row), after the first table's rows:
 49.1 ms/step at 4K positions (326 tok/s), 74.5 ms at 128K (215 tok/s), 236.7 ms at ~1M (68 tok/s).
 
