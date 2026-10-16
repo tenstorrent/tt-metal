@@ -80,7 +80,7 @@ def test_the_input_nudge_floor_catches_what_the_bf16_model_let_through(gspec, mo
     monkeypatch.setattr(CC, "col_errors", lambda got, want: None)  # the whole-output limits only
     assert run_component_test(s, "attention", 0, checks="auto")
     out = capsys.readouterr().out
-    assert "noise1e-2                    caught" in out and "input nudge (new seed)       pass" in out
+    assert "noise1e-2" not in out and "input nudge (new seed)       pass" in out  # F90: not a mistake kind
 
 
 @pytest.mark.parametrize("step", [s for s in STEPS if s != "attention"])
