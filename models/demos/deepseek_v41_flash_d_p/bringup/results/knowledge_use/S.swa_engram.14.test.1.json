@@ -1,0 +1,67 @@
+{
+ "used": [
+  {
+   "id": "K-39",
+   "how": "split the router vs golden by routing (reselected fraction + precision checks on rows with the golden's experts) instead of PCC over all rows",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-30",
+   "how": "its layer-1 prediction (0.9847) matched the CPU reference (0.9846): treated the 0.99 vs-golden PCC as below the noise floor, not a device bug; updated the entry",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-1",
+   "how": "explained why the fp32 CPU chain drifts from the bf16-stored golden input (fp8 q-dq flips) and why no device step can do better, in the test docstring",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-34",
+   "how": "kept the tight check vs the CPU step on the same inputs and the loose one vs golden, and tightened the vs-CPU rel for the router",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-35",
+   "how": "measured the CPU chain, bf16 control and the device at this layer and set the limits from them (about 2x the CPU distance), not copied from layer 0",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the swap step rel limit (2 x component error, F73) is too loose for a selection output: the component error comes from PCC on golden inputs and is mostly flips (router 0.049 -> limit 0.099; 1 % noise passes); now DS41-32",
+  "BRINGUP_IMPL=mutations does not work for swap tests (run_swap_test takes the device path with mesh None); swap tests can only be swept per mutate:<kind>"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "touched known_issues.md (DS41-30 update, DS41-32 added); DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x (swap_step_calib) the step's own component error, no cap (testing/component.py:350-356)', which matches component.py:350-356 here; it keeps its model-specific symptom, so no further change"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "DS41-32"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.swa_engram.14",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T04:02:57",
+  "head": "f9110bc9993",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.swa_engram.14.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_14_router.py"
+  ]
+ }
+}
