@@ -916,7 +916,7 @@ void ControlPlane::adopt_local_mesh_fabric_config() {
     const auto local_mesh = this->local_mesh_binding_.mesh_ids.front();
     const auto resolved = this->mesh_graph_->get_fabric_config(local_mesh);
     if (resolved != this->fabric_config_ && this->fabric_config_ != FabricConfig::DISABLED) {
-        log_warning(
+        log_critical(
             tt::LogFabric,
             "Fabric config set in two places: SetFabricConfig requested {}, but the mesh graph descriptor "
             "declares {} for this process's mesh (mesh {}). The MGD's per-mesh fabric_config takes precedence; "
