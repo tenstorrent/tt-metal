@@ -78,7 +78,7 @@ def test_steps_catch_every_mutation_of_a_swapped_step(gspec, monkeypatch, kind, 
     # output's bf16 resolution); every other limit from the same model, none fixed
     lim, err = m[f"swap_{step}_rel_limit"], m[f"swap_{step}_component_err"]
     assert 2.0 * err <= lim + 1e-12 and lim < 0.03
-    assert m[f"swap_{step}_vs_cpu_limit"] < 0.9999 + 1e-4 and f"swap_{step}_bias_limit" in m
+    assert f"swap_{step}_bias_limit" in m and f"swap_{step}_vs_golden_err_limit" in m
 
 
 def test_every_swap_limit_comes_from_the_noise_floor(gspec, monkeypatch):
@@ -88,9 +88,10 @@ def test_every_swap_limit_comes_from_the_noise_floor(gspec, monkeypatch):
     monkeypatch.setenv(IMPL_ENV, "reference")
     assert run_swap_test(s, "blk", SWAPPED, checks="steps")
     m = got()
-    assert 0.999 < m["pcc_swap_out_limit"] < 1.0 and m["pcc_swap_out"] >= m["pcc_swap_out_limit"]
+    # F81: gated as the rel error; PCC stays a diagnostic
+    assert 0 < m["err_swap_out_limit"] < 0.05 and m["err_swap_out"] <= m["err_swap_out_limit"] and "pcc_swap_out" in m
     for n in SWAPPED:
-        assert 0.999 < m[f"swap_{n}_vs_golden_limit"] < 1.0, n
+        assert 0 < m[f"swap_{n}_vs_golden_err_limit"] < 0.05, n
 
 
 def test_the_bf16_control_passes_and_limits_fall_back_without_a_component_result(gspec, monkeypatch):
@@ -274,4 +275,4 @@ def test_a_frozen_test_that_wraps_the_step_check_with_the_old_signature_still_wo
     monkeypatch.setenv(IMPL_ENV, "reference")
     with mock.patch.object(component, "_check_step", wrapper):
         assert run_swap_test(s, "blk", SWAPPED, checks="steps")
-    assert seen == list(SWAPPED) and 0.999 < got()["swap_attention_vs_golden_limit"] < 1.0
+    assert seen == list(SWAPPED) and 0 < got()["swap_attention_vs_golden_err_limit"] < 0.05

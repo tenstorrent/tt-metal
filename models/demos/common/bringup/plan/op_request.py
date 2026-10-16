@@ -267,6 +267,11 @@ def _tolerance(task: dict, spec=None) -> dict:
     pcc = None
     for name, c in (task["gate"].get("metrics") or {}).items():
         op, v = str(c).split()
+        if op in ("<=", "<") and name.startswith("err_"):  # F81: a rel-error gate: its recorded limit is the rel
+            lim = (got.get(f"{name}_limit") or {}).get("value") if v == "limit" else float(v)
+            if isinstance(lim, (int, float)):
+                return {"pcc": round(1 - lim * lim / 2, 6), "rel_rms": round(max(0.02, float(lim)), 3)}
+            continue
         if op not in (">=", ">"):
             continue
         if v == "limit":

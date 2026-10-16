@@ -40,6 +40,9 @@ thresholds:                # accuracy gates (PCC lower limits unless named other
 
 noise_floor:               # F80: the floor of every component / swap limit (testing/noise_floor.py)
   seeds: 3                 # input-nudge runs per floor (the worst counts)
+  swap_seeds: 1            # in a swap test: for the steps before the newly swapped one (each had `seeds` in its own
+                           # swap test) and for the nudged block; the new step keeps `seeds`. CPU time: the floor runs
+                           # every swapped step again (DeepSeek-V4.1 S.swa.15: 35 s -> >300 s with 3 everywhere)
   flip_spread: 2.0         # a selection flip is explained when both entries sit within this x the nudge's score spread of the cutoff
 
 tests:
