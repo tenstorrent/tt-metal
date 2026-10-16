@@ -552,6 +552,8 @@ using DescribedEnums = std::tuple<
     RouterState,
     RouterCommand,
     DynamicStatistics,
-    NocSendType>;
+    NocSendType,
+    compressed_routing_values,
+    NocScatterWriteChunkEncoding>;
 
 }  // namespace tt::tt_fabric::layout
