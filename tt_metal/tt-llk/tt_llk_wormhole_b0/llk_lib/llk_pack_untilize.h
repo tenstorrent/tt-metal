@@ -72,7 +72,8 @@ inline void _llk_pack_untilize_configure_addrmod_()
  * @tparam full_ct_dim: Total number of input tiles across all blocks.
  * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
  * @tparam narrow_row: True when packing fewer than a full row of datums.
- * @tparam row_num_datums: Number of datums per output row.
+ * @tparam row_num_datums: Datums each tile contributes to an output row (TILE_C_DIM unless narrow_row); an
+ *         output row of a block holds block_ct_dim * row_num_datums datums.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @note @ref _llk_pack_untilize_configure_addrmod_ must have programmed the ADDR_MOD slots.
@@ -160,7 +161,8 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  * @tparam full_ct_dim: Total number of input tiles across all blocks (must be divisible by block_ct_dim).
  * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
  * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
- * @tparam row_num_datums: Number of datums per output row when narrow_row is set. With block_ct_dim != full_ct_dim
+ * @tparam row_num_datums: Datums each tile contributes to an output row (TILE_C_DIM unless narrow_row); an
+ *         output row of a block holds block_ct_dim * row_num_datums datums. With block_ct_dim != full_ct_dim
  *         the per-row L1 stride and the block start are kept in 16 B units, so block_ct_dim * row_num_datums
  *         datums must be a multiple of 16 bytes (asserted).
  * @param pack_dst_format: Destination (L1) data format.
@@ -236,7 +238,8 @@ inline void _llk_pack_untilize_uninit_()
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam full_ct_dim: Total number of input tiles across all blocks.
  * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
- * @tparam row_num_datums: Number of datums per output row when narrow_row is set.
+ * @tparam row_num_datums: Datums each tile contributes to an output row (TILE_C_DIM unless narrow_row); must
+ *         match the init.
  * @tparam tile_dst_ct_offset: Compile-time column-tile offset into the destination register.
  * @param address: L1 destination base address for the block.
  * @param pack_dst_format: Destination (L1) data format.

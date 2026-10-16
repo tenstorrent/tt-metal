@@ -23,7 +23,7 @@
  * @tparam full_ct_dim    Width of the full input in tiles (defaults to block_ct_dim).
  * @tparam diagonal       Whether to use diagonal packing.
  * @tparam narrow_row     Whether the input rows are narrow.
- * @tparam row_num_datums Number of datums per row.
+ * @tparam row_num_datums Datums each tile contributes to an output row (TILE_C_DIM unless narrow_row).
  * @tparam dense          Pack two 2-face tiles into a single 4-face region (unused on Wormhole; must be false).
  * @param  output         Output circular buffer / operand index.
  */
@@ -73,7 +73,7 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
  * @tparam full_ct_dim        Width of the full input in tiles (defaults to block_ct_dim).
  * @tparam diagonal           Whether to use diagonal packing.
  * @tparam narrow_row         Whether the input rows are narrow.
- * @tparam row_num_datums     Number of datums per row.
+ * @tparam row_num_datums     Datums each tile contributes to an output row (TILE_C_DIM unless narrow_row).
  * @tparam tile_dst_ct_offset Compile-time column offset of the tile in the destination register.
  * @tparam dense              Pack two 2-face tiles into a single 4-face region (unused on Wormhole; must be false).
  * @param  block_rt_dim       Height of the block in tiles (number of rows to pack).
