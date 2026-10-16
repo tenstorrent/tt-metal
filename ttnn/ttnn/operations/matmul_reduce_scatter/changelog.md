@@ -26,3 +26,37 @@
 - **Golden test progress**: all 624 former xfail cells (`dtype=bfloat8_b` ∪ `weight_dtype=bfloat4_b`, every shape, Linear and Ring, 1-2 links) pass, plus the LOOSE perf cases: 659 passed / 0 failed in the targeted slices (EVAL_CAPTURE_L1=0). EXCLUSIONS stays empty.
 - **Issues encountered**: None.
 - **Tests added**: `test_matmul_reduce_scatter_precision_baseline.py` has a new activation-dtype column and two cases (`focus_a_bf8b_w_bf4b`, `mimo_w_bf4b`), and it prints `_LAST_PLAN` (xblock / kb / grid) per case.
+
+## Refinement 2 — Speed up the PERF FOCUS profile (Kimi K2.7 o_proj)
+- **Date**: 2026-10-16
+- **What was done**: Measured first. Zones and ablations broke the focus case down as fill + 4 × matmul entry + finish adds + transport tail; the fixes below target those terms. Numbers are traced (`MRS_PERF_TRACE=1`), max over the 4 chips, QB2 1x4 TORUS_XY ring, 2 links:
+
+  | Case | Before (µs) | After (µs) |
+  |---|---|---|
+  | Focus | 136.5-141 | 124.2-125.8 (target 124.8) |
+  | GLM | 206-207 | 198.5 |
+  | MiMo | 245-276 | 244-262 (no regression; noisy) |
+
+  Untraced, chip 0 (MMIO) runs 8-25 µs longer than the others. Under trace it matches the other chips, so that skew was host launch skew, not kernel time.
+
+  Levers, in order of gain:
+  1. **Mirrored half orders** (`MIRROR_HALF_ORDERS`, host-only schedule change: `build_schedule` / `plan_transport` give `entries[h]` per half). The shared order sent a whole block one way in each middle entry, so the bwd ports finished at ~131 µs and the fwd ports at ~102 µs. Now the two halves walk the equal-distance blocks in opposite orders, so every entry sends half a block each way. The halves are split along the streamed operand's multicast lines (`half_split` n / m), so no mcast line spans two blocks. The design's deadlock argument is re-proved per half in `op_design.md` and asserted in `plan_transport`. It applies to ring_balanced with a resident regime only. The transport tail went from 131 to 115 µs, which is now under the last matmul.
+  2. **Finish adds on the FPU** (`FIN_ADD_FPU`): `add<hold, arrival>` and, for add-both, `BinaryFpu` + `DestReuseBinary`. The fp32 hold reaches DEST through srcA exactly as it did through CopyTile in the SFPU chain, so precision is unchanged (focus rel-RMS 0.00454). A relay / fin add went from 4.5 to 1.2 µs per entry, and that time is serial on the TRISCs between matmul entries.
+  3. **Streamed fin write** (writer): each tile row of the fin block is written as soon as the finish packs it. Before, the writer waited for all P tiles, and every core's DRAM write landed after the last add. About −2 µs.
+  4. **Fill levers** (`READ_NOCS`, `SENDERS_PER_LINE`, `LOOKAHEAD_AFTER_BARRIER`, `MCAST_SENDER_PLACEMENT`, each now a per-regime dict). Entry 0 of the resident regime is DRAM-bound: 39 µs against 24.7 µs per later entry, and the `MRS_ABLATE=dram` stub brings it to 28 µs. The resident regime now reads W on NoC1 (the reader owns every read on both NoCs of its core) with 2 senders per line, issues look-ahead reads after the current step's barrier, and uses diagonal_disjoint senders. Together these are worth ~−3.5 µs. On the stream regime (MiMo) each of these measured neutral-to-worse, so it keeps the pre-refinement values.
+
+  Measured and not kept as defaults (still live knobs):
+  - kb 8 / 32 (131 / 134-139 µs traced; kb 16 stays).
+  - `PREFETCH_STEPS` 2 (+4 µs).
+  - Both operands on NoC1 (+8 µs).
+  - Column strip (P = 12 on 100 cores cuts each matmul entry 24.7 → 21.3 µs, but one port lands far from its Ethernet core, so transport ends at ~150 µs; 150-160 µs in total, with "eth" or "spread" port placement).
+- **Accuracy achieved**: focus PCC 0.999991, rel-RMS 0.00454 (gate 0.035), max_abs 0.066. MiMo PCC 0.999888, rel-RMS 0.00455. A bf8b × W bf4b rel-RMS 0.00238. Unchanged from Refinement 1, from `test_matmul_reduce_scatter_precision_baseline.py`.
+- **Golden test progress**: targeted slices (EVAL_CAPTURE_L1=0):
+  - `test_golden.py` loose cases + the 640x2048x7168 / 640x1536x32 / 2048x4096x4096 Linear cells: 123/123 pass.
+  - `test_regression.py` 6/6, `test_fabric_configs.py` 24/24, `test_ring_mock.py` 72/72.
+  - Acceptance file: 38 line + 24 ring pass. Precision baseline: 6/6.
+- **Issues encountered**:
+  - The traced harness needed a trace region on the mesh open; it is opt-in (`MRS_PERF_TRACE=1`) so the default run is unchanged.
+  - The perf-only env switches grew by `MRS_KB_MAX`, `MRS_MIRROR`, `MRS_FIN_ADD_FPU`, `MRS_LOOKAHEAD_AFTER_BARRIER`, `MRS_A_READ_NOC`, `MRS_W_READ_NOC` and `MRS_ABLATE=mcast`. They follow the existing `MRS_*` convention; the defaults are the module constants.
+- **Remaining headroom (finding)**: the focus case is now compute-bound (4 × 24.7 µs matmul entries, of which ~13% is fp32 full-sync pack time), plus an ~11 µs DRAM fill in entry 0 (6.5 MB at ~175-200 GB/s aggregate), ~3 µs of finishes and a ~3 µs fin-write tail.
+- **Tests added**: `test_matmul_reduce_scatter_perf.py` gained a traced mode (`MRS_PERF_TRACE=1`). Reader ablation `MRS_ABLATE=mcast` (perf scaffolding).

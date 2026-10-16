@@ -65,7 +65,7 @@
 
 **Done when**: the golden suite (EVAL_CAPTURE_L1=0) shows the former `dtype=bfloat8_b` / `weight_dtype=bfloat4_b` xfail cells as `supported_pass` (or in `EXCLUSIONS` with a stated reason), 0 loud categories, and the acceptance suite, `test_regression.py`, `test_fabric_configs.py`, `test_ring_mock.py` and the precision baseline are still green.
 
-### [ ] Refinement 2 — Speed up the PERF FOCUS profile (Kimi K2.7 o_proj)
+### [x] Refinement 2 — Speed up the PERF FOCUS profile (Kimi K2.7 o_proj)
 
 **Type**: perf
 
@@ -76,6 +76,25 @@
 - **Chip-0 launch skew.** The implementer measured chips 1-3 at 132-134 µs and chip 0 at 161 µs. Measure traced (as the baseline was) before attributing it to the kernels. If it survives tracing, the ready fence or port placement on chip 0 is the region.
 
 **Done when**: the measured device-ns of the focus case (max over the 4 chips, traced, production router config) improves and moves toward 124.8 µs. Its rel-RMS must stay ≤ 0.035, the golden suite must stay green (0 loud categories, EVAL_CAPTURE_L1=0), and there must be no regression across the config-spanning guard set. That set is one representative per distinct kernel path × placement: resident-A scatter -1, stream-W scatter -2, line placement (FABRIC_2D 2x2), ring placement (1x4 TORUS_XY), 1 and 2 links. `tests/ttnn/unit_tests/operations/matmul_reduce_scatter/test_matmul_reduce_scatter_perf.py --profile` is the measurement harness.
+
+**Outcome**: Focus case, traced, max over 4 chips: 136.5-141 → 124.2-125.8 µs, at the 124.8 target. rel-RMS is 0.00454. GLM went 206-207 → 198.5 µs, and MiMo is unchanged within noise (244-262 vs 245-276). Untraced, chip 0 runs 8-25 µs longer than the others; under trace it matches them, so that skew was host launch skew, not kernel time.
+
+The wins:
+- Mirrored per-half entry orders: every entry sends half a block each way, so the transport tail drops from 131 to 115 µs and hides under the last matmul.
+- FPU finish adds: 4.5 → 1.2 µs per relay/fin.
+- Streamed fin write.
+- Resident-regime fill levers: W reads on NoC1, 2 senders per line, look-ahead after the barrier, disjoint senders.
+
+The case is now compute-bound. Of the 125 µs:
+- 4 × 24.7 µs of matmul on 80 of the 99 rectangle cores, ~13% of it fp32 full-sync pack time;
+- an ~11 µs DRAM fill in entry 0 (6.5 MB at ~175-200 GB/s aggregate);
+- ~3 µs of finishes and a ~3 µs fin-write tail.
+
+What I would try next, and why I did not:
+- **More cores.** The column strip gives P=12 on 100 cores (24.7 → 21.3 µs per entry), but one port lands far from its Ethernet core and transport ends at ~150 µs. Ports would need to sit off-strip near each link.
+- **A smaller first K-block** to shrink the fill. kb is one CB-window constant today, and kb 8 / 32 globally both measured worse.
+- **16-bit half-sync DEST for the matmul**, so pack overlaps math. That changes the fp32-DEST precision policy, which is the design's call.
+- **Refinement 4's sub-block sends.**
 
 ### [ ] Refinement 3 — Speed up the rows-scattered MiMo-V2 profile (W residency L1 fit)
 
