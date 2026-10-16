@@ -144,6 +144,44 @@ def mcast_1d_config(grid, m, n, k, in0_block_w=4, out_subblock_w=4):
     )
 
 
+def decode_linear_config(device, k, n, block_tiles=64):
+    """1D in0-mcast config for a decode matmul [1, 1, 32, k] x [k, n] with a DRAM-interleaved weight.
+
+    N is split over an exactly filled rectangle of the compute grid, fewest tiles per core first. K blocks are
+    wide (about ``block_tiles`` weight tiles per core per block): the weight reader waits on one read barrier
+    per block, so with narrow K blocks these M = 32 matmuls pay a DRAM round trip every few K tiles."""
+    assert k % TILE == 0 and n % TILE == 0, (k, n)
+    kt, nt = k // TILE, n // TILE
+    grid = device.compute_with_storage_grid_size()
+    for per_core_n in range(1, nt + 1):
+        if nt % per_core_n:
+            continue
+        cores = nt // per_core_n
+        rows = [y for y in range(grid.y, 0, -1) if cores % y == 0 and cores // y <= grid.x]
+        if rows:
+            core_x, core_y = cores // rows[0], rows[0]
+            break
+    in0_block_w = max(1, min(kt, block_tiles // per_core_n))
+    while kt % in0_block_w:
+        in0_block_w -= 1
+    out_subblock_w = min(per_core_n, 4)
+    while per_core_n % out_subblock_w:
+        out_subblock_w -= 1
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=1,
+        out_block_w=per_core_n,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
 def pad_to(n, multiple):
     return ((n + multiple - 1) // multiple) * multiple
 
@@ -194,12 +232,10 @@ class DramShardedMatmul:
         blocks = w.reshape(w.shape[0], tp, self.n)
         return torch.nn.functional.pad(blocks, (0, self.n_pad - self.n)).reshape(w.shape[0], tp * self.n_pad)
 
-    def __call__(self, x, weight, memory_config=None):
-        """x [1, 1, 32, K] (interleaved or L1-sharded) -> [1, 1, 32, n_pad] (``memory_config``, default DRAM)."""
-        if x.memory_config() == self.in_memory_config:
-            x_sharded = x
-        else:
-            x_sharded = ttnn.to_memory_config(x, self.in_memory_config)
+    def matmul_sharded(self, x_sharded, weight, memory_config=None):
+        """x already in ``in_memory_config`` -> [1, 1, 32, n_pad] (``memory_config``, default DRAM interleaved).
+
+        The caller keeps ownership of ``x_sharded``."""
         out = ttnn.matmul(
             x_sharded,
             weight,
@@ -208,8 +244,13 @@ class DramShardedMatmul:
             dtype=self.out_dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
-        if x_sharded is not x:
-            x_sharded.deallocate(True)
         result = ttnn.to_memory_config(out, memory_config or ttnn.DRAM_MEMORY_CONFIG)
         out.deallocate(True)
+        return result
+
+    def __call__(self, x, weight, memory_config=None):
+        """x [1, 1, 32, K] (interleaved) -> [1, 1, 32, n_pad] (``memory_config``, default DRAM interleaved)."""
+        x_sharded = ttnn.to_memory_config(x, self.in_memory_config)
+        result = self.matmul_sharded(x_sharded, weight, memory_config)
+        x_sharded.deallocate(True)
         return result
