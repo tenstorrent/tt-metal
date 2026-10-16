@@ -248,6 +248,32 @@ def test_a_component_test_whose_sweep_fails_goes_to_the_test_role(orch, sandbox)
     assert "mistake sweep failed" in (o.run_dir / "briefs" / "C.blk.a.test.1.md").read_text()
 
 
+def test_an_aborted_test_agent_retries_the_freeze_without_review(orch, sandbox):
+    # F94: the overseer fixes the check that sent the test to an agent (the sweep no longer slips) and aborts it: the
+    # freeze without review runs again before any other test agent
+    import json
+
+    from models.demos.common.bringup import overseer as OV
+
+    sandbox.write_spec(block_types={"blk": {"layers": [0], "representative": 0}}, agents={"component_review": "none"})
+    (sandbox.repo / "tests/check.py").write_text(SWEEP_CHECK)
+    (sandbox.repo / "src/sweep.txt").write_text("slips")
+    o = orch([_comp_task()], {"C.blk.a.implement.1.md": IMPLEMENT})
+    real = o.run_agent
+
+    def overseer_fixes_and_aborts(task, role, attempt, brief, **kw):
+        if role == "test":
+            (sandbox.repo / "src/sweep.txt").unlink(missing_ok=True)  # the framework fix
+            abort = {"task": task["id"], "role": role, "attempt": attempt, "reason": "the sweep is fixed"}
+            (o.run_dir / OV.ABORT_FILE).write_text(json.dumps(abort))
+        return real(task, role, attempt, brief, **kw)
+
+    o.run_agent = overseer_fixes_and_aborts
+    assert o.run() == DONE
+    assert [c for c in orch.calls() if ".test." in c] == ["C.blk.a.test.1.md bringup-engineer"]
+    assert any("frozen without review after the abort (F94)" in line for line in orch.lines)
+
+
 def test_freeze_with_mutations_requires_the_sweep(sandbox):
     (sandbox.repo / "tests").mkdir(exist_ok=True)
     (sandbox.repo / "src").mkdir(exist_ok=True)
