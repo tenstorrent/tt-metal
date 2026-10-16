@@ -94,7 +94,8 @@ DispatchKernel::DispatchKernel(
     this->send_to_brisc_ = true;
     // Log dispatch core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
-    Inspector::set_dispatch_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
+    Inspector::set_dispatch_core_info(
+        descriptor.metal_context(), virtual_core, type, cq_id, device_id, servicing_device_id);
 }
 
 void DispatchKernel::GenerateStaticConfigs() {
