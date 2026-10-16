@@ -1887,8 +1887,8 @@ template <
     BinaryOp BINOP,
     int ITERATIONS                        = 32,
     std::uint32_t MATH_FORMAT             = 0,
-    ckernel::DstRoundingMode DST_ROUNDING = ckernel::DstRoundingMode::Default,
-    bool SIGN_MAGNITUDE_FORMAT            = true>
+    bool SIGN_MAGNITUDE_FORMAT            = true,
+    ckernel::DstRoundingMode DST_ROUNDING = ckernel::DstRoundingMode::Default>
 void call_binary_sfpu_operation(
     const std::uint32_t dst_index_in0 = 0,
     const std::uint32_t dst_index_in1 = 1,
