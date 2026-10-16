@@ -102,7 +102,11 @@ def _chunked_prefill_capabilities():
         raise ValueError(f"DSV41_VLLM_CHUNK={chunk} must be a positive multiple of 128")
     up = int(os.environ.get("DSV41_PREFILL_UP", "1"))
     cap = int(os.environ.get("DSV41_VLLM_MAX_PARTIAL", str(VS.MESH_ROWS * up - 1)))
-    return {"prefill_chunk_alignment": chunk, "max_partial_prefills": max(cap, 0)}
+    caps = {"prefill_chunk_alignment": chunk, "max_partial_prefills": max(cap, 0)}
+    if _apc_on():
+        # the scheduler rounds vLLM's prefix-cache hits down to the grid of the snapshot policy (a hit the model cannot resume from would make it recompute the whole prompt in one call)
+        caps["prefix_cache_hit_policy"] = os.environ.get("DSV41_APC_POLICY", "pow2")
+    return caps
 
 
 def _resolve_weights_dir(hf_config):

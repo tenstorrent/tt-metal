@@ -180,6 +180,22 @@ def mixed(long_words, n_short=8):
 if __name__ == "__main__":
     out = sys.argv[1]
     res = {}
+    if (
+        "--only-mixed" in sys.argv
+    ):  # mixed phase repeated: with --switch FILE the prefix cache is toggled (1 / 0 / 1) through the server's DSV41_APC_FILE between the runs
+        sw = sys.argv[sys.argv.index("--switch") + 1] if "--switch" in sys.argv else None
+        words = int(sys.argv[sys.argv.index("--only-mixed") + 1])
+        [stream(prompt_for(100 + k), max_tokens=8) for k in range(3)]
+        res["mixed_runs"] = []
+        for k, v in enumerate(["1", "0", "1"] if sw else ["-", "-", "-"]):
+            if sw:
+                open(sw, "w").write(v)
+            r = mixed(words)
+            r["switch"] = v
+            res["mixed_runs"].append(r)
+        json.dump(res, open(out, "w"))
+        print("DONE", flush=True)
+        sys.exit(0)
     res["warm"] = [
         stream(prompt_for(100 + k), max_tokens=8) for k in range(3)
     ]  # (compiles / captures the prefill + decode traces; the 2nd / 3rd request restores a snapshot (APC on): compiles the restore programs)
@@ -198,6 +214,15 @@ if __name__ == "__main__":
     res["solo"] = solo
     print("solo ttft", [round(x["ttft"], 3) for x in solo], flush=True)
     if "--mixed" in sys.argv:
-        res["mixed"] = mixed(int(sys.argv[sys.argv.index("--mixed") + 1]) if sys.argv[-1] != "--mixed" else 32000)
+        words = int(sys.argv[sys.argv.index("--mixed") + 1]) if sys.argv[-1] != "--mixed" else 32000
+        res["mixed"] = mixed(words)
+        if "--switch" in sys.argv:  # same server, prefix cache toggled: isolates what the cache changes
+            sw = sys.argv[sys.argv.index("--switch") + 1]
+            res["mixed_runs"] = []
+            for v in ("0", "1"):
+                open(sw, "w").write(v)
+                r = mixed(words)
+                r["switch"] = v
+                res["mixed_runs"].append(r)
     json.dump(res, open(out, "w"))
     print("DONE", flush=True)
