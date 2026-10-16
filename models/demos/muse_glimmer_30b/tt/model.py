@@ -170,7 +170,8 @@ class MuseGlimmerModel:
         full = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
         return full[0, 0, :num_rows, : self.args.vocab_size].float()
 
-    def prefill_forward(self, tokens: torch.Tensor, user_id: int, page_table_tt, return_all_logits=False):
+    def _prefill_hidden(self, tokens: torch.Tensor, user_id: int, page_table_tt):
+        """Run embedding + all layers for one prompt -> (hidden [1,1,S,H], s_real, S)."""
         a = self.args
         tokens = tokens.reshape(-1)
         s_real = tokens.shape[0]
@@ -195,6 +196,23 @@ class MuseGlimmerModel:
             nx = layer.forward_prefill(x, rope if a.uses_rope(i) else None, self.kv_caches[i], page_table_tt, user_id)
             ttnn.deallocate(x)
             x = nx
+        return x, s_real, s
+
+    def prefill_forward_logits_tt(self, tokens: torch.Tensor, user_id: int, page_table_tt):
+        """Prefill one prompt -> softcapped logits [1,1,32,vocab_local] on device; the last real token is row 0."""
+        a = self.args
+        x, s_real, _ = self._prefill_hidden(tokens, user_id, page_table_tt)
+        last = ttnn.slice(x, (0, 0, s_real - 1, 0), (1, 1, s_real, a.hidden_size))
+        ttnn.deallocate(x)
+        hs = ttnn.pad(last, [(0, 0), (0, 0), (0, 31), (0, 0)], 0.0)
+        ttnn.deallocate(last)
+        logits = self.head(hs)
+        ttnn.deallocate(hs)
+        return logits
+
+    def prefill_forward(self, tokens: torch.Tensor, user_id: int, page_table_tt, return_all_logits=False):
+        a = self.args
+        x, s_real, s = self._prefill_hidden(tokens, user_id, page_table_tt)
 
         if not return_all_logits:
             t0 = ((s_real - 1) // 32) * 32  # 32-row tile containing the last real row

@@ -57,6 +57,29 @@ class MuseGlimmerGenerator:
             logger.info(f"Prefill user {u} (replica {r}, slot {slot}, {len(p)} tokens): {time.time() - t0:.2f}s")
         return out
 
+    def prefill_tokens(self, prompts: list[list[int]], sampling_params) -> torch.Tensor:
+        """Prefill and sample each prompt's first token on device -> LongTensor [n]."""
+        assert len(prompts) <= self.global_batch_size
+        self.page_table_dirty = True
+        out = torch.zeros(len(prompts), dtype=torch.int64)
+        loaded = set()
+        for u, p in enumerate(prompts):
+            r, slot = u // self.B, u % self.B
+            m = self.models[r]
+            t0 = time.time()
+            logits_tt = m.prefill_forward_logits_tt(torch.tensor(p, dtype=torch.int64), slot, self.page_table_tt[r])
+            tok_tt = m.sample_on_device(logits_tt, None if r in loaded else sampling_params)
+            loaded.add(r)
+            out[u] = m.tokens_to_torch(tok_tt, 1)[0]
+            ttnn.deallocate(logits_tt)
+            ttnn.deallocate(tok_tt)
+            logger.info(f"Prefill user {u} (replica {r}, slot {slot}, {len(p)} tokens): {time.time() - t0:.2f}s")
+        # Replicas without users still run in every decode step and need the request's parameters.
+        for r, m in enumerate(self.models):
+            if r not in loaded:
+                m.sampling.reset_sampling_params(sampling_params)
+        return out
+
     @staticmethod
     def _to_sampling_params(sampling: dict | None):
         """Our sampling dict (None => greedy) -> SamplingParams (greedy: temp 0 / top_k 1 / top_p 1, as gemma4)."""
@@ -142,15 +165,6 @@ class MuseGlimmerGenerator:
         """Device-sampled next tokens, LongTensor [global_batch]. `sampling` is a SamplingParams."""
         return self.decode_step(tokens, positions, sampling=sampling, sampling_params=sampling_params)
 
-    def _effective_sampling(self, sampling: dict | None) -> dict | None:
-        """Device sampling supports top_k in 1..32; apply that cap to the host-sampled first token too."""
-        if sampling is None or not self.device_sampling:
-            return sampling
-        sp = dict(sampling)
-        k = int(sp.get("top_k", 0))
-        sp["top_k"] = k if 0 < k <= 32 else 32
-        return sp
-
     @staticmethod
     def _sample(logits: torch.Tensor, sampling: dict | None, gen: torch.Generator) -> torch.Tensor:
         logits = torch.nan_to_num(logits.float(), nan=float("-inf"))
@@ -185,19 +199,21 @@ class MuseGlimmerGenerator:
         assert 0 < n <= self.global_batch_size
         if max_new_tokens <= 0:
             raise ValueError("max_new_tokens must be positive")
-        sampling = self._effective_sampling(sampling)
         gb = self.global_batch_size
         stop = set(stop_token_ids or [])
         gen = torch.Generator().manual_seed(seed)
 
+        dev_sp = self._to_sampling_params(sampling) if self.device_sampling else None
         t0 = time.time()
-        logits = self.prefill(prompts)
+        if dev_sp is not None:
+            cur = self.prefill_tokens(prompts, dev_sp)
+        else:
+            cur = self._sample(self.prefill(prompts), sampling, gen)
         ttft = time.time() - t0
         logger.info(f"Prefill of {n} prompts took {ttft:.2f}s")
 
         generated: list[list[int]] = [[] for _ in range(n)]
         active = [True] * n
-        cur = self._sample(logits, sampling, gen)
         pos = torch.tensor([len(p) for p in prompts], dtype=torch.int64)
         for u in range(n):
             t = int(cur[u])
@@ -205,8 +221,6 @@ class MuseGlimmerGenerator:
             if t in stop or pos[u] >= self.models[0].args.max_seq_len:
                 active[u] = False
 
-        dev_sp = self._to_sampling_params(sampling) if self.device_sampling else None
-        pending_sp = dev_sp  # loaded on the device by the first decode step only
         decode_times = []
         step_users = []
         breakdowns = []
@@ -223,8 +237,7 @@ class MuseGlimmerGenerator:
             idx = torch.tensor([u for u in range(n) if active[u]], dtype=torch.long)
             cur = torch.zeros(n, dtype=torch.int64)
             if dev_sp is not None:
-                step_tokens = self.decode_step_tokens(tokens, positions, dev_sp, sampling_params=pending_sp)
-                pending_sp = None
+                step_tokens = self.decode_step_tokens(tokens, positions, dev_sp)
                 cur[idx] = step_tokens[:n][idx]  # inactive users' tokens are ignored
             else:
                 step_logits = self.decode_step(tokens, positions)[:n]
