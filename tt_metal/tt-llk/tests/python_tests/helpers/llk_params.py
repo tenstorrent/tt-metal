@@ -815,11 +815,6 @@ PERF_LOOP_FACTOR_QUASAR = 32
 
 
 # ******** QUASAR specific ********
-class ImpliedMathFormat(Enum):
-    No = "false"
-    Yes = "true"
-
-
 class UnpackerEngine(Enum):
     """
     Enum for unpacker engine selection.

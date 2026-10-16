@@ -28,7 +28,7 @@ namespace {
 
 struct SMCRuntimeTelemetryBuffer {
     tt_xy_pair arc_core;
-    uint32_t addr = 0;
+    uint64_t addr = 0;
     uint32_t size = 0;
 };
 
