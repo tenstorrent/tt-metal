@@ -159,7 +159,7 @@ def test_nan_survives_only_into_a_32_bit_dest_and_a_32_bit_pack():
 
 
 # The two suites do not share a format axis, so the gate's reach is counted per suite.
-# ScalarRsub is the scalar suite's only member of the set; the other ten are unary.
+# ScalarRsub is the scalar suite's only member of the set; the other eleven are unary.
 _SCALAR_NAN_SIGN_OPS = frozenset({MathOperation.ScalarRsub})
 _UNARY_NAN_SIGN_OPS = GENERATED_NAN_SIGN_OPS - _SCALAR_NAN_SIGN_OPS
 
@@ -174,8 +174,11 @@ _SCALAR_SUITE_CELLS = [
 def test_nan_sign_gate_matches_the_measured_wormhole_failures():
     """Pinned against the Wormhole n300 run rather than against the rule that generated it.
 
-    Unary: 50 (op, cell) pairs — the 49 recorded failures plus the one Rsqrt cell that was
-    already xfailed for the unrelated -0.0 divergence, and which this gate now skips first.
+    Unary: 55 (op, cell) pairs. 50 are that run's: the 49 recorded failures plus the one
+    Rsqrt cell that was already xfailed for the unrelated -0.0 divergence, and which this
+    gate now skips first. The other five are TanhDerivativeLut's, enrolled later on a
+    Wormhole n150 when its edge sweep was first switched on: one per cell where the NaN
+    narrows, the same five cells every other member gets.
     Scalar: 1, which is the run's single `ScalarRsub` failure.
     """
     unary_gated = [
@@ -184,10 +187,10 @@ def test_nan_sign_gate_matches_the_measured_wormhole_failures():
         for cell in _EDGE_SWEEP_CELLS
         if specials_safe(*cell) and nan_sign_is_unspecified(op, *cell)
     ]
-    assert len(_UNARY_NAN_SIGN_OPS) == 10
+    assert len(_UNARY_NAN_SIGN_OPS) == 11, "expected 11 NaN-sign-gated unary operations"
     assert (
-        len(unary_gated) == 50
-    ), f"expected 50 gated unary (op, cell) pairs, got {len(unary_gated)}"
+        len(unary_gated) == 55
+    ), f"expected 55 gated unary (op, cell) pairs, got {len(unary_gated)}"
 
     scalar_gated = [
         (op, cell)
