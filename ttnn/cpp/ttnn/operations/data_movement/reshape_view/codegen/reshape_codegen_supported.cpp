@@ -184,39 +184,26 @@ bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output
 bool is_demoted(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& /*output_mem_config*/,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    if (input.storage_type() != ttnn::StorageType::DEVICE || input.layout() != Layout::TILE) {
-        return false;
-    }
     const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
     return choice.has_value() && native_faster(input, *choice, reshape_core_grid(input, sub_core_grids).num_cores());
 }
 
-std::optional<LaunchPlan> routed_launch_plan(
+bool codegen_plan_fits_live_l1(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    if (scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids) != nullptr) {
-        return std::nullopt;
+    const std::optional<tt::tt_metal::CoreRangeSet>& /*sub_core_grids*/) {
+    const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
+    if (!choice) {
+        return false;
     }
-    auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
-    // Demotion is settled before the static fit, so a native-routed call builds no output spec.
-    if (!choice || native_faster(input, *choice, reshape_core_grid(input, sub_core_grids).num_cores()) ||
-        static_fit_violation(input, logical_output_shape, output_mem_config, *choice) != nullptr) {
-        return std::nullopt;
-    }
-    // Native needs only a few CB pages, so a call whose smallest plan does not fit live L1 runs there instead of
-    // reaching the program factory's no-plan error. The output is reserved because the op allocates it before the
-    // program factory samples live L1.
     const auto reserved = pending_output_l1_bytes(input, output_spec(input, logical_output_shape, output_mem_config));
-    if (!live_tile_rows_choice(input, logical_output_shape, *choice, reserved)) {
-        return std::nullopt;
-    }
-    return LaunchPlan{.tile_rows = std::move(*choice)};
+    return live_tile_rows_choice(input, logical_output_shape, *choice, reserved).has_value();
 }
 
-LaunchPlan forced_launch_plan(
+LaunchPlan launch_plan(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,

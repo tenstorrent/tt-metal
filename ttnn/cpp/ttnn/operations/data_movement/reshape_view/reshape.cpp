@@ -593,7 +593,7 @@ ttnn::Tensor reshape_dispatch(
             logical_shape,
             mem_config,
             sub_core_grid,
-            reshape_codegen::forced_launch_plan(tensor, logical_shape, mem_config, sub_core_grid));
+            reshape_codegen::launch_plan(tensor, logical_shape, mem_config, sub_core_grid));
     }
 
     // No reshape required only when the shape AND the memory config are unchanged. A same-shape
@@ -744,10 +744,16 @@ ttnn::Tensor reshape_dispatch(
             tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
     }
     if (impl == ReshapeImpl::ROUTED && operations::data_movement::codegen_supported_on_arch(tensor) &&
-        reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value) == nullptr) {
-        if (auto plan = reshape_codegen::routed_launch_plan(tensor, logical_shape, mem_config, sub_core_grid)) {
-            return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*plan));
-        }
+        reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value) == nullptr &&
+        reshape_codegen::supported_by_codegen(tensor, logical_shape, mem_config, sub_core_grid) &&
+        !reshape_codegen::is_demoted(tensor, logical_shape, mem_config, sub_core_grid) &&
+        reshape_codegen::codegen_plan_fits_live_l1(tensor, logical_shape, mem_config, sub_core_grid)) {
+        return ttnn::prim::reshape_codegen(
+            tensor,
+            logical_shape,
+            mem_config,
+            sub_core_grid,
+            reshape_codegen::launch_plan(tensor, logical_shape, mem_config, sub_core_grid));
     }
     if (logical_shape.volume() != tensor.logical_volume()) {
         // This is completely incorrect but it is due to issue 15137 or issue 15558
