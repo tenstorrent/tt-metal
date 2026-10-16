@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 
+#include "build.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "llk_defs.h"
@@ -14,6 +15,11 @@
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
+
+// UNPACK_BLOCK (driver template): the block calls of tilize_block instead of one call per tile
+#ifndef UNPACK_BLOCK
+#define UNPACK_BLOCK 0
+#endif
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -29,7 +35,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces = params.num_faces;
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
-    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */, num_faces);
+    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */, num_faces, UNPACK_BLOCK);
 
     std::uint32_t read_offset = 0;
 
@@ -37,6 +43,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t i = 0; i < params.BLOCK_RT_DIM; i++)
     {
+#if UNPACK_BLOCK
+        _llk_unpack_tilize_block_wrapper_(
+            L1_ADDRESS(params.buffer_A[read_offset]),
+            0 /* first tile */,
+            params.BLOCK_CT_DIM,
+            formats.unpack_A_src,
+            formats.unpack_A_dst,
+            block_ct_dim,
+            FACE_R_DIM,
+            num_faces,
+            false /* narrow_tile */);
+#else
         for (std::uint32_t j = 0; j < params.BLOCK_CT_DIM; j++)
         {
             _llk_unpack_tilize_wrapper_(
@@ -49,6 +67,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 num_faces,
                 false /* narrow_tile */);
         }
+#endif
         read_offset += params.BLOCK_CT_DIM;
     }
     _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, num_faces);
@@ -138,6 +157,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t block = 0; block < num_blocks; ++block)
     {
         _llk_packer_wait_for_math_done_();
+#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
+        // One pack run for the block's contiguous tiles
+        if (tiles_in_block > 1 && num_faces == 4 && !IS_BFP_FORMAT(formats.pack_dst))
+        {
+            const std::uint32_t first = block * tiles_in_block;
+            if (is_8bit_format)
+            {
+                _llk_pack_block_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[first]), tiles_in_block);
+            }
+            else
+            {
+                _llk_pack_block_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Tilize>(0, L1_ADDRESS(params.buffer_Res[first]), tiles_in_block);
+            }
+            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            continue;
+        }
+#endif
         for (std::uint32_t tile = 0; tile < tiles_in_block; ++tile)
         {
             std::uint32_t res_tile_idx = (block * tiles_in_block) + tile;
