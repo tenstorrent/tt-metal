@@ -186,9 +186,12 @@ def prefill_forward(
     tt_k.deallocate(True)
     tt_v.deallocate(True)
 
-    # Concat heads and apply output projection
-    tt_sdpa_out_pre_concat = tt_sdpa_out
-    tt_sdpa_out = concat_heads(tt_sdpa_out, is_decode_mode=False)
+    # Concat heads and apply output projection. Every o_proj path casts its input to bf8 first; the cast runs on the
+    # heads instead, so the concat moves bf8 tiles (half the bytes). A tile keeps its 32 x 32 values through the
+    # concat, so it packs to the same bf8 tile either way (bit-identical).
+    tt_sdpa_out_pre_concat = ttnn.typecast(tt_sdpa_out, ttnn.bfloat8_b)
+    tt_sdpa_out.deallocate(True)
+    tt_sdpa_out = concat_heads(tt_sdpa_out_pre_concat, is_decode_mode=False)
     tt_sdpa_out_pre_concat.deallocate(True)
 
     # Flatten back for output projection: [B, 1, S, H] -> [1, 1, B*S, H]
