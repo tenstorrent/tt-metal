@@ -1,0 +1,54 @@
+# AgentX simulator (Gemma4 prefill)
+
+Replays the AgentX coding-agent traces against a step-cost model of Gemma4 prefill on a BH Galaxy (8x4), to compare chunk sizes, batching and cache sizes on a realistic workload in seconds instead of hours of silicon. Host only. Run from this directory.
+
+The step cost is built from per-layer device measurements (`model_data_revc.json`) and calibrated against silicon replays of AgentX slices. Sessions run closed loop: `--concurrency` sessions at a time, each request sent when the ones it depends on finish plus its recorded think time, capped at `--max-think-s`.
+
+```
+# traces
+hf download semianalysisai/cc-traces-weka-062126-256k --repo-type dataset --local-dir <dir>
+
+# configs x loads over the whole corpus (every knob takes a comma list)
+./agentx_sim.py --traces <dir>/traces.jsonl --config 8192x8192:fcfs,2048x8192:pack --concurrency 32,64 -j 4
+
+# the tt-metal#60408 sweep
+./sweep_60408.sh <dir>/traces.jsonl sweep.jsonl
+
+# a slice for a silicon replay, its prediction, and the comparison with the measured replay
+./agentx_slice.py build --traces <dir>/traces.jsonl --out slice.json --concurrency 48 --start 600 --window 120
+./agentx_slice.py predict --slice slice.json --measured replay.json
+```
+
+## Reading the output
+
+One row per run (`--json` writes every metric):
+- `TTFT p50 p90 p99`: seconds from send to prefill done, every request of the run.
+- `tok/s`, `useful`: rows processed per busy second, padding included, and new (uncached) tokens per busy second.
+- `pad%`: padded rows. `recmp%`: cached tokens prefilled again because the resume point is rounded down to the chunk.
+- `hit`: prefix-cache hit rate. `used`: the part of it kept after rounding to the chunk.
+- `ss ...`: the steady window, while all `--concurrency` sessions are running: device utilisation, new tokens per wall second (against an unlimited cache) and TTFT. Compare designs here at a fixed load; `ss util` near 1.0 means saturated.
+
+## Other configurations
+
+`--config UNITxBUDGET:POLICY`: UNIT is the chunk size, BUDGET / UNIT the lanes per step (UNIT == BUDGET is unbatched), POLICY `fcfs` or `pack` (fewest rows left first).
+
+```
+# chunk sizes, unbatched
+./agentx_sim.py --traces <dir>/traces.jsonl --config 1024x1024:fcfs,2048x2048:fcfs,4096x4096:fcfs,8192x8192:fcfs,16384x16384:fcfs -j 5
+
+# lane counts and widths
+./agentx_sim.py --traces <dir>/traces.jsonl --config 2048x4096:fcfs,2048x8192:fcfs,2048x16384:fcfs,4096x16384:pack -j 4
+```
+
+- Fitted on silicon: unbatched 8192, 4096, 2048; 2048-wide lanes, 1 to 4 per step.
+- Anything else (unbatched 1024 or 16384, wider or narrower lanes, more than 4 lanes) runs on the measured per-layer data with the nearest calibration, and is marked `*` with the reason. Treat it as an unvalidated estimate.
+- Per-layer data covers chunks of 1024 to 16384 and at most 16384 tokens per step.
+
+## Accuracy
+
+- On held-out silicon replays (bh-glx-120-c05u08), batched busy time is within 0.2% and TTFT p50 / p90 / p99 within 2%. Unbatched TTFT p50 is within 1.5-3% on average; 8k near saturation reads up to 8% low.
+- The calibration is from one Galaxy; another box moved saturated TTFT tails by up to 10%.
+- The model goes stale as prefill gets faster. To check it, replay one slice on silicon (`../demo/agentx_replay.py`) and compare with `agentx_slice.py predict --measured`.
+- Not modelled: loading a cached prefix into the device, and the first decode token.
+
+`--help` on each script lists its options and the other knobs (cache size, chunk-aligned or exact resume, think-time cap, decode rate).
