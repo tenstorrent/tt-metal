@@ -60,6 +60,17 @@ struct Args {
 };
 
 tt::DataFormat w_format(bool bf8) { return bf8 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Bfp4_b; }
+
+// the expert matmuls' fidelity: LoFi (bandwidth bound); MIMO_FL_FIDELITY=HiFi2 / HiFi3 / HiFi4 for accuracy probes
+MathFidelity expert_fidelity() {
+    const char* f = std::getenv("MIMO_FL_FIDELITY");
+    if (f == nullptr) {
+        return MathFidelity::LoFi;
+    }
+    const std::string v(f);
+    return v == "HiFi2" ? MathFidelity::HiFi2
+                        : (v == "HiFi3" ? MathFidelity::HiFi3 : (v == "HiFi4" ? MathFidelity::HiFi4 : MathFidelity::LoFi));
+}
 }  // namespace factory_detail
 using namespace factory_detail;
 constexpr uint32_t KBLK = kKBlk, BF8_TILE = kBf8Tile;
@@ -335,7 +346,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             std::string(KDIR) + name,
             rect_ranges(cores),
             ComputeConfig{
-                .math_fidelity = MathFidelity::LoFi,
+                .math_fidelity = expert_fidelity(),
                 .fp32_dest_acc_en = fp32,
                 .dst_full_sync_en = full_sync,
                 .compile_args = ct,

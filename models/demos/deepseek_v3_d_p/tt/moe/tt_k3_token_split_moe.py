@@ -45,7 +45,7 @@ class K3Dims:
     K: int = 16
     beta: float = 4.0
     linear_beta: float = 25.0
-    eps: float = 1e-6
+    eps: float = 1e-5  # (rms_norm_eps, reference/kimi_k3/config.json)
     route_scale: float = 1.0
 
 
@@ -145,18 +145,23 @@ class TtK3TokenSplitMoE:
         self.cfg = ttnn.types.BlackholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
-        # routed experts: the flat expert (fake-initialized, then the pool packed once and replicated)
+        # routed experts: the flat expert (fake-initialized, then the pool packed once and replicated). Its tokens and
+        # its gate/up -> down intermediate in bfp8 (K3_X_BF16 / K3_H_BF16 = 1: bf16, accuracy probes)
+        self.x_bf16 = os.environ.get("K3_X_BF16") == "1"
+        self.h_bf16 = os.environ.get("K3_H_BF16") == "1"
+        self.wdtype = os.environ.get("K3_WDTYPE", "bf4")  # routed expert weights: bf4 (default) or bf8
+        self.act = os.environ.get("K3_ROUTED_ACT", "situ")  # (silu: an accuracy probe of the device SiTU)
         E, EPC = d.E, self.EPC
         self.op = FlatRoutedExpert(
             mesh_device, "fake", m=cap, H=d.latent, I=d.I, gids=[list(range(c * EPC, (c + 1) * EPC)) for c in range(self.N)],
-            n_global=E, wdtype="bf4", act="situ", pin=1,
+            n_global=E, wdtype=self.wdtype, act=self.act, pin=1, x_bf16=self.x_bf16, h_bf16=self.h_bf16,
         )
         P = len(w.pool)
         assert EPC % P == 0, "every chip's local expert e uses pool[e % P]: EPC must be a multiple of the pool"
         lay = dict(self.op.plan)
         W_l = [tuple(t.T.contiguous() for t in (w.pool[e % P][0], w.pool[e % P][1])) + (w.pool[e % P][2].T.contiguous(),) for e in range(EPC)]
         regions, dregs, rregs = flat_weight_regions(W_l, lay)
-        wdt = W_DTYPES["bf4"][0]
+        wdt = W_DTYPES[self.wdtype][0]
         for t in (self.op.w_gu, self.op.w_d, self.op.w_rd):  # (the fake tensors)
             if t is not None:
                 ttnn.deallocate(t)
@@ -258,13 +263,15 @@ class TtK3TokenSplitMoE:
             ttnn.deallocate(t)
 
     # -- the ops (per chip; tensors on the mesh) --
-    def router(self, x):
+    def router(self, x, keep_logits=False):
         logits = self._linear(x, self.w_gate, self.cfg_hi)
         wts, ids = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
             logits, self.bias, n_groups=1, summed_experts_per_group=1, topk_groups=1, n_activated_experts=self.d.K,
             route_scale=self.d.route_scale, stable_sort=True, epsilon=1e-20, score_func="sigmoid",
             padding_config=None, weights_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
+        if keep_logits:
+            return ids, wts, logits
         ttnn.deallocate(logits)
         return ids, wts
 
@@ -312,6 +319,7 @@ class TtK3TokenSplitMoE:
             done_words=self.op.done, intermediate=self.d.I, max_tokens_per_expert=self.op.m, arena=arena, y=self.y,
             extra=self.desc, extra_key=self.key, collector=self.coll["core"], counts_addr=self.coll["counts_addr"],
             writers=self.writers, activation=self.op.act, pin=1, token_index=pl["token_index"], down_fp32=True,
+            x_bf16=self.x_bf16, h_bf16=self.h_bf16,
             l1_args=self.l1_args,
         )
 
@@ -338,7 +346,7 @@ class TtK3TokenSplitMoE:
         if given, is called after every stage (e.g. to read the profiler per stage)."""
         mark = hook or (lambda _: None)
         os.environ["MIMO_FL_Y_L1"] = "1"
-        ids, wts = self.router(x)
+        ids, wts, *logits = self.router(x, keep_logits=keep)
         mark("router")
         gi, gw = self.gather_routing(ids, wts)
         mark("routing_gather")
@@ -359,7 +367,7 @@ class TtK3TokenSplitMoE:
         mark("shared")
         y = ttnn.add(yr, ys)
         mark("sum")
-        inter = dict(ids=ids, wts=wts, gi=gi, gw=gw, lat=lat, xg=xg, yr=yr, ys=ys) if keep else None
+        inter = dict(ids=ids, wts=wts, gi=gi, gw=gw, lat=lat, xg=xg, yr=yr, ys=ys, logits=logits[0], routed=self.out) if keep else None
         if not keep:
             for t in (ids, wts, gi, lat, xg, yr, ys):  # (gw is gi)
                 ttnn.deallocate(t)

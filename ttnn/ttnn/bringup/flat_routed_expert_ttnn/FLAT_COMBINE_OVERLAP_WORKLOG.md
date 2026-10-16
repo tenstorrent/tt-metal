@@ -815,3 +815,38 @@ each), planner 98, latent down 131, arena zero 6, dispatch 394, experts + combin
   token: bitcast + concat), so one all-gather pair instead of two. Planner bit-exact (uniform 95, packed 154 us
   standalone). Routing gather 292 -> 163 us (the two all-gathers 54 + 88 us: mostly launch skew after the stage
   sync), block 4617 -> 4487 us, exact.
+
+### Accuracy: the K3 block vs TtMoe, and the flat expert vs production at GLM 5.3 / K2.7 / K3 (2026-10-16)
+Tools (tests/perf): `zz_k3_moe_accuracy.py` (offline, dumps of scratch_k3_moe_layer.py K3_DUMP= and
+zz_scratch_k3_ttmoe_compare.py K3_DUMP_TTMOE=; refs: upstream KimiSparseMoeBlock fp32 / bf16 with the experts pointed
+at the pool, and a host model with the device's weight formats), `zz_scratch_expert_precision_models.py` (one chip,
+model expert shapes, runs unchanged in an origin/main worktree for the production op) + `zz_expert_precision_report.py`.
+- Host model == upstream block to 1e-7 (fp32). RMSNorm eps fixed 1e-6 -> 1e-5 (config.json; no measurable effect here).
+- Block end to end vs upstream fp32 (448 experts, 2560 tokens, same weights / input): token-split PCC 0.99592 (rel
+  9.1%), TtMoe 0.99566 (rel 10.7%). Both dominated by bfp4 routed weights (yr rel 20% from the weights alone).
+- Device arithmetic per stage needs a reference with the device's own weight rounding: the flat expert's upload goes
+  fp32 -> bf16 -> bfp4 (K3_WCHECK: device weights == bfp4(bf16(W)) exactly; straight fp32 -> bfp4 differs in 0.75% of
+  elements), the block's dense bf8 weights and TtMoe's experts go straight (lower error with the matched reference).
+  Matched: token-split routed experts + combine 1.9% rel (of it the tokens' bfp8 rounding 1.1%; bf16 h 1.35%), latent
+  down 0.4%, norm + up 0.5%, shared 1.0%; TtMoe routed 5.0%, latent 2.0 / 2.0%, shared 6.1% (bf16 DEST + bf16
+  reduce-scatter of the TP partials). Routing: 0.54% (ours) / 0.66% (TtMoe) of the picks differ from the host, every
+  one a near-tie.
+- Expert matmul fidelity: HiFi2 bit-identical to LoFi (LoFi takes 5 weight bits / 7 activation bits: bfp4 weights are
+  exact). bfp8 weights are LESS accurate in LoFi (routed 3.3% vs 1.9%: the 7-bit mantissa truncated to 5) and 1.8x
+  the experts' time (4571 vs 2523 us). MXFP4 checkpoint weights -> bfp4: 11% weight error (19% on the routed output,
+  either exponent orientation); -> bfp8: exact.
+- Flat expert vs production (TtRoutedExpert as TtMoe builds it: LoFi, bf16 DEST, packer L1 acc, hybrid threshold
+  320 for GLM 5.3 / K2.7, unified only for K3; origin/main cb0eabe05e7 == this branch's copy, bit-identical), same bf16
+  weights / row-major inputs, arithmetic rel error over 5 input distributions:
+  | shape | flat (bfp8 h) | flat (bf16 h) | production |
+  | GLM 5.3 6144 x 2048 | 7.1-7.9% (BUG, below) | 0.8-2.0% | 2.6-5.2% |
+  | K2.7 7168 x 2048 | 1.3-2.5% | 0.8-2.0% | 2.6-5.5% |
+  | K3 3584 x 3072 | 1.2-5.9% | 0.8-5.9% | 2.0-8.3% |
+  Production's norm ratio 1.03-1.04 (bf16 DEST gain); flat 1.00-1.015. (student_t2 inputs: every op ~145% off the
+  host bfp8-x reference while agreeing within 4% with each other: a reference artifact, excluded.)
+- BUG (flat expert, GLM 5.3 shape H 6144, bfp8 h): the plan gets 4-tile (128-row) sub-blocks (row passes: Ht / KBLK
+  = 24 = x_slots; K2.7 has 28 K-blocks, K3 NP 2: both mt 2) and the last row tile of some sub-blocks is never written:
+  the same tiles every run and input (expert 0 tile 7 of 16, expert 5 tile 3 of 7, expert 7 tile 7 of 12), contents
+  whatever was there (30% error in one run, inf in the next). MIMO_FL_MT=2: correct. Not the row-pass gate/up kernel
+  (MIMO_FL_GU_FULL_SYNC=1: same tiles), not the x ring depth (MIMO_FL_X_SLOTS_MAX=26: same): the 128-row sub-block's
+  h exchange / down / y write. The K3 block is unaffected (mt 2). Open.

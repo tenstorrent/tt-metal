@@ -65,6 +65,22 @@ def test_k3_moe_layer(mesh_device, device_params):
     w = random_k3_weights(d, pool_size=POOL)
     moe = TtK3TokenSplitMoE(mesh_device, w, d, S)
     logger.info(f"K3 block built in {time.time() - t0:.0f} s: {moe.EPC} experts per chip, combine accumulators {moe.A}, cells {len(moe.cells)}")
+    if os.environ.get("K3_WCHECK"):  # (debug: the routed weights read back from the device vs host roundings)
+        from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import flat_weight_regions
+
+        lay = dict(moe.op.plan)
+        W_l = [(w.pool[e % POOL][0].T.contiguous(), w.pool[e % POOL][1].T.contiguous(), w.pool[e % POOL][2].T.contiguous()) for e in range(moe.EPC)]
+        regions, dregs, _ = flat_weight_regions(W_l, lay)
+        banks = lay["banks"]
+        for name, regs, t in (("gate/up", regions, moe.op.w_gu), ("down", dregs, moe.op.w_d)):
+            per = -(-len(regs) // banks)
+            regs = list(regs) + [torch.zeros_like(regs[0])] * (per * banks - len(regs))
+            host = torch.cat([torch.cat([regs[b + h * banks] for h in range(per)]).reshape(-1, 32) for b in range(banks)], dim=1)
+            dev = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float().reshape(host.shape)
+            for lbl, src in (("fp32", host), ("bf16 first", host.to(torch.bfloat16).float())):
+                hq = ttnn.to_torch(ttnn.from_torch(src.contiguous(), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
+                logger.info(f"K3 WCHECK {name}: device != host bfp4({lbl}): {(dev != hq).float().mean().item() * 100:.3f}% of elements")
+        pytest.skip("weight check")
     if os.environ.get("K3_MEMDUMP"):  # (debug: the L1 map after the build)
         ttnn.device.dump_device_memory_state(mesh_device, prefix=os.environ["K3_MEMDUMP"])
         pytest.skip("memory dump")
@@ -93,6 +109,14 @@ def test_k3_moe_layer(mesh_device, device_params):
     gs, us = xs @ w.sh_gate.T, xs @ w.sh_up.T
     a = d.beta * torch.tanh(gs / d.beta) * torch.sigmoid(gs) * (d.linear_beta * torch.tanh(us / d.linear_beta))
     logger.info(f"stages: latent down PCC {pcc(lat, xs @ w.lat_down.T):.5f}, shared expert PCC {pcc(ys, a @ w.sh_down.T):.5f}")
+    if os.environ.get("K3_DUMP"):  # (the device's outputs per stage, for the offline accuracy analysis)
+        cat = lambda t, *shp: torch.cat([ttnn.to_torch(u).reshape(*shp) for u in ttnn.get_device_tensors(t)])  # noqa: E731
+        dump = dict(
+            S=S, N=N, E=d.E, pool=POOL, wdtype=moe.wdtype, act=moe.act, x=x, gi=gi, gw=gw, logits=cat(inter["logits"], S, d.E), lat=cat(inter["lat"], S, d.latent),
+            routed=cat(inter["routed"], S, d.latent), yr=cat(inter["yr"], S, d.H), ys=cat(inter["ys"], S, d.H), y=cat(y, S, d.H),
+        )
+        torch.save(dump, os.environ["K3_DUMP"])
+        logger.info(f"K3 dump: {os.environ['K3_DUMP']}")
     assert pcc(yd, yref_dev) > 0.98, "block output off"
     # timing: per stage (the programs between two stage marks), slowest chip; and the whole forward
     per_chip_programs(mesh_device)
