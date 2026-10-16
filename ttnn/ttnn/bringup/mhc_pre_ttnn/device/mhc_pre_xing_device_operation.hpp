@@ -33,6 +33,7 @@ struct MhcPreXingParams {
     uint32_t sinkhorn_iters = 20;
     double clamp_min = -30.0;
     double clamp_max = 30.0;
+    bool deepseek = false;  // DeepSeek-V4 coefficient math (compute define MHC_XING_DEEPSEEK; off: Xing's program)
     tt::tt_metal::ComputeConfigDescriptor compute_config;
 };
 

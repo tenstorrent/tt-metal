@@ -946,3 +946,168 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   evidence: `PYTHONPATH=$PWD python -m models.demos.deepseek_v41_flash_d_p.reference.official_checks`.
 - Gate: `ok   official taps: 129 steps, chunk 1` (0 errors, 0 unmapped); L2 / L14 / L20 compressor pass as explained
   (rel 0.0373 / 0.0366 / 0.0371 > 0.0304 / 0.0351 / 0.0361).
+
+## FIX.4 overseer, attempt 3 (run1 brief FIX.4.overseer.3): hc mixes Sinkhorn in fp32 on the SFPU (OV-10/11/12)
+- Reverted attempt 2 (OV-12): deleted ttnn/ttnn/bringup/mhc_split_sinkhorn/, restored INDEX.md and
+  bringup_nanobind.cpp; tt/mhc.py and tt/settings.py back to HEAD before the change below.
+- Fork `mhc_pre_ttnn`: `ttnn.bringup.mhc_pre_xing(..., deepseek=True)` (default False). DeepSeek's
+  hc_split_sinkhorn_kernel math (K-20): pre = sigmoid + eps, no clamp, softmax + eps, column norm, then iters - 1
+  (row, column) pairs; the same fp32 SFPU code as Xing's path. Kernel code behind the compute define
+  MHC_XING_DEEPSEEK (absent when off: Xing's program and hash unchanged). CHANGELOG entry 7, INDEX row.
+- tt/mhc.py: setting HC_SINKHORN (default and max_precision `sfpu_fp32`): after tp_sum, one mhc_pre_xing call on the
+  exchanged row (it also does r = rsqrt(sum x^2 / 4H + eps), so the hand-composed slice / multiply / add / rsqrt chain
+  is gone on this path); `fpu` keeps the old chain + ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn for A/B.
+- Stage numbers, golden inputs, layer 0..2, component chunk 1 (probe_001.py in
+  tests/ttnn/unit_tests/operations/mhc_ds41_fix4/probes/):
+  - sum x^2: rel 4-6e-7 (exact). Linear (device mixes vs fp64): 3.39e-4 / 3.67e-4 / 3.46e-4 / 3.87e-4 / 3.47e-4
+    (L0 attn / L0 ffn / L1 attn / L1 ffn / L2 attn), multiplicative bias -3.3e-4..-3.75e-4; CPU fp32 mixes 2-4e-7.
+  - Sinkhorn alone (device output vs a CPU fp32 Sinkhorn on the device's own mixes): fpu 5.9e-4 / 1.19e-3 / 6.5e-4 /
+    7.7e-4 / 7.4e-4; sfpu_fp32 6.8e-8 / 7.6e-8 / 6.5e-8 / 7.4e-8 / 6.5e-8.
+  - Whole step vs the CPU step: fpu 6.12e-4 / 1.27e-3 / 6.98e-4 / 8.21e-4 / 7.82e-4 (bias -3.3e-4..-4.4e-4, worst
+    column L0 attn col 10 1.6 %, L2 attn col 15 3.5 %); sfpu_fp32 6.07e-5 / 1.08e-4 / 1.36e-4 / 1.50e-4 / 1.00e-4
+    (bias +1.4e-5 / +3.8e-5 / +7e-6 / +4.5e-5 / -8e-6); rel limits 3.52e-5 / 1.47e-4 / 3.94e-4 / 2.84e-4 / 4.05e-4.
+  - Times (wall, 20 synced calls, one call = 1024 rows per chip on 2x2): rsqrt + Sinkhorn fpu 0.45 ms, sfpu_fp32
+    0.031 ms; whole mixes step 0.77 -> 0.41 ms; per layer per chunk (attn_hc + ffn_hc) 1.54 -> 0.82 ms.
+  - Fork cases (random rows, real scale / base): rel 5.2e-8..1.0e-7 vs fp64.
+- What remains (DS41-41): every column bias the gates flag equals the one the CPU fp32 Sinkhorn makes from the
+  device's mixes (e.g. L0 attn col 20 -1.74e-3 of rms both): the linear's in-tile partial-dot truncation (DS41-16).
+  Golden streams are bf16-valued and hc_fn is TF32-rounded, so the operands are exact; round_tf32(x) changed nothing
+  here. With fp32 streams (swap / assembled model) the FPU also truncates x: mixes -6.9e-4; round_tf32(x) halves it,
+  +1.94 ms per call (not taken: owner pick). No multi-pass (owner): the steps' column-bias checks need a waiver.
+- RMS stage (owner note): exact as composed (REPORT: sum x^2 1e-6, rsqrt 5e-7; OV-10 said leave it); on the default
+  path the rsqrt now runs inside mhc_pre_xing (Newton rsqrt, same fork), so no hand-composed chain remains there.
+  rsqrt fast_and_approximate_mode: only on the `fpu` path (ttnn.rsqrt default, accurate).
+- Not done: x as bf16 for the linear (OV-10 "optional"): in the assembled model the streams are fp32, not bf16-valued,
+  so a bf16 cast would round them.
+- Gate (each test with its own BRINGUP_TASK): err_* all pass (L0 attn 0.00124 <= 0.00247, L0 ffn 0.00125 <= 0.0036,
+  L1 attn 0.00127 <= 0.0077, L1 ffn 0.00133 <= 0.0123, L2 attn 0.00111 <= 0.0077; swap err_swap_out 0.0187 <= 0.083,
+  0.0218 <= 0.083). The tests still FAIL on the F83-F85 auto checks: vs CPU column bias 25-38 x (all five), L0 attn
+  rel 6.07e-5 > 3.52e-5; vs golden column bias L0 attn col 20 16.7 x, L0 ffn 4.6 x, L1 attn 4.6 x, L2 attn 3.4 x;
+  swaps also fail router / kv own-floor checks (as in the overseer's f83 log, not hc). Fork regression (option off):
+  model cases 103 passed, unit + golden 321 passed / 1 skipped (= baseline).
+- Re-run: the brief's gate; fork: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_pre_ttnn/tests/test_mhc_pre_xing.py -k deepseek`;
+  A/B: `DS41_HC_SINKHORN=fpu`.
+
+## FIX.4 overseer, attempt 4 (run1 brief FIX.4.overseer.4): no further change; residual is the device floor
+- Tree = attempt 3's change (HC_SINKHORN=sfpu_fp32, mhc_pre_xing(deepseek=True); build current, 15:11). No code
+  changed in this attempt: nothing left in tt/mhc.py is a bug or a lower-precision choice at normal settings.
+- Gate as written: stops at test 1 (pytest asserts on the F83-F85 auto checks), numbers bit-identical to attempt 3.
+  Each remaining test run alone with its BRINGUP_TASK: every err_* passes:
+  err_attn_hc_L00 0.00124 <= 0.00247, err_ffn_hc_L00 0.00125 <= 0.00360, err_attn_hc_L01 0.00127 <= 0.00774,
+  err_ffn_hc_L01 0.00133 <= 0.0123, err_attn_hc_L02 0.00111 <= 0.00773, err_swap_out 0.0187 <= 0.0830 (S.swa.15),
+  0.0218 <= 0.0825 (S.swa_engram.18).
+- What fails (all the linear's in-tile truncation, DS41-16 / DS41-41; the probe report's best is the same: L0 attn
+  6.1e-5 = 3.3 x its 1.84e-5 floor): vs CPU rel L0 attn 6.07e-5 > 3.52e-5; column bias vs CPU 25-38 x (components),
+  vs golden 3.4-16.7 x; own-floor row / column 2.1-3.2 x; swaps (fp32 inputs, x also truncated, K-30): S.swa.15
+  attn_hc 6.1e-5 > 3.5e-5, ffn_hc 2.79e-4 > 1.5e-4; S.swa_engram.18 ffn_hc 3.14e-4 > 2.8e-4. Swaps also fail router
+  and kv own-floor checks (not hc; as before this task).
+- Left for the owner: waive the hc steps' vs-CPU / column-bias checks (DS41-41), or pick round_tf32(x) before the hc
+  linear for fp32 inputs (halves the swap-side bias, +1.94 ms per call; not a "normal setting", not taken).
+- Re-run: the brief's gate; per test `BRINGUP_TASK=<task> scripts/run_safe_pytest.sh --run-all <test>`.
+
+## FIX.4 overseer, attempt 5 (run1 brief FIX.4.overseer.5): hc_fn rounded to the 9 bits HiFi4 multiplies in srcA
+- Found the linear's bias (DS41-42, corrects DS41-41): at HiFi4 the FPU multiplies 9 explicit mantissa bits of matmul
+  in1 (srcA), all 10 of TF32 in in0 (srcB). hc_fn^T sits in in1, so its TF32 10th bit was truncated: mixes bias
+  -3.46e-4 with TF32-exact operands (probe_008.py). W in in0 or W rounded to 9 bits: 8e-5, bias +3e-5.
+- Change: tt/common.fpu_weight rounds to nearest-even at 9 bits when FP32_WEIGHT_ROUND=srca (new value; default and
+  max_precision); rne (TF32, attempts 3/4) and truncate stay selectable. Load time only. tt/mhc.py: comments only.
+  No fork changed (mhc_pre_xing(deepseek=True) from attempt 3 stays).
+- Stage numbers (golden inputs, chunk 1; L0 attn / L0 ffn / L1 attn / L1 ffn / L2 attn; probe_009.py), rne -> srca:
+  device mixes vs fp64 3.4e-4..3.9e-4 (bias -2.8e-4..-3.4e-4) -> 7.5e-5..1.5e-4 (bias +1.9e-5..+6.6e-5); step vs
+  the CPU step 6.07e-5 / 1.08e-4 / 1.36e-4 / 1.50e-4 / 1.00e-4 -> 1.07e-5 / 4.44e-5 / 6.02e-5 / 6.58e-5 / 5.88e-5
+  (limits 3.52e-5 / 1.47e-4 / 3.94e-4 / 2.84e-4 / 4.05e-4: all pass now); Sinkhorn alone 6.5e-8..7.6e-8; fp32-mantissa
+  streams 1.19e-4..3.04e-4 -> 5.9e-5..1.56e-4. Table in known_issues_detail.md (DS41-42).
+- RMS statistic (owner note), per-chip sum of x^2 vs fp64, [1024, 10240] fp32 per chip (probe_007.py): today's
+  mhc_pre_xing_pack rel 4.7e-7 (bf16-valued) / 1.0e-7 (fp32 mantissas), 0.119 ms incl. packing the mix row;
+  ttnn.rms_norm_pre_all_gather does not fit L1 at this width in fp32 (dataflow_buffer.cpp:2695), on 4 column
+  blocks 7.7e-8 / 2.3e-8, 0.247 ms; ttnn.bringup.rms_norm whole norm 0.29 ms, its statistic as implied by y rel
+  7.6e-4 (incl. its y multiply). The statistic is already exact (its rsqrt error 2e-7 vs the tightest floor 1.8e-5)
+  and on the default path the rsqrt is inside mhc_pre_xing (no multiply / add / ttnn.rsqrt chain): the fork was not
+  extended (a second read of x per call, no accuracy to gain). ttnn.rsqrt is only on the `fpu` A/B path, accurate.
+- Gate (each test run alone too): every err_* passes (attn L0 0.00123, ffn L0 0.00124, attn L1 0.00126, ffn L1
+  0.00132, attn L2 0.00111; err_swap_out 0.0186 / 0.0218). Component vs-CPU rel all pass; they fail only the own-floor
+  checks: column bias 5.0 / 6.9 / 7.7 / 5.5 x (L0 ffn / L1 attn / L1 ffn / L2 attn), L0 attn row 2.5 x, column 22
+  2.7 x, its bias 23 x (+1.38e-4 of rms; host 9-bit rounding alone +1.6e-4), vs golden column 10 bias 2.6 x. Swaps:
+  S.swa.15 ffn_hc rel 1.95e-4 > 1.5e-4 (was 2.79e-4; fp32 h_mid truncated to TF32 on unpack, K-30), own-floor
+  col / row; S.swa_engram.18 attn_hc / ffn_hc rel pass (1.28e-4, 1.49e-4; ffn was 3.14e-4 > 2.8e-4), own-floor
+  col / row fail; router and kv own-floor checks fail as before (not hc).
+- What remains needs the owner's waiver: the weight's fixed per-column rounding (any FPU weight format; host alone
+  TF32 9e-5..1.7e-3, 9 bits 1.9e-4..1.8e-3 of rms) needs an exact fp32 weight = a split matmul (owner: no).
+- Re-run: the brief's gate; A/B `DS41_FP32_WEIGHT_ROUND=rne`; probes:
+  `scripts/tt-probe.sh mhc_ds41_fix4 < tests/ttnn/unit_tests/operations/mhc_ds41_fix4/probes/probe_00{7,8,9}.py`.
+
+## FIX.4 fix, attempt 101 (run1 brief FIX.4.fix.101): no code change; what remains is the device floor (DS41-43)
+- Tree = attempt 5 (FP32_WEIGHT_ROUND=srca, HC_SINKHORN=sfpu_fp32 = mhc_pre_xing(deepseek=True)). Nothing changed in
+  tt/ or the forks. Gate test 1 re-run: bit-identical to the 16:27 log. err_attn_hc_L00 0.00123 <= 0.00247 ok; vs CPU
+  rel 1.07e-5 <= 3.52e-5 ok. It fails only the own-floor checks: row 900 2.51 x, column 22 2.68 x, column 22 bias
+  +1.38e-4 of rms 23.4 x; vs golden column 10 bias 2.57 x.
+- Stage by stage, L0 attn_hc chunk 1, golden inputs (probe_010.py), device / host emulation of the 9-bit weight alone /
+  device vs emulation:
+  - sum x^2: exact (4.7e-7, attempt 5). Mixes vs fp64: 7.46e-5 / 4.99e-5 / 5.63e-5 (FPU accumulation, column means
+    -1.2e-5..-4.0e-5 of rms).
+  - Sinkhorn (SFPU fp32) vs a CPU fp32 Sinkhorn on the device's mixes: row 900 1.25e-7 (exact).
+  - Step vs CPU: 1.07e-5 / 7.85e-6 / 1.04e-5. Column 22 bias +1.38e-4 / +1.57e-4 / -1.8e-5 (the weight's rounding).
+    Row 900: 1.34e-4 / 3.96e-5 / 9.47e-5 (median row 1.6e-5). Its mixes error 1.47e-2 is below the median row's
+    2.88e-2: ordinary FPU accumulation that this row's Sinkhorn amplifies.
+- The test that settles it (CPU, the gate's own Expect and floor; cpu/weight_floor_cpu.py). A perfect device whose
+  only error is hc_fn's rounding fails the vs-CPU column-bias check:
+  - TF32 rne (the most an FPU source holds) at 4 of 5 steps: 5.3 / 2.9 / 1.65 ok / 4.1 / 7.4 x.
+  - 9 bits (today) at 5 of 5: 26.5 / 11.3 / 5.9 / 5.2 / 3.6 x, plus the vs-golden check at L0 attn col 10, 2.8 x.
+  - 11 bits at 2 of 5. 12 bits passes everything.
+  So no single-pass FPU weight passes the checks; only a split / exact matmul would (owner: no). REPORT.md agrees:
+  SFPU ops are fp32-exact, the FPU is the limit, and fidelity / fp32 acc / packer_l1_acc change nothing.
+- Answer: disagree. Waiver requested for the hc steps' own-floor row / column / bias checks. Owner option, not taken:
+  swap the operands so hc_fn sits in in0 / srcB at full TF32. Columns would improve on 4 of 5 steps but still fail,
+  and fp32 x would then lose a bit in srcA (K-30).
+- Re-run: `PYTHONPATH=$PWD python tests/ttnn/unit_tests/operations/mhc_ds41_fix4/cpu/weight_floor_cpu.py 0 5` (CPU,
+  ~25 min); `scripts/tt-probe.sh mhc_ds41_fix4 < tests/ttnn/unit_tests/operations/mhc_ds41_fix4/probes/probe_010.py`.
+
+## FIX.4 fix, attempt 102 (run1 brief FIX.4.fix.102): no code change; bookkeeping of attempt 101 fixed; answer disagree
+- Reverted the out-of-scope file: weight_floor_cpu.py moved out of the repo to
+  /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/evidence/FIX.4/ (its code is also in
+  known_issues_detail.md, DS41-43 section). Re-run: `PYTHONPATH=$PWD python <that path> 0 5` (CPU, ~25 min).
+- known_issues DS41-43 shortened to <= 600 chars; its detail heading now equals the entry title
+  (`python3 -m models.demos.common.bringup.knowledge.check --model-dir models/demos/deepseek_v41_flash_d_p`: clean).
+- Tree = attempt 5 (FP32_WEIGHT_ROUND=srca, HC_SINKHORN=sfpu_fp32). Each gate test run alone (logs
+  /tmp/fix4_102/): numbers bit-identical to attempts 5 / 101. err_attn_hc_L00 0.00123 <= 0.00247, err_ffn_hc_L00
+  0.00124 <= 0.00360, err_attn_hc_L01 0.00126 <= 0.00774, err_ffn_hc_L01 0.00132 <= 0.0123, err_attn_hc_L02 0.00111
+  <= 0.00773, err_swap_out 0.0186 <= 0.0830 (S.swa.15). Every component vs-CPU rel passes (1.07e-5 / 4.44e-5 /
+  6.02e-5 / 6.58e-5 / 5.88e-5 vs 3.52e-5 / 1.47e-4 / 3.94e-4 / 2.84e-4 / 4.05e-4). The pytest asserts fail only on
+  own-floor checks: vs CPU column bias L0 attn col 22 23.4 x (+row 900 2.51 x, col 22 2.68 x), L0 ffn col 4 4.99 x,
+  L1 attn col 11 6.91 x, L1 ffn col 0 7.73 x, L2 attn col 6 5.54 x; vs golden L0 attn col 10 2.57 x. Swaps (fp32
+  streams, x truncated to TF32 on unpack, K-30): S.swa.15 ffn_hc rel 1.95e-4 > 1.5e-4, own-floor bias 60 x; attn_hc
+  23.4 x; S.swa_engram.18 hc own-floor 22-43 x (rel pass); router / kv own-floor fails are not hc (as before).
+- Fresh check of the floor's premise: the official hc_mixes is `F.linear(x, hc_fn) * rsqrt` in fp32
+  (hf/inference/model.py:956; torch's default matmul is not TF32), so the floor (fp32 weights, input nudges only) is
+  right and the device's 9-bit / TF32 weight is the residual. Nothing left is a bug or a lower-precision choice at
+  HiFi4 / fp32 acc / approx off; the remaining options are owner picks (round_tf32(x) for fp32 streams, +1.94 ms
+  per call; hc_fn in in0 / srcB still fails 4 of 5 steps). Waiver requested for the hc own-floor checks.
+
+## FIX.4 fix, attempt 103 (run1 brief FIX.4.fix.103, ttnn-expert-debugger): no code change; independent check, answer disagree
+- Tree = attempt 5 (FP32_WEIGHT_ROUND=srca, HC_SINKHORN=sfpu_fp32 = mhc_pre_xing(deepseek=True)); nothing changed in
+  tt/ or the forks. Each gate test run alone (logs /tmp/fix4_103/): bit-identical to attempts 5 / 101 / 102. Every
+  err_* passes (0.00123 / 0.00124 / 0.00126 / 0.00132 / 0.00111; err_swap_out 0.0186 / 0.0218) and every component
+  vs-CPU rel passes; pytest fails only on own-floor checks (vs CPU column bias L0 attn col 22 23.4 x + row 900
+  2.51 x + col 22 2.68 x, L0 ffn col 4 4.99 x, L1 attn col 11 6.91 x, L1 ffn col 0 7.73 x, L2 attn col 6 5.54 x; vs
+  golden L0 attn col 10 2.57 x). Swaps: S.swa.15 ffn_hc rel 1.95e-4 > 1.5e-4 (fp32 h_mid, K-30) + own-floor; router /
+  kv own-floor fails are not hc.
+- The one thing not tried before: is the linear's remaining accumulation error a matmul configuration choice?
+  probe_011 (chip 0, L0 attn_hc golden x [1024, 10240] @ the 9-bit / bf16 weight, exact products) vs fp64:
+  default 8.08e-5 (bias +3.0e-5, worst column bias 1.75e-4 of rms); explicit 1D config in0_block_w 1 / 4 / 10 / 40:
+  8.08e-5 bit-identical (the partial reload is exact fp32); packer_l1_acc on: 8.2-8.3e-5. A CPU model of exact
+  tile dots + fp32 accumulation: 2.6e-7. probe_012: K = 32 (one tile) 2.1-3.1e-4; one nonzero product per dot:
+  exact; two nonzero products: rel 1.5e-4, 44 % of outputs inexact. So the error is the FPU's in-tile sum (~TF32,
+  DS41-16), not a setting: even an exact weight leaves a ~2e-4 column bias at the mixes and row 900's 2.5 x.
+- Owner note on the RMS statistic (probe_013; DS41-44): ttnn.bringup.rms_norm's r = y / x is on the TF32 grid,
+  bias +2.9e-4, rms 3.7e-4 vs fp64; today's mhc_pre_xing_pack sum 4.7e-7 (and the rsqrt inside mhc_pre_xing, SFPU
+  fp32 Newton, 5e-7). The fork sums x^2 with an FPU reduce, so a return_sum_sq option would still be ~1e-4: not "at
+  least as accurate"; not extended (as OV-10 decided). ttnn.rsqrt: only on the fpu A/B path, fast_and_approximate_mode
+  defaults to False (accurate). No hand-composed multiply / add / rsqrt chain is left on the default path.
+- Lead for the owner (not acted on: model-wide, outside this step): the official streams are bf16 (model.py:968
+  hc_post `y.type_as(x)`, default dtype bf16; the golden streams are bf16-valued), while ds41_ref.hc_post and the
+  device (tt/residual.py) keep them fp32. With bf16 streams the hc linear's x would be exact in srcB in the assembled
+  model and the swaps' K-30 truncation (S.swa.15 ffn_hc rel 1.95e-4) would go; the own-floor column bias (weight) stays.
+- Answer: disagree. Nothing left in tt/mhc.py is a bug or a lower-precision choice at HiFi4 / fp32 acc / approx off;
+  the weight's fixed rounding (DS41-43) and the FPU's in-tile sum (DS41-16) need a split / exact matmul (owner: no).
+  Waiver requested for the hc steps' own-floor row / column / bias checks (and S.swa.15 ffn_hc's rel on fp32 streams).
+- Re-run: `scripts/tt-probe.sh mhc_ds41_fix4 < tests/ttnn/unit_tests/operations/mhc_ds41_fix4/probes/probe_01{1,2,3}.py`.
