@@ -368,6 +368,126 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     )
 
 
+_FP32_EXP_MASK = 0xFF << _FP32_MANTISSA_BITS
+
+
+def _fp32_is_nan(bits: int) -> bool:
+    return (bits & _FP32_EXP_MASK) == _FP32_EXP_MASK and bits & (
+        (1 << _FP32_MANTISSA_BITS) - 1
+    )
+
+
+def _fp32_to_fp16b_special_bits() -> list[int]:
+    """fp32 bit patterns around the Float32 -> Float16_b rounding step.
+
+    The kernel rounds to nearest-even on the bit pattern (+0x7FFF + lsb, then clear
+    the low 16 bits), which is only valid for finite values: on a NaN the add can
+    carry out of the mantissa (0x7FFFFFFF -> 0x80000000, a signed zero) and the mask
+    can clear every mantissa bit a low-payload NaN had (0x7F800001 -> +inf).
+    """
+    patterns = [
+        0x7F800001,  # NaN, payload below bit 16: the mask alone leaves +inf
+        0x7F808000,  # NaN, payload bit 15: +0x7FFF carries it out, the mask leaves +inf
+        0x7FFFFFFF,  # NaN, every mantissa bit: the carry runs through the sign (-0.0)
+        0x7FFF8000,  # NaN, bits 15..22: same carry (lsb set) -> -0.0
+        0x7FC00000,  # canonical quiet NaN: unaffected today and must stay NaN
+        0x7F800000,  # +inf must stay +inf (exponent 255, zero mantissa)
+        0x7F7FFFFF,  # largest finite rounds up to +inf, as float32 -> bfloat16 does
+        0x3F808000,  # 1 + 2^-8, a tie: rounds to even (1.0)
+        0x3F818000,  # 1 + 2^-7 + 2^-8, a tie: rounds to even (1 + 2^-6)
+        0x3F80FFFF,  # just above the tie: rounds up
+        0x3F807FFF,  # just below the tie: rounds down
+        0x00800000,  # smallest normal
+        0x00000000,  # +0
+    ]
+    return patterns + [p | _FP32_SIGN_BIT for p in patterns]
+
+
+def _fp32_random_normal_bits(count: int, seed: int) -> list[int]:
+    """Random normal fp32 bit patterns (both signs, exponents 1..254, any mantissa).
+
+    Exponent 0 is left out because Dest flushes denormals; exponent 255 is covered
+    by the special patterns.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    sign = torch.randint(0, 2, (count,), generator=generator, dtype=torch.int64) << 31
+    exponent = (
+        torch.randint(1, 255, (count,), generator=generator, dtype=torch.int64)
+        << _FP32_MANTISSA_BITS
+    )
+    mantissa = torch.randint(
+        0, 1 << _FP32_MANTISSA_BITS, (count,), generator=generator, dtype=torch.int64
+    )
+    return (sign | exponent | mantissa).tolist()
+
+
+def test_eltwise_unary_typecast_fp32_to_fp16b_rounding_specials():
+    # The SFPU half of Float32 -> Float16_b rounds the fp32 word in Dest to bfloat16
+    # precision and stores it back as fp32; the packer narrows it afterwards. Read
+    # that fp32 word back as it is (Float32 L1 output): the packer's own fp32 -> bf16
+    # conversion maps NaN to infinity, so a bf16 output could not show what the SFPU
+    # left in Dest.
+    kernel_formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b)
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes  # a Float32 input needs 32-bit Dest
+    input_dimensions = [32, 32]
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    specials = _fp32_to_fp16b_special_bits()
+    assert len(specials) <= src_A.numel()
+    bits = specials + _fp32_random_normal_bits(src_A.numel() - len(specials), seed=7301)
+    src_A = torch.tensor(
+        [b - _UINT32_WRAP if b & _FP32_SIGN_BIT else b for b in bits],
+        dtype=torch.int32,
+    ).view(torch.float32)
+    # torch rounds float32 -> bfloat16 to nearest-even and overflows to inf, like the
+    # kernel; it canonicalises NaN (dropping the sign), so NaN lanes are checked apart.
+    golden_bits = [
+        g & 0xFFFFFFFF
+        for g in src_A.to(torch.bfloat16).to(torch.float32).view(torch.int32).tolist()
+    ]
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        input_dimensions,
+        src_A,
+        tile_cnt_A,
+        src_B,
+        tile_cnt_B,
+        kernel_formats=kernel_formats,
+    )
+    result = configuration.run().result
+    assert len(result) == len(
+        bits
+    ), f"expected {len(bits)} result elements, got {len(result)}"
+
+    mismatches = []
+    for b, g, r in zip(bits, golden_bits, result):
+        got = struct.unpack("<I", struct.pack("<f", r))[0]
+        if _fp32_is_nan(b):
+            # NaN in, NaN out with the input sign; the payload is not pinned.
+            ok = math.isnan(r) and (math.copysign(1.0, r) < 0) == bool(
+                b & _FP32_SIGN_BIT
+            )
+            expected = "nan" if not b & _FP32_SIGN_BIT else "-nan"
+        else:
+            ok = got == g
+            expected = hex(g)
+        if not ok:
+            mismatches.append((hex(b), expected, hex(got)))
+    assert not mismatches, (
+        f"{len(mismatches)} fp32->bf16 mismatches (input bits, expected, got): "
+        f"{mismatches[:16]}"
+    )
+
+
 def _build_typecast_config(
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,
@@ -377,7 +497,14 @@ def _build_typecast_config(
     tile_cnt_A: int,
     src_B: torch.Tensor,
     tile_cnt_B: int,
+    kernel_formats: InputOutputFormat | None = None,
 ) -> TestConfig:
+    """Build the test config for an L1 ``formats`` pair.
+
+    ``kernel_formats`` selects the SFPU typecast kernel (``typecast_tile<IN, OUT>``)
+    when it must differ from the L1 pair; by default the kernel pair is ``formats``.
+    """
+    kernel_formats = kernel_formats or formats
     # Unpack straight into Dest when either:
     #  * the input is 32-bit -- the unpacker has no SrcA/SrcB path for
     #    Int32/UInt32/Float32, so is_unpacker_format_conversion_supported_dest
@@ -409,7 +536,7 @@ def _build_typecast_config(
             # through the shared unary-SFPU dispatch; TYPECAST_FORMATS supplies the
             # (input, output) pair that selects the concrete typecast kernel.
             MATH_OP(mathop=MathOperation.Typecast),
-            TYPECAST_FORMATS(formats.input_format, formats.output_format),
+            TYPECAST_FORMATS(kernel_formats.input_format, kernel_formats.output_format),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

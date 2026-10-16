@@ -290,14 +290,33 @@ inline void calculate_typecast_fp32_to_fp16b() {
     // low 16 bits (&0xFFFF0000), and store FP32 for 32-bit-Dest correctness. The historical
     // macro relied on a FP16B store to truncate and does not reproduce the masked-FP32 result,
     // so it is not equivalent and is not restored here. See #46751.
+    //
+    // Round-to-nearest-even on the bit pattern (+0x7FFF + lsb, then clear the low 16 bits) is
+    // only valid for finite values: on a NaN the add can carry out of the mantissa
+    // (0x7FFFFFFF -> 0x80000000, a signed zero) and the mask can clear every mantissa bit a
+    // low-payload NaN had (0x7F800001 -> 0x7F800000, infinity). So the rounding runs only on
+    // lanes with exponent != 255, and NaN lanes get the quiet bit set so the mask leaves a
+    // NaN behind. Infinity lanes are left alone: 0x7F800000 survives the mask.
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x0040);  // lreg[3] = 0x00400000 (quiet-NaN bit)
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TTI_SFPSHFT(9, p_sfpu::LREG1, p_sfpu::LREG4, 5);  // lreg[4] = mantissa << 9 (sign and exponent shifted out)
+        // lreg[2] = biased exponent; LaneEnabled = exponent < 255 (finite lanes)
+        TTI_SFPEXEXP(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_NODEBIAS);
+        TTI_SFPIADD(-255 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
         TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG0, 5);                // lreg[0] = lreg[1] >> 16
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);                            // lreg[0] &= 1
         TTI_SFPIADD(0, p_sfpu::LREG13, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);  // lreg[1] += 0x7FFF
         TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);   // lreg[1] += lreg[0]
-        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);                            // lreg[1] &= 0xFFFF0000
+        // LaneEnabled = exponent == 255 (infinity or NaN)
+        TTI_SFPCOMPC(0, 0, 0, 0);
+        // LaneEnabled &= mantissa != 0 (NaN)
+        TTI_SFPSETCC(0, p_sfpu::LREG4, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);  // lreg[1] |= 0x00400000
+        // LaneEnabled = true
+        TTI_SFPENCC(0, 0, 0, 0);
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);  // lreg[1] &= 0xFFFF0000
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
     }
 }
