@@ -37,4 +37,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     watcher/test_zero_mode_guard.cpp
 )
 
-set(UNIT_TESTS_INSPECTOR_SRC inspector/test_rpc_startup.cpp)
+set(UNIT_TESTS_INSPECTOR_SRC
+    inspector/test_rpc_startup.cpp
+    inspector/test_session_per_context.cpp
+)
