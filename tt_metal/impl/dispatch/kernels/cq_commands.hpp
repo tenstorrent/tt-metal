@@ -397,10 +397,10 @@ struct CQDispatchGoSignalMcastCmd {
     uint8_t multicast_go_offset;  // Index of the multicast go to write to. CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET - no
                                   // multicast gos.
     uint8_t go_ring_slot;         // Launch message slot whose go message this go is written to.
-    uint8_t pad1;
+    uint8_t sub_device_index;     // Sub-device the go is for: selects its dispatch_s sync semaphore and go count.
     uint32_t go_signal;
     uint32_t wait_count;
-    uint32_t wait_stream;  // Index of the stream to wait on
+    uint32_t wait_stream;  // Completion counter (stream index) to wait on before sending the go
 } __attribute__((packed));
 
 struct CQDispatchNotifySubordinateGoSignalCmd {

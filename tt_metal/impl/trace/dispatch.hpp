@@ -12,6 +12,7 @@
 
 #include "core_coord.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/expected_worker_completions.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "impl/context/context_types.hpp"
 #include "sub_device_types.hpp"
@@ -54,19 +55,19 @@ struct TraceDispatchMetadata {
 void reset_host_dispatch_state_for_trace(
     uint32_t num_sub_devices,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
-    DispatchArray<uint32_t>& expected_num_workers_completed,
+    ExpectedWorkerCompletions& expected_num_workers_completed,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
-    DispatchArray<uint32_t>& expected_num_workers_completed_reset,
+    ExpectedWorkerCompletions& expected_num_workers_completed_reset,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset);
 
 void load_host_dispatch_state(
     uint32_t num_sub_devices,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
-    DispatchArray<uint32_t>& expected_num_workers_completed,
+    ExpectedWorkerCompletions& expected_num_workers_completed,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
-    DispatchArray<uint32_t>& expected_num_workers_completed_reset,
+    ExpectedWorkerCompletions& expected_num_workers_completed_reset,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset);
 
 void issue_trace_commands(
@@ -74,7 +75,7 @@ void issue_trace_commands(
     SystemMemoryManager& sysmem_manager,
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
-    const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state);
 
 uint32_t compute_trace_cmd_size(ContextId context_id, uint32_t num_sub_devices);
@@ -83,7 +84,7 @@ void update_worker_state_post_trace_execution(
     const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& trace_worker_descriptors,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
-    DispatchArray<uint32_t>& expected_num_workers_completed);
+    ExpectedWorkerCompletions& expected_num_workers_completed);
 
 std::size_t compute_interleaved_trace_buf_page_size(uint32_t buf_size, uint32_t num_banks);
 

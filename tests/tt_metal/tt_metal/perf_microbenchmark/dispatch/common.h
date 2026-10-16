@@ -1461,6 +1461,7 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"PACKED_WRITE_MAX_UNICAST_SUB_CMDS", std::to_string(num_compute_cores)},
         {"DISPATCH_S_SYNC_SEM_BASE_ADDR", "0"},
         {"MAX_NUM_WORKER_SEMS", std::to_string(DispatchSettings::DISPATCH_MESSAGE_ENTRIES)},
+        {"MAX_NUM_COMPLETION_COUNTERS", std::to_string(DispatchSettings::DISPATCH_COMPLETION_COUNTERS)},
         {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES", std::to_string(DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES)},
         {"MCAST_GO_SIGNAL_ADDR", "0"},
         {"MCAST_GO_RING_SIZE", "0"},  // The harness sends no gos.

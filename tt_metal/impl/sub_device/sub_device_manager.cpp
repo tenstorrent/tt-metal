@@ -188,6 +188,7 @@ uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const 
 }
 
 void SubDeviceManager::validate_sub_devices() const {
+    TT_FATAL(!sub_devices_.empty(), "A sub-device manager needs at least one sub-device");
     TT_FATAL(
         sub_devices_.size() <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
         "Number of sub-devices specified {} is larger than the max number of sub-devices {}",

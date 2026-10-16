@@ -57,7 +57,7 @@ struct BufferDispatchConstants {
 // to assemble dispatch commands and compute src + dst offsets
 // required to write buffer data.
 struct BufferWriteDispatchParams {
-    ttsl::Span<const uint32_t> expected_num_workers_completed;
+    ExpectedWorkerCompletions expected_num_workers_completed;
     uint32_t address = 0;
     uint32_t page_size_to_write = 0;
     uint32_t data_size_to_copy = 0;
@@ -97,7 +97,7 @@ public:
         uint32_t dst_page_index,
         uint32_t total_pages_to_write,
         uint32_t cq_id,
-        ttsl::Span<const uint32_t> expected_num_workers_completed,
+        const ExpectedWorkerCompletions& expected_num_workers_completed,
         uint32_t src_noc_xy,
         uint64_t src_addr,
         bool src_pinned,
@@ -173,7 +173,7 @@ public:
         uint32_t total_pages_to_write,  // number of partial pages
         uint32_t num_full_pages,
         uint32_t cq_id,
-        ttsl::Span<const uint32_t> expected_num_workers_completed,
+        const ExpectedWorkerCompletions& expected_num_workers_completed,
         uint32_t src_noc_xy,
         uint64_t src_addr,
         bool src_pinned,
@@ -311,7 +311,7 @@ public:
         Buffer* buffer,
         uint32_t total_pages_to_write,
         uint32_t cq_id,
-        ttsl::Span<const uint32_t> expected_num_workers_completed,
+        const ExpectedWorkerCompletions& expected_num_workers_completed,
         ttsl::Span<const SubDeviceId> sub_device_ids,
         uint32_t pinned_noc_xy,
         uint64_t pinned_addr,
@@ -491,7 +491,7 @@ using InterleavedBufferWriteDispatchParamsVariant =
 InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_params(
     const Buffer& buffer,
     uint32_t cq_id,
-    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     const BufferRegion& region,
     ttsl::Span<const SubDeviceId> sub_device_ids,
     uint32_t pinned_src_noc_xy,
@@ -738,12 +738,12 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
         for (const auto& sub_device_id : sub_device_ids) {
-            auto offset_index = *sub_device_id;
+            const uint32_t counter_index = dispatch_params.expected_num_workers_completed.counter_index(sub_device_id);
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                dispatch_params.expected_num_workers_completed[offset_index]);
+                metal_ctx.dispatch_mem_map().get_completion_stream(counter_index),
+                dispatch_params.expected_num_workers_completed[counter_index]);
         }
 
         TT_ASSERT(
@@ -986,12 +986,12 @@ void issue_buffer_dispatch_command_sequence(
 
     if (dispatch_params.issue_wait) {
         for (const auto& sub_device_id : sub_device_ids) {
-            auto offset_index = *sub_device_id;
+            const uint32_t counter_index = dispatch_params.expected_num_workers_completed.counter_index(sub_device_id);
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                dispatch_params.expected_num_workers_completed[offset_index]);
+                metal_ctx.dispatch_mem_map().get_completion_stream(counter_index),
+                dispatch_params.expected_num_workers_completed[counter_index]);
         }
     }
     if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
@@ -1156,7 +1156,7 @@ bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
     uint32_t cq_id,
-    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     CoreType dispatch_core_type,
     ttsl::Span<const SubDeviceId> sub_device_ids,
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory,
@@ -1394,7 +1394,7 @@ bool write_to_device_buffer(
 
 // Initialize Dispatch Parameters - reused across write txns
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed) {
+    Buffer& buffer, uint32_t cq_id, const ExpectedWorkerCompletions& expected_num_workers_completed) {
     // Note that the src_page_index is the device page idx, not the host page idx
     // Since we read core by core we are reading the device pages sequentially
     ShardedBufferReadDispatchParams dispatch_params;
@@ -1413,7 +1413,7 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
 }
 
 BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed) {
+    Buffer& buffer, uint32_t cq_id, const ExpectedWorkerCompletions& expected_num_workers_completed) {
     auto root_buffer = buffer.impl().root_buffer(buffer);
     const BufferRegion region = buffer.impl().root_buffer_region();
     IDevice* device = root_buffer->device();
@@ -1513,22 +1513,24 @@ void issue_read_buffer_dispatch_command_sequence(
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
+    const auto& mem_map = MetalContext::instance(context_id).dispatch_mem_map();
     uint32_t last_index = num_worker_counters - 1;
     // We only need the write barrier + prefetch stall for the last wait cmd
     for (uint32_t i = 0; i < last_index; ++i) {
-        auto offset_index = *sub_device_ids[i];
+        const uint32_t counter_index = dispatch_params.expected_num_workers_completed.counter_index(sub_device_ids[i]);
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
-            MetalContext::instance(context_id).dispatch_mem_map().get_dispatch_stream_index(offset_index),
-            dispatch_params.expected_num_workers_completed[offset_index]);
+            mem_map.get_completion_stream(counter_index),
+            dispatch_params.expected_num_workers_completed[counter_index]);
     }
-    auto offset_index = *sub_device_ids[last_index];
+    const uint32_t counter_index =
+        dispatch_params.expected_num_workers_completed.counter_index(sub_device_ids[last_index]);
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,
-        MetalContext::instance(context_id).dispatch_mem_map().get_dispatch_stream_index(offset_index),
-        dispatch_params.expected_num_workers_completed[offset_index]);
+        mem_map.get_completion_stream(counter_index),
+        dispatch_params.expected_num_workers_completed[counter_index]);
 
     // Select write op once, then unify relay
     if (use_pinned_transfer) {

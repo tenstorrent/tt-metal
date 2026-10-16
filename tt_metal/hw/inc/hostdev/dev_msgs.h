@@ -456,6 +456,10 @@ struct mailboxes_t {
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
     // Index into go_messages to use. Always 0 on unicast cores.
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) volatile uint32_t go_message_index;
+    // Quasar FDS: the go groups this core accepts, one bit per group.
+    // Gos for completion counter c arrive on group c + 1, so the host sets the bits of the core's sub-device's
+    // counters. Written together with go_message_index.
+    volatile uint32_t fds_go_group_mask;
     volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4 for
                                                            // the 4 TRISCs per engine.
     volatile uint8_t fw_shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4
@@ -484,6 +488,8 @@ static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 static_assert(offsetof(watcher_msg_t, debug_ring_buf) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
+// The host writes go_message_index and fds_go_group_mask with one 8-byte write.
+static_assert(offsetof(mailboxes_t, fds_go_group_mask) == offsetof(mailboxes_t, go_message_index) + sizeof(uint32_t));
 
 struct eth_word_t {
     volatile uint32_t bytes_sent;

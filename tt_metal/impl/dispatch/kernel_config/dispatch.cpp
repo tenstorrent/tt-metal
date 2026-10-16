@@ -151,6 +151,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_s_sync_sem_base_addr = my_dispatch_constants.get_device_command_queue_addr(
             CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
+        static_config_.max_num_completion_counters = DispatchSettings::DISPATCH_COMPLETION_COUNTERS;
         static_config_.mcast_go_signal_addr =
             descriptor_.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
         static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
@@ -196,6 +197,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.packed_write_max_unicast_sub_cmds = packed_write_max_unicast_sub_cmds;
         static_config_.dispatch_s_sync_sem_base_addr = 0;       // Unused
         static_config_.max_num_worker_sems = 1;                 // Used for array sizing, set to 1 even if unused
+        static_config_.max_num_completion_counters = 1;         // Used for array sizing, set to 1 even if unused
         static_config_.mcast_go_signal_addr = 0;                // Unused
         static_config_.distributed_dispatcher = 0;              // Unused
         static_config_.first_stream_used = 0;                   // Unused
@@ -228,6 +230,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_s_sync_sem_base_addr = my_dispatch_constants.get_device_command_queue_addr(
             CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
+        static_config_.max_num_completion_counters = DispatchSettings::DISPATCH_COMPLETION_COUNTERS;
         static_config_.mcast_go_signal_addr =
             descriptor_.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
         static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
@@ -501,6 +504,7 @@ void DispatchKernel::CreateKernel() {
         {"PACKED_WRITE_MAX_UNICAST_SUB_CMDS", std::to_string(static_config_.packed_write_max_unicast_sub_cmds.value())},
         {"DISPATCH_S_SYNC_SEM_BASE_ADDR", std::to_string(static_config_.dispatch_s_sync_sem_base_addr.value())},
         {"MAX_NUM_WORKER_SEMS", std::to_string(static_config_.max_num_worker_sems.value())},
+        {"MAX_NUM_COMPLETION_COUNTERS", std::to_string(static_config_.max_num_completion_counters.value())},
         {"MCAST_GO_SIGNAL_ADDR", std::to_string(static_config_.mcast_go_signal_addr.value())},
         // Workers report done for a go to the dispatcher that sent it.
         {"GO_DONE_NOC_X", std::to_string(my_virtual_core.x)},

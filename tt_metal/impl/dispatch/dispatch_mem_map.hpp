@@ -108,8 +108,8 @@ public:
 
     uint32_t get_dispatch_stream_index(uint32_t index) const;
 
-    // Offset to be passed in the go message.
-    uint8_t get_dispatch_message_update_offset(uint32_t index) const;
+    // Stream index of a completion counter.
+    uint32_t get_completion_stream(uint32_t counter_index) const;
 
     // Index of the first worker-completion counter reserved for cq_id's workers, in the shared
     // WORKER_COMPLETION_SEMAPHORES L1 region.

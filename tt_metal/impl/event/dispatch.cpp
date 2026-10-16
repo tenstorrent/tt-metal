@@ -51,7 +51,7 @@ void issue_record_event_commands(
     uint32_t num_command_queues,
     SystemMemoryManager& manager,
     ttsl::Span<const SubDeviceId> sub_device_ids,
-    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     bool notify_host,
     bool clear_count) {
     std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
@@ -97,7 +97,7 @@ void issue_record_event_commands(
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
-        auto offset_index = *sub_device_ids[i];
+        const uint32_t counter_index = expected_num_workers_completed.counter_index(sub_device_ids[i]);
         // recording an event does not have any side-effects on the dispatch completion count
         // hence clear_count is set to false, i.e. the number of workers on the dispatcher is
         // not reset
@@ -110,14 +110,14 @@ void issue_record_event_commands(
             command_sequence.add_dispatch_wait_with_prefetch_stall(
                 wait_flags,
                 0,
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index]);
+                metal_ctx.dispatch_mem_map().get_completion_stream(counter_index),
+                expected_num_workers_completed[counter_index]);
         } else {
             command_sequence.add_dispatch_wait(
                 wait_flags,
                 0,
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index]);
+                metal_ctx.dispatch_mem_map().get_completion_stream(counter_index),
+                expected_num_workers_completed[counter_index]);
         }
     }
 

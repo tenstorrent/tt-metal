@@ -27,8 +27,22 @@ static_assert(
     sizeof(decltype(CQDispatchCmd::notify_dispatch_s_go_signal.index_bitmask)) * CHAR_BIT);
 
 static_assert(
-    DispatchSettings::DISPATCH_MESSAGE_ENTRIES + 1 < 16,
-    "FDS reserves group zero and requires every dispatch message index to fit in a four-bit group id");
+    DispatchSettings::fds_group_for_completion_counter(DispatchSettings::DISPATCH_COMPLETION_COUNTERS - 1) < 16,
+    "FDS reserves group zero and requires every completion counter's group to fit in a four-bit group id");
+static_assert(
+    DispatchSettings::num_completion_slots(DispatchSettings::DISPATCH_MESSAGE_ENTRIES) >= 1,
+    "Every sub-device needs at least one completion slot");
+
+static_assert(
+    DispatchSettings::DISPATCH_COMPLETION_COUNTERS >= DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+    "Every sub-device needs at least one completion counter");
+
+// A go names its completion counter in go_msg_t::dispatch_message_offset, after the dispatcher adds its CQ's counter
+// block offset (DispatchMemMap::get_completion_counter_offset).
+static_assert(
+    DispatchSettings::MAX_NUM_HW_CQS * DispatchSettings::DISPATCH_COMPLETION_COUNTERS <=
+        DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET + 1,
+    "Every CQ's completion counters must fit in go_msg_t::dispatch_message_offset");
 
 static_assert(
     DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET ==
