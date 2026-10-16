@@ -343,9 +343,16 @@ def _calib(s, kind) -> float:
     return CC.calib(CC.limits(s), low)
 
 
+_STEP_CTX: dict = {}  # step -> (model, chain) of the running swap test (F79: frozen tests wrap _check_step)
+
+
 def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: bool, model=None, chain=None) -> bool:
     """F76: model = the step's precision model on the same inputs (limits vs the CPU step), chain = the step's output
-    when every swapped step runs as its precision model from the golden block input (limit vs the golden)."""
+    when every swapped step runs as its precision model from the golden block input (limit vs the golden). Called
+    with the original eight arguments: frozen swap tests patch this function with a wrapper of that signature, so the
+    two come from _STEP_CTX (F79)."""
+    if model is None and chain is None:
+        model, chain = _STEP_CTX.get(st.name, (None, None))
     from models.demos.common.bringup.testing import noise_floor as NF
 
     tag, ok = f"swap_{st.name}", True
@@ -366,7 +373,8 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         if m is None:
             print(f"note {name}: no precision model; limit {threshold(s, 'component')} (spec thresholds.component)")
             return threshold(s, "component")
-        v = NF.gate_limit(mode, NF.value(mode, m, want), NF.bf16_res(mode, want), k, want.numel())
+        # the resolution floor from the fp32 CPU step's output (the golden is already bf16: its own rounding is 0)
+        v = NF.gate_limit(mode, NF.value(mode, m, want), NF.bf16_res(mode, cpu), k, want.numel())
         metrics.record(f"{name}_limit", v)
         return v
 
@@ -578,7 +586,11 @@ def run_swap_test(
         from models.demos.common.bringup.testing import noise_floor as NF
 
         k = max(_calib(s, _step(ref, layer, n).kind) for n in swapped) if swapped else _calib(s, None)
-        mv, rv = NF.value("pcc", chain["out"], gl["out"].float()), NF.bf16_res("pcc", gl["out"].float())
+        # resolution: one bf16 rounding of an fp32 block out (the golden's is 0): the CPU last step on the same
+        # inputs when it writes the block out, else the precision-model block's out (fp32 after a CPU last step)
+        fp32_out = same_input.get(last.name) if last is not None and last.output == "out" else None
+        fp32_out = fp32_out if isinstance(fp32_out, torch.Tensor) else chain["out"]
+        mv, rv = NF.value("pcc", chain["out"], gl["out"].float()), NF.bf16_res("pcc", fp32_out.float())
         thr = NF.gate_limit("pcc", mv, rv, k, gl["out"].numel())
         print(f"note pcc_swap_out: limit {thr:.6f} = {k} x the precision model's miss {1 - mv:.3g} (bf16 {1 - rv:.3g})")
     elif thr is None:
@@ -587,25 +599,14 @@ def run_swap_test(
     metrics.record("pcc_swap_out_limit", thr)
     _, ok = compare("pcc_swap_out", seen["out"], gl["out"], "pcc", thr)
     if checks == "steps":
+        _STEP_CTX.clear()
+        for name in swapped:
+            _STEP_CTX[name] = (models.get(name), (chain or {}).get(_step(ref, layer, name).output))
         for name in swapped:
             st = _step(ref, layer, name)
             golden = gl[st.output] if st.output in gl else None
             golden = golden.float() if golden is not None and golden.is_floating_point() else golden
-            ok = (
-                _check_step(
-                    s,
-                    block_type,
-                    layer,
-                    st,
-                    seen[st.output],
-                    same_input[name],
-                    golden,
-                    bridged[name],
-                    models.get(name),
-                    (chain or {}).get(st.output),
-                )
-                and ok
-            )
+            ok = _check_step(s, block_type, layer, st, seen[st.output], same_input[name], golden, bridged[name]) and ok
         if last is not None:
             ok = _check_tail(s, ref, layer, steps, last, seen, same_input[last.name], snapshot) and ok
     accuracy_guard.note(s, ok)
