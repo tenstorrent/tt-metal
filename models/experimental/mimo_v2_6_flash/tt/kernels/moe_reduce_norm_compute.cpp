@@ -11,11 +11,13 @@
 //   h_t = y_t * w * gamma_t                        (gamma packed like the compact tiles)
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -72,17 +74,16 @@ void kernel_main() {
     constexpr uint32_t inv_hidden_bits = get_compile_time_arg_val(14);
     constexpr uint32_t eps_bits = get_compile_time_arg_val(15);
 
-    init_sfpu(cb_in, cb_out);
+    // FPU adds: the chips' bf16 copies pairwise into fp32 Dest (A + B + Dest), then the bf16-rounded sum plus the
+    // residual.
+    compute_kernel_hw_startup(cb_in, cb_in, cb_out);
     cb_wait_front(cb_res, tiles);
     for (uint32_t t = 0; t < tiles; t++) {
         cb_wait_front(cb_in, chips);
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_in);
-        add_binary_tile_init();
-        copy_tile(cb_in, 0, 0);
-        for (uint32_t c = 1; c < chips; c++) {
-            copy_tile(cb_in, c, 1);
-            add_binary_tile(0, 1, 0);
+        add_init(cb_in, cb_in, true);
+        for (uint32_t c = 0; c < chips; c += 2) {
+            add_tiles(cb_in, cb_in, c, c + 1, 0);
         }
         tile_regs_commit();
         cb_pop_front(cb_in, chips);
@@ -95,12 +96,8 @@ void kernel_main() {
 
         cb_wait_front(cb_mid, 1);
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_res);
-        copy_tile(cb_res, t, 0);
-        copy_tile_to_dst_init_short(cb_mid);
-        copy_tile(cb_mid, 0, 1);
-        add_binary_tile_init();
-        add_binary_tile(0, 1, 0);
+        add_init(cb_res, cb_mid);
+        add_tiles(cb_res, cb_mid, t, 0, 0);
         tile_regs_commit();
         cb_pop_front(cb_mid, 1);
 
