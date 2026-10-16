@@ -627,7 +627,8 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     else if constexpr (OPERATION == SfpuType::silu)
     {
         // silu_init routes to sigmoid_init<false>, seeding the reciprocal's
-        // vConstFloatPrgm0 that calculate_silu depends on.
+        // vConstFloatPrgm0 that calculate_silu depends on (and, on Blackhole,
+        // vConstFloatPrgm1 = 1/ln2 for its exp).
         llk_math_eltwise_unary_sfpu_init<OPERATION>(silu_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::log1p)
@@ -900,6 +901,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_exp2, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
+#ifndef ARCH_BLACKHOLE
     // VectorMode::RC: params drives 4 face iterations with 2×SETRWC between each —
     // the lambda processes 8 rows per face, giving 32 total.
     else if constexpr (OPERATION == SfpuType::exponential && APPROX_MODE && CLAMP_NEGATIVE)
@@ -913,6 +915,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             VectorMode::RC,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
     }
+#endif
     // Single call (else branch): calculate_exponential handles 8 or 32 iterations internally.
     else if constexpr (OPERATION == SfpuType::exponential)
     {
@@ -2374,7 +2377,8 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::snake_beta)
     {
-        // snake_beta uses sfpu_reciprocal internally; snake_beta_init forwards to sfpu_reciprocal_init.
+        // snake_beta uses sfpu_reciprocal internally; snake_beta_init forwards to sfpu_reciprocal_init
+        // (BH: Prgm0; WH: Prgm0..2) and, on Blackhole, also programs Prgm1/2 = 1/pi, pi for the range reduction.
         SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX_MODE));
     }
     else

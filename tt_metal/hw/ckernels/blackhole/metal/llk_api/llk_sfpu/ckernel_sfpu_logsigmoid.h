@@ -19,35 +19,48 @@ inline void calculate_logsigmoid(
     const uint dst_index_in1,  // Index for exp(-x)
     const uint dst_index_out)  // Index for output
 {
+    // The three lowest coefficients in Prgm0-2, written by every call: the exp that produces exp(-x) programs them in
+    // its init, which the caller runs again before that exp's next call.
+    sfpi::vConstFloatPrgm0 = 0.6924354434013367f;
+    sfpi::vConstFloatPrgm1 = 0.49275708198547363f;
+    sfpi::vConstFloatPrgm2 = 0.12142381817102432f;
+    // The four highest coefficients stay in the LRegs the row leaves free.
+    sfpi::vFloat c5 = -0.00028794066747650504f;
+    sfpi::vFloat c6 = 5.3185409342404455e-05f;
+    sfpi::vFloat c7 = 7.1853546614875086e-06f;
+    sfpi::vFloat c8 = 7.4961114648886e-08f;
+
     // logsigmoid(x) = -softplus(-x)
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr uint dst_tile_size_sfpi = 32;
 
         // Read inputs from destination registers
-        sfpi::vFloat x = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat in = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat exp_neg_x = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
         // Save original x as result; negate x since we compute softplus(-x)
-        sfpi::vFloat result = x;
-        x = -x;
+        sfpi::vFloat result = in;
+        sfpi::vFloat x = -in;
 
-        v_if(x < -4.0f) {
+        v_if(in > 4.0f) {
             // For very negative: use exp
             result = -exp_neg_x;
         }
-        v_elseif(x >= -4.0f && x < 4.0f) {
+        // in <= 4 is implied: Blackhole float compares are a sign-magnitude total order, NaN included.
+        v_elseif(x < 4.0f) {
             // Polynomial approximation for softplus(-x) in the mid-range
             result = PolynomialEvaluator::eval(
                 x,
-                0.6924354434013367f,
-                0.49275708198547363f,
-                0.12142381817102432f,
+                sfpi::vConstFloatPrgm0,
+                sfpi::vConstFloatPrgm1,
+                sfpi::vConstFloatPrgm2,
                 0.0031102809589356184f,
                 -0.00330807245336473f,
-                -0.00028794066747650504f,
-                5.3185409342404455e-05f,
-                7.1853546614875086e-06f,
-                7.4961114648886e-08f);
+                c5,
+                c6,
+                c7,
+                c8);
             result = -result;
         }
         v_endif;

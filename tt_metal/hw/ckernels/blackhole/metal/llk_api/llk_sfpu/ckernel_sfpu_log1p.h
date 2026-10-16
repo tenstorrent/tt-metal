@@ -48,8 +48,9 @@ namespace sfpu {
 // Inputs with 1 + a < 0 fall through to the default NaN.
 // The boundary case u == 0 (a == -1) is outside the 2^k * t derivation above;
 // it still evaluates to -inf via the same bit-level reduction path.
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
+// c is a coefficient of the fp32 polynomial; calculate_log1p passes it in a register, the other callers as a literal.
+template <bool is_fp32_dest_acc_en, typename C = float>
+sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a, C c = 0x1.b84p-4f) {
     sfpi::vFloat u = a + 1.0f;
     sfpi::vFloat r = std::numeric_limits<float>::quiet_NaN();
 
@@ -93,7 +94,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
 
             m = m + t;
             r = -0x1.92cp-5f;
-            r = r * m + 0x1.b84p-4f;
+            r = r * m + c;
             r = r * m + -0x1.0c4p-3f;
             r = r * m + 0x1.274p-3f;
             r = r * m + -0x1.55p-3f;
@@ -136,9 +137,10 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
  */
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_log1p() {
+    const sfpi::vFloat c = 0x1.b84p-4f;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+        sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0], c);
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }

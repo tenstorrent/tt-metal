@@ -31,8 +31,18 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lgamma_stirling_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_lgamma_stirling,
+        (APPROX, is_fp32_dest_acc_en, 32),
+        idst,
+        VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_lgamma_stirling, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC));
+#endif
 }
 
 /**
@@ -64,6 +74,17 @@ ALWI void lgamma_stirling_tile_init() {
 
 // clang-format on
 ALWI void lgamma_stirling_float_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_lgamma_stirling_fp32,
+        (APPROX, 32),
+        idst0,
+        idst1,
+        idst2,
+        VectorMode::None));
+#else
     MATH(SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -73,6 +94,7 @@ ALWI void lgamma_stirling_float_tile(uint32_t idst0, uint32_t idst1, uint32_t id
         idst1,
         idst2,
         VectorMode::RC));
+#endif
 }
 
 /**
@@ -106,6 +128,18 @@ ALWI void lgamma_stirling_float_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lgamma_adjusted_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t idst3) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_TERNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_lgamma_adjusted,
+        (APPROX, is_fp32_dest_acc_en, 32),
+        idst0,
+        idst1,
+        idst2,
+        idst3,
+        VectorMode::None));
+#else
     MATH(SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -116,6 +150,7 @@ ALWI void lgamma_adjusted_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, u
         idst2,
         idst3,
         VectorMode::RC));
+#endif
 }
 
 /**

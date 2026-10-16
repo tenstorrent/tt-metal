@@ -7,6 +7,8 @@
 
 #include <cstdint>
 #include <limits>
+#include <utility>
+#include <type_traits>
 
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
@@ -101,23 +103,69 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
     return _sfpu_exp_21f_bf16_unsafe_<is_fp32_dest_acc_en>(val, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
 }
 
+// exp_21f constants. The one-argument _sfpu_exp_21f_bf16_(val) materialises them per call; callers that
+// evaluate exp inside a row loop pass them in through the five-argument overload instead, built once before
+// the loop (sfpi (through 7.84.0) never hoists an SFPLOADI literal out of a loop on its own, so each fp32 literal
+// otherwise costs an SFPLOADI pair per row). Same values either way: the two forms are bit-identical.
+constexpr float EXP_21F_ONE_LN2 = 1.4426950216293334961f;  // 0x3FB8AA3B
+constexpr float EXP_21F_C0 = EXP_21F_BF16_C0;
+constexpr float EXP_21F_C1 = EXP_21F_BF16_C1;
+constexpr float EXP_21F_C2 = EXP_21F_BF16_C2;
+
+// A loop constant a kernel keeps in an LReg when COND, and a plain float otherwise. Kernels whose arms
+// (bf16 / fp32 dest) hoist different constants declare all of them before the loop with the arm's condition,
+// so the arm that never reads one pays nothing: a float is folded away, an sfpi::vFloat is an SFPLOADI pair
+// per call. sfpi cannot spill, so each kernel hoists only what fits beside its live data -- one LReg too
+// many is a compile error ("too few lregs"), never a slowdown. Declare these non-const: a const vFloat
+// that lives across a partially unrolled loop makes sfpi (through 7.84.0) try to spill it ("cannot write SFPU
+// object to memory").
+template <bool COND>
+using HoistedIf = std::conditional_t<COND, sfpi::vFloat, float>;
+
+// The unary kernel on an interleaved input defines SFPU_UNARY_LITERAL_CONSTANTS: there the shorter rows of sigmoid,
+// silu, softplus and tanhshrink with registered constants make the DRAM-bound op slower, so they keep literals.
+#ifdef SFPU_UNARY_LITERAL_CONSTANTS
+constexpr bool sfpu_unary_registered_constants = false;
+#else
+constexpr bool sfpu_unary_registered_constants = true;
+#endif
+
+// Programs vConstFloatPrgm1 = 1/ln2 for the hoisted-constant exp callers (sigmoid, silu, mish), which read
+// it on every row. 1/ln2 is the same fp32 (0x3FB8AA3B) as the Juffa fp32 exp's log2(e),
+// so one register serves a kernel's bf16 and fp32 arms. Prgm0 is left alone (sfpu_reciprocal_init's 2.0f,
+// which those kernels' Newton step needs), and Prgm2 deliberately so: fused kernels run sigmoid/silu with
+// one init before a loop that interleaves other SFPU code, and the MoE gate kernels
+// (ckernel_sfpu_generalized_moe_gate_topk_single_face.h, ckernel_sfpu_generic_moe_gate_topk.h) write
+// LREG14 = Prgm2 there. So the contract those kernels already keep for Prgm0 extends to Prgm1 only.
+inline void _init_exp_hoisted_prgm_consts_() { sfpi::vConstFloatPrgm1 = EXP_21F_ONE_LN2; }
+
 /*
  * This function implements the exponential function using a polynomial approximation algorithm
  * based on "Simple Multiple Precision Algorithms for Exponential Functions [Tips & Tricks]"
  * by Moroz et al. 2022 (https://doi.org/10.1109/MSP.2022.3157460).
  * More specifically, it is the implementation of the `exp_21f` algorithm described in Section 5
  *
- * @param val The input value (sfpi::vFloat vector), can be any floating point number
+ * This overload takes the four constants from the caller (see EXP_21F_* above). Each may be a float
+ * (materialised by SFPLOADI where it is used, exactly as a literal would be) or an sfpi::vFloat /
+ * vConstFloatPrgmN the caller holds across its row loop. The arithmetic is identical either way; only the
+ * source of the constants differs. The constants are template-typed rather than plain sfpi::vFloat on
+ * purpose: a vFloat parameter is built before the call and stays live through the body, which reorders
+ * the SFPLOADIs of the non-hoisting callers (their codegen would no longer be identical) and costs an
+ * LReg per constant for the whole body.
+ *
+ * @param val     The input value (sfpi::vFloat vector), can be any floating point number
+ * @param one_ln2 1/ln(2) (EXP_21F_ONE_LN2)
+ * @param c0      Constant term of the 2**x_f refinement polynomial (EXP_21F_C0)
+ * @param c1      Linear coefficient of that polynomial (EXP_21F_C1)
+ * @param c2      Quadratic coefficient of that polynomial (EXP_21F_C2)
  *
  * @return sfpi::vFloat Result of exp(val)
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-// Like the unsafe overload, accepts EXP_21F_BF16_C0..C2 as floats or preloaded
-// vFloats. A fused caller can retain them across its loop without changing the clamp.
-template <bool is_fp32_dest_acc_en, typename C0, typename C1, typename C2>
-sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, C0 c0, C1 c1, C2 c2) {
+template <bool is_fp32_dest_acc_en, typename K, typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, K one_ln2, C0 c0, C1 c1, C2 c2) {
     // This function computes exp(x) by leveraging mathematic properties of exp(x):
     // That is, exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
     // - z_i = trunc(x / ln2) (integer part)
@@ -132,8 +180,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, C0 c0, C1 c1, C2 
     // This formula prepares for the computation of exp(x) = 2^(x/log(2))
     //
     // In our case, we will let the multiplication by 2^23 be done implicitly in _float_to_int32_exp21f_ function
-    constexpr float ONE_LN2 = 1.4426950216293334961f;
-    sfpi::vFloat xlog2 = (val * ONE_LN2 + 127.f);
+    sfpi::vFloat xlog2 = (val * one_ln2 + 127.f);
 
     // Intermediary values can overflow in xlog2 is outside of [0, 256[ which leads to invalid results instead of 0
     // (when input < -88.5) and +inf (when input > 88.5)
@@ -167,9 +214,26 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, C0 c0, C1 c1, C2 
     return y;
 }
 
+// For callers that keep 1/ln2 a literal and hold only c0..c2.
+template <bool is_fp32_dest_acc_en, typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, C0 c0, C1 c1, C2 c2) {
+    return _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val, EXP_21F_ONE_LN2, c0, c1, c2);
+}
+
+// exp_21f with every constant a literal; see the five-argument overload above.
+// @param val The input value (sfpi::vFloat vector), can be any floating point number
+// @return sfpi::vFloat Result of exp(val)
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
-    return _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
+    return _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val, EXP_21F_ONE_LN2, EXP_21F_C0, EXP_21F_C1, EXP_21F_C2);
+}
+
+// Row-loop form of _sfpu_exp_21f_bf16_: 1/ln2 from vConstFloatPrgm1 (the kernel's init must have run
+// _init_exp_hoisted_prgm_consts_()), c0..c2 from the caller -- each an sfpi::vFloat built once before the
+// loop, or a float literal where the caller's LRegs are all spoken for.
+template <bool is_fp32_dest_acc_en, typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_prgm_(sfpi::vFloat val, C0 c0, C1 c1, C2 c2) {
+    return _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val, sfpi::vConstFloatPrgm1, c0, c1, c2);
 }
 
 /*
@@ -367,29 +431,44 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+// Juffa exp constants that the hoisted-constant overload below takes from its caller (see EXP_21F_*
+// for the rationale). LOG2E is the same fp32 as EXP_21F_ONE_LN2, so one Prgm register can serve both exps.
+constexpr float EXP_FP32_LOG2E = EXP_21F_ONE_LN2;  // log2(e) == 1/ln(2), 0x3FB8AA3B
+constexpr float EXP_FP32_NEG_LN2_HI = -6.93145752e-1f;
+constexpr float EXP_FP32_P0 = 1.37805939e-3f;
+constexpr float EXP_FP32_P1 = 8.37312452e-3f;  // 0x1.125edcp-7
+
 // Non-finite behaviour of the guarded form (unsafe = false), measured on Blackhole silicon:
 //   +-NaN (either sign, quiet or signalling) -> NaN    +Inf -> +Inf    -Inf -> +0
 // unsafe = true drops both guards and preserves none of this.
-template <bool unsafe = false>
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+//
+// This overload takes log2(e), -ln2_hi and the two leading polynomial coefficients from the caller, each
+// either a float (materialised where used, as a literal is) or a vFloat / vConstFloatPrgmN held across a
+// row loop. They are template-typed rather than plain sfpi::vFloat for the reason given at
+// _sfpu_exp_21f_bf16_, and here it bit: vFloat parameters stay live through the body, which pushed
+// tanhshrink's fp32 path (this exp inside its large-|x| branch, with x, |x| and the result live) past the
+// eight LRegs ("too few lregs"). _sfpu_exp_fp32_accurate_(a) below passes the literals and is what
+// everything not hoisting reads.
+template <bool unsafe = false, typename K, typename H, typename P0, typename P1>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a, K log2e, H neg_ln2_hi, P0 p0, P1 p1) {
     sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
     sfpi::vSMag16 sm;
 
     // j = round(a / ln2)
     // interleaved with first coefficient of polynomial
-    j = 1.442695f * a;
-    r = 1.37805939e-3f;
+    j = log2e * a;
+    r = p0;
     sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
     j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
     // f = a - i*j (two-part cody-waite)
-    f = j * -6.93145752e-1f + a;
+    f = j * neg_ln2_hi + a;
     f = j * -1.42860677e-6f + f;
 
     // approximate r = exp(f) on [-ln2/2, ln2/2]
     // interleaved with conversion of i from sign-mag to two's complement via abs and copysgn
-    r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
+    r = r * f + p1;
     r = r * f + 4.16695364e-2f;  // 0x1.555b5ap-5
     r = r * f + 1.66664720e-1f;  // 0x1.555450p-3
     r = r * f + 4.99999851e-1f;  // 0x1.fffff6p-2
@@ -421,6 +500,19 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     }
 
     return y;
+}
+
+template <bool unsafe = false>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+    return _sfpu_exp_fp32_accurate_<unsafe>(a, EXP_FP32_LOG2E, EXP_FP32_NEG_LN2_HI, EXP_FP32_P0, EXP_FP32_P1);
+}
+
+// Row-loop form of _sfpu_exp_fp32_accurate_: log2(e) from vConstFloatPrgm1 -- the same register and bit
+// pattern as exp_21f's 1/ln2, so one _init_exp_hoisted_prgm_consts_() serves a kernel's bf16 and fp32 arms --
+// and -ln2_hi, p0, p1 from the caller (sfpi::vFloat built before the loop, or a float literal).
+template <bool unsafe, typename H, typename P0, typename P1>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_prgm_(sfpi::vFloat a, H neg_ln2_hi, P0 p0, P1 p1) {
+    return _sfpu_exp_fp32_accurate_<unsafe>(a, sfpi::vConstFloatPrgm1, neg_ln2_hi, p0, p1);
 }
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
@@ -464,6 +556,26 @@ sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val) {
     v_endif;
 
     return val;
+}
+
+// Every LOADMACRO carries its DEST row offset as an immediate because ADDR_MOD_7 does not increment.
+template <int VEC, int N>
+sfpi_inline void _exp_approx_clamped_sanitise_vector_() {
+    // The SWAP needs a delay slot, so an SFPNOP follows every LOADMACRO but the last.
+    TTI_SFPLOADMACRO(4 | (VEC & 3), 0, ADDR_MOD_7, 2 * VEC);
+    if constexpr (VEC + 1 < N) {
+        TTI_SFPNOP;
+    }
+}
+
+template <int... VEC>
+sfpi_inline void _exp_approx_clamped_sanitise_pass_(std::integer_sequence<int, VEC...>) {
+    (_exp_approx_clamped_sanitise_vector_<VEC, static_cast<int>(sizeof...(VEC))>(), ...);
+}
+
+template <int... VEC>
+sfpi_inline void _exp_approx_clamped_exp_pass_(std::integer_sequence<int, VEC...>) {
+    (TTI_SFPLOADMACRO(VEC & 3, 0, ADDR_MOD_7, 2 * VEC), ...);
 }
 
 template <bool SCALE_EN, bool is_fp32_dest_acc_en>
@@ -510,9 +622,21 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             sfpi::dst_reg++;
         }
 #else
-        // Code below is hand-unrolled for 8 iterations
-        // so it doesn't respect ITERATIONS. TODO: tt-llk#1486
-        // static_assert(ITERATIONS == 8);
+        static_assert(
+            ITERATIONS == 8 || ITERATIONS == 32,
+            "The clamped approximate exponential processes 8 vectors (one face) or 32 (a whole tile) per call.");
+        if constexpr (ITERATIONS == 32) {
+            _exp_approx_clamped_sanitise_pass_(std::make_integer_sequence<int, 32>{});
+            _exp_approx_clamped_exp_pass_(std::make_integer_sequence<int, 32>{});
+            // The last macro's store lands after its LOADMACRO; drain it before the caller's next SFPU op.
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            return;
+        }
+
+        // Code below is hand-unrolled for 8 iterations.
 
         // Sanitize the input values by loading from DEST, comparing against the value -88.5, and if the input value is
         // more negative than that, swap the input value with -88.5 and store back to DEST
@@ -714,18 +838,24 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
+// The false flags skip state another op of the ttnn unary chain already holds on a later tile.
 template <
     bool APPROXIMATION_MODE,
     uint32_t scale,
     bool CLAMP_NEGATIVE,
-    bool is_fp32_dest_acc_en>
+    bool is_fp32_dest_acc_en,
+    bool common_init = true,
+    bool constants = true,
+    bool upper_macros = true>
 void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
     // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
-    sfpu::_init_sfpu_config_reg();
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    if constexpr (common_init) {
+        sfpu::_init_sfpu_config_reg();
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+        math::reset_counters(p_setrwc::SET_ABD_F);
+    }
     if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
         // Algorithm is adapted from:
         //      A Fast, Compact Approximation of the Exponential Function
@@ -745,27 +875,29 @@ void exp_init() {
         //          LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
         //          LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 
-        constexpr float LN2_RECIP = 1.4426950408889634f;
-        constexpr float A = 256.0f * LN2_RECIP;
-        constexpr float B_minus_C = 32500.818359375f;
-        constexpr float THRESHOLD = -88.5f;
+        if constexpr (constants) {
+            constexpr float LN2_RECIP = 1.4426950408889634f;
+            constexpr float A = 256.0f * LN2_RECIP;
+            constexpr float B_minus_C = 32500.818359375f;
+            constexpr float THRESHOLD = -88.5f;
 
-        constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
+            constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
 
-        constexpr float A_scaled = A * scale_fp32;
-        constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
+            constexpr float A_scaled = A * scale_fp32;
+            constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
 
-        TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
-        TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
+            TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
+            TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
+            TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
 
-        TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
-        TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
+            TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
+            TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
+            TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
 
-        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
-        TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
+            TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
+            TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+            TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
+        }
 
 #ifndef DISABLE_SFPLOADMACRO
         // Next, set up the macro instructions which will be necessary
@@ -799,50 +931,55 @@ void exp_init() {
         // instruction register 1, which is Macro Instruction Register 5
         TTI_SFPMAD(12, 0, 13, 13, 0);  // MACRO Instruction 1 <--- lreg X = lreg[12] (A) * lreg[0] (y) + lreg[13] (B-C)
 
-        // Backdoor load of Macro Instruction 2
-        // ROUND instruction to convert FP32 result into an integer value (int16)
-        //                Stochastic = 0,  Imm(Descale),  SrcB(unused),   SrcC(input value),  Lreg_dest = 14 to install
-        //                in Programmable Macro Instruction reg 2'b10,  instr_mod1 = 14 to treat input as fp32, output
-        //                as unsigned int16, use imm as descale
-        TTI_SFP_STOCH_RND(0, 0, 0, 0, 14, 14);  // Round to unsigned Int16
+        if constexpr (upper_macros) {
+            // Backdoor load of Macro Instruction 2
+            // ROUND instruction to convert FP32 result into an integer value (int16)
+            //                Stochastic = 0,  Imm(Descale),  SrcB(unused),   SrcC(input value),  Lreg_dest = 14 to
+            //                install in Programmable Macro Instruction reg 2'b10,  instr_mod1 = 14 to treat input as
+            //                fp32, output as unsigned int16, use imm as descale
+            TTI_SFP_STOCH_RND(0, 0, 0, 0, 14, 14);  // Round to unsigned Int16
 
-        // Backdoor load of Macro Instruction 3
-        // If using the unsigned int rounding mode, then shift by 15; SHL to move integer bits to exponent;
-        TTI_SFPSHFT(
-            15,
-            0,
-            15,
-            1);  // imm = 15 to shift left by 15 bits; lreg_c = 0 (will use macro reg); lreg_dest = 15 to install in
-                 // Programmable Macro Instruction reg 2'b11, which is Macro Instruction Register 7
+            // Backdoor load of Macro Instruction 3
+            // If using the unsigned int rounding mode, then shift by 15; SHL to move integer bits to exponent;
+            TTI_SFPSHFT(
+                15,
+                0,
+                15,
+                1);  // imm = 15 to shift left by 15 bits; lreg_c = 0 (will use macro reg); lreg_dest = 15 to install in
+                     // Programmable Macro Instruction reg 2'b11, which is Macro Instruction Register 7
 
-        // So at this point, we have the following instructions loaded into our macro registers:
-        //
-        // 00: (no macro instruction, just execute whatever is issued from Tensix) <-- these are fixed / not
-        // programmable 01: ( Rsvd                                                            ) <-- these are fixed /
-        // not programmable 02: ( NOP                                                             ) <-- these are fixed
-        // / not programmable 03: ( SFPSTORE                                                        ) <-- these are
-        // fixed / not programmable 04: TTI_SFPSWAP       (0, 0, 11, 1) 05: TTI_SFPMAD        (12, 0, 13, 13, 0) 06:
-        // TTI_SFP_STOCH_RND (1, 0, 0, 0, 14, 14) 07: TTI_SFPSHFT       (15,0,15,1)
+            // So at this point, we have the following instructions loaded into our macro registers:
+            //
+            // 00: (no macro instruction, just execute whatever is issued from Tensix) <-- these are fixed / not
+            // programmable 01: ( Rsvd                                                            ) <-- these are fixed
+            // / not programmable 02: ( NOP                                                             ) <-- these are
+            // fixed / not programmable 03: ( SFPSTORE                                                        ) <--
+            // these are fixed / not programmable 04: TTI_SFPSWAP       (0, 0, 11, 1) 05: TTI_SFPMAD        (12, 0, 13,
+            // 13, 0) 06: TTI_SFP_STOCH_RND (1, 0, 0, 0, 14, 14) 07: TTI_SFPSHFT       (15,0,15,1)
 
-        // Now we want to set up our two sequences
+            // Now we want to set up our two sequences
 
-        // Sequence 1 setup: we want to Load, SWAP, <delay>, Store
-        //       Delay slot:                  0     1        2
-        //                                                                                                                                                                                                 Use
-        //                                                                                                                                                                                                 Loaded  Result          Macro
-        //                                                                                                                                                                                                 Value   Value   Delay   Instruction
-        //                                                                                                                                                                                                 SRCB    Stage   Slot    Select
-        TTI_SFPLOADI(
-            0,
-            0xA,
-            0x0004);  // slot1 : SIMPLE UNIT, want SWAP  instruction which is in macro instruction mux[4], delayed by 0
-                      // ; not using staging flop as dest; not using load reg as srcb : 8'b0_______0_______000_____100
-                      // = 0x04 slot2 : MAD    UNIT, unused : 8'b0_______0_______000_____000          = 0x00
-        TTI_SFPLOADI(
-            0, 0x8, 0x1300);  // slot3 : ROUND  UNIT, unused : 8'b0_______0_______000_____000          = 0x00 slot4 :
-                              // STORE  UNIT, want STORE instruction which is in macro instruction mux[3], delayed by 2
-                              // ; not using staging flop as src ; : 8'b0_______0_______010_____011          = 0x13
-        TTI_SFPCONFIG(0, 5, 0);  // SFPCONFIG Dest 5 = Macro Sequence Register 1
+            // Sequence 1 setup: we want to Load, SWAP, <delay>, Store
+            //       Delay slot:                  0     1        2
+            //                                                                                                                                                                                                 Use
+            //                                                                                                                                                                                                 Loaded  Result          Macro
+            //                                                                                                                                                                                                 Value   Value   Delay   Instruction
+            //                                                                                                                                                                                                 SRCB    Stage   Slot    Select
+            TTI_SFPLOADI(
+                0,
+                0xA,
+                0x0004);  // slot1 : SIMPLE UNIT, want SWAP  instruction which is in macro instruction mux[4], delayed
+                          // by 0 ; not using staging flop as dest; not using load reg as srcb :
+                          // 8'b0_______0_______000_____100 = 0x04 slot2 : MAD    UNIT, unused :
+                          // 8'b0_______0_______000_____000          = 0x00
+            TTI_SFPLOADI(
+                0,
+                0x8,
+                0x1300);  // slot3 : ROUND  UNIT, unused : 8'b0_______0_______000_____000          = 0x00 slot4 :
+                          // STORE  UNIT, want STORE instruction which is in macro instruction mux[3], delayed by 2
+                          // ; not using staging flop as src ; : 8'b0_______0_______010_____011          = 0x13
+            TTI_SFPCONFIG(0, 5, 0);  // SFPCONFIG Dest 5 = Macro Sequence Register 1
+        }
 
         // Sequence 0 setup: we want to Load, MAD, <delay>, ROUND, SHIFT, Store
         //       Delay slot:                  0    1        2      3      4

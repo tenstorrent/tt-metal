@@ -70,6 +70,21 @@ template <
     InputClamping input_clamping = InputClamping::ClampToNegative,
     int iterations = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_MATH)
+    if constexpr (iterations == 8) {
+        if (vector_mode == VectorMode::RC) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                calculate_exponential,
+                (approx, is_fp32_dest_acc_en, scale_en, 32, (input_clamping == InputClamping::ClampToNegative)),
+                idst,
+                VectorMode::None,
+                scale);
+            return;
+        }
+    }
+#endif
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

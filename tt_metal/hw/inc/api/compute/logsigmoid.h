@@ -26,6 +26,17 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_out) {
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_logsigmoid,
+        (APPROX, 32 /* ITERATIONS */),
+        idst_in0,
+        idst_in1,
+        idst_out,
+        VectorMode::None)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -35,6 +46,7 @@ ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_ou
         idst_in1,
         idst_out,
         VectorMode::RC)));
+#endif
 }
 
 /**

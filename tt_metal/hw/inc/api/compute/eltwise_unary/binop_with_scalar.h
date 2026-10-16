@@ -33,6 +33,16 @@ enum { ADD_UNARY = 0, SUB_UNARY = 1, MUL_UNARY = 2, DIV_UNARY = 3, RSUB_UNARY = 
 #ifndef ARCH_QUASAR
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_unary_tile(uint32_t idst, uint32_t param1) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_binop_with_scalar,
+        (APPROX, ADD_UNARY, 32 /* ITERATIONS */, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::None,
+        param1));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -41,10 +51,21 @@ ALWI void add_unary_tile(uint32_t idst, uint32_t param1) {
         idst,
         VectorMode::RC,
         param1));
+#endif
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_unary_tile(uint32_t idst, uint32_t param1) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_binop_with_scalar,
+        (APPROX, SUB_UNARY, 32 /* ITERATIONS */, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::None,
+        param1));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -53,11 +74,22 @@ ALWI void sub_unary_tile(uint32_t idst, uint32_t param1) {
         idst,
         VectorMode::RC,
         param1));
+#endif
 }
 #endif
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_binop_with_scalar,
+        (APPROX, MUL_UNARY, 32 /* ITERATIONS */, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::None,
+        param1));
+#else
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, sfpu::BinopMode::Mul>(idst, param1)));
 #else
@@ -70,11 +102,22 @@ ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
         VectorMode::RC,
         param1));
 #endif
+#endif
 }
 
 #ifndef ARCH_QUASAR
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void div_unary_tile(uint32_t idst, uint32_t param1) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_binop_with_scalar,
+        (APPROX, DIV_UNARY, 32 /* ITERATIONS */, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::None,
+        param1));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -83,10 +126,21 @@ ALWI void div_unary_tile(uint32_t idst, uint32_t param1) {
         idst,
         VectorMode::RC,
         param1));
+#endif
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_binop_with_scalar,
+        (APPROX, RSUB_UNARY, 32 /* ITERATIONS */, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::None,
+        param1));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -95,6 +149,7 @@ ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
         idst,
         VectorMode::RC,
         param1));
+#endif
 }
 
 // clang-format off
@@ -113,6 +168,16 @@ ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
 // clang-format on
 
 ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_add_int32,
+        (APPROX, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        param1));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -121,6 +186,7 @@ ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
         idst,
         VectorMode::RC,
         param1));
+#endif
 }
 
 // clang-format off
@@ -139,6 +205,16 @@ ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
 // clang-format on
 
 ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sub_int32,
+        (APPROX, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        param1));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -147,6 +223,7 @@ ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
         idst,
         VectorMode::RC,
         param1));
+#endif
 }
 #endif
 

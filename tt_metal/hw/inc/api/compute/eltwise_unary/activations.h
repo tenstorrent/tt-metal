@@ -30,6 +30,15 @@ namespace ckernel {
 */
 // clang-format on
 ALWI void hardsigmoid_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_activation,
+        (APPROX, ckernel::ActivationType::Hardsigmoid, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -37,9 +46,19 @@ ALWI void hardsigmoid_tile(uint32_t idst) {
         (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC));
+#endif
 }
 
 ALWI void hardsigmoid_tile_pack(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_activation,
+        (APPROX, ckernel::ActivationType::Hardsigmoid, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None));
+#else
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -47,6 +66,7 @@ ALWI void hardsigmoid_tile_pack(uint32_t idst) {
         (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC));
+#endif
 }
 
 /**
@@ -96,6 +116,17 @@ ALWI void softsign_tile_init() { MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_so
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_celu,
+        (APPROX, is_fp32_dest_acc_en, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        alpha,
+        alpha_recip));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -105,6 +136,7 @@ ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
         VectorMode::RC,
         alpha,
         alpha_recip));
+#endif
 }
 
 /**
@@ -160,6 +192,16 @@ ALWI void softshrink_tile_init() { MATH(SFPU_UNARY_INIT(softshrink)); }
 */
 // clang-format on
 ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_hardshrink,
+        (APPROX, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -168,6 +210,7 @@ ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 
 /**

@@ -26,6 +26,7 @@ inline void _calculate_tanh_derivative_(const int iterations)
     sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
 
     // tanh'(x) = 1 - (tanh(x))^2. SGN_RETAIN makes lut odd, and the square drops the sign.
+#pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
         sfpi::vFloat val = sfpi::dst_reg[0];

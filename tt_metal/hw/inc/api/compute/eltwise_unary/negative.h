@@ -30,15 +30,25 @@ ALWI void negative_tile_init() { MATH(SFPU_UNARY_INIT(negative)); }
  */
 // clang-format on
 ALWI void negative_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_, (APPROX, 32 /*ITERATIONS*/), idst, VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+#endif
 }
 
 #ifndef ARCH_QUASAR
 
 ALWI void negative_tile_int32(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_int_, (APPROX, 32 /*ITERATIONS*/), idst, VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_int_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+#endif
 }
 
 #endif

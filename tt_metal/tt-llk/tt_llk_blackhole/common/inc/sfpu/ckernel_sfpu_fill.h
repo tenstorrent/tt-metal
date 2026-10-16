@@ -19,6 +19,7 @@ inline void _calculate_fill_(const float value)
     // SFPU microcode
     sfpi::vFloat fill_val = value;
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::dst_reg[0] = fill_val;
@@ -34,6 +35,7 @@ inline void _calculate_fill_int_(const std::uint32_t value)
     {
         // Materialize the 32-bit immediate once, outside the loop
         sfpi::vInt fill_val = value;
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++)
         {
             sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = fill_val;
@@ -44,6 +46,7 @@ inline void _calculate_fill_int_(const std::uint32_t value)
     {
         // Materialize the 16-bit immediate once, outside the loop
         sfpi::vUInt fill_val = static_cast<std::uint16_t>(value & 0xFFFF);
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++)
         {
             sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>() = fill_val;
@@ -62,6 +65,7 @@ inline void _calculate_fill_bitcast_(const std::uint32_t value_bit_mask)
     // SFPU microcode
     sfpi::vFloat fill_val = Converter::as_float(value_bit_mask);
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::dst_reg[0] = fill_val;

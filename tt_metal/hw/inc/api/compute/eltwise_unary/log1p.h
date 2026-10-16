@@ -37,6 +37,15 @@ ALWI void log1p_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void log1p_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_log1p,
+        (APPROX, fast_and_approx, is_fp32_dest_acc_en, 32),
+        idst,
+        VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -44,6 +53,7 @@ ALWI void log1p_tile(uint32_t idst) {
         (APPROX, fast_and_approx, is_fp32_dest_acc_en),
         idst,
         VectorMode::RC));
+#endif
 }
 
 }  // namespace ckernel

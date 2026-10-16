@@ -62,6 +62,7 @@ constexpr std::array<float, ERFC_LUT_SIZE> ERFC_LUT = {{// Breakpoints
 
 template <int ITERATIONS = 8>
 inline void calculate_erfc() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         // Clamp |x| to 5.0 before evaluation (avoids extrapolation, saves one branch)

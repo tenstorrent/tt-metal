@@ -21,7 +21,7 @@ inline void calculate_prelu(const uint value) {
     // SFPU microcode
     vFloat init = Converter::as_float(value);
 
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat a = dst_reg[0];
         v_if(a < 0.0f) { a = a * init; }

@@ -113,7 +113,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
             // constant is log10(2) * 2^-23, which is not exactly representable, and
             // folding it in measured worse than the existing path.
             constexpr float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
-            result = e_float * TWO_TO_M23 + r * sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+            result = e_float * TWO_TO_M23 + r * sfpi::vConstFloatPrgm0;
         } else {
             result = e_float * sfpi::vConstFloatPrgm0 + r;
 
@@ -141,6 +141,10 @@ template <
     int ITERATIONS = 8,
     bool IS_BASE_TWO = false>
 inline void calculate_log(uint log_base_scale_factor) {
+    if constexpr (IS_BASE_TWO) {
+        // The base-two arm reads its scale from Prgm0 (log_init's constant is for the other arms).
+        sfpi::vConstFloatPrgm0 = sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, IS_BASE_TWO>(
