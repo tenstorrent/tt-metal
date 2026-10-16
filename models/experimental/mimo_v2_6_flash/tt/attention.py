@@ -34,6 +34,208 @@ from .rope import permute_heads_for_rope
 SWA_RING_TOKENS = 512
 
 
+class SwaDecodeQkv:
+    """SWA decode, users in rows 0-3: the fused qkv row [1, 1, 32, (nh + 2) * D] (L1 tiles) -> the RoPE'd query in
+    the height-sharded layout paged SDPA decode reads ([1, 32, nh, D], one [32, D] shard per user) and the RoPE'd key
+    and the value written into the users' ring slots of the BFP8 paged caches, in one launch in place of
+    nlp_create_qkv_heads_decode, two rotary_embedding_llama and two paged_update_cache.
+
+    One core per query head (it reads rows 0-3 of its head's D / 32 tiles: every user at once, so RoPE is
+    element-wise against rows 0-3 of cos / sin) and one key and one value core per user (read-modify-write of the
+    user's cache tile row: BFP8 -> bf16, the new row patched in, -> BFP8)."""
+
+    CB_X, CB_COS, CB_SIN, CB_TRANS, CB_TMP, CB_ROT, CB_CACHE, CB_C16, CB_SIG, CB_OUT8, CB_META = range(11)
+    ROLE_Q, ROLE_K, ROLE_V = 0, 1, 2
+
+    def __init__(self, plan, num_heads, head_dim, users, ring, block_size, trans_mat, sample_qkv):
+        """``trans_mat``: the decode RoPE transformation tile (torch [32, 32]); ``sample_qkv``: a fused qkv tensor of
+        the decode shape, used once to take the query layout nlp_create_qkv_heads_decode produces."""
+        device = plan.mesh_device
+        self.device = device
+        self.nh, self.d, self.users, self.ring, self.block_size = num_heads, head_dim, users, ring, block_size
+        assert head_dim % TILE == 0 and ring % block_size == 0 and block_size % TILE == 0
+        self.d_tiles = head_dim // TILE
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            sample_qkv, num_heads=num_heads, num_kv_heads=1, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        )
+        self.q_memory_config = q.memory_config()
+        self.q_shape = list(q.shape)
+        for t in (q, k, v):
+            t.deallocate(True)
+        shard_cores = ttnn.corerange_to_cores(self.q_memory_config.shard_spec.grid, row_wise=True)
+        self.q_out = ttnn.from_torch(
+            torch.zeros(self.q_shape),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=plan.replicate(),
+            memory_config=self.q_memory_config,
+        )
+        self.user_noc = [device.worker_core_from_logical_core(shard_cores[u]) for u in range(users)]
+        self.trans = ttnn.from_torch(
+            trans_mat.reshape(1, 1, TILE, TILE).to(torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=plan.replicate(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        grid = device.compute_with_storage_grid_size()
+        row_q, row_kv = 3, 4
+        assert num_heads <= grid.x and 2 * users <= grid.x
+        self.q_cores = [ttnn.CoreCoord(h, row_q) for h in range(num_heads)]
+        self.k_cores = [ttnn.CoreCoord(u, row_kv) for u in range(users)]
+        self.v_cores = [ttnn.CoreCoord(users + u, row_kv) for u in range(users)]
+        self.all_ranges = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(self.q_cores[0], self.q_cores[-1]),
+                ttnn.CoreRange(self.k_cores[0], self.v_cores[-1]),
+            ]
+        )
+        self.compute_config = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+        )
+
+    def _cbs(self, cache_dtype):
+        tile = ttnn.Tile([TILE, TILE])
+
+        def cb(index, dtype, pages):
+            page = tile.get_tile_size(dtype)
+            fmt = ttnn.CBFormatDescriptor(
+                buffer_index=index, data_format=dtype, page_size=page, tile=ttnn.TileDescriptor(tile)
+            )
+            return ttnn.CBDescriptor(total_size=pages * page, core_ranges=self.all_ranges, format_descriptors=[fmt])
+
+        n = self.d_tiles
+        bf = ttnn.bfloat16
+        return [
+            cb(self.CB_X, bf, n),
+            cb(self.CB_COS, bf, n),
+            cb(self.CB_SIN, bf, n),
+            cb(self.CB_TRANS, bf, 1),
+            cb(self.CB_TMP, bf, 2),
+            cb(self.CB_ROT, bf, n),
+            cb(self.CB_CACHE, cache_dtype, n),
+            cb(self.CB_C16, bf, n),
+            cb(self.CB_SIG, bf, 1),
+            cb(self.CB_OUT8, cache_dtype, n),
+            cb(self.CB_META, bf, 1),
+        ]
+
+    def __call__(self, xqkv, cos, sin, pos, page_table, k_cache, v_cache):
+        """xqkv rows 0-3 are the users; cos / sin [1, 1, 32, D] (DRAM tiles, rows = users' positions); pos int32 [32]
+        and page_table int32 [32, blocks] (DRAM, row-major; pos < 0 leaves that user's cache alone). Returns the
+        persistent query tensor (its users' head rows are rewritten every call; shared by every SWA layer)."""
+        for t in (xqkv, cos, sin):
+            assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16
+        assert xqkv.memory_config().buffer_type == ttnn.BufferType.L1
+        assert (
+            cos.memory_config().buffer_type == ttnn.BufferType.DRAM
+            and sin.memory_config().buffer_type == ttnn.BufferType.DRAM
+        )
+        assert (
+            pos.memory_config().buffer_type == ttnn.BufferType.DRAM
+            and page_table.memory_config().buffer_type == ttnn.BufferType.DRAM
+        )
+        cache_dtype = k_cache.dtype
+        cache_tile = ttnn.Tile([TILE, TILE]).get_tile_size(cache_dtype)
+        pos_page = pos.shape[-1] * 4
+        pt_page = page_table.shape[-1] * 4
+        n = self.d_tiles
+        kernels = []
+        roles = (
+            (self.ROLE_Q, self.q_cores, lambda i: i * n, None),
+            (self.ROLE_K, self.k_cores, lambda i: self.nh * n, k_cache),
+            (self.ROLE_V, self.v_cores, lambda i: (self.nh + 1) * n, v_cache),
+        )
+        user_noc = []
+        for c in self.user_noc:
+            user_noc += [c.x, c.y]
+        for role, cores, first, cache in roles:
+            ranges = ttnn.CoreRangeSet([ttnn.CoreRange(cores[0], cores[-1])])
+            reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+            for i, c in enumerate(cores):
+                reader_rt[c.x][c.y] = [
+                    xqkv.buffer_address(),
+                    first(i),
+                    cos.buffer_address(),
+                    sin.buffer_address(),
+                    self.trans.buffer_address(),
+                    i,
+                    pos.buffer_address(),
+                    page_table.buffer_address(),
+                    cache.buffer_address() if cache is not None else 0,
+                ]
+                writer_rt[c.x][c.y] = [
+                    i,
+                    self.q_out.buffer_address(),
+                    cache.buffer_address() if cache is not None else 0,
+                ] + user_noc
+                compute_rt[c.x][c.y] = []
+            reader_ct = [
+                role,
+                self.CB_X,
+                self.CB_COS,
+                self.CB_SIN,
+                self.CB_TRANS,
+                self.CB_CACHE,
+                self.CB_META,
+                n,
+                self.ring,
+                self.block_size,
+                pos_page,
+                pt_page,
+                cache_tile,
+            ]
+            writer_ct = [
+                role,
+                self.CB_X,
+                self.CB_ROT,
+                self.CB_META,
+                self.CB_C16,
+                self.CB_SIG,
+                self.CB_OUT8,
+                n,
+                self.users,
+                cache_tile,
+            ]
+            compute_ct = [
+                role,
+                self.CB_X,
+                self.CB_COS,
+                self.CB_SIN,
+                self.CB_TRANS,
+                self.CB_TMP,
+                self.CB_ROT,
+                self.CB_CACHE,
+                self.CB_C16,
+                self.CB_SIG,
+                self.CB_OUT8,
+                n,
+            ]
+            for name, ct, rt, config in (
+                ("swa_qkv_reader.cpp", reader_ct, reader_rt, ttnn.ReaderConfigDescriptor()),
+                ("swa_qkv_writer.cpp", writer_ct, writer_rt, ttnn.WriterConfigDescriptor()),
+                ("swa_qkv_compute.cpp", compute_ct, compute_rt, self.compute_config),
+            ):
+                kernels.append(
+                    ttnn.KernelDescriptor(
+                        kernel_source=f"{KERNEL_DIR}/attn/{name}",
+                        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                        core_ranges=ranges,
+                        compile_time_args=ct,
+                        runtime_args=rt,
+                        config=config,
+                    )
+                )
+        program = ttnn.ProgramDescriptor(kernels=kernels, cbs=self._cbs(cache_dtype), semaphores=[])
+        ttnn.generic_op([xqkv, cos, sin, self.trans, pos, page_table, k_cache, v_cache, self.q_out], program)
+        return self.q_out
+
+
 class ConcatHeads:
     """Decode SDPA output [1, B, heads, D] (bf16 tiles, interleaved) -> the concatenated heads [1, 1, B, heads * vd]
     in L1 (bf16 tiles, interleaved), without the V padding columns D > vd. With ``mask`` ([1, 1, B, 1] bf16 0 / 1
@@ -225,6 +427,7 @@ class TtMiMoAttention:
         hidden = cfg.hidden_size
         self.qkv_stream = self.o_stream = None
         self.qkv_staged = None  # set by the model: the L1 staging tensor that holds this layer's qkv weight
+        self.swa_qkv = None  # set by the model: the shared SwaDecodeQkv of the SWA layers' compact decode
         self.fabric_gather = False  # set by the model: forward_decode(compact=True) returns the un-gathered rows
         self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
         self.qkv_width = (self.nh_local + 2 * self.nkv_local) * self.head_dim
@@ -376,6 +579,24 @@ class TtMiMoAttention:
         except AssertionError:
             return None
 
+    def make_swa_qkv(self, users, block_size):
+        """A SwaDecodeQkv for this (SWA) layer's shapes, to share between the SWA layers."""
+        assert not self.split_users and self.nkv_local == 1 and self.cache_modulo is not None
+        sample = ttnn.from_torch(
+            torch.zeros(1, 1, TILE, self.qkv_width),
+            device=self.plan.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self.plan.replicate(),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        trans = ttnn.to_torch(ttnn.get_device_tensors(self.rope.transformation_mat)[0]).float().reshape(-1, TILE, TILE)
+        op = SwaDecodeQkv(
+            self.plan, self.nh_local, self.head_dim, users, self.cache_modulo, block_size, trans[0], sample
+        )
+        sample.deallocate(True)
+        return op
+
     def qkv_prefetch(self, staging, k0, k1):
         """(kernels, tensors) that stage rows [k0, k1) of this layer's decode qkv weight into ``staging`` (to add to
         a launch of the previous layer); see BankStreamMatmul.prefetch_section."""
@@ -519,25 +740,31 @@ class TtMiMoAttention:
             cur_pos = cur_pos["pos"]
         assert not self.split_users, "global layers on TP=8 need the per-chip owned positions"
         xqkv = self._decode_qkv(x, self.wqkv, self.decode_qkv_program, compact)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
-            xqkv,
-            num_heads=self.nh_local,
-            num_kv_heads=self.nkv_local,
-            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-        )
-        xqkv.deallocate(True)
-        trans = self.rope.transformation_mat
-        q_rot = ttnn.experimental.rotary_embedding_llama(q, rot_mats[0], rot_mats[1], trans, is_decode_mode=True)
-        k_rot = ttnn.experimental.rotary_embedding_llama(k, rot_mats[0], rot_mats[1], trans, is_decode_mode=True)
-        q.deallocate(True)
-        k.deallocate(True)
-
         k_cache, v_cache = kv_cache
-        update = dict(update_idxs_tensor=cur_pos, page_table=page_table, cache_position_modulo=self.cache_modulo)
-        ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
-        ttnn.experimental.paged_update_cache(v_cache, v, **update)
-        k_rot.deallocate(True)
-        v.deallocate(True)
+        fused_qkv = compact and self.swa_qkv is not None and len(rot_mats) >= 4
+        if fused_qkv:
+            # Head split, RoPE and both cache updates in one launch (rot_mats[2:4]: the raw cos / sin rows).
+            q_rot = self.swa_qkv(xqkv, rot_mats[2], rot_mats[3], cur_pos, page_table, k_cache, v_cache)
+            xqkv.deallocate(True)
+        else:
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+                xqkv,
+                num_heads=self.nh_local,
+                num_kv_heads=self.nkv_local,
+                memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            )
+            xqkv.deallocate(True)
+            trans = self.rope.transformation_mat
+            q_rot = ttnn.experimental.rotary_embedding_llama(q, rot_mats[0], rot_mats[1], trans, is_decode_mode=True)
+            k_rot = ttnn.experimental.rotary_embedding_llama(k, rot_mats[0], rot_mats[1], trans, is_decode_mode=True)
+            q.deallocate(True)
+            k.deallocate(True)
+
+            update = dict(update_idxs_tensor=cur_pos, page_table=page_table, cache_position_modulo=self.cache_modulo)
+            ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
+            ttnn.experimental.paged_update_cache(v_cache, v, **update)
+            k_rot.deallocate(True)
+            v.deallocate(True)
 
         attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_rot,
@@ -553,7 +780,8 @@ class TtMiMoAttention:
             compute_kernel_config=self.sdpa_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        q_rot.deallocate(True)
+        if not fused_qkv:
+            q_rot.deallocate(True)
         # Heads concatenated with only V's 128 real dims (the padding columns are zeros), in L1 for the o matmul.
         attn_cat = self.concat_heads(attn)
         attn.deallocate(True)

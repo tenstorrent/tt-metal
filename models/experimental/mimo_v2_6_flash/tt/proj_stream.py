@@ -12,6 +12,7 @@ block from the first core's L1 once a semaphore says it has landed.
 """
 
 import math
+import os
 
 import torch
 
@@ -99,8 +100,8 @@ class BankStreamMatmul:
     SEM_X = 0  # tiles of x the bank's loader has landed
     # prefetch_section: weight rows per transaction id and chunks in flight per core. 16 rows in flight stream at
     # ~400 GB/s alone; inside the fabric reductions 4 rows (2 x 2) keep the reduction from stretching.
-    PREFETCH_CHUNK_ROWS = 2
-    PREFETCH_CHUNKS = 2
+    PREFETCH_CHUNK_ROWS = int(os.environ.get("MIMO_PF_ROWS", 2))
+    PREFETCH_CHUNKS = int(os.environ.get("MIMO_PF_CHUNKS", 2))
 
     def __init__(self, plan, k, n, compute_kernel_config, skip_bank_core=False):
         """``skip_bank_core``: use the GROUP cores after each bank core in its row, so the bank cores stay free and
@@ -217,7 +218,7 @@ class BankStreamMatmul:
             self.cores,
             [row_bytes, self.cpb * w_tile, self.PREFETCH_CHUNK_ROWS, self.PREFETCH_CHUNKS],
             rt,
-            ttnn.ReaderConfigDescriptor(),
+            ttnn.WriterConfigDescriptor() if os.environ.get("MIMO_PF_NOC1") == "1" else ttnn.ReaderConfigDescriptor(),
         )
         return [kernel], [w, staging]
 

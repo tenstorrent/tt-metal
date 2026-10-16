@@ -139,6 +139,7 @@ class TtMiMoModel:
         self.decode_users = None
         self.norm_buffers = None
         self.qkv_staging = None
+        self.swa_qkv = None
         # Chip c's vocab shard starts at c * vocab_local: added to its local top-k ids for the device greedy.
         offsets = (torch.arange(plan.tp, dtype=torch.int32) * self.vocab_local).reshape(plan.tp, 1, 1, 1)
         self.vocab_offset = ttnn.from_torch(
@@ -186,6 +187,18 @@ class TtMiMoModel:
             nxt = self.layers[i + 1].input_norm if i + 1 < len(self.layers) else self.final_norm
             layer.set_fused_norms(self.plan, nxt, self.norm_buffers)
         self._setup_qkv_prefetch()
+        self._setup_swa_qkv()
+
+    def _setup_swa_qkv(self):
+        """One SwaDecodeQkv shared by the compact-decode SWA layers (MIMO_SWA_QKV=0 keeps the ttnn ops)."""
+        if os.environ.get("MIMO_SWA_QKV", "1") != "1" or self.decode_users > 4:
+            return
+        for layer in self.layers:
+            if not layer.is_swa or not layer.can_fuse_norms() or layer.attn.swa_qkv is not None:
+                continue
+            if self.swa_qkv is None:
+                self.swa_qkv = layer.attn.make_swa_qkv(self.decode_users, self.block_size)
+            layer.attn.swa_qkv = self.swa_qkv
 
     def _setup_qkv_prefetch(self):
         """Each fused, fabric-gathered layer stages the next SWA layer's qkv weight into one shared L1 tensor during
@@ -330,7 +343,8 @@ class TtMiMoModel:
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, self.max_batch, self.cfg.hidden_size))
         rot_mats = {
-            True: self.rope_setups["swa"].decode_rot_mats(cos_swa, sin_swa),
+            # SWA: the sharded mats plus the raw cos / sin rows (SwaDecodeQkv reads those).
+            True: (*self.rope_setups["swa"].decode_rot_mats(cos_swa, sin_swa), cos_swa, sin_swa),
             False: self.rope_setups["full"].decode_rot_mats(cos_full, sin_full),
         }
         positions = {"pos": cur_pos_tt, "pos_owned": pos_owned_tt, "owner_mask": owner_mask_tt}
@@ -343,7 +357,7 @@ class TtMiMoModel:
             x = y
         logits = self._logits(x, h)
         x.deallocate(True)
-        for t in (*rot_mats[True], *rot_mats[False]):
+        for t in (*rot_mats[True][:2], *rot_mats[False]):
             t.deallocate(True)
         if greedy_only:
             next_tokens = self.greedy_head(logits, token_input=tokens_tt)
