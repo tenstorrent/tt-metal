@@ -546,7 +546,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack": "perf_pack"},
     },
     "perf_pack_untilize": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -562,6 +562,11 @@ PERF_TEST_SCHEMAS = {
             "full_rt_dim",
             "loop_factor",
             "marker",
+            "narrow_row",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "row_num_datums",
             "tile_cnt",
             "unpack_to_dest",
         ],

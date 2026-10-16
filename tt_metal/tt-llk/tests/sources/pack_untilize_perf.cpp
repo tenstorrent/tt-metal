@@ -45,20 +45,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const std::uint32_t num_faces   = params.num_faces;
 #endif
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
-        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            0 /* transpose_of_faces */,
+            0 /* within_face_16x16_transpose */,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
             formats.unpack_A_src,
-            formats.unpack_B_src,
-            formats.unpack_A_dst,
-            formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            4 /* num_faces */,
-            4 /* num_faces */);
+            formats.unpack_A_dst);
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
         PROFILER_SYNC();
     }
 
@@ -98,6 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const std::uint32_t num_faces   = params.num_faces;
 #endif
     constexpr bool is_int_fpu_en = false;
 
@@ -105,7 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
 
         _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
-            4 /* num_faces */, formats.math);
+            num_faces, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_reconfig_remap_wrapper_(true);
@@ -123,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * TILE_NUM_FACES);
+                _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * num_faces);
                 return;
             }
 
@@ -184,6 +183,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const std::uint32_t num_faces   = params.num_faces;
 #endif
     constexpr bool UNTILIZE = true;
 
@@ -191,9 +191,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
 
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
-            formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
+            formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces /* tile_size */, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
-        _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4 /* num_faces */);
+        _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, PACK_UNTILIZE_NARROW_ROW, PACK_UNTILIZE_ROW_NUM_DATUMS>(
+            formats.pack_src, formats.pack_dst, FACE_R_DIM, num_faces);
         PROFILER_SYNC();
     }
 
@@ -206,8 +207,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile += BLOCK_CT_DIM)
                 {
-                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
-                        PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
+                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, PACK_UNTILIZE_NARROW_ROW, PACK_UNTILIZE_ROW_NUM_DATUMS>(
+                        PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, num_faces, 0 /* tile_dst_rt_offset */);
                 }
             }
         }
@@ -218,8 +219,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t i = 0; i < TILE_CNT; i += BLOCK_CT_DIM)
                 {
                     _llk_packer_wait_for_math_done_();
-                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
-                        PERF_ADDRESS(PERF_OUTPUT, i), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
+                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, PACK_UNTILIZE_NARROW_ROW, PACK_UNTILIZE_ROW_NUM_DATUMS>(
+                        PERF_ADDRESS(PERF_OUTPUT, i), formats.pack_dst, FACE_R_DIM, num_faces, 0 /* tile_dst_rt_offset */);
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }
