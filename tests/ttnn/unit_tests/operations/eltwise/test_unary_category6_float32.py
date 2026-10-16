@@ -11,6 +11,7 @@ from ttnn.comparison import ulp
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal, assert_with_ulp
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    assert_finite_matches_golden,
     assert_ftz_band,
     assert_ftz_then_ulp,
     generate_float32_bits,
@@ -72,8 +73,8 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 | sigmoid                  |                                |                                |
 | sigmoid                  | FastApproximate                | abs ≤ 0.12                     |
 | xielu                    | x > 0                          | ULP ≤ 2 vs float64             |
-|                          | x < 0                          | rtol 1e-5, atol 1e-6           |
-| softplus                 | beta * x <= -2^23              | xfail: +inf, NaN or garbage    |
+|                          | x <= 0                         | rtol 1e-5, atol 1e-6           |
+| softplus                 | beta * x <= -2^23              | xfail (#55798)                 |
 |                          | beta * x <= -87.5, golden < SNB| exactly 0                      |
 |                          | beta * x > threshold           | exact                          |
 |                          | elsewhere                      | rtol 5.1e-4                    |
@@ -124,9 +125,14 @@ def _assert_inf_matches(golden, result, label):
 
 
 def _assert_abs_within(golden, result, bound, label):
-    """|result - golden| <= bound, element-wise."""
+    """No NaN, infinities match the golden, and |result - golden| <= bound on the finite rest."""
+    assert not torch.isnan(golden).any(), f"{label}: golden contains NaN"
+    assert_finite_matches_golden(golden, result, label)
+    _assert_inf_matches(golden, result, label)
+    finite = torch.isfinite(golden)
+    golden, result, bound = golden[finite], result[finite], bound[finite]
     err = (result.double() - golden.double()).abs()
-    over = err > bound.double()
+    over = ~(err <= bound.double())
     assert not over.any(), (
         f"{label}: {int(over.sum().item())} elements exceed the bound; worst |error| {err.max().item():g} "
         f"against a bound of {bound.double()[err.argmax()].item():g}"
@@ -628,7 +634,7 @@ def test_xielu(device, alpha_p, alpha_n):
     | x > 0, ref < SNB  | exactly 0            | FTZ                                       |
     | x > 0             | ULP ≤ 2 vs float64   | multiply-add; alpha_p * x^2 overflows to  |
     |                   |                      | +inf on both sides near the top           |
-    | x < 0             | rtol 1e-5, atol 1e-6 | the terms cancel where the output crosses |
+    | x <= 0            | rtol 1e-5, atol 1e-6 | the terms cancel where the output crosses |
     |                   | vs float64           | 0 (2816 ULP at x = -1.59); up to 9.8e-6   |
     |                   |                      | relative for |x| >= 1e4                   |
 
@@ -648,8 +654,8 @@ def test_xielu(device, alpha_p, alpha_n):
     keep = positive & ~ftz
     assert_with_ulp(expected_result=golden[keep], actual_result=result[keep], ulp_threshold=2, allow_nonfinite=True)
 
-    negative = input_tensor < 0
-    assert_allclose(expected_result=golden[negative], actual_result=result[negative], rtol=1e-5, atol=1e-6)
+    non_positive = input_tensor <= 0
+    assert_allclose(expected_result=golden[non_positive], actual_result=result[non_positive], rtol=1e-5, atol=1e-6)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -699,7 +705,7 @@ def test_softplus(device, beta, threshold_val):
     assert_allclose(expected_result=golden[curve], actual_result=result[curve], rtol=5.1e-4, atol=0)
 
 
-@pytest.mark.xfail(reason="float32 softplus tail rounds beta * x / ln2 to int32 without a clamp")
+@pytest.mark.xfail(strict=True, reason="#55798: float32 softplus tail rounds beta * x / ln2 to int32 without a clamp")
 def test_softplus_tail_breakdown(device):
     """softplus(x) for beta * x <= -2^23, default beta and threshold.
 
