@@ -4,6 +4,9 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstddef>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -13,7 +16,9 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -37,6 +42,7 @@
 #include "eth_test_common.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/program/slow_dispatch.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -329,6 +335,55 @@ bool noc_reader_and_writer_kernels(
 }
 
 }  // namespace unit_tests::erisc::kernels
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+constexpr const char* SPIN_UNTIL_L1_FLAG_KERNEL =
+    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/spin_until_l1_flag.cpp";
+
+// Labels returned by llrt::eth_fw_stage_to_string().
+constexpr const char* STAGE_APP_FW = "APP_FW";
+constexpr const char* STAGE_KERNEL = "KERNEL";
+
+// Returns nullptr when the eth firmware stage breadcrumb can be observed, otherwise why it can't.
+const char* eth_fw_stage_skip_reason(MetalEnvImpl& env) {
+    if (env.get_cluster().get_target_device_type() != tt::TargetDevice::Silicon) {
+        return "eth FW stage breadcrumb needs silicon";
+    }
+    if (env.get_hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FW_STAGE) == 0) {
+        return "eth FW stage breadcrumb is not mapped on this arch";
+    }
+    return nullptr;
+}
+
+// Decoded eth firmware stage of each processor on an ethernet core, indexed by processor.
+std::vector<std::string> read_eth_fw_stages(
+    MetalEnvImpl& env, IDevice* device, const CoreCoord& logical_eth_core, HalProgrammableCoreType core_type) {
+    const auto& hal = env.get_hal();
+    const uint32_t num_slots = std::min<uint32_t>(
+        hal.get_dev_size(core_type, HalL1MemAddrType::FW_STAGE) / sizeof(uint32_t),
+        hal.get_num_risc_processors(core_type));
+    const CoreCoord virtual_core = device->ethernet_core_from_logical_core(logical_eth_core);
+    std::vector<std::string> stages;
+    for (uint32_t processor = 0; processor < num_slots; processor++) {
+        stages.push_back(llrt::eth_fw_stage_to_string(
+            llrt::read_eth_fw_stage(env, device->id(), virtual_core, core_type, processor)));
+    }
+    return stages;
+}
+
+std::array<std::pair<HalProgrammableCoreType, std::vector<CoreCoord>>, 2> eth_cores_by_type(IDevice* device) {
+    const auto active = device->get_active_ethernet_cores(true);
+    const auto inactive = device->get_inactive_ethernet_cores();
+    return {{
+        {HalProgrammableCoreType::ACTIVE_ETH, {active.begin(), active.end()}},
+        {HalProgrammableCoreType::IDLE_ETH, {inactive.begin(), inactive.end()}},
+    }};
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 namespace tt::tt_metal {
 
@@ -689,6 +744,122 @@ TEST_F(BlackholeSingleCardFixture, ActiveEthPtpTraceStamped) {
             if (trace[kExitValid] != 0) {
                 const uint64_t exit = (static_cast<uint64_t>(trace[kExitHi]) << 32) | trace[kExitLo];
                 EXPECT_GT(exit, entry) << "exit precedes entry on " << eth_noc_xy.str();
+            }
+        }
+    }
+}
+
+TEST(EthFwStage, DecodesStageValues) {
+    EXPECT_EQ(llrt::eth_fw_stage_to_string(0), "UNKNOWN/BASE_FW");
+    EXPECT_EQ(llrt::eth_fw_stage_to_string(0x45534142), "BASE_FW");
+    EXPECT_EQ(llrt::eth_fw_stage_to_string(0x494e4946), "APP_FW_INIT");
+    EXPECT_EQ(llrt::eth_fw_stage_to_string(0x50554c46), "APP_FW");
+    EXPECT_EQ(llrt::eth_fw_stage_to_string(0x4c4e524b), "KERNEL");
+    EXPECT_EQ(llrt::eth_fw_stage_to_string(0x44434241), "0x44434241 ('ABCD')");
+    EXPECT_EQ(llrt::eth_fw_stage_to_string(0x00000001), "0x00000001 ('....')");
+}
+
+TEST_F(BlackholeSingleCardFixture, EthFwStageIdleInAppFw) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+    if (const char* reason = eth_fw_stage_skip_reason(env)) {
+        GTEST_SKIP() << reason;
+    }
+
+    for (const auto& mesh_device : devices_) {
+        auto* device = mesh_device->impl().get_devices()[0];
+        for (const auto& [core_type, logical_cores] : eth_cores_by_type(device)) {
+            for (const auto& logical_core : logical_cores) {
+                const auto stages = read_eth_fw_stages(env, device, logical_core, core_type);
+                for (size_t processor = 0; processor < stages.size(); processor++) {
+                    EXPECT_EQ(stages[processor], STAGE_APP_FW) << "device " << device->id() << " eth core "
+                                                               << logical_core.str() << " processor " << processor;
+                }
+            }
+        }
+    }
+}
+
+TEST_F(BlackholeSingleCardFixture, EthFwStageKernelWhileKernelRuns) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+    if (const char* reason = eth_fw_stage_skip_reason(env)) {
+        GTEST_SKIP() << reason;
+    }
+    const auto& hal = env.get_hal();
+    auto& cluster = env.get_cluster();
+    constexpr auto ack_timeout = std::chrono::seconds(10);
+
+    for (const auto& mesh_device : devices_) {
+        auto* device = mesh_device->impl().get_devices()[0];
+        for (const auto& [core_type, logical_cores] : eth_cores_by_type(device)) {
+            if (logical_cores.empty()) {
+                continue;
+            }
+            const uint32_t num_processors = hal.get_num_risc_processors(core_type);
+            const uint32_t l1_base = hal.get_dev_addr(core_type, HalL1MemAddrType::UNRESERVED);
+            const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+            const auto ack_addr = [&](uint32_t processor) { return l1_base + (2 * processor) * l1_alignment; };
+            const auto release_addr = [&](uint32_t processor) { return l1_base + (2 * processor + 1) * l1_alignment; };
+
+            const std::vector<uint32_t> zeros(2 * num_processors * l1_alignment / sizeof(uint32_t), 0);
+            for (const auto& logical_core : logical_cores) {
+                cluster.write_core(device->id(), device->ethernet_core_from_logical_core(logical_core), zeros, l1_base);
+            }
+
+            const CoreRangeSet core_ranges{ttsl::Span<const CoreCoord>(logical_cores)};
+            Program program = CreateProgram();
+            for (uint32_t processor = 0; processor < num_processors; processor++) {
+                EthernetConfig config;
+                config.eth_mode = core_type == HalProgrammableCoreType::IDLE_ETH ? Eth::IDLE : Eth::SENDER;
+                config.noc = static_cast<NOC>(processor);
+                config.processor = static_cast<DataMovementProcessor>(processor);
+                eth_test_common::set_arch_specific_eth_config(config);
+                const auto kernel = CreateKernel(program, SPIN_UNTIL_L1_FLAG_KERNEL, core_ranges, config);
+                SetRuntimeArgs(program, kernel, core_ranges, {ack_addr(processor), release_addr(processor)});
+            }
+            slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/false);
+
+            const auto wait_for_ack = [&](const CoreCoord& virtual_core, uint32_t processor) {
+                const auto deadline = std::chrono::steady_clock::now() + ack_timeout;
+                while (std::chrono::steady_clock::now() < deadline) {
+                    if (cluster.read_core(device->id(), virtual_core, ack_addr(processor), sizeof(uint32_t))[0] != 0) {
+                        return true;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                return false;
+            };
+            for (const auto& logical_core : logical_cores) {
+                const CoreCoord virtual_core = device->ethernet_core_from_logical_core(logical_core);
+                for (uint32_t processor = 0; processor < num_processors; processor++) {
+                    EXPECT_TRUE(wait_for_ack(virtual_core, processor))
+                        << "kernel never started on device " << device->id() << " eth core " << logical_core.str()
+                        << " processor " << processor;
+                }
+                const auto stages = read_eth_fw_stages(env, device, logical_core, core_type);
+                for (size_t processor = 0; processor < stages.size(); processor++) {
+                    EXPECT_EQ(stages[processor], STAGE_KERNEL) << "device " << device->id() << " eth core "
+                                                               << logical_core.str() << " processor " << processor;
+                }
+            }
+
+            const std::vector<uint32_t> release{1};
+            for (const auto& logical_core : logical_cores) {
+                const CoreCoord virtual_core = device->ethernet_core_from_logical_core(logical_core);
+                for (uint32_t processor = 0; processor < num_processors; processor++) {
+                    cluster.write_core(device->id(), virtual_core, release, release_addr(processor));
+                }
+            }
+            slow_dispatch::WaitProgramDone(*device, program);
+
+            for (const auto& logical_core : logical_cores) {
+                const auto stages = read_eth_fw_stages(env, device, logical_core, core_type);
+                for (size_t processor = 0; processor < stages.size(); processor++) {
+                    EXPECT_EQ(stages[processor], STAGE_APP_FW)
+                        << "device " << device->id() << " eth core " << logical_core.str() << " processor " << processor
+                        << " after the kernel finished";
+                }
             }
         }
     }
