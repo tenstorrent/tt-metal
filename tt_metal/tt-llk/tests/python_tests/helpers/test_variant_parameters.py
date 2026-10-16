@@ -86,6 +86,29 @@ class THROTTLE_LEVEL(TemplateParameter):
         return f"constexpr int THROTTLE_LEVEL = {self.throttle_level};"
 
 
+@dataclass(init=False)
+class FAST_TILIZE_W_STEP(TemplateParameter):
+    """Blackhole fast tilize: a 16-bit input steps L1 by the packer's output W counter, as the `ttnn.tilize` kernels do
+    (tilize_helpers.inl), except a row of two tiles with a 16-bit output, which keeps the paced init. No dataclass
+    field, so the perf reports keep their columns.
+    """
+
+    def __init__(self, ct_dim: int, formats):
+        self.two_tile_row = ct_dim == 2
+        self.w_step = formats.input_format.size == 2 and (
+            ct_dim >= 3 or (self.two_tile_row and formats.output_format.size != 2)
+        )
+
+    def __repr__(self) -> str:
+        return f"FAST_TILIZE_W_STEP({self.w_step}, {self.two_tile_row})"
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool FAST_TILIZE_W_STEP = {str(self.w_step).lower()};\n"
+            f"constexpr bool FAST_TILIZE_TWO_TILE_ROW = {str(self.two_tile_row).lower()};"
+        )
+
+
 @dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
@@ -844,6 +867,48 @@ class TILIZE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool tilize_en = {str(self.tilize.value).lower()};"
+
+
+@dataclass
+class PACK_BLOCK(TemplateParameter):
+    """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
+
+    pack_block: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool pack_block_en = {str(self.pack_block).lower()};"
+
+
+class MATMUL_PACK_BLOCK(TemplateParameter):
+    """PACK_BLOCK for matmul_test.cpp, picked from columns the test already reports, so it adds no column."""
+
+    def __init__(self, pack_block: bool = False):
+        self.matmul_pack_block = pack_block
+
+    def __repr__(self) -> str:
+        return f"MATMUL_PACK_BLOCK({self.matmul_pack_block})"
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, MATMUL_PACK_BLOCK)
+            and other.matmul_pack_block == self.matmul_pack_block
+        )
+
+    def __hash__(self) -> int:
+        return hash(self.matmul_pack_block)
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool pack_block_en = {str(self.matmul_pack_block).lower()};"
+
+
+@dataclass
+class TINY_PACK_MODE(TemplateParameter):
+    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile."""
+
+    tiny_pack_mode: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int tiny_pack_mode = {self.tiny_pack_mode};"
 
 
 @dataclass

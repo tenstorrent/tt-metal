@@ -19,10 +19,17 @@ FORCE_INLINE void transpose(uint32_t dfb_in_id, uint32_t dfb_out_id, DataflowBuf
     dfb_out.reserve_back(BatchSize);
 
     transpose_init(dfb_in_id);
+#ifdef ARCH_BLACKHOLE
+    for (uint32_t i = 0; i < BatchSize; i++) {
+        transpose_tile(dfb_in_id, i, i);
+    }
+    pack_block_mop(0, dfb_out_id, BatchSize);
+#else
     for (uint32_t i = 0; i < BatchSize; i++) {
         transpose_tile(dfb_in_id, i, i);
         pack_tile(i, dfb_out_id);
     }
+#endif
 
     tile_regs_commit();
     tile_regs_release();
