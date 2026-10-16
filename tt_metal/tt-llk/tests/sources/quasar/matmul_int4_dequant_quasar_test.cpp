@@ -127,7 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         LLK_ASSERT(GROUP_KT_DIM > 0 && KT_DIM % GROUP_KT_DIM == 0, "KT_DIM must be a whole number of quantization groups");
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
         const DataFormat math_format = static_cast<DataFormat>(formats.math);
@@ -276,15 +276,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         if constexpr (full)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
             _llk_sync_init_(ACC_READY_SEM, 2 /*max*/, 0 /*init*/);
             _llk_sync_init_(EPILOGUE_DONE_SEM, 2 /*max*/, 0 /*init*/);
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
             // SFPU alone: read Dest without waiting for the inactive FPU. CFG persists across run types.
-            auto cfg_regs                                    = (volatile std::uint32_t*)TENSIX_CFG_BASE;
-            cfg_regs[SFPU_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            set_up_zero_dest_dvalid_handshake_for_sfpu();
         }
 
         if constexpr (active)
@@ -451,7 +450,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
         else if constexpr (active)
         {
