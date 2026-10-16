@@ -221,7 +221,9 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
-        overlap_output_gate=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        # The output gate beside the relay (and the projections on the matmul program) also at T=1024, 2048 and
+        # 2560: 0.752 -> 0.740 ms, 0.913 -> 0.839 ms and 1.021 -> 0.871 ms.
+        overlap_output_gate=active_seq_len_local in (128, 256, 320, _TUNED_PROJECTION_ROWS),
     )
 
 
