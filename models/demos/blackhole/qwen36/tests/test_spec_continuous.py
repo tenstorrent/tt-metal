@@ -56,8 +56,10 @@ def _setup(mesh_device):
 class BatchDriver:
     """Host mirror of the plugin runner at B > 1 (greedy); row == state slot, None = padding row."""
 
-    def __init__(self, eng, seed):
+    def __init__(self, eng, seed, lookahead=True, drafts=True):
         self.eng = eng
+        self.lookahead = lookahead  # False: a row's blocks cover only its real tokens (no lookahead, as ngram)
+        self.drafts = drafts  # False: proposals are withheld, every step verifies n = 0
         self.reqs = [None] * B
         g = torch.Generator().manual_seed(seed)
         self.free = (1 + torch.randperm(NUM_BLOCKS - 1, generator=g)).tolist()
@@ -66,8 +68,10 @@ class BatchDriver:
         self.stats = []
 
     def _blocks_for(self, req, last_pos):
-        """[NB] int32 row covering positions up to last_pos + (1+K) + (K+1) lookahead; unused entries 0."""
-        need = min(NB, math.ceil((last_pos + (1 + K) + (K + 1)) / BLOCK_SIZE))
+        """[NB] int32 row covering positions up to last_pos + (1+K) + (K+1) lookahead (up to last_pos without
+        lookahead); unused entries 0."""
+        extra = (1 + K) + (K + 1) if self.lookahead else 1
+        need = min(NB, math.ceil((last_pos + extra) / BLOCK_SIZE))
         while len(req["blocks"]) < need:
             req["blocks"].append(self.free.pop())
         row = req["blocks"] + [0] * (NB - len(req["blocks"]))
@@ -107,7 +111,7 @@ class BatchDriver:
         for r in live:
             q = self.reqs[r]
             pos0[r] = q["P"] + len(q["out"]) - 1
-            drafts[r] = list(q["proposal"])
+            drafts[r] = list(q["proposal"]) if self.drafts else []
             n = ns[r] = len(drafts[r])
             tokens[r] = PAD
             tokens[r, : 1 + n] = torch.tensor([q["out"][-1]] + drafts[r], dtype=torch.int32)
@@ -120,6 +124,7 @@ class BatchDriver:
         )
         ids_all = res.argmax_ids
         assert tuple(ids_all.shape) == (B, 1 + K)
+        cross = [r for r in live if int(pt[r, (pos0[r] + K) // BLOCK_SIZE]) == 0]  # padded columns past the blocks
 
         committed = torch.full((B, 1 + K), PAD, dtype=torch.int32)
         cpos = torch.full((B, 1 + K), PAD, dtype=torch.int32)
@@ -155,7 +160,7 @@ class BatchDriver:
         for r in live:
             if len(self.reqs[r]["out"]) >= self.reqs[r]["max_new"]:
                 self._finish(r)
-        self.stats.append({"live": live, "n": ns, "m": ms})
+        self.stats.append({"live": live, "n": ns, "m": ms, "cross": cross})
         self.steps += 1
 
     def remap(self, perm):
@@ -313,6 +318,31 @@ def test_left_out_rows_keep_state(mesh_device):
         for u in range(B):
             _assert_same(f"request {u} left out of some steps", out[u], full[u])
         assert not eng._parked, f"parked slots left behind: {sorted(eng._parked)}"
+        assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_padded_columns_past_reservation(mesh_device):
+    """No-draft steps whose padded columns cross into unallocated blocks (max_model_len, ngram) give the same
+    tokens as with lookahead blocks, and two such rows in one call do not trip the KV-write collision check."""
+    model, eng, tokenizer, prompts = _setup(mesh_device)
+    n_prog = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        short = prompts[0][:60]
+        # rows 0 and 3 run in lockstep: their padded columns cross 64 in the same call
+        sched = {0: [(0, 0, short), (3, 1, short), (5, 2, prompts[5])]}
+        ref = BatchDriver(eng, seed=7, drafts=False).run(sched)
+        drv = BatchDriver(eng, seed=8, lookahead=False, drafts=False)
+        out = drv.run(sched)
+        assert max(len(s["cross"]) for s in drv.stats) >= 2, "no step had two rows past their blocks"
+        for rid in ref:
+            _assert_same(f"request {rid} without lookahead", out[rid], ref[rid])
         assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
     finally:
         mesh_device.set_program_cache_misses_allowed(True)

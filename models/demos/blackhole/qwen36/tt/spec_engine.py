@@ -243,6 +243,17 @@ def draft_rows_fit(anchor_pos, K, capacity):
     return [int(p) + 1 + K < capacity for p in anchor_pos]
 
 
+def verify_write_table(page_table, start_pos, num_valid_drafts, block_size):
+    """[B, nb] table with each row's entries past the block of its last real column (start_pos + n) set to the
+    null block 0, so padded verify columns write only that row's current block or the null block."""
+    pt = torch.as_tensor(page_table).clone()
+    last = torch.as_tensor(start_pos).reshape(-1).to(torch.int64)
+    last = last + torch.as_tensor(num_valid_drafts).reshape(-1).to(torch.int64)
+    cols = torch.arange(pt.shape[1]).reshape(1, -1)
+    pt[cols > (last // int(block_size)).reshape(-1, 1)] = 0
+    return pt
+
+
 # --------------------------------------------------------------------------------------------- #
 # Spec-decode memory cost (pure: config time, no device)
 # --------------------------------------------------------------------------------------------- #
@@ -913,12 +924,16 @@ class MTPSpecEngine:
     # --------------------------------------------------------------------- #
     # Verify
     # --------------------------------------------------------------------- #
-    def verify(self, tokens, start_pos, accepted_counts, page_table, read_logits=False, active=None):
+    def verify(
+        self, tokens, start_pos, accepted_counts, page_table, read_logits=False, active=None, num_valid_drafts=None
+    ):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j. The first verify after prefill is
         the seed (see _seed): row 0 holds the first generated token, other rows are filler, accepted_counts = 1.
         Fresh rows may join running ones (see _join). A live row left out is parked on host and restored when it
         returns; a fresh row left out defers its seed.
         ``active`` (bool [B], None = all): False rows are padding and run over the null block.
+        ``num_valid_drafts`` ([B], None = all columns real): the target's KV writes use verify_write_table;
+        the drafter keeps the full table.
         Returns (ids int32 [B, T], logits [B, T, vocab] or None)."""
         assert self.captured, "verify before capture"
         B, T = self.B, self.T
@@ -956,6 +971,8 @@ class MTPSpecEngine:
             mi_prev[~active] = 0
         self._row_active = active.clone()
         self._last_pt = pt
+        # padded columns may sit past the runner's KV reservation (max_model_len, ngram)
+        vpt = pt if num_valid_drafts is None else verify_write_table(pt, start_pos, num_valid_drafts, self.block_size)
         assert int(start_pos.max()) + T <= table_capacity(
             self._last_cap_blocks, self.block_size
         ), "verify window past the paged KV capacity"
@@ -978,11 +995,11 @@ class MTPSpecEngine:
                 self._prompts.pop(u, None)
                 self._fresh_dirty.discard(u)
             if set(fresh) == set(rows):
-                return self._seed(tokens, start_pos, pt, read_logits)
-            return self._join(tokens, start_pos, mi_prev, pt, active, fresh, read_logits)
+                return self._seed(tokens, start_pos, vpt, read_logits)
+            return self._join(tokens, start_pos, mi_prev, vpt, active, fresh, read_logits)
 
         args = (tokens.tolist(), start_pos.tolist(), mi_prev.tolist())
-        kw = dict(read_logits=read_logits, page_tables=pt, inactive=(~active).tolist())
+        kw = dict(read_logits=read_logits, page_tables=vpt, inactive=(~active).tolist())
         if self._timing:
             ids, vfeed, lt = self._verify_split(*args, **kw)
         else:
@@ -1124,7 +1141,13 @@ class MTPSpecEngine:
             self.no_draft_streak,
         )
         ids, logits = self.verify(
-            clean, start0, accepted_counts, page_table, read_logits=spec_mode == "logits", active=active
+            clean,
+            start0,
+            accepted_counts,
+            page_table,
+            read_logits=spec_mode == "logits",
+            active=active,
+            num_valid_drafts=num_valid_drafts,
         )
         return VerifyResult(spec_mode, mask_unused_columns(ids, num_valid_drafts), logits)
 

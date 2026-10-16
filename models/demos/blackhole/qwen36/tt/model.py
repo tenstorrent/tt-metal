@@ -26,8 +26,9 @@ def spec_kv_write_conflicts(page_tables, positions, T, block_size):
     """Cross-user collisions of the grouped verify KV write. Call j writes candidate j of every
     user (one user per core) to the 32-row cache tile (page_tables[u][pos // block_size],
     (pos % block_size) // 32) at pos = positions[u] + j; two users on the same tile in the same
-    call race (read-modify-write, one update lost). Shared table entries that no call writes
-    (vLLM's null-block padding) are harmless. Users with a negative position are skipped.
+    call race (read-modify-write, one update lost). Writes to block 0 (vLLM's null block: padding rows,
+    padded columns past a row's reservation) are junk by design and skipped. Users with a negative position
+    are skipped.
     Returns [(j, u_first, u_second, block, tile)], empty when the write is safe."""
     rows = page_tables.tolist() if isinstance(page_tables, torch.Tensor) else [list(r) for r in page_tables]
     conflicts = []
@@ -39,7 +40,10 @@ def spec_kv_write_conflicts(page_tables, positions, T, block_size):
             pos = int(p) + j
             if pos // block_size >= len(rows[u]):
                 raise IndexError(f"user {u} writes position {pos}, past its {len(rows[u])}-block page table")
-            key = (int(rows[u][pos // block_size]), (pos % block_size) // ttnn.TILE_SIZE)
+            blk = int(rows[u][pos // block_size])
+            if blk == 0:
+                continue
+            key = (blk, (pos % block_size) // ttnn.TILE_SIZE)
             first = owner.setdefault(key, u)
             if first != u:
                 conflicts.append((j, first, u, *key))
@@ -1627,8 +1631,8 @@ class Qwen36Model:
         row per user. When given, every persistent page-table buffer is re-staged for this replay,
         with columns clipped or padded with block 0 (vLLM's null block) to the captured width.
         None keeps the tables staged last. A grouped KV write that would put two users on the same
-        (block, 32-row tile) in the same call raises AssertionError before anything is staged. The MTP
-        drafter's own table (``SpeculativeDecoder.mtp_pt``) is a separate buffer this argument does
+        (block, 32-row tile) in the same call (block 0 excepted) raises AssertionError before anything is staged.
+        The MTP drafter's own table (``SpeculativeDecoder.mtp_pt``) is a separate buffer this argument does
         not touch. ``inactive``: length-B bools; those users are skipped by the KV-write collision check only
         (their rows write the null block).
 

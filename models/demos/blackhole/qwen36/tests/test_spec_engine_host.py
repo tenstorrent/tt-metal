@@ -18,7 +18,7 @@ import pytest
 import torch
 from loguru import logger
 
-from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.blackhole.qwen36.tt.model import Qwen36Model, spec_kv_write_conflicts
 from models.demos.blackhole.qwen36.tt.spec_engine import (
     PLACEHOLDER_TOKEN_ID,
     MTPSpecEngine,
@@ -39,6 +39,7 @@ from models.demos.blackhole.qwen36.tt.spec_engine import (
     spec_round_up,
     spec_table_width,
     table_capacity,
+    verify_write_table,
 )
 
 SHAPES = [(1, 12), (2, 8), (4, 4), (8, 4), (3, 5)]
@@ -687,3 +688,56 @@ def test_verify_defers_fresh_row_left_out():
     assert seeds == [1] and e._fresh == {1: 7} and e._fresh_dirty == {1} and 0 not in e._prompts
     e.verify(tok, torch.tensor([6, 7]), one, pt)
     assert prefills == [(1, [2] * 7)] and joins == [[1]] and e._fresh == {} and e._fresh_dirty == set()
+
+
+def test_verify_write_table():
+    pt = torch.tensor([[5, 9, 7], [3, 4, 8], [0, 0, 0]], dtype=torch.int32)
+    # row 0: n=0 at the last slot of block 0 (no lookahead): stale block 9 is not written
+    # row 1: n=2 from 62 ends at 64 (block 1); row 2: padding row
+    out = verify_write_table(pt, [63, 62, 0], [0, 2, 0], 64)
+    assert out.tolist() == [[5, 0, 0], [3, 4, 0], [0, 0, 0]]
+    assert pt[0, 1].item() == 9  # input untouched
+    full = torch.cat([torch.arange(1, 65), torch.zeros(1)]).to(torch.int32).reshape(1, 65)
+    assert torch.equal(verify_write_table(full, [4094], [0], 64), full)
+
+
+@pytest.mark.parametrize(
+    "pos,nb,stale",
+    [
+        ([4094, 4094], 65, False),  # two narrow rows at max_model_len 4096: 4096..4097 hit column 64 = null block
+        ([63, 127], 3, True),  # no lookahead (ngram) at a 64-token boundary, stale ids past the reservation
+    ],
+)
+def test_decode_forward_padded_columns_stay_in_reservation(pos, nb, stale):
+    B, K = 2, 3
+    T = K + 1
+    seen = {}
+
+    def verify_traced(tokens, positions, mi_prev, **kw):
+        seen["pt"] = kw["page_tables"].clone()
+        assert spec_kv_write_conflicts(kw["page_tables"], positions, T, 64) == []
+        return [0] * (B * T), "feed", None
+
+    model = types.SimpleNamespace(
+        _fit_spec_page_table=lambda pt, n: torch.as_tensor(pt, dtype=torch.int32), verify_traced=verify_traced
+    )
+    e = _bare_engine(B, K, captured=True, nb=nb, _timing=False, _gdn=[], model=model, no_draft_streak=16)
+    pt = torch.zeros(B, nb, dtype=torch.int32)
+    for u in range(B):
+        live = (pos[u] // 64) + 1
+        pt[u, :live] = torch.arange(1 + 100 * u, 1 + 100 * u + live)
+        if stale:
+            pt[u, live:] = 99  # a block another request owns
+    tok = torch.full((B, T), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+    tok[:, 0] = 7
+    start = torch.full((B, T), -1, dtype=torch.int32)
+    start[:, 0] = torch.tensor(pos, dtype=torch.int32)
+    e.decode_forward(
+        tok,
+        start,
+        num_valid_drafts=torch.zeros(B, dtype=torch.int32),
+        accepted_counts=torch.ones(B, dtype=torch.int32),
+        page_table=pt,
+    )
+    assert not bool((seen["pt"] == 99).any()), "verify got a block past the reservation"
+    assert torch.equal(e._last_pt, pt), "the drafter must keep the full table"
