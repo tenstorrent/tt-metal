@@ -957,10 +957,10 @@ ProgramArtifacts create_no_bcast_artifacts(
         describe_native_value(t.entries_per_thread, cfg.entries_per_thread),
         in_producers_consumers,
         out_producers_consumers);
-    // num_tiles_per_cycle > 1 batches n tiles per reserve/push. Above ring stride 1 only one tile of each batch
-    // comes out right. The rule's compute count of 4 reaches this case on the NoC path in L1, the borrowed path
-    // and the mixed paths; it runs by the rule, and says so.
-    if (num_tiles_per_cycle > 1 && !ring_stride_one) {
+    // Above ring stride 1 the FPU kernel's binary unpack reads tile p of a batch p entries on, not p strides on, so
+    // only one tile of each batch is right; the SFPU kernel copies through the single-operand unpack, which strides.
+    // The rule's compute count of 4 reaches this on the NoC path in L1, the borrowed path and the mixed paths.
+    if (num_tiles_per_cycle > 1 && !ring_stride_one && !is_sfpu) {
         log_warning(
             tt::LogOp,
             "binary_ng Quasar-native: tiles_per_cycle={} above ring stride 1 (in: max(R,C)={}, out: "

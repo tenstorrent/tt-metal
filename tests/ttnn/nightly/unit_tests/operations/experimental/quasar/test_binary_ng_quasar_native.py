@@ -121,14 +121,16 @@ def _batched_wrong_tiles(tiles_per_cluster, knobs, path, sfpu=False):
     """The output tiles that compute batching leaves wrong.
 
     tiles_per_cluster lists each cluster's tile count. Above output ring stride 1 (stride max(C, W)), only one
-    tile of each compute batch comes out right, in a full batch and in a short one. Each compute thread's share
+    tile of each FPU-kernel compute batch comes out right, in a full batch and in a short one: its binary unpack
+    reads tile p of a batch p entries on, not p strides on. The SFPU kernel copies each operand through the
+    single-operand unpack, which strides, so its batches are exact. Each compute thread's share
     runs in full batches and one short batch, and thread t takes one extra tile while t < tiles % C. The tests
     compare the count tile for tile. A borrowed shard that the compute threads do not divide sends its last
     tiles through the tail rings, which this does not model; test_native_prediction_tables_cover_their_cases
     keeps such shards out of the predicted cases.
     """
     _, c, w, batch = _resolve(knobs, path, sfpu)
-    if max(c, w) == 1:
+    if sfpu or max(c, w) == 1:
         return 0
     landed = 0
     for tiles in tiles_per_cluster:
