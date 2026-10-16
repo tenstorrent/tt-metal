@@ -16,6 +16,8 @@ void kernel_main() {
 
     constexpr auto dfb_in_id = tt::CBIndex::c_0;
     constexpr auto dfb_out_id = tt::CBIndex::c_16;
+    DataflowBuffer dfb_in(dfb_in_id);
+    DataflowBuffer dfb_out(dfb_out_id);
 
     compute_kernel_hw_startup(dfb_in_id, dfb_out_id);
 
@@ -30,5 +32,5 @@ void kernel_main() {
             compute_kernel_lib::ReservePolicy::PerTile,
             compute_kernel_lib::PushPolicy::PerTile,
             compute_kernel_lib::DataFormatReconfig::Disabled)>(
-        compute_kernel_lib::IterationShape::tiles(per_core_tile_cnt));
+        compute_kernel_lib::IterationShape::tiles(per_core_tile_cnt), dfb_in, dfb_out);
 }

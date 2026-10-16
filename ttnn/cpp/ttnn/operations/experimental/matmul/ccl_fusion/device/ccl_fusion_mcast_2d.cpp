@@ -918,7 +918,7 @@ ttnn::device_operation::CachedProgram<Mcast2DSharedVariables> create_program_mca
         mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
     }
     // When accumulating in fp32 with the K reduction split across blocks, the intermediate
-    // partials CB holds Float32 and is reloaded into DEST between blocks by copy_block_matmul_partials.
+    // partials CB holds Float32 and is reloaded into DEST between blocks by copy_block.
     // Unless the reload's CB view is marked UnpackToDestFp32, that reload is routed through SrcA and
     // rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on every block boundary
     // and accuracy degrades as the number of K-blocks grows. The flag is set on the alias when bias
@@ -2828,7 +2828,7 @@ void create_program_mcast_in0_in1_descriptor(
         compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
     }
     // When accumulating in fp32 with the K reduction split across blocks, the intermediate
-    // partials CB holds Float32 and is reloaded into DEST between blocks by copy_block_matmul_partials.
+    // partials CB holds Float32 and is reloaded into DEST between blocks by copy_block.
     // Unless the reload's CB view is marked UnpackToDestFp32, that reload is routed through SrcA and
     // rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on every block boundary
     // and accuracy degrades as the number of K-blocks grows. The flag is set on the alias when bias
