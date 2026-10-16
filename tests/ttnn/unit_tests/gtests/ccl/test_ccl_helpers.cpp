@@ -1463,7 +1463,7 @@ TEST(CclTopologyUtils, OpsRefuseALabelThatDoesNotCoverTheDevicesTheyReach) {
         std::string::npos);
 }
 
-TEST(CclTopologyUtils, CallerRelabelsScopeSilencesRefusalsForIntermediates) {
+TEST(CclTopologyUtils, SilenceIntermediateRefusalsReturnsNulloptQuietly) {
     // all_reduce_async labels its result from its own input and runs reduce_scatter / all_gather on intermediates
     // nobody reads; inside the scope their refusals are nullopt without a log or a TT_FATAL, honest labels are
     // unaffected, scopes nest, and strict mode is back the moment the scope ends.
@@ -1471,13 +1471,13 @@ TEST(CclTopologyUtils, CallerRelabelsScopeSilencesRefusalsForIntermediates) {
     const auto in = collapsed_label(mesh, TopoShard{3});
     StrictCclTopologyScope strict(true);
     {
-        const topo::CallerRelabelsScope caller_relabels;
+        const topo::SilenceIntermediateRefusals silence_refusals;
         EXPECT_FALSE(topo::all_gather_output_topology(in, 0, mesh, kRank, 3).has_value());
         EXPECT_FALSE(topo::reduce_scatter_output_topology(in, 0, mesh, kRank, 3).has_value());
         EXPECT_EQ(
             topo::all_gather_output_topology(in, 1, mesh, kRank, 3), nd_label(mesh, {TopoShard{3}, TopoReplicate{}}));
         {
-            const topo::CallerRelabelsScope nested;
+            const topo::SilenceIntermediateRefusals nested;
             EXPECT_FALSE(topo::all_gather_output_topology(in, 0, mesh, kRank, 3).has_value());
         }
         EXPECT_FALSE(topo::all_gather_output_topology(in, 0, mesh, kRank, 3).has_value());
@@ -1507,7 +1507,8 @@ TEST(CclTopologyUtils, StrictModeThrowsWhereWarnOnlyReturnsNullopt) {
 TEST(CclTopologyUtils, RefuseIsHandledLikeTheHelpersOwnRefusals) {
     // A hook-level refusal (a label the op cannot renumber into its output layout, a ring order no label carries)
     // goes through the same handling as the helpers' own: nullopt in warn-only mode, TT_FATAL under strict mode,
-    // silent inside a CallerRelabelsScope -- so strict mode covers every "no honest label", not only the helpers'.
+    // silent inside a SilenceIntermediateRefusals scope -- so strict mode covers every "no honest label", not only the
+    // helpers'.
     {
         StrictCclTopologyScope warn_only(false);
         EXPECT_FALSE(topo::refuse("hook: no honest label", topo::RefusalFamily::Gather).has_value());
@@ -1515,7 +1516,7 @@ TEST(CclTopologyUtils, RefuseIsHandledLikeTheHelpersOwnRefusals) {
     }
     StrictCclTopologyScope strict(true);
     {
-        const topo::CallerRelabelsScope caller_relabels;
+        const topo::SilenceIntermediateRefusals silence_refusals;
         EXPECT_FALSE(topo::refuse("hook: intermediate", topo::RefusalFamily::Scatter).has_value());
     }
     const auto message = message_of([&] { topo::refuse("hook: no honest label", topo::RefusalFamily::Gather); });
