@@ -753,6 +753,7 @@ public:
 
     Config config() const override { return this->config_; }
     std::optional<ComputeProcessor> compute_processor() const override { return this->config_.processor; }
+    const ComputeConfig& compute_config() const { return this->config_; }
 
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
 

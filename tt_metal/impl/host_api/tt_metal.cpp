@@ -175,6 +175,18 @@ void ValidateLegacyRuntimeArgsAPI(const Program& program, std::string_view api_n
         api_name);
 }
 
+// A MATH or PACK kernel that selects its processor reads the UNPACK kernel's runtime arguments and has none of its own.
+std::shared_ptr<Kernel> get_kernel_with_runtime_args(const Program& program, KernelHandle kernel_id) {
+    auto kernel = program.impl().get_kernel(kernel_id);
+    const auto processor = kernel->compute_processor();
+    TT_FATAL(
+        !processor || *processor == ComputeProcessor::UNPACK,
+        "Compute kernel {} on TRISC{} reads the UNPACK kernel's runtime arguments; get them from the UNPACK kernel",
+        kernel->name(),
+        enchantum::to_underlying(*processor));
+    return kernel;
+}
+
 inline void SetRuntimeArgsImpl(
     const Program& program, KernelHandle kernel_id, const CoreCoord& c, ttsl::Span<const uint32_t> runtime_args) {
     if (!runtime_args.empty()) {
@@ -1222,17 +1234,17 @@ void SetCommonRuntimeArgs(
 
 RuntimeArgsData& GetRuntimeArgs(const Program& program, KernelHandle kernel_id, const CoreCoord& logical_core) {
     ValidateLegacyRuntimeArgsAPI(program, "GetRuntimeArgs");
-    return program.impl().get_kernel(kernel_id)->runtime_args_data(logical_core);
+    return get_kernel_with_runtime_args(program, kernel_id)->runtime_args_data(logical_core);
 }
 
 std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program, KernelHandle kernel_id) {
     ValidateLegacyRuntimeArgsAPI(program, "GetRuntimeArgs");
-    return program.impl().get_kernel(kernel_id)->runtime_args_data();
+    return get_kernel_with_runtime_args(program, kernel_id)->runtime_args_data();
 }
 
 RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id) {
     ValidateLegacyRuntimeArgsAPI(program, "GetCommonRuntimeArgs");
-    return program.impl().get_kernel(kernel_id)->common_runtime_args_data();
+    return get_kernel_with_runtime_args(program, kernel_id)->common_runtime_args_data();
 }
 
 namespace experimental::lightmetal {

@@ -855,7 +855,7 @@ void Kernel::validate_runtime_args_size(
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
     const auto processor = this->compute_processor();
     TT_FATAL(
-        !processor || *processor == ComputeProcessor::UNPACK,
+        total_rt_args == 0 || !processor || *processor == ComputeProcessor::UNPACK,
         "Compute kernel {} on TRISC{} reads the UNPACK kernel's runtime arguments, so it must not have its own",
         this->name(),
         enchantum::to_underlying(*processor));
