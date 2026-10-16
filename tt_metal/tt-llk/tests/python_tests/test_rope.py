@@ -368,6 +368,14 @@ def test_rope_fused_cos_sin(tile_h, x_stride, per_row, scale):
     _check_fused_cos_sin(tile_h, x_stride, per_row, scale)
 
 
+@parametrize(tile_h=[1, 4], per_row=[False, True])
+def test_rope_fused_one_head(tile_h, per_row):
+    """One head of one width tile: too few faces for the load-macro body."""
+    _check_fused_cos_sin(
+        tile_h, TILE_SLOT_STRIDE, per_row, None, ht=1, wt=1, cs_base=TILE_ROWS
+    )
+
+
 @parametrize(
     # (heads, width tiles, x stride, height, per-row phase, scale, phases first)
     case=[

@@ -85,6 +85,7 @@ constexpr bool _llk_unpack_A_asserts_check_unpacker_B_()
  * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @tparam whole_tile: Plain copy only: one UNPACR and one SrcA valid per tile instead of per face.
  * @param transpose_of_faces: Whether faces are reordered (transposed) during the unpack.
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpack_src_format: Source data format of the operand in L1.
@@ -94,7 +95,8 @@ template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
+    bool unpack_to_dest                          = false,
+    bool whole_tile                              = false>
 inline void _llk_unpack_A_mop_config_(
     const bool transpose_of_faces, const ckernel::TensorShape tensor_shape, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format = 0)
 {
@@ -262,7 +264,7 @@ inline void _llk_unpack_A_mop_config_(
             }
             else
             {
-                const std::uint32_t outerloop     = num_faces;
+                const std::uint32_t outerloop     = whole_tile ? 1 : num_faces;
                 constexpr std::uint32_t innerloop = 1;
                 ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
                 tmp.set_start_op(unpack_srca);
@@ -282,6 +284,9 @@ inline void _llk_unpack_A_mop_config_(
  * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @tparam whole_tile: Plain copy of a full 32x32 tile only: its four faces land in one SrcA bank with one UNPACR and one
+ *         SrcA valid, so the unpacker can run a whole tile ahead of the math thread instead of one face. Pair with the
+ *         whole_tile datacopy init.
  * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
@@ -296,7 +301,8 @@ template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
+    bool unpack_to_dest                          = false,
+    bool whole_tile                              = false>
 inline void _llk_unpack_A_init_(
     const std::uint32_t transpose_of_faces          = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
@@ -310,6 +316,10 @@ inline void _llk_unpack_A_init_(
     LLK_ASSERT(BType != BroadcastType::COL || num_faces == 4, "Unary Broadcast Column requires num_faces == 4 (32x32 only)");
     LLK_ASSERT(transpose_of_faces == 0 || face_r_dim == 16, "Partial faces are not supported for transpose datacopy, face_r_dim must be 16 rows");
     LLK_ASSERT(transpose_of_faces == 0 || num_faces == 4 || num_faces == 1, "Transpose requires num_faces == 4 or 1 (32x32 and 16x16 only)");
+    static_assert(
+        !whole_tile || (BType == BroadcastType::NONE && !acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::NONE),
+        "whole_tile is a plain copy");
+    LLK_ASSERT(!whole_tile || (transpose_of_faces == 0 && face_r_dim == FACE_R_DIM && num_faces == 4), "whole_tile needs a full 32x32 tile and no transpose");
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
@@ -344,10 +354,17 @@ inline void _llk_unpack_A_init_(
         constexpr bool reads_srca       = (BType == BroadcastType::NONE) && !(acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA);
         constexpr bool reads_srcb       = (BType != BroadcastType::NONE) || (acc_to_dest && binary_reuse_dest != EltwiseBinaryReuseDestType::DEST_TO_SRCB);
         constexpr std::uint32_t UNP_SEL = (reads_srca && reads_srcb) ? p_setadc::UNP_AB : (reads_srca ? p_setadc::UNP_A : p_setadc::UNP_B);
-        config_unpacker_x_end<UNP_SEL>(face_r_dim);
+        if constexpr (whole_tile)
+        {
+            TTI_SETADCXX(p_setadc::UNP_A, 4 * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+        }
+        else
+        {
+            config_unpacker_x_end<UNP_SEL>(face_r_dim);
+        }
     }
 
-    _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+    _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, whole_tile>(
         transpose_of_faces > 0, tensor_shape, unpack_src_format, unpack_dst_format);
 }
 
