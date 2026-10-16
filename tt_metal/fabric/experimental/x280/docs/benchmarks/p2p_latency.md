@@ -1,13 +1,11 @@
 # p2p_latency: one live exchange between two cores
 
-**Status:** Measured on silicon. Results are in [`docs/results.md`](../results.md); running it is
-below.
+Results are in [`docs/results.md`](../results.md); running it is below.
 
 **Scope:** hart-to-hart
 signal latency where the two harts sit on different X280 complexes. This is
-the [`ubench design`](design.md)'s `p2p_latency`
-`x280_peer_tile` — X280 tile to X280 tile, one chip — and is implemented as that member
-rather than as a new suite.
+the [benchmark design](design.md)'s `p2p_latency`
+`x280_peer_tile` — X280 tile to X280 tile, one chip.
 
 ## Document boundaries
 
@@ -56,8 +54,8 @@ it runs. `x280_peer_tile`'s exchange is two such stores, which puts 24 hops of r
 every RTT independent of placement.
 
 The count is over every physical node on the ring. Whether a harvested tile
-still forwards, and so whether harvesting shrinks the effective ring, is
-settled in neither tree and the service encodes no guess about it. A measured
+still forwards, and so whether harvesting shrinks the effective ring, is not
+documented; the count assumes every node forwards. A measured
 latency that does not track these counts on a harvested part puts that
 assumption first in line.
 
@@ -92,7 +90,7 @@ Three consequences follow from the destination being LIM rather than L1:
 - The `fence ir, ir` the poll issues before every load orders the uncached
   path rather than a stale line. It drains the inbound store buffer,
   and without it a LIM poll wedges even through `volatile`
-  (`kernels/p2p_latency/backends/x280_noc.hpp:133-147`); the wedge is not a
+  (`include/rt/x280_idle.h`); the wedge is not a
   cached value, because LIM is not a data-cacheable address
   (`L2CPUTile/Caches.md:27-30`; LIM is the uncached scratchpad at
   `0x0800_0000`, `L2CPUTile/MemoryMap.md:84`). The fence is required either
@@ -112,7 +110,7 @@ live. The device cases that require a reset-held tile
 `OversizedActiveImageIsRejectedWithoutWritingLim` in
 `tests/device/test_x280_device_hw.cpp`) then skip until the next ASIC reset. Extra live tiles
 do not perturb the measurement — the resident idle touches no DRAM, AXI, or
-MMIO outside its own L2CPU tile (`src/lim_idle.c:20-22`) — and cost only
+MMIO outside its own L2CPU tile (`src/lim_idle.c:24-25`) — and cost only
 power. Images and environment knobs are under § Metal peers and in
 [harness.md](../harness.md#running-benchmarks).
 
@@ -160,16 +158,8 @@ untagged local offset while host reads and writes use the tagged DRISC-L1 view.
 DRISC measurements are raw `get_timestamp()` ticks carrying the same per-run
 AICLK evidence and externally usable conversion rate.
 
-## Open questions
+## Limitations
 
-- Whether load changes any of this. Deferred, and the one qualification the
-  lap invariance carries: it is a statement about hop count, not about
-  queueing delay. Congestion occurs when two packets contend for the same
-  link between routers (`NoC/RoutingPaths.md:59`), so a 10-hop leg offers ten
-  routers' worth of contention where a 2-hop leg offers two, and under traffic
-  placement can matter even though the hop count does not. Every number this
-  member produces is a quiet-part number: one exchange in flight, the other
-  complexes in resident idle, no concurrent fabric traffic. What the deferred
-  work would establish is how the total degrades against offered load and
-  whether the pairs separate once they are contending, which needs a traffic
-  generator this set does not build.
+Every number this member produces is a quiet-part number: one exchange in flight, the other
+complexes in resident idle, no concurrent fabric traffic. The lap invariance is a statement
+about hop count, not queueing delay under load.

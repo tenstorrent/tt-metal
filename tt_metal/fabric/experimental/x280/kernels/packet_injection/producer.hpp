@@ -700,7 +700,7 @@ private:
 
     const pi_producer_args_t& args_;
     uintptr_t host_l1_override_;
-    // Left uninitialized: derive_spans() populates it through pi_compute_layout()
+    // Left uninitialized: derive_l1_spans() populates it through pi_compute_layout()
     // before anything reads it, and returns on failure without a reader.
     pi_layout_t layout_;
 

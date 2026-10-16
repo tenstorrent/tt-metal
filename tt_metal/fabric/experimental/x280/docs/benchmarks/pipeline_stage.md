@@ -8,8 +8,7 @@ workload is one destination-to-next-hop operation over a fixed, suite-prepared
 input.
 
 Results are in [`docs/results.md`](../results.md).
-X280 micro-benchmark figures move with firmware code layout alone (a code-placement
-pad probe), so a figure compares only against a run of the same image.
+X280 micro-benchmark figures move with firmware code layout alone, so a figure compares only against a run of the same image.
 
 Host lifecycle, device ownership, shape admission, argument extents, STOP, and
 window cleanup are owned by
@@ -62,7 +61,7 @@ else:
 
 This is the operation expressed by
 `get_next_hop_router_direction()` in
-`tt-metal/tt_metal/fabric/hw/inc/tt_fabric_api.h`. The X280 implementation
+`tt_metal/fabric/hw/inc/tt_fabric_api.h`. The X280 implementation
 retains only the freestanding layout and packed-entry decoding needed to perform
 that operation.
 
@@ -197,9 +196,7 @@ not flush the region, change `WAYENABLE`, invalidate or repin lines, allocate a
 lease, or restore masks at case close.
 
 Both pipeline executables require this exact prepared profile; every
-benchmark opens at its 14 LIM ways ([harness.md](../harness.md#running-benchmarks)). Legacy/stress
-suites, cache experiments, and unreviewed executables are excluded from the
-prepared sequence.
+benchmark opens at its 14 LIM ways ([harness.md](../harness.md#running-benchmarks)).
 
 Each pipeline firmware binary calls the read-only
 `x280_pinned_input_check_policy(&X280_PINNED_INPUT_ROUTER_REGION, X280_PINNED_INPUT_PREPARED)` before case work. Compute checks before
@@ -432,9 +429,9 @@ Silicon correctness and timing observations are recorded in
 
 ## Stable references
 
-- `tt-metal/tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h` owns
+- `tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h` owns
   `routing_l1_info_t` and packed direction-table layouts.
-- `tt-metal/tt_metal/fabric/hw/inc/tt_fabric_api.h` owns the production
+- `tt_metal/fabric/hw/inc/tt_fabric_api.h` owns the production
   destination-to-next-hop selection semantics.
 - `kernels/pipeline_stage/pipeline_stage_common.h` owns the fixed packet
   constants, state values, and

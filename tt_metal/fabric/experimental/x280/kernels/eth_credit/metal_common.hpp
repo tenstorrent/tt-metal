@@ -185,7 +185,7 @@ inline core_sync::Outcome barrier(
 /**
  * Whether the Ethernet PCS reports link up, read directly. is_link_up() is not
  * used in a loop: on ERISC0 a down link makes it wait about 5.4e9 cycles
- * before answering (eth_fw_api.h:283-294), which would overrun the stall
+ * before answering (blackhole/eth_fw_api.h, is_link_up()), which would overrun the stall
  * budget the check enforces. ERISC1's arm of it is this same register read.
  */
 inline bool link_up() {
@@ -221,7 +221,7 @@ static_assert(
  * the same magic value. The sender resends until its own local_value holds the
  * magic; the receiver waits for it, then answers once.
  *
- * The unbounded original hands ERISC0 to base firmware (run_routing) after a
+ * erisc::datamover::handshake's unbounded wait hands ERISC0 to base firmware (run_routing) after a
  * long wait; this one fails instead, within a budget far shorter than that.
  *
  * @return false on expiry, which the caller reports as

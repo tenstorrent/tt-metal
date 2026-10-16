@@ -398,7 +398,7 @@ PI_STATIC_ASSERT(offsetof(pi_producer_args_t, timeout_ticks) == 64u, "offset tim
 PI_STATIC_ASSERT(sizeof(x280_noc_coord_t) == 8u, "a tile-table entry must be 8 bytes");
 
 /* --------------------------------------------------------------------------
- * Current-protocol slots and control
+ * Slots and control
  * -------------------------------------------------------------------------- */
 
 /**
@@ -411,10 +411,9 @@ PI_STATIC_ASSERT(sizeof(x280_noc_coord_t) == 8u, "a tile-table entry must be 8 b
  * `value` with a length-carrying NoC write out of Tensix L1, and that path
  * requires the source and destination addresses to be congruent -- mod 16 per
  * NOC_L1_WRITE_ALIGNMENT_BYTES and the WormholeB0 alignment table, with no
- * Blackhole table published and mod 64 reported for Blackhole DRAM transfers.
+ * Blackhole table published.
  * Every producer's L1 source word is congruent to 0 mod 64, so a 64-byte slot
- * at a 64-aligned base keeps every destination congruent under any of those
- * moduli. A smaller slot leaves the write undefined for the workers it
+ * at a 64-aligned base keeps every destination congruent mod 16 and mod 64. A smaller slot leaves the write undefined for the workers it
  * misaligns.
  */
 typedef struct {
@@ -1087,8 +1086,7 @@ static PI_CONSTEXPR inline pi_layout_check_t pi_compute_layout(
      * NOC_L1_{READ,WRITE}_ALIGNMENT_BYTES to 16 and derives L1_ALIGNMENT as
      * their maximum; that constant is an absolute alignment, while the
      * congruence relation itself comes from the alignment table cited above.
-     * The transport_bandwidth backends -- the
-     * tree's only other Tensix/LIM transfers -- refuse a run unless both the
+     * The transport_bandwidth backends refuse a run unless both the
      * staging source and the peer destination satisfy it. This is that check
      * for packet injection, at the 64 the producer's L1 sources already meet.
      * Unreachable while the alignment above and the record sizes stand, and
@@ -1198,7 +1196,7 @@ PI_STATIC_ASSERT(
  *
  * abi_tag carries nothing about the layout, so a changed offset
  * passes pi_abi_tag_matches() on every side while host, X280 and Tensix address
- * different memory -- and Metal JIT-compiles the producer from the worktree at
+ * different memory -- and Metal JIT-compiles the producer from source at
  * launch, so the kernel need not have been built from the same header as the
  * binary that placed the arena. Nothing the device publishes can corroborate
  * its own layout: `arena_bytes` in the report is the host's figure.
@@ -1265,7 +1263,7 @@ PI_STATIC_ASSERT(
  * goldens pin the interior spans at P=1 and P=2 and the strides and extents
  * -- ring_stride, rings_bytes, tile_coords_bytes, l1_tile_bytes, the export
  * triple -- that no total here observes. An interior span moving at a small
- * shape under a total that holds is the coord-padding case, which these
+ * shape under a total that holds is what these
  * assertions alone would miss. */
 
 /* The L1 side, which no arena total observes. */

@@ -35,8 +35,7 @@ required flexibility. Their catalogue and prioritization are intentionally
 tracked in
 [`docs/benchmarks/design.md`](benchmarks/design.md).
 
-The harness may eventually contribute useful machinery to Fabric 2, but that is
-not a design requirement. Characterization is intended to determine the
+Contributing machinery to Fabric 2 is not a design requirement. Characterization is intended to determine the
 partition; the harness must not assume that partition in advance.
 
 ### Goals
@@ -149,7 +148,7 @@ This is centralization, not uniformization. Session ownership, restoration,
 region handling, execution, and recording are reusable services. The timed
 loop, participant roles, axes, suite directory structure, and derived
 quantities remain owned by the
-[`ubench design`](benchmarks/design.md#behavior-named-suites).
+[benchmark design](benchmarks/design.md#behavior-named-suites).
 
 ## Concrete target model
 
@@ -202,11 +201,11 @@ arguments and deadlines, and records the resulting measurement.
 ### Runtime ownership and participant selection
 
 `X280Runtime` is session-owned and returns stable `X280Tile` references. The
-runtime owner serializes use of tile-shared LIM, System Port, active-image
-state, and the future writable NOC-window pool. X280 has no case-scoped RAII
+runtime owner serializes use of tile-shared LIM, System Port, and active-image
+state. X280 has no case-scoped RAII
 claim and no public `X280Hart` or `HartSet` API.
 
-A suite configuration may identify one or more harts as future launch
+A suite configuration may identify one or more harts as launch
 participants, but that selection is not a runtime acquisition. A memory-only
 case selects a tile reference and uses its proven `available_lim()` span
 without launching active firmware; it does not encode that behavior as an
@@ -454,11 +453,11 @@ implementations validate that the shared boundaries are honest.
 ### `p2p_latency` is the first harness client
 
 The harness is checked against the canonical participant matrix and
-implementation order in the ubench design's
+implementation order in the benchmark design's
 [`Participant rows`](benchmarks/design.md#participant-rows).
 It supplies the reusable selection, region, execution, deadline, clock, and
 recording mechanisms those rows consume. Suite configuration, protocol,
-reduction, and extension rules remain in the ubench design. Current host and
+reduction, and extension rules remain in the benchmark design. Current host and
 runtime blockers are recorded here under [Design rules](#design-rules)
 rather than duplicated beside the suite order.
 
@@ -477,7 +476,7 @@ Kernel structure is suite-owned: see
 [`p2p_latency`](benchmarks/design.md#kernel-frontend-and-backend)
 and
 [`transport_bandwidth`](benchmarks/design.md#frontend-and-backend-contract)
-in the ubench design. The harness only loads prepared artifacts and packs
+in the benchmark design. The harness only loads prepared artifacts and packs
 arguments according to the selected suite contract; it does not impose a
 frontend/backend split on other suites.
 
@@ -659,7 +658,7 @@ Private implementation follows the same boundary:
   ordered identity inventory, exact lookup, active submission, the live-session
   registry keyed by `SessionId`, and the public PLL entry point;
 - `ChipImpl` owns chip serialisation, topology, reset-register coordination, and
-  temporary chip-wide bootstrap state;
+  chip-wide bootstrap state;
 - the tile implementation owns identity, read-only inspection, explicit
   resident-idle boot, the single-execution reservation slot, saved restoration
   failure, and health;
@@ -683,9 +682,8 @@ hardware operation refuses a closed or dropped mesh.
 
 Metal's `tt::Cluster` wrapper is the intended route for topology, register, and
 LIM access: `get_soc_desc`, `read_reg` / `write_reg`, and
-`read_core` / `write_core`. This is the staging boundary for eventual X280
-support inside the Metal runtime, not merely a shared owner from which the
-component extracts a raw transport. Register writes remain 32-bit,
+`read_core` / `write_core`. The component uses it as its access layer, not
+merely as a shared owner from which it extracts a raw transport. Register writes remain 32-bit,
 strict/uncached, ordered by readback, and LIM remains on the wrapper block path.
 
 Raw UMD is restricted to ARC telemetry, which the wrapper does not expose.
@@ -694,8 +692,8 @@ Metal-owned cluster. Adding wrapper telemetry removes that raw borrow without
 changing public callers.
 
 The current `MetalContext::get_cluster()` borrow is confined to the Metal
-access adapter. A future Metal-owned replacement, including migration to
-`MetalEnv`, changes that adapter rather than the runtime or tile API.
+access adapter. Replacing it, including with `MetalEnv`, changes that adapter
+rather than the runtime or tile API.
 
 L2CPU identity is always the NOC0 hardware numbering defined by reset bit
 `4+N` and telemetry `L2CPUCLK<N>`. The adapter converts explicitly where a
@@ -990,7 +988,7 @@ clock evidence, native availability and retained reference observations.
 ### Suite integration boundary
 
 Canonical performance-suite requirements stay in the
-[`ubench design`](benchmarks/design.md). A suite consumes the
+[benchmark design](benchmarks/design.md). A suite consumes the
 concrete inventory, target, region, execution, artifact, clock, and result
 services defined here. Each suite validates its own path as part of its
 ordinary invocation; no separate admission workload runs before it. Adding a suite changes this LLD only when it introduces a
@@ -1385,8 +1383,8 @@ has none and an unbounded kernel wait hangs the host with no way back.
   and preprocessed assembly.
 - `include/x280_hart_protocol.h` — canonical per-hart commands, phases,
   heartbeats, record offsets, wire structs, and layout assertions.
-- `include/socket_layout.h` — migration and socket mailbox placement and
-  values. `include/x280.h` remains the characterization-firmware umbrella.
+- `include/x280.h` — umbrella over `x280_address_map.h` and
+  `x280_hart_protocol.h`, plus `HART_STACK_SIZE`.
 - `include/rt/x280_hw.h` and `include/rt/x280_pll.h` — active-cycle
   versus wall-clock primitives and device-side PLL measurement.
 - `include/rt/x280_idle.h` — per-hart record accessors, the participant

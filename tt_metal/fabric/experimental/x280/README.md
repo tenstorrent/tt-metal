@@ -152,12 +152,12 @@ results are described in [docs/results.md](docs/results.md).
 - **core_sync.** An X280 director's multicast release spreads 16 Tensix workers' exits over
   about 122 debug-timer ticks, against about 11,600 for unicast.
 - **packet_injection.** One Tensix producer sustains about 1.38 M headers/s at one credit per
-  header. With the credit returned through a mode-1 (strict) window, at C=8, K=16 the X280
-  consumer plateaued at about 4.9 M headers/s from Tensix and about 4.8 M from four or more idle
-  ERISCs, bound by X280 service. With it posted, as built now, the visit cap K is the lever and C
-  is nearly flat: at C=8, K=16 four Tensix producers run 5.76 M headers/s with no credit stall,
+  header. With the credit returned through a mode-1 (strict) window, which the shipped build
+  does not use, at C=8, K=16 the X280 consumer plateaus at about 4.9 M headers/s from Tensix and
+  about 4.8 M from four or more idle ERISCs, bound by X280 service. With it posted, as the shipped
+  build does, the visit cap K is the lever and C is nearly flat: at C=8, K=16 four Tensix producers run 5.76 M headers/s with no credit stall,
   eight run 11.49 M, and all idle ERISCs 19.58 M; at C=K=1 all idle ERISCs are X280-bound at
-  about 229.5 ns per visit (whole-suite run).
+  about 229.5 ns per visit.
 - **eth_credit.** Each X280 forwarder moves 0.30-0.35 M packets/s across the Ethernet link,
   flat in slot size, bound by its header write into the ERISC; 5.8 GB/s per forwarder at 16 KiB
   slots.

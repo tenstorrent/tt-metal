@@ -1,7 +1,6 @@
 # Packet Injection Characterization
 
-**Status:** Implementation and silicon execution are available. The
-implementation uses core-sync for its phase boundary; measurement schema 2 owns
+The implementation uses core-sync for its phase boundary; measurement schema 2 owns
 the clock-evidence contract.
 
 **Scope:** characterization of
@@ -129,7 +128,7 @@ spread of **0.50%**; two of N=3 gave 3426 and 3416, a spread of 0.29%.
 That bounds a *single-request* measurement. It does not bound the throughput
 rows directly, which average over 1000 requests per worker — but it does explain
 them: 0.50% on one request implies roughly 0.016% once averaged over a thousand,
-which is the same order as the ~0.04% agreement actually observed across builds
+which is the same order as the ~0.04% agreement observed between runs
 and between topologies. The two are consistent, so the sub-0.05% agreements in
 the throughput table are real rather than an artefact of a quiet instrument.
 Every figure in this document other than the latency pair is a single run.
@@ -235,17 +234,15 @@ and the per-worker rates must not be summed: every shape reconstructs the same
 constant, and presenting that constant as a capacity attributes the 1/P falloff
 to a mechanism these measurements do not distinguish. A single consumer hart
 serving workers in turn and a saturated shared NoC path both produce 1/P with a
-flat total. **A B/C sweep is required before attributing the observed scaling to
-any one mechanism**; this configuration holds B and C at 1, so every request
+flat total. The T=4 capacity and C/K isolation points (`docs/measurement.md`)
+vary B and C; this configuration holds B and C at 1, so every request
 carries a publication and a credit return.
 
-**The rates do not depend on the consumer's code layout.** They were re-measured
-after a change that made the consumer image 464 bytes larger and relocated its
-polling loop, and they agree with the pre-change measurements to about 0.04% --
-the same order as the spread within a single shape. That is a reproducibility
-result about the measurement, not evidence for any mechanism: it rules out the
-reading that the earlier figures were an artefact of one build which a
-differently optimised consumer would move.
+**The rates do not depend on the consumer's code layout.** A consumer image 464
+bytes larger, with its polling loop relocated, gives the same rates to about 0.04%
+-- the same order as the spread within a single shape. That is a reproducibility
+result about the measurement, not evidence for any mechanism: the figures are not
+an artefact of one build that a differently optimised consumer would move.
 
 ### Backpressure Measurement
 
@@ -344,7 +341,7 @@ placement, memory budgets and cleanup status. Both run records carry `released_g
 `released_endpoints`, the release X280 executed (`pi_run_result_t`): the group's receiver
 count, zero for none, and the unicast endpoint count. The run record also carries
 `release_guards`, the guard words armed (zero for a unicast release), and
-`release_guards_overwritten`. Earlier records carry
+`release_guards_overwritten`. A record without `release_guards` carries
 `release_multicast_safe` instead, the flag the host passed: 1 released tiles that filled their
 bounding box by one multicast, 0 released one unicast per tile.
 
@@ -352,8 +349,7 @@ The reported assumption mask covers inbound LIM visibility, scalar counter atomi
 same-address credit order on the static-VC counter window (`PI_ASSUMED_STATIC_VC_ORDER`),
 nominal mtime frequency, local timer access ordering, and (for latency) pinned export
 visibility. It does not carry bit 2 (`PI_ASSUMED_BRIDGE_COMPLETION`, mode-1 credit
-completion): no packet-injection store waits for completion, and a record that sets it
-returned its credits through a mode-1 window.
+completion): no packet-injection store waits for completion.
 `PACKET_INJECTION_BRIDGE_HISTORY` defaults to `unknown`; the accepted
 `reported_no_mode3_since_reset` value is provenance, not proof of clean hardware.
 `mode3_observed` refuses reuse without initiating a reset.
@@ -422,7 +418,7 @@ length-carrying NoC write whose Tensix L1 source is congruent to 0 mod 64, and t
 write path requires source and destination congruence. Only `value` is semantic; the
 remaining 60 bytes of each slot are padding.
 For `P=280, T=140, S=16, N=48`: base `F = 619,072` bytes; export `8*P*N = 107,520` bytes; total arena `726,592` bytes.
-Request `PACKET_INJECTION_N=48` explicitly for that initial maximum-worker point.
+Request `PACKET_INJECTION_N=48` explicitly for that maximum-worker point.
 The latency default remains N=4096 and is rejected, not clamped, when it exceeds capacity.
 The core-sync arrival table adds eight bytes per worker before alignment; every admitted
 configuration is decided by `pi_compute_layout()` against the 917,376-byte arena.
@@ -770,14 +766,12 @@ writers. One to all available inactive `IDLE_ETH` cores, one per Ethernet tile,
 each run the shared `Producer` against their own SPSC ring into the one shared
 X280 consumer image (the throughput variant). There is no second single-writer
 implementation: `writers=1` is the same loop, protocol and result schema as every
-larger point. § Measured operation below states what is timed, and § Credit-protocol cost
-compares its per-header cost with that of a single-writer prototype that never
-waits for credit.
+larger point. § Measured operation below states what is timed.
 
 **Axes.** The GTest executable `x280_packet_injection_erisc_to_x280_header`
 registers `Axes/PacketInjectionEriscToX280Header.Run/<writers>_b<B>`:
 `writers1`, `writers2`, `writers4`, `writers8` and `writers_all` at B=1, and B=4
-and B=8 at `writers1` and at the four-writer deployment fan-in. With the default
+and B=8 at `writers1` and at `writers4`. With the default
 S=16, B=8 is the largest batch that leaves the ring double-buffered; B=S would
 publish the whole ring and then wait for all of it. The writer count and B come
 only from the axis; the suite rejects `PACKET_INJECTION_B`, `_T`, `_TILES` and
@@ -837,7 +831,7 @@ shares its NoC writes, barrier, cache invalidation and `rdcycle` with
 asserted in the device build), records `PI_ACTOR_ERISC` on failure, and its
 `prepare_header()` does nothing: the host seeds the header. The image asserts
 `PI_MODE_THROUGHPUT` with creation excluded. The kernel compiles at `-Os`, the
-EthernetConfig default and what the prototype ran.
+EthernetConfig default.
 
 **Placement and seeding.** Each writer's slice sits at the aligned base of the
 IDLE_ETH unreserved window (the suite requires the HAL window to end at the
@@ -921,13 +915,14 @@ evidence at 1350 MHz on writer 0's ERISC wall clock.
 Aggregate ingress does not scale with writers at this consumer configuration:
 the X280 interval grows in proportion to P and stays at about 1.4 M headers/s.
 Empty visits stay at zero while almost every header enters the credit wait,
-which is the X280-service signature in the plan's discriminating checks; batching
+which is the X280-service signature (many stall episodes, no empty visits; § Throughput
+Measurement); batching
 does not move it at C=1/K=1. ERISC wall and `rdcycle` deltas agree within two
 ticks, and one writer's wall delta over the aggregate interval implies about
 1.35 GHz, matching the AICLK evidence. The scaling campaign below re-ran these
 nine points and reproduced them within 0.09%.
 
-**Scaling campaign.** Card 0 as above, three runs per point through
+**Scaling campaign.** The same p150b, three runs per point through
 `run_characterization.py`.
 Rates are X280 `mtime` aggregates, mean [min, max] over the runs; stall
 episodes, counter writes and wall ticks are per writer. W is calibrated per point.
@@ -968,8 +963,8 @@ speedup/P:
 `writers_all` agrees between N=1024 (4.8238 M headers/s) and N=4096 (4.8273), a
 0.07% difference.
 
-Reading, by the empty-visit versus stall-episode check, with the credit then
-returned through a mode-1 (strict) window: at C=1, K=1 every point
+Reading, by the empty-visit versus stall-episode check, with the credit
+returned through a mode-1 (strict) window, which the shipped build does not use: at C=1, K=1 every point
 is X280-service bound (about 1,000 stall episodes per 1,024 headers, empty
 visits at most 3), and that service time is mostly credit writes -- at K=16 the
 X280 cost per header falls linearly with credits per header, about 570 X280
@@ -981,8 +976,8 @@ publication paces it, an attribution from the response to B rather than from
 the counters. C=8, K=16 is the edge of the S=16 grid, so where larger visits and
 credit batches stop helping is not measured.
 
-With the credit posted through the counter window (mode 2), as built now, a
-whole-suite run reads the same S=16, B=1 grid differently: the
+With the credit posted through the counter window (mode 2), as the shipped build
+does, the same S=16, B=1 grid reads differently: the
 visit cap K is the lever and C is nearly flat at fixed K. Across all writers,
 (C, K) = (1, 16), (4, 16) and (8, 16) run 19.622, 19.660 and 19.580 M headers/s,
 within 0.4%, and (1, 8), (4, 8) and (8, 8) run 16.137, 16.458 and 16.362, within
@@ -1021,19 +1016,12 @@ The unified member publishes with the packet-injection ring protocol: the slot
 write, a write barrier, then the ring-tail produced counter, which X280 polls
 with a fence before the counter load and another before the slot loads (see
 [Architectural Overview](#architectural-overview)).
-Comparing that encoding with a per-slot or in-header valid flag, such as the
-prototype's, is a separate measurement this member does not make.
 
-### Credit-protocol cost
+### Credit wait
 
-The prototype never waits on its consumer: its X280 validation pass runs after
-the ERISC batch ends. The unified member's writer waits for ring credit from the
-X280 consumer, so the difference between the two per-header costs is the cost of
-the credit protocol at the unified member's settings. The
-prototype's `DRAINED` point took 420.17 ERISC wall ticks per header and
-`writers1_b1` (S=16, C=1, K=1) 973.4, so the credit protocol costs 553.2 ticks per
-header there. 992 of 1,024 measured headers entered the credit wait: the writer
-is paced by X280 service and credit return, not by its own publication code.
+`writers1_b1` (S=16, C=1, K=1) costs 973.4 ERISC wall ticks per header, and 992 of
+1,024 measured headers entered the credit wait: the writer is paced by X280 service
+and credit return, not by its own publication code.
 
 ## Running the Benchmark
 
@@ -1055,17 +1043,7 @@ compilation against Metal's device-generated configuration is verified by
 data-movement RISCs for all five mode/creation-flag variants on a live device
 without enqueue or dispatch.
 
-The schema-2 baseline consists of seventeen successful p150b runs at UMD device 0,
-all against one set of binaries, covering every mode and
-every variant: throughput at P=1, 2, 4 and 8 across BRISC-only and paired shapes;
-`latency-include` and `latency-exclude` at N=1 and N=3, each run twice; and
-backpressure in both creation variants at P=1 and at P=2. Every run's producer and
-consumer counted the same traffic independently, per worker, and every run's
-`arena_bytes` matched the layout's compile-time golden for its shape.
-
-Those measurements predate schema 3 and do not qualify the core-sync boundary.
-They remain the throughput, latency, and backpressure baseline; their five binaries
-were byte-identical to a clean build of the schema-2 commit that recorded them.
+The figures above are measurement-schema-2 records; they do not cover the core-sync boundary.
 
 **L1 page order is confirmed ordered rather than assumed.** The strongest case is
 T=4 paired, where eight producers occupy eight pages and the host's per-page
@@ -1073,7 +1051,7 @@ identity check passed on all of them, with worker `w` landing on tile `w >> 1`
 and RISC `w & 1` — four tiles, both NoCs, in ascending page order. Note that
 `family=paired` doubles the worker count, so T=4 paired is P=8, not P=4.
 
-The assumption mask below remains an explicit limitation of the benchmark
+The assumption mask (§ Results and clock evidence) remains an explicit limitation of the benchmark
 contract, not a statement about whether the benchmark runs.
 
 Build in a tt-metal tree configured with `TT_METAL_BUILD_X280` ([README](../../README.md#2-build-boot-and-run-a-benchmark)), from the repository root:
@@ -1099,7 +1077,7 @@ env TT_METAL_RUNTIME_ROOT="$PWD" \
 
 # Producer JIT compile gate: no firmware image, no prepared runtime, no dispatch
 env TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD" \
-  TT_METAL_CACHE="$PWD/build/jit-cache-bu1" TT_METAL_FORCE_JIT_COMPILE=1 \
+  TT_METAL_CACHE="$PWD/build/jit-cache" TT_METAL_FORCE_JIT_COMPILE=1 \
   TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 \
   build/test/tt_metal/x280/x280_packet_injection_tensix_to_x280 \
   --gtest_filter='PacketInjectionCompile.BothRiscsCompileForEveryVariant'

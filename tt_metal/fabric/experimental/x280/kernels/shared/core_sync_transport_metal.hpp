@@ -83,7 +83,7 @@ struct MetalEndpoint {
  *
  * num_dests counts the destinations the sender is targeting and EXCLUDES the
  * sender itself, which the non-loopback multicast does not write
- * (dataflow_api.h:904-907). It is not derivable from the corners: whether the
+ * (dataflow_api.h, noc_semaphore_set_multicast). It is not derivable from the corners: whether the
  * director sits inside the rectangle is the host's knowledge, not the
  * transport's. Zero means there is no rectangle to release. */
 struct MetalGroup {
@@ -197,7 +197,7 @@ struct MetalTransport {
     /* A Tensix or Ethernet core originates a broadcast over the Tensix grid; a
      * DRISC core does not. An ethernet kernel calling noc_semaphore_set_multicast
      * directly is what settles the ETH arms
-     * (tt-metal/tests/tt_metal/tt_metal/test_kernels/dataflow/dynamic_noc_writer_eth.cpp:90-91). */
+     * (tests/tt_metal/tt_metal/test_kernels/dataflow/dynamic_noc_writer_eth.cpp). */
     static constexpr bool kHasMulticast =
         (CoreType == ProgrammableCoreType::TENSIX || CoreType == ProgrammableCoreType::ACTIVE_ETH ||
          CoreType == ProgrammableCoreType::IDLE_ETH);
@@ -357,7 +357,7 @@ struct MetalTransport {
      * corners.
      *
      * The sender is NOT written to, whether or not it lies inside the rectangle
-     * (dataflow_api.h:904-907); a director does not consume its own release
+     * (dataflow_api.h, noc_semaphore_set_multicast); a director does not consume its own release
      * token, so the loopback variant is never used here. The rectangle must
      * contain at least one core other than the sender, which is what
      * num_dests > 0 states.

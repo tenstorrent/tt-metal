@@ -16,10 +16,7 @@
  * (participant B) each read their own section by fixed hartid-scaled offset.
  * See docs/benchmarks/design.md, §Roles and mailbox model.
  *
- * Compiled by the host case and by the X280 image; kept out of the
- * x280_abi_headers C checks because it is C++-only (uses `static_assert`). The host case's
- * C++ compilation and the image's `.cpp` compilation are the guarantees this
- * header is well-formed.
+ * Compiled by the host case and by the X280 image.
  */
 #ifndef X280_P2P_LATENCY_X280_SAME_TILE_ARGS_H
 #define X280_P2P_LATENCY_X280_SAME_TILE_ARGS_H
@@ -35,8 +32,8 @@
  * Medium selector
  * --------------------------------------------------------------------------
  * x280_same_tile is the only member with a medium choice (see design §Participant rows).
- * Coherent cached LIM is the initial target; uncached LIM is admitted once
- * its visibility operation is separately established.
+ * The backend admits coherent cached LIM and refuses uncached LIM, whose
+ * visibility operation is not established.
  */
 typedef enum {
     P2P_LATENCY_X280_SAME_TILE_MEDIUM_COHERENT = 0u,
@@ -47,9 +44,8 @@ typedef enum {
  * x280_same_tile backend argument section
  * --------------------------------------------------------------------------
  * All four *_addr fields are LIM absolute addresses (i.e. what
- * X280Tile::available_lim() yielded plus an offset). The image reads from
- * peer_inbound and writes into own_inbound / own_result through a straight
- * pointer.
+ * X280Tile::available_lim() yielded plus an offset). The image writes
+ * peer_inbound and own_result and reads own_inbound through a plain pointer.
  *
  * Fields carry every address the backend needs; the frontend never touches
  * them. Keeping them here rather than deriving them lets a host case place

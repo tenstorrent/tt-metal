@@ -18,7 +18,6 @@
 #include "../shared/ubench_units.h"
 #include "../../include/rt/measurement.h"
 #include "../../include/rt/x280_pinned_input.h"
-#include "../../include/socket_layout.h"
 #include "../../include/x280_address_map.h"
 #include "../../include/x280_hart_protocol.h"
 
@@ -249,9 +248,9 @@ UBENCH_LAYOUT_ASSERT(
     "the fixture window begins at a line boundary at or above the hart protocol end, below its end");
 UBENCH_LAYOUT_ASSERT(PIPELINE_STAGE_FIXTURE_LIM_END == 0x081C0000u, "WAYENABLE 1 leaves fourteen 128 KiB LIM ways");
 UBENCH_LAYOUT_ASSERT(
-    offsetof(pipeline_stage_result_t, raw_batch_delta) == 24u, "pipeline counters retain their published offset");
+    offsetof(pipeline_stage_result_t, raw_batch_delta) == 24u, "pipeline counters begin at offset 24");
 UBENCH_LAYOUT_ASSERT(
-    offsetof(pipeline_stage_result_t, verify_sentinel) == 48u, "pipeline verification retains its published offset");
+    offsetof(pipeline_stage_result_t, verify_sentinel) == 48u, "pipeline verification sentinel is at offset 48");
 UBENCH_LAYOUT_ASSERT(
     sizeof(pipeline_stage_samples_t) == PIPELINE_STAGE_SAMPLES_BYTES,
     "sample region contains a two-word header and fixed delta array");

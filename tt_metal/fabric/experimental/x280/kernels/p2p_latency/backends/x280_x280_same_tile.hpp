@@ -9,9 +9,8 @@
  * share one LIM, so a transmit is a plain LIM store from the initiator's
  * hart into the responder's inbound mailbox and a poll is a plain load from
  * this hart's own inbound. No NOC window is consumed, no address translation
- * is required. The medium selector chooses coherent cached LIM (initial) or
- * uncached LIM (deferred; the header rejects it until its explicit visibility
- * operation is separately established).
+ * is required. The medium selector names coherent cached LIM or uncached LIM;
+ * initialize() admits only coherent cached LIM and refuses uncached LIM.
  *
  * The design's clock-solipsistic rule holds: each hart reads only its own
  * rdcycle and mtime and never sends or receives timestamps. The result region's raw
@@ -62,9 +61,8 @@ struct state_t {
     uint64_t hartid;
     uint64_t run_value;
 
-    /* Set by initialize(). Not used inside the timed loop for x280_same_tile, but the
-     * frontend calls bind_direction() every phase and future members may want a
-     * per-direction rebinding. Kept for parity. */
+    /* Set by initialize(). Not used inside the timed loop; the frontend calls
+     * bind_direction() every phase. Kept for parity with the other backends. */
     uint32_t direction;
 };
 
@@ -87,18 +85,14 @@ inline bool initialize(
     uint64_t run_value,
     p2p_latency_result_t& result) {
     if (backend_args.medium != P2P_LATENCY_X280_SAME_TILE_MEDIUM_COHERENT) {
-        /* Uncached LIM medium is deferred: the design admits it only after
-         * its explicit visibility operation is separately established, and
-         * this member does not stand up an unproven artifact/configuration
-         * pair. */
+        /* Uncached LIM is refused: its visibility operation is not
+         * established. */
         return false;
     }
 
     if (common.payload_size != 4u) {
-        /* x280_same_tile implements only the token-only specialisation. Larger
-         * payloads are a separate template instantiation of the frontend
-         * and its backend transmit; they can be added alongside the
-         * payload sweep without touching this member. */
+        /* x280_same_tile implements only the token-only specialisation; a
+         * larger payload is refused. */
         return false;
     }
 

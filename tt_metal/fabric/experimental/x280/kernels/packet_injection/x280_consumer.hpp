@@ -250,7 +250,7 @@ public:
     pi_error_t run() {
         pi_error_t err = validate_args();
         if (err != PI_ERROR_NONE) {
-            // Do NOT dereference unverified run_result_ or slots_ pointers!
+            // run_result_ and slots_ are unverified here and are not dereferenced.
             return err;
         }
 
@@ -1277,7 +1277,7 @@ private:
         if (all_drained && recovery_release_ok && counters_quiescent()) {
             return collect_and_cleanup();
         } else {
-            // Producers stuck / unproven: do NOT unpin or clear windows!
+            // Producers are not proven quiescent, so the windows stay pinned and programmed.
             run_result_->data_quiescent = 0u;
         }
 

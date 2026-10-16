@@ -1,6 +1,4 @@
-# Characterization Ubench Design
-
-**Status:** v0 implementation design
+# Benchmark design
 
 ## Purpose
 
@@ -38,7 +36,7 @@ Two design documents have distinct authority:
   structure.
 
 Raw X280 NOC encodings and helper behavior remain defined by
-[`include/noc.h`](../../include/noc.h). The harness LLD summarizes the
+[`include/noc.h`](../../include/noc.h). [`docs/harness.md`](../harness.md) summarizes the
 non-obvious consequences that span that header, atomic behavior, and L3/LIM
 visibility.
 
@@ -50,8 +48,8 @@ document.
 
 The pseudocode in this document records more than an example. Its suite
 sequencing, dataflow, protocol ownership, and measurement brackets are
-normative design decisions. Hardware ownership and lifecycle follow the
-harness LLD and landed programming components. Type names, target-adapter
+normative design decisions. Hardware ownership and lifecycle follow
+[`docs/harness.md`](../harness.md) and the programming components. Type names, target-adapter
 shapes, function names, and exact source layout are illustrative unless
 explicitly stated otherwise.
 
@@ -172,8 +170,8 @@ selection names are illustrative, not a second host API specification.
 
 The frontend is a suite's unit of variation and is not shared: phase graphs
 differ legitimately between roles and directions, a boundary with a drain,
-and per-item granularity, and would differ again for the multi-producer
-arrival scanning of § Client handling. One frontend per suite, each
+per-item granularity, and the multi-producer arrival scanning of
+packet_injection's consumer. One frontend per suite, each
 absorbing its members as backends, is the shape — extracting a common one
 would couple those phase graphs to save a driver of about thirty lines.
 
@@ -193,9 +191,8 @@ checking its address, extent, and alignment, then validates the common and
 backend cookies before trusting an embedded address.
 
 Phase enums stay per-suite and keep their own numbering. The outcome
-vocabulary is a mapping over them rather than a renumbering, so a suite
-already publishing a result record adopts it without changing the values its
-host reads.
+vocabulary is a mapping over them rather than a renumbering, so a suite's
+published values do not change.
 
 ### Host shape for peer-to-peer latency
 
@@ -428,9 +425,7 @@ consumer, at writer counts 1, 2, 4, 8 and all available and publication batch
 sizes 1, 4 and 8. Aggregate ingress comes from one X280 `mtime` interval; each
 ERISC keeps raw wall ticks and `rdcycle`. Header creation, Ethernet arrival, the
 packet copy to DRISC, and the wait for that copy are preconditions outside the
-measured bracket. The cost of its credit protocol, against a single-writer
-prototype that never waited for its consumer, is in
-[packet_injection.md](packet_injection.md#credit-protocol-cost).
+measured bracket.
 
 ## Functional preconditions
 
@@ -495,7 +490,7 @@ bytes_in_flight = L × T_protocol
 
 ### Participant rows
 
-Rows follow the accepted implementation sequence:
+Rows:
 
 | Entry | Participants | Scope | Capability exercised |
 |---|---|---|---|
@@ -506,13 +501,12 @@ Rows follow the accepted implementation sequence:
 | 5 | X280 ↔ inactive idle ERISC | one chip | same-chip NOC mechanical smoke path; no Ethernet-link traffic |
 | 6 | ERISC ↔ ERISC | two chips | link-pair selection, raw ERISC session, and independent clock state |
 
-Participant entries 1–3 define the initial implementation sequence.
 Entry 4 has the separately named `drisc_peer_tile` mechanical smoke member.
 It uses forced slow dispatch and the free non-endpoint DRISC, requires NOC0 in
 the stream mode DRISC firmware sets, switches no NIU, and separates the peer's untagged local address from the host's tagged L1 view.
 Its `get_timestamp()` deltas are raw ticks with per-run AICLK evidence and a
 validated conversion rate.
-Entry 5 now has the separately named `erisc_peer_tile` mechanical smoke member:
+Entry 5 has the separately named `erisc_peer_tile` mechanical smoke member:
 X280 maps the idle ERISC mailbox through its checked paired-range TLB, while
 ERISC returns the token through Metal NOC operations. The member requires an
 inactive Ethernet core and publishes ERISC wall-clock deltas as raw ticks with
@@ -631,7 +625,7 @@ through both phases.
 
 The 4-byte case uses a token-only specialization so its hot path contains no
 payload-size branch. Larger sizes may use one generic runtime-sized artifact;
-each size remains a separate invocation. Initial payload anchors should cover:
+each size remains a separate invocation. The payload anchors are:
 
 - 4 bytes: credit/token exchange;
 - 64 bytes: one X280 vector-store width;
@@ -743,9 +737,9 @@ NOC and the directional hop count derived by the harness
 `hops(from, to, noc_id)` service. A cross-chip ERISC link records link identity
 and mode instead; it has no NOC hop count.
 
-Start with a bounded placement probe and compare its spread against
-same-configuration repeatability. Expand to a full placement sweep only if the
-observed effect is large enough to change placement decisions.
+A bounded placement probe is compared against same-configuration
+repeatability; a full placement sweep runs only where the observed effect is
+large enough to change placement decisions.
 
 Keep default sweeps separate:
 
@@ -1002,8 +996,8 @@ X280 aperture transfers use explicit volatile stores; `memcpy()` is not used.
 | measurement clock | harness-fenced `rdcycle` bracket | accepted Metal timestamp counter |
 | one-time setup | select local medium and consume host-prepared windows | configure local cache behavior |
 
-Active/raw-link ERISC members must supply the same semantic operations before
-their rows are implementation-ready. `drisc_peer_tile` and idle
+Active/raw-link ERISC members have no backend: they would need the same semantic
+operations. `drisc_peer_tile` and idle
 `erisc_peer_tile` use the same staged Metal NOC write, completion barrier, and
 cache-invalidating poll as the Tensix peer; their target policies supply the raw
 wall-clock read, backend identity, and, for DRISC, the selected-NIU lifecycle.
@@ -1053,7 +1047,7 @@ and `drisc_peer_tile`.
 
 ## Transport bandwidth
 
-### Question and maturity
+### Question
 
 `transport_bandwidth` measures the achieved rate of one transport leg. Its
 timed loop repeatedly issues the same logical transfer; source, destination,
@@ -1063,9 +1057,6 @@ application credits, or require an echo in the timed path.
 The common loop and measurement boundaries are specified. Receiving-ERISC
 packet-header ingress is not a member of this suite: it returns ring
 credit in its measured path, and is `packet_injection/erisc_to_x280_header`.
-
-A raw-Ethernet member uses the raw link primitive; production link and
-application credit semantics remain separate paths.
 
 ### Protocol
 
@@ -1123,8 +1114,8 @@ an invalid result.
 For addressable memory, `SIZE` is the number of application bytes moved by one
 issue. Raw Ethernet must separately define and report payload bytes and wire
 bytes, including mandatory hardware headers, before its rate can be compared
-with line rate. Until that accounting and its completion boundary are fixed,
-the raw-Ethernet member is not implementation-ready.
+with line rate. That accounting and its completion boundary are not fixed, so
+there is no raw-Ethernet member.
 
 ### Measurement boundary
 
@@ -1202,12 +1193,11 @@ prepares its fixed source and destination during `INIT`. Address progression is
 added only when a member needs it to defeat cache absorption or to study a
 specific DMA buffer partition.
 
-For the initial addressable mappings, Tensix `issue()` uses the selected
+For the addressable mappings, Tensix `issue()` uses the selected
 asynchronous NOC operation and `drain()` uses its matching barrier. X280
 posted-store members end with a read through the window, which does not force
 completion under the posted ordering mode. DRISC DMA and
-ERISC raw-link mappings are not fixed until their concrete members are
-specified.
+ERISC raw-link mappings are not fixed; those members do not exist.
 
 ### Kernel entry point
 
@@ -1286,31 +1276,20 @@ documented `issue()` semantics on that component.
 
 ### Members and axes
 
-| Member | Primitive | Readiness |
+| Member | Primitive | Status |
 |---|---|---|
-| Tensix write to X280 | asynchronous NOC write into X280 LIM; passive X280 target | landed (`tensix_to_x280`) |
-| Idle-ERISC write to X280 | the Tensix write's kernel and backend on 1-8 idle ERISCs, each into its own LIM range, their timed loops released together by a host start gate after warm-up; ERISC wall clock | landed (`erisc_to_x280`) |
-| X280 write to Tensix | X280 harts 0..H-1 (H = 1, 2 or 4) each issue `SIZE/W` uncached stores of `W` = 4 (`sw`), 8 (`sd`) or 64 B (`vse32.v`) per issue through their own paired TLB slot 120+h in ordering mode 2 (posted) into their own range of a Tensix L1 buffer; passive Tensix target. `DRAINED` ends on one read through the window, so it is an issue rate, not a delivered rate, and is recorded as `RETIRED` ([docs/measurement.md "Quantities that share a label"](../measurement.md#quantities-that-share-a-label)) | landed (`x280_to_tensix`) |
+| Tensix write to X280 | asynchronous NOC write into X280 LIM; passive X280 target | `tensix_to_x280` |
+| Idle-ERISC write to X280 | the Tensix write's kernel and backend on 1-8 idle ERISCs, each into its own LIM range, their timed loops released together by a host start gate after warm-up; ERISC wall clock | `erisc_to_x280` |
+| X280 write to Tensix | X280 harts 0..H-1 (H = 1, 2 or 4) each issue `SIZE/W` uncached stores of `W` = 4 (`sw`), 8 (`sd`) or 64 B (`vse32.v`) per issue through their own paired TLB slot 120+h in ordering mode 2 (posted) into their own range of a Tensix L1 buffer; passive Tensix target. `DRAINED` ends on one read through the window, so it is an issue rate, not a delivered rate, and is recorded as `RETIRED` ([docs/measurement.md "Quantities that share a label"](../measurement.md#quantities-that-share-a-label)) | `x280_to_tensix` |
 | ERISC raw transmit | raw Ethernet issue and completion | peer operation, completion, and byte accounting unresolved |
 | DRISC read from Tensix | repeated NOC read from host-seeded Tensix L1 | primitive, drain, and supported depth unresolved |
 | DRISC GDDR DMA | repeated DMA read or write | direction, buffer partition, and completion mapping unresolved |
-| concurrent pumps | multiple unchanged transport legs | endpoint topology and aggregation contract deferred |
+| concurrent pumps | multiple unchanged transport legs | endpoint topology and aggregation contract unresolved |
 
 Common runtime axes are transfer size, transfer count, warm-up count, and
 measurement boundary. Placement and access plans are host-resolved.
 Outstanding depth and buffer partition are member-specific axes; they are not
 forced into a universal frontend parameter.
-
-The first concrete member design must state:
-
-- exact source and destination memory;
-- alignment and size constraints;
-- `issue()` acceptance semantics;
-- `drain()` completion semantics;
-- warm-up and path-verification behavior;
-- logical versus physical byte accounting;
-- required functional preconditions; and
-- result fields and reference bound.
 
 ### Results
 
@@ -1322,7 +1301,7 @@ mechanism.
 
 ## Pipeline-stage cost
 
-### Question and maturity
+### Question
 
 `pipeline_stage` measures the per-item X280 cycle cost of a processing stage
 and whether it fits the available per-item budget.
@@ -1361,10 +1340,9 @@ Memory operations define useful boundaries. Action issue is local stage work;
 transport after that issue is measured by a transport suite rather than silently
 included in a compute-stage measurement.
 
-Initial subjects are routing, forwarding, credit receive, and credit issue.
-The current routing member does not make route construction, lookup style,
-packet tier, table placement, or working-set size into axes. A future subject
-must justify any new axis from its own measurement question.
+The subjects are routing and forwarding. The routing member does not make route
+construction, lookup style, packet tier, table placement, or working-set size
+into axes.
 
 ### Measurement granularities
 
@@ -1441,8 +1419,6 @@ leaves the record aborted, and every later case skips until a reset.
 
 Both pipeline executables require `LimShape{14}`, at which every benchmark
 opens ([harness.md](../harness.md#running-benchmarks)).
-Legacy/stress suites, cache experiments, and unreviewed executables remain
-outside that sequence.
 
 ### Current layouts and subject boundaries
 
@@ -1476,39 +1452,17 @@ count, prepared-input base and extent, admitted `wayenable`, pinned-way and
 way-mask identity, instrumentation, counts, raw counter deltas, per-item
 reductions, a stage witness, and verification state.
 
-## Deferred and reference measurements
-
-### Client handling
-
-An arrival-driven client-handling suite may later measure per-writer mailbox
-scanning, connection-state lookup, and service scaling across clients and
-harts. Under the harness X280 single-writer invariant, it uses one cell per
-producer rather than one shared atomic counter. Producer topology,
-live-versus-seeded input, synchronization, result shape, and reference arms
-remain unresolved.
-
-### Composed experiments
-
-Multi-participant credit cycles, chained data moves, and a pipeline distributed
-across several X280 harts require a composed-experiment model. They remain
-deferred until the primitive latency, bandwidth, and stage measurements show
-that composition is decision-relevant.
-
-A distributed hart pipeline would combine measured stage costs with same-tile
-handoff cost. That arithmetic is a model until the composed run measures its
-overlap and contention directly.
-
-### Production-path references
+## Reference measurements
 
 Production-fabric line rate, configured maximum-payload throughput, existing
 fabric round-trip latency, and production-router phase telemetry are reference
-measurements. The harness supplies recording discipline, but the production
-datapath is not reclassified as a ubench backend.
+measurements. The harness supplies recording discipline; the production
+datapath is not a benchmark backend.
 
 ## Stable implementation references
 
-Host-runtime and X280 window implementation references are maintained in the
-harness LLD. Suite implementations additionally rely on:
+Host-runtime and X280 window implementation references are in
+[`docs/harness.md`](../harness.md). Suite implementations additionally rely on:
 
 - [`tt_metal/hw/inc/api/dataflow/noc.h`](../../../../../hw/inc/api/dataflow/noc.h)
   — Tensix NOC issue, flush, and barrier operations.
