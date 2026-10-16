@@ -5,14 +5,17 @@
 to the gates, and how the ``--ulp-measure`` records are judged against it."""
 
 import math
+from pathlib import Path
 
 import pytest
+
 from conftest import TANH_DOMAINS
 from helpers import ulp_budget_diff
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.ulp_budget_diff import (
+    RAISE_LABEL,
     Kind,
     Verdict,
     compare,
@@ -260,7 +263,7 @@ _RAISED_HEAD = _edited(0, Row(input=F16B, output=F16B, measured=9))
 @pytest.mark.parametrize(
     "head, flags, status",
     [(_BASE, [], 0), (_RAISED_HEAD, [], 1), (_RAISED_HEAD, ["--allow-raises"], 0)],
-    ids=["unchanged", "raised", "raised-advisory"],
+    ids=["unchanged", "raised", "raised-admitted"],
 )
 def test_diff_exit_status(tmp_path, head, flags, status):
     base_path, head_path = tmp_path / "base.yaml", tmp_path / "head.yaml"
@@ -304,6 +307,116 @@ def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text):
         head_path.write_text(head_text)
     argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
     assert main([*argv, "--allow-raises"]) == 2
+
+
+# ── The CI that holds the tables ──────────────────────────────────────────────
+
+_REPO = Path(__file__).resolve().parents[4]
+_WORKFLOWS = _REPO / ".github/workflows"
+
+
+def _ci_file(path: Path) -> str:
+    if not path.exists():  # pragma: no cover - the CI ships with this file
+        pytest.skip(f"{path.name} not in this checkout")
+    return path.read_text(encoding="utf-8")
+
+
+def test_the_guard_runs_the_tool_as_a_module_in_the_llk_image_per_table():
+    """The tool is a module of the test package (relative imports, torch through
+    `ulp`), so the guard runs `-m helpers.ulp_budget_diff` in the LLK image, once per
+    table, with CHIP_ARCH naming that table's architecture: the loader reads it at
+    import, and an unkeyed row binds on the architecture its file is for."""
+    text = _ci_file(_WORKFLOWS / "llk-sfpu-ulp-budget-guard.yaml")
+    body = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "python3 -m helpers.ulp_budget_diff diff" in body
+    assert "helpers/ulp_budget_diff.py diff" not in body
+    assert "image: ${{ inputs.docker-image }}" in body
+    assert 'CHIP_ARCH="$arch" python3 -m helpers.ulp_budget_diff' in body
+    assert "*_bh.yaml) arch=blackhole" in body
+    assert "TABLES: sfpu_accuracy_budget_wh.yaml sfpu_accuracy_budget_bh.yaml" in body
+
+
+def test_the_guard_is_in_pr_gate_and_the_sweep_runs_nightly():
+    """The guard is host-only and seconds long, so PR Gate calls it on every PR, in the
+    LLK image it already resolves. The sweep holds a card for minutes, which PR Gate's
+    llk buckets have no room for, so llk-e2e calls it every night on a Wormhole and a
+    Blackhole card, and its summary job reports it."""
+    import yaml
+
+    jobs = yaml.safe_load(_ci_file(_WORKFLOWS / "pr-gate.yaml"))["jobs"]
+    status = jobs["workflow-status"]
+    (check,) = [
+        step
+        for step in status["steps"]
+        if step.get("uses") == "./.github/actions/workflow-status"
+    ]
+    listed = check["with"]["required-jobs"] + "," + check["with"]["optional-jobs"]
+    listed = {job.strip() for job in listed.replace("\n", ",").split(",")}
+    guard = "llk-sfpu-ulp-budget-guard"
+    assert jobs[guard]["uses"] == f"./.github/workflows/{guard}.yaml"
+    assert "resolve-docker-pull-refs" in jobs[guard]["needs"]
+    assert "llk-ci-docker-image" in jobs[guard]["with"]["docker-image"]
+    assert guard in status["needs"] and guard in listed
+    assert not [j for j in jobs.values() if "llk-sfpu-ulp-sweep" in str(j.get("uses"))]
+
+    nightly = yaml.safe_load(_ci_file(_WORKFLOWS / "llk-e2e.yaml"))
+    assert "schedule" in nightly[True]  # PyYAML reads the `on:` key as True
+    sweep = nightly["jobs"]["llk-sfpu-ulp-sweep"]
+    assert sweep["uses"] == "./.github/workflows/llk-sfpu-ulp-sweep.yaml"
+    assert "llk-sfpu-ulp-sweep" in nightly["jobs"]["llk-e2e-summary"]["needs"]
+
+    matrix = _REPO / "tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml"
+    entries = yaml.safe_load(matrix.read_text(encoding="utf-8"))
+    assert {e["name"]: set(e["skus"]) for e in entries} == {
+        "llk_sfpu_ulp_sweep_wormhole": {"wh_n150_civ2"},
+        "llk_sfpu_ulp_sweep_blackhole": {"bh_p150b_civ2"},
+    }
+    assert all(e["budget_type"] == "e2e" for e in entries)
+
+
+def test_the_sweep_runs_the_sweep_and_the_comparison_and_fails_on_either():
+    """Each entry must run the sweep with --ulp-measure *and* the headroom comparison
+    over it against its own architecture's table, and exit with either's failure: a
+    cmd that stopped after a red sweep would publish no report, and one that ignored
+    headroom would pass every tolerance-cell regression."""
+    import yaml
+
+    matrix = _REPO / "tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml"
+    entries = yaml.safe_load(_ci_file(matrix))
+    for entry, suffix in zip(entries, ("wh", "bh")):
+        cmd = entry["cmd"]
+        assert "--ulp-measure=ulp_measurements.jsonl" in cmd
+        assert "test_unary_sfpu_ulp.py || status=$?" in cmd
+        assert "python3 -m helpers.ulp_budget_diff headroom" in cmd
+        assert f"--table helpers/sfpu_accuracy_budget_{suffix}.yaml" in cmd
+        assert "--measured ulp_measurements.jsonl" in cmd
+        # The job summary is this file.
+        assert "--out ulp_headroom_report.md" in cmd
+        assert cmd.count("|| status=$?") == 2 and 'exit "$status"' in cmd
+        assert "set -e" not in cmd.replace("set -uo", ""), "-e would skip the report"
+    # verify-changed-tests would run the cmd from the repo root, where it cannot work.
+    verify = _ci_file(_WORKFLOWS / "verify-changed-tests.yaml")
+    unsupported = yaml.safe_load(verify)["env"]["UNSUPPORTED_YAMLS"].split()
+    assert "llk_sfpu_accuracy_tests.yaml" in unsupported
+    # The workflow tells the card's architecture from the runner, so each entry's
+    # table is the one the session loads.
+    workflow = _ci_file(_WORKFLOWS / "llk-sfpu-ulp-sweep.yaml")
+    assert 'echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"' in workflow
+
+
+def test_the_guard_admits_a_loosened_gate_only_in_a_budget_raise_pr():
+    """A raise passes only in a PR that changes nothing but the tables and carries the
+    label; the tool's exit 1 is a loosened gate, and the workflow fails on it."""
+    text = _ci_file(_WORKFLOWS / "llk-sfpu-ulp-budget-guard.yaml")
+    assert f"const label = '{RAISE_LABEL}';" in text
+    assert "!tables.includes(path)" in text and "listLabelsOnIssue" in text
+    # --allow-raises comes only from that decision, never unconditionally.
+    assert text.count("--allow-raises") == 2  # the decision's array, and a comment
+    assert 'if [[ "$ALLOWED" == true ]]; then' in text
+    assert '1) echo "verdict=loosened"' in text
+    assert "steps.compare.outputs.verdict != 'pass'" in text
 
 
 def test_the_guard_imports_no_module_that_loads_the_checked_out_table():

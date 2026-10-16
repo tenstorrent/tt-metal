@@ -155,6 +155,12 @@ fp16 subnormals the pack does not reproduce.
   loader refuses one without it. A worse measurement is a raised gate, recorded by a
   re-emit in a change of its own; `python -m helpers.ulp_budget_diff diff --base <old>
   --head <new>` lists every cell a change loosens.
+- **Raising a budget is a PR of its own.** PR Gate's `llk-sfpu-ulp-budget-guard` fails
+  a change that loosens a gate in either table (a raised figure, a widened floor, a gate
+  demoted or deleted, a widened `atol`/`rtol`) unless the change touches nothing but
+  the tables and carries the `ulp-budget-raise-approved` label; after adding the label,
+  re-run the job. Lowering a budget is never blocked, and a tolerance cell's recorded
+  measurement going up is reported, not blocked.
 - **Most specific key wins.** Key fields are `input`, `output`, `approx`, `dest` and
   `arch`, all optional; two rows matching one variant equally specifically are refused.
 - **A row holds for the configuration it was measured in**: `FAST_MODE(No)` and
@@ -213,8 +219,11 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
 
 - **Any host pytest run in `tests/` wipes `/tmp/tt-llk-build`**: chain
   `--compile-producer` and `--compile-consumer`, and run host suites afterwards.
-- **The sweep is marked `accuracy`**, which every LLK workflow deselects; run it by name
-  or `-m accuracy`.
+- **The sweep is marked `accuracy`**, which every LLK workflow deselects; `llk-e2e`
+  runs it by path every night on a Wormhole and a Blackhole card
+  (`llk-sfpu-ulp-sweep.yaml`, matrix `tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml`)
+  and reports to the LLK CI status channel. Dispatch that workflow to sweep a branch
+  that changes an SFPU kernel or the SFPI pin. Run it locally by name or `-m accuracy`.
 - **Both runs take the same op set**: every unary op with a block in the table, whatever
   its rows say. `--ulp-emit` changes what is written, not what is collected.
 - **A plain gate run does not judge tolerance cells**: it skips them with the measured

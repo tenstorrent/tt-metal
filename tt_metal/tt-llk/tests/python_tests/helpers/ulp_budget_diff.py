@@ -35,6 +35,10 @@ from .ulp_table import (
 # The op and the key of the row that decides a cell.
 Cell = tuple[MathOperation, BudgetKey]
 
+# The label that approves a pull request loosening a gate. The guard workflow admits one
+# only when the change touches nothing but the tables and carries this label.
+RAISE_LABEL = "ulp-budget-raise-approved"
+
 # A collapsed section shows this many rows and says how many it withheld; a list of
 # what failed or loosened is never cut.
 _MAX_ROWS = 40
@@ -486,6 +490,17 @@ def render_budget_diff(changes: list[Change]) -> str:
             lines(loosened),
             collapsed=False,
         ),
+        *(
+            [
+                "A gate may only be loosened in a pull request that changes nothing but "
+                f"the tables and carries the `{RAISE_LABEL}` label, each row re-measured "
+                "in the same change; otherwise the budget is being fitted to a failure, "
+                "and the kernel or the golden is what moved.",
+                "",
+            ]
+            if loosened
+            else []
+        ),
         *_section(
             f"{len(other)} other budget change(s)", header, lines(other), collapsed=True
         ),
@@ -685,7 +700,11 @@ def main(argv: list[str] | None = None) -> int:
     diff = sub.add_parser("diff", help="what a change to the table does to the gates")
     diff.add_argument("--base", type=Path, required=True)
     diff.add_argument("--head", type=Path, required=True)
-    diff.add_argument("--allow-raises", action="store_true", help="report, do not fail")
+    diff.add_argument(
+        "--allow-raises",
+        action="store_true",
+        help="report loosened gates but exit 0 (a budget-only, approved PR)",
+    )
     headroom = sub.add_parser(
         "headroom", help="--ulp-measure records against the table"
     )
