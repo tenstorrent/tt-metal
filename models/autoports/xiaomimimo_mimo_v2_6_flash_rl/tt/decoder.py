@@ -161,12 +161,17 @@ class TtMiMoDecoderLayer:
         x2.deallocate(True)
         return y
 
-    def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, token_mask=None):
+    def attention_decode(self, x, rot_mats, cur_pos, page_table, kv_cache):
+        """Decode attention block: input norm, attention (with its row all-reduce), residual add."""
         h = self.input_norm(x)
         attn = self.attn.forward_decode(h, rot_mats[self.is_swa], cur_pos, self._page_table(page_table), kv_cache)
         h.deallocate(True)
         x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
+        return x2
+
+    def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, token_mask=None):
+        x2 = self.attention_decode(x, rot_mats, cur_pos, page_table, kv_cache)
         y = self._ffn(x2, token_mask, decode=True)
         x2.deallocate(True)
         return y
