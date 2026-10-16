@@ -578,23 +578,51 @@ def test_a_measurement_resolves_against_the_most_specific_row():
     assert over == 1  # 50 is inside the broad 100 but past the specific 1
 
 
-def test_a_long_report_is_capped_and_says_how_many_it_withheld():
-    """A PR comment has a size limit, and 2,000-odd gated cells could blow past it."""
+def test_the_headroom_report_lists_every_failure_and_caps_only_the_slack():
+    """The failing cells are what the report is for; slack is a to-do list."""
     extra = 5
     n = _MAX_ROWS + extra
     table = "Abs:\n" + "".join(
         f'  - {{in: Float16_b, out: Float16_b, dest: "{i}", max_ulp: 8}}\n'
-        for i in range(n)
+        for i in range(2 * n)
     )
     rows = [
         {"op": "Abs", "in": "Float16_b", "out": "Float16_b", "dest": str(i), "max": 99}
         for i in range(n)
+    ] + [
+        {"op": "Abs", "in": "Float16_b", "out": "Float16_b", "dest": str(i), "max": 0}
+        for i in range(n, 2 * n)
     ]
     report, over = render_headroom(parse_table(table), _measured_cells(rows))
     assert over == n
+    assert report.count("over budget |") == n
+    assert report.count("could tighten |") == _MAX_ROWS
     # Delimited: a bare "5 more" is also in "45 more".
-    assert f"| _… {extra} more_ |" in report
-    assert report.count("over budget |") == _MAX_ROWS
+    assert report.count(f"| _… {extra} more_ |") == 1
+
+
+def test_the_guard_lists_every_loosened_cell_and_caps_only_the_improvements():
+    """The loosened cells are the list the guard exists for (#58590 loosened 87)."""
+    extra = 5
+    n = _MAX_ROWS + extra
+
+    def table(raised, tightened):
+        return _head(
+            *(
+                f'{{in: Float16_b, out: Float16_b, dest: "{i}", max_ulp: {raised}}}'
+                for i in range(n)
+            ),
+            *(
+                f'{{in: Float16_b, out: Float16_b, dest: "{i}", max_ulp: {tightened}}}'
+                for i in range(n, 2 * n)
+            ),
+        )
+
+    changes = _changes(table(5, 5), table(9, 1))
+    report = render_budget_diff(changes)
+    assert report.count("budget raised |") == n
+    assert report.count("budget tightened |") == _MAX_ROWS
+    assert report.count(f"| _… {extra} more_ |") == 1
 
 
 def test_a_tolerance_cell_with_no_recorded_figure_is_counted_not_passed_silently():
@@ -658,19 +686,18 @@ def test_the_key_dimensions_are_the_registrys():
     assert KEY_FIELDS == tuple(_KEY_FIELDS)
 
 
-def test_both_checks_are_part_of_the_required_pr_gate():
-    """A red check in a workflow of its own blocked nothing: no branch rule requires it,
-    and a path-filtered check cannot be required. Both count because PR Gate calls them
-    and "PR Gate Status" -- a required check -- fails when either fails (the guard only
-    on a table that cannot load). The sweep runs only when an SFPU kernel, the SFPI pin,
-    or its own workflow or matrix changed."""
+def test_the_guard_is_in_pr_gate_and_the_sweep_runs_nightly():
+    """The guard is host-only and seconds long, so PR Gate calls it on every PR. The
+    sweep holds an N150 for ~10 minutes, which PR Gate's llk wh_n150_civ2 bucket has no
+    room for, so llk-e2e calls it every night and its summary job reports it."""
     import yaml
 
     repo = Path(__file__).resolve().parents[4]
-    gate = repo / ".github/workflows/pr-gate.yaml"
-    if not gate.exists():  # pragma: no cover - the checks ship with the workflow
-        pytest.skip("workflow not in this checkout")
-    jobs = yaml.safe_load(gate.read_text(encoding="utf-8"))["jobs"]
+    workflows = repo / ".github/workflows"
+    if not (workflows / "pr-gate.yaml").exists():  # pragma: no cover
+        pytest.skip("workflows not in this checkout")
+    jobs = yaml.safe_load((workflows / "pr-gate.yaml").read_text(encoding="utf-8"))
+    jobs = jobs["jobs"]
     status = jobs["workflow-status"]
     (check,) = [
         step
@@ -679,24 +706,25 @@ def test_both_checks_are_part_of_the_required_pr_gate():
     ]
     listed = check["with"]["required-jobs"] + "," + check["with"]["optional-jobs"]
     listed = {job.strip() for job in listed.split(",")}
-    for name in ("llk-sfpu-ulp-budget-guard", "llk-sfpu-ulp-sweep"):
-        assert jobs[name]["uses"] == f"./.github/workflows/{name}.yaml"
-        assert name in status["needs"] and name in listed
-    assert "llk-sfpu-kernels-changed == 'true'" in jobs["llk-sfpu-ulp-sweep"]["if"]
-    outputs = jobs["find-changed-files"]["outputs"]
-    assert "llk-sfpu-kernels-changed" in outputs
-    # A change to the sweep's own CI runs it: nothing else would exercise it.
-    scan = (repo / ".github/scripts/utils/find-changed-files.sh").read_text(
-        encoding="utf-8"
-    )
-    scan = scan.split("# --- llk-sfpu-kernels-changed", 1)[1].split("# ---", 1)[0]
-    assert ".github/workflows/llk-sfpu-ulp-sweep.yaml" in scan
-    assert "tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml" in scan
+    guard = "llk-sfpu-ulp-budget-guard"
+    assert jobs[guard]["uses"] == f"./.github/workflows/{guard}.yaml"
+    assert guard in status["needs"] and guard in listed
+    assert not [j for j in jobs.values() if "llk-sfpu-ulp-sweep" in str(j.get("uses"))]
+
+    nightly = yaml.safe_load((workflows / "llk-e2e.yaml").read_text(encoding="utf-8"))
+    assert "schedule" in nightly[True]  # PyYAML reads the `on:` key as True
+    sweep = nightly["jobs"]["llk-sfpu-ulp-sweep"]
+    assert sweep["uses"] == "./.github/workflows/llk-sfpu-ulp-sweep.yaml"
+    assert "llk-sfpu-ulp-sweep" in nightly["jobs"]["llk-e2e-summary"]["needs"]
+
+    matrix = repo / "tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml"
+    (entry,) = yaml.safe_load(matrix.read_text(encoding="utf-8"))
+    assert entry["budget_type"] == "e2e"
 
 
 def test_the_sweep_runs_the_sweep_and_the_comparison_and_fails_on_either():
     """It must run the sweep with --ulp-measure *and* the headroom comparison over it,
-    with the JUnit report so failures no measurement describes reach the PR comment, and
+    with the JUnit report so failures no measurement describes reach the summary, and
     exit with either's failure: a cmd that stopped after a red sweep would publish no
     report, and one that ignored headroom would pass every tolerance-cell regression."""
     import yaml
@@ -713,7 +741,7 @@ def test_the_sweep_runs_the_sweep_and_the_comparison_and_fails_on_either():
     assert "helpers/ulp_budget_diff.py headroom" in cmd
     assert "--measured ulp_measurements.jsonl" in cmd
     assert f"--junitxml={junit}" in cmd and f"--junit {junit}" in cmd
-    # The workflow comments this file on the PR.
+    # The job summary is this file.
     assert "--out ulp_headroom_report.md" in cmd
     assert cmd.count("|| status=$?") == 2 and 'exit "$status"' in cmd
     assert "set -e" not in cmd.replace("set -uo", ""), "-e would skip the report"
@@ -915,7 +943,7 @@ def test_headroom_exit_status(tmp_path, worst, status):
     assert main([*argv, "--measured", measured]) == status
 
 
-# ── The sweep's failed tests, for the PR comment ──────────────────────────────
+# ── The sweep's failed tests, for the job summary ─────────────────────────────
 
 _JUNIT = """<testsuites><testsuite name="pytest">
 <testcase classname="test_unary_sfpu_ulp"
@@ -932,7 +960,7 @@ _JUNIT = """<testsuites><testsuite name="pytest">
 
 
 def test_a_failed_sweep_test_is_named_by_its_parameters_and_its_figure():
-    """The PR comment has to say which combination failed and with what value. The
+    """The summary has to say which combination failed and with what value. The
     test id is the combination; the assertion's first line carries the value."""
     first, second = junit_failures(_JUNIT)
     assert first.test == "[Abs-in:Float16_b-out:Float16_b-approx:No-dest_acc:Yes]"

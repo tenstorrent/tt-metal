@@ -1,17 +1,16 @@
 # LLK SFPU accuracy — the exhaustive ULP sweep, held against
 # tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml.
 #
-# Run by .github/workflows/llk-sfpu-ulp-sweep.yaml, which PR Gate calls when a PR
-# changes an SFPU kernel, the SFPI pin, that workflow or this file; a failure fails the
-# required "PR Gate Status". Every finite bfloat16 and float16 value (and a stride of
-# float32) through every enrolled unary op, per format pair, approximation mode and dest
-# accumulator.
+# Run nightly by .github/workflows/llk-sfpu-ulp-sweep.yaml, which llk-e2e.yaml calls;
+# dispatch that workflow to sweep a branch. Every finite bfloat16 and float16 value (and
+# a stride of float32) through every enrolled unary op, per format pair, approximation
+# mode and dest accumulator.
 #
 # Two checks, both run whatever the first returns, and the job fails if either does:
 #   * pytest fails a gated cell whose worst lane is over its `max_ulp`;
 #   * `ulp_budget_diff.py headroom` fails a tolerance cell past the `max N ULP` or the
 #     non-finite lane count its row records, and lists every pytest failure no
-#     measurement describes. Its report is what the job comments on the PR.
+#     measurement describes. Its report is the job summary.
 #
 # The JUnit file is not named pytest-report-*: the cmd lint (tt-metal#57706) reads any
 # later word `pytest` as a second device run after a recorded failure, and the
@@ -22,22 +21,14 @@
 # Nothing here writes the table: --ulp-emit is a deliberate human step, and a table
 # rewritten by CI would be a gate that agrees with itself.
 #
-# Timeout: the limits PR Gate enforces are verify_time_budget.py's 15-minute ceiling on
-# any one gate entry and llk's pr_gate bucket in .github/time_budget.yaml (40 minutes on
-# wh_n150_civ2, which this entry shares with llk_smoke_wormhole's 15). pr-gate.yaml's
-# header aims every job at under 5 minutes; like the LLK smoke jobs (10-15 minutes),
-# this one does not meet that aim. It took 9-11 minutes on wh_n150_civ2, checkout and
-# SFPI install included (2026-09/10), and runs only on an SFPU kernel, SFPI pin or
-# sweep CI change. To shorten it, split it with --splits/--group as the Blackhole smoke entries
-# in llk_pr_gate_tests.yaml do; each group then holds an N150 for its share.
-#
-# The merge queue runs it on the same regular N150 pool: wh_n150_civ2 has no
-# `merge_queue_sku` in .github/sku_config.yaml, since there is no priority N150 pool.
+# Charged to llk's e2e bucket, not pr_gate: PR Gate's wh_n150_civ2 bucket (40 minutes)
+# is taken by llk_smoke_wormhole's two 15-minute groups. The job took 9-11 minutes on
+# wh_n150_civ2, checkout and SFPI install included (2026-09/10).
 
 - name: llk_sfpu_ulp_sweep_wormhole
   split_group: 1
   team: llk
-  budget_type: pr_gate
+  budget_type: e2e
   coverage: false
   cmd: |
     set -uo pipefail
@@ -59,5 +50,5 @@
     exit "$status"
   skus:
     wh_n150_civ2:
-      timeout: 15
+      timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic

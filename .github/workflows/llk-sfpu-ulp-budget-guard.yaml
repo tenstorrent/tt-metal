@@ -13,7 +13,7 @@ name: "LLK SFPU ULP budget guard"
 # this job is what lets them find the loosened cells in a re-emitted table, which no line
 # diff of it shows. It fails only when the table cannot load.
 #
-# The sweep that holds the hardware to the table is llk-sfpu-ulp-sweep.yaml.
+# The sweep that holds the hardware to the table is llk-sfpu-ulp-sweep.yaml, nightly.
 
 on:
   workflow_call:
@@ -125,7 +125,17 @@ jobs:
             const report = `${process.env.RUNNER_TEMP}/ulp_budget_report.md`;
             if (!fs.existsSync(report)) return;
             const marker = '<!-- llk-ulp-budget-guard -->';
-            const body = `${marker}\n${fs.readFileSync(report, 'utf8')}`;
+            // The report lists every loosened cell. A comment holds 65,536 characters,
+            // so a longer one is cut at a line and points at the job summary.
+            const limit = 60000;
+            let text = fs.readFileSync(report, 'utf8');
+            if (text.length > limit) {
+              const run = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}` +
+                `/actions/runs/${process.env.GITHUB_RUN_ID}`;
+              text = text.slice(0, text.lastIndexOf('\n', limit)) +
+                `\n\n_Cut at ${limit} characters: the [job summary](${run}) has the whole report._\n`;
+            }
+            const body = `${marker}\n${text}`;
             const { owner, repo } = context.repo;
             const issue_number = context.payload.pull_request.number;
             // One comment, edited in place, so a series of pushes does not bury the

@@ -181,7 +181,6 @@ jobs:
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
-      llk-sfpu-kernels-changed: ${{ steps.find-changes.outputs.llk-sfpu-kernels-changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -650,15 +649,14 @@ jobs:
         with:
           pytest-markers: "quasar and not perf"
 
-  # LLK SFPU accuracy, two checks of
-  # tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml. Both skip
+  # LLK SFPU ULP budget guard (llk-sfpu-ulp-budget-guard.yaml), advisory: it reports
+  # which cells a change to
+  # tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml loosens, for
+  # the table's code owners to review, and fails only on a table that cannot load.
+  # Host-only and seconds long; it ends at once when the table is untouched. Skips
   # drafts like the rest: a job that ran there would wake workflow-status, which then
-  # fails on the skipped verify-time-budgets.
-  #
-  # The guard (llk-sfpu-ulp-budget-guard.yaml) is advisory: it reports which cells a
-  # change to the table loosens, for the table's code owners to review, and fails only
-  # on a table that cannot load. Host-only and seconds long; it ends at once when the
-  # table is untouched.
+  # fails on the skipped verify-time-budgets. The sweep that holds the hardware to the
+  # table runs nightly (llk-e2e.yaml).
   llk-sfpu-ulp-budget-guard:
     if: >-
       ${{
@@ -670,28 +668,6 @@ jobs:
       contents: read
       pull-requests: write
     uses: ./.github/workflows/llk-sfpu-ulp-budget-guard.yaml
-
-  # The exhaustive ULP sweep on a Wormhole card (llk-sfpu-ulp-sweep.yaml), only when an
-  # SFPU kernel, the SFPI pin, or the sweep's own workflow or matrix changed
-  # (find-changed-files: llk-sfpu-kernels-changed). Fails on a cell past its
-  # budget or its recorded measurement, and comments the failing combinations on the PR.
-  llk-sfpu-ulp-sweep:
-    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
-    if: >-
-      ${{
-        github.event.action != 'destroyed' &&
-        (github.event_name == 'merge_group' ||
-         (github.event_name == 'pull_request' && !github.event.pull_request.draft)) &&
-        needs.find-changed-files.outputs.llk-sfpu-kernels-changed == 'true'
-      }}
-    permissions:
-      contents: read
-      packages: read
-      pull-requests: write
-    uses: ./.github/workflows/llk-sfpu-ulp-sweep.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
@@ -718,7 +694,6 @@ jobs:
       - llk-smoke-tests
       - llk-build-quasar
       - llk-sfpu-ulp-budget-guard
-      - llk-sfpu-ulp-sweep
       - verify-time-budgets
     runs-on: ubuntu-slim
     steps:
@@ -736,7 +711,6 @@ jobs:
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
-            llk-smoke-tests, llk-build-quasar, llk-sfpu-ulp-budget-guard,
-            llk-sfpu-ulp-sweep
+            llk-smoke-tests, llk-build-quasar, llk-sfpu-ulp-budget-guard
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
