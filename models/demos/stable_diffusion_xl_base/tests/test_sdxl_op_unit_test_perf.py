@@ -175,7 +175,8 @@ def test_block_sharded_group_norm_sdxl_performance():
     # #55698 (2026-09-25) migrated the GroupNorm kernels to eltwise_chain and set 68875 from its own measurement;
     # #56292, three hours later, removed the legacy rsqrt from the sharded kernel (modern routine, fewer SFPU
     # instructions per pass). Thirteen single-kernel readings since then span 67332-68004 ns, mean 67712.
-    expected_duration_ns = 67750
+    # #57652 added a write barrier before each VALID multicast (8 per op): five N150 readings 69887-70075 ns, mean 69986.
+    expected_duration_ns = 70000
 
     # Log the performance result
     print(
