@@ -441,12 +441,14 @@ ProgramDescriptor build_tile_mapped(
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
     writer.config = WriterConfigDescriptor{};
 
+    reader.emplace_common_runtime_args({in_buf, map_buf});
+    writer.emplace_common_runtime_args({out_buf});
     const auto cores = corerange_to_cores(all_cores, num_cores, false);
     uint32_t start = 0;
     for (const auto& core : cores) {
         const uint32_t end = start + (group1.contains(core) ? rows1 : rows2);
-        reader.emplace_runtime_args(core, {in_buf, map_buf, start, end});
-        writer.emplace_runtime_args(core, {out_buf, start, end});
+        reader.emplace_runtime_args(core, {start, end});
+        writer.emplace_runtime_args(core, {start, end});
         start = end;
     }
 
