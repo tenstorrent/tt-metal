@@ -316,6 +316,9 @@ void DispatchSKernel::CreateKernel() {
         {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dependent_config_.upstream_dispatch_cb_sem_id.value())},
         {"DISPATCH_S_SYNC_SEM_BASE_ADDR", std::to_string(static_config_.dispatch_s_sync_sem_base_addr.value())},
         {"MCAST_GO_SIGNAL_ADDR", std::to_string(static_config_.mcast_go_signal_addr.value())},
+        // Workers report done for a go to the dispatcher that sent it.
+        {"GO_DONE_NOC_X", std::to_string(my_virtual_core.x)},
+        {"GO_DONE_NOC_Y", std::to_string(my_virtual_core.y)},
         {"DISTRIBUTED_DISPATCHER", std::to_string(static_config_.distributed_dispatcher.value())},
         {"FIRST_STREAM_USED", std::to_string(static_config_.first_stream_used.value())},
         {"COMPLETION_COUNTER_OFFSET", std::to_string(static_config_.completion_counter_offset.value())},

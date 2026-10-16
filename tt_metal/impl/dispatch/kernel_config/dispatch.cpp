@@ -502,6 +502,9 @@ void DispatchKernel::CreateKernel() {
         {"DISPATCH_S_SYNC_SEM_BASE_ADDR", std::to_string(static_config_.dispatch_s_sync_sem_base_addr.value())},
         {"MAX_NUM_WORKER_SEMS", std::to_string(static_config_.max_num_worker_sems.value())},
         {"MCAST_GO_SIGNAL_ADDR", std::to_string(static_config_.mcast_go_signal_addr.value())},
+        // Workers report done for a go to the dispatcher that sent it.
+        {"GO_DONE_NOC_X", std::to_string(my_virtual_core.x)},
+        {"GO_DONE_NOC_Y", std::to_string(my_virtual_core.y)},
         {"DISTRIBUTED_DISPATCHER", std::to_string(static_config_.distributed_dispatcher.value())},
         {"HOST_COMPLETION_Q_WR_PTR", std::to_string(static_config_.host_completion_q_wr_ptr.value())},
         {"DEV_COMPLETION_Q_WR_PTR", std::to_string(static_config_.dev_completion_q_wr_ptr.value())},
