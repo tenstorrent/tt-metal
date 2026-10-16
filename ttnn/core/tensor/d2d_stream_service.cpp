@@ -107,10 +107,6 @@ std::map<distributed::MeshCoordinate, DeviceAddr> allocate_service_core_words(
     }
     return addrs;
 }
-// Gates are spaced by the L1 alignment so any NoC write (not just inline writes and
-// atomic incs) can open one.
-uint32_t stage_gate_stride_bytes() { return tt::tt_metal::hal::get_l1_alignment(); }
-
 static_assert(
     static_cast<uint32_t>(d2d_stream::GateState::Closed) == 0,
     "allocate_service_core_words zero-fills the stage-gate array");
@@ -497,7 +493,7 @@ struct D2DStreamServiceReceiver::Impl {
             stage_gate->num_gates);
         auto it = stage_gate_addrs.find(coord);
         TT_FATAL(it != stage_gate_addrs.end(), "D2DStreamServiceReceiver::{}: no stage gate at coord {}", fn, coord);
-        return it->second + (gate * CMAKE_UNIQUE_NAMESPACE::stage_gate_stride_bytes());
+        return it->second + (gate * tt::tt_metal::hal::get_l1_alignment());
     }
 
     // Persistent receiver workload, launched once at create_pair.
@@ -821,7 +817,7 @@ D2DStageGateDescriptor D2DStreamServiceReceiver::get_stage_gate_descriptor(
         .fabric_node_id = mesh->get_fabric_node_id(coord),
         .service_core_noc = mesh->get_device(coord)->worker_core_from_logical_core(impl_->service_cores.at(coord)),
         .gate_base_addr = base,
-        .gate_stride_bytes = CMAKE_UNIQUE_NAMESPACE::stage_gate_stride_bytes(),
+        .gate_stride_bytes = tt::tt_metal::hal::get_l1_alignment(),
     };
 }
 
@@ -936,7 +932,7 @@ Program build_receiver_program(
                     {"terminate_value", kTerminateValue},
                     {"num_stage_gates", stage_gate ? stage_gate->num_gates : 0},
                     {"stage_gate_addr", stage_gate_addr},
-                    {"stage_gate_stride", stage_gate_stride_bytes()},
+                    {"stage_gate_stride", tt::tt_metal::hal::get_l1_alignment()},
                     {"stage_gate_slot_offset", stage_gate ? stage_gate->slot_id_offset_bytes : 0},
                     {"stage_gate_mode_offset", stage_gate ? stage_gate->gate_mode_offset_bytes : 0},
                     {"gate_open_value", static_cast<uint32_t>(d2d_stream::GateState::Open)},
@@ -1344,7 +1340,8 @@ ReceiverSideResources build_receiver_side(
             gate->slot_id_offset_bytes != gate->gate_mode_offset_bytes,
             "D2DStreamService: stage-gate slot_id and gate_mode must be distinct metadata words (both at offset {})",
             gate->slot_id_offset_bytes);
-        stage_gate_addrs = allocate_service_core_words(mesh, service_cores, gate->num_gates, stage_gate_stride_bytes());
+        stage_gate_addrs =
+            allocate_service_core_words(mesh, service_cores, gate->num_gates, tt::tt_metal::hal::get_l1_alignment());
     }
 
     auto data_ready_sem = ttnn::global_semaphore::create_global_semaphore(
