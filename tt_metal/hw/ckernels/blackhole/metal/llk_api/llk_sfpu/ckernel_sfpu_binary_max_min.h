@@ -14,6 +14,10 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+// The float max/min sits on macros 2 and 3 so that macros 0 and 1 stay with the exp on the pack thread.
+constexpr int kBinaryMaxMinSwapMacro = 2;
+constexpr int kBinaryMaxMinStoreMacro = 3;
+
 template <bool IS_MAX_OP = true, int ITERATIONS = 8>
 inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     uint offset0 = (dst_index_in0 * 32) << 1;
@@ -49,9 +53,11 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
 #pragma GCC unroll 8
     for (int i = 0; i < ITERATIONS; ++i) {
         int a = i & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0 | (a >> 2));
+        TT_SFPLOADMACRO(
+            (kBinaryMaxMinSwapMacro << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0 | (a >> 2));
         TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);
-        TT_SFPLOADMACRO((1 << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset2 | (c >> 2));
+        TT_SFPLOADMACRO(
+            (kBinaryMaxMinStoreMacro << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset2 | (c >> 2));
     }
 
     TTI_SFPNOP;
@@ -154,7 +160,7 @@ inline void binary_max_min_init() {
     // InstructionTemplate[1]
     TTI_SFPSHFT2(0, 0, 13, 6);  // SFPSHFT2_MOD1_SHFT_IMM
 
-    // Macro 0
+    // Swap macro
     {
         constexpr uint simple_bits = 0x80 | 0x00 | (1 << 3) | 4;
         constexpr uint mad_bits = 0;
@@ -163,10 +169,10 @@ inline void binary_max_min_init() {
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 0, 0);
+        TTI_SFPCONFIG(0, 4 + kBinaryMaxMinSwapMacro, 0);
     }
 
-    // Macro 1
+    // Store macro
     {
         constexpr uint simple_bits = 0;
         constexpr uint mad_bits = 0;
@@ -175,15 +181,15 @@ inline void binary_max_min_init() {
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 1, 0);
+        TTI_SFPCONFIG(0, 4 + kBinaryMaxMinStoreMacro, 0);
     }
 
     // Misc: {
     //   StoreMod0: DEFAULT,
-    //   UsesLoadMod0ForStore: {1,1},
-    //   UnitDelayKind: {1,1}, (WaitForElapsedInstructions=1)
+    //   UsesLoadMod0ForStore: {0,0,0,0}, (the load mod0 is DEFAULT as well)
+    //   UnitDelayKind: {1,1,1,1}, (WaitForElapsedInstructions=1)
     // }
-    TTI_SFPCONFIG(0x330, 8, 1);
+    TTI_SFPCONFIG(0xF00, 8, 1);
 #endif
 }
 

@@ -17,6 +17,9 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+// The 8b reciprocal sits on macro 2 so that macros 0 and 1 stay with the exp on the pack thread.
+constexpr int kReciprocal8bMacro = 2;
+
 // Computes the reciprocal of a floating point value x.
 template <int max_iter = 2>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat x) {
@@ -29,13 +32,14 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat x) {
         // On Blackhole, when x=0 and y=infinity (and vice versa), t=+NaN regardless of the operand signs.
         // Negating the meaning of t makes it easier to detect NaN using a trivial sign check t>=0.
         // Equivalently, we could use v_if (t >= 2.0) instead, but SFPI doesn't support SFPLE/SFPGT at the moment.
-        sfpi::vFloat t = x * y - sfpi::vConstFloatPrgm0;
+        const sfpi::vFloat two = 2.0f;
+        sfpi::vFloat t = x * y - two;
 
         if constexpr (max_iter > 1) {
             sfpi::vFloat y1 = y * -t - 0.0f;
             // If t=NaN, then t>=0.  This check consumes the SFPNOP slot of the preceding SFPMAD.
             v_if(t < 0) {
-                t = x * y1 - sfpi::vConstFloatPrgm0;
+                t = x * y1 - two;
                 y = y1 * -t - 0.0f;
             }
             v_endif;
@@ -106,11 +110,11 @@ inline void _calculate_reciprocal_fast_8b_3c_(const int iterations) {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++) {
         TT_SFPLOADMACRO(
-            /*lreg_ind*/ (0 << 2) | y,
+            /*lreg_ind*/ (kReciprocal8bMacro << 2) | y,
             /*instr_mod0*/ InstrModLoadStore::DEFAULT,
             /*sfpu_addr_mode*/ ADDR_MOD_7,
             /*dest_reg_addr*/ 0);
-        // Macro 0 schedules y = arecip(y) and x = y for the next SFPU issue.
+        // The macro schedules y = arecip(y) and x = y for the next SFPU issue.
         // Wait before writing y's low 16 bits directly.
         TTI_SFPNOP;
         // Keep the patch and correction in LReg space; macro store/reload
@@ -255,7 +259,7 @@ inline void _init_reciprocal_fast_8b_3c_() {
         /*lreg_dest*/ 13,
         /*instr_mod1*/ 8);  // SFPMAD_MOD1_INDIRECT_VD
 
-    // Macro 0: [y]
+    // Macro 2: [y]
     // Loads y, schedules y = arecip(y), and copies y to L[LREG7].
     {
         constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | (4 + 0);
@@ -265,15 +269,15 @@ inline void _init_reciprocal_fast_8b_3c_() {
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 0, 0);
+        TTI_SFPCONFIG(0, 4 + kReciprocal8bMacro, 0);
     }
 
     // Misc: {
     //   StoreMod0: 0, unused
     //   UsesLoadMod0ForStore: {0,0,0,0},
-    //   UnitDelayKind: Simple + MAD use WaitForElapsedInstructions
+    //   UnitDelayKind: {1,1,1,1}, (WaitForElapsedInstructions=1)
     // }
-    TTI_SFPCONFIG(0x300, 8, 1);
+    TTI_SFPCONFIG(0xF00, 8, 1);
 #endif
 }
 
@@ -369,11 +373,7 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
 }
 
 template <bool APPROXIMATE = false>
-sfpi_inline void sfpu_reciprocal_init() {
-    if constexpr (!APPROXIMATE) {
-        sfpi::vConstFloatPrgm0 = 2.0f;
-    }
-}
+sfpi_inline void sfpu_reciprocal_init() {}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_reciprocal() {
@@ -400,7 +400,6 @@ void recip_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
     if constexpr (APPROXIMATION_MODE) {
         _init_reciprocal_fast_7b_();
     } else if constexpr (is_fp32_dest_acc_en) {
