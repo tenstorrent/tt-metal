@@ -214,7 +214,7 @@ UnicastPolicy tune_unicast(const PolicyInputs& in) {
         //           (2 KB pages, k stays 1) and 64 B-2 KB pages within noise.
         // Validity: k only moves Matched outputs with unpadded pages above ~packet / 2; with a run cap (4 links)
         //           the cap is choose_k's budget, so k stays near 1 there.
-        p.shared.walk.k = 1;  // COMMIT 1: today's value; commit 2 ships kAutoK
+        p.shared.walk.k = WalkPolicy::kAutoK;
         // CB entry. A stripe no longer than the walk stride makes every output lane run one walk page, so a packet
         // carries at most 4 of them (the scatter cap binds): there the entry is one packet, so the writer never
         // waits on chunks a packet cannot carry (WalkPolicy::one_packet_short_stripe). Longer stripes keep packet-
@@ -225,7 +225,7 @@ UnicastPolicy tune_unicast(const PolicyInputs& in) {
         // Result:   one packet wins at stripe <= stride (8 DRAM banks): stripe 8 (512K) -15.8% line / -7.7% ring,
         //           stripe 2 (2M) -12.5% / -8.0% (R1); it loses at stripe 10 (> stride): 10M +8.0% ring / +11.9%
         //           line, 2.6M +6.8% / +6.3% (R3); stripes 20 and 32 and every row-major shape within noise (R1).
-        p.shared.walk.one_packet_short_stripe = false;  // COMMIT 1: today's entry; commit 2 ships true
+        p.shared.walk.one_packet_short_stripe = true;
         // packets_per_cb_entry for the packet-load entries: one, except in a narrow stripe band. A two-packet entry
         // halves the reader/writer handshake count but leaves the writer trailing an extra packet behind, and that
         // lag costs 1-4% at almost every stripe length -- measured at 2, 4, 5, 8, 20, 32 and 64 chunks. Between 9
@@ -308,8 +308,8 @@ MulticastPolicy tune_multicast(const PolicyInputs& in) {
         //           8 KB row-major pages -19.2% (346.4 -> 279.9 us; -19.0% against the cap-off run alone); ring
         //           and every other shape within noise. Under the cap (R1b) k = auto resolved to 1 everywhere.
         // Validity: 4 KB pages were not in R2b (unicast gained 6-9% there; an expectation, not data).
-        p.shared.run_cap_bytes = in.page_bytes >= 1024 ? 8192u : 0u;  // COMMIT 1: today's cap; commit 2: 0
-        p.shared.walk.k = 1;                                          // COMMIT 1: commit 2 ships kAutoK
+        p.shared.run_cap_bytes = 0;
+        p.shared.walk.k = WalkPolicy::kAutoK;
         // Packet-load entries (packets_per_cb_entry) on every stripe: no one-packet entries, not even on the short
         // stripes where unicast uses them (on multicast those were within noise, -1.8% to -4.5%, in R1b).
         // Data:     <R1: report 2026_10_16_00_39_37 (R1b: entry=one_packet); R2: report 2026_10_16_01_12_19 (R2b:

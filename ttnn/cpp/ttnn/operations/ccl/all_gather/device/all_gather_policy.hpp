@@ -52,7 +52,6 @@ struct PolicyInputs {
     uint32_t num_links = 0;       // unicast: requested links on the axis; multicast: links it runs
     uint64_t per_link_bytes = 0;  // packed bytes of the gathered output per link (at num_links)
     uint32_t stripe_pages = 0;    // walk pages this device contributes per output row
-    uint32_t page_bytes = 0;      // walk page bytes (COMMIT 1 only: multicast's run cap)
 };
 
 struct SharedPolicy {

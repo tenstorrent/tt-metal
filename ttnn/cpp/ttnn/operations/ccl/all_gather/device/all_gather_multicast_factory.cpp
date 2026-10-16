@@ -222,7 +222,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     policy_in.num_links = min_num_links;
     policy_in.per_link_bytes = per_link_bytes(output_tensor.tensor_spec(), min_num_links);
     policy_in.stripe_pages = geom.walk_pages_per_stripe;
-    policy_in.page_bytes = geom.walk_page_bytes;
     const MulticastPolicy policy = tune_multicast(policy_in);
     const uint32_t cb_depth = policy.shared.cb_depth;
 

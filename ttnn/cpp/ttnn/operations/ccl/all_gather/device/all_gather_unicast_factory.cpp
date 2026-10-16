@@ -162,7 +162,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     policy_in.num_links = num_links;
     policy_in.per_link_bytes = per_link_bytes(output_tensor.tensor_spec(), num_links);
     policy_in.stripe_pages = geom.walk_pages_per_stripe;
-    policy_in.page_bytes = geom.walk_page_bytes;
     const UnicastPolicy policy = tune_unicast(policy_in);
     uint32_t workers_per_dir = policy.workers_per_dir;
 
