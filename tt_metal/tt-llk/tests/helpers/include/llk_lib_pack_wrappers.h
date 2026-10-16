@@ -141,8 +141,7 @@ inline void _llk_pack_untilize_wrapper_(
     const std::uint32_t num_faces          = 4,
     const std::uint32_t tile_dst_rt_offset = 0)
 {
-    // narrow_row only selects the MOP in init; the execute path is shared.
-    _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, row_num_datums, tile_dst_ct_offset>(
+    _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
         address, pack_dst_format, face_r_dim, num_faces, tile_dst_rt_offset);
 }
 

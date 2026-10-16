@@ -20,17 +20,45 @@ using namespace ckernel;
 using namespace ckernel::packer;
 
 /**
+ * @brief Dest rows (MOP runs) an untilize pack walks per block.
+ *
+ * Every run packs one output row per enabled packer: two PACRs per packer for the multi-face full-row
+ * MOP (row Y of faces 0 and 1, concatenated), one PACR for the narrow-row and single-face MOPs. In the
+ * non-diagonal layout packers 0..3 read the physical Dest rows Y + {0, 8, 32, 40} (see
+ * @ref _llk_init_packer_dest_offset_registers_), so a 32x32 tile is covered by 4 packers x 8 runs and a
+ * 16-row two-face tile by packers 0/1 x 8 runs. A single-face tile (num_faces == 1) enables packer 0 only,
+ * so it has to walk all face_r_dim rows itself; tiles with fewer than FACE_R_DIM rows also use one packer
+ * and need face_r_dim runs.
+ *
+ * @param face_r_dim: Number of rows per face.
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ */
+inline std::uint32_t _llk_pack_untilize_num_rows_(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
+{
+    return (face_r_dim < FACE_R_DIM) ? face_r_dim : ((num_faces == 1) ? FACE_R_DIM : TILE_R_DIM / 4);
+}
+
+/**
+ * @brief True for a one-tile narrow block (block_ct_dim == full_ct_dim == 1 with narrow_row), which is packed
+ *        by a single MOP run of @ref _llk_pack_untilize_num_rows_ PACRs instead of one run per row.
+ */
+template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim, bool narrow_row>
+inline constexpr bool _llk_pack_untilize_single_tile_v = narrow_row && block_ct_dim == 1 && full_ct_dim == 1;
+
+/**
  * @brief Configure the ADDR_MOD slots used by the untilize pack MOP.
  *
  * Programs the src Y increment/clear patterns the untilize MOP relies on to walk face rows and reset
  * between rows/faces for the selected layout.
  *
  * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
+ * @tparam step_y_per_pacr: True when ADDR_MOD_0 has to step Y by one row after every PACR (diagonal, and the
+ *         one-tile narrow block whose single MOP run walks the rows itself).
  */
-template <bool diagonal = false>
+template <bool diagonal = false, bool step_y_per_pacr = false>
 inline void _llk_pack_untilize_configure_addrmod_()
 {
-    if constexpr (diagonal)
+    if constexpr (diagonal || step_y_per_pacr)
     {
         addr_mod_pack_t {
             .y_src = {.incr = 1},
@@ -90,8 +118,9 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     const std::uint32_t PACKCNT              = diagonal ? (num_faces > 2 ? num_faces / 2 : num_faces) : ((face_r_dim < FACE_R_DIM) ? 1 : num_faces);
     constexpr std::uint32_t MEGAROW          = 1;
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
-    constexpr std::uint32_t MOP_INNER_LOOP   = diagonal ? FACE_R_DIM - 1 : 1;
-    constexpr std::uint32_t MOP_OUTER_LOOP   = block_ct_dim;
+    constexpr bool single_tile               = _llk_pack_untilize_single_tile_v<block_ct_dim, full_ct_dim, narrow_row>;
+    const std::uint32_t MOP_INNER_LOOP       = single_tile ? _llk_pack_untilize_num_rows_(face_r_dim, num_faces) : (diagonal ? FACE_R_DIM - 1 : 1);
+    constexpr std::uint32_t MOP_OUTER_LOOP   = single_tile ? 1 : block_ct_dim;
 
     if constexpr (diagonal)
     {
@@ -107,7 +136,14 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
     }
     else
     {
-        if (!narrow_row && num_faces > 1)
+        if constexpr (single_tile)
+        {
+            // One-tile narrow block: a single MOP run of num_rows PACRs packs the whole tile, ADDR_MOD_0 stepping
+            // Y by one row after each PACR (no W advance, no per-row counter traffic from the execute loop).
+            ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 0));
+            tmp.program();
+        }
+        else if (!narrow_row && num_faces > 1)
         {
             // Two PACRs per tile, row Y of faces 0 and 1: inc ch0_y+=1 (addr_mod_0 will increment by 15)
             ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0));
@@ -182,7 +218,7 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    _llk_pack_untilize_configure_addrmod_<diagonal>();
+    _llk_pack_untilize_configure_addrmod_<diagonal, _llk_pack_untilize_single_tile_v<block_ct_dim, full_ct_dim, narrow_row>>();
 
     _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(face_r_dim, num_faces);
 
@@ -231,13 +267,16 @@ inline void _llk_pack_untilize_uninit_()
 /**
  * @brief Untilize-pack one block of tiles from the destination register to L1.
  *
- * Programs the L1 destination address, then runs the MOP once per Dest row of the block (num_rows runs,
- * which depends on the tile geometry, see below), resetting the W counter before each run, advancing Y
- * after it and, for a partial block, replaying the per-row L1 address update; finally closes the block.
+ * Programs the L1 destination address, then runs the MOP once per Dest row of the block
+ * (@ref _llk_pack_untilize_num_rows_ runs), resetting the W counter before each run, advancing Y after it
+ * and, for a partial block, replaying the per-row L1 address update; finally closes the block. A one-tile
+ * narrow block (block_ct_dim == full_ct_dim == 1 with narrow_row) is packed by a single MOP run instead.
  *
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam full_ct_dim: Total number of input tiles across all blocks.
  * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
+ * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row; selects the one-tile fast path
+ *         and must match the init.
  * @tparam row_num_datums: Datums each tile contributes to an output row (TILE_C_DIM unless narrow_row); must
  *         match the init.
  * @tparam tile_dst_ct_offset: Compile-time column-tile offset into the destination register.
@@ -253,6 +292,7 @@ template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim        = block_ct_dim,
     bool diagonal                    = false,
+    bool narrow_row                  = false,
     std::uint32_t row_num_datums     = TILE_C_DIM,
     std::uint32_t tile_dst_ct_offset = 0>
 inline void _llk_pack_untilize_(
@@ -267,23 +307,26 @@ inline void _llk_pack_untilize_(
 
     program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal, row_num_datums>(address, pack_dst_format);
 
-    // MOP runs per block. Every run packs one output row per enabled packer: two PACRs per packer for the
-    // multi-face full-row MOP (row Y of faces 0 and 1, concatenated), one PACR for the narrow-row and
-    // single-face MOPs. In the non-diagonal layout packers 0..3 read the physical Dest rows Y + {0, 8, 32, 40}
-    // (see _llk_init_packer_dest_offset_registers_), so a 32x32 tile is covered by 4 packers x 8 runs and a
-    // 16-row two-face tile by packers 0/1 x 8 runs. A single-face tile (num_faces == 1) enables packer 0
-    // only, so it has to walk all face_r_dim rows itself; tiles with fewer than FACE_R_DIM rows also use one
-    // packer and need face_r_dim runs.
-    const std::uint32_t num_rows = (face_r_dim < FACE_R_DIM) ? face_r_dim : ((num_faces == 1) ? FACE_R_DIM : TILE_R_DIM / 4);
+    [[maybe_unused]] const std::uint32_t num_rows = _llk_pack_untilize_num_rows_(face_r_dim, num_faces);
 
-    for (std::uint32_t row = 0; row < num_rows; row++)
+    if constexpr (_llk_pack_untilize_single_tile_v<block_ct_dim, full_ct_dim, narrow_row>)
     {
-        set_dst_write_addr(tile_dst_ct_offset + tile_dst_rt_offset); // Clear tile counter
+        // The MOP programmed by init walks all num_rows rows of the one tile by itself; the close PACR below
+        // clears Y for the next block.
+        set_dst_write_addr(tile_dst_ct_offset + tile_dst_rt_offset); // Select the tile
         ckernel::ckernel_template::run();
-        TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile
-        if constexpr (block_ct_dim != full_ct_dim)
+    }
+    else
+    {
+        for (std::uint32_t row = 0; row < num_rows; row++)
         {
-            lltt::replay(ckernel::packer::replay_buf_offset, 10); // update row address
+            set_dst_write_addr(tile_dst_ct_offset + tile_dst_rt_offset); // Clear tile counter
+            ckernel::ckernel_template::run();
+            TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile
+            if constexpr (block_ct_dim != full_ct_dim)
+            {
+                lltt::replay(ckernel::packer::replay_buf_offset, 10); // update row address
+            }
         }
     }
 
