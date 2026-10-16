@@ -109,6 +109,19 @@ def test_k3_moe_layer(mesh_device, device_params):
     gs, us = xs @ w.sh_gate.T, xs @ w.sh_up.T
     a = d.beta * torch.tanh(gs / d.beta) * torch.sigmoid(gs) * (d.linear_beta * torch.tanh(us / d.linear_beta))
     logger.info(f"stages: latent down PCC {pcc(lat, xs @ w.lat_down.T):.5f}, shared expert PCC {pcc(ys, a @ w.sh_down.T):.5f}")
+    if os.environ.get("K3_DEBUG_REPEAT"):  # (debug: a second call with the intermediates, diffed against the first)
+        snap = lambda t: [ttnn.to_torch(u) for u in ttnn.get_device_tensors(t)]  # noqa: E731
+        first = {k: snap(inter[k]) for k in ("gi", "lat")}
+        first.update({f"pl.{k}": snap(v) for k, v in inter["pl"].items()})
+        y2_, inter2 = moe(xt, keep=True)
+        ttnn.synchronize_device(mesh_device)
+        second = {k: snap(inter2[k]) for k in ("gi", "lat")}
+        second.update({f"pl.{k}": snap(v) for k, v in inter2["pl"].items()})
+        for k in first:
+            diffs = [int((a.to(torch.float64) != b.to(torch.float64)).sum()) for a, b in zip(first[k], second[k])]
+            logger.info(f"K3 DEBUG_REPEAT {k}: elements differing per chip {diffs}")
+        y2t = torch.cat([ttnn.to_torch(t).reshape(S, d.H) for t in ttnn.get_device_tensors(y2_)]).float()
+        logger.info(f"K3 DEBUG_REPEAT y: PCC vs first {pcc(y2t, yd):.6f}")
     if os.environ.get("K3_DUMP"):  # (the device's outputs per stage, for the offline accuracy analysis)
         cat = lambda t, *shp: torch.cat([ttnn.to_torch(u).reshape(*shp) for u in ttnn.get_device_tensors(t)])  # noqa: E731
         dump = dict(

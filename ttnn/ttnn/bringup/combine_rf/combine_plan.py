@@ -451,8 +451,10 @@ void kernel_main() {
     // the routing: one page of all T entries, or one page per token row ([N S, K] row-major, RP = 2 K bytes), or
     // (JW) one page per token of its K ids then its K weights ([N S, 2 K] uint16, RP = 4 K bytes; wts = ids)
     constexpr uint32_t RP = __RPAGE__, JW = __RJOINT__, RB = 2 * K;  // (RB: one row's ids, or weights, in bytes)
-    const InterleavedAddrGen<true> ids_g = {.bank_base_address = ids_addr, .page_size = RP ? RP : T * 2};
-    const InterleavedAddrGen<true> w_g = {.bank_base_address = w_addr, .page_size = RP ? RP : T * 2};
+    constexpr uint32_t PT = __RPT__;  // tokens per page (joint rows: PT rows of RP bytes a page; 1: a page a row)
+    static_assert(PT == 1 || (JW && RP == 64), "multi-token pages: joint rows only");
+    const InterleavedAddrGen<true> ids_g = {.bank_base_address = ids_addr, .page_size = RP ? RP * PT : T * 2};
+    const InterleavedAddrGen<true> w_g = {.bank_base_address = w_addr, .page_size = RP ? RP * PT : T * 2};
     // (row pages land 64 bytes apart in local scratch, free until the sort: a DRAM read keeps its source's 64-byte
     // alignment in L1; then unpacked)
     uint32_t stg = B + O_BUCK, pk_src[3], pk_dst[3], pk_dw[3], pk_rows[3], npk = 0;
@@ -464,7 +466,15 @@ void kernel_main() {
             noc_async_read(get_noc_addr(0, g) + e0 * 2, dst, al64(n * 2));
         } else {
             const uint32_t r0 = e0 / K, rows = n / K;
-            for (uint32_t r = 0; r < rows; ++r) noc_async_read(get_noc_addr(r0 + r, g), stg + r * 64, RP);
+            if constexpr (PT == 1) {
+                for (uint32_t r = 0; r < rows; ++r) noc_async_read(get_noc_addr(r0 + r, g), stg + r * 64, RP);
+            } else {  // (whole runs of rows per page: one read each, rows already 64 bytes apart)
+                for (uint32_t r = r0; r < r0 + rows;) {
+                    const uint32_t first = r % PT, cnt = PT - first < r0 + rows - r ? PT - first : r0 + rows - r;
+                    noc_async_read(get_noc_addr(r / PT, g) + first * RP, stg + (r - r0) * 64, cnt * RP);
+                    r += cnt;
+                }
+            }
             pk_src[npk] = stg, pk_dst[npk] = dst, pk_dw[npk] = dst_w, pk_rows[npk++] = rows;
             stg += rows * 64;
         }
@@ -478,17 +488,14 @@ void kernel_main() {
     invalidate_l1_cache();
     if constexpr (RP != 0) {
         static_assert(RP <= 64 && RB % 4 == 0 && RP == (JW ? 2 : 1) * RB, "row pages");
+        // (unpacked by local NoC copies, one per row and array: scalar L1 copies cost ~50 cycles a word here)
         for (uint32_t q = 0; q < npk; ++q) {
             for (uint32_t r = 0; r < pk_rows[q]; ++r) {
-                const volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pk_src[q] + r * 64);
-                volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pk_dst[q] + r * RB);
-                for (uint32_t w = 0; w < RB / 4; ++w) dst[w] = src[w];
-                if (pk_dw[q]) {
-                    volatile tt_l1_ptr uint32_t* dw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pk_dw[q] + r * RB);
-                    for (uint32_t w = 0; w < RB / 4; ++w) dw[w] = src[RB / 4 + w];
-                }
+                noc_async_read(get_noc_addr(pk_src[q] + r * 64), pk_dst[q] + r * RB, RB);
+                if (pk_dw[q]) noc_async_read(get_noc_addr(pk_src[q] + r * 64 + RB), pk_dw[q] + r * RB, RB);
             }
         }
+        noc_async_read_barrier();
     }
     ts[1] = get_timestamp_32b();
     constexpr uint32_t E0 = ME * EPC;
@@ -849,7 +856,8 @@ def port_luts(mesh_device, num_links):
 
 
 def combine_planner_prepare(
-    mesh_device, *, S, K, EPC, A, L, port_luts, n_ports, rows_cap, core=(0, 0), cores=None, row_pages=False, joint=False
+    mesh_device, *, S, K, EPC, A, L, port_luts, n_ports, rows_cap, core=(0, 0), cores=None, row_pages=False, joint=False,
+    tokens_per_page=1
 ):
     """port_luts[coord] = 8 port ids (direction * 2 + link; 0xFF none), n_ports[coord] = P. Returns run(ids, wts) ->
     dict of the per-chip output tensors (counts, regions, token_index, table, plan), allocated once. ids / wts: one
@@ -944,7 +952,8 @@ def combine_planner_prepare(
                 pd.kernels = [
                     ttnn.KernelDescriptor(
                         kernel_source=(_PLANNER_MC2 if V2 else _PLANNER_MC).replace("__RPAGE__", str((4 if joint else 2) * K if row_pages else 0))
-                        .replace("__RJOINT__", str(int(joint))),
+                        .replace("__RJOINT__", str(int(joint)))
+                        .replace("__RPT__", str(tokens_per_page)),
                         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                         core_ranges=mcs,
                         compile_time_args=[me, R, C, S, K, EPC, NG, A, L, n_ports[(r, cc)], rows_cap, M, CH]

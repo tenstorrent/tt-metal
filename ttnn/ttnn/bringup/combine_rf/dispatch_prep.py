@@ -27,6 +27,7 @@ constexpr uint8_t CHIP_OF[__E__] = {__CHIPS__};
 constexpr auto ids_args = TensorAccessorArgs<0>();
 constexpr auto route_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
 constexpr uint32_t ROW = 4 * K;  // a joint routing row: K ids, K weights (uint16)
+constexpr uint32_t PT = __PT__;  // routing rows per page (router_topk: 32)
 static_assert(K % 2 == 0);
 
 FORCE_INLINE uint32_t links(uint32_t s) { return (s & 15) + (s >> 4); }
@@ -35,14 +36,17 @@ void kernel_main() {
     const uint32_t ids_addr = get_arg_val<uint32_t>(0), route_addr = get_arg_val<uint32_t>(1);
     const uint32_t t0 = get_arg_val<uint32_t>(2), t1 = get_arg_val<uint32_t>(3);  // (this core's tokens)
     const uint32_t scratch = get_write_ptr(0);
-    const auto ids = TensorAccessor(ids_args, ids_addr, ROW);
+    const auto ids = TensorAccessor(ids_args, ids_addr, ROW * PT);
     const auto route = TensorAccessor(route_args, route_addr, S * 4);
     constexpr uint32_t RS = (ROW + 63) / 64 * 64;  // (64-byte landing: a DRAM read keeps its source alignment)
     const uint32_t rows_l1 = (scratch + 63) & ~63u, words_l1 = rows_l1 + (t1 - t0) * RS;
     if constexpr (__NOROUTE__) {  // (probe: no route words)
         return;
     }
-    for (uint32_t t = t0; t < t1; ++t) noc_async_read(ids.get_noc_addr(ME * S + t), rows_l1 + (t - t0) * RS, ROW);
+    for (uint32_t t = t0; t < t1; ++t) {
+        const uint32_t g = ME * S + t;
+        noc_async_read(ids.get_noc_addr(g / PT) + (g % PT) * ROW, rows_l1 + (t - t0) * RS, ROW);
+    }
     noc_async_read_barrier();
     invalidate_l1_cache();
     const uint32_t r0 = ME / C, c0 = ME % C;
@@ -110,7 +114,9 @@ void kernel_main() {
 """
 
 
-def dispatch_prep_prepare(mesh_device, *, S, K, EPC, n_route=8, n_copy=16, batch=4, torus=(False, False), rows=(8, 9)):
+def dispatch_prep_prepare(
+    mesh_device, *, S, K, EPC, n_route=8, n_copy=16, batch=4, torus=(False, False), rows=(8, 9), tokens_per_page=1
+):
     """Returns run(joint_routing, own_rows, xbuf, route) (one generic_op: route words + own-row copy).
     joint_routing [N S, 2 K] uint16 row-major (replicated), own_rows [S, W] bf16 row-major, xbuf [1, 1, N S, W]
     row-major, route [1, 1, 1, S] uint32 (outputs written in place). Cores (logical): n_route route cores on row
@@ -148,6 +154,7 @@ def dispatch_prep_prepare(mesh_device, *, S, K, EPC, n_route=8, n_copy=16, batch
                 .replace("__YSPAN__", ", ".join(map(str, span_table(R, wrap_y))))
                 .replace("__K__", str(K)).replace("__ME__", str(me)).replace("__E__", str(E))
                 .replace("__CHIPS__", chips_of)
+                .replace("__PT__", str(tokens_per_page))
                 .replace("__NOROUTE__", "1" if os.environ.get("DPREP_PROBE") == "noroute" else "0")
             )
             copy_src = _COPY.replace("__NOCOPY__", "1" if os.environ.get("DPREP_PROBE") == "nocopy" else "0")

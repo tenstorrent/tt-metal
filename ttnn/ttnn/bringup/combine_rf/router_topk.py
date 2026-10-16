@@ -44,7 +44,7 @@ void kernel_main() {
     const uint32_t l1_off = get_arg_val<uint32_t>(6), ntok = get_arg_val<uint32_t>(7);  // (two RISCs: their halves)
     const auto sg = TensorAccessor(s_args, s_addr, TB);
     const auto bg = TensorAccessor(b_args, b_addr, TB);
-    const auto og = TensorAccessor(o_args, o_addr, 4 * K);
+    const auto og = TensorAccessor(o_args, o_addr, 32 * 4 * K);  // (a page: one row tile's 32 tokens' rows)
     // only this RISC's tokens' rows: per token, per tile, its two 16-value face rows (64 B each) of both inputs
     constexpr uint32_t RB = ET * 2 * 64;  // one token's row of one input
     const uint32_t l1 = ((get_write_ptr(0) + 63) & ~63u) + l1_off;
@@ -92,7 +92,7 @@ void kernel_main() {
         if constexpr (__PROBE__ == 1) {  // (probe: no weight math)
             volatile tt_l1_ptr uint16_t* o = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(o_l1 + i * 64);
             for (uint32_t j = 0; j < K; ++j) o[j] = static_cast<uint16_t>(ti[j]), o[K + j] = 0;
-            noc_async_write(o_l1 + i * 64, og.get_noc_addr(tr * 32 + r), 4 * K);
+            noc_async_write(o_l1 + i * 64, og.get_noc_addr(tr) + r * 4 * K, 4 * K);
             continue;
         }
         for (uint32_t j = 0; j < K; ++j) {
@@ -107,7 +107,7 @@ void kernel_main() {
             o[j] = static_cast<uint16_t>(ti[j]);
             o[K + j] = static_cast<uint16_t>(bf16_rne(w[j] * inv));
         }
-        noc_async_write(o_l1 + i * 64, og.get_noc_addr(tr * 32 + r), 4 * K);
+        noc_async_write(o_l1 + i * 64, og.get_noc_addr(tr) + r * 4 * K, 4 * K);
     }
     noc_async_write_barrier();
 }
@@ -115,7 +115,8 @@ void kernel_main() {
 
 
 def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=8):
-    """run(s, b) -> [S, 2 K] uint16 row-major (s / b: [S, E] fp32 TILE, DRAM interleaved)."""
+    """run(s, b) -> [S / 32, 32 * 2 K] uint16 row-major: 2 KB pages of 32 tokens' joint rows (s / b: [S, E] fp32
+    TILE, DRAM interleaved); combine_plan tokens_per_page=32 reads it (and its fabric all-gather)."""
     import struct
 
     assert S % 32 == 0 and E % 32 == 0 and 32 % split == 0 and 4 * K == 64
@@ -159,7 +160,7 @@ def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=8):
         return mesh_desc
 
     def run(s, b):
-        out = ttnn.allocate_tensor_on_device(ttnn.Shape([S, 2 * K]), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, mesh_device,
+        out = ttnn.allocate_tensor_on_device(ttnn.Shape([S // 32, 32 * 2 * K]), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, mesh_device,
                                              ttnn.DRAM_MEMORY_CONFIG)
         k = tuple(int(t.buffer_address()) for t in (s, b, out))
         if state.get("key") != k:

@@ -219,7 +219,12 @@ class TtK3TokenSplitMoE:
         # that one is zeroed); the combine's ports drain their credits, so nothing lands after the call either.
         # Allocated here once for its address (the kernels bake it: every call's arena must land there).
         self.sparse_dispatch = os.environ.get("K3_DISPATCH", "sparse") == "sparse"
-        self.dprep = dispatch_prep_prepare(mesh_device, S=S, K=d.K, EPC=self.EPC) if self.sparse_dispatch else None
+        self.rows_pt = 32 if os.environ.get("K3_TOPK", "custom") == "custom" else 1  # (routing rows per page)
+        self.dprep = (
+            dispatch_prep_prepare(mesh_device, S=S, K=d.K, EPC=self.EPC, tokens_per_page=self.rows_pt)
+            if self.sparse_dispatch
+            else None
+        )
         # the routing rows' all-gather: one sparse_all_gather_2d to every chip (default) or two ttnn.all_gather
         # (sparse: sparse_all_gather_2d to every chip, 157 us vs 140 for the two ttnn.all_gather at 64-B rows; fag: the
         # dense fabric all-gather, one snake)
@@ -247,7 +252,8 @@ class TtK3TokenSplitMoE:
         self.rows_cap = rows_cap
         chips = [(r, c) for r in range(R) for c in range(C)]
         self._planner_args = dict(S=S, K=d.K, EPC=EPC, L=2, port_luts=luts, n_ports=nps, rows_cap=rows_cap,
-                                  cores=sorted(pcores, key=lambda c: (c[1], c[0])), row_pages=True, joint=True)
+                                  cores=sorted(pcores, key=lambda c: (c[1], c[0])), row_pages=True, joint=True,
+                                  tokens_per_page=32 if os.environ.get("K3_TOPK", "custom") == "custom" else 1)
         probe = combine_planner_prepare(mesh_device, A=15, **self._planner_args)  # (outputs only: their addresses)
         self.combine = sparse_combine_rf_prepare(
             mesh_device, S, d.latent, {ch: [] for ch in chips}, num_links=2, n_acc=16, depth=int(os.environ.get("K3_D", "4")),
@@ -564,7 +570,7 @@ class TtK3TokenSplitMoE:
         mark("shared")
         y = ttnn.add(yr, ys, dtype=ttnn.bfloat16)
         mark("sum")
-        inter = dict(ids=ids, wts=wts, gi=gi, gw=gw, lat=lat, xg=xg, yr=yr, ys=ys, logits=logits[0], routed=self.out) if keep else None
+        inter = dict(ids=ids, wts=wts, gi=gi, gw=gw, lat=lat, xg=xg, yr=yr, ys=ys, logits=logits[0], routed=self.out, pl=pl) if keep else None
         if not keep:
             for t in (ids, wts, gi, lat, xg, yr, ys):  # (gw is gi)
                 if t is not None and t.is_allocated():
