@@ -50,10 +50,8 @@ output kind or a miss fails the sweep: the orchestrator then starts the test-rol
 from __future__ import annotations
 
 import math
-import weakref
 
 import torch
-from torch.overrides import TorchFunctionMode
 
 from models.demos.common.bringup.core import defaults, metrics
 from models.demos.common.bringup.testing import mutate as MU
@@ -117,97 +115,6 @@ def limits(s) -> dict:
 # ---------------------------------------------------------------- the precision model
 def _ptr(t: torch.Tensor) -> int:
     return t.untyped_storage().data_ptr()
-
-
-class _Bf16Everywhere(TorchFunctionMode):
-    """Rounds to bf16 the float32 result of every op that reads a value derived from the step's inputs; constants
-    (weights, RoPE tables, masks, positions: anything built without the inputs) stay exact, as on a device where they
-    are prepared on the host or in fp32."""
-
-    def __init__(self, inputs):
-        super().__init__()
-        self.tainted = {}
-        for t in inputs:
-            self._mark(t)
-
-    def _mark(self, t):
-        if isinstance(t, torch.Tensor):
-            self.tainted[id(t)] = weakref.ref(t)
-
-    def _round(self, o, ptrs=()):
-        # a view or an in-place result shares memory with an argument: replacing it by a rounded copy would cut the
-        # alias (Gemma writes its attention output through out.view(...)); it is marked, not rounded
-        if isinstance(o, torch.Tensor) and o.dtype == torch.float32 and _ptr(o) not in ptrs:
-            o = o.to(torch.bfloat16).float()
-        self._mark(o)
-        return o
-
-    def _is(self, t):
-        r = self.tainted.get(id(t)) if isinstance(t, torch.Tensor) else None
-        return r is not None and r() is t
-
-    def __torch_function__(self, func, types, args=(), kwargs=None):
-        kwargs = kwargs or {}
-        out = func(*args, **kwargs)
-        flat = [a for a in list(args) + list(kwargs.values())]
-        flat += [x for a in flat if isinstance(a, (list, tuple)) for x in a]
-        if any(self._is(a) for a in flat):
-            ptrs = {_ptr(a) for a in flat if isinstance(a, torch.Tensor)}
-            if isinstance(out, torch.Tensor):
-                out = self._round(out, ptrs)
-            elif type(out) in (tuple, list):
-                out = type(out)(self._round(o, ptrs) for o in out)
-            elif isinstance(out, tuple):  # torch.return_types (topk, max, ...): marked, not rounded
-                for o in out:
-                    self._mark(o)
-        return out
-
-
-PRECISION_FILE = "precision.yaml"
-DTYPES = ("bf16", "fp32")
-
-
-def step_precision(s, block_type: str | None, step: str) -> dict:
-    """F78: the reference's own dtypes for a step, from <bringup_dir>/precision.yaml (the reference role writes it
-    from the official code; owner rule: match the reference precision):
-
-        steps:
-          router: {compute: fp32, out: fp32}        # every block type
-          swa.attn_norm: {compute: fp32, out: bf16} # one block type
-
-    compute fp32: the reference computes the step in fp32 from its bf16 inputs (no intermediate rounding); bf16: its
-    intermediates are bf16 (a step that mixes the two, e.g. fp32 scores and bf16 probabilities, is bf16: the looser
-    floor). out: the dtype it hands on. Default {compute: bf16, out: bf16}."""
-    import yaml
-
-    p = s.bringup_dir / PRECISION_FILE
-    steps = ((yaml.safe_load(p.read_text()) if p.exists() else None) or {}).get("steps") or {}
-    e = steps.get(f"{block_type}.{step}") or steps.get(step) or {}
-    out = {"compute": e.get("compute", "bf16"), "out": e.get("out", "bf16")}
-    bad = [v for v in out.values() if v not in DTYPES]
-    if bad:
-        raise ValueError(f"{p}: {step}: dtypes {bad} not in {DTYPES}")
-    return out
-
-
-def precision_model(ref, cpu, case, prec: dict | None = None) -> torch.Tensor:
-    """The CPU step at the reference's own dtypes (prec, step_precision): bf16 inputs; with compute bf16 every
-    float32 intermediate that depends on them rounded to bf16, with fp32 none; the output rounded to bf16 unless out
-    is fp32. The reference object's attributes (one level of dicts too) are restored afterwards: a cache filled in
-    this mode would otherwise hand its values to every later exact run."""
-    prec = prec or {"compute": "bf16", "out": "bf16"}
-    saved = {k: (dict(v) if isinstance(v, dict) else v) for k, v in vars(ref).items()}
-    x = [MU.bf16(t) for t in _clone(case.inputs)]
-    try:
-        if prec["compute"] == "fp32":
-            y = cpu(case.rctx(), *x)
-        else:
-            with _Bf16Everywhere(x):
-                y = cpu(case.rctx(), *x)
-    finally:
-        vars(ref).clear()
-        vars(ref).update(saved)
-    return y if prec["out"] == "fp32" else MU.bf16(y)
 
 
 def rel(a, b) -> float:
@@ -521,38 +428,62 @@ class Expect:
         self.cpu_step = ref.component(layer, st.name)
         self.cases = cases(s, ref, layer, st, g, c, self.kind)
         self.cpu = {x.name: run_cpu(self.cpu_step, x) for x in self.cases}
-        # F76: the precision model on every input, for every output kind: each limit is calib x its statistic
-        self.prec = step_precision(s, s.block_type_of(layer), st.name)  # F78: the reference's own dtypes
-        self.model = {x.name: precision_model(ref, self.cpu_step, x, self.prec) for x in self.cases}
+        # F80: the noise floor is the larger of the official code's arithmetic (cached with the goldens, golden input
+        # only) and the input nudge (the fp32 step on inputs moved inside their official dtype's rounding cell)
+        self.dtypes = NF.input_dtypes(s, s.block_type_of(layer), st.name, len(st.inputs))
+        self.out_dtype = NF.output_dtype(s, s.block_type_of(layer), st.name)  # vs the CPU: one rounding to it
+        self.arith = NF.arith(s, layer, st.name, c) or {}
+        self.floor, self.scores = {}, {}
+        for x in self.cases:
+            run = lambda *inp, x=x: self.cpu_step(x.rctx(), *_clone(list(inp)))  # noqa: E731
+            if self.kind in ("selection", "index"):
+                _, sc, kk = NF.tapped(run, _clone(x.inputs))
+                outs, nsc = [], []
+                for k_ in range(NF.SEEDS):
+                    o, ns, _ = NF.tapped(
+                        run, [NF.nudge(t, 1000 * k_ + j, d) for j, (t, d) in enumerate(zip(x.inputs, self.dtypes))]
+                    )
+                    outs.append(o)
+                    nsc.append(ns)
+                self.floor[x.name] = outs
+                if sc is not None and all(n is not None for n in nsc):
+                    self.scores[x.name] = (sc, kk, nsc)
+            else:
+                self.floor[x.name] = NF.nudged(run, _clone(x.inputs), self.dtypes)
         self.rel_lim, self.model_err, self.res, self.col_lim, self.L = {}, {}, {}, {}, {}
         for x in self.cases:
-            cpu, m = self.cpu[x.name], self.model[x.name]
+            cpu, outs = self.cpu[x.name], self.floor[x.name]
             f = 1.0 if x.name == "golden" else self.lim["component_probe"]
             if self.kind == "float":
-                self.model_err[x.name] = float_errors(m, cpu)
-                self.res[x.name] = float_errors(MU.bf16(cpu), cpu)
+                fe = NF.worst_float(outs, cpu, float_errors)
+                self.model_err[x.name] = NF.merge_float(self.arith.get("vs_step") if x.name == "golden" else None, fe)
+                self.res[x.name] = float_errors(NF.round_to(cpu, self.out_dtype), cpu)
                 self.rel_lim[x.name] = rel_limit(
                     self.lim, self.model_err[x.name]["rel"], self.low, self.res[x.name]["rel"]
                 )
-                mc, rc = col_errors(m, cpu), col_errors(MU.bf16(cpu), cpu)
+                cols = [col_errors(o, cpu) for o in outs]
+                mc = None if cols[0] is None else torch.stack(cols).amax(0)
+                rc = col_errors(NF.round_to(cpu, self.out_dtype), cpu)
                 self.col_lim[x.name] = None if mc is None else rel_limit(self.lim, mc, self.low, rc)
             elif self.kind == "selection":
-                me, re_ = selection_fails(m, cpu, self.lim)[0], selection_fails(MU.bf16(cpu), cpu, self.lim)[0]
+                me = _worst_selection([selection_fails(o, cpu, self.lim)[0] for o in outs])
+                re_ = selection_fails(NF.round_to(cpu, self.out_dtype), cpu, self.lim)[0]
                 self.L[x.name] = selection_limits(self.lim, self.k, f, me, re_, int((cpu != 0).sum().item()))
             elif self.kind == "index":
-                self.L[x.name] = self._index_limits(m, cpu, x.start, f)
+                self.L[x.name] = self._index_limits(outs, cpu, x.start, f)
         if self.kind == "float":
             self.golden_err = rel(self.cpu["golden"], want)
             self.golden_col_err = col_errors(self.cpu["golden"], want)
-            # vs the golden: the precision model's own statistics vs the bf16 golden (its rounding included)
-            self.gold_model = float_errors(self.model["golden"], want)
+            # vs the golden: the floor's own statistics vs the bf16 golden (its rounding included)
+            fg = NF.worst_float(self.floor["golden"], want, float_errors)
+            self.gold_model = NF.merge_float(self.arith.get("vs_golden"), fg)
             self.gold_res = float_errors(MU.bf16(self.cpu["golden"]), want)
-        if self.kind == "selection":  # vs the golden: the precision model's own stats vs the bf16 golden
-            gm = selection_fails(self.model["golden"], want, self.lim)[0]
+        if self.kind == "selection":
+            gm = _worst_selection([selection_fails(o, want, self.lim)[0] for o in self.floor["golden"]])
             gr = selection_fails(MU.bf16(self.cpu["golden"]), want, self.lim)[0]
             self.golden_L = selection_limits(self.lim, self.k, 1.0, gm, gr, int((want != 0).sum().item()))
         if self.kind == "index":
-            self.golden_L = self._index_limits(self.model["golden"], want, self.cases[0].start, 1.0)
+            self.golden_L = self._index_limits(self.floor["golden"], want, self.cases[0].start, 1.0)
         # the gate vs the golden (the template's metric): the frozen test's literal THRESHOLD, else the noise floor
         self.thr_how = "the frozen test's THRESHOLD"
         if thr is None:
@@ -561,18 +492,25 @@ class Expect:
                 if self.kind == "index" and mode in (None, "topk_overlap")
                 else (mode or default_mode(want))
             )
-            mv = gate_value(self.model["golden"], want, self.kind, mode)
+            mv = min(gate_value(o, want, self.kind, mode) for o in self.floor["golden"])
+            if "pcc_vs_golden" in (self.arith.get("vs_golden") or {}) and gm == "pcc":
+                mv = min(mv, self.arith["vs_golden"]["pcc_vs_golden"])
             rv = (
                 gate_value(MU.bf16(self.cpu["golden"]), self.cpu["golden"], self.kind, mode)
                 if want.is_floating_point()
                 else 1.0
             )
             thr = NF.gate_limit(gm, mv, rv, self.k, want.numel())
-            self.thr_how = f"{self.k} x the precision model's miss {1 - mv:.3g} (bf16 resolution {1 - rv:.3g})"
+            self.thr_how = (
+                f"{self.k} x the noise floor's miss {1 - mv:.3g} (input nudge"
+                + (", official arithmetic" if self.arith else "")
+                + f"; bf16 resolution {1 - rv:.3g})"
+            )
         self.thr = thr
 
-    def _index_limits(self, m, want, start: int, f: float) -> dict:
-        e = index_fails(m, want, start, self.lim, 0.0, L={"overlap": 0.0, "worst_row": 0.0})[0]
+    def _index_limits(self, outs, want, start: int, f: float) -> dict:
+        es = [index_fails(m, want, start, self.lim, 0.0, L={"overlap": 0.0, "worst_row": 0.0})[0] for m in outs]
+        e = {"overlap": min(x.get("overlap", 1.0) for x in es), "worst_row": min(x.get("worst_row", 1.0) for x in es)}
         valid = normalize_index(want) >= 0
         n, per_row = max(int(valid.sum().item()), 1), max(int(valid.sum(1).max().item()), 1)
         return {
@@ -583,7 +521,9 @@ class Expect:
     def describe(self) -> str:
         lims = ", ".join(f"{k} {v:.4f}" for k, v in self.rel_lim.items())
         return (
-            f"{self.st.name} L{self.layer}: output kind {self.kind}, reference dtypes {self.prec}, inputs {[x.name for x in self.cases]}"
+            f"{self.st.name} L{self.layer}: output kind {self.kind}, input dtypes {self.dtypes}, out {self.out_dtype}"
+            + (" + official arithmetic" if self.arith else "")
+            + f", inputs {[x.name for x in self.cases]}"
             + (f"; rel limits ({'low precision, ' if self.low else ''}calibrated) {lims}" if lims else "")
         )
 
@@ -605,12 +545,16 @@ class Expect:
             e, bad = float_fails(got, ref, L)
         elif self.kind == "selection":
             e, bad = selection_fails(got, ref, self.lim, f, L=self.golden_L if vs_golden else self.L[case.name])
+            if not vs_golden and case.name in self.scores and got.numel() == ref.numel():
+                e2, bad2 = self._flips(got, case.name, f)
+                e.update(e2)
+                bad += bad2
         elif self.kind == "index":
             L = self.golden_L if vs_golden else self.L[case.name]
             e, bad = index_fails(got, ref, case.start, self.lim, self.thr, f, L=L)
         else:
-            m = self.model[case.name] if not vs_golden else self.model["golden"]
-            mm = int_fails(m, ref, 0.0)[0].get("match", 1.0)
+            outs = self.floor[case.name] if not vs_golden else self.floor["golden"]
+            mm = min(int_fails(m, ref, 0.0)[0].get("match", 1.0) for m in outs)
             e, bad = int_fails(got, ref, 1 - f * self.k * max(1 - mm, 1.0 / max(ref.numel(), 1)))
         if not quiet:
             for k, v in e.items():
@@ -618,6 +562,24 @@ class Expect:
             nums = " ".join(f"{k}={v:.6g}" for k, v in e.items())
             print(f"{'ok  ' if not bad else 'FAIL'} {tag}: {nums}" + (f" ({'; '.join(bad)})" if bad else ""))
         return not bad
+
+    def _flips(self, got, case: str, f: float) -> tuple[dict, list[str]]:
+        """F80: every selection flip vs the CPU step must be explained by the nudge, and there are at most calib x
+        the nudge's own flips (at least one row)."""
+        sc, kk, nsc = self.scores[case]
+        fl = NF.flips(sc, kk, NF.support(got.reshape(-1, sc.shape[-1]), kk), nsc)
+        nudge_frac = max(NF.flips(sc, kk, NF.support(n, kk), [])["frac"] for n in nsc)
+        lim = f * self.k * max(nudge_frac, 1.0 / max(sc.shape[0], 1))
+        e = {
+            "flip_rows": fl["rows"],
+            "flips_unexplained": fl["unexplained"],
+            "flip_frac": fl["frac"],
+            "flip_limit": lim,
+        }
+        bad = [f"{fl['unexplained']} rows select another entry the nudge does not explain"] if fl["unexplained"] else []
+        if fl["frac"] > lim:
+            bad.append(f"{fl['frac']:.5f} of the rows select another entry (limit {lim:.5f})")
+        return e, bad
 
     def evaluate(self, outs: dict, quiet=False, stop_early=False) -> list[str]:
         """Every check of one module's outputs (outs[input name]); the names of the failed checks."""
@@ -649,6 +611,16 @@ def gate_value(out, want, kind, mode) -> float:
         g, w = normalize_index(out), normalize_index(want)
         return NF.value("topk_overlap", g, w)
     return NF.value(mode or default_mode(want), out, want)
+
+
+def _worst_selection(es: list[dict]) -> dict:
+    """The worst of the floor's selection stats: lowest overlap, largest matched-row rel and row-sum error."""
+    out = {"overlap": min(e.get("overlap", 1.0) for e in es)}
+    for k in ("rel", "rowsum"):
+        v = [e[k] for e in es if k in e]
+        if v:
+            out[k] = max(v)
+    return out
 
 
 def golden_gate(name, out, want, kind, mode, thr, how: str = "") -> bool:
@@ -711,12 +683,16 @@ def sweep(ex: Expect, gate_name: str) -> bool:
         f = verdict({n: MU.mutate(o, k) for n, o in ex.cpu.items()}, True)
         rows.append((k, "caught" if f else "SLIPPED", ", ".join(f)))
         ok &= bool(f)
-    if ex.kind == "float":
-        control(
-            "bf16 inputs + output",
-            {x.name: MU.bf16(run_cpu(ex.cpu_step, x, [MU.bf16(t) for t in x.inputs])) for x in ex.cases},
+    # F80: a correct step at the noise floor passes: inputs nudged with a seed the floor did not use, output in bf16
+    nudged = {
+        x.name: run_cpu(
+            ex.cpu_step, x, [NF.nudge(t, 99991 + j, d) for j, (t, d) in enumerate(zip(x.inputs, ex.dtypes))]
         )
-        control("bf16 everywhere", ex.model)
+        for x in ex.cases
+    }
+    control("input nudge (new seed)", nudged)
+    if ex.kind == "float" and ex.out_dtype == "bf16":
+        control("bf16 output", {n: MU.bf16(o) for n, o in ex.cpu.items()})
     g0, base = ex.cases[0], ex.cpu["golden"]
     for i, t in enumerate(g0.inputs):
         if not (isinstance(t, torch.Tensor) and t.is_floating_point()):

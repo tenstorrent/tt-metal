@@ -227,10 +227,11 @@ def test_a_swap_test_that_cannot_freeze_unreviewed_goes_to_the_test_role(orch, s
     assert "test fails with the CPU reference" in (o.run_dir / "briefs" / "S.blk.01.test.1.md").read_text()
 
 
-def test_the_tail_limit_follows_the_precision_model(gspec, noise, monkeypatch):
-    """F72: the block-out check after the last swapped step takes its limit from what the step's bf16 precision model
-    does to the block out (x the calibration margin, at least the bf16 resolution; no fixed floor or cap)."""
-    from models.demos.common.bringup.testing import component_checks as CC
+def test_the_tail_limit_follows_the_noise_floor(gspec, noise, monkeypatch):
+    """F72 / F80: the block-out check after the last swapped step takes its limit from what the step's noise floor
+    (its fp32 run on nudged inputs) does to the block out (x the calibration margin, at least the bf16 resolution; no
+    fixed floor or cap)."""
+    from models.demos.common.bringup.testing import noise_floor as NF
 
     s = gspec()
     noise(1e-3)
@@ -240,16 +241,18 @@ def test_the_tail_limit_follows_the_precision_model(gspec, noise, monkeypatch):
     assert m["swap_attn_residual_out_rel_limit"] == pytest.approx(
         2.0 * max(m["swap_attn_residual_out_model_rel"], 1e-9), rel=0.5
     )
-    real = CC.precision_model
-    monkeypatch.setattr(
-        CC, "precision_model", lambda ref, cpu, case, prec=None: real(ref, cpu, case, prec) * 1.05
-    )  # 5 %
+    real = NF.nudge
+    monkeypatch.setattr(  # a floor of 5 %: every nudged input scaled by 1.05
+        NF,
+        "nudge",
+        lambda t, seed, dtype="bf16": t * 1.05 if isinstance(t, torch.Tensor) and t.is_floating_point() else t,
+    )
     M.reset("T")
     assert run_swap_test(s, "blk", SWAPPED, checks="steps")
     m2 = got()
-    em = m2["swap_attn_residual_out_model_rel"]  # the residual dilutes the step's 5 % (~2 % at the block out)
+    em = m2["swap_attn_residual_out_model_rel"]  # the residual dilutes the step's 5 %
     assert em > 0.015 and m2["swap_attn_residual_out_rel_limit"] == pytest.approx(2.0 * em)  # no cap
-    monkeypatch.setattr(CC, "precision_model", real)
+    monkeypatch.setattr(NF, "nudge", real)
     noise(0.5)  # a broken step still fails: its own checks and the block-out gate
     M.reset("T")
     assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
