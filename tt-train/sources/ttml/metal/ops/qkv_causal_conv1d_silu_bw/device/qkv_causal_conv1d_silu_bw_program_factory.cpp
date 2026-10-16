@@ -97,9 +97,9 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     const uint32_t v_tiles = attrs.v_width / tt::constants::TILE_WIDTH;
     const uint32_t channel_tiles = q_tiles + k_tiles + v_tiles;
     const uint32_t channel_tiles_per_block = attrs.channel_chunk_size / tt::constants::TILE_WIDTH;
-    const uint32_t num_blocks = channel_tiles / channel_tiles_per_block;
+    const uint32_t channel_blocks = channel_tiles / channel_tiles_per_block;
     const uint32_t sequence_splits = attrs.sequence_splits;
-    const auto dist = distribute(input.device().compute_with_storage_grid_size(), num_blocks * sequence_splits);
+    const auto dist = distribute(input.device().compute_with_storage_grid_size(), channel_blocks * sequence_splits);
 
     const m2::DFBSpecName ACT_RM{"act_rm"}, ACT_TILE{"act_tile"}, WEIGHTS{"weights"}, GRAD_OUT{"grad_out"},
         PREACT{"preact"}, SIGMOID{"sigmoid"}, DC_TILE{"dc_tile"}, DC_RM{"dc_rm"}, ACC{"acc"}, GRAD_TAP{"grad_tap"},

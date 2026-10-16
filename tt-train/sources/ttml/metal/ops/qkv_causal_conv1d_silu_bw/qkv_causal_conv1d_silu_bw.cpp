@@ -56,11 +56,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
     if (sequence_splits == 0) {
         const auto grid = input.device()->compute_with_storage_grid_size();
         const uint32_t cores = grid.x * grid.y;
-        const uint32_t blocks = channels / channel_chunk_size;
+        const uint32_t channel_blocks = channels / channel_chunk_size;
         const uint32_t sequence_tiles = sequence / tt::constants::TILE_HEIGHT;
         uint64_t best_cost = ~0ULL;
         for (uint32_t candidate = 1; candidate <= sequence_tiles; ++candidate) {
-            const uint64_t items = static_cast<uint64_t>(blocks) * candidate;
+            const uint64_t items = static_cast<uint64_t>(channel_blocks) * candidate;
             const uint64_t rounds = (items + cores - 1) / cores;
             const uint64_t halo_tiles = candidate > 1 ? 1 : 0;
             const uint64_t tiles_per_item = (sequence_tiles + candidate - 1) / candidate + halo_tiles;

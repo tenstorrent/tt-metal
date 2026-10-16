@@ -50,15 +50,15 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
         noc.async_read_barrier();
         dc_views.push_back(tap_count * channel_tiles_per_block);
     };
-    const auto write_output = [&](uint32_t mt, uint32_t ct_start) {
+    const auto write_output = [&](uint32_t mt, uint32_t first_tile_column) {
         output.wait_front(channel_tiles_per_block);
-        for (uint32_t ct = 0; ct < channel_tiles_per_block; ++ct) {
+        for (uint32_t tile_column = 0; tile_column < channel_tiles_per_block; ++tile_column) {
             noc.async_write(
                 output,
                 grad_input,
                 tile_bytes,
-                {.offset_bytes = ct * tile_bytes},
-                {.page_id = mt * channel_tiles + ct_start + ct});
+                {.offset_bytes = tile_column * tile_bytes},
+                {.page_id = mt * channel_tiles + first_tile_column + tile_column});
         }
         noc.async_write_barrier();
         output.pop_front(channel_tiles_per_block);
@@ -66,9 +66,9 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
 
     for (uint32_t item = 0; item < wi_count; ++item) {
         const uint32_t work = wi_start + item;
-        const uint32_t block = work / sequence_splits;
+        const uint32_t channel_block = work / sequence_splits;
         const uint32_t split = work % sequence_splits;
-        const uint32_t ct_start = block * channel_tiles_per_block;
+        const uint32_t first_tile_column = channel_block * channel_tiles_per_block;
         const uint32_t m0 = split * sequence_tiles / sequence_splits;
         const uint32_t m1 = (split + 1) * sequence_tiles / sequence_splits;
         const bool has_halo = m1 < sequence_tiles;
@@ -91,7 +91,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
             noc.async_read_barrier();
             dc_rm.pop_front(channel_tiles_per_block);
             if (k > 0) {
-                write_output(m0 + k - 1, ct_start);
+                write_output(m0 + k - 1, first_tile_column);
             }
         }
         if (!has_halo) {
@@ -100,19 +100,19 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
                 tail[i] = 0;
             }
             push_views();
-            write_output(m1 - 1, ct_start);
+            write_output(m1 - 1, first_tile_column);
         }
 
         grad_tap.wait_front(tap_count * channel_tiles_per_block);
 
         for (uint32_t tap = 0; tap < tap_count; ++tap) {
-            for (uint32_t ct = 0; ct < channel_tiles_per_block; ++ct) {
+            for (uint32_t tile_column = 0; tile_column < channel_tiles_per_block; ++tile_column) {
                 noc.async_write(
                     grad_tap,
                     grad_tap_partial,
                     grad_tap_tile_bytes,
-                    {.offset_bytes = (tap * channel_tiles_per_block + ct) * grad_tap_tile_bytes},
-                    {.page_id = (tap * sequence_splits + split) * channel_tiles + ct_start + ct});
+                    {.offset_bytes = (tap * channel_tiles_per_block + tile_column) * grad_tap_tile_bytes},
+                    {.page_id = (tap * sequence_splits + split) * channel_tiles + first_tile_column + tile_column});
             }
         }
         noc.async_write_barrier();

@@ -138,7 +138,8 @@ template <uint32_t channel_tiles_per_block>
     dc_tile.push_back(channel_tiles_per_block);
 }
 
-// acc[tap][ct] += dc * view_tap. The running sum is kept in an fp32 DFB and packed as fp32 (grad_tap too), but each
+// acc[tap][tile_column] += dc * view_tap. The running sum is kept in an fp32 DFB and packed as fp32 (grad_tap too),
+// but each
 // add unpacks acc into SrcA, which holds tf32 (10-bit mantissa), so the accumulation is tf32 rather than full fp32.
 // The last own tile writes the sum to grad_tap instead of acc.
 template <uint32_t channel_tiles_per_block, bool first, bool last>
