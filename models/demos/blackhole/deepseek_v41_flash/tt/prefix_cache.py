@@ -280,12 +280,18 @@ def snapshot_user(model, b, s, toks):
             raise ApcUnsupported(f"{name} is {sp.tensor.dtype}")
         n = sp.count(s)
         vals = []
+        N, D = sp.tensor.shape[2], sp.tensor.shape[3]
+        end = sp.end_row(N) if sp.kind == "tail" else N
+        # slice the slot (and, for a FIFO, its valid tail) ON DEVICE first: reading a whole padded table per tensor is what made a snapshot cost ~0.5 s regardless of its size
+        lo = end - n if sp.kind == "tail" else 0
+        whole = (
+            sp.tensor.shape[0] == 1 and lo == 0 and end == N
+        )  # (a full slice returns the persistent tensor itself: never free it)
+        part = sp.tensor if whole else ttnn.slice(sp.tensor, [i, 0, lo, 0], [i + 1, 1, end, D])
         for c in range(1 if sp.replicated else cols):
-            x = read_shard(sp.tensor, r * cols + c)[i : i + 1]
-            if sp.kind == "tail":
-                end = sp.end_row(x.shape[2])
-                x = x[:, :, end - n : end]
-            vals.append(x.clone())
+            vals.append(read_shard(part, r * cols + c).clone())
+        if not whole:
+            ttnn.deallocate(part)
         snap.carried[name] = vals * cols if sp.replicated else vals
     for src in _sources(model):
         snap.pool[src] = snap.carried[f"L{src}.kvt"][0][0, 0]  # [s / ratio, 512], shared with the carried copy
@@ -442,7 +448,7 @@ class PrefixStore:
 class PrefixCache:
     """The model's prefix caching: a ``PrefixStore`` plus the snapshot policy, driven from ``Model.prefill_interleaved`` (APC_CHUNKED_PREFILL_PLAN.md).
 
-    * restore: a new prompt (no carried state) takes the deepest stored snapshot s <= end - margin (``margin`` = the ring rows of the pool: the continuation must rewrite every ring row), the
+    * restore: a new prompt (no carried state) takes the deepest stored snapshot s <= end - margin (``margin`` = 128, the attention window: the continuation rewrites the last 128 positions: ring rows read by decode, ``prev_cs``, drafter taps), the
       prompt then computes [s, end) only;
     * capture: after a replay window that ended at B (a multiple of the chunk) a user that is not an image prompt is snapshotted when ``policy`` wants B (``pow2``: B / chunk a power of two, i.e.
       512, 1024, 2048, 4096 ... with the default chunk; ``all``; an integer N: the first N boundaries) and the store does not hold it yet (same-step prompts that share a prefix: the first
@@ -454,6 +460,11 @@ class PrefixCache:
         self.m, self.chunk, self.log, self.policy = model, int(chunk), log, policy
         self.store = PrefixStore(chunk, budget_bytes)
         self.enabled = True
+        # the continuation must rewrite the last WINDOW (128) positions of the prompt: the ring rows decode reads, ``prev_cs`` (last token) and the drafter taps. The extra ring rows of a spec build
+        # (288 rows = window + slack for speculative writes) hold positions that no attention reads, so they need not be rewritten: margin 128 for both pools.
+        import os
+
+        self.margin = int(os.environ.get("DSV41_APC_MARGIN", "128"))
         self.image_token_id = None  # set when image input is on: prompts with image placeholders bypass the cache
         self.stats = dict(restores=0, restored_tokens=0, snapshots=0, snap_s=0.0, restore_s=0.0, skipped_vision=0)
 
@@ -518,7 +529,7 @@ class PrefixCache:
         if self._has_image(tokens, end):
             self.stats["skipped_vision"] += 1
             return None
-        return self.store.lookup(tokens, end, end, margin=self.m.pool.ring_rows)
+        return self.store.lookup(tokens, end, end, margin=self.margin)
 
     def restore_group(self, snap, bs):
         t = restore_users(self.m, snap, bs)
