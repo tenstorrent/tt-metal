@@ -8,6 +8,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_sync.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand_to_dest.h"
 #include "tensor_shape.h"
@@ -85,8 +86,8 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
  * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  * @note For UNP_DEST no dvalid is set (no math is involved): the caller's DEST handshake takes its place, either the dest-dvalid
- *       @ref _llk_unpack_dest_dvalid_section_done_ for a bare UNP_DEST unpack, or the UNPACK_MATH / MATH_PACK semaphore protocol of
- *       llk_unpack_unary_operand_to_dest.h (@ref _llk_unpack_unary_operand_to_dest_tile_, @ref _llk_unpack_unary_operand_to_dest_block_).
+ *       @ref _llk_unpack_dest_dvalid_section_done_ for a bare UNP_DEST unpack, or the UNPACK_MATH / MATH_PACK section handshake
+ *       that brackets the tile / block calls of llk_unpack_unary_operand_to_dest.h (see @ref _llk_unpack_unary_operand_to_dest_init_).
  */
 template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
 inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
@@ -371,8 +372,8 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
  * @tparam reuse_dest: When not NONE, sets the source counter for the CB unpacker only, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @tparam unpack_to_dest: When true, forwards to @ref _llk_unpack_unary_operand_to_dest_tile_, which runs the UNPACK_MATH / MATH_PACK
- *         semaphore handshake for unpack-to-DEST around one run of the init's num_tiles MOP; requires UNP_SEL == UNP_DEST, values = <true/false>
+ * @tparam unpack_to_dest: When true, runs the UNPACK_MATH / MATH_PACK section handshake around one @ref _llk_unpack_unary_operand_to_dest_tile_
+ *         run of the init's num_tiles MOP; requires UNP_SEL == UNP_DEST, values = <true/false>
  * @tparam DEST_SYNC_MODE: Only used with unpack_to_dest: in SyncHalf the DEST section base flips to the other bank after each call,
  *         values = <SyncFull/SyncHalf>
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
@@ -391,10 +392,17 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
     {
         static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
 
-        // Forward to the standalone unpack-to-dest family: one MOP run (the init's num_tiles tiles) into DEST tiles
-        // [0, num_tiles) as one section. EN_32BIT_DEST stays pinned to true, as it was when this arm was inline: it
-        // sizes the SyncHalf bank flip and must match the pack side of the same op.
-        _llk_unpack_unary_operand_to_dest_tile_<DEST_SYNC_MODE, true /*EN_32BIT_DEST*/>(l1_tile_idx, 0 /*dst_tile_idx*/);
+        // One MOP run (the init's num_tiles tiles) into DEST tiles [0, num_tiles) as one section, bracketed with the
+        // section handshake that tt-metal callers of the to-dest family run in tile_regs_acquire / tile_regs_commit
+        // (llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done). EN_32BIT_DEST stays pinned to true, as it
+        // was when this arm was inline: it sizes the SyncHalf bank flip and must match the pack side of the same op.
+        _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
+        _llk_unpack_unary_operand_to_dest_tile_(l1_tile_idx, 0 /*dst_tile_idx*/);
+        _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
+        if constexpr (DEST_SYNC_MODE == ckernel::DstSync::SyncHalf)
+        {
+            _llk_sync_advance_dest_section_<to_underlying(ckernel::trisc::TriscID::Unpack), true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();
+        }
         return;
     }
 
