@@ -90,8 +90,8 @@ and the input bytes are checked again after the timed loop.
 - perform a remote header read; or
 - vary implementation style, packet size, placement, or working-set size.
 
-The measured value is therefore not comparable to the historical
-route-construction or compressed-route lookup values.
+The measured value is therefore not comparable to a
+route-construction or compressed-route lookup value.
 
 ### Fixed lookup fixture
 
@@ -375,8 +375,8 @@ local-DDR path, or header allocation in the case.
 
 The prepared cache profile applies to the compatible suite even when a
 forwarding case does not use the reserved lookup bytes. That changes available
-cache capacity relative to the historical runs, so preserved forwarding code
-does not imply preserved cycle values.
+cache capacity relative to a run without that profile, so the same forwarding
+code does not imply the same cycle values.
 
 ### Forwarding summary rows
 
@@ -408,7 +408,7 @@ A current lookup observation is valid only when:
   * terminal state is `DONE`, verification reports a match, the witness equals
     the host oracle, and the item count is complete;
   * packet bytes, header count, and prepared base and extent identify the fixed workload; and
-  * the row is not combined with a historical result as though the subjects or
+  * the row is not combined with another result as though the subjects or
     execution environments were identical.
 
 A current forwarding observation is valid only when:

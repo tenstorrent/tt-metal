@@ -56,7 +56,7 @@ partition; the harness must not assume that partition in advance.
   either depend on a data-driven specification language.
 - Keep the logic under measurement separate from component orchestration.
 
-### Non-goals for v0
+### Non-goals
 
 - A production Fabric 2 runtime or bring-up path.
 - Making X280 a `HalProgrammableCoreType` or routing it through Metal JIT.
@@ -252,7 +252,7 @@ that the component remains in its designated safe state afterward.
 
 ## Ownership and lifecycle
 
-Only two lifecycle structures are fixed in v0.
+Only two lifecycle structures are fixed.
 
 ### Lifecycle follows the hardware
 
@@ -437,7 +437,7 @@ result output. It
 is not a collection of eager claims, a generic component manager, or a
 suite-independent configuration engine.
 
-Every v0 case has:
+Every case has:
 
 - explicit placement;
 - explicit component-operation and restoration scopes;
@@ -921,7 +921,7 @@ The harness permits one owner-coordinated operating-clock establishment per
 session. Before that call, every live X280 tile must be in verified resident
 idle; no active case firmware may be running. The caller must also satisfy the
 runtime's external PLL4 ownership precondition: no other process, including a
-fleet telemetry agent, may hold the device open while the clock moves. The
+telemetry daemon, may hold the device open while the clock moves. The
 operating frequency is then adopted by every case in that session and always
 reported as measured rather than merely as requested.
 
@@ -1063,7 +1063,7 @@ an inherited filter, `tt-smi -r <N>` for a device outside it prints
   Exalens is a separate-process behavioral reference only, and no
   unsupported concurrent owners are permitted.
 - Component types remain concrete and heterogeneous; no common
-  virtual base or uniform load API is introduced in v0.
+  virtual base or uniform load API exists.
 - `X280Runtime` owns one stable `X280Tile` per discovered physical
   tile. Exact repeated lookup returns the same object, whose reference is
   bounded by the runtime lifetime. X280 has no synthetic RAII claim because
@@ -1072,8 +1072,8 @@ an inherited filter, `tt-smi -r <N>` for a device outside it prints
   resolution. Local self-views do not require a vacuous cross-view plan.
 - Addresses are resolved for a viewer on the host and passed to
   kernels; test-specific addresses are not baked into shared headers.
-- Cases are code; a declarative specification and graph executor are
-  deferred.
+- Cases are code; there is no declarative specification or graph
+  executor.
 - `X280Runtime::open` is Metal's stateful X280 initialization
   boundary. It discovers and initializes all selected chips and returns a
   runtime only for all-chip readiness; X280 is not a first-class Metal
@@ -1137,7 +1137,7 @@ an inherited filter, `tt-smi -r <N>` for a device outside it prints
 - Active images are submitted on the runtime, which owns every
   in-flight session, addresses it by `SessionId`, and reaps it on completion.
   Submission accepts only healthy tiles from that same runtime; tiles expose no
-  `launch()` method. Writable outbound-NOC remains deferred.
+  `launch()` method. The runtime has no writable outbound-NOC programming.
 - Releasing a tile's harts from reset is one-way. A hardware bug means
   the harts within an L2CPU tile can be brought out of reset only once; putting
   them back requires resetting the whole ASIC (`tt-smi -r`). Asserting the reset

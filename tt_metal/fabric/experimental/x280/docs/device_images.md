@@ -137,7 +137,7 @@ in the wrong state:
 
 | Path | Source | Peak BW | Notes |
 |---|---|---|---|
-| Front Port write | Tensix or external | **10.24 GB/s** | Posted writes, dest-bound |
+| Front Port write | Tensix or external | **17.503 GB/s** | Posted writes, dest-bound; Tensix -> X280 at 16384 B ([results](results.md#transport_bandwidth)) |
 | MemPort cached read | DDR | 7.92 GB/s | 128 KB cache-miss |
 
 ### TLB programming (System Port outbound)

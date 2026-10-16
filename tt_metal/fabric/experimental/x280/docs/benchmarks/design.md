@@ -88,8 +88,8 @@ kernels/<measurement-suite>/
 This shape is a separation of responsibilities, not a commitment to exact
 filenames.
 
-Editorial family numbers and historical benchmark IDs are not part of APIs,
-paths, selectors, or result records.
+Benchmarks are named by suite and member; APIs, paths, selectors, and result
+records carry no other numbering.
 
 ### Measured cost, not validated function
 
@@ -1028,7 +1028,7 @@ The suite rejects mismatched backend identity, unexpected sample count,
 invalid terminal state, clock disagreement, or token-interval overflow.
 
 Derived-under-model values are labelled as such. A handler cost measured by
-`pipeline_stage` may later be combined with a transport result, but that sum is
+`pipeline_stage` is not summed with a transport result; any such sum is
 a model until a composed measurement validates it.
 
 ### Open design questions
@@ -1319,7 +1319,7 @@ line-rate definitions must match the traffic being budgeted.
 The current X280 contract is concrete. `route_compute` performs one
 destination-to-next-hop direction-table lookup. `route_forward` has one
 fixed-source configuration, `decide_plain`. Exact layouts, arguments, result
-identity, prepared-input requirements, and the historical boundary are defined
+identity, and prepared-input requirements are defined
 in
 [`docs/benchmarks/pipeline_stage.md`](pipeline_stage.md).
 
