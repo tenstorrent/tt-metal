@@ -636,7 +636,10 @@ class KDARecurrence:
         value_dim: int,
         batch: int = 1,
         gate_scale: float = 1.0,
+        ring_relay_cores: list[ttnn.CoreCoord] | None = None,
     ) -> None:
+        """``ring_relay_cores``: the worker cores the SP ring relay takes its head and sender cores from, in order
+        (default: the grid in row-major order)."""
         # Preparation multiplies the gate by gate_scale before its cumulative sum.
         self._gate_scale = gate_scale
         preparation = ttnn.init_device_compute_kernel_config(
@@ -738,6 +741,7 @@ class KDARecurrence:
                 num_links=links,
                 local_rows=local_rows,
                 math_fidelity=program_config.affine_prefix_math_fidelity,
+                cores=ring_relay_cores,
             )
             self._relay_final_carry = _RelayFinalCarry(device, sequence_parallel_axis, links)
         if self._sequence_parallel:
