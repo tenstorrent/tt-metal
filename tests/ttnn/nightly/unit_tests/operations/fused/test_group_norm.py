@@ -209,7 +209,7 @@ def test_group_norm_sharded_ex_external_cb_gap(device, specify_grid):
 
 
 @pytest.mark.parametrize("N, C, H, W, num_groups", base.HEIGHT_SHARDED_SHAPES)
-@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("use_welford", base.statistics_backend_values, ids=base.statistics_backend_ids)
 @pytest.mark.parametrize("specify_grid", [False])
 def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welford, specify_grid):
     base.test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welford, specify_grid)
@@ -217,7 +217,7 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welf
 
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", base.BLOCK_SHARDED_V2_8X4_SHAPES)
-@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("use_welford", base.statistics_backend_values, ids=base.statistics_backend_ids)
 @pytest.mark.parametrize("specify_grid", [False])
 def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_groups, use_welford, specify_grid):
     base.test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_groups, use_welford, specify_grid)
@@ -225,7 +225,7 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
 
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", base.BLOCK_SHARDED_V2_8X8_SHAPES)
-@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("use_welford", base.statistics_backend_values, ids=base.statistics_backend_ids)
 @pytest.mark.parametrize("specify_grid", [False])
 def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford, specify_grid):
     base.test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford, specify_grid)
@@ -233,7 +233,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
 
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", base.BLOCK_SHARDED_V2_8X8_TILE_LAYOUT_SHAPES)
-@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("use_welford", base.statistics_backend_values, ids=base.statistics_backend_ids)
 @pytest.mark.parametrize("specify_grid", [False])
 def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(
     device, N, C, H, W, num_groups, use_welford, specify_grid
@@ -245,7 +245,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(
 
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("input_shape", base.generate_sdxl_test_inputs())
-@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("use_welford", base.statistics_backend_values, ids=base.statistics_backend_ids)
 @pytest.mark.parametrize("specify_grid", [False])
 # Paramemeters need to stay consistent with usage in
 # models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_block_sharded_group_norm_sdxl_performance
@@ -255,7 +255,7 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid):
 
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("input_shape", base.generate_sdxl_test_inputs())
-@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("use_welford", base.statistics_backend_values, ids=base.statistics_backend_ids)
 @pytest.mark.parametrize("specify_grid", [False])
 # Oppositive of previous test in terms of inplace, for full coverage purposes.
 def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, specify_grid):
@@ -295,7 +295,7 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", base.NO_INPUT_MASK_SHAPES)
 @pytest.mark.parametrize("specify_grid", [False])
-@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("use_welford", base.statistics_backend_values, ids=base.statistics_backend_ids)
 def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, specify_grid):
     base.test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, specify_grid)
 
@@ -307,7 +307,7 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid)
 
 
 @pytest.mark.parametrize("N, C, H, W, num_groups", base.OPTIONAL_WEIGHT_BIAS_SHAPES)
-@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("use_welford", base.statistics_backend_values, ids=base.statistics_backend_ids)
 @pytest.mark.parametrize(
     "has_weight, has_bias", base.OPTIONAL_WEIGHT_BIAS_AFFINE_PARAMS, ids=base.OPTIONAL_WEIGHT_BIAS_AFFINE_IDS
 )

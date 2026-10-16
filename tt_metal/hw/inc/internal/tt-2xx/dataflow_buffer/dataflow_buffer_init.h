@@ -448,14 +448,14 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         total_l1_read += t_after_l1 - t_slot_start;
         const uint32_t t_wr_start = rdcycle();
         if (producer_txn_id_mask & txn_bit) {
-            CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, txn_id);
+            __builtin_riscv_ttrocc_cmdbuf_clear_tiles_to_process_tr_ack(OVERLAY_RD_CMD_BUF, txn_id);
             asm volatile("nop");
-            SET_TILES_TO_PROCESS_THRES_TR_ACK(txn_id, threshold);
+            __builtin_riscv_ttrocc_wr_tiles_to_process_thres_tr_ack(txn_id, threshold);
         }
         if (consumer_txn_id_mask & txn_bit) {
-            CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, txn_id);
+            __builtin_riscv_ttrocc_cmdbuf_clear_tiles_to_process_wr_sent(OVERLAY_WR_CMD_BUF, txn_id);
             asm volatile("nop");
-            SET_TILES_TO_PROCESS_THRES_WR_SENT(txn_id, threshold);
+            __builtin_riscv_ttrocc_wr_tiles_to_process_thres_wr_sent(txn_id, threshold);
         }
         hw_reg_write_cycles += rdcycle() - t_wr_start;
         const uint32_t t_after_rocc = rdcycle();
@@ -465,15 +465,18 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
     const uint32_t t_after_cmdbuf = rdcycle();
 
     const uint32_t t_before_ie = rdcycle();
-    uint64_t reg_val =
-        CMDBUF_RD_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);
+    uint64_t reg_val = __builtin_riscv_ttrocc_cmdbuf_rd_reg(
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET / 8);
     reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(producer_txn_id_mask & 0xFFFFFFFFULL) << 32);
-    CMDBUF_WR_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET / 8, reg_val);
     const uint32_t t_after_first_ie_rmw = rdcycle();
 
-    reg_val = CMDBUF_RD_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);
+    reg_val = __builtin_riscv_ttrocc_cmdbuf_rd_reg(
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET / 8);
     reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (consumer_txn_id_mask & 0xFFFFFFFFULL);
-    CMDBUF_WR_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET / 8, reg_val);
     const uint32_t t_after_isr_ie_writes = rdcycle();
     hw_reg_write_cycles += t_after_isr_ie_writes - t_before_ie;
 

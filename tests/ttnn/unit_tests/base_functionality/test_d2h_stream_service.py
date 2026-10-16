@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import skip_for_slow_dispatch, skip_with_llk_assert
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch, skip_with_llk_assert
 
 # Only run on Blackhole Galaxy; smaller Blackhole boards (P150/P300) fail to pin host pages for
 # the DMA buffer. See #47750.

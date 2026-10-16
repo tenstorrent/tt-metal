@@ -70,11 +70,13 @@ struct RingAttentionNeighborHaloConfig {
     bool send_backward = false;
     uint32_t distance = 1;
     // Which cyclic predecessor this exchange ships from: 1 = the immediate neighbour. A halo wider than
-    // one Q slab is covered by several exchanges, each shipping one slab tail (tail_tile_rows) into its
-    // own block of the compact buffer, starting at tile row dest_row_base.
+    // one Q slab is covered by several exchanges, each shipping one slab tail (tail_tile_rows) per Q
+    // segment into its own block of the compact buffer, starting at tile row dest_row_base (first
+    // segment) or second_dest_row_base (second).
     uint32_t hop = 1;
     uint32_t tail_tile_rows = 0;  // 0 = halo_tile_rows (one-hop halo)
     uint32_t dest_row_base = 0;
+    uint32_t second_dest_row_base = 0;
     // Non-empty for a line multicast over hops [hop, hop + hop_origin_rows.size()): the source tile row
     // each hop ships.
     std::vector<uint32_t> hop_origin_rows;
@@ -147,10 +149,11 @@ constexpr uint32_t kNeighborReaderSecondOriginFieldOffset = 6;
 constexpr uint32_t kNeighborReaderHaloPagesFieldOffset = 7;
 
 constexpr uint32_t kNeighborWriterRuntimeArgHeaderCount = 4;
-constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 5;
+constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 7;
 constexpr uint32_t kNeighborWriterInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
-// First destination page this hop writes in the compact buffer (see sliding_window_work_plan.hpp).
+// First destination page this hop writes in the compact buffer (see sliding_window_work_plan.hpp), followed
+// by the second tail's first page and the pages per tail.
 constexpr uint32_t kNeighborWriterOutputOriginPageFieldOffset = 4;
 // Multicast exchanges append [hop count, one source tile row per hop] after the tensor descriptors, then
 // (reader only) one tile width per input.

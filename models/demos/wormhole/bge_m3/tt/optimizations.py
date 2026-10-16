@@ -105,14 +105,27 @@ class Optimizations:
         intermediate_size: int = 4096,
         data_parallel: bool = False,
         quality_mode: bool = False,
+        mlp_wi_output_dtype: ttnn.DataType | None = None,
     ) -> "Optimizations":
-        """Build fully-resolved optimizations for the given shape and device."""
+        """Build fully-resolved optimizations for the given shape and device.
+
+        mlp_wi_output_dtype is the ModelArgs override for the Wi output; it decides
+        whether the S8192 minimal_matmul configs fit L1, so it has to be known here.
+        """
         max_batch = max(1, max_batch_size)
         core_grid = _matmul_core_grid(mesh_device, max_seq_len, max_batch)
         act_mem = _linear_activation_memory_config(max_seq_len, max_batch)
 
         mlp_opts = _build_mlp_optimizations(
-            mesh_device, max_seq_len, max_batch, dtype, hidden_size, intermediate_size, core_grid, act_mem
+            mesh_device,
+            max_seq_len,
+            max_batch,
+            dtype,
+            hidden_size,
+            intermediate_size,
+            core_grid,
+            act_mem,
+            wi_output_dtype=mlp_wi_output_dtype,
         )
         attn_opts = _build_attention_optimizations(
             mesh_device, max_seq_len, max_batch, dtype, hidden_size, core_grid, act_mem
@@ -146,13 +159,51 @@ class Optimizations:
 
 
 def _build_mlp_optimizations(
-    mesh_device, max_seq_len, max_batch, dtype, hidden_size, intermediate_size, core_grid, act_mem
+    mesh_device,
+    max_seq_len,
+    max_batch,
+    dtype,
+    hidden_size,
+    intermediate_size,
+    core_grid,
+    act_mem,
+    *,
+    wi_output_dtype=None,
 ):
     """MLP program/memory configs. The S8192 (JiT) shape resolves minimal_matmul
-    configs for Wi/Wo; other shapes use tuned or default program configs."""
+    configs for Wi/Wo when their dataflow buffers fit Wormhole L1 for the dtypes in
+    use; other shapes, and dtype mixes that do not fit, use tuned or default program
+    configs."""
+    wi_compute_kernel_cfg = mlp_wi_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype)
+    wo_compute_kernel_cfg = mlp_wo_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype)
+    ln_input_mem = _ln_input_sharded_memory_config(max_seq_len, max_batch, mesh_device)
+    # Dtypes the two matmuls run with (encoder.py): in0 of Wi is the LayerNorm output,
+    # which keeps the model dtype; weights and biases are the model dtype; the Wi
+    # output is the model dtype unless ModelArgs overrides it; Wo writes bfloat16 when
+    # its output feeds a sharded LayerNorm, else it keeps its input dtype.
+    wi_out_dtype = dtype if wi_output_dtype is None else wi_output_dtype
+    wo_out_dtype = ttnn.bfloat16 if ln_input_mem is not None else wi_out_dtype
+
+    # The S8192 minimal_matmul configs below were tuned for bfloat8_b (N300 B12 data
+    # parallel, and the bfloat8_b single-chip demo). Their dataflow buffers are sized
+    # for 1088 B tiles: with bfloat16 activations and weights the Wi buffers reach
+    # 2,481,376 B against the 1,499,136 B Wormhole L1 and the program fails at first
+    # enqueue (test_model_full_end_to_end[S8192] on wh_n150 since #58149); a bfloat8_b
+    # model with a bfloat16 Wi output reaches 1,736,416 B. Each config is kept only when
+    # its footprint for the actual dtypes fits; otherwise the layer takes ttnn.linear,
+    # whose auto config splits the output block to fit L1.
     wi_minimal = _mlp_wi_minimal_matmul_config(
         mesh_device, max_seq_len, max_batch, hidden_size=hidden_size, intermediate_size=intermediate_size
     )
+    if wi_minimal is not None and not _minimal_matmul_fits_wormhole_l1(
+        wi_minimal,
+        in0_dtype=dtype,
+        in1_dtype=dtype,
+        out_dtype=wi_out_dtype,
+        bias_dtype=dtype,
+        fp32_dest_acc_en=wi_compute_kernel_cfg.fp32_dest_acc_en,
+    ):
+        wi_minimal = None
     wi_prg = (
         None
         if wi_minimal is not None
@@ -174,11 +225,19 @@ def _build_mlp_optimizations(
     wo_minimal = _mlp_wo_minimal_matmul_config(
         mesh_device, max_seq_len, max_batch, hidden_size=hidden_size, intermediate_size=intermediate_size
     )
+    if wo_minimal is not None and not _minimal_matmul_fits_wormhole_l1(
+        wo_minimal,
+        in0_dtype=wi_out_dtype,
+        in1_dtype=dtype,
+        out_dtype=wo_out_dtype,
+        bias_dtype=dtype,
+        fp32_dest_acc_en=wo_compute_kernel_cfg.fp32_dest_acc_en,
+    ):
+        wo_minimal = None
 
-    ln_input_mem = _ln_input_sharded_memory_config(max_seq_len, max_batch, mesh_device)
     return MLPOptimizations(
-        wi_compute_kernel_cfg=mlp_wi_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
-        wo_compute_kernel_cfg=mlp_wo_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
+        wi_compute_kernel_cfg=wi_compute_kernel_cfg,
+        wo_compute_kernel_cfg=wo_compute_kernel_cfg,
         wi_memcfg=_mlp_wi_output_memory_config(max_seq_len, max_batch, mesh_device),
         wo_memcfg=ln_input_mem or _mlp_wo_output_memory_config(max_seq_len, max_batch, mesh_device),
         activation_memcfg=act_mem,
@@ -620,6 +679,42 @@ def _b1s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_size
         transpose_mcast=False,
         fused_activation=(ttnn.UnaryOpType.GELU, True),
     )
+
+
+# minimal_matmul allocates its dataflow buffers per core from the L1 unreserved base
+# (Wormhole HAL DEFAULT_UNRESERVED, 105,696 B) up to MEM_L1_SIZE (1464 KiB). The op does
+# not check the fit at validation (#58463); an oversized config fails at first enqueue
+# with a bare byte count from the buffer allocator, so the model checks it here.
+_WORMHOLE_L1_SIZE_BYTES = 1_499_136
+_WORMHOLE_L1_UNRESERVED_BASE_BYTES = 105_696
+_TILE_BYTES = {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.float32: 4096}
+
+
+def _tile_bytes(dtype):
+    # Unknown formats are treated as bfloat16 tiles, the conservative choice.
+    return _TILE_BYTES.get(dtype, _TILE_BYTES[ttnn.bfloat16])
+
+
+def _minimal_matmul_l1_bytes(config, *, in0_dtype, in1_dtype, out_dtype, bias_dtype, fp32_dest_acc_en):
+    """Bytes of the dataflow buffers minimal_matmul allocates per core for `config`.
+
+    Mirrors minimal_matmul_program_descriptor.cpp: in0, in1 and out blocks are double
+    buffered, one intermediate block in Float16_b (Float32 with fp32 dest accumulation),
+    one bias block of N_block tiles.
+    """
+    m, k, n = config.M_block_size, config.K_block_size, config.N_block_size
+    interm_tile = _TILE_BYTES[ttnn.float32] if fp32_dest_acc_en else _TILE_BYTES[ttnn.bfloat16]
+    return (
+        2 * m * k * _tile_bytes(in0_dtype)
+        + 2 * k * n * _tile_bytes(in1_dtype)
+        + 2 * m * n * _tile_bytes(out_dtype)
+        + m * n * interm_tile
+        + n * _tile_bytes(bias_dtype)
+    )
+
+
+def _minimal_matmul_fits_wormhole_l1(config, **dtypes):
+    return _WORMHOLE_L1_UNRESERVED_BASE_BYTES + _minimal_matmul_l1_bytes(config, **dtypes) <= _WORMHOLE_L1_SIZE_BYTES
 
 
 def _mlp_wi_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, hidden_size, intermediate_size):

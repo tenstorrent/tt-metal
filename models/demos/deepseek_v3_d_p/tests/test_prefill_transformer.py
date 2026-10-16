@@ -36,7 +36,7 @@ from loguru import logger
 import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
@@ -1052,7 +1052,7 @@ def test_kimi_prefill_transformer(
     )
 
 
-@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.1 requires Blackhole")
+@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.3 requires Blackhole")
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"])
@@ -1091,7 +1091,7 @@ def test_kimi_prefill_transformer(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1099,7 +1099,7 @@ def test_kimi_prefill_transformer(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_3"], indirect=True, ids=["glm51", "glm53"])
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer(
     variant,
@@ -1184,7 +1184,7 @@ def test_glm_prefill_transformer(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1192,7 +1192,7 @@ def test_glm_prefill_transformer(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_3"], indirect=True, ids=["glm51", "glm53"])
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.timeout(0)
 def test_glm_build_ttnn_cache(
     variant,

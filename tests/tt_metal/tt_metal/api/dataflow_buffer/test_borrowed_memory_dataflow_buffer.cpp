@@ -30,7 +30,7 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
-#include "metal2_host_api/test_helpers.hpp"
+#include "metal2_host_api/test_helpers/test_helpers.hpp"
 
 namespace tt::tt_metal {
 namespace {

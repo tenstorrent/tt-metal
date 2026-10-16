@@ -84,8 +84,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     uint32_t g1_numcores = core_group_1.num_cores();
 
     // Create Buffers
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
         embeddings_index_type = EmbeddingsIndexType::BFP16;
@@ -113,21 +111,40 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     uint32_t num_chunks;
     uint32_t last_chunk_tiles;
     uint32_t buffering;
+    // One pass has to push exactly this many tiles.
+    uint32_t dfb_num_entries;
 
     if (use_chunked_processing) {
-        // Keep tiles_per_chunk near the cap and let the last chunk be partial.
-        // Reader/compute kernels handle the partial trailing chunk explicitly
-        // via last_chunk_tiles.
-        tiles_per_chunk = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
-        num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
-        last_chunk_tiles = num_tiles_per_block - (num_chunks - 1) * tiles_per_chunk;
-        buffering = tiles_per_chunk > max_double_buffer_tiles ? 1 : 2;
+        const uint32_t chunk_cap = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
+        const uint32_t row_bytes = num_tiles_per_block * weights_single_tile_size;
+        if (row_bytes <= max_l1_budget_bytes) {
+            // One buffer holds the row, so the short last chunk lands on the end.
+            tiles_per_chunk = std::min(chunk_cap, num_tiles_per_block);
+            num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
+            last_chunk_tiles = num_tiles_per_block - (num_chunks - 1) * tiles_per_chunk;
+            buffering = 1;
+            dfb_num_entries = num_tiles_per_block;
+        } else {
+            // Chunk size divides the row, so every push matches the buffer.
+            tiles_per_chunk = chunk_cap;
+            for (uint32_t divisor = chunk_cap; divisor > 0; --divisor) {
+                if (num_tiles_per_block % divisor == 0) {
+                    tiles_per_chunk = divisor;
+                    break;
+                }
+            }
+            num_chunks = num_tiles_per_block / tiles_per_chunk;
+            last_chunk_tiles = tiles_per_chunk;
+            buffering = 2 * tiles_per_chunk * weights_single_tile_size <= max_l1_budget_bytes ? 2 : 1;
+            dfb_num_entries = buffering * tiles_per_chunk;
+        }
     } else {
         // Use original non-chunked approach for smaller embeddings
         tiles_per_chunk = num_tiles_per_block;
         num_chunks = 1;
         last_chunk_tiles = num_tiles_per_block;
         buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
+        dfb_num_entries = buffering * tiles_per_chunk;
     }
 
     // PADDED and BINARY serve some weight rows out of a locally cached copy instead of fetching them
@@ -143,14 +160,11 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     const KernelSpecName COMPUTE_G2{"compute_group_2"};
 
     const DFBSpecName WEIGHTS_STAGING{"weights_staging"};
-    const DFBSpecName INDEX_SCRATCH{"index_scratch"};
-    // On Quasar the index scratch page is a node-local scratchpad, not a self-loop DFB (Gen2 forbids a
-    // DM kernel binding a DFB as both PRODUCER and CONSUMER, which is how the reader uses it below).
+    // The reader's private page for the block of indices it is working through.
     const ScratchpadSpecName INDEX_SCRATCH_SP{"index_scratch_sp"};
     const DFBSpecName OUTPUT{"output"};
-    const DFBSpecName WEIGHT_CACHE{"weight_cache"};
-    // On Quasar the weight cache is a node-local scratchpad too (same Gen2 self-loop rule as the index
-    // scratch): the reader fills it and reads tokens back out of it, both over the NoC.
+    // The reader's private copy of the weight rows it serves locally: it fills it and reads tokens
+    // back out of it, both over the NoC.
     const ScratchpadSpecName WEIGHT_CACHE_SP{"weight_cache_sp"};
 
     const TensorParamName INPUT_PARAM{"input"};
@@ -168,29 +182,19 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = WEIGHTS_STAGING,
         .entry_size = weights_single_tile_size,
-        .num_entries = buffering * tiles_per_chunk,
+        .num_entries = dfb_num_entries,
         .data_format_metadata = weights_data_format,
     });
 
-    const bool index_as_scratchpad = device->arch() == tt::ARCH::QUASAR;
     Group<ScratchpadSpec> scratchpads;
-    if (index_as_scratchpad) {
-        scratchpads.push_back(
-            ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = TILE_HEIGHT * input_element_size_bytes});
-    } else {
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = INDEX_SCRATCH,
-            .entry_size = TILE_HEIGHT * input_element_size_bytes,
-            .num_entries = 1,
-            .data_format_metadata = input_data_format,
-        });
-    }
+    scratchpads.push_back(
+        ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = TILE_HEIGHT * input_element_size_bytes});
 
     uint32_t output_dfb_total_size;
     if (output_sharded) {
         output_dfb_total_size = output.buffer()->aligned_size_per_bank();
     } else {
-        output_dfb_total_size = buffering * tiles_per_chunk * output_single_tile_size;
+        output_dfb_total_size = dfb_num_entries * output_single_tile_size;
     }
     // The output buffer's total size has to divide evenly by its tile-sized entry. When the output is
     // sharded the total is the shard's own aligned size per bank, which the op's validation makes a
@@ -218,17 +222,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
         const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
-        if (index_as_scratchpad) {
-            scratchpads.push_back(
-                ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
-        } else {
-            spec.dataflow_buffers.push_back(DataflowBufferSpec{
-                .unique_id = WEIGHT_CACHE,
-                .entry_size = cache_page_size,
-                .num_entries = cache_entries,
-                .data_format_metadata = weights_data_format,
-            });
-        }
+        scratchpads.push_back(
+            ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
     }
     uint32_t weight_block_size;
     if (output_sharded) {
@@ -263,49 +258,20 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .accessor_name = "in0",
         .endpoint_type = DFBEndpointType::PRODUCER,
     });
-    // The index scratch page never leaves the reader: it reserves the page once, decodes indices out
-    // of it, and commits it at the end only to leave the buffer balanced. Both roles are the reader's.
-    // On Quasar that self-loop is illegal, so bind a node-local scratchpad once instead — same "in1"
-    // accessor, so the kernel selects scratch::in1 vs dfb::in1 under #ifdef ARCH_QUASAR.
+    // The index scratch page never leaves the reader: it decodes indices out of it, so it is the
+    // reader's private scratchpad.
     Group<KernelSpec::ScratchpadBinding> reader_scratchpad_bindings;
-    if (index_as_scratchpad) {
-        reader_scratchpad_bindings.push_back(
-            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH_SP, .accessor_name = "in1"});
-    } else {
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = INDEX_SCRATCH,
-            .accessor_name = "in1",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = INDEX_SCRATCH,
-            .accessor_name = "in1",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-    }
+    reader_scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH_SP, .accessor_name = "in1"});
     if (use_local_cache) {
-        // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
-        // hand-off to another kernel. On Quasar that self-loop is illegal, so bind a node-local
-        // scratchpad once instead (same "local_cache" accessor -> scratch::local_cache vs dfb::local_cache).
-        if (index_as_scratchpad) {
-            reader_scratchpad_bindings.push_back(
-                KernelSpec::ScratchpadBinding{.scratchpad_spec_name = WEIGHT_CACHE_SP, .accessor_name = "local_cache"});
-        } else {
-            reader_dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = WEIGHT_CACHE,
-                .accessor_name = "local_cache",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            });
-            reader_dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = WEIGHT_CACHE,
-                .accessor_name = "local_cache",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            });
-        }
+        // The weight cache: the reader fills it and reads tokens back out of it, with no hand-off to
+        // another kernel, so it is the reader's private scratchpad too.
+        reader_scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = WEIGHT_CACHE_SP, .accessor_name = "local_cache"});
     }
 
-    // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
-    // is what lets the reader name the cache handle at all: a dfb:: handle exists only on the builds
+    // These defines and the weight cache's scratchpad binding share one condition, the embeddings type. That
+    // is what lets the reader name the cache handle at all: a scratch:: handle exists only on the builds
     // where the host binds it, so the reader's reference to it is compiled out under the same defines
     // on the builds where it is not.
     KernelSpec::CompilerOptions::Defines embedding_defines{
@@ -342,7 +308,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
-    // Empty on non-Quasar; on Quasar carries the reader's index scratchpad.
+    // The reader's index scratchpad, plus its weight cache under PADDED / BINARY.
     spec.scratchpads = std::move(scratchpads);
 
     // -----------------------------------------------------------------------

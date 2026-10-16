@@ -67,7 +67,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    tt::tt_metal::distributed::MeshDevice& device = a.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = a.device();
 
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);

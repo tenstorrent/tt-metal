@@ -8,6 +8,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <vector>
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <shared_mutex>
 
 using namespace tt::tt_metal;
@@ -778,6 +780,39 @@ static std::pair<GatherConfig, GatherConfig> divide_transfers_between_cores(cons
     return std::make_pair(reduce_flattened_transfers(first), reduce_flattened_transfers(second));
 }
 
+uint32_t sliding_window_shard_row_width(const CoreRangeSet& grid, bool is_block_sharded) {
+    if (is_block_sharded) {
+        TT_FATAL(!grid.ranges().empty(), "Block-sharded sliding-window grid has no core ranges");
+        return grid.ranges().front().end_coord.x + 1;
+    }
+    return grid.bounding_box().grid_size().x;
+}
+
+void validate_sliding_window_shard_grid(const CoreRangeSet& grid, bool is_block_sharded, ShardOrientation orientation) {
+    // Height/width shards are stored in orientation order (buffer.cpp). Halo and pool still
+    // address shard i with the origin-anchored row walk, so a column-major 2-D grid does not
+    // place shard i on that core. Block sharding keeps row-wise enumeration: an origin
+    // rectangle with column-major orientation is the supported transpose_mcast grid.
+    const bool row_wise = is_block_sharded || orientation == ShardOrientation::ROW_MAJOR;
+    const auto cores = corerange_to_cores(grid, std::nullopt, row_wise);
+    if (cores.empty()) {
+        return;
+    }
+    const uint32_t row_width = sliding_window_shard_row_width(grid, is_block_sharded);
+    TT_FATAL(row_width > 0, "Sliding-window shard grid row width must be positive");
+    for (uint32_t core_index = 0; core_index < cores.size(); ++core_index) {
+        const CoreCoord expected(core_index % row_width, core_index / row_width);
+        TT_FATAL(
+            cores[core_index] == expected,
+            "Sliding-window shard grid core {} is {} but the origin-anchored row walk addresses it as {}. "
+            "Only an origin-anchored, row-filled grid is supported; any other grid hangs "
+            "max_pool2d/avg_pool2d or silently returns wrong conv2d results (#60513).",
+            core_index,
+            cores[core_index].str(),
+            expected.str());
+    }
+}
+
 HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
@@ -785,9 +820,14 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool transpose_mcast,
     bool remote_read,
     const tt::tt_metal::distributed::MeshDevice& device,
-    uint32_t num_cores_x,
     bool is_in_tiled,
-    int block_size) {
+    int block_size,
+    const CoreRangeSet& shard_grid,
+    ShardOrientation shard_orientation) {
+    validate_sliding_window_shard_grid(shard_grid, is_block_sharded, shard_orientation);
+    // Same width the validator uses, so a caller cannot pass a stride that disagrees with the grid.
+    const uint32_t num_cores_x = sliding_window_shard_row_width(shard_grid, is_block_sharded);
+
     auto core_id_to_noc_coords =
         [is_block_sharded, transpose_mcast, &device, num_cores_x](uint32_t core_id) -> CoreCoord {
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
