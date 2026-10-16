@@ -92,7 +92,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     // UInt16 out of 32-bit DEST: the packer reads the high half of each word.
     constexpr std::uint32_t pack_format = ckernel::to_underlying(DataFormat::UInt16);
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(pack_format, pack_format, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(pack_format, pack_format);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(pack_format);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 

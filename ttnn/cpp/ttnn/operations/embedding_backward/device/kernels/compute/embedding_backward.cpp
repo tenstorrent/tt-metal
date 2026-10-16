@@ -58,11 +58,7 @@ void kernel_main() {
                 copy_tile(cb_out_intermed_idx, hidden_dim, 1);
 
                 reshuffle_rows_tile_init();
-                // reshuffle_rows_tile expects that tiles have a header of 16 bytes.
-                // This isn't true, so we have to subtract 16 bytes from the address.
-                // Check implementation of reshuffle_rows_tile in LLK for more details.
-                // tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_reshuffle_rows.h
-                reshuffle_rows_tile(0, idx_addr - 16);
+                reshuffle_rows_tile(0, idx_addr);
 
                 pack_tile(1, cb_out_idx, hidden_dim);  // reshuffle puts output into Tile 1 in DEST
 

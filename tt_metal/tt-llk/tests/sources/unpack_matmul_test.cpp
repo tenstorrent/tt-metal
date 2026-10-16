@@ -115,7 +115,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src,
         formats.pack_dst,
-        params.TILE_SIZE_PACK,
         params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM,
         TILE_C_DIM,
         params.num_faces,

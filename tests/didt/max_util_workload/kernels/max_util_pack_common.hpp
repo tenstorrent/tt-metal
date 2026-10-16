@@ -10,8 +10,7 @@
 // MOP drains all num_tiles tiles from DST to the fixed L1 output in one run.
 ALWI void didt_pack_bfloat16_tiles(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_output_addr) {
     constexpr bool is_fp32_dest_acc_en = false;
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en>(
-        (uint32_t)DataFormat::Float16_b, (uint32_t)DataFormat::Float16_b, 128 /* tile size for float16_b >> 4 */);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en>((uint32_t)DataFormat::Float16_b, (uint32_t)DataFormat::Float16_b);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     addr_mod_pack_t{

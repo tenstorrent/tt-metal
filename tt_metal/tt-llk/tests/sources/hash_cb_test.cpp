@@ -102,8 +102,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Raw INT32 bitcast pack (pack_src == pack_dst == Int32): the packer copies
     // DEST datums without a numeric (FP32) conversion.
     constexpr std::uint32_t int32_fmt = static_cast<std::uint32_t>(DataFormat::Int32);
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
-        int32_fmt, int32_fmt, 32 * 32 * 4 /* INT32 tile size in bytes */, FACE_R_DIM, 4 /* num_faces */);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(int32_fmt, int32_fmt, FACE_R_DIM, 4 /* num_faces */);
     // The hw-configure above established the packer strides, so the wrapper skips re-programming them;
     // it still programs the X (datum) counter, which configure_pack does not touch.
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(int32_fmt, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);

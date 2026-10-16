@@ -24,7 +24,6 @@ inline void configure_explicit_geometry(std::uint32_t ocb, std::uint32_t face_r_
     const std::uint32_t tile_r_dim = face_r_dim * (num_faces > 2 ? 2 : 1);
     const std::uint32_t tile_c_dim = num_faces == 1 ? FACE_C_DIM : TILE_C_DIM;
     const bool partial_face = tile_r_dim < TILE_R_DIM;
-    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
     SAN_HOOK(configure(
         StateVal<Operand<Exu::Pack>::DestWidth32>(DST_ACCUM_MODE),
         StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
@@ -32,17 +31,9 @@ inline void configure_explicit_geometry(std::uint32_t ocb, std::uint32_t face_r_
         StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
         StateVal<Operand<Exu::Pack>::TileWidth>(tile_c_dim),
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
-        StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
-        StateDiscard<std::uint32_t>(tile_size)));
+        StateVal<Operand<Exu::Pack>::PartialFace>(partial_face)));
     _llk_pack_hw_configure_<DST_ACCUM_MODE, PackMode::Default>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        tile_size,
-        face_r_dim,
-        tile_c_dim,
-        num_faces,
-        partial_face,
-        0);
+        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face, 0);
     llk_pack_untilize_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 }

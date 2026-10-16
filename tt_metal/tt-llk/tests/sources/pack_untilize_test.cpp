@@ -135,8 +135,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         L1_ACCESS_ADDRESS_GRANULARITY;
     const std::uint32_t base_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
-        formats.pack_src, formats.pack_dst, NUM_DATUMS_IN_TILE /* tile_size */);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(formats.pack_src, formats.pack_dst);
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
     _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, params.num_faces);
     const std::uint32_t num_blocks_per_col = FULL_CT_DIM / BLOCK_CT_DIM;

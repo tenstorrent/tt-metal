@@ -217,16 +217,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
-    const std::uint32_t TILE_SIZE_PACK = params.TILE_SIZE_PACK;
-    const std::uint32_t CT_DIM         = params.CT_DIM;
-    const std::uint32_t RT_DIM         = params.RT_DIM;
-    const Operand& buffer_Res          = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t CT_DIM      = params.CT_DIM;
+    const std::uint32_t RT_DIM      = params.RT_DIM;
+    const Operand& buffer_Res       = params.buffer_Res;
 #endif
 
     {
         START_PERF_MEASURE("INIT")
-        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();

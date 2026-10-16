@@ -209,7 +209,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
             formats.pack_src,
             formats.pack_dst,
-            16 * 16 * 4 /* tile_size */,
             FACE_R_DIM,
             TILE_C_DIM,
             num_faces,

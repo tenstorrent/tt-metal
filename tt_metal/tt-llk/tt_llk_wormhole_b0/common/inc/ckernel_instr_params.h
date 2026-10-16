@@ -395,11 +395,10 @@ struct p_exp
 
 struct p_setdmareg
 {
-    constexpr static std::uint32_t PAYLOAD_IMMEDIATE   = 0;
-    constexpr static std::uint32_t PAYLOAD_16BIT       = 0;
-    constexpr static std::uint32_t PAYLOAD_32BIT       = 1;
-    constexpr static std::uint32_t PAYLOAD_128BIT      = 2;
-    constexpr static std::uint32_t PAYLOAD_TILE_HEADER = 3;
+    constexpr static std::uint32_t PAYLOAD_IMMEDIATE = 0;
+    constexpr static std::uint32_t PAYLOAD_16BIT     = 0;
+    constexpr static std::uint32_t PAYLOAD_32BIT     = 1;
+    constexpr static std::uint32_t PAYLOAD_128BIT    = 2;
 
     constexpr static std::uint32_t MODE_IMMEDIATE = 0;
     constexpr static std::uint32_t MODE_SIGNAL    = 1;
