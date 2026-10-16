@@ -546,6 +546,38 @@ def test_unary_log_operations_ttnn(
         assert_with_ulp(expected_result=golden_tensor, actual_result=tt_result, ulp_threshold=2)
 
 
+@pytest.mark.parametrize(
+    "log_function",
+    [ttnn.log, ttnn.log2, ttnn.log10],
+    ids=["log", "log2", "log10"],
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_unary_log_subnormal_fast_mode(device, log_function, ttnn_dtype):
+    # A positive subnormal input must give the same answer in fast mode as in
+    # accurate mode, and never NaN. Accurate mode flushes subnormals to +0.0
+    # before reading the exponent and returns -inf. The fast path used to skip
+    # that flush, so the exponent field (0) was decremented and wrapped to 255 on
+    # top of a non-zero mantissa, which is a NaN pattern, and that NaN was then
+    # multiplied into the result. 2**-130 is representable in both bfloat16 and
+    # float32 as a subnormal; 1e-40 rounds to the smallest bfloat16 subnormal.
+    x_torch = torch.tensor([[1e-40, 2.0**-130, 1.0]], dtype=torch.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    accurate = ttnn.to_torch(log_function(x_tt, fast_and_approximate_mode=False))
+    fast = ttnn.to_torch(log_function(x_tt, fast_and_approximate_mode=True))
+
+    assert not torch.isnan(fast[0, :2]).any(), (
+        f"fast {log_function.__name__} of a positive subnormal returned {fast[0, :2].tolist()!r}; "
+        f"accurate mode returns {accurate[0, :2].tolist()!r}. The subnormal flush in "
+        "calculate_log_body must run in fast mode too."
+    )
+    assert torch.equal(fast[0, :2], accurate[0, :2]), (
+        f"fast {log_function.__name__} of a positive subnormal returned {fast[0, :2].tolist()!r}, "
+        f"accurate mode returned {accurate[0, :2].tolist()!r}."
+    )
+    assert fast[0, 2].item() == 0.0, f"fast {log_function.__name__}(1.0) returned {fast[0, 2].item()!r}, expected 0.0."
+
+
 @pytest.mark.parametrize("h", [0])
 @pytest.mark.parametrize("w", [1])
 def test_01_volume_sin(device, h, w):
