@@ -158,16 +158,16 @@ void LayerAckService::reader_loop() {
         }
 
         internal::AckIdentity identity{};
-        std::memcpy(identity.data(), metadata.data(), kAckIdentityBytes);  // unaligned buffer
+        std::memcpy(&identity, metadata.data(), kAckIdentityBytes);  // unaligned buffer
         const auto result = decoder.decode(identity);
         if (const auto* lost = std::get_if<internal::LostAckRecord>(&result)) {
             fail(std::make_exception_ptr(std::runtime_error(fmt::format(
                 "LayerAckService: ring {} saw a new chunk (slot={} pos=[{},{})) at ACK record {} of {} "
                 "(record #{}): a D2H ack record was lost, so every later label would be wrong",
                 ring_shm_name_,
-                lost->identity[0],
-                lost->identity[1],
-                lost->identity[2],
+                lost->identity.slot_id,
+                lost->identity.pos_start,
+                lost->identity.pos_end,
                 lost->slice_idx,
                 layout_.record_count,
                 lost->record))));
@@ -175,7 +175,7 @@ void LayerAckService::reader_loop() {
         }
         const auto& ack = std::get<internal::DecodedAck>(result);
         const internal::LayerCompletionMessage msg{
-            ack.identity[0], ack.identity[1], ack.identity[2], ack.layer, ack.layer + 1, /*flags=*/0};
+            ack.identity.slot_id, ack.identity.pos_start, ack.identity.pos_end, ack.layer, ack.layer + 1, /*flags=*/0};
         if (!push_blocking(msg)) {
             return;
         }

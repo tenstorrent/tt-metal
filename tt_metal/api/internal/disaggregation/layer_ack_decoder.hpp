@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -23,7 +22,13 @@ struct LayerAckLayout {
     std::vector<uint32_t> layer_ids;  // global layer of each local record; empty = record index is the layer
 };
 
-using AckIdentity = std::array<uint32_t, 3>;  // {slot_id, pos_start, pos_end}
+struct AckIdentity {
+    uint32_t slot_id = 0;
+    uint32_t pos_start = 0;
+    uint32_t pos_end = 0;
+    bool operator==(const AckIdentity&) const = default;
+};
+static_assert(sizeof(AckIdentity) == 3 * sizeof(uint32_t));
 
 struct DecodedAck {
     uint32_t layer = 0;  // global layer
