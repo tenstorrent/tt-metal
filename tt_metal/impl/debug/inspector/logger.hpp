@@ -67,12 +67,6 @@ public:
     void log_mesh_device_created(const MeshDeviceData& mesh_device_data) noexcept;
     void log_mesh_device_destroyed(const MeshDeviceData& mesh_device_data) noexcept;
     void log_mesh_device_initialized(const MeshDeviceData& mesh_device_data) noexcept;
-    void log_mesh_workload_add_program(
-        uint64_t mesh_workload_id,
-        const distributed::MeshCoordinateRange& device_range,
-        std::size_t program_id) noexcept;
-    void log_mesh_workload_set_program_binary_status(
-        uint64_t mesh_workload_id, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
     void log_runtime_entry(const MeshWorkloadRuntimeEntry& entry) noexcept;
 };
 

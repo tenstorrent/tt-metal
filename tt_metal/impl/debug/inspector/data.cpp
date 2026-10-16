@@ -12,7 +12,6 @@
 #include <tt-metalium/experimental/inspector_config.hpp>
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include "distributed/mesh_workload_impl.hpp"
 #include <program_cache.hpp>
 #include <system_mesh.hpp>
 #include "jit_build/build_env_manager.hpp"
@@ -64,7 +63,6 @@ Data::Data(std::optional<int> rank, ContextId context_id) :
             get_rpc_server().setGetSocketsCallback([this](auto result) { this->rpc_get_sockets(result); });
             get_rpc_server().setGetGlobalSemaphoresCallback(
                 [this](auto result) { this->rpc_get_global_semaphores(result); });
-            get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
             get_rpc_server().setGetMeshWorkloadRuntimeEntriesCallback(
                 [this](auto result) { this->rpc_get_mesh_workload_runtime_entries(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
@@ -229,11 +227,6 @@ void Data::rpc_get_global_semaphores(rpc::Inspector::GetGlobalSemaphoresResults:
         }
         semaphore.setResetValue(semaphore_data.reset_value ? int64_t{*semaphore_data.reset_value} : -1);
     }
-}
-
-void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results) {
-    // Deprecated: mesh workloads are no longer tracked by Inspector. Kept for RPC schema compatibility.
-    results.initMeshWorkloads(0);
 }
 
 void Data::rpc_get_mesh_workload_runtime_entries(

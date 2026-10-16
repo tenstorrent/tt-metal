@@ -23,7 +23,6 @@ namespace tt::tt_metal {
 
     namespace distributed {
     class MeshDeviceImpl;
-    class MeshWorkloadImpl;
     class MeshBuffer;
     }
 }

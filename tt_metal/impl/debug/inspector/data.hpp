@@ -32,7 +32,6 @@ private:
     void rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& results);
     void rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results);
     void rpc_get_global_semaphores(rpc::Inspector::GetGlobalSemaphoresResults::Builder& results);
-    void rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results);
     void rpc_get_mesh_workload_runtime_entries(rpc::Inspector::GetMeshWorkloadRuntimeEntriesResults::Builder& results);
     void rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results);
     void rpc_get_kernel(
@@ -65,8 +64,6 @@ private:
     std::mutex programs_mutex;
     std::mutex mesh_buffers_mutex;
     std::mutex mesh_devices_mutex;
-    // Serializes writes to the mesh workloads log (mesh_workloads_log.yaml)
-    std::mutex mesh_workloads_mutex;
     std::mutex runtime_entries_mutex;
     // mutex to protect dispatch core info
     std::mutex dispatch_core_info_mutex;
