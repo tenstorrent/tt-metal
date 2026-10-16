@@ -27,7 +27,7 @@
 #define DFB_IS_COMPUTE_MATH 0
 #endif
 
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {
     dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
 }
@@ -45,7 +45,7 @@ inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
 #endif
 
 inline uint32_t DataflowBuffer::get_entry_size() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     return address_units_to_bytes(local_dfb_interface_.entry_size);
@@ -53,7 +53,7 @@ inline uint32_t DataflowBuffer::get_entry_size() const {
 }
 
 inline uint32_t DataflowBuffer::get_stride_size() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     return address_units_to_bytes(local_dfb_interface_.stride_size);
@@ -61,7 +61,7 @@ inline uint32_t DataflowBuffer::get_stride_size() const {
 }
 
 inline uint32_t DataflowBuffer::get_total_num_entries() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     return local_dfb_interface_.num_entries;
@@ -69,7 +69,7 @@ inline uint32_t DataflowBuffer::get_total_num_entries() const {
 }
 
 inline uint32_t DataflowBuffer::get_total_size_bytes() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     return get_total_num_entries() * address_units_to_bytes(local_dfb_interface_.entry_size);
@@ -77,7 +77,7 @@ inline uint32_t DataflowBuffer::get_total_size_bytes() const {
 }
 
 inline uint32_t DataflowBuffer::get_local_num_entries() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     const dfb::PackedTileCounter packed_tc =
@@ -93,7 +93,7 @@ inline uint32_t DataflowBuffer::get_local_num_entries() const {
 }
 
 inline uint32_t DataflowBuffer::get_local_size_bytes() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
@@ -107,7 +107,7 @@ inline uint32_t DataflowBuffer::get_local_size_bytes() const {
 
 namespace {
 
-#if !DFB_IS_COMPUTE_MATH
+#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
 
 inline uint32_t dfb_ring_span_address_units(const LocalDFBInterface& intf) {
     const uint8_t last = static_cast<uint8_t>(intf.num_tcs_to_rr - 1);
@@ -119,12 +119,12 @@ inline uint32_t dfb_ring_span_address_units(const LocalDFBInterface& intf) {
     return intf.tc_slots[last].limit - intf.tc_slots[0].base_addr;
 #endif
 }
-#endif  // !DFB_IS_COMPUTE_MATH
+#endif  // !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
 
 }  // namespace
 
 inline uint32_t DataflowBuffer::get_ring_span_bytes() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     return address_units_to_bytes(dfb_ring_span_address_units(local_dfb_interface_));
@@ -132,7 +132,7 @@ inline uint32_t DataflowBuffer::get_ring_span_bytes() const {
 }
 
 inline uint32_t DataflowBuffer::get_ring_span_num_entries() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #else
     const uint32_t entry_bytes = get_entry_size();
@@ -141,7 +141,7 @@ inline uint32_t DataflowBuffer::get_ring_span_num_entries() const {
 }
 
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
-#if !DFB_IS_COMPUTE_MATH
+#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
     WAYPOINT("RBW");
     dfb::PackedTileCounter packed_tc =
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
@@ -175,7 +175,7 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
 }
 
 inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
-#if !DFB_IS_COMPUTE_MATH
+#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
@@ -210,7 +210,7 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
 }
 
 inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
-#if !DFB_IS_COMPUTE_MATH
+#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
     WAYPOINT("WFW");
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
@@ -230,7 +230,7 @@ inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
 }
 
 inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
-#if !DFB_IS_COMPUTE_MATH
+#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
@@ -272,7 +272,7 @@ inline void DataflowBuffer::wait_relay_consumer_caught_up() const {
 #endif
 
 inline void DataflowBuffer::finish_impl() {
-#if !DFB_IS_COMPUTE_MATH
+#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
 #ifndef COMPILE_FOR_TRISC
     if (ptiles_read_ > 0) {
         handle_final_credits<true>(ptiles_read_, ptxn_id_index_);
@@ -332,7 +332,7 @@ inline DataflowBuffer::~DataflowBuffer() {
 }
 
 inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     {
@@ -349,7 +349,7 @@ inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
 }
 
 inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
-#if DFB_IS_COMPUTE_MATH
+#if DFB_IS_COMPUTE_MATH || defined(UCK_CHLKC_ISOLATE_SFPU)
     return 0;
 #elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
     {
