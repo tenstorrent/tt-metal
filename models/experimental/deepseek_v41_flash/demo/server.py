@@ -18,7 +18,9 @@ What V4.1 imposes on the serving side:
 * Users. ``--num-users`` sessions stay open at once, each with its own ring and window slot and its own rows of the
   compressed-KV page tables; their compressed KV shares pools sized for ``--total-context`` tokens (default
   ``num_users * max_context``). A step decodes one user, and switching users costs no device work: the step's packet
-  names the user's slot. Speculative decode is single-user.
+  names the user's slot. The scheduler interleaves the active users' steps through the stages, so up to one
+  decoding user per stage (eight) keeps every stage busy; seating and posting, trace dispatch, the H2D packet writes
+  and the D2H reads each run on their own thread (see :class:`V41ChatEngine`). Speculative decode is single-user.
 * Context. ``--max-context`` is 524288 tokens by default (prompt + reply). Past
   ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries the select is two-level, in the
   traced prefill and in decode, so a prompt prefills up to ``--prefill-max-len`` (by default the whole context, at
@@ -28,7 +30,7 @@ What V4.1 imposes on the serving side:
 Run it (ttnn venv, from the repo root; 32-chip Galaxy for the prefill model)::
 
     DEEPSEEK_V4_CACHE_DIR=/path/to/cache \\
-    python models/experimental/deepseek_v41_flash/demo/server.py --host 0.0.0.0 --port 8000 --debug
+    python models/experimental/deepseek_v41_flash/demo/server.py --host 0.0.0.0 --port 8000 --num-users 8 --debug
 
 Then talk to it as to the V4 server (``models/experimental/deepseek_v4_flash/demo/client.py``)::
 
@@ -41,7 +43,9 @@ from __future__ import annotations
 
 import contextlib
 import os
+import queue
 import sys
+import threading
 from collections import deque
 
 from loguru import logger
@@ -56,9 +60,10 @@ from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefil
     _ATTENTION_WEIGHT_DTYPE,
     _TP_SIZE,
 )
+from models.experimental.deepseek_v41_flash import encoding_dsv41
 from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, dequantized, load_config
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
-from models.experimental.deepseek_v4_flash.demo.chat_cli import ChatEngine, UserSession
+from models.experimental.deepseek_v4_flash.demo.chat_cli import ChatEngine, ChatFormat, UserSession
 from models.experimental.deepseek_v4_flash.demo.server import _Prefiller, build_parser, check_args, serve
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import plan_layer_placement
@@ -72,14 +77,36 @@ _MAX_CONTEXT = 524288  # default --max-context (prompt + reply)
 # compiled on every stage (a 524288-token tier ran out of DRAM).
 _MAX_PREFILL_LEN = 262144
 
+# The checkpoint's own encoding (``encoding/encoding.py``): V4.1 renamed the DSML tool-call tags and takes no
+# "medium" reasoning effort, which the V4 server accepts and V4 renders as "high".
+V41_CHAT_FORMAT = ChatFormat(
+    encoding_dsv41.render_message,
+    encoding_dsv41.merge_tool_messages,
+    encoding_dsv41.sort_tool_results_by_call_order,
+    reasoning_efforts=("low", "medium", "high", "max"),
+    calls_tag=encoding_dsv41.tool_calls_block_name,
+    invoke_tag=encoding_dsv41.tool_call_tag_name,
+    parameter_tag=encoding_dsv41.tool_parameter_tag_name,
+    effort_aliases={"medium": "high"},
+)
+
 
 class V41ChatEngine(ChatEngine):
     """:class:`ChatEngine` on :class:`DeepSeekV41Model`: the same users, decode and warmup over V4.1's model.
 
-    Only construction differs: the V4.1 config and ``lm_head``, the context capped by the compressed-KV limit, the
-    EOS from the tokenizer (the V4.1 config has none), and the layers split evenly over the stages in contiguous runs,
+    Construction differs: the V4.1 config and ``lm_head``, the context capped by the compressed-KV limit, the EOS
+    from the tokenizer (the V4.1 config has none), and the layers split evenly over the stages in contiguous runs,
     whatever the profile's pipeline group size, so the traced prefill can share them.
+
+    And :meth:`write_traced` hands the packet to a thread of its own. A V4.1 packet write also looks up both Engram
+    layers' host rows, which would otherwise hold the scheduler between seating one user's step and the next: with
+    it, the scheduler only seats and posts, the model's replay thread issues the traces, this thread writes the H2D
+    socket and the scheduler's output reader drains the D2H socket, each waiting on the others only for its data.
+
+    Prompts are rendered and tool calls parsed in V4.1's chat format (:data:`V41_CHAT_FORMAT`).
     """
+
+    chat_format = V41_CHAT_FORMAT
 
     def __init__(self, mesh_device, args, prefetcher: contextlib.ExitStack):
         from transformers import AutoTokenizer
@@ -153,6 +180,35 @@ class V41ChatEngine(ChatEngine):
         self.active = 0
         self.users[0].activate()
         self._replay_q: deque[int] = deque()
+        self._packets: queue.Queue = queue.Queue()
+        self._packet_error: BaseException | None = None
+        self._packet_writer = threading.Thread(target=self._write_packets, name="decode-packets", daemon=True)
+        self._packet_writer.start()
+        # Registered after the model's shutdown so it unwinds first: the thread's closure holds the model.
+        prefetcher.callback(self._stop_packet_writer)
+
+    def write_traced(self, token_id: int, pos: int) -> None:
+        """Queue the packet for the oldest :meth:`post_traced` step on the packet thread, which writes the packets
+        in queueing order, i.e. in the order the steps were posted. Raises once that thread has failed."""
+        if self._packet_error is not None:
+            raise RuntimeError("the decode packet writer failed") from self._packet_error
+        queued = self._replay_q.popleft()
+        if queued != int(pos):
+            raise RuntimeError(f"traced packet pos {pos} does not match queued replay {queued}")
+        self._packets.put((int(token_id), int(pos)))
+
+    def _write_packets(self) -> None:
+        for token_id, pos in iter(self._packets.get, None):
+            try:
+                self.model.write_step_packet(token_id, pos)
+            except BaseException as e:  # noqa: BLE001 - surfaced by the next write_traced
+                logger.exception(f"writing the decode packet for pos {pos} failed: {e}")
+                self._packet_error = e
+                return
+
+    def _stop_packet_writer(self) -> None:
+        self._packets.put(None)
+        self._packet_writer.join(timeout=30)
 
 
 class _V41Prefiller(_Prefiller):
