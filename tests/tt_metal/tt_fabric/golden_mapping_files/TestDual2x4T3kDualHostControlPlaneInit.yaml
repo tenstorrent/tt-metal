@@ -2,14 +2,14 @@ asic_to_fabric_node_mapping:
   hostnames:
     - hostname: t3k_dual_host_cluster_desc_rank_0.yaml
       mesh:
-        - mesh: 1
+        - mesh: 0
         - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 0
                 chip_id: 5
               asic_id: 10226774024
             - umd_chip_id: 1
@@ -17,7 +17,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 3
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 0
                 chip_id: 6
               asic_id: 10226774039
             - umd_chip_id: 2
@@ -25,7 +25,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 4
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 0
                 chip_id: 2
               asic_id: 10226774045
             - umd_chip_id: 3
@@ -33,7 +33,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 1
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 0
                 chip_id: 1
               asic_id: 10226774046
             - umd_chip_id: 4
@@ -41,7 +41,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 2
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 0
                 chip_id: 4
               asic_id: 14521741320
             - umd_chip_id: 5
@@ -49,7 +49,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 3
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 0
                 chip_id: 7
               asic_id: 14521741335
             - umd_chip_id: 6
@@ -57,7 +57,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 4
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 0
                 chip_id: 3
               asic_id: 14521741341
             - umd_chip_id: 7
@@ -65,19 +65,19 @@ asic_to_fabric_node_mapping:
                 tray_id: 1
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 0
                 chip_id: 0
               asic_id: 14521741342
     - hostname: t3k_dual_host_cluster_desc_rank_1.yaml
       mesh:
-        - mesh: 0
+        - mesh: 1
         - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 0
+                mesh_id: 1
                 chip_id: 2
               asic_id: 10226774061
             - umd_chip_id: 1
@@ -85,7 +85,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 1
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 0
+                mesh_id: 1
                 chip_id: 1
               asic_id: 10226774067
             - umd_chip_id: 2
@@ -93,7 +93,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 2
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 0
+                mesh_id: 1
                 chip_id: 5
               asic_id: 10226774072
             - umd_chip_id: 3
@@ -101,7 +101,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 3
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 0
+                mesh_id: 1
                 chip_id: 6
               asic_id: 10226774180
             - umd_chip_id: 4
@@ -109,7 +109,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 4
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 0
+                mesh_id: 1
                 chip_id: 3
               asic_id: 14521741357
             - umd_chip_id: 5
@@ -117,7 +117,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 1
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 0
+                mesh_id: 1
                 chip_id: 0
               asic_id: 14521741363
             - umd_chip_id: 6
@@ -125,7 +125,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 2
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 0
+                mesh_id: 1
                 chip_id: 4
               asic_id: 14521741368
             - umd_chip_id: 7
@@ -133,6 +133,6 @@ asic_to_fabric_node_mapping:
                 tray_id: 3
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 0
+                mesh_id: 1
                 chip_id: 7
               asic_id: 14521741476
