@@ -2035,3 +2035,52 @@ call: LLK ideal 422, data movement not hidden 35, epilogue 22, other per-block s
 forward above the LLK rate, bs16 / bs32: partial-sum add 2.4 / 5.1 ms, data movement 3.7 / 3.0 (mostly the 85 MB (bs16)
 output write to DRAM, the FF13 -> FF2 round trip), the compute loop 4.0 / 6.4, SwiGLU 1.2 / 2.8. K_block 80 (no
 partials) needs ~1.5 MB of CBs at 4,x,8 (in0 4×80×2 bfp8 + in1 80×8×2 bfp4): beyond L1.
+
+## 78. L1 occupation per op at bs16 / bs32; the post-MLP residual sum in L1 at bs16 (2026-10-16)
+
+**Occupation** (`perf_tools/l1_map_first_layer.py 16 90` / `32 90`, current defaults, a steady-state layer). Room is
+the lowest live L1 buffer minus the CB region start (111,744 B); CBs from the minimal_matmul formula (§77 notes),
+SDPA from its clash message, heads op estimated. KiB per core:
+
+| bs16 op | live L1 buffers | room | CBs | headroom |
+|---|---|---|---|---|
+| QKV (split, head-major) | Q 291, K 73, V 73, norm out 181 | 757 | 472 | 285 |
+| heads op (in place) | Q, K, V | 757 | ~413 | ~344 |
+| SDPA | Q, K, V | 757 | 563 | 194 |
+| WO | WO out 181 | 1195 | 472 | 723 |
+| add+norm (post-attn) | WO out, sum 1, norm out | 832 | small | - |
+| FF13 fused 4,40,8 | norm out, sum 1 | 832 | 798 | **34** |
+| FF2 | sum 1, next norm out, FF2 out | 832 | 472 | 360 |
+
+| bs32 op | live L1 buffers | room | CBs | headroom |
+|---|---|---|---|---|
+| WO | WO out 363, preallocated norm out 363 | 650 | 472 | 178 |
+| FF13 fused 4,40,8 | norm out 363 | 1013 | 798 | 215 |
+| FF2 | FF2 out 363, 4 quarter-batch norm outs 91 | 648 | 472 | 176 |
+| QKV chunk (first) | chunk out 217, K 145, V 145, norm outs | 502 | 472 | **30** |
+| SDPA | K, V | 720 | 563 (bs16's) | ~157 |
+
+Peak L1 use (CB region start + live buffers + CBs, of 1,521,408 B): bs16 82% (QKV), bs32 99% (first QKV chunk).
+Nothing 363 KiB-sized fits anywhere at bs32. At bs16 the 181 KiB residual-sized tensors fit in principle everywhere
+except FF13; the FF13 output (SwiGLU, ~700 KiB per core at bs16) fits nowhere, so the FF13 -> FF2 DRAM round trip
+needs a structural change (M-chunked FF13 + FF2), not placement.
+
+**The post-MLP residual sum in L1 at bs16** (`QWEN_FUSED_ADD_NORM_SUM2_L1=1`, was out of reach while the QKV output
+held 446 KiB; head-major QKV freed that). Three obstacles, all removed for the test (code not kept):
+1. `tt_transformers/tt/decoder.py` asserts the layer input is in the residual's DRAM config; relaxed for this knob.
+2. The sum is allocated by the post-MLP add right below FF2's output; FF2's output and the post-attention sum, freed
+   right after, leave a 372,096 B hole that Q + K (298,112 + 75,072 B) miss by 1,088 B (one bfp8 tile per bank:
+   per-bank page rounding, 274 + 69 vs 2 × 171 tiles), so V goes below the sum and SDPA's CBs clash. Fixed with
+   one-tile-per-bank spacers allocated before the add until one lands below FF2's output (small free gaps near the
+   top of L1 take the first ones in the e2e run, not in the eager map run), freed after it: V then ends at 700,096,
+   SDPA room 575 KiB vs 563.
+3. The layer input (the previous layer's sum) stays live across the MLP and clashes with FF13's CBs: the decoder's
+   `x.deallocate(True)` after the post-attention add is guarded by `mode == "prefill"`, but `Mode` is a plain `Enum`,
+   so it never matches and the layer input is never freed early in prefill (an upstream bug; harmless while the
+   residual is in DRAM). Fixed to `Mode.PREFILL` (and the fusion wrapper's `x.device()` calls captured before).
+
+Result, sustained_run.sh bs16, 30 iterations, 2 alternating rounds (chips 0 / 1): cold best default 140.6 / 141.0 ->
+sum in L1 141.7 / 141.7 ms (+0.9 ms on both chips; sustained follows each chip's clock). The add+norm's DRAM
+saving is smaller than what the lower placement costs (not broken down). Not pursued; the Mode fix alone was neutral at
+bs16 (140.6 / 141.0 vs 140.9 before) but changes bs1's L1 layout (sharded L1 residual), untested, so it was reverted
+with the rest.
