@@ -129,6 +129,9 @@ inline void calculate_comp() {
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_int() {
     for (int d = 0; d < ITERATIONS; d++) {
+        // The Default vInt layout is I32 here (raw two's complement word). `v > 0` and `v <= 0`
+        // are written as (v >= 0) AND (v != 0) and its complement: SFPI lowers them through an
+        // integer subtraction that overflows for INT32_MIN and would classify it as positive.
         vInt v = dst_reg[0];
         vInt zero = 0;
 
@@ -155,16 +158,24 @@ inline void calculate_comp_int() {
 
         // a[i] > 0
         if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-            v_if(v > zero) { v = 1; }
-            v_else { v = zero; }
+            vInt res = zero;
+            v_if(v >= 0) {
+                v_if(v != 0) { res = 1; }
+                v_endif;
+            }
             v_endif;
+            v = res;
         }
 
         // a[i] <= 0
         if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
-            v_if(v <= zero) { v = 1; }
-            v_else { v = zero; }
+            vInt res = 1;
+            v_if(v >= 0) {
+                v_if(v != 0) { res = zero; }
+                v_endif;
+            }
             v_endif;
+            v = res;
         }
 
         // a[i] >= 0
