@@ -82,6 +82,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifndef SDPA_INPUT_TILE_OFFSET
 #define SDPA_INPUT_TILE_OFFSET 0
 #endif
+#ifndef SDPA_PRESERVE_SRC_ZERO_FLAG
+#define SDPA_PRESERVE_SRC_ZERO_FLAG false
+#endif
 constexpr std::uint32_t SDPA_PASSES = SDPA_MASK_REENTRY ? 2 : 1;
 #ifdef SDPA_ROW_STRIDE
 constexpr std::uint32_t SDPA_INPUT_ROW_STRIDE = READ_TRANSPOSED && SDPA_ROW_STRIDE != 0 ? SDPA_ROW_STRIDE : KT_DIM;
@@ -171,6 +174,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+
+    if constexpr (SDPA_PRESERVE_SRC_ZERO_FLAG)
+    {
+        // Leave the Src zero flag at keep, as a preceding copy_tile_init does. The init must restore the
+        // operand-driven value, or MVMUL keeps the denormal SrcB operands it should flush.
+        math::_configure_preserve_zero_flag_state_();
+    }
 
     // init: operandB_face_r_dim = in0 row count (M), ct_dim programs the MVMUL template.
     _llk_math_sdpa_custom_mm_init_<MM_TRANSPOSE>(params.in0_face_r_dim, CT_DIM);

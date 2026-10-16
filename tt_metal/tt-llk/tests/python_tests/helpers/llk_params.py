@@ -81,6 +81,8 @@ class MathOperation(Enum):
     # tilized tensor rather than per datum.
     Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
+    # Whole-tile column-wise EMA; its golden works on the tilized tensor.
+    Ema = OpSpec("ema", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
     # b^x via the SCALE_EN path of calculate_exponential; dispatched with a bf16
@@ -813,11 +815,6 @@ PERF_LOOP_FACTOR_QUASAR = 32
 
 
 # ******** QUASAR specific ********
-class ImpliedMathFormat(Enum):
-    No = "false"
-    Yes = "true"
-
-
 class UnpackerEngine(Enum):
     """
     Enum for unpacker engine selection.

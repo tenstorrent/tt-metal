@@ -60,6 +60,37 @@ def flush_to_zero(tensor):
     return tensor
 
 
+def assert_all_nonfinite(result, desc):
+    """Every element must be non-finite. NaN or ±inf both pass, since bfloat16 packing can turn NaN into inf."""
+    nonfinite = ~torch.isfinite(result)
+    assert nonfinite.all(), f"expected all {desc} outputs to be non-finite; {int((~nonfinite).sum())} were finite"
+
+
+def assert_finite_matches_golden(golden, result, desc):
+    """Wherever the golden is finite, the device output must be finite too.
+
+    PCC zeroes non-finite values on both sides, so on its own it can hide a stray NaN or inf.
+    """
+    unexpected_nonfinite = torch.isfinite(golden) & ~torch.isfinite(result)
+    assert (
+        not unexpected_nonfinite.any()
+    ), f"{desc}: {int(unexpected_nonfinite.sum())} finite-input elements produced a non-finite device output"
+
+
+def bf16_binade_samples(min_magnitude):
+    """Positive magnitudes from min_magnitude to MAX_BF16, as float32.
+
+    Takes the first, middle and last bfloat16 mantissa of every binade (power-of-two
+    interval) from 2^6 up, plus min_magnitude and MAX_BF16 themselves. Binades below
+    2^6 are not sampled, so min_magnitude should be at least 64.
+    """
+    exponent_fields = torch.arange(127 + 6, 255, dtype=torch.int32)
+    mantissas = torch.tensor([0x00, 0x40, 0x7F], dtype=torch.int32)
+    bits = ((exponent_fields[:, None] << 7) | mantissas).flatten().to(torch.int16)
+    magnitudes = torch.cat([bits.view(torch.bfloat16).float(), torch.tensor([min_magnitude, MAX_BF16])]).unique()
+    return magnitudes[magnitudes >= min_magnitude]
+
+
 def generate_bfloat16_bits_in_range(low, high, dtype=torch.bfloat16, ftz=True):
     """
     Generate all bfloat16 bit patterns within a specified [low, high] range.
@@ -402,6 +433,11 @@ def to_tt_tensor(
         layout=layout,
         memory_config=memory_config,
     )
+
+
+def to_float32_tt_tensor(input_tensor, device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """Convert a torch tensor to a ttnn.float32 tensor on device with TILE_LAYOUT and DRAM."""
+    return to_tt_tensor(input_tensor, device, dtype=ttnn.float32, layout=layout, memory_config=memory_config)
 
 
 def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, **op_kwargs):
