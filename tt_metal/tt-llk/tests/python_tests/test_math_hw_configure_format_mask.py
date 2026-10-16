@@ -16,6 +16,7 @@ sources/math_hw_configure_format_mask_test.cpp for the result layout.
 
 from conftest import wormhole_only
 from helpers.format_config import DataFormat
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -60,9 +61,11 @@ def test_math_alu_format_writers_mask_to_field_width():
         input_dimensions_B=input_dimensions,
     )
 
+    # Int8/UInt8/Int32 math formats require FP32 dest accumulation.
     configuration = TestConfig(
         "sources/math_hw_configure_format_mask_test.cpp",
         formats,
+        dest_acc=DestAccumulation.Yes,
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

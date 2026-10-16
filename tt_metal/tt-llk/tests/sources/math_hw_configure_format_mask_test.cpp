@@ -13,7 +13,8 @@
 //
 // MATH seeds both fields with Float32 (0) through the shipped configurator, then programs each
 // (srcA, srcB) pair through each writer under test and reads the word back. Only MATH runs; UNPACK
-// and PACK do nothing.
+// and PACK do nothing. The variant is built with FP32 dest accumulation (is_fp32_dest_acc_en), which
+// the Int8/UInt8/Int32 formats require.
 //
 // Result words:
 //   0        magic
@@ -53,10 +54,6 @@ enum class Writer : std::uint32_t
 };
 constexpr std::uint32_t NUM_WRITERS = 3;
 
-// Int8/UInt8/Int32 formats are only accepted with FP32 dest accumulation enabled; the harness
-// constant is_fp32_dest_acc_en (params.h) is false for this test, so the writers get this instead.
-constexpr bool FP32_DEST_ACC = true;
-
 struct FormatPair
 {
     DataFormat srca;
@@ -86,7 +83,7 @@ inline std::uint32_t read_alu_format_word()
 
 inline void seed_float32()
 {
-    _llk_math_hw_configure_<FP32_DEST_ACC>(to_underlying(DataFormat::Float32), to_underlying(DataFormat::Float32));
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(to_underlying(DataFormat::Float32), to_underlying(DataFormat::Float32));
 }
 
 inline void program(const Writer writer, const std::uint32_t srca, const std::uint32_t srcb)
@@ -94,13 +91,13 @@ inline void program(const Writer writer, const std::uint32_t srca, const std::ui
     switch (writer)
     {
         case Writer::HwConfigure:
-            _llk_math_hw_configure_<FP32_DEST_ACC>(srca, srcb);
+            _llk_math_hw_configure_<is_fp32_dest_acc_en>(srca, srcb);
             break;
         case Writer::Reconfig:
-            _llk_math_reconfig_data_format_<FP32_DEST_ACC>(srca, srcb);
+            _llk_math_reconfig_data_format_<is_fp32_dest_acc_en>(srca, srcb);
             break;
         case Writer::ReconfigSkipInt8:
-            _llk_math_reconfig_data_format_<FP32_DEST_ACC, true /*skip_int8*/>(srca, srcb);
+            _llk_math_reconfig_data_format_<is_fp32_dest_acc_en, true /*skip_int8*/>(srca, srcb);
             break;
     }
 }
