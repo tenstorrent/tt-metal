@@ -147,8 +147,8 @@ built by SFPI 7.87.0. The headline tables, as mean [min-max] over attempts, are 
   346.667 to 360.000 ns.
 - **transport_bandwidth.** X280 -> Tensix from one hart at 65536 B: 1.800 GB/s with `sw`, 3.600
   with `sd` and 14.399 with `vse32.v`. Tensix -> X280 at 4096 B: 17.504 GB/s.
-- **pipeline_stage.** The next-hop direction-table lookup: 41.824 ns per item; the router forward
-  decision: 25.148 ns per item.
+- **pipeline_stage.** The next-hop direction-table lookup: 41.824 ns and 73.190 X280 cycles
+  per item; the router forward decision: 25.148 ns and 44.007 cycles per item.
 - **core_sync.** The exits of 16 Tensix workers spread over 119.7 raw live-timer ticks under a
   multicast release and 11559.3 under unicast.
 - **packet_injection.** Four Tensix BRISC producers: 234.095 ns per header at C=1, K=1 and 174.415

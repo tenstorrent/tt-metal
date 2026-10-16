@@ -122,8 +122,12 @@ the producer retires only on the credit X280 returns after servicing.
 
 `latency-include` and `latency-exclude` differ only in whether the producer's
 start timestamp is taken before or after header construction, so the difference
-between them is the cost of constructing one 96-byte header. Both latencies are in
-[results.md](../results.md#packet_injection).
+between them is the cost of constructing one 96-byte header. Over 6 attempts the
+one-producer latency p50 is
+1984.321 [1974.815-2003.704] ns with creation included and
+1637.531 [1625.185-1644.444] ns with it excluded;
+the difference of the two means, 346.790 ns, is the creation cost
+([results.md](../results.md#packet_injection)).
 
 ### Throughput Measurement
 
@@ -183,38 +187,29 @@ run can therefore count one episode that never ended, which backpressure mode wo
 sample. Many empty visits with few stalls point at the producers or NoC ingress;
 many stalls with few empty visits point at X280 service.
 
-**Measured scaling, reported without attribution.** On silicon at S=16, B=1,
-C=1, per-worker rate falls as 1/P across an eightfold range:
+**Measured scaling, reported without attribution.** Per producer at S=16, B=1, C=1, K=1,
+mean [min-max] over every producer of every attempt:
 
-| P | shape | per-worker requests/s | intra-shape spread |
-|---|---|---|---|
-| 1 | T=1 BRISC-only | 1418936 | — |
-| 2 | T=1 paired | 719005..719211 | 0.029% |
-| 2 | T=2 BRISC-only | 718322..718527 | 0.028% |
-| 4 | T=2 paired | 361312..361464 | 0.042% |
-| 4 | T=4 BRISC-only | 361492..361641 | 0.041% |
-| 8 | T=4 paired | 181041..181130 | 0.049% |
+| P | family | T | ns/request |
+|---:|---|---:|---:|
+| 1 | brisc | 1 | 696.299 [696.253-696.352] |
+| 2 | brisc | 2 | 697.931 [697.407-698.382] |
+| 2 | paired | 1 | 697.733 [697.281-698.247] |
+| 4 | brisc | 4 | 935.878 [934.701-936.704] |
+| 4 | paired | 2 | 936.642 [935.918-937.374] |
+| 8 | paired | 4 | 1849.213 [1847.683-1850.466] |
 
-Workers within a shape complete within 0.05% of each other, and the two
-independent topologies at each of P=2 and P=4 agree, so the service order is
-fair and the rate does not depend on whether two workers share a tile across
-both NoCs or occupy separate tiles on one NoC.
+From P=1 to P=2 the per-producer time grows by at most 1.632 ns/request; it is larger
+at P=4 and larger again at P=8. At equal P the two topologies, two producers sharing a tile
+across both NoCs or one producer per tile on NoC 0, agree within their ranges. Within one attempt the producers of a shape differ by
+0.224 to 1.603 ns/request (P > 1).
 
-These records describe individual worker completion and fairness only. They do
-not establish aggregate X280 capacity, injection bandwidth, or NoC bandwidth,
-and the per-worker rates must not be summed: every shape reconstructs the same
-constant, and presenting that constant as a capacity attributes the 1/P falloff
-to a mechanism these measurements do not distinguish. A single consumer hart
-serving workers in turn and a saturated shared NoC path both produce 1/P with a
-flat total. The T=4 capacity and C/K isolation points (`docs/measurement.md`)
-vary B and C; this configuration holds B and C at 1, so every request
-carries a publication and a credit return.
-
-**The rates do not depend on the consumer's code layout.** A consumer image 464
-bytes larger, with its polling loop relocated, gives the same rates to about 0.04%
--- the same order as the spread within a single shape. That is a reproducibility
-result about the measurement, not evidence for any mechanism: the figures are not
-an artefact of one build that a differently optimised consumer would move.
+These records describe individual producer completion only. They do not establish
+aggregate X280 capacity, injection bandwidth, or NoC bandwidth, and the per-producer rates
+must not be summed; the consumer's interval per header is the X280 aggregate record
+([results.md](../results.md#packet_injection)). The T=4 capacity and C/K isolation points
+(`docs/measurement.md`) vary B and C; this configuration holds B and C at 1, so every
+request carries a publication and a credit return.
 
 ### Backpressure Measurement
 
@@ -865,11 +860,24 @@ env TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD" \
 ```
 
 **Silicon.** On a Blackhole p150b with tile 0 at 1750 MHz and 14 LIM ways, 8 inactive
-IDLE_ETH cores are available, so `writers_all` is 8 there and `writers8` duplicates it. The
-published rates are in [results.md](../results.md#packet_injection). With every writer and the
-credit posted through the counter window, as the shipped build does, the visit cap K is the lever
-and C is nearly flat at fixed K; the tabulator's `erisc_to_x280_header` table reproduces every
-`c<C>k<K>` point from the records.
+IDLE_ETH cores are available, so `writers_all` is 8 there and `writers8` duplicates it. The X280
+aggregate per header at S=16, B=1, mean [min-max] over attempts, at each (C, K) the manifest
+registers:
+
+| C | K | writers1 ns/header | writers4 ns/header | writers8 ns/header | writers_all ns/header |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 1 | 388.079 [388.066-388.105] | 232.653 [232.617-232.686] | 229.575 [229.536-229.622] | 229.520 [229.404-229.609] |
+| 1 | 8 | 388.132 [388.047-388.242] |  |  | 61.976 [61.956-61.987] |
+| 1 | 16 | 388.197 [388.086-388.359] |  |  | 51.016 [50.969-51.050] |
+| 4 | 8 | 388.307 [388.242-388.359] |  |  | 60.770 [60.735-60.793] |
+| 4 | 16 | 388.353 [388.301-388.398] |  |  | 50.872 [50.859-50.891] |
+| 8 | 8 | 388.281 [388.203-388.379] |  |  | 61.103 [61.033-61.177] |
+| 8 | 16 | 388.320 [388.281-388.379] | 97.277 [97.212-97.319] | 51.027 [50.999-51.067] | 51.016 [50.901-51.138] |
+
+With every writer and the credit posted through the counter window, as the shipped build does,
+the visit cap K is the lever and C is nearly flat at fixed K. At C=8, K=16 the aggregate with
+every writer is 51.016 [50.901-51.138] ns/header at N=1024 and
+50.856 [50.832-50.879] at N=4096 ([results.md](../results.md#packet_injection)).
 
 X280 releases every Ethernet writer by its own endpoint, and the suite fails a
 run whose release used a group: a broadcast, even a one-tile one, does not reach
@@ -904,9 +912,9 @@ with a fence before the counter load and another before the slot loads (see
 
 ### Credit wait
 
-At S=16, C=1, K=1, `writers1_b1` records no credit-stall episode: one writer is paced by its own
-publication, not by X280 service. With every writer, each enters the credit wait on almost every
-header, so X280 service binds.
+At S=16, C=1, K=1, `writers1_b1` records 0 credit-stall episodes: one writer never waits for
+credit. With all 8 writers, each records 1005 to 1007 episodes per 1024 headers:
+it waits for credit on almost every header.
 
 ## Running the Benchmark
 

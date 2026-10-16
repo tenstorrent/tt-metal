@@ -7,7 +7,15 @@ and forwarding members on the host-booted SiFive X280 RISC-V cores. The lookup
 workload is one destination-to-next-hop operation over a fixed, suite-prepared
 input.
 
-Results are in [`docs/results.md`](../results.md).
+Results are in [`docs/results.md`](../results.md). Per item on the published record, mean
+[min-max] over attempts (`cpu/item` in X280 `rdcycle` cycles):
+
+| stage | ns/item | cpu/item |
+|---|---:|---:|
+| route_compute, plain | 41.824 [41.708-41.884] | 73.190 [72.987-73.294] |
+| route_compute, instrumented | 72.184 [72.129-72.236] | 126.322 [126.228-126.414] |
+| route_forward decision | 25.148 | 44.007 [44.007-44.008] |
+
 X280 micro-benchmark figures move with firmware code layout alone, so a figure compares only against a run of the same image.
 
 Host lifecycle, device ownership, shape admission, argument extents, STOP, and

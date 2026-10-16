@@ -87,15 +87,18 @@ Idle-ERISC header ingress, C=1, K=1, B=1:
 | 4 | 232.653 [232.617-232.686] |
 | 8 | 229.575 [229.536-229.622] |
 
-The backpressure configurations recorded 0 credit-stall episodes in every attempt.
+The backpressure configurations run at P=1, where the credit-stall population is empty by
+construction ([packet_injection.md](benchmarks/packet_injection.md#backpressure-measurement)).
 
 ## pipeline_stage
 
-| stage | ns/item |
-|---|---:|
-| route_compute, plain | 41.824 [41.708-41.884] |
-| route_compute, instrumented | 72.184 [72.129-72.236] |
-| route_forward decision | 25.148 |
+`cpu/item` is in X280 `rdcycle` cycles.
+
+| stage | ns/item | cpu/item |
+|---|---:|---:|
+| route_compute, plain | 41.824 [41.708-41.884] | 73.190 [72.987-73.294] |
+| route_compute, instrumented | 72.184 [72.129-72.236] | 126.322 [126.228-126.414] |
+| route_forward decision | 25.148 | 44.007 [44.007-44.008] |
 
 ## eth_credit
 
