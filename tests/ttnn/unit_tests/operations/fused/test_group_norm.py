@@ -195,16 +195,9 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     return input_tensor
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("N, C, H, W, num_groups", HEIGHT_SHARDED_SHAPES)
-@pytest.mark.parametrize(
-    "use_welford",
-    [
-        pytest.param(True, marks=pytest.mark.merge_gate),
-        # The tile path fails sporadically, see #57652.
-        pytest.param(False),
-    ],
-    ids=statistics_backend_ids,
-)
+@pytest.mark.parametrize("use_welford", statistics_backend_values, ids=statistics_backend_ids)
 @pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welford, specify_grid):
     torch.manual_seed(0)
