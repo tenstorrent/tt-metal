@@ -182,3 +182,63 @@ def dispatch_prep_prepare(mesh_device, *, S, K, EPC, n_route=8, n_copy=16, batch
         return ttnn.generic_op([jr, own, xbuf, route], state["desc"])
 
     return run
+
+
+def own_rows_copy_prepare(mesh_device, *, S, n_copy=4, batch=8, row0=8):
+    """run(own [S, W] row-major, buf [1, 1, N S, W] row-major): this chip's rows into slots idx * S + t (one generic_op;
+    e.g. the routing rows before an all-chips sparse_all_gather_2d)."""
+    R, C = tuple(mesh_device.shape)
+    N = R * C
+    cps = [ttnn.CoreCoord(i, row0) for i in range(n_copy)]
+    cset = ttnn.CoreRangeSet([ttnn.CoreRange(c_, c_) for c_ in cps])
+    st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+    dm = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default)
+    src = _COPY.replace("__NOCOPY__", "0")
+    state = {}
+
+    def build(own, buf):
+        row = int(own.buffer_aligned_page_size())
+        own_ct = list(ttnn.TensorAccessorArgs(own).get_compile_time_args())
+        b_ct = list(ttnn.TensorAccessorArgs(buf).get_compile_time_args())
+        per = -(-S // n_copy)
+        mesh_desc = ttnn.MeshProgramDescriptor()
+        for me in range(N):
+            program = ttnn.ProgramDescriptor()
+            program.cbs = [
+                ttnn.CBDescriptor(total_size=2 * batch * row, core_ranges=cset,
+                                  format_descriptors=[ttnn.CBFormatDescriptor(1, ttnn.uint32, row)])
+            ]
+            rt = ttnn.RuntimeArgs()
+            for i, cc in enumerate(cps):
+                rt[cc.x][cc.y] = [int(own.buffer_address()), int(buf.buffer_address()), min(S, i * per), min(S, (i + 1) * per), me * S, 0]
+            program.kernels = [
+                ttnn.KernelDescriptor(kernel_source=src, source_type=st, core_ranges=cset,
+                                      compile_time_args=[row, batch] + own_ct + b_ct, runtime_args=rt, config=dm)
+            ]
+            mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(me // C, me % C), ttnn.MeshCoordinate(me // C, me % C))] = program
+        return mesh_desc
+
+    def run(own, buf):
+        k = (int(own.buffer_address()), int(buf.buffer_address()))
+        if state.get("key") != k:
+            state["key"], state["desc"] = k, build(own, buf)
+        return ttnn.generic_op([own, buf], state["desc"])
+
+    return run
+
+
+def all_chips_route_words(mesh_device, S):
+    """[1, 1, 1, S] uint32 per chip (a mesh tensor): every own row to every other chip (order / link by a hash of t)."""
+    import torch
+
+    R, C = tuple(mesh_device.shape)
+    N = R * C
+    w = torch.zeros(N, 1, 1, S, dtype=torch.int64)
+    for me in range(N):
+        for t in range(S):
+            h = (t * 2654435761) & 0xFFFFFFFF
+            w[me, 0, 0, t] = (((1 << N) - 1) & ~(1 << me)) | (((h >> 31) & 1) << 16) | (((h >> 29) & 1) << 17)
+    return ttnn.from_torch(
+        w.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )

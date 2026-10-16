@@ -27,9 +27,11 @@ from dataclasses import dataclass, field
 
 import torch
 from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, port_luts
-from ttnn.bringup.combine_rf.dispatch_prep import dispatch_prep_prepare
+from ttnn.bringup.combine_rf.dispatch_prep import all_chips_route_words, dispatch_prep_prepare, own_rows_copy_prepare
 from ttnn.bringup.combine_rf.sparse_all_gather_2d import ensure_semaphores, manifest_spec, sparse_all_gather_2d
+from ttnn.bringup.combine_rf.fabric_all_gather_py import fabric_all_gather
 from ttnn.bringup.combine_rf.l1_zero import l1_zero_program
+from ttnn.bringup.combine_rf.layout_ops import layout_op_prepare
 from ttnn.bringup.combine_rf.sparse_combine_rf import sparse_combine_rf_prepare
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import W_DTYPES, FlatRoutedExpert, _bank_sharded, flat_weight_regions
 
@@ -141,9 +143,15 @@ class TtK3TokenSplitMoE:
         )
         # shared expert: K3_SE=flat (default) runs it as the flat routed expert with one expert every own token goes
         # to (bf8 weights in its bank layout, fused gate/up + SiTU + down); dense: three ttnn.linear + situ_glu
-        self.se_flat = os.environ.get("K3_SE", "flat") == "flat"
+        self.tilize = layout_op_prepare(mesh_device, "tilize")
+        self.untilize = layout_op_prepare(mesh_device, "untilize")
+        self.untilize2 = layout_op_prepare(mesh_device, "untilize", pages_per_row=2)
+        self.se_mode = os.environ.get("K3_SE", "flat")  # flat (local) | tp (TP over each mesh row) | dense
+        self.se_flat = self.se_mode in ("flat", "tp")
         self.se_parts = int(os.environ.get("K3_SE_PARTS", "3"))
-        if self.se_flat:
+        if self.se_mode == "tp":
+            self._build_shared_tp(mesh_device, w, d, S)
+        elif self.se_flat:
             self._build_shared_flat(mesh_device, w, d, S)
         else:
             self.w_sg, self.w_su = tw(w.sh_gate.T, ttnn.bfloat8_b), tw(w.sh_up.T, ttnn.bfloat8_b)
@@ -203,8 +211,16 @@ class TtK3TokenSplitMoE:
         # Allocated here once for its address (the kernels bake it: every call's arena must land there).
         self.sparse_dispatch = os.environ.get("K3_DISPATCH", "sparse") == "sparse"
         self.dprep = dispatch_prep_prepare(mesh_device, S=S, K=d.K, EPC=self.EPC) if self.sparse_dispatch else None
-        if self.sparse_dispatch:
+        # the routing rows' all-gather: one sparse_all_gather_2d to every chip (default) or two ttnn.all_gather
+        # (sparse: sparse_all_gather_2d to every chip, 157 us vs 140 for the two ttnn.all_gather at 64-B rows; fag: the
+        # dense fabric all-gather, one snake)
+        self.rgather = os.environ.get("K3_RGATHER", "fag")
+        self.rgather_fabric = self.rgather == "sparse"
+        if self.sparse_dispatch or self.rgather_fabric:
             ensure_semaphores(mesh_device, num_links=2)  # (persistent: before anything per call)
+        if self.rgather_fabric:
+            self.rcopy = own_rows_copy_prepare(mesh_device, S=S)
+            self.route_all = all_chips_route_words(mesh_device, S)
         self._warm_up()  # (the dense ops once first: what they keep in L1 across calls sits above the arena)
         a_rows = int(plan["arena_tiles"]) * 32
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
@@ -297,6 +313,22 @@ class TtK3TokenSplitMoE:
         w16 = ttnn.bitcast(w, ttnn.uint16)
         both = ttnn.concat([ids_rm, w16], dim=1)
         ttnn.deallocate(ids_rm)
+        if self.rgather_fabric:  # (one sparse_all_gather_2d, every row to every chip: own rows in place first)
+            N, S, K = self.N, self.S, self.d.K
+            buf = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, N * S, 2 * K]), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+            )
+            self.rcopy(both, buf)
+            ttnn.deallocate(both)
+            man = ttnn.allocate_tensor_on_device(*manifest_spec(self.mesh, S, num_links=2))
+            sparse_all_gather_2d(buf, self.route_all, num_links=2, manifest=man)
+            ttnn.deallocate(man)
+            g = ttnn.reshape(buf, [N * S, 2 * K])
+            return g, g
+        if self.rgather == "fag":  # (one dense fabric all-gather, a snake over the whole mesh: chip order kept)
+            g = fabric_all_gather(both, cluster_axis=None, topology=ttnn.Topology.Linear, num_links=1, dim=0)
+            ttnn.deallocate(both)
+            return g, g
         a = ttnn.all_gather(both, dim=0, cluster_axis=1)
         ttnn.deallocate(both)
         g = ttnn.all_gather(a, dim=0, cluster_axis=0)
@@ -360,12 +392,53 @@ class TtK3TokenSplitMoE:
         )
 
     def latent_up(self):
-        o = ttnn.to_layout(ttnn.reshape(self.out, [self.S, self.d.latent]), ttnn.TILE_LAYOUT)
+        o = self.tilize(ttnn.reshape(self.out, [self.S, self.d.latent]))  # (layout_ops: 19 us vs ttnn's 53)
         n = ttnn.rms_norm(o, epsilon=self.d.eps, weight=self.g_ln, compute_kernel_config=self.cfg_hi)
         ttnn.deallocate(o)
         y = self._linear(n, self.w_lu, self.cfg)
         ttnn.deallocate(n)
         return y
+
+    def _se_knobs(self):
+        self.se_fid = {"LoFi": 0, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}[os.environ.get("K3_SE_FID", "HiFi2")]
+        self.se_xbf16 = os.environ.get("K3_SE_XBF16", "1") == "1"
+        self.se_yrm = os.environ.get("K3_SE_YRM") == "1"
+        self.se_ybf16 = os.environ.get("K3_SE_YBF16", "1") == "1" and not self.se_yrm
+        self.se_srnd = os.environ.get("K3_SE_SRND") == "1"
+
+    def _build_shared_tp(self, mesh_device, w, d, S):
+        """TP shared expert over each mesh row (C chips): the row's tokens all-gathered ([C S, H] row-major, the dense
+        fabric all-gather), chip column c holding intermediate columns c * I_s / C.. (one flat expert of I_s / C over
+        all C S rows), the partial outputs reduce-scattered back to each chip's S rows."""
+        R, C, N = self.R, self.C, self.N
+        It = d.I_shared // C
+        self._se_knobs()
+        self.se = FlatRoutedExpert(
+            mesh_device, "fake", m=C * S, H=d.H, I=It, gids=[[0] for _ in range(N)], n_global=1, wdtype="bf8",
+            act="situ", pin=1, x_bf16=self.se_xbf16,
+        )
+        lay = dict(self.se.plan)
+        per_col = []
+        for c in range(C):
+            sl = slice(c * It, (c + 1) * It)
+            per_col.append(flat_weight_regions(
+                [(w.sh_gate[sl].T.contiguous(), w.sh_up[sl].T.contiguous(), w.sh_down[:, sl].T.contiguous())], lay
+            ))
+        wdt = W_DTYPES["bf8"][0]
+        for t in (self.se.w_gu, self.se.w_d, self.se.w_rd):
+            if t is not None:
+                ttnn.deallocate(t)
+        dev_order = [per_col[i % C] for i in range(N)]  # (device r * C + c holds column c's slice)
+        self.se.w_gu = _bank_sharded([g for g, _, _ in dev_order], lay["banks"], wdt, mesh_device)
+        self.se.w_d = _bank_sharded([dd for _, dd, _ in dev_order], lay["banks"], wdt, mesh_device)
+        if lay["rdown"]:
+            self.se.w_rd = _bank_sharded([rr for _, _, rr in dev_order], lay["banks"], wdt, mesh_device)
+        rep = ttnn.ReplicateTensorToMesh(mesh_device)
+        row = lambda v: ttnn.from_torch(  # noqa: E731
+            torch.tensor([v], dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rep,
+        )
+        self.se_counts, self.se_regions, self.se_tidx = row([C * S]), row([0]), None
 
     def _build_shared_flat(self, mesh_device, w, d, S):
         """The shared expert as SE_P experts of I_shared / SE_P intermediate columns each (the flat expert's gate/up
@@ -377,11 +450,7 @@ class TtK3TokenSplitMoE:
         # (3.3% rel, gain 0.982); HiFi2 + bf16 tokens + bf16 tiled y 1.2% (gain 0.997), as the ttnn.linear path; HiFi3 /
         # HiFi4 no better and slower. Knobs: K3_SE_FID (LoFi / HiFi2 / ...), K3_SE_XBF16 / K3_SE_YBF16 (default 1),
         # K3_SE_YRM bf16 row-major y, K3_SE_SRND stochastic packer rounding
-        self.se_fid = {"LoFi": 0, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}[os.environ.get("K3_SE_FID", "HiFi2")]
-        self.se_xbf16 = os.environ.get("K3_SE_XBF16", "1") == "1"
-        self.se_yrm = os.environ.get("K3_SE_YRM") == "1"
-        self.se_ybf16 = os.environ.get("K3_SE_YBF16", "1") == "1" and not self.se_yrm  # (bf16 tiles: no bfp8 y rounding)
-        self.se_srnd = os.environ.get("K3_SE_SRND") == "1"
+        self._se_knobs()
         self.se = FlatRoutedExpert(
             mesh_device, "fake", m=S, H=d.H, I=Ip, gids=[list(range(P)) for _ in range(N)], n_global=P, wdtype="bf8",
             act="situ", pin=1, x_bf16=self.se_xbf16,
@@ -409,8 +478,18 @@ class TtK3TokenSplitMoE:
         self.se_tidx = row(list(range(S)) * P)
 
     def shared(self, x):
+        if self.se_mode == "tp":  # (row all-gather, one flat expert on the row's tokens, reduce-scatter)
+            x_rm = self.untilize2(x)  # (a row as 2 pages of 7 KB: the fabric all-gather sends whole pages)
+            xg = fabric_all_gather(x_rm, cluster_axis=1, topology=ttnn.Topology.Linear, num_links=2, dim=0)
+            ttnn.deallocate(x_rm)
+            y = self.se(xg, self.se_counts, self.se_regions, x_pages_per_row=2, down_fp32=True,
+                        pack_stochastic_rounding=self.se_srnd, y_bf16=self.se_ybf16, math_fidelity=self.se_fid)
+            ttnn.deallocate(xg)
+            ys = ttnn.reduce_scatter(y, 0, cluster_axis=1, num_links=2, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(y)
+            return ys
         if self.se_flat:  # (x row major; y bfp8 tiles [P S, H]: the parts' outputs, summed)
-            x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x_rm = self.untilize(x)  # (layout_ops: 32 us vs ttnn's 49)
             y = self.se(
                 x_rm, self.se_counts, self.se_regions, token_index=self.se_tidx, down_fp32=True, y_row_major=self.se_yrm,
                 pack_stochastic_rounding=self.se_srnd, y_bf16=self.se_ybf16, math_fidelity=self.se_fid,
