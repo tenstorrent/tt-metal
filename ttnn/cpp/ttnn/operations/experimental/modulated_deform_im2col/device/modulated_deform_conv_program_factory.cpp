@@ -190,6 +190,19 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_conv_descriptor(
         push_cb(cb, 1, band_half_pages * input_page_nbytes);
     }
 
+    // One core reads the weight slices and multicasts them when the cores form one rectangle; the
+    // multicast fills a rectangle, and a ragged set would leave it writing into idle cores' L1.
+    const bool mcast_weight = all_cores.ranges().size() == 1 && num_cores > 1;
+    const CoreRange core_rect = *all_cores.ranges().begin();
+    const CoreCoord mcast_start = device->worker_core_from_logical_core(core_rect.start_coord);
+    const CoreCoord mcast_end = device->worker_core_from_logical_core(core_rect.end_coord);
+    constexpr uint32_t weight_sender_sem_id = 0;
+    constexpr uint32_t weight_receiver_sem_id = 1;
+    for (const uint32_t id : {weight_sender_sem_id, weight_receiver_sem_id}) {
+        descriptor.semaphores.push_back(SemaphoreDescriptor{
+            .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
+    }
+
     auto reader_ct = [&](bool first) {
         KernelDescriptor::CompileTimeArgs ct{
             offset_mask_arena_cb,
@@ -224,6 +237,10 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_conv_descriptor(
             bias_cb,
             out_tiles,
             has_bias ? 1u : 0u,
+            mcast_weight ? 1u : 0u,
+            num_cores - 1,
+            weight_sender_sem_id,
+            weight_receiver_sem_id,
         };
         TensorAccessorArgs(*input.buffer()).append_to(ct);
         TensorAccessorArgs(*offset_mask.buffer()).append_to(ct);
@@ -314,6 +331,13 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_conv_descriptor(
         reader_args.push_back(band_core_pages);
         reader_args.push_back(weight.buffer());
         reader_args.push_back(has_bias ? tensor_args.bias->buffer() : weight.buffer());
+        reader_args.push_back(core == core_rect.start_coord ? 1u : 0u);
+        reader_args.push_back(static_cast<uint32_t>(mcast_start.x));
+        reader_args.push_back(static_cast<uint32_t>(mcast_start.y));
+        reader_args.push_back(static_cast<uint32_t>(mcast_start.x));
+        reader_args.push_back(static_cast<uint32_t>(mcast_start.y));
+        reader_args.push_back(static_cast<uint32_t>(mcast_end.x));
+        reader_args.push_back(static_cast<uint32_t>(mcast_end.y));
         reader_desc.emplace_runtime_args(core, reader_args);
         odd_reader_desc.emplace_runtime_args(core, reader_args);
 

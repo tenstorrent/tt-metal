@@ -28,6 +28,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -71,7 +73,13 @@ constexpr uint32_t conv_weight_cb_index = get_compile_time_arg_val(28);
 constexpr uint32_t bias_cb_index = get_compile_time_arg_val(29);
 constexpr uint32_t OUT_TILES = get_compile_time_arg_val(30);  // C_out / 32
 constexpr bool HAS_BIAS = get_compile_time_arg_val(31);
-constexpr auto input_args = TensorAccessorArgs<32>();
+// One core reads each weight slice from DRAM and multicasts it to the others, so the slices cost
+// one DRAM read instead of one per core; the per-core reads otherwise congest the corner gather.
+constexpr bool MCAST_WEIGHT = get_compile_time_arg_val(32);
+constexpr uint32_t MCAST_NUM_DESTS = get_compile_time_arg_val(33);
+constexpr uint32_t weight_sender_sem_id = get_compile_time_arg_val(34);
+constexpr uint32_t weight_receiver_sem_id = get_compile_time_arg_val(35);
+constexpr auto input_args = TensorAccessorArgs<36>();
 constexpr auto offset_mask_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<offset_mask_args.next_compile_time_args_offset()>();
 constexpr auto weight_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
@@ -161,6 +169,22 @@ void kernel_main() {
     const uint32_t band_pages = get_arg_val<uint32_t>(7);
     const uint32_t weight_addr = get_arg_val<uint32_t>(8);
     const uint32_t bias_addr = get_arg_val<uint32_t>(9);
+    // The multicast's sender and its destination rectangle, in NoC coordinates.
+    const bool is_weight_sender = get_arg_val<uint32_t>(10);
+    const uint32_t sender_noc_x = get_arg_val<uint32_t>(11);
+    const uint32_t sender_noc_y = get_arg_val<uint32_t>(12);
+    uint32_t mcast_x0 = get_arg_val<uint32_t>(13);
+    uint32_t mcast_y0 = get_arg_val<uint32_t>(14);
+    uint32_t mcast_x1 = get_arg_val<uint32_t>(15);
+    uint32_t mcast_y1 = get_arg_val<uint32_t>(16);
+    if (noc_index == 1) {
+        // NoC 1 runs the other way, so its rectangle starts at the far corner.
+        const uint32_t x = mcast_x0, y = mcast_y0;
+        mcast_x0 = mcast_x1;
+        mcast_y0 = mcast_y1;
+        mcast_x1 = x;
+        mcast_y1 = y;
+    }
 
     const auto input_acc = TensorAccessor(input_args, input_addr, input_page_nbytes);
     const auto offset_mask_acc = TensorAccessor(offset_mask_args, offset_mask_addr, offset_mask_page_nbytes);
@@ -177,16 +201,50 @@ void kernel_main() {
     CircularBuffer output_cb(output_cb_index);
     CircularBuffer conv_weight_cb(conv_weight_cb_index);
 
-    // Loads one kernel position's C x C_out slice of the weight, tiles in row-major order.
+    Semaphore<> weight_sender_sem(weight_sender_sem_id);
+    Semaphore<> weight_receiver_sem(weight_receiver_sem_id);
+    if (LOADS_WEIGHT && MCAST_WEIGHT && is_weight_sender) {
+        // The value the sender multicasts into every receiver's flag once a slice has landed.
+        weight_receiver_sem.set(VALID);
+    }
+
+    // Loads one kernel position's C x C_out slice of the weight, tiles in row-major order. Every
+    // core reserves the same slot in the same order, so the slot's address matches on all of them.
     auto load_weight_slice = [&](uint32_t kk) {
         conv_weight_cb.reserve_back(WEIGHT_SLICE_TILES);
         const uint32_t dst_l1 = conv_weight_cb.get_write_ptr();
-        const uint32_t first_tile = kk * WEIGHT_SLICE_TILES;
-        for (uint32_t t = 0; t < WEIGHT_SLICE_TILES; ++t) {
-            CoreLocalMem<uint32_t> dst(dst_l1 + t * tile_nbytes);
-            noc.async_read(weight_acc, dst, tile_nbytes, {.page_id = first_tile + t}, {.offset_bytes = 0});
+        if (!MCAST_WEIGHT || is_weight_sender) {
+            const uint32_t first_tile = kk * WEIGHT_SLICE_TILES;
+            for (uint32_t t = 0; t < WEIGHT_SLICE_TILES; ++t) {
+                CoreLocalMem<uint32_t> dst(dst_l1 + t * tile_nbytes);
+                noc.async_read(weight_acc, dst, tile_nbytes, {.page_id = first_tile + t}, {.offset_bytes = 0});
+            }
+            noc.async_read_barrier();
+            if constexpr (MCAST_WEIGHT) {
+                // Every receiver has freed the slot.
+                weight_sender_sem.wait(MCAST_NUM_DESTS);
+                weight_sender_sem.set(0);
+                const MulticastEndpoint mcast_dst;
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(dst_l1),
+                    mcast_dst,
+                    WEIGHT_SLICE_TILES * tile_nbytes,
+                    MCAST_NUM_DESTS,
+                    {},
+                    {.noc_x_start = mcast_x0,
+                     .noc_y_start = mcast_y0,
+                     .noc_x_end = mcast_x1,
+                     .noc_y_end = mcast_y1,
+                     .addr = dst_l1},
+                    true);
+                noc.async_writes_flushed();
+                weight_receiver_sem.set_multicast(noc, mcast_x0, mcast_y0, mcast_x1, mcast_y1, MCAST_NUM_DESTS);
+            }
+        } else {
+            weight_receiver_sem.set(INVALID);
+            weight_sender_sem.up(noc, sender_noc_x, sender_noc_y, 1);
+            weight_receiver_sem.wait(VALID);
         }
-        noc.async_read_barrier();
         conv_weight_cb.push_back(WEIGHT_SLICE_TILES);
     };
 
