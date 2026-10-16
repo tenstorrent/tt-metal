@@ -4,7 +4,7 @@
 
 #pragma once
 
-namespace ckernel::sfpu::ttpoly {
+namespace ckernel::sfpu::ttpoly::erfc_bw {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
 template <int CODE>
@@ -70,4 +70,4 @@ inline void positive_nan_class_terminal(vUInt raw_u16, vFloat& result, float con
     }
     v_endif;
 }
-}  // namespace ckernel::sfpu::ttpoly
+}  // namespace ckernel::sfpu::ttpoly::erfc_bw
