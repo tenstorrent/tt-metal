@@ -201,6 +201,6 @@ The first argument, the reference, may instead be a GPU trace directory. The sec
 python -m models.demos.gemma4_d_p.tests.scripts.prepare_cpu_reference /path/to/cpu_fp32_32k --context-len 32768
 ```
 
-Same-build runs are not always bit-identical. With the accurate gate GELU, three 256K runs at chunk 8192 gave identical hidden states and KV. With the fast gate GELU (#59222), one of three diverged from the first chunk, moving ΔNLL by up to 0.03 per bin. Compare builds with that spread in mind, or repeat a run to confirm a small difference.
+Same-build runs give bit-identical hidden states and KV: at 256K and chunk 8192, 8 of 9 runs on two machines matched exactly. The ninth diverged from one device row in the first chunk, moving ΔNLL by up to 0.03 per bin. Treat any difference between two builds as real, but repeat a run before acting on a small one.
 
 See [test commands and setup](PREFILL_MIGRATION.md).
