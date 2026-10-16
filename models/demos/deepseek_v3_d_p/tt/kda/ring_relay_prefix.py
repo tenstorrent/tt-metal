@@ -7,15 +7,18 @@ Each rank needs only its entry state E_p (the recurrent state after every chrono
 chronologically first rank also needs the final state (its split tail's entry). Rank p (chronological position)
 receives E_p from its predecessor, applies its own transform, E_{p+1} = A_p E_p + B_p, and forwards E_{p+1} to its
 successor: about one state per rank instead of every rank's two summaries. The heads are independent, so each runs on
-its own core and the heads stream through the ring one behind another.
+its own core and the heads stream through the ring one behind another. Column j of A_p E_p + B_p needs only column j
+of E_p, so the unit a hop moves and computes is one tile column of a head's state (states are stored column-major by
+tile): a rank forwards a head's first column before the head's last one has arrived.
 
 Per device:
-  * head cores (one per head): read A_p and B_p (BF16, this rank's packed summary), take E_p (the initial state on the
-    first rank, else the predecessor's landed state), compute A_p E_p + B_p in FP32 and hand it to a sender;
-  * sender cores (one per link): read each finished head's state out of its head core (the next head's while the
-    current one's packets go out), release the head core and forward the state into the successor's landing buffer for
-    that head over the fabric. The last rank sends to the first rank's final-state landing. The link's throughput
-    (about 4 us per 64 KiB state) and the per-hop compute bound the relay.
+  * head cores (one per head): read A_p and B_p (BF16, this rank's packed summary), take E_p column by column (the
+    initial state on the first rank, else the predecessor's landed columns), compute each column of A_p E_p + B_p in
+    FP32 and count it on its sender's core;
+  * sender cores (one per link): read each finished column out of its head core into one of several buffers (later
+    columns while earlier ones' packets go out), release the head core after its last column and forward each column
+    into the successor's landing buffer over the fabric. The last rank sends to the first rank's final-state landing.
+    The link's throughput (about 1 us per 16 KiB column) and the per-hop latency bound the relay.
 Landing buffers and the hand-off are L1 tensors sharded over the head cores, so their addresses agree on every device.
 
 Successive calls are not fenced against each other: a rank writes into its successor's landing only after that call has
@@ -78,21 +81,29 @@ void kernel_main() {
     cb_push_back(cb_a, state_tiles);
     cb_push_back(cb_b, state_tiles);
 
+    // The entry state is stored column-major by tile, so each tile column (all the next state's column needs) can
+    // land, be computed and leave on its own.
     cb_reserve_back(cb_ein, state_tiles);
     if (position == 0) {
         const auto init = TensorAccessor(init_args, init_addr);
         const uint32_t state_tile = get_tile_size(cb_ein);
-        for (uint32_t i = 0; i < state_tiles; ++i) {
-            noc_async_read_page(head * state_tiles + i, init, get_write_ptr(cb_ein) + i * state_tile);
+        for (uint32_t j = 0; j < kt; ++j) {
+            for (uint32_t r = 0; r < kt; ++r) {
+                noc_async_read_page(head * state_tiles + r * kt + j, init, get_write_ptr(cb_ein) + (j * kt + r) * state_tile);
+            }
         }
         noc_async_read_barrier();
+        cb_push_back(cb_ein, state_tiles);
     } else {
-        // The predecessor's sender writes this head's entry state into cb_ein's storage, then increments.
+        // The predecessor's sender writes each tile column of this head's entry state into cb_ein's storage, then
+        // increments.
         volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_sem);
-        noc_semaphore_wait_min(arrived, 1);
+        for (uint32_t j = 0; j < kt; ++j) {
+            noc_semaphore_wait_min(arrived, j + 1);
+            cb_push_back(cb_ein, kt);
+        }
         noc_semaphore_set(arrived, 0);
     }
-    cb_push_back(cb_ein, state_tiles);
 }
 """
 
@@ -117,29 +128,31 @@ void kernel_main() {
     cb_wait_front(cb_a, state_tiles);
     cb_wait_front(cb_ein, state_tiles);
     cb_wait_front(cb_b, state_tiles);
-    cb_reserve_back(cb_eout, state_tiles);
-    // Per output tile row: B (BF16, exact in the FP32 DST) is copied into DST first and the K-sum accumulates on top
-    // of it, so the state never leaves DST between the product and the add.
-    for (uint32_t row = 0; row < kt; ++row) {
+    // Per output tile column (column-major state): B's column (BF16, exact in the FP32 DST) is copied into DST first
+    // and the K-sum accumulates on top of it, so the state never leaves DST between the product and the add. Column j
+    // needs only column j of E_in.
+    for (uint32_t j = 0; j < kt; ++j) {
+        cb_wait_front(cb_ein, (j + 1) * kt);
+        cb_reserve_back(cb_eout, kt);
         tile_regs_acquire();
         reconfig_data_format_srca(cb_b);
         copy_init(cb_b);
-        for (uint32_t c = 0; c < kt; ++c) {
-            copy_tile(cb_b, row * kt + c, c);
+        for (uint32_t r = 0; r < kt; ++r) {
+            copy_tile(cb_b, r * kt + j, r);
         }
         reconfig_data_format<SrcOrder::Reverse>(cb_a, cb_ein);
-        matmul_block_init(cb_a, cb_ein, false, kt, 1, kt);
+        matmul_block_init(cb_a, cb_ein, false, 1, kt, kt);
         for (uint32_t k = 0; k < kt; ++k) {
-            matmul_block(cb_a, cb_ein, row * kt + k, k * kt, 0, false, kt, 1, kt);
+            matmul_block(cb_a, cb_ein, k, j * kt + k, 0, false, 1, kt, kt);
         }
         tile_regs_commit();
         tile_regs_wait();
-        for (uint32_t c = 0; c < kt; ++c) {
-            pack_tile(c, cb_eout, row * kt + c);
+        for (uint32_t r = 0; r < kt; ++r) {
+            pack_tile(r, cb_eout);
         }
         tile_regs_release();
+        cb_push_back(cb_eout, kt);
     }
-    cb_push_back(cb_eout, state_tiles);
     cb_pop_front(cb_a, state_tiles);
     cb_pop_front(cb_ein, state_tiles);
     cb_pop_front(cb_b, state_tiles);
@@ -168,7 +181,8 @@ void kernel_main() {
     const uint32_t final_landing = get_arg_val<uint32_t>(4);      // the last rank's final state lands here
     const uint32_t final_sem = get_arg_val<uint32_t>(5);
     const uint32_t ack_sem = get_arg_val<uint32_t>(6);
-    const uint32_t done_sem = get_arg_val<uint32_t>(7);          // set while this head's state waits for its sender
+    const uint32_t notify_sem = get_arg_val<uint32_t>(7);        // this head's column count on its sender core
+    const uint32_t sender_xy = get_arg_val<uint32_t>(8);         // the sender's NoC x | y << 16
 
     cb_wait_front(cb_chron, 1);
     const uint32_t actual_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_chron))[0];
@@ -179,17 +193,22 @@ void kernel_main() {
     const auto entry = TensorAccessor(entry_args, entry_addr);
     const auto final_state = TensorAccessor(final_args, final_addr);
     const uint32_t tile_bytes = get_tile_size(cb_eout);
-    cb_wait_front(cb_eout, state_tiles);
-    // Hand the state to this head's sender first (it polls the flag): the DRAM copies below are off the relay's path.
-    volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem);
-    noc_semaphore_set(done, 1);
+    // Hand each tile column to this head's sender as it is packed (a count on the sender's core): the DRAM copies
+    // below are off the relay's path.
+    const uint64_t notify = get_noc_addr(sender_xy & 0xFFFF, sender_xy >> 16, notify_sem);
+    for (uint32_t j = 0; j < kt; ++j) {
+        cb_wait_front(cb_eout, (j + 1) * kt);
+        noc_semaphore_inc(notify, 1);
+    }
+    // The states are stored column-major by tile; the DRAM tensors are row-major.
+    const auto page = [&](uint32_t i) { return head * state_tiles + (i % kt) * kt + i / kt; };
     // Compute has consumed the entry state; it stays in place until the next call's predecessor writes it.
     for (uint32_t i = 0; i < state_tiles; ++i) {
-        noc_async_write_page(head * state_tiles + i, entry, ein_addr + i * tile_bytes);
+        noc_async_write_page(page(i), entry, ein_addr + i * tile_bytes);
     }
     if (position == sp_size - 1) {
         for (uint32_t i = 0; i < state_tiles; ++i) {
-            noc_async_write_page(head * state_tiles + i, final_state, get_read_ptr(cb_eout) + i * tile_bytes);
+            noc_async_write_page(page(i), final_state, get_read_ptr(cb_eout) + i * tile_bytes);
         }
     }
     noc_async_write_barrier();
@@ -197,15 +216,14 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* acked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ack_sem);
     noc_semaphore_wait_min(acked, 1);
     noc_semaphore_set(acked, 0);
-    noc_semaphore_set(done, 0);
     cb_pop_front(cb_eout, state_tiles);
     if (position == 0) {
         // The first rank's split tail enters at the final state, which the last rank sends here.
         volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_sem);
-        noc_semaphore_wait_min(landed, 1);
+        noc_semaphore_wait_min(landed, kt);
         noc_semaphore_set(landed, 0);
         for (uint32_t i = 0; i < state_tiles; ++i) {
-            noc_async_write_page(head * state_tiles + i, final_state, final_landing + i * tile_bytes);
+            noc_async_write_page(page(i), final_state, final_landing + i * tile_bytes);
         }
         noc_async_write_barrier();
     }
@@ -239,10 +257,12 @@ void kernel_main() {
     constexpr uint32_t sp_rank = get_compile_time_arg_val(1);
     constexpr uint32_t sp_size = get_compile_time_arg_val(2);
     constexpr uint32_t local_rows = get_compile_time_arg_val(3);
-    constexpr uint32_t state_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t unit_bytes = get_compile_time_arg_val(4);  // one tile column of a head's state
     constexpr uint32_t chunk_bytes = get_compile_time_arg_val(5);  // one fabric packet
-    constexpr auto start_args = TensorAccessorArgs<6>();
-    constexpr uint32_t chunks = (state_bytes + chunk_bytes - 1) / chunk_bytes;
+    constexpr uint32_t kt = get_compile_time_arg_val(6);           // tile columns per state
+    constexpr uint32_t slots = get_compile_time_arg_val(7);        // unit buffers
+    constexpr auto start_args = TensorAccessorArgs<8>();
+    constexpr uint32_t chunks = (unit_bytes + chunk_bytes - 1) / chunk_bytes;
 
     size_t a = 0;
     const uint32_t start_addr = get_arg_val<uint32_t>(a++);
@@ -258,6 +278,8 @@ void kernel_main() {
     const uint32_t num_heads = get_arg_val<uint32_t>(a++);       // entries: head core NoC x | y << 16
     const uint32_t heads_idx = a;
     a += num_heads;
+    const uint32_t notify_idx = a;                                // then each head's count semaphore here
+    a += num_heads;
 
     cb_reserve_back(cb_stage, 1);
     const uint32_t stage = get_write_ptr(cb_stage);
@@ -272,54 +294,62 @@ void kernel_main() {
     const uint32_t landed_sem = last ? final_sem : arrival_sem;
 
     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
-    // One header per packet of a head, so a head's packets go out back to back.
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[chunks];
-    for (uint32_t c = 0; c < chunks; ++c) {
-        hdrs[c] = PacketHeaderPool::allocate_header();
-        route_one_hop(hdrs[c], dst_chip_id, dst_mesh_id);
+    // The relay's unit is one tile column of a head's state (column-major storage): the successor computes that
+    // column of its state as soon as it lands. Units go through `slots` buffers: unit u + slots - 1 is read out of its
+    // head core while earlier units' packets are on the link, and a slot (and its packet headers) is reused only
+    // after its packets have left L1.
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[slots][chunks];
+    for (uint32_t b = 0; b < slots; ++b) {
+        for (uint32_t c = 0; c < chunks; ++c) {
+            hdrs[b][c] = PacketHeaderPool::allocate_header();
+            route_one_hop(hdrs[b][c], dst_chip_id, dst_mesh_id);
+        }
     }
     conn.open();
-    // Two whole-state buffers: head k+1 is read out of its head core while head k's packets go out. The head's
-    // finished flag is read past them.
-    volatile tt_l1_ptr uint32_t* probe = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + 2 * state_bytes);
-    const auto head_xy = [&](uint32_t k) { return get_arg_val<uint32_t>(heads_idx + k); };
-    const auto is_done = [&](uint32_t k) {
-        const uint32_t xy = head_xy(k);
-        noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, done_sem), reinterpret_cast<uint32_t>(probe), 4);
-        noc_async_read_barrier();
-        return probe[0] != 0;
+    const uint32_t units = num_heads * kt;
+    const auto head_xy = [&](uint32_t u) { return get_arg_val<uint32_t>(heads_idx + u / kt); };
+    // Head k's writer counts its finished columns into notify_sems[k] on this core.
+    const auto ready = [&](uint32_t u) {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(notify_idx + u / kt))[0] >=
+               u % kt + 1;
     };
-    // Read head k's state into buffer k % 2 (heads finish in any order; wait for this one).
-    const auto fetch = [&](uint32_t k) {
-        while (!is_done(k)) {
+    uint32_t fetched = 0;  // units whose reads are issued
+    const auto fetch = [&](uint32_t u) {
+        const uint32_t xy = head_xy(u);
+        noc_async_read(
+            get_noc_addr(xy & 0xFFFF, xy >> 16, eout_addr + (u % kt) * unit_bytes),
+            stage + (u % slots) * unit_bytes,
+            unit_bytes);
+    };
+    for (uint32_t u = 0; u < units; ++u) {
+        // Issue every read the free slots allow, waiting only for unit u itself.
+        while (fetched < units && fetched < u + slots && (fetched == u || ready(fetched))) {
+            if (fetched == u) {
+                while (!ready(u)) {
+                }
+            }
+            if (fetched >= slots) {
+                // Unit fetched - slots last used this slot: its packets must have left L1.
+                noc_async_writes_flushed();
+            }
+            fetch(fetched);
+            ++fetched;
         }
-        const uint32_t xy = head_xy(k);
-        noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, eout_addr), stage + (k & 1) * state_bytes, state_bytes);
-    };
-    // The state has left the head core: release it.
-    const auto release = [&](uint32_t k) {
-        const uint32_t xy = head_xy(k);
-        noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, ack_sem), 1);
-    };
-    fetch(0);
-    noc_async_read_barrier();
-    release(0);
-    for (uint32_t k = 0; k < num_heads; ++k) {
-        const uint32_t xy = head_xy(k);
+        noc_async_read_barrier();
+        const uint32_t xy = head_xy(u);
         const uint32_t hx = xy & 0xFFFF;
         const uint32_t hy = xy >> 16;
-        // Prefetch the next head now if it is already finished; its buffer's packets left with the last flush.
-        bool prefetched = false;
-        if (k + 1 < num_heads && is_done(k + 1)) {
-            fetch(k + 1);
-            prefetched = true;
+        if (u % kt == kt - 1) {
+            // The head's last column has left its head core: release the head.
+            noc_semaphore_inc(get_noc_addr(hx, hy, ack_sem), 1);
         }
-        const uint32_t buffer = stage + (k & 1) * state_bytes;
+        const uint32_t buffer = stage + (u % slots) * unit_bytes;
+        const uint32_t column = landing + (u % kt) * unit_bytes;
         for (uint32_t c = 0; c < chunks; ++c) {
             const uint32_t offset = c * chunk_bytes;
-            const uint32_t bytes = offset + chunk_bytes <= state_bytes ? chunk_bytes : state_bytes - offset;
-            const uint64_t dst = get_noc_addr(hx, hy, landing + offset);
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[c];
+            const uint32_t bytes = offset + chunk_bytes <= unit_bytes ? chunk_bytes : unit_bytes - offset;
+            const uint64_t dst = get_noc_addr(hx, hy, column + offset);
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[u % slots][c];
             if (c + 1 == chunks) {
                 hdr->to_noc_fused_unicast_write_atomic_inc(
                     NocUnicastAtomicIncFusedCommandHeader{dst, get_noc_addr(hx, hy, landed_sem), 1, true}, bytes);
@@ -329,15 +359,11 @@ void kernel_main() {
             conn.wait_for_empty_write_slot();
             conn.send_current_slot_non_blocking(buffer + offset, bytes, reinterpret_cast<uint32_t>(hdr));
         }
-        // The headers and this buffer are reused once every packet has left L1.
-        noc_async_writes_flushed();
-        if (k + 1 < num_heads) {
-            if (!prefetched) {
-                fetch(k + 1);
-            }
-            noc_async_read_barrier();
-            release(k + 1);
-        }
+    }
+    noc_async_writes_flushed();
+    // Reset the heads' counts for the next call (every head's columns have been counted).
+    for (uint32_t k = 0; k < num_heads; ++k) {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(notify_idx + k))[0] = 0;
     }
     conn.close();
     noc_async_atomic_barrier();
@@ -345,6 +371,8 @@ void kernel_main() {
 """
 
 _CB_A, _CB_B, _CB_EIN, _CB_EOUT, _CB_CHRON, _CB_STAGE = 0, 1, 2, 3, 4, 5
+# Unit (tile column) buffers per sender.
+_SLOTS = 4
 
 
 class RingRelayPrefix:
@@ -412,6 +440,9 @@ class RingRelayPrefix:
         self.final_landing = alloc()
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self.sems = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(4)]
+        # Per sender, one count per head it serves (the head's finished columns), written by the head writers.
+        self.heads_per_link = -(-batch_heads // num_links)
+        self.notify_sems = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(self.heads_per_link)]
         # The matmul runs at the affine prefix's fidelity, accumulating in an FP32 DST.
         self.compute_config = ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, fp32_dest_acc_en=True)
         ttnn.synchronize_device(mesh_device)
@@ -476,11 +507,11 @@ class RingRelayPrefix:
                         ],
                     ),
                     ttnn.CBDescriptor(
-                        total_size=2 * state_tiles * 4096 + 64,
+                        total_size=_SLOTS * kt * 4096,
                         core_ranges=self.sender_set,
                         format_descriptors=[
                             ttnn.CBFormatDescriptor(
-                                buffer_index=_CB_STAGE, data_format=ttnn.float32, page_size=2 * state_tiles * 4096 + 64
+                                buffer_index=_CB_STAGE, data_format=ttnn.float32, page_size=_SLOTS * kt * 4096
                             )
                         ],
                     ),
@@ -492,11 +523,13 @@ class RingRelayPrefix:
                 writer_ct = [_CB_EOUT, _CB_CHRON, *chron, kt]
                 for t in (entry, final):
                     writer_ct += list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-                sender_ct = [_CB_STAGE, *chron, state_tiles * 4096, chunk_bytes] + list(
+                sender_ct = [_CB_STAGE, *chron, kt * 4096, chunk_bytes, kt, _SLOTS] + list(
                     ttnn.TensorAccessorArgs(actual_start).get_compile_time_args()
                 )
                 rd, wr, sd = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+                notify = [int(ttnn.get_global_semaphore_address(n)) for n in self.notify_sems]
                 for h, core in enumerate(self.head_cores):
+                    sender = virt(self.sender_cores[h % self.num_links])
                     rd[core.x][core.y] = [
                         packed.buffer_address(),
                         initial_state.buffer_address(),
@@ -512,7 +545,8 @@ class RingRelayPrefix:
                         final_landing,
                         final_sem,
                         ack,
-                        done,
+                        notify[h // self.num_links],
+                        sender.x | (sender.y << 16),
                     ]
                 src = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
                 program.kernels = [
@@ -560,19 +594,23 @@ class RingRelayPrefix:
                         v = virt(self.head_cores[h])
                         entries.append(v.x | (v.y << 16))
                     dst = node(succ)
-                    args = [
-                        actual_start.buffer_address(),
-                        int(dst.mesh_id),
-                        int(dst.chip_id),
-                        done,
-                        eout_addr,
-                        ein_addr,
-                        final_landing,
-                        arrival,
-                        final_sem,
-                        ack,
-                        len(entries),
-                    ] + entries
+                    args = (
+                        [
+                            actual_start.buffer_address(),
+                            int(dst.mesh_id),
+                            int(dst.chip_id),
+                            done,
+                            eout_addr,
+                            ein_addr,
+                            final_landing,
+                            arrival,
+                            final_sem,
+                            ack,
+                            len(entries),
+                        ]
+                        + entries
+                        + notify[: len(entries)]
+                    )
                     link = list(ttnn.get_forwarding_link_indices(node(coord), dst))[l]
                     args += list(ttnn.setup_fabric_connection(node(coord), dst, link, program, score))
                     sd[score.x][score.y] = args

@@ -294,7 +294,7 @@ class ttKDA:
                 mesh_device,
                 rows=(0, grid.y - 1),
                 cols=(0, min(c.x for c in self._relay_column_cores) - 1),
-                k_block=8,
+                k_block=16,
                 math_fidelity=program_config.input_projection_math_fidelity,
             )
             # The output projection on every worker core the final carry leaves: the columns left of the carry's
