@@ -220,15 +220,10 @@ constexpr std::uint32_t W_SCALE_SLICES_PER_TILE_COL = 2;
 // covers 4 rows of the even (addr +0) or odd (addr +2) columns, so the scale LREG alternates.
 // Recorded stage-major (4 loads, 4 casts, 4 multiplies, 4 stores), each pass in its own LREG0-3,
 // so independent work sits between every dependent pair instead of stalling on each result.
-template <std::uint32_t SCALE_EVEN, std::uint32_t SCALE_ODD>
-inline void record_face_seq(const std::uint32_t slot)
+template <std::uint32_t SLOT, std::uint32_t SCALE_EVEN, std::uint32_t SCALE_ODD>
+inline void record_face_seq()
 {
-    load_replay_buf(
-        slot,
-        FACE_SEQ_LEN,
-        false /*exec_while_loading*/,
-        0 /*set_mutex*/,
-        0 /*last*/,
+    load_replay_buf<SLOT, FACE_SEQ_LEN>(
         []
         {
 #pragma GCC unroll SFPU_PASSES_PER_HALF_FACE
@@ -336,8 +331,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_eltwise_sfpu_init_();
 
             // LREG4/5: columns 0-15 even/odd, LREG6/7: columns 16-31 even/odd.
-            record_face_seq<p_sfpu::LREG4, p_sfpu::LREG5>(FACE_SEQ_SLOT[0]);
-            record_face_seq<p_sfpu::LREG6, p_sfpu::LREG7>(FACE_SEQ_SLOT[1]);
+            record_face_seq<FACE_SEQ_SLOT[0], p_sfpu::LREG4, p_sfpu::LREG5>();
+            record_face_seq<FACE_SEQ_SLOT[1], p_sfpu::LREG6, p_sfpu::LREG7>();
         }
         PROFILER_SYNC();
     }
