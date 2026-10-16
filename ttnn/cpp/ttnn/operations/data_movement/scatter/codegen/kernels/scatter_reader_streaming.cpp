@@ -23,13 +23,16 @@
 
 void kernel_main() {
     // Runtime args
-    const uint32_t index_addr = get_arg_val<uint32_t>(0);
-    const uint32_t src_addr = get_arg_val<uint32_t>(1);
-    const uint32_t core_loop_count = get_arg_val<uint32_t>(2);
-    const uint32_t tile_width = get_arg_val<uint32_t>(3);
-    const uint32_t tile_height = get_arg_val<uint32_t>(4);
-    const uint32_t core_id = get_arg_val<uint32_t>(5);
-    // Args 6..22 are the fixed-width logical page-map descriptor.
+    // Buffer addresses are common (per-kernel) runtime args: a program-cache hit then rebinds two
+    // slots per kernel instead of two per core.
+    const uint32_t index_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t src_addr = get_common_arg_val<uint32_t>(1);
+    // Per-core runtime args
+    const uint32_t core_loop_count = get_arg_val<uint32_t>(0);
+    const uint32_t tile_width = get_arg_val<uint32_t>(1);
+    const uint32_t tile_height = get_arg_val<uint32_t>(2);
+    const uint32_t core_id = get_arg_val<uint32_t>(3);
+    // Args 4..20 are the fixed-width logical page-map descriptor.
 
     // Compile-time args
     constexpr uint32_t cb_input = get_compile_time_arg_val(0);
@@ -98,7 +101,7 @@ void kernel_main() {
     for (uint32_t h = 0; h < Ht; h++) {
         uint32_t current_output_tile_id = core_id;
         uint32_t h_src = 0;
-        const bool has_src_data = map_scatter_input_page<6>(h, h_src);
+        const bool has_src_data = map_scatter_input_page<4>(h, h_src);
         const bool is_last_h_tile = has_src_data && ((h_src % Ht_per_batch_src) == (Ht_per_batch_src - 1));
         const uint32_t valid_h = is_last_h_tile ? src_valid_h_last : tile_height;
 
