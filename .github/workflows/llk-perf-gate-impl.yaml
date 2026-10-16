@@ -75,12 +75,22 @@ on:
         default: L1_TO_L1
         type: string
       fail_on_regression:
-        description: "Fail the job on a regression. False reports to Slack only."
+        description: "Fail the job on a regression. False only reports it."
+        required: false
+        default: true
+        type: boolean
+      slack:
+        description: "Post the verdict to the LLK regressions channel"
+        required: false
+        default: false
+        type: boolean
+      slack_on_pass:
+        description: "With slack, also post when the gate passes. With slack, regressions and skips always post."
         required: false
         default: true
         type: boolean
       threshold:
-        description: "Relative slowdown counting as a regression (BH 0.02, WH 0.08)"
+        description: "Relative slowdown counting as a regression (BH 0.02, WH 0.13)"
         required: false
         default: "0.02"
         type: string
@@ -101,9 +111,8 @@ on:
         type: string
       pr_number:
         description: >-
-          The PR the compared runs came from. Only used to label the Slack
-          message when there is no pull_request event to read it from,
-          as on a pilot dispatch. Nothing is posted to the PR.
+          The PR the compared runs came from, when there is no pull_request
+          event to read it from. Labels the report only.
         required: false
         type: string
 
@@ -363,6 +372,7 @@ jobs:
             --module-threshold "$MODULE_THRESHOLDS" \
             --report perf_gate_report.md \
             --test 'LLK perf' \
+            --arch '${{ inputs.arch }}' \
             --baseline-sha "$BASELINE_SHA" \
             --current-sha "${{ github.event.pull_request.head.sha || github.sha }}" \
             --baseline-label "$BASELINE_LABEL" \
@@ -434,6 +444,7 @@ jobs:
           GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
           MEASURE_RESULT: ${{ steps.measured.outputs.result }}
+          MEASURE_REASON: ${{ steps.measured.outputs.reason }}
           ARCH: ${{ inputs.arch }}
           RUN_TYPES: ${{ inputs.run_types }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -447,14 +458,9 @@ jobs:
                 || github.event_name == 'workflow_dispatch' && format('manual run on {0}', github.ref_name)
                 || github.event_name }}
           WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
+          SLACK_ON_PASS: ${{ inputs.slack_on_pass }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -z "$SLACK_CHANNEL_ID" ]; then
-            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
-            echo "should_post=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
           if [[ "$PR_NUMBER" == "?" && "$GITHUB_REF" =~ gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
             PR_NUMBER="${BASH_REMATCH[1]}"
             PR_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
@@ -495,7 +501,8 @@ jobs:
             --exit-code "${GATE_EXIT_CODE:-0}" \
             --comparison-finished "${COMPARISON_FINISHED:-true}" \
             --measure-result "$MEASURE_RESULT" \
-            --channel "$SLACK_CHANNEL_ID" \
+            --measure-reason "$MEASURE_REASON" \
+            --channel "${SLACK_CHANNEL_ID:-unset}" \
             --pr-number "$PR_NUMBER" \
             --pr-url "$PR_URL" \
             --pr-title "$PR_TITLE" \
@@ -509,16 +516,22 @@ jobs:
             --gate-name "$GATE_NAME" \
             --trigger "$TRIGGER" \
             --note "$NOTE" \
+            --post-pass "$SLACK_ON_PASS" \
             --out slack_payload.json && exit 0
 
           echo "::error::The gate could not build its Slack notification."
           echo "should_post=false" >> $GITHUB_OUTPUT
 
       - name: Notify Slack
-        if: ${{ !cancelled() && steps.slack.outputs.should_post == 'true' }}
+        if: ${{ !cancelled() && inputs.slack && steps.slack.outputs.should_post == 'true' }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
         run: |
+          if [ -z "$SLACK_CHANNEL_ID" ]; then
+            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
+            exit 0
+          fi
           if [ -z "$SLACK_BOT_TOKEN" ]; then
             echo "::error::LLK_SLACK_REPORTING_BOT_TOKEN is unset; the gate could not notify Slack."
             exit 0
@@ -543,6 +556,11 @@ jobs:
         env:
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
         run: |
+          # Only the merge gate posts to Slack, so the run page is where the other gates show their verdict.
+          if [ -f perf_gate_report.md ]; then
+            cat perf_gate_report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
           HAVE_BASELINE=$(cat have_baseline.txt)
           EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
 
@@ -569,7 +587,7 @@ jobs:
             if [ "${{ inputs.fail_on_regression }}" = "true" ]; then
               exit 1
             fi
-            echo "Report-only: Slack carries the verdict; the job does not fail."
+            echo "Report-only: the job does not fail."
             exit 0
           fi
 

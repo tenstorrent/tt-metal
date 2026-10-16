@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bitset>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -179,6 +180,41 @@ void ReduceScatterFusedOpSignaler::init_reduce_scatter(
     initialized_reduce_scatter = true;
 }
 
+void ReduceScatterFusedOpSignaler::init_reduce_scatter(
+    ProgramDescriptor& desc, const IDevice* device, const CoreRangeSet& core_range_to_signal) {
+    this->fused_op_receiver_cores_noc.clear();
+    for (const auto& range : core_range_to_signal.ranges()) {
+        for (const auto& core : grid_to_cores(range.start_coord, range.end_coord, true)) {
+            this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+        }
+    }
+    this->fused_op_receiver_signal_semaphores.push_back(add_semaphore_descriptor(desc, core_range_to_signal));
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+    this->fused_op_signaler_mode =
+        this->num_fused_op_cores_to_signal > 1 ? FusedOpSignalerMode::MULTI : FusedOpSignalerMode::SINGLE;
+    initialized_reduce_scatter = true;
+}
+
+uint32_t add_semaphore_descriptor(
+    ProgramDescriptor& desc, const CoreRangeSet& cores, uint32_t initial_value, tt::CoreType core_type) {
+    TT_FATAL(!cores.ranges().empty(), "Expected a non-empty CoreRangeSet");
+    constexpr uint32_t kSemaphoresPerCore = 16;
+    std::bitset<kSemaphoresPerCore> used;
+    for (const auto& sem : desc.semaphores) {
+        if (sem.core_type == core_type && sem.id < kSemaphoresPerCore && sem.core_ranges.intersects(cores)) {
+            used.set(sem.id);
+        }
+    }
+    for (uint32_t id = 0; id < kSemaphoresPerCore; id++) {
+        if (!used.test(id)) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = id, .core_type = core_type, .core_ranges = cores, .initial_value = initial_value});
+            return id;
+        }
+    }
+    TT_THROW("No semaphore id is free on every core of {}", cores.str());
+}
+
 void ReduceScatterFusedOpSignaler::init_fused_op() { initialized_fused_op = true; }
 
 void ReduceScatterFusedOpSignaler::push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args) {
@@ -336,6 +372,51 @@ void MatmulFusedOpSignaler::init_fused_op(
     } else {
         this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
         this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+    }
+
+    // Set the number of fused op cores to signal
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+
+    initialized_fused_op = true;
+}
+
+void MatmulFusedOpSignaler::init_fused_op(
+    ProgramDescriptor& desc,
+    const IDevice* device,
+    const CoreRange& matmul_workers,
+    const std::vector<CoreCoord>& matmul_worker_cores) {
+    // Create the sync semaphore for the matmul workers
+    if (matmul_worker_cores.size() > 1) {
+        this->matmul_worker_sync_semaphore = add_semaphore_descriptor(desc, CoreRangeSet(matmul_workers));
+    }
+
+    // Get the noc coords for the matmul workers
+    this->matmul_worker_cores_noc.clear();
+    this->matmul_worker_cores.clear();
+    for (const auto& core : matmul_worker_cores) {
+        this->matmul_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
+        this->matmul_worker_cores.push_back(core);
+    }
+    initialized_fused_op = true;
+}
+
+void MatmulFusedOpSignaler::init_fused_op(
+    ProgramDescriptor& desc,
+    const IDevice* device,
+    const CoreRangeSet& core_range_to_signal,
+    FusedOpSignalerMode fused_op_signaler_mode) {
+    this->fused_op_signaler_mode = fused_op_signaler_mode;
+
+    this->fused_op_receiver_cores_noc.clear();
+    for (const auto& range : core_range_to_signal.ranges()) {
+        for (const auto& core : grid_to_cores(range.start_coord, range.end_coord, true)) {
+            this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+        }
+    }
+    // Create the semaphores
+    const uint32_t num_semaphores = fused_op_type == MatmulFusedOpSignalerType::LLAMA_ALL_GATHER ? ring_size : 2;
+    for (uint32_t i = 0; i < num_semaphores; i++) {
+        this->fused_op_receiver_signal_semaphores.push_back(add_semaphore_descriptor(desc, core_range_to_signal));
     }
 
     // Set the number of fused op cores to signal

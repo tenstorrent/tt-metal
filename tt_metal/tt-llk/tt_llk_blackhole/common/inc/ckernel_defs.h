@@ -365,13 +365,18 @@ enum class BinaryOp : std::uint8_t
     // register, so it needs its own variant.
     NEXTAFTER      = 43,
     NEXTAFTER_BF16 = 44,
-    // LOGADDEXP and LOGADDEXP2 are the exception to the 1:1 mapping above: neither has
-    // an SfpuType counterpart, so their inits pass a placeholder instead -- `add1` in the
-    // tt-llk test helpers (sfpu_operations.h), `unused` in the tt-metal Compute API.
+    // LOGADDEXP, LOGADDEXP2, and COPY_DEST have no SfpuType counterpart, so their
+    // inits pass a placeholder (`add1` in the test helpers, `unused` in Compute API).
     LOGADDEXP  = 45,
     LOGADDEXP2 = 46,
+    // Quant family and Dest-to-Dest copy. Appended so the values above stay put.
+    // The kernels are calculate_quant_int32 / requant / dequant and copy_dest_value.
+    QUANT     = 47,
+    REQUANT   = 48,
+    DEQUANT   = 49,
+    COPY_DEST = 50,
     // situ_glu has a Blackhole kernel only: the harness dispatches it on Blackhole.
-    SITU_GLU = 47,
+    SITU_GLU = 51,
 };
 
 enum class PackMode : std::uint8_t
