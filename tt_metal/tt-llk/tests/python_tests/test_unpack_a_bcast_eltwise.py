@@ -39,6 +39,7 @@ from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
 MATHOPS = [MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul]
+DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 SRCA_REUSE_COUNTS = [2, 4, 8]
 INPUT_DIMENSIONS = [
     [128, 32],
@@ -61,23 +62,21 @@ REGULAR_FORMATS = {
 
 @skip_for_blackhole
 @parametrize(
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=DEST_ACC_MODES,
     formats=lambda dest_acc: REGULAR_FORMATS[dest_acc],
     mathop=MATHOPS,
     srca_reuse_count=SRCA_REUSE_COUNTS,
-    math_fidelity=[MathFidelity.LoFi],
     input_dimensions=INPUT_DIMENSIONS,
 )
 def test_unp_bcast_sub_sdpa(
     formats,
     mathop,
     dest_acc,
-    math_fidelity,
     input_dimensions,
     srca_reuse_count,
 ):
     _run_unp_bcast_sub_sdpa(
-        formats, mathop, dest_acc, math_fidelity, input_dimensions, srca_reuse_count
+        formats, mathop, dest_acc, input_dimensions, srca_reuse_count
     )
 
 
@@ -89,21 +88,19 @@ def test_unp_bcast_sub_sdpa(
         same=True,
     ),
     mathop=MATHOPS,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=DEST_ACC_MODES,
     srca_reuse_count=SRCA_REUSE_COUNTS,
-    math_fidelity=[MathFidelity.LoFi],
     input_dimensions=INPUT_DIMENSIONS,
 )
 def test_unp_bcast_sub_sdpa_full_grid(
     formats,
     mathop,
     dest_acc,
-    math_fidelity,
     input_dimensions,
     srca_reuse_count,
 ):
     _run_unp_bcast_sub_sdpa(
-        formats, mathop, dest_acc, math_fidelity, input_dimensions, srca_reuse_count
+        formats, mathop, dest_acc, input_dimensions, srca_reuse_count
     )
 
 
@@ -111,7 +108,6 @@ def _run_unp_bcast_sub_sdpa(
     formats,
     mathop,
     dest_acc,
-    math_fidelity,
     input_dimensions,
     srca_reuse_count,
 ):
@@ -121,9 +117,6 @@ def _run_unp_bcast_sub_sdpa(
 
     if input_tiles % srca_reuse_count != 0:
         pytest.skip("Input tiles must be divisible by reuse factor")
-
-    if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
-        pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -172,7 +165,7 @@ def _run_unp_bcast_sub_sdpa(
                         reconstructed_tile,
                         b_tile,
                         formats.output_format,
-                        math_fidelity,
+                        MathFidelity.LoFi,
                         formats.input_format,
                         dest_acc=dest_acc,
                     )
@@ -192,7 +185,7 @@ def _run_unp_bcast_sub_sdpa(
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
-            MATH_FIDELITY(math_fidelity),
+            MATH_FIDELITY(MathFidelity.LoFi),
             MATH_OP(mathop=mathop),
             DEST_SYNC(),
         ],
