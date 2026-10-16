@@ -13,19 +13,22 @@ from helpers.format_config import (
     QUASAR_DATA_FORMAT_ENUM_VALUES,
     WORMHOLE_DATA_FORMAT_ENUM_VALUES,
 )
+from helpers.logger import logger
 
 from .arch_common import _get_parser
 from .config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
+from .fuser_config import FuserConfig
 from .operand import L1_PACKERS
+from .validator import SUPPORTED_TILE_SIZES
 
-SweepValue = str | bool | int | float
+SweepValue = str | bool | int | float | tuple[int, int]
 ConfigPath = tuple[str | int, ...]
 AllValues = tuple[SweepValue, ...] | Callable[[dict], Iterable[SweepValue]]
 
 
 @dataclass(frozen=True)
 class SweepParameter:
-    value_type: type[str] | type[bool] | type[int] | type[float] = str
+    value_type: type[str] | type[bool] | type[int] | type[float] | type[tuple] = str
     all_values: AllValues | None = None
     node_types: tuple[str, ...] = ()
     id_field: str | None = None
@@ -79,6 +82,9 @@ SWEEP_PARAMETERS: dict[str, dict[str, SweepParameter]] = {
     "math": {
         "operation": _SFPU_OPERATION,
         "approximation_mode": _SFPU_APPROXIMATION_MODE,
+        "unpack_to_dest": SweepParameter(
+            value_type=bool, all_values=(False, True), node_types=("Fpu",)
+        ),
     },
     "pack": {
         "operation": _SFPU_OPERATION,
@@ -86,6 +92,9 @@ SWEEP_PARAMETERS: dict[str, dict[str, SweepParameter]] = {
     },
     "operand": {
         "format": SweepParameter(all_values=_operand_formats),
+        "tile_dims": SweepParameter(
+            value_type=tuple, all_values=tuple(sorted(SUPPORTED_TILE_SIZES))
+        ),
     },
 }
 
@@ -118,12 +127,27 @@ def _sweep_choices(
             raise ValueError(f"{location}: 'all' is not defined; use an explicit list")
         values = list(provider(node) if callable(provider) else provider)
     elif isinstance(value, list):
+        if (
+            value
+            and parameter.value_type is tuple
+            and all(type(item) is int for item in value)
+        ):
+            return None
         values = value
     else:
         return None
 
     if not values:
         raise ValueError(f"{location}: sweep choices cannot be empty")
+    if parameter.value_type is tuple:
+        if any(
+            not isinstance(choice, (list, tuple))
+            or len(choice) != 2
+            or any(type(dim) is not int for dim in choice)
+            for choice in values
+        ):
+            raise ValueError(f"{location}: sweep choices must be [rows, cols] pairs")
+        values = [tuple(choice) for choice in values]
     if any(type(choice) is not parameter.value_type for choice in values):
         raise ValueError(
             f"{location}: sweep choices must be {parameter.value_type.__name__} values"
@@ -165,9 +189,41 @@ def expand_fuser_configs(
             for key in axis.path[:-1]:
                 node = node[key]
             node[axis.path[-1]] = value
-            suffix.append(f"{axis.label}_{value}")
+            value_id = "x".join(map(str, value)) if isinstance(value, tuple) else value
+            suffix.append(f"{axis.label}_{value_id}")
         case_name = "__".join([test_name, *suffix])
         yield case_name, config_dict
+
+
+def validated_fuser_configs(
+    test_name: str, definition: dict
+) -> Iterator[tuple[str, FuserConfig]]:
+    """Build valid cases before parametrization, filtering rejected sweep combinations."""
+    supported_archs = definition.get("supported_archs")
+    if (
+        supported_archs is not None
+        and get_chip_architecture().value not in supported_archs
+    ):
+        return
+
+    valid_count = 0
+    rejected_count = 0
+    for case_name, config_dict in expand_fuser_configs(test_name, definition):
+        try:
+            config = FuserConfigSchema.load(case_name, config_dict)
+        except ValueError as error:
+            if case_name == test_name:
+                raise
+            rejected_count += 1
+            logger.debug(f"Excluding invalid fuser sweep case {case_name}: {error}")
+            continue
+        valid_count += 1
+        yield case_name, config
+
+    if not valid_count:
+        raise ValueError(
+            f"Fuser sweep '{test_name}' has no valid cases ({rejected_count} rejected)"
+        )
 
 
 def collect_fuser_cases(yaml_files):
@@ -175,6 +231,5 @@ def collect_fuser_cases(yaml_files):
     for yaml_path in yaml_files:
         test_name = str(yaml_path.relative_to(FUSER_CONFIG_DIR).with_suffix(""))
         definition = FuserConfigSchema.load_definition(test_name)
-        for case_name, config_dict in expand_fuser_configs(test_name, definition):
-            cases[case_name] = config_dict
+        cases.update(validated_fuser_configs(test_name, definition))
     return cases

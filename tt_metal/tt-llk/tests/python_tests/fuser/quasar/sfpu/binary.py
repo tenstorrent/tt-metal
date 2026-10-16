@@ -86,12 +86,14 @@ class BinarySfpu(Sfpu):
         dst = block.tile_id_dest
         data_format = config.sentinel._sfpu_format.cpp_enum_value
         dst_rounding_mode = self.dst_rounding_mode.cpp_enum_value
+        dst_tile_shape = operation.tile_shape.dst_tile_shape
+        vector_mode = self._vector_mode(operation)
 
         return (
             f"test_utils::call_binary_sfpu_operation_quasar<"
             f"{op}, {dest_sync}, {en_32bit_dest}, {dst_rounding_mode}, "
-            f"{quasar_iterations}, {sign_magnitude}, {approx_mode}"
-            f">({src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, {data_format});\n"
+            f"{quasar_iterations}, {sign_magnitude}, {approx_mode}, ckernel::BroadcastType::NONE, {dst_tile_shape}"
+            f">({src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, {data_format}, {vector_mode});\n"
         )
 
     def __str__(self) -> str:
