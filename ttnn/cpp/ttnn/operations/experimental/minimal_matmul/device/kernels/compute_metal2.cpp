@@ -61,6 +61,39 @@ void copy_and_pack_block(
     }
 }
 
+#ifdef FUSE_RESIDUAL
+// Fused residual add: out = intermediate + residual, per tile, in place of copy_and_pack_block. The residual arrives
+// one row of N_block_tiles at a time (read_residual_block_sync), in the intermediate's row-major block layout.
+void add_residual_and_pack_block(
+    DFBBindingToken in_dfb,
+    DFBBindingToken residual_dfb,
+    DFBBindingToken out_dfb,
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles) {
+    DataflowBuffer dfb_out(out_dfb);
+    DataflowBuffer dfb_residual(residual_dfb);
+    reconfig_data_format(in_dfb, residual_dfb);
+    pack_reconfig_data_format(out_dfb);
+    retarget_packer(out_dfb);
+    add_tiles_init(in_dfb, residual_dfb);
+    uint32_t tile_id = 0;
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        dfb_residual.wait_front(N_block_tiles);
+        for (uint32_t n = 0; n < N_block_tiles; n++) {
+            tile_regs_acquire();
+            add_tiles(in_dfb, residual_dfb, tile_id, n, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, out_dfb);
+            tile_regs_release();
+            tile_id++;
+        }
+        dfb_residual.pop_front(N_block_tiles);
+        dfb_out.push_back(N_block_tiles);
+    }
+}
+#endif  // FUSE_RESIDUAL
+
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in
 // `in_dfb` (the intermediate accumulator): within each M row, column tile 2p is the
@@ -715,7 +748,9 @@ void kernel_main() {
 #elif !defined(FUSE_TERNARY)
             dfb_out.reserve_back(out_block_num_tiles);
             dfb_intermediate.wait_front(out_block_num_tiles);
-#ifndef FUSE_BIAS
+#if defined(FUSE_RESIDUAL)
+            add_residual_and_pack_block(dfb::intermediate, dfb::residual, dfb::out, M_block_tiles, N_block_tiles);
+#elif !defined(FUSE_BIAS)
             copy_and_pack_block(dfb::intermediate, dfb::out, M_block_tiles, N_block_tiles);
 #else
             dfb_in2.wait_front(N_block_tiles);

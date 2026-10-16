@@ -108,6 +108,9 @@ void kernel_main() {
     const auto ternary_a_reader = TensorAccessor(tensor::ternary_a);
     const auto ternary_b_reader = TensorAccessor(tensor::ternary_b);
 #endif  // FUSE_TERNARY
+#ifdef FUSE_RESIDUAL
+    const auto residual_reader = TensorAccessor(tensor::residual);
+#endif
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
 #ifdef MM_WINDOW_BLOCKS
@@ -145,6 +148,10 @@ void kernel_main() {
     DataflowBuffer dfb_in2(dfb::in2);
 #endif
 
+#if defined(FUSE_RESIDUAL) && !defined(IS_OUTPUT_WRITER)
+    DataflowBuffer dfb_residual(dfb::residual);
+    constexpr uint32_t residual_tile_size = get_tile_size(dfb::residual);
+#endif
 #if defined(FUSE_TERNARY) && !defined(IS_OUTPUT_WRITER)
     DataflowBuffer dfb_ternary_a(dfb::ternary_a);
     DataflowBuffer dfb_ternary_b(dfb::ternary_b);
@@ -411,6 +418,10 @@ void kernel_main() {
 #endif  // !IS_OUTPUT_WRITER
 #endif
 
+#if defined(FUSE_RESIDUAL) && !defined(IS_OUTPUT_WRITER)
+            read_residual_block_sync<M_block_tiles, N_block_tiles>(
+                residual_reader, out_shape, dfb_residual, residual_tile_size, m_tile, m_tile_end, n_tile, n_tile_end);
+#endif
 #ifdef FUSE_TERNARY
 #ifndef IS_OUTPUT_WRITER
             read_ternary_blocks_sync<M_block_tiles, N_block_tiles>(

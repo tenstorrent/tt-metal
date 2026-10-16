@@ -64,6 +64,10 @@ struct MinimalMatmulInputs {
 
     // Preallocated outputs, one per chunk (required with head_major); empty: the op allocates them.
     std::vector<Tensor> optional_output_tensors;
+
+    // Fused residual add: output = input @ weight + residual_tensor (full [M, N]), added in the epilogue in place of
+    // the intermediate -> output copy.
+    std::optional<Tensor> residual_tensor;
 };
 
 }  // namespace ttnn::experimental::prim

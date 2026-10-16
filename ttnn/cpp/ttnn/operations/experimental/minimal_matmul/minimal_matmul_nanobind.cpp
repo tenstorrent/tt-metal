@@ -23,7 +23,7 @@ void bind_minimal_matmul(nb::module_& mod) {
     ttnn::bind_function<"minimal_matmul", "ttnn.experimental.">(
         mod,
         R"doc(
-        minimal_matmul(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None, fuse_swiglu=False)
+        minimal_matmul(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None, fuse_swiglu=False, residual_tensor=None)
 
         Experimental, high-performance matrix multiply (A @ B [+ bias]) with optional fused activation.
         This op expects TILE layout tensors on device and operates in tile units internally. It is designed
@@ -68,6 +68,10 @@ void bind_minimal_matmul(nb::module_& mod) {
             Optional fused unary activation applied per output tile during packing. See ttnn unary utilities
             for supported ops and parameters. Typical examples include relu/gelu/etc. If provided, it is applied
             after bias (if any) and before the tile is written out.
+
+        residual_tensor : Optional[ttnn.Tensor], default: None
+            Full [..., M, N] TILE interleaved tensor added to the product in the epilogue (output = A @ B + residual),
+            in place of the intermediate -> output copy. Not with fuse_swiglu / bias / fused_activation.
 
         fuse_swiglu : bool, default: False
             If True, applies SwiGLU activation fused into the matmul: the weight tensor's N columns are
@@ -162,7 +166,8 @@ void bind_minimal_matmul(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("fuse_swiglu") = false);
+        nb::arg("fuse_swiglu") = false,
+        nb::arg("residual_tensor") = nb::none());
 
     auto py_minimal_matmul_config =
         nb::class_<MinimalMatmulConfig>(

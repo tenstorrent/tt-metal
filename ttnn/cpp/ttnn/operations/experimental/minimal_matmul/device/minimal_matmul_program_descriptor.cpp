@@ -137,6 +137,7 @@ const DFBSpecName DFB_INTERMEDIATE{"intermediate"};
 const DFBSpecName DFB_IN2{"in2"};
 const DFBSpecName DFB_TERNARY_A{"ternary_a"};
 const DFBSpecName DFB_TERNARY_B{"ternary_b"};
+const DFBSpecName DFB_RESIDUAL{"residual"};
 
 // Tensor parameter names (also the kernel-side tensor:: accessor names).
 const TensorParamName TP_IN0{"in0"};
@@ -145,6 +146,7 @@ const TensorParamName TP_IN2{"in2"};
 const TensorParamName TP_IN3{"in3"};
 const TensorParamName TP_TERNARY_A{"ternary_a"};
 const TensorParamName TP_TERNARY_B{"ternary_b"};
+const TensorParamName TP_RESIDUAL{"residual"};
 
 // Kernel spec names.
 const KernelSpecName K_IN0_SENDER{"in0_sender"};
@@ -221,6 +223,8 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
 
     bool use_bias = bias_tensor.has_value();
     bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_b.has_value();
+    const std::optional<Tensor>& residual_tensor = tensor_args.residual_tensor;
+    const bool use_residual = residual_tensor.has_value();
 
     /**
      * Determine dataformats, compute kernel config
@@ -480,6 +484,14 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         push_dfb(DFB_TERNARY_B, ternary_c_tile_size, ternary_c_num_tiles, ternary_c_data_format);
     }
 
+    // Fused residual add: one output block of the residual, in its own format (the epilogue adds it to the
+    // intermediate on the way to the output).
+    auto residual_data_format = in1_data_format;
+    if (use_residual) {
+        residual_data_format = tt::tt_metal::datatype_to_dataformat_converter(residual_tensor->dtype());
+        push_dfb(DFB_RESIDUAL, tt::tile_size(residual_data_format), out_block_num_tiles, residual_data_format);
+    }
+
     /**
      * Tensor parameters. One per distinct tensor the kernels access; the N outputs additionally get
      * a TensorBindingSequence so the kernels can walk them positionally (their count is a CTA).
@@ -499,6 +511,10 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             TensorParameter{.unique_id = TP_TERNARY_A, .spec = fused_ternary_input_a.value().tensor_spec()});
         spec.tensor_parameters.push_back(
             TensorParameter{.unique_id = TP_TERNARY_B, .spec = fused_ternary_input_b.value().tensor_spec()});
+    }
+    if (use_residual) {
+        spec.tensor_parameters.push_back(
+            TensorParameter{.unique_id = TP_RESIDUAL, .spec = residual_tensor->tensor_spec()});
     }
     std::vector<std::string> output_accessor_names;
     output_accessor_names.reserve(output_tensors.size());
@@ -526,6 +542,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     const bool swiglu_block_float_output =
         output_data_format == tt::DataFormat::Bfp8_b || output_data_format == tt::DataFormat::Bfp4_b;
 
+    if (use_residual) {
+        defines["FUSE_RESIDUAL"] = "1";
+    }
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
 
@@ -639,6 +658,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             bindings.push_back(TensorBinding{.tensor_parameter_name = TP_TERNARY_A, .accessor_name = *TP_TERNARY_A});
             bindings.push_back(TensorBinding{.tensor_parameter_name = TP_TERNARY_B, .accessor_name = *TP_TERNARY_B});
         }
+        if (use_residual) {
+            bindings.push_back(TensorBinding{.tensor_parameter_name = TP_RESIDUAL, .accessor_name = *TP_RESIDUAL});
+        }
         for (const auto& name : output_accessor_names) {
             bindings.push_back(TensorBinding{.tensor_parameter_name = TensorParamName{name}, .accessor_name = name});
         }
@@ -659,6 +681,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             if (use_fused_ternary) {
                 bindings.push_back(producer_of(DFB_TERNARY_A));
                 bindings.push_back(producer_of(DFB_TERNARY_B));
+            }
+            if (use_residual) {
+                bindings.push_back(producer_of(DFB_RESIDUAL));
             }
         }
         return bindings;
@@ -811,6 +836,14 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
 
     auto compute_hw = to_compute_hardware_config(compute_kernel_config);
     compute_hw.double_buffer_dest = true;
+    if (use_residual) {
+        // The output is a residual stream: pack BFP outputs with the precise shared-exponent reconciliation, as the
+        // stand-alone add would. The approximate mode costs a residual stream with outlier channels too much accuracy.
+        auto cfg_1xx =
+            compute_hw.config_1xx.value_or(tt::tt_metal::experimental::ComputeHardwareConfig::Compute1XXConfig{});
+        cfg_1xx.bfp_pack_precision_mode = tt::tt_metal::Precision::Precise;
+        compute_hw.config_1xx = cfg_1xx;
+    }
     if (fp32_dest_acc_en) {
         // Metal 2.0 requires an explicit unpack mode for Float32 DFBs when enable_32_bit_dest is set.
         const std::vector<std::pair<DFBSpecName, tt::DataFormat>> compute_consumed{
@@ -820,13 +853,15 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             {DFB_IN2, in2_data_format},
             {DFB_TERNARY_A, ternary_a_data_format},
             {DFB_TERNARY_B, ternary_c_data_format},
+            {DFB_RESIDUAL, residual_data_format},
         };
         auto& compute_unpack_modes = compute_hw.unpack_modes;
         for (const auto& [dfb, format] : compute_consumed) {
             // Only DFBs this kernel actually binds may appear in unpack_modes.
             const bool bound = (dfb == DFB_IN0 || dfb == DFB_IN1 || dfb == DFB_INTERMEDIATE) ||
                                (dfb == DFB_IN2 && use_bias) ||
-                               ((dfb == DFB_TERNARY_A || dfb == DFB_TERNARY_B) && use_fused_ternary);
+                               ((dfb == DFB_TERNARY_A || dfb == DFB_TERNARY_B) && use_fused_ternary) ||
+                               (dfb == DFB_RESIDUAL && use_residual);
             if (bound && format == tt::DataFormat::Float32) {
                 compute_unpack_modes.emplace(dfb, tt::tt_metal::UnpackMode::UnpackToSrc);
             }
@@ -846,6 +881,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     if (use_fused_ternary) {
         compute_dfb_bindings.push_back(consumer_of(DFB_TERNARY_A));
         compute_dfb_bindings.push_back(consumer_of(DFB_TERNARY_B));
+    }
+    if (use_residual) {
+        compute_dfb_bindings.push_back(consumer_of(DFB_RESIDUAL));
     }
 
     KernelSpec::RuntimeArgSchema compute_schema;
@@ -1090,6 +1128,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     if (use_fused_ternary) {
         run_args.tensor_args.insert({TP_TERNARY_A, fused_ternary_input_a.value().mesh_tensor()});
         run_args.tensor_args.insert({TP_TERNARY_B, fused_ternary_input_b.value().mesh_tensor()});
+    }
+    if (use_residual) {
+        run_args.tensor_args.insert({TP_RESIDUAL, residual_tensor->mesh_tensor()});
     }
     for (uint32_t chunk = 0; chunk < output_tensors.size(); ++chunk) {
         run_args.tensor_args.insert({TensorParamName{output_param_name(chunk)}, output_tensors[chunk].mesh_tensor()});

@@ -84,6 +84,8 @@ std::vector<Tensor> minimal_matmul(
     const std::optional<Tensor>& optional_input_tensor = std::nullopt,
     // Preallocated outputs (one per chunk) and the head-major layout (MinimalMatmulParams::head_major).
     const std::vector<Tensor>& optional_output_tensors = {},
-    const std::vector<uint32_t>& head_major = {});
+    const std::vector<uint32_t>& head_major = {},
+    // Fused residual add (MinimalMatmulInputs::residual_tensor).
+    const std::optional<Tensor>& residual_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -307,6 +307,24 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             ternary_b_logical[-1]);
     }
 
+    if (tensor_args.residual_tensor.has_value()) {
+        const auto& r = tensor_args.residual_tensor.value();
+        TT_FATAL(r.storage_type() == StorageType::DEVICE && r.buffer() != nullptr, "residual_tensor must be on device");
+        TT_FATAL(r.device() == act_tensor.device(), "residual_tensor must be on the same device");
+        TT_FATAL(r.layout() == Layout::TILE && !r.is_sharded(), "residual_tensor must be TILE interleaved");
+        TT_FATAL(dtype_supported(r.dtype()), "residual_tensor dtype {} unsupported", r.dtype());
+        TT_FATAL(
+            r.logical_shape()[-1] == N && r.physical_volume() / N == act_tensor.physical_volume() / a_logical[-1],
+            "residual_tensor must match the output [M, N={}], got {}",
+            N,
+            r.logical_shape());
+        TT_FATAL(
+            !operation_attributes.fuse_swiglu && !has_fused_ternary && !tensor_args.bias_tensor.has_value() &&
+                !operation_attributes.fused_activation.has_value() && operation_attributes.chunks == 1 &&
+                operation_attributes.head_major.empty(),
+            "residual_tensor does not combine with fuse_swiglu / ternary / bias / fused_activation / split outputs");
+    }
+
     // Config constraints
     if (config.has_value()) {
         const auto& cfg = config.value();
@@ -422,7 +440,8 @@ std::vector<Tensor> minimal_matmul(
     bool fuse_swiglu,
     const std::optional<Tensor>& optional_input_tensor,
     const std::vector<Tensor>& optional_output_tensors,
-    const std::vector<uint32_t>& head_major) {
+    const std::vector<uint32_t>& head_major,
+    const std::optional<Tensor>& residual_tensor) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -453,7 +472,8 @@ std::vector<Tensor> minimal_matmul(
             .optional_input_tensor = optional_input_tensor,
             .fused_ternary_input_a = fused_ternary_input_a,
             .fused_ternary_input_b = fused_ternary_input_b,
-            .optional_output_tensors = optional_output_tensors});
+            .optional_output_tensors = optional_output_tensors,
+            .residual_tensor = residual_tensor});
 }
 
 }  // namespace ttnn::prim

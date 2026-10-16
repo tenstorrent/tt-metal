@@ -368,6 +368,40 @@ struct RowMajorPage {
  * Helper: dispatch to correct tuple element using fold expression.
  * Each branch calls noc.async_write with the concrete TensorAccessor type.
  */
+/**
+ * Fused residual add (FUSE_RESIDUAL): read one output block of the residual [M, N] into the residual DFB in the
+ * intermediate's row-major block layout (row stride N_block_tiles), one row of tiles pushed at a time so the epilogue
+ * can start on the first row. Tiles outside the logical [M, N] (padding) are left unread.
+ */
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+void read_residual_block_sync(
+    const TensorAccessorType& accessor,
+    const TensorShape2D& shape,
+    DataflowBuffer& dfb,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    Noc noc;
+    for (uint32_t i = d0_start; i < d0_start + M_block_tiles; i++) {
+        dfb.reserve_back(N_block_tiles);
+        uint32_t write_ptr = dfb.get_write_ptr();
+        if (i < d0_end && i < shape.logical_d0) {
+            for (uint32_t j = d1_start; j < d1_end && j < shape.logical_d1; j++) {
+                noc.async_read(
+                    accessor,
+                    CoreLocalMem<uint32_t>(write_ptr + (j - d1_start) * tile_size_bytes),
+                    tile_size_bytes,
+                    {.page_id = i * shape.logical_d1 + j},
+                    {});
+            }
+            noc.async_read_barrier();
+        }
+        dfb.push_back(N_block_tiles);
+    }
+}
+
 template <typename Tuple, size_t... Is>
 FORCE_INLINE void write_tile_to_chunk(
     Noc noc,

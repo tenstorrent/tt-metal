@@ -430,6 +430,39 @@ def test_linear_transpose_core_grid(device, M, K, N, transpose_core_grid):
     assert check_result["relative_rmse"] < 0.02
 
 
+@pytest.mark.parametrize("M,K,N", [(1024, 512, 1536), (1600, 768, 640), (4096, 1024, 2560)])
+@pytest.mark.parametrize("residual_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8b"])
+@pytest.mark.parametrize("residual_in_l1", [False, True], ids=["dram", "l1"])
+def test_linear_residual(device, M, K, N, residual_dtype, residual_in_l1):
+    """residual_tensor: output = A @ B + residual, added in the epilogue (padded M / N blocks included)."""
+    torch.manual_seed(0)
+    a, b, r = torch.randn(1, 1, M, K), torch.randn(1, 1, K, N) * 0.05, torch.randn(1, 1, M, N) * 4
+    tt_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_r = ttnn.from_torch(
+        r,
+        dtype=residual_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG if residual_in_l1 else ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cfg = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=1,
+        subblock_w=8,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+    ckc = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False, packer_l1_acc=True
+    )
+    out = ttnn.experimental.minimal_matmul(tt_a, tt_b, config=cfg, compute_kernel_config=ckc, residual_tensor=tt_r)
+    check_result = assert_quality(a @ b + ttnn.to_torch(tt_r).float(), ttnn.to_torch(out).float())
+    assert check_result["pcc"] > 0.9995
+    assert check_result["relative_rmse"] < 0.03
+
+
 @pytest.mark.parametrize("M,K,N", [(255, 255, 255)])
 @pytest.mark.parametrize(
     "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
