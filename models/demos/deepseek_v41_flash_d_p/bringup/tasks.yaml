@@ -2407,12 +2407,51 @@ tasks:
     files:
       models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_norm.py: aaef42a4b716e53e8c4a4371e4839c080627c20d5749667d5eda5f768521a6dd
       /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
+- id: FIX.1
+  title: routed experts stored as bfp8 at load (no per-chunk fp4 decode)
+  step: implement
+  role: implement
+  precheck: false
+  deps:
+  - C.enc_source.attn_norm
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_experts.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_15_ffn_residual.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py
+    metrics:
+      pcc_experts_L00: '>= 0.99'
+      pcc_experts_L01: '>= 0.99'
+      pcc_swap_out: '>= 0.98'
+  device: true
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: experts
+    kind: moe
+    layer: 0
+    stateful: false
+    details: 'OVERSEER FIX (not a failing test: the code passes today; this step changes it). Today the routed experts keep
+      their packed fp4 weights on device and decode them to bf16 for every chunk (EXPERTS_IMPL=loop), about 4 ms per weight
+      matrix per chunk: host-side-free but a per-chunk weight rebuild, against agent rule 5. Change: convert every routed
+      expert''s w1/w2/w3 to bfp8 ONCE, at load (bfp8 holds every fp4 value of this checkpoint exactly; measured), and delete
+      the per-chunk decode. The scaled model has 24 routed experts per chip, the same as a galaxy_4x4 chip; they fit in bfp8
+      (check plan.yaml''s memory numbers and say what they are now). With the weights already bfp8, run the experts through
+      the routed-expert op the repo uses for bfp8 expert weights (ttnn/ttnn/bringup/INDEX.md, repo_map.md) rather than a per-expert
+      loop, where it works; if it does not, say why in BREADCRUMBS.md and keep the loop on bfp8 weights. Keep the old path
+      only as a value of the EXPERTS_IMPL setting (tt/settings.py), not the default. Measure the experts'' device time per
+      layer per chunk before and after (the plain profile of one block or a timed loop, minutes, not per-op mode) and put
+      both numbers in BREADCRUMBS.md and the setting''s description. The gate reruns both frozen experts component tests and
+      both full-block swap tests (swa layer 0, swa_engram layer 1); all must pass. Update known_issues/repo_map entries that
+      describe the per-chunk decode.'
 - id: S.enc_source.03
   title: 'enc_source block with steps 1-3 on device (last: attn_norm)'
   step: implement
   deps:
   - C.enc_source.attn_norm
   - S.enc_source.02
+  - FIX.1
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_03_attn_norm.py
     metrics:

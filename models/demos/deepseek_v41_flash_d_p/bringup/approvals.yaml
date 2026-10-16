@@ -6,10 +6,11 @@ intake:
   note: ''
 plan:
   by: dnijemcevic
-  at: '2026-10-15T22:17:05'
+  at: '2026-10-16T06:42:46'
   files:
     models/demos/deepseek_v41_flash_d_p/bringup/plan.yaml: d14f97080020eb21633212f60a1c9155323686fee61ee09475626dd2e9cfbd5b
     models/demos/deepseek_v41_flash_d_p/bringup/plan.md: b92b4487dbb48f9a4902c58fde561b7e9fac782a654d11f8883c2713166a6b23
     models/demos/deepseek_v41_flash_d_p/bringup/components.yaml: c62167a984ebe2fa673477098f4b9dc2bc17162ade4f7f9fd69e886b696238c6
-  note: ''
-  ledger: e472d1bf5ed1c9b42bd73445091e7b3790dc513ebf987ea5f430efbe51ff01d6
+  note: 'overseer: FIX.1 added (owner: experts bfp8 at load now, 2026-10-16); plan
+    otherwise unchanged'
+  ledger: cb78409e4d830ab64e5ca134b5d8bdaa3e4d5ca40983a170d52cae52b5c79b98
