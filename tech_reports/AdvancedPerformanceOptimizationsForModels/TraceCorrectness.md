@@ -72,7 +72,7 @@ Two example scenarios:
 - **Concurrent traces:** Traces captured at different times can use the same physical addresses for temporary memory. If they are executed concurrently on different subdevices, they can corrupt each other's work.
 - **Concurrent traced and untraced work:** While a trace runs, work on another subdevice can allocate and use a buffer that overlaps the trace's temporary memory. Either execution can corrupt the other's data. This can happen even if no unsafe buffer was allocated when replay was submitted. These buffers will be reported at the next replay check if they remain allocated. If released before that check, they will not be reported, even if corruption already occurred.
 
-The checker cannot account for these scenarios. When using tracing with concurrent work on different subdevices, careful code analysis needs to be performed to establish that no overlap is possible.
+The checker cannot account for these scenarios, as the host doesn't know whether a previously dispatched replay is still ongoing on device. When using tracing with concurrent work on different subdevices, careful code analysis needs to be performed to establish that no overlap is possible.
 
 ### Using the trace allocation checker
 
@@ -90,7 +90,7 @@ Accounting is kept separately for each `(sub-device manager, trace ID)` pair. Tr
 
 Accounting includes the global allocator and all subdevice allocators of the capture manager. It is not restricted to the subdevices used by the trace. For example, a tracked, non-exempt buffer allocated on subdevice 1 after capture of a trace on subdevice 2 is recorded as potentially unsafe for that trace. If the buffer remains allocated at that trace's pre-replay check, the checker rejects replay.
 
-> **Warning: limits of the pre-replay check.** Accounting across subdevices does not establish all the memory-safety requirements for [concurrent execution](#concurrent-execution)
+> **Warning: limits of the pre-replay check.** Accounting across subdevices does not establish all the memory-safety requirements for [concurrent execution](#concurrent-execution).
 
 Trace storage itself is excluded from accounting. Buffers in the reserved `BufferType::TRACE` region cannot overlap ordinary buffers. With `trace_region_size=0`, trace storage is instead allocated top-down in DRAM; capture validates its address against the current capture's DRAM high-water marks and the maximum high-water mark of every live trace. Capture fails rather than retaining a dynamic trace buffer that could be corrupted by replay.
 
