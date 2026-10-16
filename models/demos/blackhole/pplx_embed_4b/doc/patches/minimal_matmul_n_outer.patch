@@ -1,0 +1,372 @@
+diff --git a/tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py b/tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py
+index 570872a1ccd..ac3d0f899c7 100644
+--- a/tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py
++++ b/tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py
+@@ -430,6 +430,47 @@ def test_linear_transpose_core_grid(device, M, K, N, transpose_core_grid):
+     assert check_result["relative_rmse"] < 0.02
+ 
+ 
++@pytest.mark.parametrize("M,K,N", [(2048, 256, 2048), (2048, 512, 1536), (1600, 768, 2304), (1024, 2560, 1024)])
++@pytest.mark.parametrize("transpose_core_grid", [True, False], ids=["transposed", "untransposed"])
++@pytest.mark.parametrize("fuse_swiglu", [False, True], ids=["plain", "swiglu"])
++def test_linear_n_outer(device, M, K, N, transpose_core_grid, fuse_swiglu):
++    """MinimalMatmulConfig.n_outer: N-outer block order with in1 resident across M blocks matches the default order
++    (2, 3, 4 and 10 K blocks; several M and N blocks per core; padded M)."""
++    torch.manual_seed(0)
++    a, b = torch.randn(1, 1, M, K), torch.randn(1, 1, K, N)
++    tt_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
++    tt_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
++    ckc = ttnn.init_device_compute_kernel_config(
++        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False, packer_l1_acc=True
++    )
++    outs = []
++    for n_outer in (False, True):
++        cfg = ttnn.MinimalMatmulConfig(
++            M_block_size=4,
++            K_block_size=4 if K <= 512 else 8,
++            N_block_size=4,
++            subblock_h=1,
++            subblock_w=4,
++            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
++            transpose_core_grid=transpose_core_grid,
++            n_outer=n_outer,
++        )
++        assert cfg.n_outer == n_outer
++        kw = dict(config=cfg, compute_kernel_config=ckc)
++        if fuse_swiglu:
++            kw["fuse_swiglu"] = True
++        outs.append(ttnn.to_torch(ttnn.experimental.minimal_matmul(tt_a, tt_b, **kw)))
++    # The default order runs K backwards on alternate N blocks (in0 reuse), n_outer always forward: equal up to the
++    # accumulation order.
++    assert comp_pcc(outs[0], outs[1], 0.99995)[0], "n_outer changed the result"
++    ref = a @ b
++    if fuse_swiglu:  # adjacent tile pairs are (gate, up)
++        t = ref.reshape(1, 1, M, N // 64, 2, 32)
++        ref = (torch.nn.functional.silu(t[..., 0, :]) * t[..., 1, :]).reshape(1, 1, M, N // 2)
++    check_result = assert_quality(ref, outs[1])
++    assert check_result["pcc"] > 0.999
++
++
+ @pytest.mark.parametrize("M,K,N", [(255, 255, 255)])
+ @pytest.mark.parametrize(
+     "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+diff --git a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute_metal2.cpp b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute_metal2.cpp
+index af335776bb1..47430a1b1bc 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute_metal2.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute_metal2.cpp
+@@ -397,11 +397,12 @@ void matmul_blocks(
+     const uint32_t full_N_block_tiles,
+     const uint32_t K_block_tiles,
+     const uint32_t subblock_h,
+-    const uint32_t subblock_w) {
++    const uint32_t subblock_w,
++    const uint32_t in1_base = 0) {  // in1 tile offset of this K block (N-outer: in1 is resident)
+     uint32_t in0_index_offset = 0;
+ 
+     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
+-        uint32_t in1_index_offset = 0;
++        uint32_t in1_index_offset = in1_base;
+         for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
+             tile_regs_acquire();
+ 
+@@ -463,11 +464,12 @@ void matmul_blocks_swiglu(
+     const uint32_t K_block_tiles,
+     const uint32_t subblock_h,
+     const uint32_t subblock_w,
+-    const bool add_partials) {
++    const bool add_partials,
++    const uint32_t in1_base = 0) {  // in1 tile offset of this K block (N-outer: in1 is resident)
+     const uint32_t out_full_N_block_tiles = full_N_block_tiles >> 1;
+     uint32_t in0_index_offset = 0;
+     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
+-        uint32_t in1_index_offset = 0;
++        uint32_t in1_index_offset = in1_base;
+         for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
+             tile_regs_acquire();
+             uint32_t in0_index = in0_index_offset;
+@@ -589,20 +591,33 @@ void kernel_main() {
+     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
+     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
+ 
+-    bool reuse_in0_block = false;
++    [[maybe_unused]] bool reuse_in0_block = false;  // unused with MM_N_OUTER
+ 
+     uint32_t current_M_block_tiles = M_block_tiles;
+     uint32_t current_N_block_tiles = N_block_tiles;
+     uint32_t current_subblock_h = subblock_h;
+     uint32_t current_subblock_w = subblock_w;
+ 
++#ifdef MM_N_OUTER
++    // N-outer (MinimalMatmulConfig::n_outer): one flat loop over this core's output blocks, M fastest. The per-M-block
++    // setup below runs for every block, so K always runs forward and in0 is never reused.
++#if defined(FUSE_AG) || defined(MM_WINDOW_BLOCKS) || defined(SRS_FUSE_OP_SIGNALER)
++#error "MM_N_OUTER is not supported with the fused-CCL paths"
++#endif
++    for (uint32_t blk = 0; blk < M_blocks_per_core * N_blocks_per_core; blk++) {
++        const uint32_t n_block_iter = blk / M_blocks_per_core;
++        const uint32_t m_block_iter = blk % M_blocks_per_core;
++#else
+     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
++#endif
+         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+         current_M_block_tiles = m_tile_end - m_tile;
+         current_subblock_h = std::min(current_M_block_tiles, subblock_h);
+ 
++#ifndef MM_N_OUTER
+         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
++#endif
+             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
+             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
+             current_N_block_tiles = n_tile_end - n_tile;
+@@ -624,7 +639,14 @@ void kernel_main() {
+             dfb_intermediate.reserve_back(out_block_num_tiles);
+             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
+                 dfb_in0.wait_front(in0_block_num_tiles);
++#ifdef MM_N_OUTER
++                // in1 holds every K block of this N block (pushed on its first M block, popped after its last)
++                dfb_in1.wait_front((k_block + 1) * in1_block_num_tiles);
++                const uint32_t in1_base = k_block * in1_block_num_tiles;
++#else
+                 dfb_in1.wait_front(in1_block_num_tiles);
++                constexpr uint32_t in1_base = 0;
++#endif
+ 
+                 if (swiglu_in_k_loop && k_block == K_num_blocks - 1) {
+                     if (K_num_blocks > 1) {  // publish the partial sums of K blocks 0..K-2 for the add
+@@ -646,7 +668,8 @@ void kernel_main() {
+                         K_block_tiles,
+                         current_subblock_h,
+                         current_subblock_w,
+-                        K_num_blocks > 1);
++                        K_num_blocks > 1,
++                        in1_base);
+                     dfb_out.push_back(out_block_num_tiles >> 1);
+                     if (K_num_blocks > 1) {
+                         dfb_intermediate.pop_front(out_block_num_tiles);
+@@ -661,9 +684,11 @@ void kernel_main() {
+                         N_block_tiles,
+                         K_block_tiles,
+                         current_subblock_h,
+-                        current_subblock_w);
++                        current_subblock_w,
++                        in1_base);
+                 }
+ 
++#ifndef MM_N_OUTER
+                 if (k_block == K_num_blocks - 1) {
+                     /**
+                      * On next iteration we might get reuse on in0
+@@ -679,6 +704,12 @@ void kernel_main() {
+                 }
+                 dfb_in1.pop_front(in1_block_num_tiles);
+                 reuse_in0_block = false;
++#else
++                dfb_in0.pop_front(in0_block_num_tiles);
++                if (k_block == K_num_blocks - 1 && m_block_iter == M_blocks_per_core - 1) {
++                    dfb_in1.pop_front(K_num_blocks * in1_block_num_tiles);
++                }
++#endif
+                 if (k_block == 0) {
+                     pack_reconfig_l1_acc(1);
+                 }
+@@ -740,6 +771,8 @@ void kernel_main() {
+                 broadcast_ternary_b);
+ #endif  // FUSE_TERNARY
+             }
++#ifndef MM_N_OUTER
+         }
++#endif
+     }
+ }
+diff --git a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp
+index 4f49fbdbf2f..58b01517487 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp
+@@ -231,7 +231,18 @@ void kernel_main() {
+     uint32_t defer_write_n_tile_end = 0;
+     bool defer_write = false;
+ 
++#ifdef MM_N_OUTER
++    // N-outer (MinimalMatmulConfig::n_outer): one flat loop over this core's output blocks, M fastest. The per-M-block
++    // setup below runs for every block, so K always runs forward and in0 is never reused.
++#if defined(FUSE_AG) || defined(MM_WINDOW_BLOCKS) || defined(SRS_FUSE_OP_SIGNALER)
++#error "MM_N_OUTER is not supported with the fused-CCL paths"
++#endif
++    for (uint32_t blk = 0; blk < M_blocks_per_core * N_blocks_per_core; blk++) {
++        const uint32_t n_block_iter = blk / M_blocks_per_core;
++        const uint32_t m_block_iter = blk % M_blocks_per_core;
++#else
+     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
++#endif
+         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+         // Rows this block writes to. Only the OUTPUT is windowed — this kernel also reads the
+@@ -270,7 +281,9 @@ void kernel_main() {
+         // When striding M block, in0 gets no reuse
+         reuse_block = false;
+         k_forward = true;
++#ifndef MM_N_OUTER
+         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
++#endif
+             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
+             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
+             bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
+@@ -536,7 +549,9 @@ void kernel_main() {
+ #endif
+ #endif  // IS_OUTPUT_WRITER
+             }
++#ifndef MM_N_OUTER
+         }
++#endif
+     }
+     noc.async_write_barrier();
+     noc.async_atomic_barrier();
+diff --git a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_metal2.cpp b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_metal2.cpp
+index 01614a5926b..4ff006d3ee6 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_metal2.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out_metal2.cpp
+@@ -224,7 +224,18 @@ void kernel_main() {
+     uint32_t defer_write_n_tile_end = 0;
+     bool defer_write = false;
+ 
++#ifdef MM_N_OUTER
++    // N-outer (MinimalMatmulConfig::n_outer): one flat loop over this core's output blocks, M fastest. The per-M-block
++    // setup below runs for every block, so K always runs forward and in0 is never reused.
++#if defined(FUSE_AG) || defined(MM_WINDOW_BLOCKS) || defined(SRS_FUSE_OP_SIGNALER)
++#error "MM_N_OUTER is not supported with the fused-CCL paths"
++#endif
++    for (uint32_t blk = 0; blk < M_blocks_per_core * N_blocks_per_core; blk++) {
++        const uint32_t n_block_iter = blk / M_blocks_per_core;
++        const uint32_t m_block_iter = blk % M_blocks_per_core;
++#else
+     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
++#endif
+         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+ #ifdef MM_WINDOW_BLOCKS
+@@ -259,7 +270,9 @@ void kernel_main() {
+ 
+         k_forward = true;
+ 
++#ifndef MM_N_OUTER
+         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
++#endif
+             uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
+             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
+             uint32_t current_N_block_tiles = n_tile_end - n_tile;
+@@ -329,6 +342,10 @@ void kernel_main() {
+                 }
+ 
+                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
++#ifdef MM_N_OUTER
++                // in1 stays resident in L1 across this N block's M blocks: read / forward it on the first one only
++                if (m_block_iter == 0) {
++#endif
+                 dfb_in1.reserve_back(in1_block_num_tiles);
+ 
+                 uint32_t in1_start_address = dfb_in1.get_write_ptr();
+@@ -383,6 +400,9 @@ void kernel_main() {
+ 
+                     in1_valid_semaphore.relay_unicast(noc, in1_receiver_semaphore, in1_dest_noc_x, in1_dest_noc_y);
+                 }
++#ifdef MM_N_OUTER
++                }
++#endif
+ #ifdef SRS_FUSE_OP_SIGNALER
+                 if constexpr (is_output_writer) {
+                     // Synchronize and signal strided reduce scatter readers after
+@@ -503,7 +523,9 @@ void kernel_main() {
+ #endif
+ #endif  // IS_OUTPUT_WRITER
+             }
++#ifndef MM_N_OUTER
+         }
++#endif
+     }
+     noc.async_write_barrier();
+     noc.async_atomic_barrier();
+diff --git a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp
+index 23442c0cb7b..0eaa074e40c 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp
++++ b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp
+@@ -24,6 +24,11 @@ struct MinimalMatmulConfig {
+     // Parallelize M over the grid's x axis and N over y (true) or the reverse (false). Unset: transposed when M > N.
+     // Each axis is padded to a multiple of its core count, so the choice sets the padded work per core.
+     std::optional<bool> transpose_core_grid = std::nullopt;
++
++    // Output blocks N-outer instead of M-outer, with each N block's in1 (all K blocks) held in L1 across the core's M
++    // blocks: in1 is read from DRAM once per N block instead of once per (M block, N block); in0 is re-read per N
++    // block instead. The in1 buffer grows to max(2, K blocks) blocks.
++    bool n_outer = false;
+ };
+ 
+ struct MinimalMatmulParams {
+diff --git a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_descriptor.cpp b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_descriptor.cpp
+index af615117126..7c6e3525c2a 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_descriptor.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_descriptor.cpp
+@@ -379,7 +379,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
+ 
+     const uint32_t double_buffer_factor = 2;
+     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
+-    uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
++    const bool n_outer = config.has_value() && config->n_outer;
++    // n_outer: in1 for every K block of an N block stays resident across the M blocks
++    uint32_t in1_cb_num_tiles = in1_block_num_tiles * (n_outer ? std::max(double_buffer_factor, K_blocks) : double_buffer_factor);
+     // TODO: consider not double buffering the output
+     // SwiGLU emits half the N tiles per block (one per gate/up pair), so the output DFB only
+     // needs to hold half a block. The intermediate DFB still holds the full (2N) block.
+@@ -517,6 +519,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
+     if (fuse_swiglu) {
+         defines["FUSE_SWIGLU"] = "1";
+     }
++    if (n_outer) {
++        defines["MM_N_OUTER"] = "1";
++    }
+     // Without a bias the compute kernel applies SwiGLU on the pack thread in each output block's last K block
+     // (matmul_blocks_swiglu); with one it runs the swiglu_block epilogue. The in-loop path pairs gate / up tiles within
+     // one DST subblock, so an odd subblock_w (a pair straddling two subblocks) takes the epilogue too.
+diff --git a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
+index 8a2d4a76d77..16a0182330d 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
+@@ -90,6 +90,8 @@ void bind_minimal_matmul(nb::module_& mod) {
+             - transpose_core_grid: Optional[bool]. M over the grid's x axis and N over y (True) or the reverse (False).
+               Each axis is padded to a multiple of its core count, so this sets the padded work per core. Default
+               (None): transposed when M > N.
++            - n_outer: bool. Output blocks N-outer, each N block's in1 (all K blocks) held in L1 across the M
++              blocks: in1 read once per N block instead of once per output block (in1 buffer max(2, K blocks)).
+ 
+             Required invariants:
+             - All block/subblock sizes must be > 0.
+@@ -173,7 +175,7 @@ void bind_minimal_matmul(nb::module_& mod) {
+                             )doc")
+             .def(nb::init<>())
+             .def(
+-                nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord, std::optional<bool>>(),
++                nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord, std::optional<bool>, bool>(),
+                 nb::kw_only(),
+                 nb::arg("M_block_size") = 1,
+                 nb::arg("K_block_size") = 1,
+@@ -181,7 +183,8 @@ void bind_minimal_matmul(nb::module_& mod) {
+                 nb::arg("subblock_h") = 1,
+                 nb::arg("subblock_w") = 1,
+                 nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}),
+-                nb::arg("transpose_core_grid") = nb::none());
++                nb::arg("transpose_core_grid") = nb::none(),
++                nb::arg("n_outer") = false);
+ 
+     py_minimal_matmul_config.def_rw("M_block_size", &MinimalMatmulConfig::M_block_size, "");
+     py_minimal_matmul_config.def_rw("K_block_size", &MinimalMatmulConfig::K_block_size, "");
+@@ -194,6 +197,10 @@ void bind_minimal_matmul(nb::module_& mod) {
+         "transpose_core_grid",
+         &MinimalMatmulConfig::transpose_core_grid,
+         "M over the grid's x axis and N over y (True) or the reverse (False); None: transposed when M > N");
++    py_minimal_matmul_config.def_rw(
++        "n_outer",
++        &MinimalMatmulConfig::n_outer,
++        "Output blocks N-outer with each N block's in1 (all K blocks) resident across the M blocks");
+ 
+     py_minimal_matmul_config.def(
+         "__repr__", [](const MinimalMatmulConfig& config) { return fmt::format("{}", config); });

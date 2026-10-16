@@ -2180,3 +2180,22 @@ its N slice of the weight. FF13's M_block is 4 (all that fits beside K_block 40)
 packed weight ~7 times a call (~200 MB at bs16). Next: an N-outer order that keeps an N block's full-K weight resident
 (FF13 has two K blocks and its in1 CB already holds two) while in0 streams from L1: weight reads 7x -> 1x, ~56 / 72 µs a
 call (~2.0 / 2.6 ms a forward) to win. FF2 (K 304 tiles) cannot hold its weight; its bs32 exposure (80 µs) is open.
+
+## 83. N-outer block order with in1 resident: fewer weight re-reads, but slower (2026-10-16)
+
+`MinimalMatmulConfig.n_outer` (not kept; `doc/patches/minimal_matmul_n_outer.patch`, unit tests included: 16 passed): the
+three kernels walk one flat loop over a core's output blocks with M fastest, the in1 kernel reads / forwards an N block's
+K blocks on its first M block only, and the compute kernel keeps them (in1 CB max(2, K blocks) blocks; for FF13's two K
+blocks the same size) and pops them after the last M block. K always runs forward, so in0 is never reused. Wall µs per
+call (bench_mm_ablate.py, `MM_N_OUTER=1`):
+
+| FF13 fused 4,40,8 | full | no in1 read | no in0 read | no reads | compute only |
+|---|---|---|---|---|---|
+| bs16 default | 1640.9 | 1585.6 | 1633.6 (§82) | 1558.6 (§82) | 1555.1 (§82) |
+| bs16 n_outer | 1680.9 | 1660.4 | 1649.6 | 1609.1 | 1571.8 |
+| bs32 transposed default / n_outer | 3079.9 / 3115.3 | 3019.2 / 3051.1 | | | |
+
+The weight re-reads drop (in1 exposure 55 -> 22 µs at bs16) but the output writes become exposed (no reads - compute only:
+4 -> 37 µs; successive blocks now walk down M, so the writer's rows change every block) and the compute loses ~17 µs
+(no in0 reuse, the in1 load at each N block boundary is not prefetched). Net +40 / +35 µs. Next per the plan: weight
+reads from the bank-adjacent cores (DRAM-sharded weights, `get_optimal_dram_bank_to_logical_worker_assignment`).
