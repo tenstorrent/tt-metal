@@ -77,6 +77,9 @@ COMPONENT_DEFAULTS = {
     "component_second_rel": 0.03,  # ... and a rel limit of at least this, no bias limit ...
     "component_second_row": 0.15,  # ... worst row at least this (GLM KDA attention x 1e-3: 0.09; hard cases >= 0.34)
     "component_second_ratio": 0.1,  # ... row norm ratio within 1 +- at least this (GLM: 0.056; hard cases >= 0.13)
+    # F96: the scaled probes (small, big) catch structural bugs (rel 0.5-2); at RMS 1e-3 a correct device meets
+    # absolute floors (fp8 scale, epsilon) the nudge does not model (DeepSeek-V4.1 attention, small: 0.035)
+    "component_scaled_rel": 0.2,
 }
 LOW_PRECISION_KINDS = tuple(defaults.get("tests.low_precision_kinds"))
 SPARSE_ZEROS = 0.75
@@ -553,6 +556,8 @@ class Expect:
                 model, res = self.gold_model, self.gold_res
                 rl = max(rl, self.k * max(model["rel"], res["rel"]))
             second = case.name != "golden"
+            if case.name in SCALED_PROBES:  # F96
+                rl = max(rl, self.lim["component_scaled_rel"])
             cl = self.col_lim[case.name]
             if cl is not None and vs_golden and self.golden_col_err is not None:
                 cl = cl + self.golden_col_err
@@ -758,6 +763,7 @@ def sweep(ex: Expect, gate_name: str) -> bool:
         # F91 (owner): a mistake no larger than the step's own limit on every input is one a correct step may make
         size = {x.name: rel(mut[x.name], ex.cpu[x.name]) for x in ex.cases} if ex.kind == "float" else {}
         rl = {n: v if n == "golden" else max(v, ex.lim["component_second_rel"]) for n, v in ex.rel_lim.items()}
+        rl.update({n: max(rl[n], ex.lim["component_scaled_rel"]) for n in SCALED_PROBES if n in rl})  # F96
         within = bool(size) and all(v <= rl.get(n, 0.0) for n, v in size.items())  # the limits check() applies
         how = f"size {max(size.values()):.3g} <= the step's limit" if within else ", ".join(f)
         rows.append((k, "caught" if f else "within limit" if within else "SLIPPED", how))
