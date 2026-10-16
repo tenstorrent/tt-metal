@@ -125,33 +125,33 @@ def test_softmax_zeroes_the_padding_scores(device, tt_config, config, batch, seq
 def test_softmax_needs_both_hifi4_and_fp32_accumulation(device, tt_config, config):
     """Negative control: neither half of the kernel config is optional here.
 
-    HiFi4 alone still misses the budget, so the fp32 accumulator is not a refinement on top of
-    it. numeric_stable changes the reduction order rather than the fidelity and measures like
-    the stock config. All four variants score above 0.9996 PCC, so only max-abs separates them.
+    HiFi4 without the fp32 accumulator misses the budget, and so does the fp32 accumulator at
+    HiFi2. All three variants score above 0.9996 PCC, so only max-abs separates them.
     """
     logits = torch.randn(1, 1, 1024, config.num_experts)
     ref = logits.softmax(dim=-1)
     logits_tt = to_device(logits, device, dtype=tt_config.router_dtype)
-    hifi4_only = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
 
-    def max_abs(**kwargs):
-        return compute_max_abs_error(ttnn.to_torch(ttnn.softmax(logits_tt, dim=-1, **kwargs)).float(), ref)
+    def kernel_config(math_fidelity, fp32_dest_acc_en):
+        return ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=math_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=False,
+        )
 
-    ported = max_abs(compute_kernel_config=tt_config.compute_kernel_config(OpGroup.SOFTMAX))
-    without_fp32_acc = max_abs(compute_kernel_config=hifi4_only)
-    stock = max_abs()
-    stable = max_abs(numeric_stable=True)
+    def max_abs(compute_kernel_config):
+        out = ttnn.softmax(logits_tt, dim=-1, compute_kernel_config=compute_kernel_config)
+        return compute_max_abs_error(ttnn.to_torch(out).float(), ref)
+
+    ported = max_abs(tt_config.compute_kernel_config(OpGroup.SOFTMAX))
+    without_fp32_acc = max_abs(kernel_config(ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False))
+    without_hifi4 = max_abs(kernel_config(ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True))
 
     assert ported < SOFTMAX_MAX_ABS, f"the port's own config missed its budget at {ported:.3e}"
     assert without_fp32_acc > SOFTMAX_MAX_ABS, f"HiFi4 alone should miss it, got {without_fp32_acc:.3e}"
-    assert stock > without_fp32_acc, f"HiFi4 should beat the stock config, got {stock:.3e}"
-    assert stable > SOFTMAX_MAX_ABS, f"numeric_stable is not a substitute, got {stable:.3e}"
+    assert without_hifi4 > SOFTMAX_MAX_ABS, f"fp32 accumulation at HiFi2 should miss it, got {without_hifi4:.3e}"
 
 
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
