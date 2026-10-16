@@ -54,10 +54,11 @@ from fuser.validator import (
     UnarySfpuMathSchema,
     eltwise_unpacker_rules,
     forced_unpackers,
+    reject,
     require_dest_tiles,
     require_src_a_tiles,
 )
-from helpers.llk_params import MathOperation
+from helpers.llk_params import MathOperation, ReduceDimension
 from pydantic import Field
 
 from .fpu.datacopy import DatacopyFpu
@@ -79,11 +80,17 @@ from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
 from .unpacker.reduce_block_max import ReduceBlockMaxUnpacker
 from .unpacker.reduce_block_max_runtime import ReduceBlockMaxRuntimeUnpacker
+from .unpacker.reduce_tilize_a import UnpackReduceTilize
 from .unpacker.sub_bcast_col_custom import SubBcastColCustomUnpacker
 from .unpacker.tilize_a import UnpackerTilizeA
 from .unpacker.transpose_dest import TransposeDestUnpacker
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
+
+_reduce_col_only = reject(
+    lambda s, a, b: s.operation != "Reduce" or s.reduce_dim != ReduceDimension.Column,
+    "unpacker can only be paired with a column reduce (operation: Reduce, reduce_dim: REDUCE_COL)",
+)
 
 UNPACKER_MAP = {
     "UnpackerA": (
@@ -121,6 +128,18 @@ UNPACKER_MAP = {
     "TransposeDestUnpacker": (
         lambda s: TransposeDestUnpacker(),
         [],
+    ),
+    "UnpackReduceTilize": (
+        lambda s: UnpackReduceTilize(s.reduce_pool),
+        [
+            IN0_REQUIRED,
+            IN1_REQUIRED,
+            NO_BROADCAST,
+            NO_TRANSPOSE,
+            NO_UNPACK_TO_DEST,
+            _reduce_col_only,
+            require_src_a_tiles((32, 32), (16, 32), (8, 32), (4, 32), (2, 32), (1, 32)),
+        ],
     ),
 }
 
@@ -178,7 +197,7 @@ FPU_MAP = {
         [
             NO_REUSE_DEST,
             REDUCE_PARAMS_REQUIRED,
-            forced_unpackers("ReduceUnpacker"),
+            forced_unpackers("ReduceUnpacker", "UnpackReduceTilize"),
             SUPPORTED_SRC_A_TILE,
         ],
     ),

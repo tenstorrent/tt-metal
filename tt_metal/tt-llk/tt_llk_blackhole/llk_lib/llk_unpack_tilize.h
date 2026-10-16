@@ -503,11 +503,13 @@ inline void _llk_unpack_tilizeA_B_init_(
 }
 
 /**
- * @brief Tilize operand A and unpack operand B, face by face, into SrcA and SrcB.
+ * @brief Tilize operand A and unpack operand B into SrcA and SrcB, one data-valid per tile.
  *
- * Loops over the faces, computing each face's SrcA L1 address, optionally clearing SrcA to
- * neginf/zero, unpacking the SrcB face, then unpacking the face's rows into SrcA (row by row via
- * the MOP) and setting data-valid, synchronizing through the unpack semaphore each iteration.
+ * Optionally clears the whole SrcA bank to neginf/zero once, then loops over the faces: each face's
+ * rows are unpacked (row by row via the MOP) into SrcA rows [16n, 16n + face_r_dim) so the full tile
+ * sits contiguously in one bank, and data-valid is set only after the last face. SrcB is unpacked once
+ * per tile (face 0 when @p reload_srcB, every face at its own 16-row offset otherwise). This matches
+ * @ref _llk_math_reduce_, which clears SrcA/SrcB data-valid once per tile.
  *
  * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
  * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
@@ -545,6 +547,17 @@ inline void _llk_unpack_tilizeA_B_(
     // Clear z/w start counters for SrcA/B
     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111);
 
+    // Pre-fill the whole SrcA bank once per tile. All faces land in this bank (dvalid is set once, after
+    // the last face), so rows past face_r_dim in every face carry the pool identity (-inf for MAX, 0 otherwise).
+    if constexpr (neginf_srcA)
+    {
+        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
+    }
+    else if constexpr (zero_srcA_reduce)
+    {
+        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+    }
+
     for (std::uint32_t n = 0; n < num_faces; n++)
     {
         /*
@@ -556,17 +569,10 @@ inline void _llk_unpack_tilizeA_B_(
         std::uint32_t address_face_a = (n % 2 == 0) ? address_a : (address_a + (SCALE_DATUM_SIZE(unpA_src_format, FACE_C_DIM) >> 4));
         address_face_a += (n >= 2) ? ((SCALE_DATUM_SIZE(unpA_src_format, block_c_dim)) >> 4) : 0;
 
+        const bool last_face = (n == num_faces - 1);
+
         // Wait for free context
         wait_for_next_context(2);
-
-        if constexpr (neginf_srcA)
-        {
-            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
-        }
-        else if constexpr (zero_srcA_reduce)
-        {
-            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
-        }
 
         // Validate and configure addresses
         _llk_unpack_configure_addresses_(address_face_a, address_b, cfg);
@@ -577,12 +583,29 @@ inline void _llk_unpack_tilizeA_B_(
         // Stall unpacker until pending CFG writes from Trisc have completed
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
-        // Reset Y counters for SrcA
+        // Reset Y counters for SrcA (the face slot is selected by CH1_Z, stepped on each face's last row)
         TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1010);
-        // Unpack SrcB 16x16 face & Set Data Valid
 
-        // If reload_srcB, only first face needs to be loaded, otherwise CH0_Z+=1
-        TTI_UNPACR(SrcB, reload_srcB ? 0b0 : 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        if constexpr (reload_srcB)
+        {
+            // One SrcB face serves the whole tile: unpack it once and set dvalid immediately
+            if (n == 0)
+            {
+                TTI_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            }
+        }
+        else
+        {
+            // Advance both the L1 face (CH0_Z) and the SrcB face slot (CH1_Z); dvalid only after the last face
+            if (last_face)
+            {
+                TTI_UNPACR(SrcB, 0b00010001 /*CH0_Z+=1, CH1_Z+=1*/, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            }
+            else
+            {
+                TTI_UNPACR(SrcB, 0b00010001 /*CH0_Z+=1, CH1_Z+=1*/, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            }
+        }
 
         // Unpacks face_r_dim-1 rows of 1x16 datums to SrcA
         if (run_r_dim_loop)
@@ -590,8 +613,16 @@ inline void _llk_unpack_tilizeA_B_(
             ckernel_unpack_template::run(face_r_dim - 1, unp_cfg_context == 0 ? 0 : 0xffff);
         }
 
-        // Unpack last SrcA row of a 16x16 face and SetDvalid
-        TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        // Unpack the last SrcA row of this face. Non-final faces step CH1_Z to the next 16-row face slot;
+        // SetDvalid only once the whole tile is in the bank.
+        if (last_face)
+        {
+            TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        }
+        else
+        {
+            TTI_UNPACR(SrcA, 0b00010000 /*CH1_Z+=1*/, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        }
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
@@ -604,8 +635,8 @@ inline void _llk_unpack_tilizeA_B_(
 /**
  * @brief Restore unpacker state after a tilize-A-with-unpack-B operation.
  *
- * Reverts the SrcA Ch1 Y stride @ref _llk_unpack_tilizeA_B_init_ wrote, and zeroes the Ch0/Ch1 Y
- * counters on both unpackers, which belong to the execute path rather than to init. The unpack
+ * Reverts the SrcA Ch1 Y stride @ref _llk_unpack_tilizeA_B_init_ wrote, and zeroes the Ch0/Ch1 Y and
+ * Z/W counters on both unpackers, which belong to the execute path rather than to init. The unpack
  * config word-0 write is wider than init's: init only clears haloize_mode, while this is a
  * full-word write that also forces out_data_format and throttle_mode and zeroes context_count,
  * tileize_mode, unpack_src_reg_set_update and shift_amount. x-start/x-end and the MOP are
@@ -618,8 +649,9 @@ inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 
-    // _llk_unpack_tilizeA_B uses y-stride and updates y counter
+    // _llk_unpack_tilizeA_B uses y-stride and updates y counter; the execute path also steps CH1_Z per face
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
     unpack_config_u config = {0};
 

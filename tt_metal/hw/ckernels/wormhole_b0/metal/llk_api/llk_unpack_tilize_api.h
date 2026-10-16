@@ -202,13 +202,20 @@ inline void llk_unpack_tilizeA_B_init(
  * addresses are read from the CB fifo state.
  *
  * @tparam zero_srcA    Zero out srcA.
+ * @tparam neginf_srcA  Use whole-tile reduce unpack with negative-infinity padding.
+ * @tparam reload_srcB  Reuse one srcB face for the whole reduce tile.
+ * @tparam zero_srcA_reduce Use whole-tile reduce unpack with zero padding.
  * @param  operandA     Input operand index for tilize source A.
  * @param  operandB     Input operand index for unpack source B.
  * @param  tile_index_a Tile index within operand A.
  * @param  tile_index_b Tile index within operand B.
  * @param  block_ct_dim Number of column tiles in the block.
  */
-template <bool zero_srcA = false>
+template <
+    bool zero_srcA = false,
+    bool neginf_srcA = false,
+    std::uint32_t reload_srcB = false,
+    bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B(
     std::uint32_t operandA,
     std::uint32_t operandB,
@@ -241,7 +248,7 @@ inline void llk_unpack_tilizeA_B(
         get_operand_num_faces(operandB_id)));
 
     WAYPOINT("UPTW");
-    _llk_unpack_tilizeA_B_<zero_srcA>(
+    _llk_unpack_tilizeA_B_<zero_srcA, neginf_srcA, reload_srcB, zero_srcA_reduce>(
         unpack_src_format[operandA_id],
         face_r_dim,
         narrow_tile,
@@ -275,7 +282,8 @@ inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA, std::uint32_t operandB, std::uint32_t block_c_tiles_a, std::uint32_t tile_idx_b) {
     SAN_HOOK(unsupported());
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
-        llk_unpack_tilizeA_B<zero_srcA>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a);
+        llk_unpack_tilizeA_B<zero_srcA, neginf_srcA, reload_srcB, zero_srcA_reduce>(
+            operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a);
     }
 }
 
