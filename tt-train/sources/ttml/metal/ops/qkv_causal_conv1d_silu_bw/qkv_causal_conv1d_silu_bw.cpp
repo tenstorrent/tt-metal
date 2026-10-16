@@ -49,6 +49,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
         "qkv_causal_conv1d_silu_bw: input must be a [1,T,Q+K+V] device tensor");
     const auto sequence = static_cast<uint32_t>(input.logical_shape()[1]);
     const auto channels = q_width + k_width + v_width;
+    // One core gets channel_chunk_size channels x (sequence / sequence_splits) rows. Both default to auto.
     if (channel_chunk_size == 0) {
         channel_chunk_size = qkv_causal_conv1d_silu_chunk_size(channels, *input.device());
     }
