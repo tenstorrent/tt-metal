@@ -17,15 +17,25 @@ its own.
 from __future__ import annotations
 
 import math
-import re
 from dataclasses import asdict, dataclass
 from fractions import Fraction
 from functools import lru_cache
+from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union
 
 import torch
 from helpers.format_config import DataFormat
 from helpers.stimuli_generator import StimuliSpec
+from helpers.ulp_provenance import (
+    EMITTER_KINDS,
+    BudgetTable,
+    KeyLine,
+    Kind,
+    Provenance,
+    Row,
+    RunIdentity,
+    render_row,
+)
 
 #: The formats this harness can judge a result in -- enumerated whole as inputs, except
 #: Float32, which is strided (`is_exhaustive`). Bfp8_b rides on the bfloat16 value set: the
@@ -69,9 +79,6 @@ _FP32_STRIDE = 2**16
 
 #: One 64-tile run: the most values a sweep variant generates.
 _SWEEP_TENSOR = 2**16
-
-#: A top-level op key in the table.
-_OP_KEY = re.compile(r"^([A-Za-z_]\w*):")
 
 _INF = float("inf")
 
@@ -1105,8 +1112,9 @@ def merge_measured(rows) -> None:
             record(op, tuple(key), value)
 
 
-def _incomplete_grids() -> List[str]:
-    """Each touched ``(op, in, out)`` missing a cell :func:`sweep_cells` runs.
+def _incomplete_grids() -> List[Tuple[str, str, str, int]]:
+    """Each touched ``(op, in, out)`` missing a cell :func:`sweep_cells` runs, with how
+    many it is missing.
 
     ``write_table`` replaces every row of a touched ``(in, out)``, so a run narrowed
     within one -- ``-k``, ``--maxfail``, an interrupt -- would drop the rows of the
@@ -1121,96 +1129,60 @@ def _incomplete_grids() -> List[str]:
         for pair in sorted({key[:2] for key in cells}):
             missing = expected.get(pair, set()) - set(cells)
             if missing:
-                gaps.append(
-                    f"{op} {pair[0]}->{pair[1]}: {len(missing)} cell(s) unmeasured"
-                )
+                gaps.append((op, pair[0], pair[1], len(missing)))
     return gaps
 
 
-def finish_emit(arch, testsfailed: int, path=None, exitstatus=0) -> str:
-    """Write this session's measurements into the table, and say what was written.
+def sweep_run(arch) -> RunIdentity:
+    """This session's run identity, as the key lines it writes name it. Float32 has
+    2^32 values and one run holds 2^16, so its input is strided, and calling it
+    exhaustive would overstate every row keyed on it."""
+    from datetime import date
 
-    * **nothing written, ``RuntimeError``** when the session cannot vouch for them: off
-      ``MEASURED_ARCH``, where unkeyed rows would carry another arch's numbers under
-      Wormhole's name; after a failure, when only a subset was measured; when
-      *exitstatus* says the session did not run to the end (pytest calls
-      ``pytest_sessionfinish`` after a Ctrl-C too, and an interrupt between two ops
-      leaves every touched grid complete and nothing counted as failed); or when an
-      op's ``(in, out)`` grid is incomplete, when a write would drop the rest's rows.
-    * **written, then ``RuntimeError``** when an op was measured with no key line to
-      write into. Every *other* op's block has already been rewritten, so a red emit is
-      not an untouched table.
-    * **written**, returning the summary line. An op kept verbatim -- a row the run
-      covers carries a field ``_render`` cannot put back, the ``near_zero_atol`` floors
-      and ``atol``/``rtol`` anchors -- is named in it: such a block is maintained by
-      hand by design, and failing on it would turn every whole-table emit red.
+    walked = "/".join(f.name for f in SWEEP_INPUT_FORMATS if is_exhaustive(f))
+    strided = "/".join(f.name for f in SWEEP_INPUT_FORMATS if not is_exhaustive(f))
+    return RunIdentity(
+        sweep=f"exhaustive {walked}"
+        + (f" + strided {strided}" if strided else "")
+        + " sweep",
+        arch=arch.value,
+        date=date.today().isoformat(),
+    )
+
+
+def finish_emit(arch, testsfailed: int, path=None, exitstatus=0) -> WriteReport:
+    """Write this session's measurements into the table, and report what was written.
+
+    * **nothing written**, :class:`WrongArch` off ``MEASURED_ARCH``, where unkeyed rows
+      would carry another arch's numbers under Wormhole's name; :class:`SessionNotClean`
+      after a failure, when only a subset was measured, or when *exitstatus* says the
+      session did not run to the end (pytest calls ``pytest_sessionfinish`` after a
+      Ctrl-C too, and an interrupt between two ops leaves every touched grid complete
+      and nothing counted as failed); :class:`IncompleteGrid` when an op's ``(in,
+      out)`` grid is incomplete, when a write would drop the rest's rows.
+    * **written, then** :class:`UnplacedMeasurements` when an op was measured with no
+      key line to write into. Every *other* op's block has already been rewritten, so a
+      red emit is not an untouched table.
+    * **written**, returning the :class:`WriteReport`. An op kept verbatim -- a row the
+      run covers carries a field ``_render`` cannot put back, the ``atol``/``rtol``
+      anchors -- is named in it: such a block is maintained by hand by design, and
+      failing on it would turn every whole-table emit red.
 
     *exitstatus* is pytest's ``session.exitstatus``, an ``ExitCode`` or a plain int.
     pytest has already set it to ``TESTS_FAILED`` when a test failed, so the failure
     count is read first, to give that run its own message.
     """
-    from datetime import date
-
     import pytest
     from helpers.sfpu_accuracy_budget import _TABLE_PATH, MEASURED_ARCH
 
     if arch != MEASURED_ARCH:
-        raise RuntimeError(
-            f"ran on {arch.value}, but the table's unkeyed rows are read as "
-            f"{MEASURED_ARCH.value} measurements and `_render` does not emit `arch`. "
-            "Nothing written."
-        )
-    if testsfailed:
-        raise RuntimeError(
-            f"saw {testsfailed} failure(s), so the session measured a subset. Nothing "
-            "written -- emit from a clean run."
-        )
-    if exitstatus != pytest.ExitCode.OK:
-        try:
-            name = pytest.ExitCode(exitstatus).name
-        except ValueError:  # pytest.exit(returncode=...) can carry any int
-            name = str(exitstatus)
-        raise RuntimeError(
-            f"the session ended with exit status {name}, not OK, so what it measured "
-            "is whatever it got to. Nothing written -- emit from a run that ends on "
-            "its own."
-        )
+        raise WrongArch(arch)
+    if testsfailed or exitstatus != pytest.ExitCode.OK:
+        raise SessionNotClean(testsfailed, exitstatus)
     gaps = _incomplete_grids()
     if gaps:
-        raise RuntimeError(
-            "measured only part of an op's grid, and a write would drop the rows of "
-            "the rest. Nothing written -- emit whole (in, out) grids:\n  "
-            + "\n  ".join(gaps)
-        )
-    path = path or _TABLE_PATH
-    # Float32 has 2^32 values and one run holds 2^16, so its input is strided, and
-    # calling it exhaustive would overstate every row keyed on it.
-    walked = "/".join(f.name for f in SWEEP_INPUT_FORMATS if is_exhaustive(f))
-    strided = "/".join(f.name for f in SWEEP_INPUT_FORMATS if not is_exhaustive(f))
-    suffix = (
-        f"exhaustive {walked}"
-        + (f" + strided {strided}" if strided else "")
-        + f" sweep, {arch.value}, {date.today().isoformat()}"
-    )
-    try:
-        n, kept = write_table(path, suffix)
-        unplaced = []
-    except UnplacedMeasurements as exc:
-        n, kept, unplaced = exc.written, exc.kept, exc.missing
-    message = f"rewrote {n} op block(s) in {path.name}"
-    if kept:
-        message += (
-            f"; kept {', '.join(kept)} verbatim: a row this sweep covers carries a "
-            f"field it cannot regenerate (beyond {sorted(_RENDERABLE_FIELDS)}), so "
-            "their measurements were not written. Settle those cells by hand"
-        )
-    if unplaced:
-        raise RuntimeError(
-            f"{message}; but measured {', '.join(unplaced)} and the table has no key "
-            "line for them, so they were not written. Give an op its block first "
-            "(SFPU_ULP.md, step 2) to enrol it."
-        )
-    return f"--ulp-emit: {message}"
+        raise IncompleteGrid(gaps)
+    return write_table(path or _TABLE_PATH, sweep_run(arch))
 
 
 def _verdict(
@@ -1334,10 +1306,8 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
             # singletons, both get dropped, and one measurement would silently overwrite
             # the other. `_render` writes the survivor's own figure into the provenance
             # comment, so the budget audit could not catch it either.
-            raise ValueError(
-                f"collapsing {axes} to {[axes[i] for i in keep]} merges two different "
-                f"measurements onto {collapsed}: {merged[collapsed]} and {value}. The "
-                "recorded cells do not form a full grid -- emit from a complete run."
+            raise AmbiguousCollapse(
+                axes, [axes[i] for i in keep], collapsed, (merged[collapsed], value)
             )
         merged[collapsed] = value
 
@@ -1351,149 +1321,226 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
     return rows
 
 
-#: The run identity, stated once on the op's key line rather than on each of the ~4,200
-#: rows in the table (repeated, it was a quarter of the file). Rows this run did not
-#: supersede keep their own suffix, or are given one by :func:`_stamp_kept`.
-_MEASURED_BY = "measured by: {suffix}, except where a row says otherwise"
-
-#: A previous run's clause, built from :data:`_MEASURED_BY` so the wording lives in one
-#: place: stripped so a re-emit replaces it instead of appending, and its ``run`` group
-#: is the run it names.
-_MEASURED_BY_RE = re.compile(
-    r";?\s*" + re.escape(_MEASURED_BY).replace(re.escape("{suffix}"), r"(?P<run>.*?)")
-)
+# ─────────────────────────────────────────────────────────────────────────────
+# Writing the table
+# ─────────────────────────────────────────────────────────────────────────────
 
 
-def _split_key_line(key_line: str) -> Tuple[str, str, str]:
-    """An op's key line as ``(head, header, run)``: the ``Op:`` part, its header comment
-    without the ``measured by:`` clause, and the run that clause names ("" if none)."""
-    head, _, comment = key_line.rstrip("\n").partition("#")
-    clause = _MEASURED_BY_RE.search(comment)
-    header = _MEASURED_BY_RE.sub("", comment).strip().rstrip(";").strip()
-    return head, header, clause.group("run") if clause else ""
+@dataclass(frozen=True)
+class WriteReport:
+    """What :func:`write_table` did, as data: tests assert on these fields, and the
+    terminal line is rendered from them (:meth:`summary`)."""
 
+    path: Path
+    #: op -> the rows its block now has.
+    written: Dict[str, List[Row]]
+    #: op -> why its block was kept verbatim: the field a covered row carries that
+    #: ``_render`` cannot put back (``atol``, ``near_zero_atol`` before P10, ...), or
+    #: ``alias`` for a row whose fields live on an anchor.
+    kept: Dict[str, str]
+    #: Ops measured with no key line to write into.
+    unplaced: List[str]
+    #: Rows this run did not supersede that were given the run identity they had.
+    stamped: List[Row]
 
-#: A run identity names its date; a row without one relied on its key line for it.
-_DATED = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-#: The notes :func:`_render` writes, whole. Only such a note is an earlier emit's figure
-#: and can be credited to the outgoing run; a hand-written note that merely starts the
-#: same way -- Frac's `max 384 ULP, 40 variants / 737k lanes, ...` from a sample -- is
-#: not.
-_EMITTED_NOTE = re.compile(
-    r"max \d+ ULP("
-    r", budget \d+ > ceiling \d+(; \d+ ULP outside a [0-9.e+-]+ near-zero floor)?"
-    r"|, block-quantized"
-    r"| outside a [0-9.e+-]+ near-zero floor \(\d+ steps over every lane\)"
-    r")?|not measurable: .+"
-)
-
-
-def _stamp_kept(kept: List[str], key_line: str) -> List[str]:
-    """*kept* with each row that names no run of its own stamped with the one it had.
-
-    ``_render`` replaces the key line's ``measured by:`` clause with this run's, and a
-    row this run did not supersede would then be credited to it -- a pair-narrowed
-    re-emit, or a sampled ``{out: Float32, max_ulp: 0}`` under an exhaustive clause the
-    sweep cannot produce. So before the clause goes, it goes onto those rows: a row
-    whose note is one ``_render`` writes (``max 1 ULP``, from an earlier emit) gets the
-    outgoing clause's run, and a bare row -- hand-authored, never emitted -- the key
-    line's own header comment, which is the provenance it was written against.
-
-    Left alone: a row whose note is hand-written (``see the Bfp8_b note above``, a
-    sample's figures), since no run on the key line measured it and crediting one would
-    be a guess, and an ``arch:`` row, which a run on this arch never measures.
-    """
-    _, header, outgoing = _split_key_line(key_line)
-    stamped = []
-    for row in kept:
-        body, _, note = row.rstrip("\n").partition("#")
-        note = note.strip()
-        if note:
-            emitted = _EMITTED_NOTE.fullmatch(note)
-            origin = (outgoing or header) if emitted else ""
-        else:
-            origin = header or outgoing
-        if _DATED.search(note) or not origin or "arch" in _row_fields(row):
-            stamped.append(row)
-            continue
-        stamped.append(f"{body.rstrip()}  # {note + ', ' if note else ''}{origin}\n")
-    return stamped
-
-
-def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
-    """One op's block: each row with its verdict, and the measurement behind it.
-
-    The run identity is appended to *key_line*, which keeps whatever it already said:
-    a header comment such as `Fill:  # 0 ULP, 115 variants` is the provenance for every
-    row this sweep does not reach. Each row still carries its own number, which is what
-    the provenance audit reads.
-    """
-    from helpers.sfpu_accuracy_budget import usable_budget_ceiling
-
-    head, existing, _ = _split_key_line(key_line)
-    measured_by = _MEASURED_BY.format(suffix=suffix)
-    out = [f"{head.rstrip()}  # {existing + '; ' if existing else ''}{measured_by}\n"]
-    for row in rows:
-        metric, value = row["verdict"]
-        body = ", ".join(
-            f'{k}: "{row[k]}"' if k in ("approx", "dest") else f"{k}: {row[k]}"
-            for k in KEY_AXES
-            if k in row
+    def summary(self) -> str:
+        message = (
+            f"--ulp-emit: rewrote {len(self.written)} op block(s) in {self.path.name}"
         )
-        extra = row.get("extra")
-        decided = (
-            "max_ulp: {}".format(value) if metric == "ulp" else "metric: tolerance"
-        )
-        if extra and extra[0] == "floor":
-            decided += f", near_zero_atol: {extra[1]:.2e}"
-        pairs = f"{body}, {decided}" if body else decided
-        # The first figure is always the one the budget was derived from, which is
-        # what the provenance audit and the headroom report read back.
-        note = f"max {row['measured']} ULP"
-        if metric == "unmeasurable":
-            note = f"not measurable: {value}"
-        elif metric == "tolerance":
-            # Just the two numbers: the reason is in the table header, and this pair
-            # keeps the claim checkable against `usable_budget_ceiling`.
-            ceiling = usable_budget_ceiling(DataFormat[row["out"]])
-            note += f", budget {value} > ceiling {ceiling:.0f}"
-            if extra and extra[0] == "floor_short":
-                note += f"; {extra[2]} ULP outside a {extra[1]:.2e} near-zero floor"
-        elif metric == "block":
-            note += ", block-quantized"
-        elif extra and extra[0] == "floor":
-            note += (
-                f" outside a {extra[1]:.2e} near-zero floor "
-                f"({extra[2]} steps over every lane)"
+        if self.kept:
+            named = ", ".join(f"{op} ({why})" for op, why in sorted(self.kept.items()))
+            message += (
+                f"; kept {named} verbatim: a row this sweep covers carries a field it "
+                f"cannot regenerate (beyond {sorted(_RENDERABLE_FIELDS)}), so their "
+                "measurements were not written. Settle those cells by hand"
             )
-        out.append(f"  - {{{pairs}}}  # {note}\n")
-    return out
+        return message
 
 
-#: A ``name: value`` pair inside an inline row, with the value unquoted.
-_ROW_FIELD = re.compile(r'([A-Za-z_]\w*)\s*:\s*"?([^,}"]*)"?')
+class EmitRefused(RuntimeError):
+    """``--ulp-emit`` refused to write, or wrote only part of what it measured. Each
+    subclass carries the facts as attributes; the message is for the terminal."""
 
-#: What `_render` can put back. A row carrying anything else -- a `near_zero_atol`
-#: floor, an `atol`/`rtol` pair -- cannot be regenerated from a measurement, so it is
-#: preserved rather than replaced even when this sweep covers its cell.
+
+class WrongArch(EmitRefused):
+    def __init__(self, arch):
+        from helpers.sfpu_accuracy_budget import MEASURED_ARCH
+
+        self.arch = arch
+        super().__init__(
+            f"ran on {arch.value}, but the table's unkeyed rows are read as "
+            f"{MEASURED_ARCH.value} measurements and `_render` does not emit `arch`. "
+            "Nothing written."
+        )
+
+
+class SessionNotClean(EmitRefused):
+    """The session failed tests, or did not run to its end."""
+
+    def __init__(self, failures: int, exitstatus):
+        import pytest
+
+        self.failures, self.exitstatus = failures, exitstatus
+        if failures:
+            message = (
+                f"saw {failures} failure(s), so the session measured a subset. Nothing "
+                "written -- emit from a clean run."
+            )
+        else:
+            try:
+                name = pytest.ExitCode(exitstatus).name
+            except ValueError:  # pytest.exit(returncode=...) can carry any int
+                name = str(exitstatus)
+            message = (
+                f"the session ended with exit status {name}, not OK, so what it "
+                "measured is whatever it got to. Nothing written -- emit from a run "
+                "that ends on its own."
+            )
+        super().__init__(message)
+
+
+class IncompleteGrid(EmitRefused):
+    """*gaps* is ``(op, in, out, unmeasured cells)`` for each touched ``(in, out)``
+    missing a cell :func:`sweep_cells` runs."""
+
+    def __init__(self, gaps: List[Tuple[str, str, str, int]]):
+        self.gaps = gaps
+        super().__init__(
+            "measured only part of an op's grid, and a write would drop the rows of "
+            "the rest. Nothing written -- emit whole (in, out) grids:\n  "
+            + "\n  ".join(
+                f"{op} {i}->{o}: {missing} cell(s) unmeasured"
+                for op, i, o, missing in gaps
+            )
+        )
+
+
+class AmbiguousCollapse(EmitRefused):
+    """Collapsing the recorded cells would merge two different measurements onto one
+    row: *cells* is the collapsed key, and *values* the two decisions it would hold."""
+
+    def __init__(self, axes, kept_axes, cells, values):
+        self.cells, self.values = cells, values
+        super().__init__(
+            f"collapsing {list(axes)} to {list(kept_axes)} merges two different "
+            f"measurements onto {cells}: {values[0]} and {values[1]}. The recorded "
+            "cells do not form a full grid -- emit from a complete run."
+        )
+
+
+class UnplacedMeasurements(EmitRefused):
+    """:func:`write_table` wrote every op it could, and measured some it had no key line
+    for. *report* is what a normal return would have been; *missing* the ops it could
+    not place."""
+
+    def __init__(self, report: WriteReport):
+        self.report, self.missing = report, report.unplaced
+        super().__init__(
+            f"{report.summary()}; but measured {', '.join(report.unplaced)} and the "
+            "table has no key line for them, so they were not written. Give an op its "
+            "block first (SFPU_ULP.md, step 2) to enrol it."
+        )
+
+
+#: What `_render` can put back. A row carrying anything else -- an `atol`/`rtol` pair --
+#: cannot be regenerated from a measurement, so it is preserved rather than replaced
+#: even when this sweep covers its cell.
 _RENDERABLE_FIELDS = frozenset(
     {"in", "out", "approx", "dest", "max_ulp", "metric", "near_zero_atol"}
 )
 
 
-def _row_fields(line: str) -> Dict[str, str]:
-    """The inline row's fields, parsed. Substring matching is not enough: ``in:
-    Float16`` is a substring of ``in: Float16_b``."""
-    body = line.split("#", 1)[0]
-    if "{" not in body:
-        return {}
-    return dict(_ROW_FIELD.findall(body[body.index("{") + 1 : body.rindex("}")]))
+def _provenance_of(row: dict) -> Provenance:
+    """The note :func:`_render` writes beside a decided row. The first figure is the one
+    the budget was derived from, which is what the audits and the headroom report read.
+    """
+    from helpers.sfpu_accuracy_budget import usable_budget_ceiling
+
+    metric, value = row["verdict"]
+    extra = row.get("extra")
+    if metric == "unmeasurable":
+        return Provenance.parse(f"not measurable: {value}")
+    if metric == "tolerance":
+        # Just the two numbers: the reason is in the table header, and this pair keeps
+        # the claim checkable against `usable_budget_ceiling`.
+        floor = {}
+        if extra and extra[0] == "floor_short":
+            floor = dict(floor=extra[1], residual=extra[2])
+        return Provenance(
+            Kind.DEMOTED,
+            measured=row["measured"],
+            budget_needed=value,
+            ceiling=round(usable_budget_ceiling(DataFormat[row["out"]])),
+            **floor,
+        )
+    if metric == "block":
+        return Provenance(Kind.BLOCK, measured=row["measured"])
+    if extra and extra[0] == "floor":
+        return Provenance(
+            Kind.FLOORED,
+            measured=row["measured"],
+            floor=extra[1],
+            measured_all=extra[2],
+        )
+    return Provenance(Kind.EMITTED, measured=row["measured"])
 
 
-def _pins_a_measured_cell(line: str, measured: Set[Tuple[str, str, str, str]]) -> bool:
-    """Whether some cell this run measured resolves through *line*'s key: every key
-    field *line* pins agrees with it. A wildcard row -- an op-wide ``{metric:
+def _render(
+    op: str, key_line: KeyLine, rows: List[dict], run: RunIdentity
+) -> List[str]:
+    """One op's block: the key line credited to *run*, and each row with its verdict
+    and the measurement behind it.
+
+    The key line keeps whatever header it already had: `Fill:  # 0 ULP, 115 variants`
+    is the provenance for every row this sweep does not reach."""
+    out = [f"{op}:  # {key_line.with_run(run).render()}\n"]
+    for row in rows:
+        metric, value = row["verdict"]
+        fields = {k: row[k] for k in KEY_AXES if k in row}
+        if metric == "ulp":
+            fields["max_ulp"] = value
+        else:
+            fields["metric"] = "tolerance"
+        extra = row.get("extra")
+        if metric == "ulp" and extra and extra[0] == "floor":
+            fields["near_zero_atol"] = f"{extra[1]:.2e}"
+        out.append(render_row(fields, _provenance_of(row)))
+    return out
+
+
+def _stamp(row: Row, key_line: KeyLine) -> Optional[Provenance]:
+    """The provenance *row* needs once its key line names this run instead of the one
+    it had, or ``None`` if it needs none.
+
+    ``_render`` replaces the key line's run, and a row this run did not supersede would
+    then be credited to it -- a pair-narrowed re-emit, or a sampled ``{out: Float32,
+    max_ulp: 0}`` under an exhaustive run the sweep cannot produce. So the run goes onto
+    those rows first: an emitter-written note naming no run (``max 1 ULP``, from an
+    earlier emit) gets the outgoing run, or the key line's header when it had none, and a
+    bare row -- hand-authored, never emitted -- the header, which is the provenance it
+    was written against.
+
+    Left alone: a row naming its own run, a hand-written note (``see the Bfp8_b note
+    above``, a sample's figures) since no run on the key line measured it and crediting
+    one would be a guess, and an ``arch:`` row, which a run on this arch never measures.
+    """
+    if not row.alias and "arch" in row.pinned:
+        return None
+    outgoing, header = key_line.run, key_line.header
+    p = row.provenance
+    if p is None:
+        origin = header or (outgoing.render() if outgoing else "")
+        return Provenance.parse(origin) if origin else None
+    if p.kind not in EMITTER_KINDS or p.names_its_run:
+        return None
+    if outgoing is not None:
+        return p.with_run(outgoing)
+    return Provenance.parse(f"{p.render()}, {header}") if header else None
+
+
+def _pins_a_measured_cell(row: Row, measured: Set[Tuple[str, str, str, str]]) -> bool:
+    """Whether some cell this run measured resolves through *row*'s key: every key
+    field *row* pins agrees with it. A wildcard row -- an op-wide ``{metric:
     tolerance, atol: 0.13}``, or a YAML alias whose fields are not inline -- pins
     nothing, so it answers for every cell.
 
@@ -1501,67 +1548,53 @@ def _pins_a_measured_cell(line: str, measured: Set[Tuple[str, str, str, str]]) -
     ``(in, out)``: a rendered row is more specific than a wildcard, so it would shadow
     the wildcard's ``atol``/``rtol`` on every cell it names.
     """
-    if line.strip().startswith("- *"):
-        return True  # an alias: its fields live on the anchor, so assume the widest
-    fields = _row_fields(line)
-    pinned = [(i, fields[axis]) for i, axis in enumerate(KEY_AXES) if axis in fields]
+    if row.alias:
+        return True  # its fields live on the anchor, so assume the widest
+    pinned = [
+        (i, row.pinned[axis]) for i, axis in enumerate(KEY_AXES) if axis in row.pinned
+    ]
     return any(all(key[i] == value for i, value in pinned) for key in measured)
 
 
-def _unrenderable(line: str) -> bool:
-    """A row carrying something ``_render`` cannot put back: a field beyond
-    ``_RENDERABLE_FIELDS``, or an alias whose fields are not inline. Arch-keyed rows are
-    never touched, so they are not counted."""
-    if line.strip().startswith("- *"):
-        return True
-    fields = _row_fields(line)
-    return "arch" not in fields and bool(set(fields) - _RENDERABLE_FIELDS)
+def _unrenderable(row: Row) -> Optional[str]:
+    """What *row* carries that ``_render`` cannot put back -- the fields beyond
+    ``_RENDERABLE_FIELDS``, or ``alias`` for a row whose fields are not inline -- or
+    ``None``. Arch-keyed rows are never touched, so they are not counted."""
+    if row.alias:
+        return "alias"
+    if "arch" in row.pinned:
+        return None
+    extra = sorted(set(row.values) - _RENDERABLE_FIELDS)
+    return ", ".join(extra) or None
 
 
-class UnplacedMeasurements(ValueError):
-    """``write_table`` wrote every op it could, and measured some it had no key line
-    for. Carries what a normal return would, plus the ops it could not place."""
-
-    def __init__(self, message: str, written: int, kept: List[str], missing: List[str]):
-        super().__init__(message)
-        self.written, self.kept, self.missing = written, kept, missing
-
-
-def _covered(line: str, emitted_cells: Set[Tuple[str, str]]) -> bool:
-    """Whether this run measured the ``(in, out)`` cell *line* declares.
+def _covered(row: Row, emitted_cells: Set[Tuple[str, str]]) -> bool:
+    """Whether this run measured the ``(in, out)`` cell *row* declares.
 
     Only the cells actually in ``MEASURED`` for this op, never the static
     ``SWEEP_FORMATS`` cross-product: a partial run -- ``-k``, an interrupt, a driver
     skip -- must replace what it measured and leave the rest alone, rather than
     rendering a whole op block from an incomplete session.
     """
-    fields = _row_fields(line)
-    return (
-        bool(fields)
-        and (
-            fields.get("in", ""),
-            fields.get("out", ""),
-        )
-        in emitted_cells
-    )
+    if row.alias:
+        return False
+    return (row.pinned.get("in", ""), row.pinned.get("out", "")) in emitted_cells
 
 
-def _replaceable(line: str, emitted_cells: Set[Tuple[str, str]]) -> bool:
-    """Whether this run's output supersedes *line*.
+def _replaceable(row: Row, emitted_cells: Set[Tuple[str, str]]) -> bool:
+    """Whether this run's output supersedes *row*.
 
     A row that pins ``arch`` is never replaceable. This sweep runs on one architecture,
     and the table's own header says to re-measure on Blackhole; specificity lets the two
     rows coexist, so regenerating one arch must not erase the other's contract.
 
-    Nor is a row carrying a field ``_render`` cannot put back -- a ``near_zero_atol``
-    floor, an ``atol``/``rtol`` pair. :func:`write_table` keeps such an op's block
-    verbatim and names it in its return, rather than quietly replacing or quietly
-    duplicating the row.
+    Nor is a row carrying a field ``_render`` cannot put back -- an ``atol``/``rtol``
+    pair. :func:`write_table` keeps such an op's block verbatim and names it in its
+    report, rather than quietly replacing or quietly duplicating the row.
     """
-    fields = _row_fields(line)
-    if "arch" in fields or set(fields) - _RENDERABLE_FIELDS:
+    if row.alias or "arch" in row.pinned or _unrenderable(row):
         return False
-    return _covered(line, emitted_cells)
+    return _covered(row, emitted_cells)
 
 
 def rounds_at_pack(in_fmt: str, out_fmt: str, dest: Optional[str]) -> bool:
@@ -1612,93 +1645,115 @@ def _is_exact(
     return not rounds_at_pack(in_fmt, out_fmt, dest)
 
 
-def write_table(path, suffix: str) -> Tuple[int, List[str]]:
-    """Replace every swept op's block in the YAML with what the sweep measured.
+def _block_end(lines: List[str], start: int) -> int:
+    """The index past an op block starting at *start*: its indented and blank lines,
+    less the blank lines after it, which are left for the next block."""
+    end = start + 1
+    while end < len(lines) and (not lines[end].strip() or lines[end][0].isspace()):
+        end += 1
+    while end - 1 > start and not lines[end - 1].strip():
+        end -= 1
+    return end
 
-    Returns how many blocks were rewritten, and the ops kept verbatim because a row the
-    sweep covers carries a field it cannot regenerate (a ``near_zero_atol`` floor).
 
-    Line-oriented on purpose. The table's comments *are* its provenance, and a load and
+def _restamped(table: BudgetTable, row: Row, provenance: Provenance) -> List[str]:
+    """*row*'s lines with its comment replaced by *provenance*."""
+    lines = table.lines[row.first_line : row.last_line + 1]
+    body = lines[-1][: row.end_column].rstrip()
+    return lines[:-1] + [f"{body}  # {provenance.render()}\n"]
+
+
+def write_table(path, run: RunIdentity) -> WriteReport:
+    """Replace every swept op's block in the YAML with what the sweep measured, credited
+    to *run*.
+
+    Line-oriented on purpose. The table's comments carry its provenance, and a load and
     re-dump through PyYAML would drop every one of them, including for the ops this
-    sweep never touched.
+    sweep never touched. Which lines are an op's key line and rows is read from
+    :class:`BudgetTable`, never from the shape of a line: matching key lines by a
+    trailing colon once skipped 17 ops whose key line carries a header comment, and left
+    their sampled rows in place looking measured.
 
     Raises :class:`UnplacedMeasurements` if an op in ``MEASURED`` has no key line to
     write into -- *after* writing every op that has one, so one unenrolled op does not
     throw away the rest of a whole-table emit. The measurement would otherwise be
     dropped in silence, and the sampled rows it was meant to replace would stay in place
-    looking measured -- the failure the ``_OP_KEY`` comment below records biting once
-    already.
+    looking measured.
     """
-    import pathlib as _pathlib
-
-    path = _pathlib.Path(path)
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    out, i, written, kept_verbatim = [], 0, set(), []
+    path = Path(path)
+    table = BudgetTable.load(path)
+    lines = table.lines
+    starts = {block.line: block for block in table.blocks.values()}
+    out: List[str] = []
+    written: List[str] = []
+    kept_verbatim: Dict[str, str] = {}
+    stamped_at: List[int] = []
+    i = 0
     while i < len(lines):
-        line = lines[i]
-        # A top-level key by shape, not by trailing colon: an op whose key line carries a
-        # header comment -- `Signbit:  # 0 ULP, 16 variants` -- does not end with one.
-        # Matching on that silently skipped 17 ops, every one of them exact or predicate,
-        # and left their sampled rows in place looking measured. Signbit and Threshold
-        # measure 16,129 steps exhaustively against the 0 those rows claimed.
-        head = _OP_KEY.match(line)
-        name = head.group(1) if head else ""
-        if head and name in MEASURED:
-            j = i + 1
-            while j < len(lines) and (not lines[j].strip() or lines[j][0].isspace()):
-                j += 1
-            # The blank lines after the block are left for the loop to copy through.
-            while j - 1 > i and not lines[j - 1].strip():
-                j -= 1
-            emitted_cells = {(k[0], k[1]) for k in MEASURED[name]}
-            rows = [l for l in lines[i + 1 : j] if l.strip().startswith("- ")]
-            # Any row a measured cell resolves through, not only one pinning the
-            # measured (in, out): an op-wide `{metric: tolerance, atol: 0.13}` would
-            # otherwise be shadowed by the bare rows rendered below it, and every cell
-            # they name would silently lose its declared atol.
-            unrenderable = [
-                l
-                for l in rows
-                if _unrenderable(l) and _pins_a_measured_cell(l, set(MEASURED[name]))
-            ]
-            if unrenderable:
-                # Emitting over it would drop the floor; keeping it as well would give
-                # the cell two equally specific keys, which `_load_table` refuses. So
-                # the op's block stays as it is, and the caller is told: the row is a
-                # judgement a measurement cannot re-derive. Every other op is written.
-                out.extend(lines[i:j])
-                kept_verbatim.append(name)
-                written.add(name)
-                i = j
-                continue
-            kept = _stamp_kept(
-                [l for l in rows if not _replaceable(l, emitted_cells)], line
-            )
-            out.extend(_render(line, _collapse(_decide(MEASURED[name], name)), suffix))
-            # Rows this run did not supersede -- a format it does not reach, an
-            # arch-keyed entry, a floor `_render` cannot re-derive -- are the
-            # measurement of a different run and stay as they are. Replacing a whole op
-            # block deleted them.
-            out.extend(kept)
-            written.add(name)
-            i = j
+        block = starts.get(i)
+        if block is None or block.op not in MEASURED:
+            out.append(lines[i])
+            i += 1
             continue
-        out.append(line)
-        i += 1
+        name, end = block.op, _block_end(lines, i)
+        cells = MEASURED[name]
+        emitted_cells = {(k[0], k[1]) for k in cells}
+        # Any row a measured cell resolves through, not only one pinning the measured
+        # (in, out): an op-wide `{metric: tolerance, atol: 0.13}` would otherwise be
+        # shadowed by the bare rows rendered below it, and every cell they name would
+        # silently lose its declared atol.
+        why = sorted(
+            {
+                reason
+                for row in block.rows
+                if _pins_a_measured_cell(row, set(cells))
+                for reason in [_unrenderable(row)]
+                if reason
+            }
+        )
+        if why:
+            # Emitting over it would drop the row; keeping it as well would give the
+            # cell two equally specific keys, which `_load_table` refuses. So the op's
+            # block stays as it is, and the caller is told: the row is a judgement a
+            # measurement cannot re-derive. Every other op is written.
+            out.extend(lines[i:end])
+            kept_verbatim[name] = ", ".join(why)
+            i = end
+            continue
+        out.extend(
+            _render(
+                name,
+                block.key_line,
+                _collapse(_decide(cells, name)),
+                run,
+            )
+        )
+        # Rows this run did not supersede -- a format it does not reach, an arch-keyed
+        # entry -- are the measurement of a different run and stay as they are.
+        # Replacing a whole op block deleted them.
+        for row in block.rows:
+            if _replaceable(row, emitted_cells):
+                continue
+            stamp = _stamp(row, block.key_line)
+            if stamp is None:
+                out.extend(lines[row.first_line : row.last_line + 1])
+            else:
+                stamped_at.append(len(out) + row.last_line - row.first_line)
+                out.extend(_restamped(table, row, stamp))
+        written.append(name)
+        i = end
     # Exactly one trailing newline: an op block carries its own trailing blank lines,
     # and the last block's leave the file ending in several. `end-of-file-fixer` then
     # rewrites the table on every commit.
     path.write_text("".join(out).rstrip("\n") + "\n", encoding="utf-8")
-    missing = sorted(set(MEASURED) - written)
-    if missing:
-        raise UnplacedMeasurements(
-            f"{path.name}: measured {', '.join(missing)} but found no key line to "
-            "write into, so those were not written; every other op was. Add the op's "
-            "block to the table first -- the emitter keeps a key line's name and comment "
-            "and only adds or replaces its `measured by:` clause, so it cannot be "
-            "generated here.",
-            written=len(written) - len(kept_verbatim),
-            kept=kept_verbatim,
-            missing=missing,
-        )
-    return len(written) - len(kept_verbatim), kept_verbatim
+    after = BudgetTable.load(path)
+    report = WriteReport(
+        path=path,
+        written={op: after.rows_of(op) for op in written},
+        kept=kept_verbatim,
+        unplaced=sorted(set(MEASURED) - set(written) - set(kept_verbatim)),
+        stamped=[row for row in after.rows if row.last_line in set(stamped_at)],
+    )
+    if report.unplaced:
+        raise UnplacedMeasurements(report)
+    return report

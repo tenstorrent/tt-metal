@@ -6,10 +6,13 @@
 No device: ``write_table`` is a line-oriented rewrite of a YAML file, and everything
 worth pinning is about what it must *not* touch. The table's rows are contracts, so a
 regeneration that quietly drops one weakens a gate with nothing to notice.
+
+Assertions read the table back through ``BudgetTable`` and compare rows and
+``Provenance`` values, never comment text: the grammar is ``Provenance.render``'s
+business, pinned once by its round-trip test.
 """
 
 import math
-import re
 
 import pytest
 import torch
@@ -17,9 +20,15 @@ from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.ulp import has_ulp_gate
+from helpers.ulp_provenance import BudgetTable, KeyLine, Kind, Provenance, RunIdentity
 from helpers.ulp_sweep import (
     EMIT_HEADROOM,
     MEASURED,
+    AmbiguousCollapse,
+    IncompleteGrid,
+    SessionNotClean,
+    UnplacedMeasurements,
+    WrongArch,
     _known_lanes,
     _normal_input,
     export_measured,
@@ -42,14 +51,6 @@ _OP = MathOperation.Abs
 _CELL = ("Float16", "Float16", "No", "No")
 
 
-def _record_full_grid(op, in_fmt, out_fmt, value):
-    """*value* on every ``approx`` x ``dest`` cell of ``in_fmt -> out_fmt``: the whole
-    grid the emitter refuses to write without."""
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record(op, (in_fmt, out_fmt, approx, dest), value)
-
-
 #: One op block with a row of each kind write_table has to tell apart.
 _TABLE = """Gelu:  # header provenance, ungeneratable
   - {in: Float16, out: Float16, max_ulp: 7}  # superseded
@@ -61,9 +62,14 @@ Log1p:
 """
 
 
-def _refuses(match, kind=ValueError):
+#: Two runs, as ``finish_emit`` would name them.
+_RUN = RunIdentity(sweep="sweep A", arch="wormhole", date="2026-09-23")
+_RUN_B = RunIdentity(sweep="sweep B", arch="wormhole", date="2026-09-24")
+
+
+def _refuses(kind):
     """The suite's ``expect_error`` fixture needs a device; these are host-only tests."""
-    return pytest.raises(kind, match=match)  # allow-pytest.raises: host-only test
+    return pytest.raises(kind)  # allow-pytest.raises: host-only test
 
 
 @pytest.fixture(autouse=True)
@@ -87,87 +93,92 @@ def table(tmp_path):
     MEASURED.clear()
 
 
-def _rows(path):
-    return [
-        l.strip() for l in path.read_text().splitlines() if l.strip().startswith("- ")
-    ]
-
-
-def _key_line(path, op):
-    return next(l for l in path.read_text().splitlines() if l.startswith(f"{op}:"))
+def _record_grid(op, in_fmt, out_fmt, value, **kw):
+    """Every approx x dest cell of one ``(in, out)``, so the emitter collapses them."""
+    for approx in ("No", "Yes"):
+        for dest in ("No", "Yes"):
+            record(op, (in_fmt, out_fmt, approx, dest), value, **kw)
 
 
 def test_only_the_cells_this_run_measured_are_replaced(table):
     """`MEASURED`, not the static SWEEP_FORMATS cross-product. A `-k` run, an interrupt
     or a driver skip must leave every cell it did not measure alone rather than render a
     whole op block from a partial session."""
-    record("Gelu", _CELL, 5)
-    assert write_table(table, "today") == (1, [])
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    report = write_table(table, _RUN)
+    assert (set(report.written), report.kept, report.unplaced) == ({"Gelu"}, {}, [])
 
-    rows = _rows(table)
-    assert "{in: Float16, out: Float16, max_ulp: 6}" in rows[0]  # 5 * 1.1, rounded up
-    assert "max 5 ULP" in rows[0]
-    # The run identity is on the op's key line, once, not repeated on every row.
-    key_line = _key_line(table, "Gelu")
-    assert "measured by: today, except where a row says otherwise" in key_line
-    assert "header provenance, ungeneratable" in key_line  # and what it already said
-    assert "today" not in rows[0]
-    assert not any("max_ulp: 7" in row for row in rows)  # the superseded cell is gone
-    # The same op's other (in, out) cell: kept.
-    assert any("{in: Float16_b, out: Float32, max_ulp: 9}" in row for row in rows)
+    after = BudgetTable.load(table)
+    gelu = after.row("Gelu", in_="Float16", out="Float16")
+    assert gelu.max_ulp == 6  # 5 * 1.1, rounded up; the superseded 7 is gone
+    # The run identity is on the op's key line, once, not on the row; and the key line
+    # keeps what it already said.
+    assert gelu.provenance == Provenance(Kind.EMITTED, measured=5)
+    assert after.key_lines["Gelu"] == KeyLine("header provenance, ungeneratable", _RUN)
+    # The same op's other (in, out) cell and the other arch's row: kept as they were.
+    kept = after.row("Gelu", in_="Float16_b", out="Float32")
+    assert kept.max_ulp == 9
+    assert kept.provenance == Provenance.hand("fp32 output, not swept")
+    assert (
+        after.row("Gelu", in_="Float16_b", out="Float16_b", arch="BLACKHOLE").max_ulp
+        == 44
+    )
+    assert len(after.rows_of("Gelu")) == 3
     # The op this run never measured: untouched, key line and row alike.
-    assert _key_line(table, "Log1p") == "Log1p:"
-    assert "{in: Float16, out: Float16_b, metric: tolerance}" in rows[-1]
+    assert after.key_lines["Log1p"] == KeyLine()
+    assert after.rows_of("Log1p") == BudgetTable(_TABLE).rows_of("Log1p")
 
 
 def test_a_second_regeneration_replaces_the_run_identity(table):
     """The key line carries which sweep the rows below came from, so a re-emit has to
     replace it. Appending would accumulate one stale run identity per regeneration, and
     the oldest would read as current."""
-    record("Gelu", _CELL, 5)
-    write_table(table, "sweep A, wormhole, 2026-09-23")
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    write_table(table, _RUN)
     MEASURED.clear()
-    record("Gelu", _CELL, 5)
-    write_table(table, "sweep B, wormhole, 2026-09-24")
-
-    key_line = _key_line(table, "Gelu")
-    assert key_line.count("measured by:") == 1
-    assert "sweep B, wormhole, 2026-09-24" in key_line
-    assert "sweep A" not in key_line
-    assert "header provenance, ungeneratable" in key_line  # and the original survives
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    write_table(table, _RUN_B)
+    assert BudgetTable.load(table).key_lines["Gelu"] == KeyLine(
+        "header provenance, ungeneratable", _RUN_B
+    )
 
 
 def test_a_row_a_narrower_re_emit_did_not_supersede_keeps_its_own_run(table):
     """Emit one `(in, out)` pair, then a different one. The second run replaces the key
-    line's clause with its own, so the first pair's rows -- which named no run, the key
+    line's run with its own, so the first pair's rows -- which named no run, the key
     line did -- would be credited to a sweep that never measured them. They take the
-    outgoing identity with them instead; a bare, hand-authored row takes the key line's
+    outgoing run with them instead; a bare, hand-authored row takes the key line's
     header, which is what it was written against."""
+    header = "0 ULP, 16 variants, 2026-09-18"
     table.write_text(
-        "Gelu:  # 0 ULP, 16 variants, 2026-09-18\n" "  - {out: Float32, max_ulp: 0}\n",
-        encoding="utf-8",
+        f"Gelu:  # {header}\n" "  - {out: Float32, max_ulp: 0}\n", encoding="utf-8"
     )
-    _record_full_grid("Gelu", "Float16", "Float16", 5)
-    write_table(table, "sweep A, wormhole, 2026-09-23")
+    _record_grid("Gelu", "Float16", "Float16", 5)
+    first = write_table(table, _RUN)
+    assert [row.key for row in first.stamped] == [(("out", "Float32"),)]
     MEASURED.clear()
-    _record_full_grid("Gelu", "Float16_b", "Float16_b", 1)
-    write_table(table, "sweep B, wormhole, 2026-09-24")
+    _record_grid("Gelu", "Float16_b", "Float16_b", 1)
+    second = write_table(table, _RUN_B)
+    f16 = (("in", "Float16"), ("out", "Float16"))
+    assert [row.key for row in second.stamped] == [f16]
 
-    assert "measured by: sweep B, wormhole, 2026-09-24" in _key_line(table, "Gelu")
-    rows = _rows(table)
-    first = next(r for r in rows if "in: Float16, out: Float16," in r)
-    assert first.endswith("# max 5 ULP, sweep A, wormhole, 2026-09-23")
-    bare = next(r for r in rows if r.startswith("- {out: Float32"))
-    assert bare.endswith("# 0 ULP, 16 variants, 2026-09-18")
-    second = next(r for r in rows if "in: Float16_b, out: Float16_b" in r)
-    assert "2026" not in second  # this run's rows name it through the key line
+    after = BudgetTable.load(table)
+    assert after.key_lines["Gelu"] == KeyLine(header, _RUN_B)
+    assert after.row("Gelu", in_="Float16", out="Float16").provenance == Provenance(
+        Kind.EMITTED, measured=5, run=_RUN
+    )
+    assert after.row("Gelu", out="Float32").provenance == Provenance.hand(header)
+    # This run's rows name it through the key line.
+    assert after.row("Gelu", in_="Float16_b", out="Float16_b").provenance == Provenance(
+        Kind.EMITTED, measured=1
+    )
 
 
 def test_a_re_emit_credits_no_run_with_a_hand_written_note_or_an_arch_row(table):
     """Only a note `_render` writes is an earlier emit's figure. A hand-written one --
     "fp32 output, not swept", or Frac's sampled `max 384 ULP, 40 variants / ...`, which
     starts like an emitted note -- names no run on the key line, and an `arch:` row is
-    one no Wormhole run measured; crediting either to the outgoing clause made the
+    one no Wormhole run measured; crediting either to the outgoing run made the
     provenance audit read a sample as exhaustive."""
     table.write_text(
         "Gelu:\n"
@@ -176,20 +187,25 @@ def test_a_re_emit_credits_no_run_with_a_hand_written_note_or_an_arch_row(table)
         "  - {in: Float16_b, out: Float16_b, arch: BLACKHOLE, max_ulp: 44}  # bh\n",
         encoding="utf-8",
     )
-    for in_fmt, run in (
-        ("Float16", "sweep A, wormhole, 2026-09-23"),
-        ("Float16_b", "sweep B, wormhole, 2026-09-24"),
-    ):
+    before = BudgetTable.load(table)
+    for in_fmt, run in (("Float16", _RUN), ("Float16_b", _RUN_B)):
         MEASURED.clear()
-        _record_full_grid("Gelu", in_fmt, in_fmt, 1)
+        _record_grid("Gelu", in_fmt, in_fmt, 1)
         write_table(table, run)
-    rows = _rows(table)
-    assert any(r.endswith("# fp32 output, not swept") for r in rows)
-    assert any(r.endswith("# max 384 ULP, 40 variants / 737k lanes") for r in rows)
-    assert any(r.endswith("max_ulp: 44}  # bh") for r in rows)
+    after = BudgetTable.load(table)
+    for key in (
+        dict(in_="Float16_b", out="Float32"),
+        dict(out="Float16"),
+        dict(in_="Float16_b", out="Float16_b", arch="BLACKHOLE"),
+    ):
+        assert (
+            after.row("Gelu", **key).provenance == before.row("Gelu", **key).provenance
+        )
+    assert after.row("Gelu", out="Float16").provenance.kind is Kind.HAND
     # And the first run's emitted rows still go with it.
-    first = next(r for r in rows if "in: Float16, out: Float16," in r)
-    assert first.endswith("# max 1 ULP, sweep A, wormhole, 2026-09-23")
+    assert after.row("Gelu", in_="Float16", out="Float16").provenance == Provenance(
+        Kind.EMITTED, measured=1, run=_RUN
+    )
 
 
 def test_a_demotion_names_the_budget_it_would_have_needed(table):
@@ -200,18 +216,19 @@ def test_a_demotion_names_the_budget_it_would_have_needed(table):
     from helpers.ulp_sweep import _verdict
 
     assert _verdict(100, "Float16_b") == ("tolerance", 110)
-    _record_full_grid("Gelu", "Float16_b", "Float16_b", 100)
-    _record_full_grid("Gelu", "Float16_b", "Bfp8_b", 3)
-    write_table(table, "today")
-    rows = _rows(table)
-    assert any(
-        "Float16_b, out: Float16_b, metric: tolerance}  # max 100 ULP, budget 110 > "
-        "ceiling 6" in r
-        for r in rows
+    _record_grid("Gelu", "Float16_b", "Float16_b", 100)
+    _record_grid("Gelu", "Float16_b", "Bfp8_b", 3)
+    write_table(table, _RUN)
+    after = BudgetTable.load(table)
+    demoted = after.row("Gelu", in_="Float16_b", out="Float16_b")
+    assert (demoted.metric, demoted.provenance) == (
+        "tolerance",
+        Provenance(Kind.DEMOTED, measured=100, budget_needed=110, ceiling=6),
     )
-    assert any(
-        "out: Bfp8_b, metric: tolerance}  # max 3 ULP, block-quantized" in r
-        for r in rows
+    block = after.row("Gelu", in_="Float16_b", out="Bfp8_b")
+    assert (block.metric, block.provenance) == (
+        "tolerance",
+        Provenance(Kind.BLOCK, measured=3),
     )
 
 
@@ -234,8 +251,12 @@ def test_a_row_for_another_architecture_survives_a_regeneration(table):
     other. Specificity lets the two rows coexist, so an arch-keyed row is never
     replaceable — even though its `in`/`out` are both swept formats."""
     record("Gelu", ("Float16_b", "Float16_b", "No", "No"), 3)
-    write_table(table, "today")
-    assert any("arch: BLACKHOLE, max_ulp: 44" in row for row in _rows(table))
+    write_table(table, _RUN)
+    after = BudgetTable.load(table)
+    assert (
+        after.row("Gelu", in_="Float16_b", out="Float16_b", arch="BLACKHOLE").max_ulp
+        == 44
+    )
 
 
 def test_a_row_carrying_a_floor_is_regenerated_from_the_measurement(table):
@@ -248,26 +269,28 @@ def test_a_row_carrying_a_floor_is_regenerated_from_the_measurement(table):
         "  - {in: Float16, out: Float16, max_ulp: 2, near_zero_atol: 5.59e-07}  # floor\n",
         encoding="utf-8",
     )
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record("Gelu", ("Float16", "Float16", approx, dest), 5)
-    assert write_table(table, "today") == (1, [])
-    text = table.read_text()
-    assert "near_zero_atol" not in text
-    assert "{in: Float16, out: Float16, max_ulp: 6}" in text
+    _record_grid("Gelu", "Float16", "Float16", 5)
+    report = write_table(table, _RUN)
+    assert (set(report.written), report.kept) == ({"Gelu"}, {})
+    (row,) = report.written["Gelu"]
+    assert (row.key, row.max_ulp, row.near_zero_atol) == (
+        (("in", "Float16"), ("out", "Float16")),
+        6,
+        None,
+    )
 
 
 @pytest.mark.parametrize(
-    "wildcard",
+    "wildcard, why",
     [
-        "{metric: tolerance, atol: 0.13, rtol: 0.05}",
-        "&lut {metric: tolerance, atol: 0.13, rtol: 0.05}",
-        "*lut",
+        ("{metric: tolerance, atol: 0.13, rtol: 0.05}", "atol, rtol"),
+        ("&lut {metric: tolerance, atol: 0.13, rtol: 0.05}", "atol, rtol"),
+        ("*lut", "alias"),
     ],
     ids=["inline", "anchor", "alias"],
 )
 def test_an_op_wide_declared_tolerance_is_not_shadowed_by_a_rendered_row(
-    table, wildcard
+    table, wildcard, why
 ):
     """SigmoidAppx's op-wide `atol: 0.13` pins no `(in, out)`, so it is not "covered" by
     any one measured cell -- but every rendered row is more specific than it, and a bare
@@ -281,8 +304,9 @@ def test_an_op_wide_declared_tolerance_is_not_shadowed_by_a_rendered_row(
     )
     table.write_text(f"{anchor}Gelu:\n  - {wildcard}\n", encoding="utf-8")
     before = table.read_text()
-    _record_full_grid("Gelu", "Float16_b", "Float16_b", 100)
-    assert write_table(table, "today") == (0, ["Gelu"])
+    _record_grid("Gelu", "Float16_b", "Float16_b", 100)
+    report = write_table(table, _RUN)
+    assert (report.written, report.kept) == ({}, {"Gelu": why})
     assert table.read_text() == before
 
 
@@ -294,8 +318,10 @@ def test_a_pinned_declared_tolerance_on_an_unmeasured_cell_does_not_block_the_op
         encoding="utf-8",
     )
     record("Gelu", ("Float16_b", "Float16_b", "No", "No"), 1)
-    assert write_table(table, "today") == (1, [])
-    assert any("atol: 0.2}  # kept" in row for row in _rows(table))
+    report = write_table(table, _RUN)
+    assert (set(report.written), report.kept) == ({"Gelu"}, {})
+    kept = BudgetTable.load(table).row("Gelu", in_="Float16", out="Float16")
+    assert (kept.values["atol"], kept.provenance) == (0.2, Provenance.hand("kept"))
 
 
 def test_a_measurement_with_nowhere_to_go_is_refused_after_writing_the_rest(table):
@@ -306,15 +332,15 @@ def test_a_measurement_with_nowhere_to_go_is_refused_after_writing_the_rest(tabl
 
     Refused only *after* every op that has a key line is written: a whole-table emit
     measures every sweepable op, and one unenrolled op must not throw the rest away."""
-    from helpers.ulp_sweep import UnplacedMeasurements
-
-    record("Sqrt", _CELL, 1)
-    record("Gelu", _CELL, 5)
-    with _refuses("no key line") as caught:
-        write_table(table, "today")
-    assert isinstance(caught.value, UnplacedMeasurements)
-    assert (caught.value.written, caught.value.missing) == (1, ["Sqrt"])
-    assert "{in: Float16, out: Float16, max_ulp: 6}" in _rows(table)[0]
+    record("Sqrt", ("Float16", "Float16", "No", "No"), 1)
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    with _refuses(UnplacedMeasurements) as caught:
+        write_table(table, _RUN)
+    assert caught.value.missing == ["Sqrt"]
+    assert set(caught.value.report.written) == {"Gelu"}
+    assert (
+        BudgetTable.load(table).row("Gelu", in_="Float16", out="Float16").max_ulp == 6
+    )
 
 
 def test_a_cell_recorded_twice_keeps_the_worst_lane():
@@ -336,8 +362,12 @@ def test_an_incomplete_grid_is_refused_rather_than_collapsed(table):
     provenance comment, so the budget audit could not catch it either."""
     record("Gelu", _CELL, 4)
     record("Gelu", ("Float16", "Float16", "Yes", "Yes"), 9)
-    with _refuses("do not form a full grid"):
-        write_table(table, "today")
+    before = table.read_text()
+    with _refuses(AmbiguousCollapse) as caught:
+        write_table(table, _RUN)
+    assert caught.value.cells == ("Float16", "Float16")
+    assert {measured for _, measured, _ in caught.value.values} == {4, 9}
+    assert table.read_text() == before
 
 
 def test_the_emitted_budget_uses_the_declared_headroom(monkeypatch):
@@ -788,7 +818,7 @@ def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():
     for op, entries in _known_lanes().items():
         for entry in entries:
             where = f"{op.name}: {entry}"
-            assert re.fullmatch(r"#\d+", entry.issue), where
+            assert entry.issue[:1] == "#" and entry.issue[1:].isdigit(), where
             assert entry.inputs and entry.low <= entry.high and entry.why, where
             # A block output is never step-gated, so there would be nothing to keep gated.
             assert has_ulp_gate(entry.output), where
@@ -843,26 +873,16 @@ def test_an_unmeasurable_cell_survives_the_xdist_merge_in_either_order(
 @pytest.mark.parametrize(
     "arch, failed, exitstatus, refusal",
     [
-        (ChipArchitecture.BLACKHOLE, 0, 0, "unkeyed rows are read as wormhole"),
-        (
-            ChipArchitecture.WORMHOLE,
-            3,
-            pytest.ExitCode.TESTS_FAILED,
-            "saw 3 failure",
-        ),
-        (
-            ChipArchitecture.WORMHOLE,
-            0,
-            pytest.ExitCode.INTERRUPTED,
-            "exit status INTERRUPTED",
-        ),
+        (ChipArchitecture.BLACKHOLE, 0, 0, WrongArch),
+        (ChipArchitecture.WORMHOLE, 3, pytest.ExitCode.TESTS_FAILED, SessionNotClean),
+        (ChipArchitecture.WORMHOLE, 0, pytest.ExitCode.INTERRUPTED, SessionNotClean),
         (
             ChipArchitecture.WORMHOLE,
             0,
             int(pytest.ExitCode.INTERRUPTED),
-            "exit status INTERRUPTED",
+            SessionNotClean,
         ),
-        (ChipArchitecture.WORMHOLE, 0, 17, "exit status 17"),
+        (ChipArchitecture.WORMHOLE, 0, 17, SessionNotClean),
     ],
     ids=[
         "other-arch",
@@ -880,10 +900,14 @@ def test_emit_refuses_what_the_session_cannot_vouch_for(
     it. The interrupted case has every touched grid complete and nothing failed: pytest
     still calls the hook after a Ctrl-C, so only the exit status knows the run stopped
     early."""
-    _record_full_grid("Gelu", "Float16", "Float16", 5)
+    _record_grid("Gelu", "Float16", "Float16", 5)
     before = table.read_text()
-    with _refuses(refusal, RuntimeError):
+    with _refuses(refusal) as caught:
         finish_emit(arch, failed, table, exitstatus=exitstatus)
+    if refusal is WrongArch:
+        assert caught.value.arch == arch
+    else:
+        assert (caught.value.failures, caught.value.exitstatus) == (failed, exitstatus)
     assert table.read_text() == before
 
 
@@ -1082,10 +1106,11 @@ def test_effective_dest_acc_asks_for_the_chip_only_for_an_outlier(monkeypatch):
         )
         == DestAccumulation.Yes
     )
-    with _refuses("looked up the chip", AssertionError):
+    with _refuses(AssertionError) as caught:
         inference.effective_dest_acc(
             DataFormat.Float16_b, DataFormat.Float16, DestAccumulation.No
         )
+    assert "looked up the chip" in str(caught.value)
 
 
 def test_the_sweep_collects_every_keyed_op_whether_gating_or_emitting(monkeypatch):
@@ -1115,12 +1140,38 @@ def test_the_sweep_collects_every_keyed_op_whether_gating_or_emitting(monkeypatc
 
 
 def test_emit_writes_on_a_clean_wormhole_session(table):
-    _record_full_grid("Gelu", "Float16", "Float16", 5)
-    message = finish_emit(
+    """And credits the key line to the sweep it ran, under the arch it ran on."""
+    from datetime import date
+
+    _record_grid("Gelu", "Float16", "Float16", 5)
+    report = finish_emit(
         ChipArchitecture.WORMHOLE, 0, table, exitstatus=pytest.ExitCode.OK
     )
-    assert message == "--ulp-emit: rewrote 1 op block(s) in budget.yaml"
-    assert "{in: Float16, out: Float16, max_ulp: 6}" in _rows(table)[0]
+    assert (set(report.written), report.kept, report.unplaced) == ({"Gelu"}, {}, [])
+    run = BudgetTable.load(table).key_lines["Gelu"].run
+    assert (run.arch, run.date, run.exhaustive) == (
+        "wormhole",
+        date.today().isoformat(),
+        True,
+    )
+    assert report.written["Gelu"][0].max_ulp == 6
+
+
+def test_the_terminal_summary_is_rendered_from_the_report(tmp_path):
+    """The one line `--ulp-emit` prints names the count and each op kept verbatim with
+    why; nothing reads it back."""
+    from helpers.ulp_sweep import WriteReport
+
+    report = WriteReport(
+        path=tmp_path / "budget.yaml",
+        written={"Gelu": [], "Exp": []},
+        kept={"Erfinv": "atol"},
+        unplaced=[],
+        stamped=[],
+    )
+    summary = report.summary()
+    assert summary.startswith("--ulp-emit: rewrote 2 op block(s) in budget.yaml; ")
+    assert "kept Erfinv (atol) verbatim" in summary
 
 
 def test_a_whole_table_emit_over_the_real_table_ends_green(tmp_path, monkeypatch):
@@ -1145,15 +1196,12 @@ def test_a_whole_table_emit_over_the_real_table_ends_green(tmp_path, monkeypatch
         for i, o, a, d in sweep_cells(ChipArchitecture.WORMHOLE):
             record(op.name, (i.name, o.name, a.name, d.name), 1)
     try:
-        message = finish_emit(ChipArchitecture.WORMHOLE, 0, path)
+        report = finish_emit(ChipArchitecture.WORMHOLE, 0, path)
     finally:
         MEASURED.clear()
-    _, _, tail = message.partition("; kept ")
-    kept = tail.split(" verbatim", 1)[0].split(", ") if tail else []
-    assert message.startswith(
-        f"--ulp-emit: rewrote {len(ops) - len(kept)} op block(s) in budget.yaml"
-    )
-    assert set(kept) <= {op.name for op in ops}
+    assert report.unplaced == []
+    assert set(report.written) | set(report.kept) == {op.name for op in ops}
+    assert not set(report.written) & set(report.kept)
 
 
 def test_the_claim_is_the_whole_format_not_the_drivers_sampling_window():
@@ -1232,11 +1280,12 @@ def test_a_not_measurable_verdict_keeps_the_measurable_lanes_maximum(table):
 
     record("Gelu", _CELL, 5)
     record_unmeasurable("Gelu", ("Float16", "Float16", "Yes", "No"), reason)
-    write_table(table, "today")
+    write_table(table, _RUN)
     (row,) = [
         row
         for row in parse_table(table.read_text(encoding="utf-8")).values()
-        if "not measurable" in row.provenance
+        if isinstance(row.provenance, Provenance)
+        and row.provenance.kind is Kind.UNMEASURABLE
     ]
     assert recorded_nonfinite(row) == 1, row.provenance
     # 3.0 -> 3.015625 is one bf16 step.
@@ -1252,14 +1301,13 @@ def test_an_unmeasurable_cell_is_written_as_its_own_verdict(table):
     record_unmeasurable(
         "Gelu", ("Float16", "Float16", "Yes", "No"), "no measurable lane"
     )
-    write_table(table, "today")
-    rows = _rows(table)
-    assert any("max_ulp: 6" in r and 'approx: "No"' in r for r in rows)
-    assert any(
-        'approx: "Yes"' in r
-        and "metric: tolerance" in r
-        and "not measurable: no measurable lane" in r
-        for r in rows
+    write_table(table, _RUN)
+    after = BudgetTable.load(table)
+    assert after.row("Gelu", in_="Float16", out="Float16", approx="No").max_ulp == 6
+    parked = after.row("Gelu", in_="Float16", out="Float16", approx="Yes")
+    assert (parked.metric, parked.provenance) == (
+        "tolerance",
+        Provenance(Kind.UNMEASURABLE, prose="no measurable lane"),
     )
 
 
@@ -1268,8 +1316,9 @@ def test_emit_refuses_a_partly_measured_grid(table):
     one would drop the rows of the cells it never reached."""
     record("Gelu", _CELL, 5)
     before = table.read_text()
-    with _refuses("Gelu Float16->Float16: 3 cell", RuntimeError):
+    with _refuses(IncompleteGrid) as caught:
         finish_emit(ChipArchitecture.WORMHOLE, 0, table)
+    assert caught.value.gaps == [("Gelu", "Float16", "Float16", 3)]
     assert table.read_text() == before
 
 
@@ -1287,19 +1336,23 @@ def test_an_op_with_an_unregenerable_row_is_kept_while_the_rest_are_written(tmp_
         encoding="utf-8",
     )
     MEASURED.clear()
-    record("Erfinv", _CELL, 5)
-    record("Gelu", _CELL, 5)
-    written, kept = write_table(path, "today")
+    record("Erfinv", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    report = write_table(path, _RUN)
     MEASURED.clear()
-    text = path.read_text()
-    assert (written, kept) == (1, ["Erfinv"])
-    assert "atol: 0.2}  # hand atol" in text
-    assert "max_ulp: 7" not in text and "max_ulp: 6" in text
+    assert (set(report.written), report.kept) == ({"Gelu"}, {"Erfinv": "atol"})
+    after = BudgetTable.load(path)
+    erfinv = after.row("Erfinv", in_="Float16", out="Float16")
+    assert (erfinv.values["atol"], erfinv.provenance) == (
+        0.2,
+        Provenance.hand("hand atol"),
+    )
+    assert [row.max_ulp for row in after.rows_of("Gelu")] == [6]
 
 
 def test_a_rewritten_block_keeps_one_blank_line_before_the_next(table):
-    record("Gelu", _CELL, 5)
-    write_table(table, "today")
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    write_table(table, _RUN)
     assert "\n\n\n" not in table.read_text()
 
 
@@ -1413,18 +1466,13 @@ def test_a_floored_cell_is_written_with_its_floor_and_read_back(table):
     unfloored maximum. The loader accepts the row as a ULP contract with a floor."""
     from helpers.sfpu_accuracy_budget import _load_table
 
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record(
-                "Gelu", ("Float16", "Float16", approx, dest), 14337, floor=(2, 2.4e-7)
-            )
-    assert write_table(table, "today") == (1, [])
-    (row,) = [r for r in _rows(table) if r.startswith("- {in: Float16, out: Float16, ")]
-    assert row.startswith(
-        "- {in: Float16, out: Float16, max_ulp: 3, near_zero_atol: 2.40e-07}"
-    )
-    assert row.endswith(
-        "# max 2 ULP outside a 2.40e-07 near-zero floor (14337 steps over every lane)"
+    _record_grid("Gelu", "Float16", "Float16", 14337, floor=(2, 2.4e-7))
+    report = write_table(table, _RUN)
+    assert (set(report.written), report.kept) == ({"Gelu"}, {})
+    row = BudgetTable.load(table).row("Gelu", in_="Float16", out="Float16")
+    assert (row.max_ulp, row.near_zero_atol) == (3, 2.4e-7)
+    assert row.provenance == Provenance(
+        Kind.FLOORED, measured=2, floor=2.4e-7, measured_all=14337
     )
     contracts = _load_table(table)[MathOperation.Gelu]
     (contract,) = [
@@ -1434,16 +1482,17 @@ def test_a_floored_cell_is_written_with_its_floor_and_read_back(table):
 
 
 def test_a_floor_that_still_leaves_the_cell_over_the_ceiling_demotes_and_says_so(table):
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record(
-                "Gelu", ("Float16", "Float16", approx, dest), 14337, floor=(100, 1e-3)
-            )
-    write_table(table, "today")
-    (row,) = [r for r in _rows(table) if r.startswith("- {in: Float16, out: Float16, ")]
-    assert "metric: tolerance}" in row and "near_zero_atol" not in row
-    assert row.endswith(
-        "# max 14337 ULP, budget 15771 > ceiling 51; 100 ULP outside a 1.00e-03 near-zero floor"
+    _record_grid("Gelu", "Float16", "Float16", 14337, floor=(100, 1e-3))
+    write_table(table, _RUN)
+    row = BudgetTable.load(table).row("Gelu", in_="Float16", out="Float16")
+    assert (row.metric, row.near_zero_atol) == ("tolerance", None)
+    assert row.provenance == Provenance(
+        Kind.DEMOTED,
+        measured=14337,
+        budget_needed=15771,
+        ceiling=51,
+        floor=1e-3,
+        residual=100,
     )
 
 
