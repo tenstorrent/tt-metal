@@ -11,6 +11,8 @@
 #include "ckernel.h"
 #endif
 
+// Not copy_via_memmove: that invalidates and drains on every copy, while these readers invalidate once per NOC wait
+// and drain once after a batch of copies.
 namespace codegen_kernels {
 
 // Copies with RISC stores of T, which must divide `bytes` and both addresses. Returns the last store's address.
