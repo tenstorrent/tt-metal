@@ -30,8 +30,20 @@ def _build(mesh_device):
         "down_proj": hf_experts.down_proj.data.clone(),
     }
     hf_config = TestFactory.create_hf_config()
-    tp, ep = mesh_device.shape[1], mesh_device.shape[0]
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp, ep=ep), prefill=ModeConfig(tp=tp, ep=ep))
+    if tuple(mesh_device.shape) == (8, 4):
+        # the Galaxy one-instance orientation: TP on the size-8 axis 0, fractured dense weights, lanes/EP over
+        # the 4 columns (4 whole experts per chip)
+        tp, ep = mesh_device.shape[0], mesh_device.shape[1]
+        mesh_config = MeshConfig(
+            mesh_device.shape,
+            decode=ModeConfig(tp=tp, ep=ep),
+            prefill=ModeConfig(tp=tp, ep=ep),
+            tp_axis=0,
+            weight_fracture=True,
+        )
+    else:
+        tp, ep = mesh_device.shape[1], mesh_device.shape[0]
+        mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp, ep=ep), prefill=ModeConfig(tp=tp, ep=ep))
     mesh_config.lane_sharded = True  # lanes = the ep axis
     ccl_manager = CCLManager(mesh_device, num_links=1)
     experts = Gemma4Experts(
@@ -72,11 +84,7 @@ def _run(experts, mesh_device, mesh_config, hidden, routing):
     x = ttnn.from_torch(hidden, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper)
     r = ttnn.from_torch(routing, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper)
     out = experts(x, r)
-    per_lane = []
-    tp = mesh_device.shape[1]
-    for lane in range(mesh_device.shape[0]):
-        per_lane.append(ttnn.to_torch(ttnn.get_device_tensors(out)[lane * tp]).reshape(-1, hidden.shape[-1]).float())
-    return per_lane
+    return _read_lanes(out, mesh_device, hidden.shape[-1])
 
 
 def _check(got, ref, request, what):
@@ -85,10 +93,10 @@ def _check(got, ref, request, what):
 
 
 @skip_if_not_moe
-@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4), (8, 4)])
 def test_lane_parallel_prefill(mesh_device, reset_seeds, request):
     hf_config, hf_experts, mesh_config, experts = _build(mesh_device)
-    lanes = mesh_device.shape[0]
+    lanes = _num_lanes(mesh_device)
     hidden, routing, idx, wts = _inputs(hf_config, lanes, ROWS, seed=1)
     mesh_config._g4_single_lane_prefill_owner = None
     per_lane = _run(experts, mesh_device, mesh_config, hidden, routing)
@@ -97,10 +105,10 @@ def test_lane_parallel_prefill(mesh_device, reset_seeds, request):
 
 
 @skip_if_not_moe
-@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4), (8, 4)])
 def test_single_owner_prefill_every_lane(mesh_device, reset_seeds, request):
     hf_config, hf_experts, mesh_config, experts = _build(mesh_device)
-    lanes = mesh_device.shape[0]
+    lanes = _num_lanes(mesh_device)
     hidden, routing, idx, wts = _inputs(hf_config, lanes, ROWS, seed=2)
     for owner in range(lanes):
         mesh_config._g4_single_lane_prefill_owner = owner
@@ -113,11 +121,11 @@ def test_single_owner_prefill_every_lane(mesh_device, reset_seeds, request):
 
 
 @skip_if_not_moe
-@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4), (8, 4)])
 def test_decode_rows_after_owner_prefill(mesh_device, reset_seeds, request):
     """Served order: owner-0 prefill, decode rows (1 per lane), owner-1 prefill, decode rows again."""
     hf_config, hf_experts, mesh_config, experts = _build(mesh_device)
-    lanes = mesh_device.shape[0]
+    lanes = _num_lanes(mesh_device)
     hidden_p, routing_p, idx_p, wts_p = _inputs(hf_config, lanes, ROWS, seed=3)
     hidden_d, routing_d, idx_d, wts_d = _inputs(hf_config, lanes, 1, seed=4)
     for owner in range(lanes):
@@ -140,22 +148,31 @@ def test_decode_rows_after_owner_prefill(mesh_device, reset_seeds, request):
 DECODE_ROWS = 32  # one tile of decode rows per lane (the served B=32 per lane)
 
 
+def _lane_device_indices(mesh_device):
+    """Row-major index of each lane's first chip: lanes on axis 1 for the (8,4) Galaxy orientation, axis 0 otherwise."""
+    rows, cols = (int(x) for x in mesh_device.shape)
+    if (rows, cols) == (8, 4):
+        return list(range(cols))
+    return [lane * cols for lane in range(rows)]
+
+
+def _num_lanes(mesh_device):
+    return len(_lane_device_indices(mesh_device))
+
+
 def _read_lanes(out, mesh_device, hidden_dim):
-    tp = mesh_device.shape[1]
-    return [
-        ttnn.to_torch(ttnn.get_device_tensors(out)[lane * tp]).reshape(-1, hidden_dim).float()
-        for lane in range(mesh_device.shape[0])
-    ]
+    shards = ttnn.get_device_tensors(out)
+    return [ttnn.to_torch(shards[i]).reshape(-1, hidden_dim).float() for i in _lane_device_indices(mesh_device)]
 
 
 @skip_if_not_moe
-@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4)], device_params_extra={"trace_region_size": 64_000_000})
+@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4), (8, 4)], device_params_extra={"trace_region_size": 64_000_000})
 def test_traced_decode_rows_around_eager_prefill(mesh_device, reset_seeds, request):
     """Served order with a captured decode trace: capture the decode-row graph once (as warmup does),
     replay it, run an eager owner prefill, replay with reloaded rows, run an eager lane-parallel prefill,
     replay again. Every replay and every prefill is checked against the HF experts."""
     hf_config, hf_experts, mesh_config, experts = _build(mesh_device)
-    lanes = mesh_device.shape[0]
+    lanes = _num_lanes(mesh_device)
     hidden_dim = hf_config.hidden_size
     mapper = mesh_config.lane_shard_mapper(mesh_device, tensor_dim=2)
 

@@ -195,7 +195,9 @@ def create_tt_model(
     # (#54831: 2085 of 2131 keys served as torch.empty and written to disk). Bump the layout tag
     # whenever a cache filename scheme changes.
     _cache_layout = {
-        "layout": "v2-fused-gate-up-ws",
+        # v3: routed experts are stored whole per chip (*_ep{ep}tp{tp}_whole_* fused [up|gate]) instead
+        # of intermediate-sliced; the v2 marker certified only the old expert filenames.
+        "layout": "v3-experts-whole-ep-tp",
         # Fractured builds write *_f8x4_* MLP files; a marker seeded by a plain
         # TP build must not certify them.
         "weight_layout": (

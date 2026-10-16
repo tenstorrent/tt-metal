@@ -4,12 +4,13 @@
 """
 Weight loading for Gemma4 routed experts.
 
-Unfuses HF gate_up_proj [num_experts, 2*intermediate, hidden] into separate
-gate and up projections for sparse_matmul.
+Keeps HF gate_up_proj [num_experts, 2*intermediate, hidden] fused ([up | gate] on N) and
+shards whole experts over the (ep, tp) mesh axes for sparse_matmul (Qwen3.6 MoE layout).
 
 No bias in Gemma4 experts (unlike GPT-OSS).
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -55,6 +56,26 @@ def _expert_parallel_factors(mesh_device, mesh_config):
     return ep, tp, ep_axis, tp_axis
 
 
+def _refuse_placeholder_on_cache_miss(state_dict, cache_prefixes, weight_dtype):
+    """A warm-cache placeholder state dict (``is_placeholder``) carries dataless ``torch.empty``
+    tensors. ``ttnn.as_tensor`` only discards them on a cache HIT; on a miss it would convert the
+    garbage and persist it as the cache entry (the 26B served zero expert outputs after the layout
+    change renamed the expert tensorbins). Refuse up front so a renamed layout forces a cold load."""
+    if not getattr(state_dict, "is_placeholder", False):
+        return
+    missing = [
+        f"{prefix}_dtype_{weight_dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
+        for prefix in cache_prefixes
+        if prefix is None
+        or not os.path.isfile(f"{prefix}_dtype_{weight_dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
+    ]
+    if missing:
+        raise RuntimeError(
+            "Expert weight cache miss with a warm-cache placeholder state dict; refusing to persist dataless "
+            f"tensors. Cold-load the checkpoint (delete the .weights_complete marker or set the force env). Missing: {missing}"
+        )
+
+
 def load_expert_weights(
     mesh_device,
     config,
@@ -98,12 +119,20 @@ def load_expert_weights(
     fused_src = state_dict.get("gate_up_proj") if state_dict else None
     down_src = state_dict.get("down_proj") if state_dict else None
     if is_mesh:
-        # mesh axis 0 shards dims[0], axis 1 shards dims[1]; tensor dim 0 = ep, dim 1 = tp
-        dims = (1, 0) if tp_axis == 0 else (0, 1)
+        # mesh axis 0 shards dims[0], axis 1 shards dims[1]; tensor dim 0 = ep, dim 1 = tp. An axis
+        # whose factor is 1 replicates (None): a size-1 tensor dim cannot be split over it.
+        ep_dim = 0 if ep > 1 else None
+        tp_dim = 1 if tp > 1 else None
+        dims = (tp_dim, ep_dim) if tp_axis == 0 else (ep_dim, tp_dim)
         mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=dims)
     else:
         mapper = None
     suffix = f"_ep{ep}tp{tp}_whole_{dtype_to_str(weight_dtype)}"
+    _refuse_placeholder_on_cache_miss(
+        state_dict,
+        [get_cache_file_name(tensor_cache_path, f"{n}{suffix}") for n in ("gate_up_proj", "down_proj")],
+        weight_dtype,
+    )
 
     def _load(name, src, preprocess):
         # per chip: [1, E_loc, K, N]
