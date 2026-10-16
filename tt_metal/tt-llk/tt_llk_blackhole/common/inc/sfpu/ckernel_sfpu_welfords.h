@@ -10,7 +10,8 @@
 // presenting another SFPU instruction triggers a stall and takes three.
 #define WELFORD_SFPU_INDEPENDENT_SHFT2_NOP() TTI_SFPNOP
 #define WELFORD_SFPU_ONLINE_HAZARD_NOP()
-#define WELFORD_SFPU_INSTR_PER_ROW 6
+// Four SFPMAD. Blackhole's scoreboard stalls each dependent read, so the row has no NOP.
+#define WELFORD_SFPU_INSTR_PER_ROW 4
 #include "ckernel_sfpu_welfords_common.h"
 #undef WELFORD_SFPU_INSTR_PER_ROW
 #undef WELFORD_SFPU_ONLINE_HAZARD_NOP

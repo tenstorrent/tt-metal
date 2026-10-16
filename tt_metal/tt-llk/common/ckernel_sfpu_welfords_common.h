@@ -97,9 +97,9 @@ sfpi_inline void _welfords_load_block_()
  * LREGs as tabulated below.
  *
  * - input_lreg: Input value (new sample x_{N+1}) (Either LREG0, LREG1, LREG2, or LREG3)
- * - LREG4: Mean of previous samples (mean_{N})
+ * - LREG4: Mean of previous samples (mean_{N}), then the updated mean (mean_{N+1})
  * - LREG5: Running sum of squared differences from the current mean (M2_{N})
- * - LREG6: Placeholder for the new mean (mean_{N+1})
+ * - LREG6: α = x_{N+1} - mean_{N}, kept live so the new mean can land in LREG4
  * - LREG7: Reciprocal of sample count (1/(N+1))
  *
  * The computation proceeds as:
@@ -114,44 +114,25 @@ sfpi_inline void _welfords_load_block_()
 template <std::uint32_t input_lreg>
 sfpi_inline void _compute_welfords_row_()
 {
-    // mean calculation
-    // ----------------
-    // mean_{N_+1} = mean_{N} + ((1/N+1) * (x_{N+1} - mean_{N}))
-    // Let α = x_{N+1} - mean_{N} and β = 1/N+1
-    // Then mean_{N+1} = mean_{N} + α * β
-
-    // 1. Calculate α = x_{N+1} - mean_{N}
+    // α = x_{N+1} - mean_N. Kept in LREG6 for the M2 step.
     // LREG6 = -1 * LREG4 + input_lreg
     TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, ckernel::p_sfpu::LREG6, 0);
     // Wormhole needs a dependency-hazard NOP here; Blackhole does not.
     WELFORD_SFPU_ONLINE_HAZARD_NOP();
 
-    // 2. Calculate α * β + mean_{N}
-    // LREG6 = LREG6 * LREG7 + LREG4
-    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG6, 0);
-
-    // m2 calculation
-    // ---------------
-    // m2_{N+1} = m2_{N} + (x_{N+1} - mean_{N}) * (x_{N+1} - mean_{N+1})
-    // Let α = x_{N+1} - mean_{N} and β = x_{N+1} - mean_{N+1}
-    // Then m2_{N+1} = m2_{N} + α * β
-
-    // 1. Re-calculate α in lREG4 since LREG6 now contains the new mean
-    // LREG4 = -1 * LREG4 + input_lreg
-    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, ckernel::p_sfpu::LREG4, 0);
-
-    // 2. Calculate β = x_{N+1} - mean_{N+1}
-    // input_lreg = -1 * LREG6 + input_lreg
-    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG6, input_lreg, input_lreg, 0);
-    // Wormhole needs a dependency-hazard NOP here; Blackhole does not.
+    // mean_{N+1} = α / (N+1) + mean_N, written directly over the old mean.
+    // LREG4 = LREG6 * LREG7 + LREG4
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG4, 0);
     WELFORD_SFPU_ONLINE_HAZARD_NOP();
 
-    // 3. Calculate m2_{N+1} = α * β + m2_{N}
-    // LREG5 = LREG4 * input_lreg + LREG5
-    TTI_SFPMAD(ckernel::p_sfpu::LREG4, input_lreg, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
+    // β = x_{N+1} - mean_{N+1}
+    // input_lreg = -1 * LREG4 + input_lreg
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, input_lreg, 0);
+    WELFORD_SFPU_ONLINE_HAZARD_NOP();
 
-    // Moves mean to LREG4 from LREG6 since it now is considered the past mean
-    TTI_SFPMOV(0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG4, 0);
+    // M2_{N+1} = α * β + M2_N
+    // LREG5 = LREG6 * input_lreg + LREG5
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, input_lreg, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
 }
 
 /**
@@ -698,10 +679,10 @@ sfpi_inline void _two_pass_store_split_mean_var_to_dst_row_(std::uint32_t recipr
     TTI_SFPMUL(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG4, 0);
     WELFORD_SFPU_ONLINE_HAZARD_NOP();
 
-    constexpr std::uint32_t offset0                = 0;
-    constexpr std::uint32_t offset1                = 2;
-    constexpr std::uint32_t offset2                = 16;
-    constexpr std::uint32_t offset3                = 18;
+    constexpr std::uint32_t offset0 = 0;
+    constexpr std::uint32_t offset1 = 2;
+    constexpr std::uint32_t offset2 = 16;
+    constexpr std::uint32_t offset3 = 18;
 
     // Save variance while the two transpose groups form row 0 (anchor) and
     // row 16 (anchor - mean) of one split-mean tile.
@@ -996,7 +977,7 @@ sfpi_inline void _two_pass_horizontal_sum_mean_()
 #define TWO_PASS_REDUCE_ROTATE_MEAN()                                                                     \
     TTI_SFPSHFT2(0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1); \
     TTI_SFPNOP
-#define TWO_PASS_REDUCE_ADD_MEAN()    TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG0, 0)
+#define TWO_PASS_REDUCE_ADD_MEAN() TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG0, 0)
 
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 0);
     TWO_PASS_REDUCE_ROTATE_MEAN();
@@ -1102,7 +1083,7 @@ sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32
     TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, reciprocal_bits >> 16);
     TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, reciprocal_bits & 0xffff);
     TTI_SFPMUL(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG5, 0);
-    constexpr std::uint32_t scratch_tile_offset = 128;
+    constexpr std::uint32_t scratch_tile_offset   = 128;
     constexpr std::uint32_t scratch_anchor_offset = scratch_tile_offset + 4;
 
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, 0);
