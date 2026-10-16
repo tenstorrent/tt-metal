@@ -51,7 +51,8 @@ def test_combine_plan(mesh_device, device_params, routing):
     wbits = gates.view(torch.int16).to(torch.int64) & 0xFFFF
     luts, nps = port_luts(mesh_device)
     rep = ttnn.ReplicateTensorToMesh(mesh_device)
-    ROWS = os.environ.get("FC_PLAN_ROWS") == "1"  # (the routing as [N S, K] row-major: a page per token)
+    ROWS = os.environ.get("FC_PLAN_ROWS", "0") in ("1", "2")  # (the routing as [N S, K] row-major: a page per token)
+    JOINT = os.environ.get("FC_PLAN_ROWS") == "2"  # (one [N S, 2 K] uint16 tensor: ids then weight bits per token)
     shp = (N * S, K) if ROWS else (1, -1)
     ids_t = ttnn.from_torch(
         ids.reshape(*shp).to(torch.int32),
@@ -72,8 +73,14 @@ def test_combine_plan(mesh_device, device_params, routing):
     m = int(os.environ.get("FC_PLAN_CORES", "8"))  # (0: the one-core planner)
     cores = [(i % 8, i // 8) for i in range(m)] if m else None
     run = combine_planner_prepare(
-        mesh_device, S=S, K=K, EPC=EPC, A=A, L=L, port_luts=luts, n_ports=nps, rows_cap=ROWS_CAP, cores=cores, row_pages=ROWS
+        mesh_device, S=S, K=K, EPC=EPC, A=A, L=L, port_luts=luts, n_ports=nps, rows_cap=ROWS_CAP, cores=cores, row_pages=ROWS, joint=JOINT
     )
+    if JOINT:
+        both = torch.cat([ids.reshape(N * S, K).to(torch.int64), wbits.reshape(N * S, K)], 1).to(torch.int32)
+        ids_t = w_t = ttnn.from_torch(
+            both, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rep,
+        )
     outs = run(ids_t, w_t)
     ttnn.synchronize_device(mesh_device)
     got = {

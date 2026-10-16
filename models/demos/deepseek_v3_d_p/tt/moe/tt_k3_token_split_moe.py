@@ -204,7 +204,7 @@ class TtK3TokenSplitMoE:
         self.rows_cap = rows_cap
         chips = [(r, c) for r in range(R) for c in range(C)]
         self._planner_args = dict(S=S, K=d.K, EPC=EPC, L=2, port_luts=luts, n_ports=nps, rows_cap=rows_cap,
-                                  cores=sorted(pcores, key=lambda c: (c[1], c[0])), row_pages=True)
+                                  cores=sorted(pcores, key=lambda c: (c[1], c[0])), row_pages=True, joint=True)
         probe = combine_planner_prepare(mesh_device, A=15, **self._planner_args)  # (outputs only: their addresses)
         self.combine = sparse_combine_rf_prepare(
             mesh_device, S, d.latent, {ch: [] for ch in chips}, num_links=2, n_acc=16, depth=int(os.environ.get("K3_D", "4")),
@@ -254,7 +254,7 @@ class TtK3TokenSplitMoE:
         yr = self._linear(n, self.w_lu, self.cfg)
         y = ttnn.add(yr, self.shared(x))
         ttnn.synchronize_device(self.mesh)
-        for t in (x, ids, wts, gi, gw, lat, xg, o, n, yr, y):
+        for t in (x, ids, wts, gi, lat, xg, o, n, yr, y):  # (gw is gi)
             ttnn.deallocate(t)
 
     # -- the ops (per chip; tensors on the mesh) --
@@ -269,20 +269,19 @@ class TtK3TokenSplitMoE:
         return ids, wts
 
     def gather_routing(self, ids, wts):
-        """ids (uint16 TILE [S, K]) / weights (bf16 row-major [S, K]) -> [N S, K] row-major, home-major (an all-gather
-        over the columns, then the rows), replicated: the planner reads a page per token (row_pages)."""
-
-        def ag(t):
-            a = ttnn.all_gather(t, dim=0, cluster_axis=1)
-            b = ttnn.all_gather(a, dim=0, cluster_axis=0)
-            ttnn.deallocate(a)
-            return b
-
+        """ids (uint16 TILE [S, K]) / weights (bf16 row-major [S, K]) -> one [N S, 2 K] uint16 row-major tensor, each
+        token's ids then its weights' bits (64 B a token), home-major (an all-gather over the columns, then the rows),
+        replicated: the planner reads a page per token (row_pages, joint)."""
         ids_rm = ttnn.to_layout(ids, ttnn.ROW_MAJOR_LAYOUT)
         w = wts if wts.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(wts, ttnn.ROW_MAJOR_LAYOUT)
-        gi, gw = ag(ids_rm), ag(w)
+        w16 = ttnn.bitcast(w, ttnn.uint16)
+        both = ttnn.concat([ids_rm, w16], dim=1)
         ttnn.deallocate(ids_rm)
-        return gi, gw
+        a = ttnn.all_gather(both, dim=0, cluster_axis=1)
+        ttnn.deallocate(both)
+        g = ttnn.all_gather(a, dim=0, cluster_axis=0)
+        ttnn.deallocate(a)
+        return g, g
 
     def latent_down(self, x):
         lat = self._linear(x, self.w_ld, self.cfg)
@@ -362,6 +361,6 @@ class TtK3TokenSplitMoE:
         mark("sum")
         inter = dict(ids=ids, wts=wts, gi=gi, gw=gw, lat=lat, xg=xg, yr=yr, ys=ys) if keep else None
         if not keep:
-            for t in (ids, wts, gi, gw, lat, xg, yr, ys):
+            for t in (ids, wts, gi, lat, xg, yr, ys):  # (gw is gi)
                 ttnn.deallocate(t)
         return (y, inter) if keep else y

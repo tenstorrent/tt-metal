@@ -71,6 +71,21 @@ def test_routing_gather(mesh_device, device_params):
         logger.info(f"PROBE w: {out.dtype} {out.layout} {tuple(out.shape)}")
         return ids
 
+    def c5():  # ids + weights as one [S, 2K] uint16 row-major (64 B a token), gathered on dim 0
+        ids_rm = ttnn.to_layout(ids, ttnn.ROW_MAJOR_LAYOUT)
+        w16 = ttnn.bitcast(wts, ttnn.uint16)
+        both = ttnn.concat([ids_rm, w16], dim=1)
+        a = ttnn.all_gather(both, dim=0, cluster_axis=1)
+        out = ttnn.all_gather(a, dim=0, cluster_axis=0)
+        got = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).to(torch.int64) & 0xFFFF
+        wref = torch.cat([ttnn.to_torch(t).reshape(S, K) for t in ttnn.get_device_tensors(wts)]).view(torch.int16).to(torch.int64) & 0xFFFF
+        ok = torch.equal(got[:, :K].reshape(-1), ref_ids) and torch.equal(got[:, K:], wref)
+        logger.info(f"PROBE c5: {out.dtype} {out.layout} {tuple(out.shape)} equal={ok}")
+
+    try:
+        c5()
+    except Exception as e:  # noqa: BLE001
+        logger.info(f"PROBE c5: FAILED {str(e).splitlines()[0][:200]}")
     for n, f in (("c1", c1), ("c2", c2), ("c3", c3)):
         chain(n, f)
     try:

@@ -448,39 +448,45 @@ void kernel_main() {
         for (uint32_t i = 0; i < 1024; ++i) plan[i] = 0;  // (before my counts go out: the others' atomics follow them)
     }
     const uint32_t c0 = p * CH, chl = c0 >= T ? 0 : (T - c0 < CH ? T - c0 : CH);
-    // the routing: one page of all T entries, or (RP) one page of RP bytes per token row ([N S, K] row-major)
-    constexpr uint32_t RP = __RPAGE__;
+    // the routing: one page of all T entries, or one page per token row ([N S, K] row-major, RP = 2 K bytes), or
+    // (JW) one page per token of its K ids then its K weights ([N S, 2 K] uint16, RP = 4 K bytes; wts = ids)
+    constexpr uint32_t RP = __RPAGE__, JW = __RJOINT__, RB = 2 * K;  // (RB: one row's ids, or weights, in bytes)
     const InterleavedAddrGen<true> ids_g = {.bank_base_address = ids_addr, .page_size = RP ? RP : T * 2};
     const InterleavedAddrGen<true> w_g = {.bank_base_address = w_addr, .page_size = RP ? RP : T * 2};
     // (row pages land 64 bytes apart in local scratch, free until the sort: a DRAM read keeps its source's 64-byte
-    // alignment in L1; then packed)
-    uint32_t stg = B + O_BUCK, pk_src[3], pk_dst[3], pk_rows[3], npk = 0;
-    auto rd = [&](const InterleavedAddrGen<true>& g, uint32_t e0, uint32_t n, uint32_t dst, bool home = false) {
+    // alignment in L1; then unpacked)
+    uint32_t stg = B + O_BUCK, pk_src[3], pk_dst[3], pk_dw[3], pk_rows[3], npk = 0;
+    auto rd = [&](const InterleavedAddrGen<true>& g, uint32_t e0, uint32_t n, uint32_t dst, uint32_t dst_w,
+                  bool home = false) {
         if (home) stg = B + O_STG;  // (the home ids: in the slice staging, sized for them; the bucket region's tail
                                     // is the other cores' counts exchange, written any time)
         if constexpr (RP == 0) {
             noc_async_read(get_noc_addr(0, g) + e0 * 2, dst, al64(n * 2));
         } else {
-            const uint32_t r0 = e0 / (RP / 2), rows = n / (RP / 2);
+            const uint32_t r0 = e0 / K, rows = n / K;
             for (uint32_t r = 0; r < rows; ++r) noc_async_read(get_noc_addr(r0 + r, g), stg + r * 64, RP);
-            pk_src[npk] = stg, pk_dst[npk] = dst, pk_rows[npk++] = rows;
+            pk_src[npk] = stg, pk_dst[npk] = dst, pk_dw[npk] = dst_w, pk_rows[npk++] = rows;
             stg += rows * 64;
         }
     };
     if (chl) {
-        rd(ids_g, c0, chl, B + O_IDS);
-        rd(w_g, c0, chl, B + O_WTS);
+        rd(ids_g, c0, chl, B + O_IDS, JW ? B + O_WTS : 0);
+        if constexpr (!JW) rd(w_g, c0, chl, B + O_WTS, 0);
     }
-    if (p < A) rd(ids_g, ME * SK, SK, B + O_HOME, true);  // (owners only)
+    if (p < A) rd(ids_g, ME * SK, SK, B + O_HOME, 0, true);  // (owners only)
     noc_async_read_barrier();
     invalidate_l1_cache();
     if constexpr (RP != 0) {
-        static_assert(RP % 4 == 0 && RP <= 64, "row pages");
+        static_assert(RP <= 64 && RB % 4 == 0 && RP == (JW ? 2 : 1) * RB, "row pages");
         for (uint32_t q = 0; q < npk; ++q) {
             for (uint32_t r = 0; r < pk_rows[q]; ++r) {
                 const volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pk_src[q] + r * 64);
-                volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pk_dst[q] + r * RP);
-                for (uint32_t w = 0; w < RP / 4; ++w) dst[w] = src[w];
+                volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pk_dst[q] + r * RB);
+                for (uint32_t w = 0; w < RB / 4; ++w) dst[w] = src[w];
+                if (pk_dw[q]) {
+                    volatile tt_l1_ptr uint32_t* dw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pk_dw[q] + r * RB);
+                    for (uint32_t w = 0; w < RB / 4; ++w) dw[w] = src[RB / 4 + w];
+                }
             }
         }
     }
@@ -843,11 +849,13 @@ def port_luts(mesh_device, num_links):
 
 
 def combine_planner_prepare(
-    mesh_device, *, S, K, EPC, A, L, port_luts, n_ports, rows_cap, core=(0, 0), cores=None, row_pages=False
+    mesh_device, *, S, K, EPC, A, L, port_luts, n_ports, rows_cap, core=(0, 0), cores=None, row_pages=False, joint=False
 ):
     """port_luts[coord] = 8 port ids (direction * 2 + link; 0xFF none), n_ports[coord] = P. Returns run(ids, wts) ->
     dict of the per-chip output tensors (counts, regions, token_index, table, plan), allocated once. ids / wts: one
-    row-major page [1, N S K] each, or with row_pages (the multi-core planner) [N S, K] row-major (a page per token)."""
+    row-major page [1, N S K] each, or with row_pages (the multi-core planner) [N S, K] row-major (a page per token),
+    or with joint (and row_pages) one [N S, 2 K] uint16 row-major tensor, each token's ids then its weights' bits
+    (run(t, t))."""
     R, C = tuple(mesh_device.shape)
     N = R * C
     NG = N * EPC
@@ -887,6 +895,7 @@ def combine_planner_prepare(
         assert (S * K) % M == 0
         HS = S * K // M
         assert not row_pages or CH % K == 0
+        assert not joint or row_pages
         HR = S if row_pages else 0  # (row pages: chunk ids + weights land in the bucket region, the home ids in the
         assert not row_pages or (2 * K <= 64 and 64 * 2 * CH // K <= CH * 8)  # slice staging; 64 B a row)
 
@@ -934,7 +943,8 @@ def combine_planner_prepare(
                     rt[x[0]][x[1]] = head + [pi] + pxy + [int(tdbg_t.buffer_address())] + rect
                 pd.kernels = [
                     ttnn.KernelDescriptor(
-                        kernel_source=(_PLANNER_MC2 if V2 else _PLANNER_MC).replace("__RPAGE__", str(2 * K if row_pages else 0)),
+                        kernel_source=(_PLANNER_MC2 if V2 else _PLANNER_MC).replace("__RPAGE__", str((4 if joint else 2) * K if row_pages else 0))
+                        .replace("__RJOINT__", str(int(joint))),
                         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                         core_ranges=mcs,
                         compile_time_args=[me, R, C, S, K, EPC, NG, A, L, n_ports[(r, cc)], rows_cap, M, CH]

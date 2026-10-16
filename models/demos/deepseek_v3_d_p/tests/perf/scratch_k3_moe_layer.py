@@ -74,8 +74,9 @@ def test_k3_moe_layer(mesh_device, device_params):
     y, inter = moe(xt, keep=True)
     ttnn.synchronize_device(mesh_device)
     yd = torch.cat([ttnn.to_torch(t).reshape(S, d.H) for t in ttnn.get_device_tensors(y)]).float()
-    gi = ttnn.to_torch(ttnn.get_device_tensors(inter["gi"])[0]).to(torch.int64).reshape(N * S, d.K) & 0xFFFF
-    gw = ttnn.to_torch(ttnn.get_device_tensors(inter["gw"])[0]).float().reshape(N * S, d.K)
+    g = ttnn.to_torch(ttnn.get_device_tensors(inter["gi"])[0]).to(torch.int64).reshape(N * S, 2 * d.K) & 0xFFFF
+    gi = g[:, : d.K]  # (the joint routing rows: ids, then the weights' bf16 bits)
+    gw = g[:, d.K :].to(torch.int16).view(torch.bfloat16).float()
     # the reference with the device's routing (the rest of the block), and with its own (routing agreement)
     yref_dev, _, _ = reference_k3_moe(x, w, d, ids=gi, wts=gw)
     yref, ids_ref, wts_ref = reference_k3_moe(x, w, d)

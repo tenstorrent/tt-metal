@@ -811,3 +811,7 @@ Per stage now (us): router 136 (gate 42 + top-k 95), routing gather 292 (four tt
 each), planner 98, latent down 131, arena zero 6, dispatch 394, experts + combine 2526, norm + latent up 236
 (to tile 54, rms_norm 58, linear 124), shared 766 (gate 197, up 198, situ_glu 179, down 196), add 33: 4617 us (was
 5223). Exact as before (PCC 0.99623, repeat call bit-identical).
+- Joint routing rows (`joint=True`): ids and the weights' bf16 bits concatenated per token ([N S, 2 K] uint16, 64 B a
+  token: bitcast + concat), so one all-gather pair instead of two. Planner bit-exact (uniform 95, packed 154 us
+  standalone). Routing gather 292 -> 163 us (the two all-gathers 54 + 88 us: mostly launch skew after the stage
+  sync), block 4617 -> 4487 us, exact.
