@@ -84,8 +84,10 @@ def measure_noise(control_before, control_after, control_ids):
 
 
 def build(calls_doc, raw, meta):
-    """`raw`: time runs per label (`before`, `after`, `ctl_before`, `ctl_after`: one worker JSON or
-    None per round), `device`: per round `{(impl, call index): {"ns", "ops"}}`, `control_ids`."""
+    """`raw`: time runs per label (`before`, `after_default`, `after`, `ctl_before`, `ctl_after`: one
+    worker JSON or None per round; `after_default` and `before` both run the default only, so Q1
+    compares like with like, `after` runs every implementation for Q2), `device`: per round `{(impl, call index): {"ns", "ops"}}`, `control_ids`.
+    """
     noise = measure_noise(raw["time"]["ctl_before"], raw["time"]["ctl_after"], raw["control_ids"])
     noise_pct = noise["noise_pct"]
     rows, skipped = [], []
@@ -93,7 +95,8 @@ def build(calls_doc, raw, meta):
         cid = call["id"]
         before = {"default": series(raw["time"]["before"], cid, "default")}
         after = {impl: series(raw["time"]["after"], cid, impl) for impl in ("default", "native", "codegen")}
-        q1 = _comparison(before["default"], after["default"], noise_pct)
+        after_solo = series(raw["time"]["after_default"], cid, "default")
+        q1 = _comparison(before["default"], after_solo, noise_pct)
         q2 = {impl: _comparison(after["default"], after[impl], noise_pct) for impl in ("native", "codegen")}
         beaten_by = [i for i, c in q2.items() if c["comparable"] and c["verdict"] == "faster"]
         device = {}
@@ -113,6 +116,7 @@ def build(calls_doc, raw, meta):
                 "call": {k: call[k] for k in ("shape", "dtype", "layout", "memory_config", "args")},
                 "before": before,
                 "after": after,
+                "after_default_only": after_solo,
                 "q1": q1,
                 "q2": q2,
                 "fastest_option_used": None if not any(c["comparable"] for c in q2.values()) else not beaten_by,

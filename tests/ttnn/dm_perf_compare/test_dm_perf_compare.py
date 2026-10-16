@@ -121,6 +121,7 @@ def results_for(after_default, after_native, before=100.0, digest_native="d"):
     raw = {
         "time": {
             "before": run(None, {"default": (before, "d")}),
+            "after_default": run(None, {"default": (after_default, "d")}),
             "after": run(None, {"default": (after_default, "d"), "native": (after_native, digest_native)}),
             "ctl_before": run(None, {"default": (100.0, "d")}),
             "ctl_after": run(None, {"default": (100.0, "d")}),

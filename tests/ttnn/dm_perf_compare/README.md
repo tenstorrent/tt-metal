@@ -22,13 +22,16 @@ Each tree is a built tt-metal checkout; the script runs each side's processes wi
 
 ## Method
 
-- 5 rounds. A round runs one fresh process per build; their order alternates between rounds.
-  The after-build process measures `default`, `native` and `codegen` on every call.
+- 5 rounds, after one discarded priming pair. A round runs fresh processes: before (default only),
+  after (default only), then after again with `default`, `native` and `codegen`. The first two
+  feed Q1 and alternate order between rounds; the third feeds Q2. Q1 compares like with like
+  because a process that also runs the forced entries leaves caches and allocator in another state
+  (measured: about +4% on the same default call).
 - Per call and implementation: warm-up, then best of N timed calls, each synced. Profiler off.
   `best_us` is host launch plus device, the time a caller waits.
 - A call's change is the median of its per-round changes (negative is faster).
 - Noise: a second pair of processes runs the after build against itself on a few calls; the noise
-  band is the largest per-call median change found there, never below 1%.
+  band is the largest per-call median change found there, never below 3%.
 - Verdict: `faster` / `slower` only when the median clears the noise band and at least 4 of 5 rounds
   point the same way; otherwise `no change`.
 - Output match: every run hashes its output. Runs being compared must agree, otherwise the call is

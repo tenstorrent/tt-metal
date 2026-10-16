@@ -12,9 +12,10 @@ measured on the same machine and the rounds agree on the direction.
 import math
 import statistics
 
-# A noise estimate from a handful of control calls can come out near zero by luck; below this a
+# A noise estimate from a handful of control calls can come out near zero by luck. Launch-bound
+# calls (tens of microseconds) moved 2-3% between runs of identical builds, so below this a
 # "change" is not worth reporting whatever the control said.
-MIN_NOISE_PCT = 1.0
+MIN_NOISE_PCT = 3.0
 # Share of rounds that must point the same way as the median for the call to count.
 AGREE_FRACTION = 0.8
 

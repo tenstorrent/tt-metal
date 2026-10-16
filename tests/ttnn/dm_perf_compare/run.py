@@ -8,9 +8,9 @@
     python tests/ttnn/dm_perf_compare/run.py --calls calls/repeat_smoke.json \\
         --before-tree <build of the merge-base> --after-tree <build of the change> --out results.json
 
-Per round, one fresh process per build (before / after) measures time per call with the profiler
-off; the order of the two alternates between rounds. The after build's process measures the default
-and both forced implementations. A control pair of the after build against itself, on a few calls,
+Per round, fresh processes measure time per call with the profiler off: before and after run the
+default only (Q1, order alternating between rounds), then after runs the default and both forced
+implementations (Q2). A control pair of the after build against itself, on a few calls,
 sets the noise band. A device-profiler pass over the after build then adds device time and the
 device ops each implementation dispatches. This script only spawns processes and needs no ttnn.
 """
@@ -139,6 +139,7 @@ def main(argv):
     parser.add_argument("--device-reps", type=int, default=10)
     parser.add_argument("--device-rounds", type=int, default=None, help="default: same as --rounds")
     parser.add_argument("--control-calls", type=int, default=4)
+    parser.add_argument("--no-prime", action="store_true", help="skip the discarded first pair of processes")
     parser.add_argument("--no-device", action="store_true")
     args = parser.parse_args(argv)
     args.calls = os.path.abspath(args.calls)
@@ -152,20 +153,28 @@ def main(argv):
     after_impls = list(IMPLS)
 
     raw = {
-        "time": {"before": [], "after": [], "ctl_before": [], "ctl_after": []},
+        "time": {"before": [], "after_default": [], "after": [], "ctl_before": [], "ctl_after": []},
         "device": [],
         "control_ids": control_ids,
     }
+    if not args.no_prime:
+        # The first processes after idle run slower (cold kernel cache, card not at clocks); keeping
+        # them would bias round 1 toward whichever build ran second.
+        log("priming (discarded)")
+        for tree, impls in (("before", ["default"]), ("after", after_impls)):
+            runner.time_pass(tree, f"prime-{tree}", impls, everything, 0)
     for rnd in range(args.rounds):
         log("round %d/%d" % (rnd + 1, args.rounds))
         first_is_before = rnd % 2 == 0
         pair = (
-            (("before", "before"), ("after", "after"))
+            (("before", "before"), ("after_default", "after"))
             if first_is_before
-            else (("after", "after"), ("before", "before"))
+            else (("after_default", "after"), ("before", "before"))
         )
-        for label, tree in pair:
-            impls = ["default"] if label == "before" else after_impls
+        # Q1 compares default-only processes on both sides: a process that also runs the forced
+        # implementations leaves the allocator and caches in a different state.
+        for label, tree in (*pair, ("after", "after")):
+            impls = after_impls if label == "after" else ["default"]
             raw["time"][label].append(runner.time_pass(tree, f"{label}-r{rnd}", impls, everything, rnd))
         ctl_pair = (("ctl_before", "after"), ("ctl_after", "after"))
         for label, tree in ctl_pair if first_is_before else reversed(ctl_pair):
