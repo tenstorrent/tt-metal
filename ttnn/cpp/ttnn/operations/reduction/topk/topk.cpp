@@ -671,18 +671,27 @@ std::vector<Tensor> topk(
         output_tensors = std::optional<std::tuple<Tensor, Tensor>>{std::nullopt};
     }
 
+    // Padded rows sort stably so real +/-inf values beat the +/-inf pad slots they tie with.
+    const auto arch = padded_tensor.device()->arch();
     const bool row_is_padded = pad_amount > 0 || current_dim_size % static_cast<int>(tile_width) != 0;
-    if (row_is_padded && !stable) {
+    const bool index_output_is_32bit = output_tensors.has_value()
+                                           ? std::get<1>(output_tensors.value()).dtype() != DataType::UINT16
+                                           : ttnn::prim::is_uint32_index_required(padded_tensor, -1);
+    const bool stable_needs_extra_l1 = padded_tensor.dtype() != DataType::FLOAT32 && index_output_is_32bit;
+    const bool use_stable = stable || (row_is_padded && !padded_indices_tensor.has_value() && !stable_needs_extra_l1 &&
+                                       (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE));
+    if (row_is_padded && !use_stable) {
         // Once per process: topk runs inside per-step model loops.
         static std::once_flag padded_unstable_warned;
         std::call_once(padded_unstable_warned, [&] {
             log_warning(
                 tt::LogOp,
-                "topk: the reduced dimension (size {}) is padded with {}; with stable=false, a row with fewer than "
-                "k={} values other than {} can select padding. Positional indices can then point past the reduced "
-                "dimension; a custom indices_tensor instead returns its padding label (0 by default). Pass "
-                "stable=true for positional indices if such rows can occur; stable=true is not supported with a "
-                "custom indices_tensor. This warning is emitted once per process.",
+                "topk: the reduced dimension (size {}) is padded with {} and is not sorted stably automatically "
+                "here (custom indices_tensor, non-float32 input needing 32-bit indices, or no stable support on "
+                "this architecture). A row with fewer than k={} values other than {} can select padding: "
+                "positional indices can then point past the reduced dimension; a custom indices_tensor returns its "
+                "padding label (0 by default). With positional indices on Wormhole or Blackhole, stable=true "
+                "avoids this but can run out of L1 for large k. This warning is emitted once per process.",
                 current_dim_size,
                 pad_val,
                 k,
@@ -697,7 +706,7 @@ std::vector<Tensor> topk(
         -1,
         largest,
         sorted,
-        stable,
+        use_stable,
         input_memory_config,
         used_sub_core_grids,
         padded_indices_tensor,
