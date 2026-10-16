@@ -22,6 +22,7 @@ import torch
 
 import ttnn
 
+from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
 from .kv import kv_replication
 from .moe_stream import KERNEL_DIR, CompactRows
@@ -222,6 +223,8 @@ class TtMiMoAttention:
                 decode_sinks = torch.nn.functional.pad(s.reshape(dims.num_heads, 1), (0, TILE - 1))
 
         hidden = cfg.hidden_size
+        self.qkv_stream = self.o_stream = None
+        self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
         self.qkv_width = (self.nh_local + 2 * self.nkv_local) * self.head_dim
         self.wo = as_weight(wo, plan, plan.shard(-2), weight_dtype, cache_name(cache_dir, prefix, "wo"))
         if self.split_users:
@@ -250,6 +253,8 @@ class TtMiMoAttention:
             )
             self.decode_qkv_program = decode_linear_config(plan.mesh_device, hidden, self.decode_qkv_width)
             self.decode_o_program = decode_linear_config(plan.mesh_device, self.nh_decode * self.v_head_dim, hidden)
+            # Bank-local streaming o projection (2048 x 4096 per chip: 23.9 us instead of 35.2 us).
+            self.o_stream = self._bank_stream(self.nh_decode * self.v_head_dim, hidden)
         else:
             # The cached weight is DRAM-sharded and padded per chip; decode and prefill both read an unpadded
             # interleaved copy made once here.
@@ -271,6 +276,12 @@ class TtMiMoAttention:
             self.wo_decode = self._unpadded_o()
             self.decode_qkv_program = decode_linear_config(plan.mesh_device, hidden, self.qkv_width)
             self.decode_o_program = decode_linear_config(plan.mesh_device, self.nh_local * self.v_head_dim, hidden)
+            # Bank-local streaming qkv (4096 x 1920 per chip, read padded to 2048 columns once: 23.9 us instead of
+            # 32.4 us). It reads its own padded copy; prefill keeps the interleaved weight. The SWA o projection
+            # (1024 x 4096) stays on the linear, which is faster at that size.
+            self.qkv_stream = self._bank_stream(hidden, self.qkv_width)
+            if self.qkv_stream is not None:
+                self.wqkv_stream = self.qkv_stream.prepare(self.wqkv)
         self.sinks = self.decode_sinks = None
         if dims.has_sink:
             self.sinks = as_weight(sinks, plan, plan.shard(1), ttnn.bfloat16, cache_name(cache_dir, prefix, "sinks"))
@@ -285,7 +296,6 @@ class TtMiMoAttention:
         # Decode: SDPA output -> concatenated heads (V's real dims) in one launch.
         self.concat_heads = ConcatHeads(plan, self.nh_decode if self.split_users else self.nh_local, self.v_head_dim)
 
-        self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
         self.sdpa_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=False, packer_l1_acc=False)
         self.decode_sdpa_program = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
@@ -356,8 +366,18 @@ class TtMiMoAttention:
             compute_kernel_config=self.mm_config,
         )
 
-    def _decode_qkv(self, x, weight, program_config):
-        # Keep the fused qkv row in L1: the decode head split reads it with many small per-user row reads.
+    def _bank_stream(self, k, n):
+        """A BankStreamMatmul for a [k, n] decode projection, or None when its layout constraints do not hold."""
+        try:
+            return BankStreamMatmul(self.plan, k, n, self.mm_config)
+        except AssertionError:
+            return None
+
+    def _decode_qkv(self, x, weight, program_config, compact=False):
+        # Keep the fused qkv row in L1: the decode head split reads it with many small per-user row reads. The bank
+        # stream computes rows 0-3 only, so it serves the compact (users in rows 0-3) decode.
+        if compact and weight is self.wqkv and self.qkv_stream is not None:
+            return self.qkv_stream(x, self.wqkv_stream)
         return ttnn.linear(
             x,
             weight,
@@ -457,14 +477,17 @@ class TtMiMoAttention:
         """o projection and the row reduction (consumes ``attn_cat``). ``compact``: the users are in rows 0-3; returns
         the row all-gather of every chip's compact rows (CompactRows) for ReduceExpand instead of the all-reduced
         [1, 1, 32, hidden]."""
-        out = ttnn.linear(
-            attn_cat,
-            self.wo_decode,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG if compact else ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.decode_o_program,
-            compute_kernel_config=self.mm_config,
-        )
+        if compact and self.o_stream is not None:
+            out = self.o_stream(attn_cat, self.wo_decode)  # [1, 1, 32, hidden] bf16 in L1, rows 0-3
+        else:
+            out = ttnn.linear(
+                attn_cat,
+                self.wo_decode,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG if compact else ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.decode_o_program,
+                compute_kernel_config=self.mm_config,
+            )
         attn_cat.deallocate(True)
         if not compact:
             return self.plan.all_reduce(out)
@@ -485,7 +508,7 @@ class TtMiMoAttention:
                 )
             cur_pos = cur_pos["pos"]
         assert not self.split_users, "global layers on TP=8 need the per-chip owned positions"
-        xqkv = self._decode_qkv(x, self.wqkv, self.decode_qkv_program)
+        xqkv = self._decode_qkv(x, self.wqkv, self.decode_qkv_program, compact)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv,
             num_heads=self.nh_local,
