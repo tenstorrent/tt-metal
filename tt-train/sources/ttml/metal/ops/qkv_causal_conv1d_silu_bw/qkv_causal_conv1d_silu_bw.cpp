@@ -56,8 +56,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
     if (sequence_splits == 0) {
         const auto grid = input.device()->compute_with_storage_grid_size();
         const uint32_t cores = grid.x * grid.y;
-        const uint32_t blocks = std::max<uint32_t>(channels / std::max<uint32_t>(channel_chunk_size, 1), 1);
-        const uint32_t sequence_tiles = std::max<uint32_t>(sequence / tt::constants::TILE_HEIGHT, 1);
+        const uint32_t blocks = channels / channel_chunk_size;
+        const uint32_t sequence_tiles = sequence / tt::constants::TILE_HEIGHT;
         uint64_t best_cost = ~0ULL;
         for (uint32_t candidate = 1; candidate <= sequence_tiles; ++candidate) {
             const uint64_t items = static_cast<uint64_t>(blocks) * candidate;
