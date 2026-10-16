@@ -51,7 +51,7 @@ Make sure to replicate the conditions faithfully in warmup. If a program cache m
 ## Unsafe allocations
 
 The captured chain of operations may include allocations and deallocations of temporary tensors. After capture, these will no longer be visible to the allocator. If you allocate a new buffer after capturing a trace, it may include addresses that will be overwritten when that trace gets executed again.
-As a consequence, all allocations made after some trace has been captured, and not released before it is executed, are unsafe.
+As a consequence, a buffer allocated after capture is potentially unsafe if it remains allocated when replay starts or is allocated while replay is still running.
 
 You can use the trace allocation tracker tool to check a program for potentially unsafe allocations.
 
@@ -60,6 +60,19 @@ If we capture multiple traces, we may want to persist the input tensors as place
 Buffer allocations may not be explicit!
 For example `ttnn.reshape`, when first executed with a new shape, may allocate a lookup table to speed up future executions. If this happens after some trace has already been captured, executing that trace may corrupt this table. This will lead to undefined behavior, including data corruption and hangs.
 When a new program is compiled, the compilation result is saved in program cache. Program cache buffers share the address space with regular buffers - they may also be corrupted, if not allocated before all trace capture.
+
+### Concurrent execution
+
+Memory safety must hold until all device accesses from a replay complete, including outstanding memory transfers. A return from `ttnn.execute_trace(..., blocking=False)` does not establish completion.
+
+Two unsafe scenarios are:
+
+- **Concurrent traces:** Traces captured at different times can use the same physical addresses for temporary memory after the original allocations have been released. Reusing this memory can be safe when the traces complete in sequence. Concurrent accesses can corrupt either trace if at least one access writes.
+- **Concurrent traced and untraced work:** While a trace runs, work on another subdevice can allocate and use a buffer that overlaps the trace's temporary memory. Either execution can corrupt the other's data. This can happen even if no unsafe buffer was allocated when replay was submitted.
+
+Different subdevices do not guarantee disjoint memory access. They can access shared DRAM, and a NoC transfer can access L1 on another subdevice's cores. Concurrent work must use disjoint physical memory or synchronization that orders conflicting accesses. A host-side deallocation does not prove that device accesses have completed.
+
+Intentional sharing also requires synchronization. For example, a prefetcher's global circular buffer needs a protocol that prevents reads before the producer's writes complete. The protocol must also prevent overwrites until the consumers finish reading. These properties require separate code analysis of memory ownership and synchronization, whether or not the allocation checker is enabled.
 
 ### Using the trace allocation checker
 
@@ -73,7 +86,7 @@ The environment variables are read once while TT-NN starts up, so they must be s
 
 Once a trace has been captured, the checker accounts for subsequent device-buffer allocations for that trace. Immediately before `ttnn.execute_trace`, it checks whether any buffers unsafe for the requested trace are still alive. If it finds candidates, it runs Python garbage collection and checks again. If unsafe buffers remain, `ttnn.execute_trace` raises a `RuntimeError` instead of replaying the trace and potentially corrupting them. Buffers that have already been released are removed from the accounting automatically.
 
-> **Warning: concurrent execution is not checked.** The check covers tracked buffers that remain allocated before replay submission. Exempt allocations are not checked. It cannot establish that temporary memory used by concurrent traces does not overlap, for example when the traces run on different subdevices. It also cannot establish that work on another subdevice does not allocate and use overlapping memory while a trace runs. These cases require separate code analysis of memory ownership and synchronization.
+> **Warning: concurrent execution is not checked.** The check covers tracked, non-exempt buffers that remain allocated before replay submission. It does not establish the memory-safety requirements for [concurrent execution](#concurrent-execution).
 >
 > With tracking enabled, non-exempt allocations made during replay are recorded without an immediate warning or error. They can be reported at the next replay check if they remain allocated. If they are released before that check, they are removed from tracking and will not be reported, even if corruption already occurred.
 
