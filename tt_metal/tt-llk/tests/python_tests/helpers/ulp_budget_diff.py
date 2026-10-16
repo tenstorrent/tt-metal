@@ -46,6 +46,10 @@ MEASURED_ARCH = "WORMHOLE"
 #: A cell identity: the op plus whichever key dimensions the row pins.
 Cell = Tuple[str, Tuple[Tuple[str, str], ...]]
 
+#: The label that approves a pull request loosening a gate. The guard workflow admits
+#: one only when the change touches nothing but the table and carries this label.
+RAISE_LABEL = "ulp-budget-raise-approved"
+
 #: An informational section (other budget changes, headroom, slack) shows this many
 #: rows and says how many it withheld. A list of what failed or loosened is never cut.
 _MAX_ROWS = 40
@@ -143,9 +147,18 @@ class Change:
         }
     )
 
+    #: The regressions that loosen what a cell is gated or judged by. The rest of
+    #: REGRESSIONS move a tolerance cell's recorded measurement, which a re-emit does
+    #: whenever the hardware or the golden moves: reported, never blocked.
+    GATE_LOOSENING = REGRESSIONS - {"baseline_raised", "baseline_dropped"}
+
     @property
     def is_regression(self) -> bool:
         return self.kind in self.REGRESSIONS
+
+    @property
+    def loosens_gate(self) -> bool:
+        return self.kind in self.GATE_LOOSENING
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -511,24 +524,36 @@ def render_budget_diff(changes: List[Change]) -> str:
     """The diff report. Regressions first, and what to do about them."""
     if not changes:
         return "### SFPU ULP budgets\n\nNo budget changed.\n"
-    regressions = [c for c in changes if c.is_regression]
+    loosened = [c for c in changes if c.loosens_gate]
+    baselines = [c for c in changes if c.is_regression and not c.loosens_gate]
     improvements = [c for c in changes if not c.is_regression]
     out = ["### SFPU ULP budgets", ""]
-    if regressions:
+    if loosened:
         out += [
-            f"**{len(regressions)} cell(s) loosen a gate.** A budget may only be raised "
-            "by re-measuring and updating that row's `measured` figure and its date in "
-            "the same change — that is the table's own rule, and it is what makes "
-            "every number in it traceable.",
+            f"**{len(loosened)} cell(s) loosen a gate.** A gate may only be loosened in "
+            "a pull request that changes nothing but the table and carries the "
+            f"`{RAISE_LABEL}` label, with each row's `measured` figure and its date "
+            "re-measured in the same change.",
             "",
             *_md_table(
                 ("cell", "change", "before", "after", "re-measured"),
-                [_change_row(c, with_provenance=True) for c in regressions],
+                [_change_row(c, with_provenance=True) for c in loosened],
             ),
             "",
-            "If these are genuine re-measurements, say so in the PR body for the "
-            "table's code owners to approve. If they are not, the budget is being "
-            "fitted to a failure and the kernel or the golden is what moved.",
+            "If they are not re-measurements, the budget is being fitted to a failure "
+            "and the kernel or the golden is what moved.",
+            "",
+        ]
+    if baselines:
+        out += [
+            f"**{len(baselines)} tolerance cell(s) record a worse measurement.** "
+            "Reported, not blocked: the nightly sweep holds each cell to the figure its "
+            "row records, so this is the new figure it will be held to.",
+            "",
+            *_md_table(
+                ("cell", "change", "before", "after", "re-measured"),
+                [_change_row(c, with_provenance=True) for c in baselines],
+            ),
             "",
         ]
     if improvements:
@@ -548,12 +573,9 @@ def render_budget_diff(changes: List[Change]) -> str:
 
 
 def _allowed_note(regressions: List[Change]) -> str:
-    """Appended under --allow-raises: the loosened gates are
-    reported, not blocked, and the ones without a fresh measurement are named."""
-    note = (
-        f"\n_Advisory: {len(regressions)} loosened gate(s) reported, not blocked; "
-        "approving them is the table's code owners' review._\n"
-    )
+    """Appended under --allow-raises: the loosened gates are admitted, and the ones
+    without a fresh measurement are named."""
+    note = f"\n_Admitted: {len(regressions)} loosened gate(s), under --allow-raises._\n"
     unmeasured = [c for c in regressions if not c.remeasured]
     if unmeasured:
         note += (
@@ -858,10 +880,10 @@ def _diff(args) -> Tuple[str, int]:
         parse_table(args.head.read_text(encoding="utf-8")),
     )
     report = render_budget_diff(changes)
-    regressions = [c for c in changes if c.is_regression]
-    if regressions and args.allow_raises:
-        report += _allowed_note(regressions)
-    return report, 0 if not regressions or args.allow_raises else 1
+    loosened = [c for c in changes if c.loosens_gate]
+    if loosened and args.allow_raises:
+        report += _allowed_note(loosened)
+    return report, 0 if not loosened or args.allow_raises else 1
 
 
 def _headroom(args) -> Tuple[str, int]:
@@ -901,7 +923,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     d.add_argument(
         "--allow-raises",
         action="store_true",
-        help="report loosened gates but exit 0 (advisory)",
+        help="report loosened gates but exit 0 (a budget-only, approved PR)",
     )
     d.add_argument("--out", type=Path, help="write the report here as well as stdout")
 

@@ -248,6 +248,12 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py test_ulp_provenance.py -q
   comment beside a row is prose; no code reads it. `python3 helpers/ulp_budget_diff.py
   diff --base <old.yaml> --head <new.yaml>` lists every cell a change loosens and
   whether its row was re-measured.
+- **Raising a budget is a PR of its own.** PR Gate's `llk-sfpu-ulp-budget-guard` fails
+  a change that loosens a gate (a raised `max_ulp`, a widened floor, a gate demoted or
+  deleted, a widened `atol`/`rtol`) unless the change touches nothing but the table and
+  carries the `ulp-budget-raise-approved` label; after adding the label, re-run the
+  job. Lowering a budget is never blocked, and a tolerance cell's recorded measurement
+  going up is reported, not blocked.
 - **Most specific key wins.** A row's key fields are `in`, `out`, `approx`, `dest` and
   `arch`, all optional. Two rows matching one variant equally specifically are an
   authoring error, not a tie-break, and the loader refuses them.
@@ -305,8 +311,12 @@ the floor it would have needed.
 - **Any host pytest run in `tests/` wipes `/tmp/tt-llk-build`.** Chain
   `--compile-producer` and `--compile-consumer` in one go; if you run a host suite in
   between, recompile.
-- **The sweep is marked `accuracy`**, which every LLK workflow deselects. Run it by name
-  or by `-m accuracy`. `nightly` would *not* have kept it out of `llk-e2e`.
+- **The sweep is marked `accuracy`**, which every LLK workflow deselects; `llk-e2e`
+  runs it by path every night (`llk-sfpu-ulp-sweep.yaml`, matrix
+  `tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml`) and reports to the LLK CI status
+  channel. Dispatch that workflow to sweep a branch that changes an SFPU kernel or the
+  SFPI pin. Run it locally by name or by `-m accuracy`. `nightly` would *not* have kept
+  it out of `llk-e2e`.
 - **Both runs take the same op set**: every unary op with a key line in the table,
   whatever its rows say. The key line is the enrolment, so an op on tolerance everywhere
   is measured on every run and held to the figures its rows record by the headroom

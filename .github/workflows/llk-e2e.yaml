@@ -26,11 +26,19 @@ jobs:
       pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar and not accuracy' }}
       coverage: false
 
+  # The exhaustive SFPU ULP sweep against helpers/sfpu_accuracy_budget.yaml. Named by
+  # path in its own matrix: it is marked `accuracy`, which the markers above deselect.
+  llk-sfpu-ulp-sweep:
+    name: "LLK SFPU ULP sweep"
+    uses: ./.github/workflows/llk-sfpu-ulp-sweep.yaml
+    secrets: inherit
+
   llk-e2e-summary:
     name: "LLK e2e summary"
     if: always()
     needs:
       - llk-e2e-tests
+      - llk-sfpu-ulp-sweep
     runs-on: ubuntu-slim
     steps:
       - name: Check e2e test results

@@ -1,0 +1,226 @@
+name: "LLK SFPU ULP budget guard"
+
+# Called from PR Gate (pr-gate.yaml) on every non-draft PR and merge-queue entry; it
+# ends at once when tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml
+# is untouched. No hardware.
+#
+# It fails a change that loosens a gate in the table -- a raised `max_ulp`, a widened
+# `near_zero_atol`, a row demoted to `metric: tolerance`, a gated row deleted, or a
+# tolerance row's declared `atol`/`rtol` widened -- unless the change is a budget raise
+# PR: it touches nothing but the table, and carries the `ulp-budget-raise-approved`
+# label. A raise therefore never rides along with the kernel or golden change that
+# needed it, and someone opts in to it. A tolerance cell whose recorded measurement goes
+# up is reported, not blocked. For every cell the report says whether the deciding row
+# was re-measured, which no line diff of a re-emitted table shows. It also fails on a
+# table that cannot load.
+#
+# PR Gate does not run on `labeled`: after adding the label, re-run this job ("Re-run
+# failed jobs" on the PR Gate run). The label is read from the API when the job runs.
+#
+# The sweep that holds the hardware to the table is llk-sfpu-ulp-sweep.yaml, nightly.
+
+on:
+  workflow_call:
+
+env:
+  TABLE: tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget.yaml
+
+jobs:
+  budget-guard:
+    name: "SFPU ULP budgets"
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: write
+    steps:
+      - name: Checkout the change
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          # The commit and its first parent, which is all the comparison reads.
+          fetch-depth: 2
+
+      - name: Take the base revision of the table
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The checkout is the merge the PR proposes (pull_request) or the queue's
+          # commit (merge_group). Its first parent is what the change lands on, with
+          # everything queued ahead of it, so the diff is exactly this change -- unlike
+          # the event's base.sha, which can be absent after a base-branch force-push
+          # and would then make every row read as new.
+          if ! git rev-parse --verify --quiet 'HEAD^1^{commit}' > /dev/null; then
+            echo "::error title=SFPU ULP budget guard::The checkout has no first parent to compare against."
+            exit 1
+          fi
+          echo "Comparing HEAD $(git rev-parse HEAD) against HEAD^1 $(git rev-parse HEAD^1)"
+          if git diff --quiet HEAD^1 HEAD -- "$TABLE"; then
+            echo "The budget table is unchanged; nothing to judge."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          # A change that introduces the table has no base version of it; an empty file
+          # makes every row read as new, which is correct and not a regression.
+          if git cat-file -e "HEAD^1:$TABLE" 2> /dev/null; then
+            git show "HEAD^1:$TABLE" > /tmp/base_budget.yaml
+          else
+            : > /tmp/base_budget.yaml
+          fi
+
+      - name: Decide whether this is a budget raise PR
+        id: raise
+        if: steps.base.outputs.changed == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            const label = 'ulp-budget-raise-approved';
+            const table = process.env.TABLE;
+            const decide = (allowed, why) => {
+              core.setOutput('allowed', allowed ? 'true' : 'false');
+              core.setOutput('why', why);
+              core.info(why);
+            };
+            const changed = execSync('git diff --name-only HEAD^1 HEAD', { encoding: 'utf8' })
+              .split('\n').filter(Boolean);
+            const others = changed.filter((path) => path !== table);
+            // The queue's commit names its pull request in the branch
+            // (gh-readonly-queue/<base>/pr-<number>-<sha>).
+            let number = context.payload.pull_request?.number;
+            if (!number && context.eventName === 'merge_group') {
+              const found = /\/pr-(\d+)-[0-9a-f]+$/.exec(context.payload.merge_group.head_ref);
+              number = found && Number(found[1]);
+            }
+            let labelled = false;
+            if (number) {
+              const labels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+                ...context.repo, issue_number: number, per_page: 100,
+              });
+              labelled = labels.some((l) => l.name === label);
+            }
+            if (others.length) {
+              decide(false, `not a budget raise PR: it also changes ${others.length} other ` +
+                `file(s), e.g. ${others.slice(0, 3).join(', ')}`);
+            } else if (!labelled) {
+              decide(false, `not a budget raise PR: the '${label}' label is not set`);
+            } else {
+              decide(true, `a budget raise PR: only the table changed, and '${label}' is set`);
+            }
+
+      - name: Install dependencies
+        if: steps.base.outputs.changed == 'true'
+        run: pip3 install PyYAML
+
+      - name: Compare the budgets
+        id: compare
+        if: steps.base.outputs.changed == 'true'
+        shell: bash
+        env:
+          ALLOWED: ${{ steps.raise.outputs.allowed }}
+          WHY: ${{ steps.raise.outputs.why }}
+        run: |
+          set -uo pipefail
+          # By path, not `-m helpers.ulp_budget_diff`: the package __init__ imports
+          # ttexalens, which is not on this runner. The tool itself needs only PyYAML,
+          # and `test_the_tool_imports_nothing_but_the_standard_library_and_yaml` keeps
+          # it that way. Exit 1 is a loosened gate, 2 a table that cannot load;
+          # --allow-raises admits the first, never the second.
+          allow=()
+          if [[ "$ALLOWED" == true ]]; then
+            allow=(--allow-raises)
+          fi
+          status=0
+          python3 tt_metal/tt-llk/tests/python_tests/helpers/ulp_budget_diff.py diff \
+            --base /tmp/base_budget.yaml \
+            --head "$TABLE" \
+            "${allow[@]}" \
+            --out "$RUNNER_TEMP/ulp_budget_report.md" || status=$?
+          if [[ "$status" == 1 ]]; then
+            printf '\n**Blocked:** %s. Move the loosened rows into a pull request that %s\n' \
+              "$WHY" "changes only the table, and have a reviewer add the \`ulp-budget-raise-approved\` label; then re-run this job." \
+              >> "$RUNNER_TEMP/ulp_budget_report.md"
+          fi
+          # A verdict word rather than the exit code: the Fail step below compares it
+          # with 'pass', so an output that was never written fails the job instead of
+          # reading as 0.
+          case "$status" in
+            0) echo "verdict=pass" >> "$GITHUB_OUTPUT" ;;
+            1) echo "verdict=loosened" >> "$GITHUB_OUTPUT" ;;
+            *) echo "verdict=unloadable" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Publish the report
+        if: ${{ !cancelled() && steps.base.outputs.changed == 'true' }}
+        shell: bash
+        run: |
+          if [[ -s "$RUNNER_TEMP/ulp_budget_report.md" ]]; then
+            cat "$RUNNER_TEMP/ulp_budget_report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The comparison produced no report; see the step above." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if grep -q "loosen a gate" "$RUNNER_TEMP/ulp_budget_report.md" 2> /dev/null; then
+            echo "::warning title=SFPU ULP budget loosened::A gate in the budget table \
+          was loosened. See the job summary for which rows, and whether each was \
+          re-measured."
+          fi
+
+      - name: Comment on the pull request
+        # A fork PR's token is read-only, so the comment is best effort. The job
+        # summary carries the same report either way. The merge queue does not
+        # comment: the PR's own run already did.
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.base.outputs.changed == 'true' }}
+        continue-on-error: true
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const fs = require('fs');
+            // Written outside the checkout, so nothing in the tree has to ignore it.
+            const report = `${process.env.RUNNER_TEMP}/ulp_budget_report.md`;
+            if (!fs.existsSync(report)) return;
+            const marker = '<!-- llk-ulp-budget-guard -->';
+            // The report lists every loosened cell. A comment holds 65,536 characters,
+            // so a longer one is cut at a line and points at the job summary.
+            const limit = 60000;
+            let text = fs.readFileSync(report, 'utf8');
+            if (text.length > limit) {
+              const run = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}` +
+                `/actions/runs/${process.env.GITHUB_RUN_ID}`;
+              text = text.slice(0, text.lastIndexOf('\n', limit)) +
+                `\n\n_Cut at ${limit} characters: the [job summary](${run}) has the whole report._\n`;
+            }
+            const body = `${marker}\n${text}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            // One comment, edited in place, so a series of pushes does not bury the
+            // conversation. Only a bot's comment: a person quoting the marker in a
+            // reply is never overwritten.
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const mine = comments.find(
+              (c) => c.user?.type === 'Bot' && c.body?.includes(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Fail on a loosened gate or a table that cannot load
+        if: ${{ steps.base.outputs.changed == 'true' && steps.compare.outputs.verdict != 'pass' }}
+        shell: bash
+        env:
+          VERDICT: ${{ steps.compare.outputs.verdict }}
+        run: |
+          if [[ "$VERDICT" == loosened ]]; then
+            echo "::error title=SFPU ULP budget loosened::A gate in the budget table was \
+          loosened outside a budget raise PR (only the table changed, and the \
+          'ulp-budget-raise-approved' label set). See the job summary."
+          else
+            echo "::error title=SFPU ULP budget table::The budget table cannot load, so \
+          no comparison with it means anything. See the job summary."
+          fi
+          exit 1
