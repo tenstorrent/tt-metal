@@ -132,6 +132,18 @@ private:
     // Runtime ids associated with each trace
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> runtime_ids_per_trace;
 
+    struct ProgramSubDeviceMetaData {
+        uint8_t sub_device_id;
+        uint64_t sub_device_manager_id;
+    };
+
+    // Sub-device metadata per encoded run host id, looked up once from the data collector. Entries are never
+    // refreshed, so a run host id reused within one profiling session keeps its first entry. Like the marker sets,
+    // only one thread at a time processes this device's markers, so no lock is needed.
+    std::unordered_map<uint32_t, std::optional<ProgramSubDeviceMetaData>> program_sub_device_meta_data_cache;
+
+    std::optional<ProgramSubDeviceMetaData> getProgramSubDeviceMetaData(uint32_t run_host_id);
+
     // Number of bytes reserved in each DRAM bank for storing device profiling data
     uint32_t profile_buffer_bank_size_bytes{};
 

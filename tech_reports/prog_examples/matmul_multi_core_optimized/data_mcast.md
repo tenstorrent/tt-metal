@@ -197,7 +197,7 @@ For kernels without bias fusion or when the [PACKER_L1_ACC] is not defined, we d
 b.  **Bias Broadcasting Mechanism**
 
     ``` cpp
-    add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
+    add_bcast_rows_init(mm_partials_cb_id, bias_cb_id);
     for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
         uint32_t bcast_tile_idx = in1_index_subblock_offset;
         for (uint32_t k = 0; k < out_subblock_w; k++, i++) {

@@ -52,10 +52,10 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
     "command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments",
     [
         pytest.param(
-            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4-2link and layer3 and gate_device and no_ref and isl_1280' --wrapper-invocation",
-            8_414_334,  # Re-cut 2026-09-27 on the CI LoudBox (bh_loudbox, 8xP150), run 36356781842.
-            # One sample. ND-sharded routed-expert weights carry the delta: the op reads 2,573,812 ns
-            # against 2,997,396 ns on main run 36360866118, and the remainder moves by under 0.2%.
+            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4-2link and layer3 and gate_device and no_ref and isl_1280'",
+            8_055_490,  # Re-cut 2026-10-15: mean of 22 CI LoudBox (bh_loudbox, 8xP150) runs,
+            # 37705811976 through 38733452366 (8,008,078-8,138,591 ns, sd 0.4%). Main stepped down
+            # between ca3797a3df8 and 496333d8fac, the same step as the moe 8x1 slot.
             # Keep cutting this gate on the CI runner -- bh-lb-15 read the old value 23% high.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",
@@ -65,7 +65,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             "2x4_layer3_moe_real_weights_fabric2d",
         ),
         pytest.param(
-            f"pytest {_TEST_PATH} -k 'torus-xy-8x4 and layer0 and gate_device and no_ref and isl_5120' --wrapper-invocation",
+            f"pytest {_TEST_PATH} -k 'torus-xy-8x4 and layer0 and gate_device and no_ref and isl_5120'",
             5_435_504,  # Measured 2026-08-22 on the 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified
             # (DDR 16000 nominal, high power).
             # Two runs 5.421 / 5.450 ms, spread 0.54% -- well inside the 3% band.
@@ -77,7 +77,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             "glx_8x4_layer0_dense_real_weights_torus_xy",
         ),
         pytest.param(
-            f"pytest {_TEST_PATH} -k 'torus-xy-8x4 and layer3 and gate_device and no_ref and isl_5120' --wrapper-invocation",
+            f"pytest {_TEST_PATH} -k 'torus-xy-8x4 and layer3 and gate_device and no_ref and isl_5120'",
             13_674_937,  # Measured 2026-08-22 on the 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified
             # (DDR 16000 nominal, high power).
             # Two runs 13.558 / 13.792 ms, spread 1.71% -- inside the 3% band, the widest of the five.
@@ -89,7 +89,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             "glx_8x4_layer3_moe_real_weights_torus_xy",
         ),
         pytest.param(
-            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer0 and gate_device and no_ref and isl_2560' --wrapper-invocation",
+            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer0 and gate_device and no_ref and isl_2560'",
             4_913_214,  # Re-measured 2026-08-27 at 640 tokens/chip on the 14kW galaxy bh-glx-120-d08u02
             # (is_high_power). Mean of 2 runs, 4.9120-4.9144 ms, 0.05% peak to peak.
             "deepseek_v3_prefill_block",
@@ -100,7 +100,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             "subtorus_4x4_layer0_dense_real_weights_torus_y",
         ),
         pytest.param(
-            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer3 and gate_device and no_ref and isl_2560' --wrapper-invocation",
+            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer3 and gate_device and no_ref and isl_2560'",
             15_570_232,
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer3_moe_torus_y",
@@ -111,7 +111,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             marks=_SUBTORUS_4X4_HOSTGATE_SKIP,
         ),
         pytest.param(
-            f"pytest {_TEST_PATH} -k 'torus-x-4x4 and layer3 and gate_device and no_ref and isl_2560' --wrapper-invocation",
+            f"pytest {_TEST_PATH} -k 'torus-x-4x4 and layer3 and gate_device and no_ref and isl_2560'",
             54_804_819,
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer3_moe_torus_x",
@@ -122,7 +122,7 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
             marks=_SUBTORUS_4X4_HOSTGATE_SKIP,
         ),
         pytest.param(
-            f"pytest {_TEST_PATH} -k 'torus-xy-4x4 and layer3 and gate_device and no_ref and isl_2560' --wrapper-invocation",
+            f"pytest {_TEST_PATH} -k 'torus-xy-4x4 and layer3 and gate_device and no_ref and isl_2560'",
             52_978_544,
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer3_moe_torus_xy",
