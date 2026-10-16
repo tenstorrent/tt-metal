@@ -906,19 +906,15 @@ std::unique_ptr<D2HSocket> D2HSocket::connect_from_descriptor(const HDSocketDesc
     socket->fifo_size_ = desc.fifo_size;
     socket->config_buffer_address_ = desc.config_buffer_address;
     socket->pcie_alignment_ = desc.pcie_alignment;
-    MeshCoordinate device_coord =
-        desc.mesh_coord.empty()
-            ? MeshCoordinate(0, 0)
-            : MeshCoordinate(ttsl::SmallVector<uint32_t>(desc.mesh_coord.begin(), desc.mesh_coord.end()));
-    socket->sender_core_ = MeshCoreCoord(device_coord, CoreCoord(desc.core_x, desc.core_y));
+    socket->sender_core_ = desc.location.core;
     socket->bytes_acked_device_offset_ = desc.bytes_acked_device_offset;
 
     socket->shm_ = std::make_unique<NamedShm>(NamedShm::open(desc.shm_name, desc.shm_size));
     socket->host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(socket->shm_->ptr()), [](uint32_t*) {});
     socket->bytes_sent_ptr_ = static_cast<uint32_t*>(socket->shm_->ptr()) + (desc.bytes_sent_offset / sizeof(uint32_t));
 
-    socket->pcie_writer_instance_ =
-        std::make_unique<PCIeCoreWriter>(desc.device_id, desc.virtual_core_x, desc.virtual_core_y);
+    socket->pcie_writer_instance_ = std::make_unique<PCIeCoreWriter>(
+        desc.location.pcie_device_id, desc.location.virtual_core.x, desc.location.virtual_core.y);
     socket->pcie_writer_ = socket->pcie_writer_instance_->get_pcie_writer();
 
     // Restore connector-mutable state left behind by any prior driver process.
