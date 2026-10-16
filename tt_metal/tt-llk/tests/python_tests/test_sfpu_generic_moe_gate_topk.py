@@ -79,6 +79,8 @@ The original sweep uses 256 experts. The partial-face regression covers counts
 from 16 through 240, with deliberately large inactive keys to exercise padding.
 Biased-payload cases use spread-out winning keys so normalized weights remain
 sensitive to payload swaps; 512/1024-expert cases place winners on every face.
+The negative-key sweep mirrors the partial-face keys below zero, so only a true
+-inf padding keeps the inactive experts out of the top-k.
 
 Configurations left uncovered
 -----------------------------
