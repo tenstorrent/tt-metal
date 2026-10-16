@@ -13,8 +13,10 @@ Sections:
 - Decoder
 - Head
 - Detector
+- Frame inputs
 """
 
+import math
 from types import SimpleNamespace
 
 import torch
@@ -562,3 +564,90 @@ def create_bevformer_parameters(model, img, device, dtype=WEIGHT_DTYPE):
         bev_queries=upload(model.bev_embedding.weight),
         bev_pos=upload(model.positional_encoding(model.bev_h, model.bev_w)),
     )
+
+
+# --- Frame inputs -------------------------------------------------------------------------------
+
+# Host-side inputs the encoder and the perception transformer derive from the BEV grid, the
+# cameras and the CAN bus, in float32 as upstream computes them: once per grid, or once per frame
+# into buffers the forward reads.
+
+
+def bev_grid_length(pc_range, bev_h, bev_w):
+    """A BEV cell's size in metres, (y, x): the point-cloud range over the grid, as upstream's head
+    passes ``grid_length`` to ``get_bev_features``."""
+    return ((pc_range[4] - pc_range[1]) / bev_h, (pc_range[3] - pc_range[0]) / bev_w)
+
+
+def ego_shift(img_metas, bev_h, bev_w, grid_length):
+    """The ego translation in BEV-grid fractions, ``(bs, 2)`` as (x, y): upstream's ``shift``, from
+    each sample's relative CAN bus, with ``grid_length`` from :func:`bev_grid_length`."""
+    shifts = []
+    for meta in img_metas:
+        can_bus = meta["can_bus"]
+        delta_x, delta_y = float(can_bus[0]), float(can_bus[1])
+        translation_length = math.hypot(delta_x, delta_y)
+        bev_angle = math.radians(float(can_bus[-2]) / math.pi * 180 - math.degrees(math.atan2(delta_y, delta_x)))
+        shift_y = translation_length * math.cos(bev_angle) / grid_length[0] / bev_h
+        shift_x = translation_length * math.sin(bev_angle) / grid_length[1] / bev_w
+        shifts.append([shift_x, shift_y])
+    return torch.tensor(shifts, dtype=torch.float32)
+
+
+# Depth below which upstream's point_sampling takes a point as behind the camera.
+PROJECTION_EPS = 1e-5
+
+
+def bev_reference_points(bev_h, bev_w, batch_size=1):
+    """BEV cell centres ``(bs, bev_h * bev_w, 1, 2)`` in [0, 1], as (x, y), x along ``bev_w``: the
+    temporal self-attention's reference points."""
+    ref_y, ref_x = torch.meshgrid(
+        torch.linspace(0.5, bev_h - 0.5, bev_h), torch.linspace(0.5, bev_w - 0.5, bev_w), indexing="ij"
+    )
+    ref_2d = torch.stack((ref_x.reshape(-1)[None] / bev_w, ref_y.reshape(-1)[None] / bev_h), -1)
+    return ref_2d.repeat(batch_size, 1, 1).unsqueeze(2)
+
+
+def camera_geometry(img_metas, bev_h, bev_w, num_points_in_pillar, pc_range):
+    """One frame's pillar points in every camera, in float32 as upstream's ``point_sampling``:
+    ``reference_points_cam`` ``(num_cams, bs, bev_h * bev_w, num_points_in_pillar, 2)`` in normalized
+    image coordinates, and ``bev_mask`` ``(num_cams, bs, bev_h * bev_w, num_points_in_pillar)``,
+    whether each point lands in front of the camera and inside its image. The image size is
+    ``img_shape``'s, the padded one."""
+    lidar2img = torch.stack([torch.as_tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
+    bs, num_cams = lidar2img.shape[:2]
+    num_queries = bev_h * bev_w
+    height = pc_range[5] - pc_range[2]
+    ref_y, ref_x = torch.meshgrid(
+        torch.linspace(0.5, bev_h - 0.5, bev_h) / bev_h, torch.linspace(0.5, bev_w - 0.5, bev_w) / bev_w, indexing="ij"
+    )
+    ref_z = torch.linspace(0.5, height - 0.5, num_points_in_pillar) / height
+    points = torch.stack(
+        (
+            ref_x.flatten()[:, None].expand(num_queries, num_points_in_pillar),
+            ref_y.flatten()[:, None].expand(num_queries, num_points_in_pillar),
+            ref_z[None].expand(num_queries, num_points_in_pillar),
+        ),
+        -1,
+    )
+    points = points[None].repeat(bs, 1, 1, 1)
+    # [0, 1] to metres, then homogeneous, (D, bs, num_queries, 4).
+    for axis in range(3):
+        points[..., axis : axis + 1] = (
+            points[..., axis : axis + 1] * (pc_range[axis + 3] - pc_range[axis]) + pc_range[axis]
+        )
+    points = torch.cat((points, torch.ones_like(points[..., :1])), -1).permute(2, 0, 1, 3)
+    depth_points = points.shape[0]
+    points = points.view(depth_points, bs, 1, num_queries, 4).repeat(1, 1, num_cams, 1, 1).unsqueeze(-1)
+    lidar2img = lidar2img.view(1, bs, num_cams, 1, 4, 4).repeat(depth_points, 1, 1, num_queries, 1, 1)
+    cam = torch.matmul(lidar2img, points).squeeze(-1)
+
+    depth = cam[..., 2:3]
+    bev_mask = depth > PROJECTION_EPS
+    cam = cam[..., 0:2] / torch.maximum(depth, torch.ones_like(depth) * PROJECTION_EPS)
+    img_h, img_w = img_metas[0]["img_shape"][0][:2]
+    cam[..., 0] /= img_w
+    cam[..., 1] /= img_h
+    # Inside the image, open bounds as upstream.
+    bev_mask = bev_mask & (cam[..., 0:1] > 0.0) & (cam[..., 0:1] < 1.0) & (cam[..., 1:2] > 0.0) & (cam[..., 1:2] < 1.0)
+    return cam.permute(2, 1, 3, 0, 4), bev_mask.permute(2, 1, 3, 0, 4).squeeze(-1)

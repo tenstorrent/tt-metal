@@ -10,18 +10,16 @@ Parameters come from ``model_preprocessing.create_bevformer_encoder_parameters``
 
 Camera geometry depends on the cameras only, not on the activations: once per frame,
 :meth:`TTBEVFormerEncoder.prepare_frame` projects the pillar points into the cameras in float32 on
-the host, as upstream's ``point_sampling`` does (``point_sampling_3d_2d.camera_geometry``), and
+the host, as upstream's ``point_sampling`` does (``model_preprocessing.camera_geometry``), and
 fills the spatial cross-attention's rebatch plan, whose per-camera capacity is fixed when it is
 built, so later frames refill it in place. In bfloat16 the projection's homogeneous divide loses
 the points' precision. The forward then runs on device only, the cells' reference points and the
 ego shift included.
 """
 
-
 import ttnn
 from models.experimental.bevformer.model_config import GRID_DTYPE
-
-from models.experimental.bevformer.reference.point_sampling_3d_2d import bev_reference_points, camera_geometry
+from models.experimental.bevformer.tt.model_preprocessing import bev_reference_points, camera_geometry
 from models.experimental.bevformer.tt.tt_common import TtFFN, layer_norm, signpost
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import (
     TTSpatialCrossAttention,
