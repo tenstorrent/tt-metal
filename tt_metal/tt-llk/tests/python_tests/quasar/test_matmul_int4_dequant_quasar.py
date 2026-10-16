@@ -10,6 +10,7 @@ import pytest
 import torch
 from helpers.chip_architecture import is_4row_arch
 from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -39,12 +40,10 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
+from helpers.tile_constants import MAX_TILE_ELEMENTS
 from helpers.tile_shape import construct_tile_shape
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
-
-TILE = 32
-TILE_ELEMENTS = TILE * TILE
 
 # Weight (B) formats against Int8 activations (A); Int8 x Int8 is the control.
 WEIGHT_FORMATS = [DataFormat.Int8, DataFormat.Int4]
@@ -103,7 +102,7 @@ def dequant_format(weight_format, register_format_hint=None):
 
 def _pad_to_tiles(values):
     # The stimuli writer works in whole tiles.
-    pad = (-values.numel()) % TILE_ELEMENTS
+    pad = (-values.numel()) % MAX_TILE_ELEMENTS
     return torch.cat([values, torch.zeros(pad, dtype=values.dtype)])
 
 
@@ -128,13 +127,13 @@ def test_matmul_int4_dequant_quasar(
     format = dequant_format(weight_format, register_format_hint)
     ct_dim, rt_dim, kt_dim, group_kt_dim = matmul_dims
     dest_acc = DestAccumulation.Yes
-    tile_dimensions = [TILE, TILE]
+    tile_dimensions = [TILE_DIM, TILE_DIM]
     tile_shape = construct_tile_shape(tile_dimensions)
 
     # A = activations (M x K), B = weights (K x N).
-    input_A_dimensions = [rt_dim * TILE, kt_dim * TILE]
-    input_B_dimensions = [kt_dim * TILE, ct_dim * TILE]
-    output_dimensions = [rt_dim * TILE, ct_dim * TILE]
+    input_A_dimensions = [rt_dim * TILE_DIM, kt_dim * TILE_DIM]
+    input_B_dimensions = [kt_dim * TILE_DIM, ct_dim * TILE_DIM]
+    output_dimensions = [rt_dim * TILE_DIM, ct_dim * TILE_DIM]
     tile_cnt_A = rt_dim * kt_dim
     tile_cnt_B = kt_dim * ct_dim
     output_tile_cnt = rt_dim * ct_dim
@@ -147,7 +146,7 @@ def test_matmul_int4_dequant_quasar(
     # multiplies by s_a once, so the reference does the same.
     assert kt_dim % group_kt_dim == 0, "K must split into whole quantization groups"
     num_groups = kt_dim // group_kt_dim
-    group_k = group_kt_dim * TILE
+    group_k = group_kt_dim * TILE_DIM
     generator = torch.Generator().manual_seed(3)
     s_a = torch.empty(output_dimensions[0]).uniform_(0.005, 0.02, generator=generator)
     s_w = torch.empty(num_groups, output_dimensions[1]).uniform_(
@@ -174,7 +173,7 @@ def test_matmul_int4_dequant_quasar(
     w_scale_slices = _pad_to_tiles(w_scale_slices)
     # s_a expanded to one full tile per output tile.
     a_scale_tiles = tilize_block(
-        s_a.view(rt_dim * TILE, 1).expand(-1, ct_dim * TILE).flatten(),
+        s_a.view(rt_dim * TILE_DIM, 1).expand(-1, ct_dim * TILE_DIM).flatten(),
         dimensions=output_dimensions,
         stimuli_format=DataFormat.Float32,
         tile_dimensions=tile_dimensions,
@@ -244,9 +243,9 @@ def test_matmul_int4_dequant_quasar(
             tile_count_res=output_tile_cnt,
             buffer_C=w_scale_slices,
             stimuli_C_format=DataFormat.Float32,
-            tile_count_C=w_scale_slices.numel() // TILE_ELEMENTS,
+            tile_count_C=w_scale_slices.numel() // MAX_TILE_ELEMENTS,
             # Scratch tile that closes the SrcS bank cycle after each scale load.
-            buffer_S=torch.zeros(TILE_ELEMENTS),
+            buffer_S=torch.zeros(MAX_TILE_ELEMENTS),
             stimuli_S_format=DataFormat.Float32,
             tile_count_S=1,
             buffer_T=a_scale_tiles,
