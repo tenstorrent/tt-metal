@@ -68,10 +68,9 @@ def generate_int_stimuli(fmt: DataFormat, input_dimensions, seed: int):
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc=INT4_UNPACK_COMBINATIONS,
-    dest_sync=[DestSync.Half],
     input_dimensions=[[32, 32], [64, 64]],
 )
-def test_unpack_int4_quasar(formats_dest_acc, dest_sync, input_dimensions):
+def test_unpack_int4_quasar(formats_dest_acc, input_dimensions):
     formats, dest_acc = formats_dest_acc
     tile_dimensions = [32, 32]
     tile_shape = construct_tile_shape(tile_dimensions)
@@ -94,7 +93,7 @@ def test_unpack_int4_quasar(formats_dest_acc, dest_sync, input_dimensions):
     )
 
     num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync,
+        DestSync.Half,
         dest_acc,
         formats,
         input_dimensions,
@@ -113,7 +112,7 @@ def test_unpack_int4_quasar(formats_dest_acc, dest_sync, input_dimensions):
         formats=formats,
         templates=[
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
-            DEST_SYNC(dest_sync),
+            DEST_SYNC(DestSync.Half),
         ],
         runtimes=[
             TEST_FACE_DIMS(tile_shape.face_r_dim),

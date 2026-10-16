@@ -79,9 +79,13 @@ PERF_GROUP_DIMS = [
 MATMUL_GROUP_DIMS += [dims for dims in PERF_GROUP_DIMS if dims not in MATMUL_GROUP_DIMS]
 
 
-def matmul_group_dims(dest_sync):
+# The kernel runs FPU -> SFPU -> PACK on half-Dest sections.
+DEST_SYNC_MODE = DestSync.Half
+
+
+def matmul_group_dims():
     # 32-bit Dest halves the tile capacity.
-    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // 2
+    max_tiles = DEST_SYNC_TILE_LIMITS[DEST_SYNC_MODE] // 2
     return [dims for dims in MATMUL_GROUP_DIMS if dims[0] * dims[1] <= max_tiles]
 
 
@@ -109,13 +113,11 @@ def _pad_to_tiles(values):
 @pytest.mark.quasar
 @parametrize(
     weight_format=WEIGHT_FORMATS,
-    dest_sync_mode=[DestSync.Half],
-    matmul_dims=lambda dest_sync_mode: matmul_group_dims(dest_sync_mode),
+    matmul_dims=matmul_group_dims(),
     register_format_hint=dequant_register_format_hints(),
 )
 def test_matmul_int4_dequant_quasar(
     weight_format,
-    dest_sync_mode,
     matmul_dims,
     register_format_hint,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -214,7 +216,7 @@ def test_matmul_int4_dequant_quasar(
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             ENABLE_2X_FORMAT(format.register_format_hint is not None),
             ENABLE_DIRECT_INDEXING(False),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(DEST_SYNC_MODE),
             UNPACK_TRANS_FACES(Transpose.No),
         ],
         "runtimes": [
@@ -293,20 +295,17 @@ def test_matmul_int4_dequant_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    weight_format=[DataFormat.Int4],
-    dest_sync_mode=[DestSync.Half],
     matmul_dims=[(1, 1, 8, 4), (2, 2, 8, 2)],
     register_format_hint=dequant_register_format_hints(),
     loop_factor=[2, 3],
 )
 def test_matmul_int4_dequant_loops_quasar(
-    weight_format, dest_sync_mode, matmul_dims, register_format_hint, loop_factor
+    matmul_dims, register_format_hint, loop_factor
 ):
     # Repeated passes exercise the TRISC2 <-> TRISC3 semaphore handshake around the s_a
     # epilogue, which a single pass never re-arms. Each pass rewrites the same result.
     test_matmul_int4_dequant_quasar(
-        weight_format,
-        dest_sync_mode,
+        DataFormat.Int4,
         matmul_dims,
         register_format_hint,
         loop_factor=loop_factor,

@@ -10,7 +10,6 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR_4_TRISC,
-    DestSync,
 )
 from helpers.param_config import parametrize
 from quasar.test_matmul_int4_dequant_quasar import (
@@ -25,8 +24,6 @@ from quasar.test_matmul_int4_dequant_quasar import (
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    weight_format=[DataFormat.Int4],
-    dest_sync_mode=[DestSync.Half],
     matmul_dims=PERF_GROUP_DIMS,
     register_format_hint=dequant_register_format_hints(),
     run_types=PERF_RUN_TYPES_QUASAR_4_TRISC,
@@ -34,16 +31,13 @@ from quasar.test_matmul_int4_dequant_quasar import (
 )
 def test_perf_matmul_int4_dequant_quasar(
     perf_report,
-    weight_format,
-    dest_sync_mode,
     matmul_dims,
     register_format_hint,
     run_types,
     loop_factor,
 ):
     run_matmul_int4_dequant(
-        weight_format,
-        dest_sync_mode,
+        DataFormat.Int4,
         matmul_dims,
         register_format_hint,
         run_types=run_types,
