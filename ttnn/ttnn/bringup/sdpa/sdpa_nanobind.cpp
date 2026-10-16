@@ -429,6 +429,11 @@ void bind_sdpa(nb::module_& mod) {
                 in Float32 instead of rounding them to bf16, and accepts a float32 q. The FPU reads Float32 operands
                 at TF32 by truncation, so the scores, probabilities, running output, row-sum and 1/sum are rounded
                 to TF32 to nearest-even in DEST before they are packed (pre-round a float32 q the same way).
+            bf16_probs (bool): bring-up fork option, default False (TF32 probabilities under fp32_scores). True
+                (needs fp32_scores and a bf16 q) keeps the running max in Float32, sums the row from the TF32
+                probabilities, then rounds the probabilities to bf16 (nearest-even) in DEST before P@V, as DeepSeek's
+                sparse_attn kernel does; fp32_output may then be False (the output rounded to bf16, the kernel's
+                output dtype).
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8), or
             Float32 with fp32_output.
@@ -450,7 +455,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("attention_sink") = nb::none(),
         nb::arg("high_precision") = false,
         nb::arg("fp32_output") = false,
-        nb::arg("fp32_scores") = false);
+        nb::arg("fp32_scores") = false,
+        nb::arg("bf16_probs") = false);
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.bringup.">(
         mod,

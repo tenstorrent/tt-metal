@@ -635,6 +635,7 @@ void sub_exp_block_bcast_cols(
         }
 #ifdef SPARSE_SDPA_FP32_SCORES
         // sparse_sdpa fp32_scores: the Float32 probabilities rounded to TF32 to nearest (the FPU reads them at TF32)
+        // (bf16_probs rounds them to bf16 after the row-sum, in sparse_sdpa_compute.cpp)
         for (uint32_t t = 0; t < tiles_per_row * tiles_per_column; ++t) {
             round_tf32_packthread_tile(t);
         }

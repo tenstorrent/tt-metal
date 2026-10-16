@@ -26,7 +26,8 @@ ttnn::Tensor sparse_sdpa(
     const std::optional<ttnn::Tensor>& attention_sink,
     bool high_precision,
     bool fp32_output,
-    bool fp32_scores) {
+    bool fp32_scores,
+    bool bf16_probs) {
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -100,7 +101,8 @@ ttnn::Tensor sparse_sdpa(
         attention_sink,
         high_precision,
         fp32_output,
-        fp32_scores);
+        fp32_scores,
+        bf16_probs);
 }
 
 }  // namespace ttnn::transformer::bringup
