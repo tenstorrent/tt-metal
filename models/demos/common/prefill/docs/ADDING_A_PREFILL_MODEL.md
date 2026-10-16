@@ -58,6 +58,8 @@ class MyModelAdapter(PrefillModelAdapter):
     supports_dflash: bool = False  # may PREFILL_DFLASH=1 attach the DFlash drafter to this model? The
                                # drafter is a separate checkpoint targeting ONE architecture (today only
                                # Kimi-K2.7), so leave it False unless a matching drafter exists.
+    supports_packed_forward: bool = False  # does the runtime implement prefill_forward (section 2.1)? Gates
+                               # PREFILL_FORWARD_CHUNKS > 1; the runner checks it before building the runtime.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
@@ -187,8 +189,8 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         PREFILL_LAYER_ACK_D2H=1 right after building the runtime.
 
         Call `sink(layer_idx, request_id)` once per layer, where `request_id` is the one
-        `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
-        callback fires synchronously mid-forward.
+        `prefill_chunk` (or `prefill_forward`) was given -- bind it per call rather than reading mutable
+        state, since the callback fires synchronously mid-forward.
 
         `layer_idx` MUST be the layer's GLOBAL index. The sink keys on
         seq = request_id * num_layers + layer_idx, so a rank-local index makes every rank's local
@@ -196,6 +198,40 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         router just sees a duplicate. If your model enumerates only its own slice, add
         `config.first_layer_idx`; if it numbers its blocks globally at build time, pass it through."""
 ```
+
+### 2.1 Packed forwards (optional)
+
+With `PREFILL_FORWARD_CHUNKS=F` (`PrefillRunParams.forward_chunks`, default 1) one forward carries F
+chunk *entries* of `chunk_size` tokens: `forward_tokens = F * chunk_size` rows. F = 1 is the
+`prefill_chunk` path above, unchanged. F > 1 needs `supports_packed_forward = True` on the adapter, and
+the runtime then gets `prefill_forward` instead of `prefill_chunk`:
+
+```python
+    def prefill_forward(self, input_tensor, kv_cache, entries, request_id=0, d2h_service=None, *, metadata_msg=None):
+        """One forward of `params.forward_chunks` entries (`forward_entries.PrefillEntry(slot, start, end)`, in
+        pack order). `input_tensor` is the forward's packed H2D tokens on the first rank (chip c holds slice c
+        of every entry's rotated chunk, in entry order: `chunk_layout.pack_forward_tokens`), or the
+        `[1, 1, forward_tokens, H]` activation from the previous rank. Return the forward_tokens-row
+        activation on a non-last rank, None on the last. Size the non-first-rank placeholder input to
+        forward_tokens. Call the layer-completion sink once per KV-writing layer per forward, after every
+        entry of that layer ran, with this `request_id` (the runner's forward counter)."""
+```
+
+Metadata: F little-endian `(slot, start, end)` uint32 triples, 12 * F bytes (F = 1 is today's 12 bytes).
+`[start, end)` keeps its single-chunk meaning; `start == end` is an empty entry (no attention, no KV
+write, slot ignored). The SHUTDOWN / WARMUP sentinels fill every word with -1 / -2. Order contract,
+validated on the first rank (`forward_entries.validate_forward_entries`):
+
+- at least one non-empty entry; empty entries only after every non-empty one;
+- a slot's entries are one run of consecutive chunks (`start` of each = `end` of the previous), and only
+  the run's last entry may be partial;
+- `start % 32 == 0`, `start < end <= start + chunk_size`, `start + chunk_size <= max_seq_len`;
+- runs of different slots may come in any order.
+
+A layer ack for forward c means that layer's KV is written for every non-empty entry of forward c.
+
+The runner refuses F > 1 at startup, before the model loads, together with `PREFILL_MTP_LEVELS > 0`,
+`PREFILL_DFLASH=1`, `PREFILL_USE_TRACE=1` or `PREFILL_LAYER_ACK_D2H=1`.
 
 ---
 
@@ -256,7 +292,7 @@ swapping the manifest. (The runner reads only the manifest's `env` block; see `_
 **Request mode + producer** — request mode is the only serving path. The runner builds the H2D service
 and exports its descriptor; the producer (prefill_producer.py / the scheduler) connects by
 `PREFILL_H2D_SERVICE_ID` and pushes token chunks. The shared env (`PREFILL_MODEL`, `PREFILL_SP/TP`,
-`PREFILL_CHUNK_SIZE`, `PREFILL_NUM_USERS`, `PREFILL_MAX_SEQ_LEN`, `PREFILL_H2D_SERVICE_ID`) must match on
+`PREFILL_CHUNK_SIZE`, `PREFILL_FORWARD_CHUNKS`, `PREFILL_NUM_USERS`, `PREFILL_MAX_SEQ_LEN`, `PREFILL_H2D_SERVICE_ID`) must match on
 both so the byte layout agrees. `PREFILL_MAX_SEQ_LEN` sizes the per-user cache (default 11 chunks) and
 must be ≥ `chunks * PREFILL_CHUNK_SIZE`, else the runner asserts when a chunk overruns a slot.
 
