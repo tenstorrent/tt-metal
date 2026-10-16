@@ -1614,7 +1614,6 @@ def test_reshuffle_rows_quasar(reshuffle_variant_mask):
             "templates": [
                 MATH_OP(mathop=MathOperation.ReshuffleRows),
                 APPROX_MODE(ApproximationMode.No),
-                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
                 DATA_COPY_TYPE(DataCopyType.A2D),
                 UNPACKER_ENGINE_SEL(
                     UnpackerEngine.UnpDest
