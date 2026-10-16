@@ -539,7 +539,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
             local_vc0_fast_path_info->enable_terminal_speedy_rx,
             speedy);
         if (changed_by_peer) {
-            log_info(tt::LogFabric, "{}", decision);
+            log_debug(tt::LogFabric, "{}", decision);
         } else {
             log_debug(tt::LogFabric, "{}", decision);
         }
