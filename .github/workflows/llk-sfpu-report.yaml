@@ -23,7 +23,7 @@ on:
       pr_number: {type: string, required: true}
       head_sha: {type: string, required: false, default: ""}
       ops: {type: string, required: false, default: ""}
-      arch: {type: string, required: false, default: all}
+      arch: {type: string, required: false, default: auto}
       base: {type: string, required: false, default: merge-base}
       iterations: {type: string, required: false, default: "3"}
       post_comment: {type: boolean, required: false, default: false}
@@ -44,11 +44,11 @@ on:
         default: ""
         type: string
       arch:
-        description: "all, wormhole or blackhole"
+        description: "auto: the architectures whose device code the PR changes; all: both"
         required: false
-        default: all
+        default: auto
         type: choice
-        options: [all, wormhole, blackhole]
+        options: [auto, all, wormhole, blackhole]
       base:
         description: "merge-base: the PR's branch point; main: current main vs main + the PR's kernel diff"
         required: false
@@ -88,7 +88,17 @@ jobs:
       mode: ${{ steps.plan.outputs.mode }}
       skus: ${{ steps.plan.outputs.skus }}
       archs: ${{ steps.plan.outputs.archs }}
+      skipped: ${{ steps.plan.outputs.skipped }}
     steps:
+      # Main's copy of the tool, for the path classifier the auto arch uses.
+      - name: Checkout main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/llk_sfpu_report
+          sparse-checkout-cone-mode: true
       - name: Resolve the PR, its head and its merge-base
         id: plan
         env:
@@ -108,19 +118,40 @@ jobs:
           [[ "$head" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::head_sha must be a full commit SHA"; exit 1; }
           moved=""
           [ "$head" = "$current" ] || moved="$current"
-          # The compare API computes the merge-base without fetching any history.
-          merge_base="$(gh api "repos/$REPO/compare/${base_ref}...${head}" --jq .merge_base_commit.sha)"
+          # The compare API computes the merge-base without fetching any history, and
+          # lists the files the PR changes since.
+          compare="$RUNNER_TEMP/compare.json"
+          gh api "repos/$REPO/compare/${base_ref}...${head}" > "$compare"
+          merge_base="$(jq -r .merge_base_commit.sha "$compare")"
           case "$BASE" in
             merge-base) mode=merge-base ;;
             main) mode=rebase ;;
             *) echo "::error::base must be merge-base or main"; exit 1 ;;
           esac
           case "$ARCH" in
-            all) skus="wh_n150_civ2,bh_p150b_civ2"; archs="wormhole,blackhole" ;;
-            wormhole) skus="wh_n150_civ2"; archs="wormhole" ;;
-            blackhole) skus="bh_p150b_civ2"; archs="blackhole" ;;
-            *) echo "::error::arch must be all, wormhole or blackhole"; exit 1 ;;
+            all) archs="wormhole,blackhole" ;;
+            wormhole|blackhole) archs="$ARCH" ;;
+            auto)
+              # The architectures whose device code the PR changes, both sides of a
+              # rename included. The API lists at most 300 files: a longer list may
+              # be cut, so it measures both.
+              if [ "$(jq '.files // [] | length' "$compare")" -ge 300 ]; then
+                archs="wormhole,blackhole"
+              else
+                archs="$(jq -r '.files // [] | .[] | .filename, (.previous_filename // empty)' "$compare" |
+                  python3 .github/llk_sfpu_report/overlay.py archs)"
+              fi ;;
+            *) echo "::error::arch must be auto, all, wormhole or blackhole"; exit 1 ;;
           esac
+          skus="" skipped=""
+          for a in wormhole blackhole; do
+            case "$a" in wormhole) sku=wh_n150_civ2 ;; blackhole) sku=bh_p150b_civ2 ;; esac
+            if [[ ",$archs," == *",$a,"* ]]; then
+              skus="${skus:+$skus,}$sku"
+            elif [ "$ARCH" = auto ]; then
+              skipped="${skipped:+$skipped,}$a"
+            fi
+          done
           {
             echo "head_sha=$head"
             echo "head_moved_to=$moved"
@@ -128,8 +159,10 @@ jobs:
             echo "mode=$mode"
             echo "skus=$skus"
             echo "archs=$archs"
+            echo "skipped=$skipped"
           } >> "$GITHUB_OUTPUT"
-          echo "PR #$PR_NUMBER head ${head:0:12} (current ${current:0:12}), merge-base ${merge_base:0:12}, mode $mode" >> "$GITHUB_STEP_SUMMARY"
+          echo "PR #$PR_NUMBER head ${head:0:12} (current ${current:0:12}), merge-base ${merge_base:0:12}," \
+            "mode $mode, architectures: ${archs:-none}" >> "$GITHUB_STEP_SUMMARY"
 
   build-images:
     name: "Docker setup"
@@ -142,6 +175,8 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
     needs: [plan]
+    # No architecture to run: the PR changes no device code either chip builds.
+    if: ${{ needs.plan.outputs.skus != '' }}
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     steps:
@@ -241,6 +276,7 @@ jobs:
             .github/llk_sfpu_report
           sparse-checkout-cone-mode: true
       - name: Download the per-architecture results
+        if: ${{ needs.plan.outputs.skus != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: llk-sfpu-report-*
@@ -252,6 +288,7 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           HEAD_SHA: ${{ needs.plan.outputs.head_sha }}
           ARCHS: ${{ needs.plan.outputs.archs }}
+          SKIPPED: ${{ needs.plan.outputs.skipped }}
           PLAN_RESULT: ${{ needs.plan.result }}
           MEASURE_RESULT: ${{ needs.measure.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -260,11 +297,12 @@ jobs:
           mkdir -p out
           shopt -s nullglob
           summaries=(parts/summary-*.json)
-          if [ ${#summaries[@]} -gt 0 ]; then
-            # An arch in ARCHS without a summary is named in the report as not finished.
+          if [ ${#summaries[@]} -gt 0 ] || { [ "$PLAN_RESULT" = success ] && [ -z "$ARCHS" ]; }; then
+            # An arch in ARCHS without a summary is named in the report as not finished;
+            # one in SKIPPED was not run, since the PR changes no device code it builds.
             python3 .github/llk_sfpu_report/report.py "${summaries[@]}" \
-              --expect "$ARCHS" --run-url "$RUN_URL" -o out/report.md
-            cp "${summaries[@]}" out/
+              --expect "$ARCHS" --skipped "$SKIPPED" --run-url "$RUN_URL" -o out/report.md
+            [ ${#summaries[@]} -eq 0 ] || cp "${summaries[@]}" out/
           else
             if [ "$PLAN_RESULT" != success ]; then
               what="Could not plan the run (the PR, its head or its merge-base did not resolve)"

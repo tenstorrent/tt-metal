@@ -3,9 +3,10 @@ run-name: "/llk-sfpu-test on #${{ github.event.issue.number }}"
 
 # Starts the LLK SFPU report (llk-sfpu-report.yaml) from a PR comment:
 #
-#   /llk-sfpu-test                     the ops whose machine code the PR changes, WH + BH
+#   /llk-sfpu-test                     the ops whose machine code the PR changes, on the
+#                                      architectures whose device code it changes
 #   /llk-sfpu-test tanh exp            exactly these ops (MathOperation names, any case)
-#   /llk-sfpu-test --arch bh           one architecture: wh, bh or all
+#   /llk-sfpu-test --arch bh           one architecture: wh, bh, or all for both
 #   /llk-sfpu-test --base main         current main vs main + the PR's kernel diff
 #
 # Only the first line of the comment is read. This workflow pins the PR head,
@@ -94,7 +95,7 @@ jobs:
           # parser never trusts a prefix it did not see.
           [ "${words[0],,}" = "/llk-sfpu-test" ] || fail "the command must be exactly /llk-sfpu-test"
           ops=()
-          arch=all
+          arch=auto
           base=merge-base
           set -- "${words[@]:1}"
           while [ $# -gt 0 ]; do
@@ -178,7 +179,8 @@ jobs:
           case "$ARCH" in
             wormhole) where="Wormhole" ;;
             blackhole) where="Blackhole" ;;
-            *) where="Wormhole and Blackhole" ;;
+            all) where="Wormhole and Blackhole" ;;
+            *) where="the architectures whose device code this PR changes" ;;
           esac
           if [ "$BASE" = main ]; then
             against="current main plus this PR's kernel changes"
@@ -202,4 +204,4 @@ jobs:
           gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
             "\`/llk-sfpu-test\` did not start a measurement: ${reason} ([log](${LOG_URL})).
 
-          Usage: \`/llk-sfpu-test [ops...] [--arch wh|bh|all] [--base merge-base|main]\`. With no ops it measures the SFPU ops whose code the PR changes."
+          Usage: \`/llk-sfpu-test [ops...] [--arch wh|bh|all] [--base merge-base|main]\`. With no ops it measures the SFPU ops whose code the PR changes, and with no \`--arch\` the architectures whose device code it changes."

@@ -52,6 +52,45 @@ def test_only_device_code_comes_from_the_pr(path, device):
     assert overlay.is_device_file(path) is device
 
 
+WH, BH = "wormhole", "blackhole"
+
+
+@pytest.mark.parametrize(
+    "paths, archs",
+    [
+        (["tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_exp.h"], [WH]),
+        (["tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h"], [WH]),
+        (["tt_metal/hw/inc/internal/tt-1xx/wormhole/cfg_defines.h"], [WH]),
+        (["tt_metal/hw/firmware/src/tt-1xx/blackhole/noc.c"], [BH]),
+        (["tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_log.h"], [BH]),
+        (["tt_metal/tt-llk/tt_llk_blackhole/a.h", "tt_metal/tt-llk/tt_llk_wormhole_b0/a.h"], [WH, BH]),
+        # Device code in no one architecture's tree builds for both chips.
+        (["tt_metal/tt-llk/common/ckernel_sfpu_welfords_common.h"], [WH, BH]),
+        (["tt_metal/hw/inc/api/compute/eltwise_unary.h"], [WH, BH]),
+        (["tt_metal/tt-llk/tests/helpers/include/sfpu_operations.h"], [WH, BH]),
+        (["tt_metal/tt-llk/tests/sources/eltwise_unary_sfpu_test.cpp"], [WH, BH]),
+        (["tt_metal/tt-llk/tt_llk_wormhole_b0/a.h", "tt_metal/tt-llk/common/b.h"], [WH, BH]),
+        # Quasar is not measured, even under a shared directory.
+        (["tt_metal/tt-llk/tt_llk_quasar/common/inc/sfpu/ckernel_sfpu_sqrt.h"], []),
+        (["tt_metal/tt-llk/tests/sources/quasar/sfpu_test.cpp"], []),
+        (["tt_metal/hw/inc/internal/tt-2xx/quasar/cfg_defines.h"], []),
+        (["tt_metal/tt-llk/tt_llk_quasar/a.h", "tt_metal/tt-llk/tt_llk_blackhole/b.h"], [BH]),
+        # Host code runs from main, so the PR's never reaches a chip.
+        (["README.md", "tt_metal/tt-llk/tests/python_tests/test_eltwise_binary_sfpu.py"], []),
+        ([], []),
+    ],
+)
+def test_the_chips_run_are_those_whose_device_code_changed(paths, archs):
+    assert overlay.archs_built(paths) == archs
+
+
+def test_the_plan_job_reads_the_chips_from_the_classifier():
+    paths = "tt_metal/tt-llk/tt_llk_blackhole/a.h\nREADME.md\n"
+    script = Path(overlay.__file__)
+    out = subprocess.run([sys.executable, str(script), "archs"], input=paths, capture_output=True, text=True)
+    assert (out.returncode, out.stdout) == (0, "blackhole\n")
+
+
 def test_ops_whose_own_kernel_changed_come_first():
     ops = ["Atan", "Erf", "Gelu", "Reciprocal", "Sigmoid"]
     changed = ["tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h"]
@@ -721,6 +760,22 @@ def test_an_arch_that_did_not_finish_is_named():
     text = report.render([dict(_summary(), not_measured="Conflicts.")], expected=["wormhole", "blackhole"])
     assert "**Not measured** on Wormhole. Conflicts." in text
     assert "**Not measured** on Blackhole. Its measurement did not finish; see the run." in text
+
+
+def test_a_chip_the_pr_does_not_build_for_is_named_as_skipped():
+    text = report.render([_summary()], expected=["wormhole"], skipped=["blackhole"])
+    assert "- Blackhole was not measured: this PR changes no device code Blackhole builds" in text
+    assert "Its measurement did not finish" not in text  # skipped, not failed
+    url = "https://github.com/tenstorrent/tt-metal/actions/runs/7"
+    text = report.render([], run_url=url, skipped=["wormhole", "blackhole"])
+    assert text.startswith(report.COMMENT_MARKER)
+    assert "**Not measured.** This PR changes no device code Wormhole or Blackhole builds." in text
+    assert f"Run: {url}." in text
+    assert "### Performance" not in text and "No regressions" not in text
+    # The chip that was run failed: both reasons are in the comment.
+    text = report.render([], expected=["wormhole"], skipped=["blackhole"])
+    assert "**Not measured** on Wormhole. Its measurement did not finish" in text
+    assert "Blackhole was not measured: this PR changes no device code Blackhole builds" in text
 
 
 def test_a_moved_device_file_leaves_no_copy_behind(tmp_path):

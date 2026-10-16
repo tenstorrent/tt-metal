@@ -10,9 +10,9 @@ architecture, and what did it do to accuracy and the edge cases?*
 Comment on the PR (write access required, same as `/test`):
 
 ```
-/llk-sfpu-test                      # auto: ops whose machine code changed, Wormhole + Blackhole
+/llk-sfpu-test                      # auto: ops whose machine code changed, on the chips whose device code changed
 /llk-sfpu-test tanh exp             # exactly these ops (MathOperation names, any case)
-/llk-sfpu-test --arch bh            # one architecture: wh, bh or all
+/llk-sfpu-test --arch bh            # one architecture: wh, bh, or all for both
 /llk-sfpu-test --base main          # current main vs main + this PR's kernel diff
 ```
 
@@ -21,7 +21,7 @@ Two workflows take it from there:
 | workflow | does |
 |---|---|
 | `llk-sfpu-test-command.yaml` | checks write access, parses the command, pins the PR head, dispatches `llk-sfpu-report` on main, posts a "measuring" note |
-| `llk-sfpu-report.yaml` | plans (merge-base, SKUs), measures one leg per arch, renders `report.md`, posts it on the PR and hides the earlier report and the note |
+| `llk-sfpu-report.yaml` | plans (merge-base, which chips), measures one leg per arch, renders `report.md`, posts it on the PR and hides the earlier report and the note |
 
 `llk-sfpu-report` can also be dispatched by hand from the Actions tab; it posts on the
 PR only with `post_comment`, and always leaves the report in the run summary and the
@@ -42,8 +42,9 @@ llk-sfpu-test-command.yaml (issue_comment, write access only)          ubuntu-sl
    │
    ▼
 llk-sfpu-report.yaml (workflow_dispatch on main)
-   plan              ubuntu-slim   merge-base from the compare API; notes if the PR
-                                   moved since the command; picks the SKUs
+   plan              ubuntu-slim   merge-base and changed files from the compare API;
+                                   notes if the PR moved since the command; picks the
+                                   chips whose device code the PR changes
    build-images      LLK CI image
    load-test-matrix  tests/pipeline_reorg/llk_sfpu_report_tests.yaml (one leg per arch)
    measure (per arch) N150 / P150b, LLK container, read-only token, no secrets
@@ -123,6 +124,14 @@ on the runner. If the merge-base is too old for the current harness, the run fal
 back to rebase mode and the report says so. Rebase mode needs the PR's device diff to
 apply to main (`git apply --3way`); when main has changed the same lines since, nothing
 is measured, and the report names the conflicting files and asks for a rebase.
+
+**Which chips.** With no `--arch`, the plan job runs only the chips whose device code
+the PR changes (`overlay.archs_built()`): a device file in one architecture's tree
+(`tt_llk_<arch>`, `hw/ckernels/<arch>`, `tt-1xx/<arch>`) runs that chip, any other
+device file runs both, and host files and Quasar's trees run neither. A rename counts
+on both sides. The report names a chip it skipped, and a PR that changes no device
+code either chip builds gets a short "not measured" comment. The compare API lists at
+most 300 files, so a longer diff runs both. `--arch all` runs both regardless.
 
 **Which ops.** `detect.py` compiles every variant of `perf_eltwise_unary_sfpu.py`,
 `perf_eltwise_unary_typecast.py` and `perf_eltwise_binary_sfpu.py` on both sides (no

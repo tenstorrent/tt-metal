@@ -72,6 +72,35 @@ def is_device_file(path):
     return path.startswith(DEVICE_PREFIXES) and path.endswith(DEVICE_SUFFIXES)
 
 
+#: The architectures the report measures, in report order. Quasar is not one of them.
+MEASURED_ARCHS = ("wormhole", "blackhole")
+
+#: Directory names that put a device file in one architecture's tree: tt_llk_<arch>,
+#: hw/ckernels/<arch>, the tt-1xx/<arch> firmware and headers, tt-2xx for Quasar.
+_ARCH_DIRS = {
+    "wormhole": {"wormhole", "wormhole_b0", "tt_llk_wormhole_b0"},
+    "blackhole": {"blackhole", "tt_llk_blackhole"},
+    "quasar": {"quasar", "tt_llk_quasar", "tt-2xx"},
+}
+
+
+def archs_built(paths):
+    """The measured architectures whose device code these changed paths touch.
+
+    A device file in one architecture's tree touches that architecture; any other
+    device file is shared and touches both. Host files touch neither: they run from
+    the tool revision, so the PR's never reach the measurement. Neither do Quasar's.
+    """
+    touched = set()
+    for path in paths:
+        if not is_device_file(path):
+            continue
+        dirs = set(path.split("/")[:-1])
+        own = [arch for arch, names in _ARCH_DIRS.items() if dirs & names]
+        touched.update(own or MEASURED_ARCHS)
+    return [arch for arch in MEASURED_ARCHS if arch in touched]
+
+
 @dataclass
 class Plan:
     """What the two sides are made of."""
@@ -187,3 +216,12 @@ def build_side(plan, dest, patch=b"", at=None):
 def remove_side(plan, dest):
     git(plan.repo, "worktree", "remove", "--force", str(dest), check=False)
     shutil.rmtree(dest, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    # The plan job's call: changed paths on stdin, the architectures to run on stdout.
+    import sys
+
+    if sys.argv[1:] != ["archs"]:
+        raise SystemExit("usage: overlay.py archs < changed-paths")
+    print(",".join(archs_built(line for line in sys.stdin.read().splitlines() if line)))

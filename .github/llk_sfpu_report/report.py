@@ -699,9 +699,16 @@ def header(summaries):
     return lines
 
 
-def notes_section(summaries, not_measured=()):
+def _skipped_note(arch):
+    return (
+        f"{_ARCH[arch]} was not measured: this PR changes no device code {_ARCH[arch]} builds "
+        "(`/llk-sfpu-test --arch all` measures it anyway)."
+    )
+
+
+def notes_section(summaries, not_measured=(), skipped=()):
     s = summaries[0]
-    notes = []
+    notes = [_skipped_note(a) for a in skipped]
     if s.get("not_applied"):
         notes.append(
             "Files this PR changes that the measurement does not use (host-side test code runs from main): "
@@ -805,9 +812,10 @@ def footer(summaries):
     return lines
 
 
-def render(summaries, expected=(), run_url=None):
+def render(summaries, expected=(), run_url=None, skipped=()):
     """The comment. An arch in ``expected`` without a summary is reported as not
-    measured: its leg failed or timed out before writing one."""
+    measured: its leg failed or timed out before writing one. An arch in ``skipped``
+    was never run: the PR changes no device code it builds."""
     present = {s["arch"] for s in summaries}
     run = f"the [run]({run_url})" if run_url else "the run"
     summaries = list(summaries) + [
@@ -816,20 +824,41 @@ def render(summaries, expected=(), run_url=None):
     summaries = sorted(summaries, key=lambda s: s["arch"] != "wormhole")
     not_measured = [s for s in summaries if s.get("not_measured")]
     summaries = [s for s in summaries if not s.get("not_measured")]
+    if not summaries and not not_measured:
+        return _fit("\n".join(nothing_to_measure_report(skipped, run_url)) + "\n")
     if not summaries:
-        return _fit("\n".join(not_measured_report(not_measured)) + "\n")
+        lines = not_measured_report(not_measured) + [f"{_skipped_note(a)}\n" for a in skipped]
+        return _fit("\n".join(lines) + "\n")
+    notes = notes_section(summaries, not_measured, skipped)
     if not any(s["ops"]["measured"] for s in summaries):
         # Empty tables and "no regressions" say nothing here; the notes say why.
-        return _fit("\n".join(header(summaries) + notes_section(summaries, not_measured) + footer(summaries)) + "\n")
+        return _fit("\n".join(header(summaries) + notes + footer(summaries)) + "\n")
     parts = header(summaries)
     parts += glance_section(summaries, not_measured)
     parts += perf_section(summaries)
     parts += accuracy_section(summaries)
     parts += edge_section(summaries)
     parts += cross_arch_section(summaries)
-    parts += notes_section(summaries, not_measured)
+    parts += notes
     parts += footer(summaries)
     return _fit("\n".join(parts) + "\n")
+
+
+def nothing_to_measure_report(skipped, run_url=None):
+    """The whole comment when the PR changes no device code a measured chip builds."""
+    archs = " or ".join(_ARCH[a] for a in skipped)
+    lines = [
+        COMMENT_MARKER,
+        "## LLK SFPU report",
+        "",
+        f"**Not measured.** This PR changes no device code {archs} builds. The report compares "
+        "device code only: host-side test code runs from main, and Quasar is not covered. "
+        "`/llk-sfpu-test --arch all` measures both anyway.",
+        "",
+    ]
+    if run_url:
+        lines += [f"Run: {run_url}.", ""]
+    return lines
 
 
 #: A GitHub comment holds 65,536 characters; leave some headroom.
@@ -862,13 +891,17 @@ def main(argv=None):
     import argparse
 
     ap = argparse.ArgumentParser(description="Render the LLK SFPU report comment.")
-    ap.add_argument("summaries", nargs="+", help="summary.json per architecture")
+    ap.add_argument("summaries", nargs="*", help="summary.json per architecture")
     ap.add_argument("-o", "--out", default="-")
     ap.add_argument("--expect", default="", help="comma-separated archs that should have a summary")
+    ap.add_argument("--skipped", default="", help="comma-separated archs the PR's diff did not touch, so not run")
     ap.add_argument("--run-url", help="the CI run, linked for an arch that did not finish")
     args = ap.parse_args(argv)
+    expected, skipped = ([a for a in arg.split(",") if a] for arg in (args.expect, args.skipped))
+    if not (args.summaries or expected or skipped):
+        ap.error("nothing to report: pass summaries, --expect or --skipped")
     summaries = [json.loads(Path(p).read_text()) for p in args.summaries]
-    text = render(summaries, [a for a in args.expect.split(",") if a], args.run_url)
+    text = render(summaries, expected, args.run_url, skipped)
     if args.out == "-":
         print(text, end="")
     else:
