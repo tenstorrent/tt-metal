@@ -1,0 +1,87 @@
+{
+ "used": [
+  {
+   "id": "DS41-47",
+   "how": "kept every compressor intermediate fp32 up to fp4 (no bf16 points), as the test's limits require",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-15",
+   "how": "de-interleaved the rope dims of wkv / wgate rows, compressor.norm, wk and k_norm at load; exact SFPU RoPE via rope_deinterleaved",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-13",
+   "how": "built fp4_qdq from the same exact SFPU / bit ops (pow2_ceil, round_e4m3) as fp8_qdq",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-31",
+   "how": "COMPRESSOR_X=round_tf32: fp32 matmul inputs rounded to TF32 nearest before the FPU reads them",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "the K-split partial sum over TP via tp_sum (all_gather + SFPU add), fp32 eltwise kept on the SFPU",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-17",
+   "how": "reused the window cache's write path (embedding to server order + update_padded_kv_cache) for the compressed caches, in token units",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-28",
+   "how": "listed the enc_source steps that passed (attn_hc .. kv) plus the compressor in hooks.py DEVICE_STEPS",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "read the gate result after the precompile collect pass (its FAIL lines are the stubbed pass)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-58",
+   "how": "read hand-run metrics from the log, not results/",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "update_padded_kv_cache needs 32-aligned rows, so a ratio-2 cache written in compressed rows cannot take 16-aligned starts (1312 -> 656): store it in token units (now DS41-48)",
+  "ttnn.divide fp32 tensor / tensor is not correctly rounded (1 ulp on 6.6 %); scalar divide by 6 matched torch (now DS41-48)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-48"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.enc_source.compressor",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T19:27:45",
+  "head": "e076eab2f7f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.enc_source.compressor.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/quant.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
