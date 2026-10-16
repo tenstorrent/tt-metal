@@ -69,11 +69,14 @@ def test_lgamma_bf16_input_fp32_output(device):
     got = ttnn.to_torch(tt_out)
 
     assert got.dtype == torch.float32
-    # The bf16 kernel evaluates Stirling plus a reflection; a bf16-grade result is a few bf16 ulps
-    # (|ref| < 16 here, so one bf16 ulp is at most 1/16).
+    # The bf16 kernel evaluates Stirling plus a reflection, so a bf16-grade result is expected: |ref| < 16
+    # here, so one bf16 ulp is at most 1/16; allow just under one ulp absolute plus a few ulps relative.
+    abs_tol = 0.05
+    rel_tol = 0.02
+    tol = abs_tol + rel_tol * ref.abs()
     err = (got - ref).abs()
     worst = err.view(-1).argmax()
-    assert torch.all(err <= 0.05 + 0.02 * ref.abs()), (
-        f"{(err > 0.05 + 0.02 * ref.abs()).sum().item()} of {err.numel()} lanes off; worst at "
+    assert torch.all(err <= tol), (
+        f"{(err > tol).sum().item()} of {err.numel()} lanes off; worst at "
         f"x={x.view(-1)[worst].item()}: got {got.view(-1)[worst].item():.4f}, ref {ref.view(-1)[worst].item():.4f}"
     )
