@@ -22,6 +22,7 @@ struct AdamWConfig {
     float epsilon{1e-8F};
     float weight_decay{1e-2F};
     bool amsgrad{false};
+    // Applies to bf16 parameters only: an fp32 parameter keeps the low bits that rounding would lose.
     bool stochastic_rounding{false};
 };
 

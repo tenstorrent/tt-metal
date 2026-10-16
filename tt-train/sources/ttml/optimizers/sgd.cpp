@@ -18,6 +18,7 @@ namespace ttml::optimizers {
 SGD::SGD(
     ttml::serialization::NamedParameters parameters, const SGDConfig& config, std::vector<ParamGroup> param_groups) :
     OptimizerBase(std::move(parameters)), m_nesterov(config.nesterov) {
+    require_bf16_parameters(m_parameters, "SGD");
     init_param_groups(param_group_defaults(config), std::move(param_groups));
     validate_config();
     for (const auto& group : m_param_groups) {
@@ -65,27 +66,36 @@ void SGD::step() {
             }
 
             auto gradients = theta_ptr->get_grad();
-            auto param = theta_ptr->get_value(autograd::PreferredPrecision::HALF);
+            // The kernel updates the parameter and the momentum buffer in place, and only exists for bf16.
+            auto param = theta_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
 
-            std::optional<ttnn::Tensor> momentum_buffer;
+            std::optional<autograd::MutableTensorView> momentum_buffer;
             bool first_momentum_update = false;
             if (momentum > 0.0F) {
                 auto it = m_momentum.find(name);
                 if (it == m_momentum.end()) {
                     auto buf = autograd::create_tensor(
-                        core::zeros_like(param),
+                        core::zeros_like(param.tensor()),
                         /* requires_grad */ false);
                     it = m_momentum.emplace(name, std::move(buf)).first;
                 }
                 first_momentum_update = m_momentum_initialized.insert(name).second;
-                momentum_buffer = it->second->get_value(autograd::PreferredPrecision::HALF);
+                momentum_buffer.emplace(it->second->get_value_for_update(autograd::PreferredPrecision::HALF));
             }
 
             // A buffer's first update must produce buf = g (PyTorch seeds fresh buffers with the raw
             // gradient); the buffer is zero at that point, so skipping dampening is sufficient.
             const float dampening = first_momentum_update ? 0.0F : group_dampening;
 
-            ttml::metal::sgd(param, gradients, lr, momentum, dampening, weight_decay, m_nesterov, momentum_buffer);
+            ttml::metal::sgd(
+                param.tensor(),
+                gradients,
+                lr,
+                momentum,
+                dampening,
+                weight_decay,
+                m_nesterov,
+                autograd::optional_tensor(momentum_buffer));
         }
     }
     m_steps++;

@@ -32,6 +32,7 @@ bool param_is_sharded(const autograd::Tensor& tensor) {
 MuonComposite::MuonComposite(
     ttml::serialization::NamedParameters parameters, const MuonConfig& config, std::vector<ParamGroup> param_groups) :
     OptimizerBase(std::move(parameters)), m_ns_steps(config.ns_steps) {
+    require_bf16_parameters(m_parameters, "MuonComposite");
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             // FSDP and TP shards parameters along a mesh axis; the Newton-Schulz update in Muon

@@ -23,6 +23,8 @@ AdamWFullPrecision::AdamWFullPrecision(
     const AdamWFullPrecisionConfig& config,
     std::vector<ParamGroup> param_groups) :
     OptimizerBase(std::move(parameters)), m_amsgrad(config.amsgrad) {
+    // The model parameters are the bf16 compute copies; the fp32 masters live in this optimizer.
+    require_bf16_parameters(m_parameters, "AdamWFullPrecision");
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             // Create fp32 master weights from the initial bf16 weights
@@ -83,22 +85,23 @@ void AdamWFullPrecision::step() {
 
             auto gradients = theta_ptr->get_grad();
 
-            const auto& master_weights = m_master_weights.at(name)->get_value(autograd::PreferredPrecision::FULL);
-            const auto& exp_avg = m_exp_avg.at(name)->get_value(autograd::PreferredPrecision::FULL);
-            const auto& exp_avg_sq = m_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::FULL);
+            // The fp32 master weights and moments are updated in place: write through their native tensors.
+            auto master_weights = m_master_weights.at(name)->get_value_for_update(autograd::PreferredPrecision::FULL);
+            auto exp_avg = m_exp_avg.at(name)->get_value_for_update(autograd::PreferredPrecision::FULL);
+            auto exp_avg_sq = m_exp_avg_sq.at(name)->get_value_for_update(autograd::PreferredPrecision::FULL);
 
-            std::optional<ttnn::Tensor> max_exp_avg_sq;
+            std::optional<autograd::MutableTensorView> max_exp_avg_sq;
             if (m_amsgrad) {
-                max_exp_avg_sq = m_max_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::FULL);
+                max_exp_avg_sq.emplace(
+                    m_max_exp_avg_sq.at(name)->get_value_for_update(autograd::PreferredPrecision::FULL));
             }
 
-            // Call the metal kernel - updates master_weights, exp_avg, exp_avg_sq in place
             ttml::metal::adamw(
-                master_weights,
+                master_weights.tensor(),
                 gradients,
-                exp_avg,
-                exp_avg_sq,
-                max_exp_avg_sq,
+                exp_avg.tensor(),
+                exp_avg_sq.tensor(),
+                autograd::optional_tensor(max_exp_avg_sq),
                 lr,
                 beta1,
                 beta2,
@@ -108,7 +111,7 @@ void AdamWFullPrecision::step() {
                 weight_decay);
 
             // Convert updated fp32 master weights back to bf16 visible weights
-            auto updated_bf16_weights = ttnn::typecast(master_weights, tt::tt_metal::DataType::BFLOAT16);
+            auto updated_bf16_weights = ttnn::typecast(master_weights.tensor(), tt::tt_metal::DataType::BFLOAT16);
             theta_ptr->set_value(updated_bf16_weights);
         }
     }

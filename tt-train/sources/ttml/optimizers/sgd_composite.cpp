@@ -19,6 +19,7 @@ SGDComposite::SGDComposite(
     const SGDCompositeConfig& config,
     std::vector<ParamGroup> param_groups) :
     OptimizerBase(std::move(parameters)), m_nesterov(config.nesterov) {
+    require_bf16_parameters(m_parameters, "SGDComposite");
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             m_theta.emplace(
