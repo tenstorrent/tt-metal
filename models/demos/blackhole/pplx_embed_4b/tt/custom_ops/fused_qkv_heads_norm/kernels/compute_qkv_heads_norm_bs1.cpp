@@ -320,6 +320,8 @@ void kernel_main() {
     constexpr uint32_t one_rsqrt = get_compile_time_arg_val(10);  // 1: gather / one rsqrt / scatter per unit
     // 1: the reader pushes cos / sin only when the seq tile changes (QWEN_HEADS_ROT_CACHE); pop them in lockstep
     constexpr uint32_t cache_rot = get_compile_time_arg_val(5);
+    // 1: in place (the unit is Q + K only; V stays where the QKV projection wrote it)
+    constexpr uint32_t inplace = get_compile_time_arg_val(11);
     constexpr uint32_t head_groups = get_compile_time_arg_val(6);
     constexpr uint32_t seq_tiles = get_compile_time_arg_val(7);
     const uint32_t num_work_units = get_arg_val<uint32_t>(0);
@@ -329,7 +331,7 @@ void kernel_main() {
     constexpr uint32_t sub_q_heads = q_heads_per_group / q_split;
     constexpr uint32_t sub_q_tiles = sub_q_heads * Wt;
     constexpr uint32_t group_kv_tiles = heads_per_group * Wt;
-    constexpr uint32_t kv_parts = (q_split == 1) ? 2 : 1;
+    constexpr uint32_t kv_parts = (q_split == 1 && !inplace) ? 2 : 1;
     constexpr uint32_t unit_tiles = sub_q_tiles + kv_parts * group_kv_tiles;
     constexpr uint32_t cb_qout = separate_q ? cb_qsep : cb_out;
     constexpr uint32_t kv_base = separate_q ? 0 : sub_q_tiles;  // K|V offset inside cb_out
@@ -352,7 +354,7 @@ void kernel_main() {
     uint32_t s_tile = (work_unit_start / q_split / head_groups) % seq_tiles;
     for (uint32_t w = 0; w < num_work_units; ++w) {
         const bool has_k = (q_split == 1) || sub == 0;
-        const bool has_v = (q_split == 1) || sub == 1;
+        const bool has_v = !inplace && ((q_split == 1) || sub == 1);
         const uint32_t v_in_off = sub_q_tiles + (has_k ? group_kv_tiles : 0);
         const uint32_t v_out_off = kv_base + (has_k ? group_kv_tiles : 0);
         in.wait_front(unit_tiles);

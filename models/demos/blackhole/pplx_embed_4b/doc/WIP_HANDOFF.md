@@ -162,6 +162,10 @@ its analytic formulation slightly overstates, structure -0.17 ms at bs32); bs32 
    QKV+heads fusion as the L1 saver for the QKV phase (frees 435 / 223 KB: bs16 Q in L1, bs32 without QKV chunks);
    (c) the MLP-phase peak at bs32 for the post-attention sum (FF13 ~170 KB, FF2 ~85 KB short), or instead the
    residual add in a lean WO / FF2 epilogue (minimal_matmul mode; the existing fused ternary costs too much).
+   **(b) done (§75):** QKV writes Q / K / V head-major (minimal_matmul_split head_major, host C++: rebuild) and the
+   heads op runs in place; the QKV intermediate is gone, bs16 has Q in L1 + one rsqrt (cold −0.9 ms, sustained −1.4),
+   bs8 −0.3 ms, bit-identical. Left from the L1 plan: bs32 (Q cannot be in L1; a head-major Q chunk in L1 copied to
+   DRAM by the heads op would drop the QKV chunks' intermediates), then (c).
    **Pinned (user, 2026-10-15): the L1 the fusion frees.** It removes no DRAM round trip (the QKV output already lives in
    L1; Q's DRAM write / read is hidden at both ends, §64 / §67), but without the 223-446 KB per core QKV intermediate bs32
    could drop its quarter-batch chunks (on paper: norm outputs 362 KB + K / V 290 KB beside the matmul's CBs fit), ~−1.1

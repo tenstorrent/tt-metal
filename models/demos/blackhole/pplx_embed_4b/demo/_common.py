@@ -488,6 +488,16 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
         os.environ.setdefault("QWEN_HEADS_Q_L1", "1")
         if os.getenv("QWEN_HEADS_Q_L1") == "1":
             os.environ.setdefault("QWEN_HEADS_ONE_RSQRT", "1")
+    # bs8 / bs16: the QKV projection writes Q / K / V head-major straight into L1 (minimal_matmul_split head_major) and the
+    # heads op normalises / rotates Q and K in place, so the QKV intermediate (446 KB per core at bs16) is gone and bs16's
+    # Q fits in L1 too, with one rsqrt. Bit-identical. Cold / sustained ms, 2 alternating rounds: bs16 141.8 / 192.1,
+    # 141.7 / 193.0 -> 140.9 / 190.4, 140.8 / 191.7 (chip 2); bs8 75.3, 75.4 -> 75.0, 75.1 (chip 1) (NEGATIVE_RESULTS 75).
+    # With Q in DRAM it would not pay (the in-place op reads Q back from DRAM). Opt out: QWEN_QKV_HEAD_MAJOR=0.
+    if batch_size in (8, 16) and seq_len == 512:
+        os.environ.setdefault("QWEN_QKV_HEAD_MAJOR", "1")
+        if batch_size == 16 and os.getenv("QWEN_QKV_HEAD_MAJOR") == "1":
+            os.environ.setdefault("QWEN_HEADS_Q_L1", "1")
+            os.environ.setdefault("QWEN_HEADS_ONE_RSQRT", "1")
     # The post-MLP add+RMSNorm output (the next layer's QKV input) preallocated in L1 before FF2 (tt/decoder_fusion.py):
     # allocated by the add, it lands below FF2's output and the post-attention sum, which are live then and freed
     # right after, and splits L1's free space. At bs16 that lets the post-attention sum stay in L1 beside the QKV

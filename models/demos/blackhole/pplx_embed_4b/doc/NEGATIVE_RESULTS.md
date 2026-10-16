@@ -1953,3 +1953,37 @@ against ~70 / ~246 µs a layer the norm-only add+norm would save: the epilogue's
 row, a scalar multiply, the add) cost too much. A lean epilogue (one dest-reuse add per output tile in the last K
 block, like the fused SwiGLU's partial-sum add, the residual streamed through the ternary DM path) is estimated at
 ~−6 ms at bs32 and ~−1.3 ms at bs16; it needs a minimal_matmul mode (host C++).
+
+## 75. QKV writes Q / K / V head-major, the heads op runs in place: the QKV intermediate is gone (landed at bs8 / 16) (2026-10-16)
+
+The L1 saver for the QKV phase (§74). Not the epilogue fusion of §71 (norm + RoPE in the matmul costs the matmul as much
+as the heads op), but the layout half of it (#57722):
+- **`minimal_matmul_split(..., output_tensors=[...], head_major=[S, Wt, off_0, tot_0, ...])`** (tt-metal, host +
+  kernels): chunk c of the output (N / chunks tiles, whole heads of Wt tiles) is written into a `[B, tot_c, S·32, Wt·32]`
+  tensor at heads off_c.., with output row m = (b, s) = (m / S, m % S). The writer's split paths take a page functor
+  (row-major by default; both DM kernels, since either can be the output writer: in1 when the core grid is transposed,
+  M > N as at bs16, in0 otherwise as at bs8). Preallocated outputs may repeat a tensor: the QKV projection runs as 6
+  chunks of 8 heads bound to (Q, Q, Q, Q, K, V) with offsets (0, 8, 16, 24, 0, 0). Bit-identical to the row-major output
+  rearranged on the host.
+- **The heads op in place** (`inplace=True`, v3): the reader reads a unit's 4 Q heads from Q and its K head from K
+  (head-major pages), no V read or copy, and the writer writes Q / K back to the same pages.
+- **Model** (`QWEN_QKV_HEAD_MAJOR`, `tt/attention.py`): a matmul / heads hook pair allocates Q / K / V at the top of L1
+  right before the QKV matmul, runs the head-major matmul into them (the base forward gets a never-written DRAM
+  placeholder for the row-major output) and the heads op in place.
+
+Standalone, µs per QKV + heads pair (`bench_qkv_head_major.py`, Q / K / V bit-identical to the current path at bs8 / 16,
+with and without one rsqrt):
+
+| | current | head-major + in place | head-major matmul | in-place heads | row-major matmul |
+|---|---|---|---|---|---|
+| bs16, Q in L1, one rsqrt | does not fit | **675.8** | 532.6 | 149.9 | 536.4 |
+| bs16, Q in DRAM, one rsqrt | 736.4 | 784.4 | 549.7 | 248.1 | 544.8 |
+| bs8, Q in L1, one rsqrt | 353.5 | **346.7** | 262.2 | 89.3 | 266.5 |
+| bs8, Q in DRAM, one rsqrt | 372.1 | 401.5 | 271.7 | 135.7 | 265.6 |
+
+The remap costs the matmul nothing. With Q in DRAM the in-place op reads Q back from DRAM, so it only pays with Q in
+L1, which is what the freed 446 KB per core (bs16) allows. E2e, 2 alternating rounds, cold / sustained ms: bs16 (chip 2)
+141.8 / 192.1, 141.7 / 193.0 -> 140.9 / 190.4, 140.8 / 191.7 (with Q in L1 + one rsqrt); bs8 (chip 1, on top of its Q
+in L1 + one rsqrt) 75.3 / 98.0, 75.4 / 98.5 -> 75.0 / 98.4, 75.1 / 99.1. STS-B embeddings bit-identical (bs16, 128
+pairs). **Landed** at bs8 / 16 (`apply_workload_env`). bs32 (Q 594 KB per core cannot be in L1): open; there the
+chunked path could write Q head-major into a small L1 chunk tensor and the heads op copy it to Q in DRAM.

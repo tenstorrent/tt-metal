@@ -131,9 +131,12 @@ def _wrap_create_qkv_heads_norm(original_fn, consts, rot=None, q_dtype=None, kv_
             not args
             and num_heads is not None
             and _interleaved_out(kwargs.get("memory_config"))
-            and _qkv_headsplit_supported(qkv_fused, num_heads, num_kv_heads, transpose_k_heads)
+            and (
+                kwargs.get("inplace")  # head-major Q / K / V from the QKV projection (qkv_fused is Q)
+                or _qkv_headsplit_supported(qkv_fused, num_heads, num_kv_heads, transpose_k_heads)
+            )
         ):
-            chunk_kwargs = {k: kwargs[k] for k in ("out_tensors", "batch_offset", "use_v3") if k in kwargs}
+            chunk_kwargs = {k: kwargs[k] for k in ("out_tensors", "batch_offset", "use_v3", "inplace") if k in kwargs}
             return nlp_create_qkv_heads_norm_headsplit(
                 qkv_fused,
                 gq,
@@ -512,6 +515,14 @@ class PplxBidirectionalAttention(Attention):
         # QWEN_HEADS_Q_L1=1 (unchunked layers): Q / K / V preallocated in L1 right before the QKV matmul, so they sit at
         # the top of L1 above the QKV output; allocated by the heads op they landed below it, and once it was freed
         # they split L1 under SDPA's static CBs (bs16: 61 KB short).
+        # QWEN_QKV_HEAD_MAJOR=1 (unchunked layers): the QKV projection writes Q / K / V head-major straight into
+        # tensors preallocated at the top of L1 (minimal_matmul_split head_major) and the heads op normalises / rotates
+        # Q and K in place: no QKV intermediate (446 KB per core at bs16), so Q fits in L1 (NEGATIVE_RESULTS 75).
+        if halves is None and _saved_chunk is None and os.getenv("QWEN_QKV_HEAD_MAJOR", "0") == "1" and rot is not None:
+            _saved_chunk = (ttnn.experimental.minimal_matmul, ttnn.experimental.nlp_create_qkv_heads)
+            ttnn.experimental.minimal_matmul, ttnn.experimental.nlp_create_qkv_heads = self._qkv_head_major_hooks(
+                x_11SH, *_saved_chunk, q_dtype, kv_dtype
+            )
         if halves is None and _saved_chunk is None and os.getenv("QWEN_HEADS_Q_L1", "0") == "1" and rot is not None:
             _saved_chunk = (ttnn.experimental.minimal_matmul, ttnn.experimental.nlp_create_qkv_heads)
             ttnn.experimental.minimal_matmul, ttnn.experimental.nlp_create_qkv_heads = self._qkv_prealloc_hooks(
@@ -544,6 +555,70 @@ class PplxBidirectionalAttention(Attention):
                 ttnn.experimental.minimal_matmul, ttnn.linear = _saved_mm
             if _saved_reshape is not None:
                 ttnn.reshape = _saved_reshape
+
+    def _qkv_head_major_hooks(self, x, inner_mm, heads, q_dtype, kv_dtype):
+        """(minimal_matmul, nlp_create_qkv_heads) replacements: the QKV matmul writes head-major Q / K / V (Q in L1 with
+        QWEN_HEADS_Q_L1=1, else the heads op's memory config; K / V in L1 with QWEN_HEADS_KV_L1=1) and returns a
+        never-written DRAM placeholder for its row-major output; the heads call then runs the heads op in place."""
+        B, S = int(x.shape[0]), int(x.shape[-2])
+        dev = x.device()
+        done = {}
+        chunk_heads = 8  # per minimal_matmul_split chunk: Q, ..., Q, K, V chunks of whole heads
+
+        def mm(a, b, *args, **kw):
+            if b is not self.wqkv or done or args:
+                return inner_mm(a, b, *args, **kw)
+            nh, nkv, hd = self.n_local_heads, self.n_local_kv_heads, self.head_dim
+            if nh % chunk_heads or nkv != chunk_heads or hd % 32 or S % 32:
+                return inner_mm(a, b, *args, **kw)
+            heads_mc = self.args.get_attn_create_head_output_mem_config(Mode.PREFILL, None, prefill_seq_len=B * S)
+            q_mc = ttnn.L1_MEMORY_CONFIG if os.getenv("QWEN_HEADS_Q_L1", "0") == "1" else heads_mc
+            kv_mc = ttnn.L1_MEMORY_CONFIG if os.getenv("QWEN_HEADS_KV_L1", "0") == "1" else heads_mc
+            q_dt, kv_dt = q_dtype or ttnn.bfloat8_b, kv_dtype or ttnn.bfloat8_b
+            if q_dt != kv_dt:
+                return inner_mm(a, b, *args, **kw)
+            alloc = lambda shp, mc: ttnn.allocate_tensor_on_device(ttnn.Shape(shp), q_dt, ttnn.TILE_LAYOUT, dev, mc)
+            qkv = (alloc([B, nh, S, hd], q_mc), alloc([B, nkv, S, hd], kv_mc), alloc([B, nkv, S, hd], kv_mc))
+            hm = [S // 32, hd // 32]
+            for c in range(nh // chunk_heads):
+                hm += [c * chunk_heads, nh]
+            hm += [0, nkv, 0, nkv]
+            ttnn.experimental.minimal_matmul_split(
+                a,
+                b,
+                chunks=nh // chunk_heads + 2,
+                config=kw.get("config"),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=q_dt,
+                compute_kernel_config=kw.get("compute_kernel_config"),
+                output_tensors=[qkv[0]] * (nh // chunk_heads) + [qkv[1], qkv[2]],
+                head_major=hm,
+            )
+            out_shape = [int(a.shape[i]) for i in range(len(a.shape) - 1)] + [int(b.shape[-1])]
+            placeholder = ttnn.allocate_tensor_on_device(
+                ttnn.Shape(out_shape), q_dt, ttnn.TILE_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG
+            )
+            done["qkv"] = (placeholder.buffer_address(), qkv)
+            return placeholder
+
+        def create_heads(xqkv, *args, **kw):
+            hit = done.get("qkv")
+            if hit is not None and xqkv.buffer_address() == hit[0]:
+                done["qkv"] = None
+                return heads(
+                    hit[1][0],
+                    num_heads=self.n_local_heads,
+                    num_kv_heads=self.n_local_kv_heads,
+                    transpose_k_heads=False,
+                    memory_config=hit[1][0].memory_config(),
+                    out_tensors=hit[1],
+                    batch_offset=0,
+                    use_v3=True,
+                    inplace=True,
+                )
+            return heads(xqkv, *args, **kw)
+
+        return mm, create_heads
 
     def _qkv_prealloc_hooks(self, x, inner_mm, heads, q_dtype, kv_dtype):
         """(minimal_matmul, nlp_create_qkv_heads) replacements that allocate Q / K / V in L1 before the QKV matmul and

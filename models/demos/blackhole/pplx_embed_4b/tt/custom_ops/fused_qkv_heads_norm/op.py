@@ -119,6 +119,7 @@ def nlp_create_qkv_heads_norm_headsplit(
     out_tensors: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor] | None = None,
     batch_offset: int = 0,
     use_v3: bool | None = None,
+    inplace: bool = False,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """``qkv_fused``: ``[B, 1, S, (num_heads + 2*num_kv_heads) * head_dim]`` TILE bf16/bfp8.
 
@@ -134,6 +135,9 @@ def nlp_create_qkv_heads_norm_headsplit(
     at ``[batch_offset, batch_offset + B)`` (a batch processed in chunks lands in one tensor per output, no concat).
     ``use_v3``: the v3 compute for this call (default: ``QWEN_FUSED_COMPUTE_V3``).
     ``kv_memory_config``: K / V placement when it differs from Q's (default: ``memory_config``).
+    ``inplace``: Q / K / V are already head-major in ``out_tensors`` (the QKV projection wrote them there,
+    ``minimal_matmul_split(..., head_major=...)``); normalise and rotate Q and K in place and leave V. ``qkv_fused`` is
+    then ignored (pass Q). v3 compute, q_split 1, batch_offset 0 only.
     """
     if memory_config is None:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -156,7 +160,29 @@ def nlp_create_qkv_heads_norm_headsplit(
         raise ValueError("rot_cos, rot_sin and trans_mat must be given together")
     # Placeholder bindings when rotary is off: the kernels never touch them (compile-time flag).
     cos_t, sin_t, trans_t = (rot_cos, rot_sin, trans_mat) if fuse_rotary else (qkv_fused, qkv_fused, qkv_fused)
-    plan = _Plan.from_input(qkv_fused, num_heads, num_kv_heads)
+    if inplace:
+        if out_tensors is None or batch_offset or not (use_v3 if use_v3 is not None else True):
+            raise ValueError("inplace needs out_tensors=(q, k, v), batch_offset 0 and the v3 compute")
+        q_in = out_tensors[0]
+        qkv_fused = q_in
+        b_, h_, s_, d_ = (int(v) for v in q_in.padded_shape)
+        wt_ = d_ // TILE
+        plan = _Plan(
+            batch=b_,
+            seq_len=s_,
+            num_q_heads=num_heads,
+            num_kv_heads=num_kv_heads,
+            q_heads_per_kv=num_heads // num_kv_heads,
+            head_dim=d_,
+            in_w_tiles=(num_heads + 2 * num_kv_heads) * wt_,
+            seq_tiles=s_ // TILE,
+            head_dim_tiles=wt_,
+            q_out_HtWt=(s_ // TILE) * wt_,
+            num_blocks_total=b_ * (s_ // TILE),
+        )
+        use_v3 = True
+    else:
+        plan = _Plan.from_input(qkv_fused, num_heads, num_kv_heads)
     if head_groups is None:
         _env = os.getenv("QWEN_HEADSPLIT_GROUPS_QKV")
         head_groups = int(_env) if _env else plan.num_kv_heads
@@ -240,7 +266,9 @@ def nlp_create_qkv_heads_norm_headsplit(
     group_q_tiles = heads_per_group * plan.q_heads_per_kv * Wt
     group_kv_tiles = heads_per_group * Wt
     sub_q_tiles = group_q_tiles // q_split
-    kv_parts = 2 if q_split == 1 else 1  # K and V in one unit, or K xor V per half
+    if inplace and q_split != 1:
+        raise ValueError("inplace supports QWEN_HEADSPLIT_Q_SPLIT=1 only")
+    kv_parts = 2 if q_split == 1 and not inplace else 1  # K and V in one unit, K xor V per half, or K only (inplace)
     unit_tiles = sub_q_tiles + kv_parts * group_kv_tiles
     tile_size = _TILE_BYTES[out_dtype]
     out_tiles = kv_parts * group_kv_tiles if separate_q else unit_tiles
@@ -319,8 +347,10 @@ def nlp_create_qkv_heads_norm_headsplit(
         q_split,
         int(res_tensor is not None),
     ]
-    for t in (qkv_fused, gamma_q_tiles, gamma_k_tiles, scaler_tile, eps_tile, cos_t, sin_t, trans_t):
+    k_in = out_tensors[1] if inplace else qkv_fused  # placeholder binding when not in place
+    for t in (qkv_fused, gamma_q_tiles, gamma_k_tiles, scaler_tile, eps_tile, cos_t, sin_t, trans_t, k_in):
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    reader_ct.append(int(inplace))
     compute_ct = [
         plan.q_heads_per_kv,
         heads_per_group,
@@ -336,6 +366,7 @@ def nlp_create_qkv_heads_norm_headsplit(
         # in DRAM). Opt out: QWEN_FUSED_RSQRT_COL=0.
         int(os.getenv("QWEN_FUSED_RSQRT_COL", "1") == "1"),
         int(one_rsqrt),
+        int(inplace),
     ]
     writer_ct = [
         plan.seq_tiles,
@@ -352,6 +383,7 @@ def nlp_create_qkv_heads_norm_headsplit(
     ]
     for t in (q_tensor, k_tensor, v_tensor):
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    writer_ct.append(int(inplace))
 
     reader_rt, compute_rt, writer_rt = [], [], []
     cursor = 0
@@ -372,6 +404,7 @@ def nlp_create_qkv_heads_norm_headsplit(
                     n_units,
                     cursor,
                     (2 if res_tensor is not None else 1) if one_rsqrt else 0,  # 2: G / P aliased, 1: build
+                    k_in.buffer_address(),
                 ],
             )
         )

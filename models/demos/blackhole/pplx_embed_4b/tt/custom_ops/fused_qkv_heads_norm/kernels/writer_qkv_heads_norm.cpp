@@ -63,6 +63,8 @@ void kernel_main() {
     constexpr auto q_args = TensorAccessorArgs<11>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    // In place (QWEN_QKV_HEAD_MAJOR): Q and K go back to their own pages; V is not touched.
+    constexpr uint32_t inplace = get_compile_time_arg_val(v_args.next_compile_time_args_offset());
 
     constexpr uint32_t cb_id = 16;  // compute output: Q|K|V, or K|V when separate_q
     constexpr uint32_t cb_q = separate_q ? 17 : cb_id;
@@ -84,7 +86,7 @@ void kernel_main() {
     constexpr uint32_t q_batch_stride = num_q_heads * q_out_HtWt;
     constexpr uint32_t kv_batch_stride = num_kv_heads * q_out_HtWt;
 
-    constexpr uint32_t kv_parts = (q_split == 1) ? 2 : 1;
+    constexpr uint32_t kv_parts = (q_split == 1 && !inplace) ? 2 : 1;
     constexpr uint32_t unit_tiles = sub_q_tiles + kv_parts * group_kv_tiles;
     constexpr uint32_t kv_tiles = kv_parts * group_kv_tiles;
     // Unit index -> (sub, group, s_tile, batch), decomposed once here and then advanced as rotating counters,
@@ -95,7 +97,7 @@ void kernel_main() {
     uint32_t batch = batch_offset + work_unit_start / q_split / head_groups / seq_tiles;
     for (uint32_t w = 0; w < num_work_units; ++w) {
         const bool has_k = (q_split == 1) || sub == 0;
-        const bool has_v = (q_split == 1) || sub == 1;
+        const bool has_v = !inplace && ((q_split == 1) || sub == 1);
         const uint32_t q_head_start = group * q_heads_per_group + sub * sub_q_heads;
         const uint32_t kv_head_start = group * heads_per_group;
 

@@ -45,6 +45,10 @@ void kernel_main() {
     constexpr auto cos_args = TensorAccessorArgs<eps_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
     constexpr auto trans_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
+    // In place (QWEN_QKV_HEAD_MAJOR): the QKV projection wrote Q / K / V head-major; read a unit's Q heads from Q
+    // (bound as the "fused" input) and its K heads from K, and leave V alone.
+    constexpr auto k_args = TensorAccessorArgs<trans_args.next_compile_time_args_offset()>();
+    constexpr uint32_t inplace = get_compile_time_arg_val(k_args.next_compile_time_args_offset());
     constexpr uint32_t fuse_rotary = get_compile_time_arg_val(7);  // 0/1; placeholders bound when 0
 
     constexpr uint32_t cb_id = 0;  // fused QKV tiles for compute
@@ -60,6 +64,7 @@ void kernel_main() {
     const auto scos = TensorAccessor(cos_args, cos_addr);
     const auto ssin = TensorAccessor(sin_args, sin_addr);
     const auto strans = TensorAccessor(trans_args, trans_addr);
+    const auto sk = TensorAccessor(k_args, get_arg_val<uint32_t>(11));
     const uint32_t tile_size_bytes = get_tile_size(cb_id);
     const uint32_t const_tile_bytes = get_tile_size(cb_gq);
 
@@ -71,7 +76,7 @@ void kernel_main() {
     constexpr uint32_t q_tiles_total = num_kv_heads * q_heads_per_kv * head_dim_tiles;
     constexpr uint32_t kv_tiles_total = num_kv_heads * head_dim_tiles;
     constexpr uint32_t sub_q_tiles = group_q_tiles / q_split;
-    constexpr uint32_t kv_parts = (q_split == 1) ? 2 : 1;
+    constexpr uint32_t kv_parts = (q_split == 1 && !inplace) ? 2 : 1;
     constexpr uint32_t unit_tiles = sub_q_tiles + kv_parts * group_kv_tiles;
 
     auto read_gamma = [&]() {
@@ -178,7 +183,7 @@ void kernel_main() {
     uint32_t batch = work_unit_start / q_split / head_groups / seq_tiles;
     for (uint32_t w = 0; w < num_work_units; ++w) {
         const bool has_k = (q_split == 1) || sub == 0;
-        const bool has_v = (q_split == 1) || sub == 1;
+        const bool has_v = !inplace && ((q_split == 1) || sub == 1);
         const uint32_t block_base = batch * (seq_tiles * in0_w_tiles) + s_tile * in0_w_tiles;
         const uint32_t q_base_tile = block_base + group * group_q_tiles;
         const uint32_t k_base_tile = block_base + q_tiles_total + group * group_kv_tiles;
@@ -186,26 +191,51 @@ void kernel_main() {
 
         cb.reserve_back(unit_tiles);
         uint32_t l1_write_offset = 0;
-        const uint32_t q_sub_base_tile = q_base_tile + sub * sub_q_tiles;
-        for (uint32_t i = 0; i < sub_q_tiles; ++i) {
-            noc.async_read(
-                s0, cb, tile_size_bytes, {.page_id = q_sub_base_tile + i}, {.offset_bytes = l1_write_offset});
-            l1_write_offset += tile_size_bytes;
-        }
-        if (has_k) {
-            for (uint32_t i = 0; i < group_kv_tiles; ++i) {
+        if constexpr (inplace) {
+            // head-major [B, H, S, d]: page ((b * H + head) * seq_tiles + s_tile) * head_dim_tiles + j
+            constexpr uint32_t num_q_heads = num_kv_heads * q_heads_per_kv;
+            constexpr uint32_t sub_q_heads = sub_q_tiles / head_dim_tiles;
+            const uint32_t q_head0 = group * heads_per_group * q_heads_per_kv + sub * sub_q_heads;
+            for (uint32_t h = 0; h < sub_q_heads; ++h) {
+                const uint32_t page0 = ((batch * num_q_heads + q_head0 + h) * seq_tiles + s_tile) * head_dim_tiles;
+                for (uint32_t j = 0; j < head_dim_tiles; ++j) {
+                    noc.async_read(s0, cb, tile_size_bytes, {.page_id = page0 + j}, {.offset_bytes = l1_write_offset});
+                    l1_write_offset += tile_size_bytes;
+                }
+            }
+            if (has_k) {
+                for (uint32_t h = 0; h < heads_per_group; ++h) {
+                    const uint32_t kh = group * heads_per_group + h;
+                    const uint32_t page0 = ((batch * num_kv_heads + kh) * seq_tiles + s_tile) * head_dim_tiles;
+                    for (uint32_t j = 0; j < head_dim_tiles; ++j) {
+                        noc.async_read(
+                            sk, cb, tile_size_bytes, {.page_id = page0 + j}, {.offset_bytes = l1_write_offset});
+                        l1_write_offset += tile_size_bytes;
+                    }
+                }
+            }
+        } else {
+            const uint32_t q_sub_base_tile = q_base_tile + sub * sub_q_tiles;
+            for (uint32_t i = 0; i < sub_q_tiles; ++i) {
                 noc.async_read(
-                    s0, cb, tile_size_bytes, {.page_id = k_base_tile + i}, {.offset_bytes = l1_write_offset});
+                    s0, cb, tile_size_bytes, {.page_id = q_sub_base_tile + i}, {.offset_bytes = l1_write_offset});
                 l1_write_offset += tile_size_bytes;
             }
-        }
-        if (has_v) {
-            for (uint32_t i = 0; i < group_kv_tiles; ++i) {
-                noc.async_read(
-                    s0, cb, tile_size_bytes, {.page_id = v_base_tile + i}, {.offset_bytes = l1_write_offset});
-                l1_write_offset += tile_size_bytes;
+            if (has_k) {
+                for (uint32_t i = 0; i < group_kv_tiles; ++i) {
+                    noc.async_read(
+                        s0, cb, tile_size_bytes, {.page_id = k_base_tile + i}, {.offset_bytes = l1_write_offset});
+                    l1_write_offset += tile_size_bytes;
+                }
             }
-        }
+            if (has_v) {
+                for (uint32_t i = 0; i < group_kv_tiles; ++i) {
+                    noc.async_read(
+                        s0, cb, tile_size_bytes, {.page_id = v_base_tile + i}, {.offset_bytes = l1_write_offset});
+                    l1_write_offset += tile_size_bytes;
+                }
+            }
+        }  // !inplace
         bool load_rot = false;
         if constexpr (fuse_rotary) {
             load_rot = !cache_rot || s_tile != last_s_tile;
