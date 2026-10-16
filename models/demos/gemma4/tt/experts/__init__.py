@@ -8,6 +8,8 @@ Decode (seq_len=1): on-device via sparse_matmul with top-k sparsity
 Prefill (seq_len>1): on-device via sparse_matmul with all-ones sparsity (gpt_oss pattern)
 """
 
+import os
+
 import ttnn
 
 from .decode import decode_forward
@@ -86,7 +88,7 @@ class Gemma4Experts:
             hidden_states = ccl_lane_gather_rows(hidden_states, self.mesh_config)
             dense_routing = ccl_lane_gather_rows(dense_routing, self.mesh_config)
             owner = getattr(self.mesh_config, "_g4_single_lane_prefill_owner", None)
-            if owner is not None:
+            if owner is not None and os.environ.get("GEMMA4_EP_LANE_FASTPATH", "1") != "0":
                 # Single-user prefill: only the owner lane's rows are real. Every lane still needs
                 # them (the experts are sharded over the lanes), but running the local experts on
                 # the other lanes' scratch rows would be 1 - 1/lanes wasted work. Slice the owner's
