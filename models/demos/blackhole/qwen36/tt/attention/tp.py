@@ -167,6 +167,8 @@ class TPAttention:
         self.wo_cfg = tpc.COMPUTE_LOFI if tpc.bfp4_attn_enabled() else self.compute_cfg
         # bf8 SDPA (QWEN_SDPA_BF8=1): bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower)
         self._sdpa_bf8 = os.environ.get("QWEN_SDPA_BF8", "0") == "1"
+        # bf8 paged KV cache (QWEN_SDPA_BF8 or the cache-only QWEN36_KV_BF8, which keeps prefill Q in bf16)
+        self._kv_bf8 = tpc.kv_cache_bf8_enabled()
         # Must match load_attention_weights_tp gates
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
         self._wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
@@ -1232,8 +1234,8 @@ class TPAttention:
 
         k_paged, v_paged = self.paged_k, self.paged_v
         block_size = k_paged.shape[2]
-        # bf8 SDPA: paged_fill_cache doesn't cast — cast K/V to cache dtype before fill
-        if self._sdpa_bf8:
+        # bf8 KV cache: paged_fill_cache doesn't cast — cast K/V to cache dtype before fill
+        if self._kv_bf8:
             _k8 = ttnn.typecast(k, ttnn.bfloat8_b)
             ttnn.deallocate(k)
             k = _k8

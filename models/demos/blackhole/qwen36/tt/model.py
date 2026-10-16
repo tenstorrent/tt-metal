@@ -22,6 +22,7 @@ from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
+from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
@@ -5344,8 +5345,8 @@ class Qwen36Model:
     def allocate_kv_caches(self, kv_cache_shape, dtype, batch_size=1):
         """Allocate caches for all 32 layers. Returns only the attention KV caches (for vLLM)."""
         assert self._paged_kv_caches is None, "allocate_kv_caches already called; deallocate first"
-        # QWEN_SDPA_BF8: bf8 paged KV for SDPA; halves KV memory (gated — validate PCC at long ctx).
-        if os.environ.get("QWEN_SDPA_BF8", "0") == "1":
+        # bf8 paged KV (QWEN_SDPA_BF8, or cache-only QWEN36_KV_BF8): halves KV memory and long-context SDPA reads.
+        if kv_cache_bf8_enabled():
             dtype = ttnn.bfloat8_b
         if self.num_devices > 1:
             return self._allocate_kv_caches_tp(kv_cache_shape, dtype, batch_size)

@@ -130,7 +130,7 @@ Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
 Optional flags:
 
 ```bash
-# Run SDPA in BF8 (faster; slightly lower precision).
+# Also cast the prefill SDPA Q to BF8 (the KV cache is BF8 by default; slightly lower precision).
 export QWEN_SDPA_BF8=1
 ```
 
@@ -143,9 +143,11 @@ Default decode settings (TP paths, 27B), each with an env var that reverts it:
 | dense-MLP gate/up weights in BFP8 | `QWEN36_MLP_GATEUP_BFP8=0` (BFP4) |
 | dense-MLP matmuls at HiFi2 | `QWEN36_MLP_FIDELITY=lofi\|hifi3\|hifi4` |
 | 8 KB fabric packet payload on multi-device meshes (demo and vLLM) | `QWEN36_FABRIC_PAYLOAD_BYTES=0` (fabric default, 4352 B) or another size |
+| BF8 paged KV cache (demo and vLLM; prefill Q stays BF16) | `QWEN36_KV_BF8=0` (BF16 cache) |
 
-With these defaults Qwen3.8-27B served through vLLM (`max_num_seqs` 32) passed AIME 2026, GPQA-Diamond and MMLU-Pro
-(reference score inside the 95% CI), and `accuracy_512` passes; BFP4 MLP-down + attention on top of them failed AIME.
+With the GDN and MLP defaults (and a BF16 KV cache) Qwen3.8-27B served through vLLM (`max_num_seqs` 32) passed
+AIME 2026, GPQA-Diamond and MMLU-Pro (reference score inside the 95% CI); BFP4 MLP-down + attention on top of them
+failed AIME. `accuracy_512` passes with all of the defaults above.
 
 
 ## End-to-end demo test (`demo/text_demo.py`)

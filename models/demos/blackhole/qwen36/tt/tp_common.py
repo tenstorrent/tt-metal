@@ -53,6 +53,14 @@ def fabric_router_config():
     return router
 
 
+def kv_cache_bf8_enabled():
+    """bf8 paged KV cache (the qwen38_27b_qb2 KV dtype): QWEN36_KV_BF8 (default 1; 0 = bf16 cache) keeps the
+    prefill Q in bf16, QWEN_SDPA_BF8=1 additionally casts the prefill Q to bf8. Halves KV memory and the SDPA reads
+    that grow with context: TP=8 B=1 decode 22.75 -> 21.55 ms/token at 64k and 24.19 -> 22.57 at 103k, unchanged
+    at 128 tokens; accuracy_512 96.88 -> 97.27, accuracy_1536 95.96 -> 95.70 (QWEN_SDPA_BF8: 96.29 / 95.64)."""
+    return os.environ.get("QWEN_SDPA_BF8", "0") == "1" or os.environ.get("QWEN36_KV_BF8", "1") == "1"
+
+
 LMHEAD_CFG_ENV = "QWEN36_LMHEAD_CFG"
 _LMHEAD_LOGGED = False
 
