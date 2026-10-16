@@ -1004,6 +1004,12 @@ class Gemma4Model:
 
         is_mesh = hasattr(self.mesh_device, "shape")
 
+        # Decode never has a single active lane: the EP experts' single-lane prefill fast path must
+        # not see a stale owner from the last prefill (the vLLM decode path does not pass through
+        # prepare_inputs_decode, and the fast path's all-reduce is not capturable in a decode trace).
+        if is_decode and self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
+            self.mesh_config._g4_single_lane_prefill_owner = None
+
         # Determine which layers are KV sources (their K/V will be shared)
         kv_source_indices = set(self.kv_shared_layer_map.values()) if not is_decode else set()
         # Store K/V from source layers for sharing during prefill
