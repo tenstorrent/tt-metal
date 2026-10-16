@@ -93,7 +93,7 @@ def test_height_sharded(device, op_name, case, num_shards):
     if case == "small":
         rows = 7 * 1024
     elif case == "few_pages_per_core":  # bursts on every chip
-        rows = large_rows(device, 1024, 32 * num_shards, pages_per_core=32)
+        rows = large_rows(device, 1024, 32 * num_shards, pages_per_core=64)
     else:
         rows = large_rows(device, 1024, 32 * num_shards)
     if case == "large_short_last_shard":

@@ -177,7 +177,8 @@ struct TensorReads {
     bool width_shards;
     bool large_pages;  // above 2 KB (fp32, int32): twice the DRAM time per tile
     uint32_t banks;    // banks the tensor uses: all of them if interleaved, else one per shard
-    bool all_banks;    // banks >= the chip's DRAM banks
+    uint64_t pages_per_bank;
+    bool all_banks;  // banks >= the chip's DRAM banks
     uint32_t shard_width;
     // Banks main's cores start on, and keep reading together while in step. Interleaved: its per-core ranges are
     // ceil(pages / cores) apart. Width shards: the shards those ranges start in.
@@ -234,8 +235,11 @@ DramReadFlow choose_flow_many_cores_per_bank(OpCost cost, const TensorReads& t, 
 // Flow for few cores per DRAM bank; None keeps main's path. Main's order leaves fewer cores idle there, so the flows
 // win only where DRAM clearly sets the time. Each branch is taken only where it beat main.
 DramReadFlow choose_flow_few_cores_per_bank(OpCost cost, const TensorReads& t, uint64_t pages_per_core) {
-    // Bursts get a height shard's first tiles in sooner; below this the first burst is most of a core's share.
+    // Bursts get a height shard's first tiles in sooner. With smaller shares the first burst is most of a core's
+    // share, and with fewer 2 KB pages per bank main's time is its launch time anyway.
     constexpr uint64_t kMinPagesPerCoreForBursts = 24;
+    constexpr uint64_t kMinPagesPerCoreForBurstsLargePages = 32;
+    constexpr uint64_t kMinPagesPerBankForBursts = 384;
     // From this on the queue saves more than its start-up and last chunk cost.
     constexpr uint64_t kMinPagesPerCoreForQueue = 96;
     // Where main's cores, in step, start on between these many banks and have at least this share, they pile onto
@@ -275,12 +279,12 @@ DramReadFlow choose_flow_few_cores_per_bank(OpCost cost, const TensorReads& t, u
         return queue && pages_per_core >= kMinPagesPerCoreForQueue ? DramReadFlow::WorkQueue : DramReadFlow::None;
     }
     // No bursts on width shards: main's order already crosses the banks.
-    DramReadFlow deep = DramReadFlow::None;
-    if (pages_per_core >= kMinPagesPerCoreForQueue) {
-        deep = DramReadFlow::WorkQueue;
-    } else if (!t.width_shards && pages_per_core >= kMinPagesPerCoreForBursts) {
-        deep = DramReadFlow::StaticBurst;
-    }
+    const bool bursts_pay = !t.width_shards && (t.large_pages ? pages_per_core >= kMinPagesPerCoreForBurstsLargePages
+                                                              : pages_per_core >= kMinPagesPerCoreForBursts &&
+                                                                    t.pages_per_bank >= kMinPagesPerBankForBursts);
+    const DramReadFlow deep = pages_per_core >= kMinPagesPerCoreForQueue ? DramReadFlow::WorkQueue
+                              : bursts_pay                               ? DramReadFlow::StaticBurst
+                                                                         : DramReadFlow::None;
     // On fewer shards than banks main queues more cores on each bank, so the flows win up to heavy ops, and for every
     // op with large pages.
     if (!t.all_banks) {
@@ -397,6 +401,7 @@ DramReadPlan get_dram_read_plan(
         .width_shards = width_shards,
         .large_pages = input_spec.compute_page_size_bytes() > kMinPageBytes,
         .banks = banks,
+        .pages_per_bank = total_pages / banks,
         .all_banks = banks >= num_dram_banks,
         .shard_width = shard_width,
         .main_start_banks = main_start_banks};

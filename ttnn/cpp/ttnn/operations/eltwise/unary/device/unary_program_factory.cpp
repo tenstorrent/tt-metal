@@ -80,7 +80,7 @@ const tt::tt_metal::experimental::KernelSpecName COMPUTE{"compute"};
 const tt::tt_metal::experimental::DFBSpecName IN_DFB{"in"};      // legacy index c_0
 const tt::tt_metal::experimental::DFBSpecName TMP0_DFB{"tmp0"};  // legacy index c_1 (LOGIT only)
 const tt::tt_metal::experimental::DFBSpecName OUT_DFB{"out"};    // legacy index c_2
-// DRAM read work queue (see dram_read_common.hpp).
+// DRAM read work queue (see kernels/dataflow/dram_read.hpp).
 const tt::tt_metal::experimental::DFBSpecName CHUNK_COUNT_DFB{"chunk_count"};  // reader to compute
 const tt::tt_metal::experimental::DFBSpecName CHUNK_RANGE_DFB{"chunk_range"};  // reader to writer
 const tt::tt_metal::experimental::DFBSpecName REQUESTS_DFB{"requests"};        // the scheduler's request table
@@ -120,15 +120,7 @@ struct CoreRtArgs {
     uint32_t out_units = 0;
     uint32_t start_id = 0;
     uint32_t compute_units = 0;
-    // With the DRAM read work queue: the queue's args.
-    struct Queue {
-        uint32_t worker_id = 0;
-        uint32_t scheduler_xy = 0;
-        uint32_t total_pages = 0;
-        uint32_t chunk_pages = 0;
-        uint32_t num_workers = 0;
-    };
-    std::optional<Queue> queue;
+    uint32_t scheduler_xy = 0;  // DRAM read work queue: the scheduler's NoC coordinates
 };
 
 // NoC coordinates packed as x | (y << 16).
@@ -337,16 +329,14 @@ void enumerate_core_rt_args(
         const auto num_workers = static_cast<uint32_t>(cores.size());
         const uint32_t scheduler_xy = noc_xy(input, cores[num_workers / 2]);
         for (uint32_t i = 0; i < num_workers; ++i) {
+            // A worker's num_pages and start_id are the tensor's pages and its index; compute counts chunks instead.
             fn(
                 CoreRtArgs{
                     .core = cores[i],
-                    .queue =
-                        CoreRtArgs::Queue{
-                            .worker_id = i,
-                            .scheduler_xy = scheduler_xy,
-                            .total_pages = out_num_tiles,
-                            .chunk_pages = plan.chunk_pages,
-                            .num_workers = num_workers}},
+                    .in_units = out_num_tiles,
+                    .out_units = out_num_tiles,
+                    .start_id = i,
+                    .scheduler_xy = scheduler_xy},
                 k);
         }
         return;
@@ -419,25 +409,11 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
     // zero unless ROW_MAJOR. A changed split can flip a core between noop and active, so every slot is
     // written on every core, noop cores zero-filled -- otherwise a flipped core keeps stale args.
     auto add_dm_args = [&](KernelRunArgs& kra,
-                           const CoreRtArgs& w,
+                           const CoreCoord& core,
                            uint32_t num_pages,
                            uint32_t start_id,
                            const std::array<uint32_t, 5>& chunk_tail) {
-        const CoreCoord& core = w.core;
-        if (const auto& q = w.queue) {
-            // The queue's num_pages and start_id are the tensor's pages and the worker index.
-            num_pages = q->total_pages;
-            start_id = q->worker_id;
-        }
         AddRuntimeArgsForNode(kra.runtime_arg_values, core, {{"num_pages", num_pages}, {"start_id", start_id}});
-        if (const auto& q = w.queue) {
-            if (kra.common_runtime_arg_values.empty()) {
-                kra.common_runtime_arg_values = {
-                    {"chunk_pages", q->chunk_pages},
-                    {"scheduler_xy", q->scheduler_xy},
-                    {"num_workers", q->num_workers}};
-            }
-        }
         if (!has_sharding) {
             AddRuntimeArgsForNode(
                 kra.runtime_arg_values,
@@ -450,11 +426,12 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
         }
     };
 
+    uint32_t scheduler_xy = 0;
     enumerate_core_rt_args(
         operation_attributes, tensor_args, output, plan, [&](const CoreRtArgs& w, const RmChunkConstants& kc) {
             if (w.noop) {
-                add_dm_args(reader_run_args, w, 0, 0, {});
-                add_dm_args(writer_run_args, w, 0, 0, {});
+                add_dm_args(reader_run_args, w.core, 0, 0, {});
+                add_dm_args(writer_run_args, w.core, 0, 0, {});
                 AddRuntimeArgsForNode(
                     compute_run_args.runtime_arg_values,
                     w.core,
@@ -473,8 +450,9 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
                           uint32_t,
                           5>{kc.chunks_per_row, kc.output_chunk_size, kc.output_last_chunk_size, kc.rows_per_tile, kc.total_rows}
                     : std::array<uint32_t, 5>{};
-            add_dm_args(reader_run_args, w, w.in_units, w.start_id, rtail);
-            add_dm_args(writer_run_args, w, w.out_units, w.start_id, wtail);
+            add_dm_args(reader_run_args, w.core, w.in_units, w.start_id, rtail);
+            add_dm_args(writer_run_args, w.core, w.out_units, w.start_id, wtail);
+            scheduler_xy = std::max(scheduler_xy, w.scheduler_xy);
             AddRuntimeArgsForNode(
                 compute_run_args.runtime_arg_values,
                 w.core,
@@ -486,8 +464,14 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
     if (plan.flow != DramReadFlow::None) {
         const auto page_order = plan.page_order();
         for (auto* kra : {&reader_run_args, &writer_run_args}) {
+            auto& common = kra->common_runtime_arg_values;
             for (size_t i = 0; i < kPageOrderArgNames.size(); ++i) {
-                kra->common_runtime_arg_values[kPageOrderArgNames[i]] = page_order[i];
+                common[kPageOrderArgNames[i]] = page_order[i];
+            }
+            if (plan.flow == DramReadFlow::WorkQueue) {
+                common["chunk_pages"] = plan.chunk_pages;
+                common["scheduler_xy"] = scheduler_xy;
+                common["num_workers"] = operation_attributes.worker_grid.num_cores();
             }
         }
     }
