@@ -1878,6 +1878,7 @@ constexpr SfpuType get_binary_comp_sfpu_type()
  * with a 16-bit Dest. DIV, MUL, the integer arms, and fp32 Dest drop it.
  * MUL uses calculate_sfpu_binary_mul, which applies its own RNE and then
  * stores +0 when either input is 0 on a 16-bit Dest.
+ * @tparam SIGN_MAGNITUDE_FORMAT Int32 Dest holds SMAG32 (ADD/SUB only).
  */
 template <
     DstSync DST_SYNC_MODE,
@@ -1886,7 +1887,8 @@ template <
     BinaryOp BINOP,
     int ITERATIONS                        = 32,
     std::uint32_t MATH_FORMAT             = 0,
-    ckernel::DstRoundingMode DST_ROUNDING = ckernel::DstRoundingMode::Default>
+    ckernel::DstRoundingMode DST_ROUNDING = ckernel::DstRoundingMode::Default,
+    bool SIGN_MAGNITUDE_FORMAT            = true>
 void call_binary_sfpu_operation(
     const std::uint32_t dst_index_in0 = 0,
     const std::uint32_t dst_index_in1 = 1,
@@ -1974,7 +1976,7 @@ void call_binary_sfpu_operation(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _add_int_,
-                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, true /* SIGN_MAGNITUDE_FORMAT */),
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, SIGN_MAGNITUDE_FORMAT),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
@@ -1989,7 +1991,7 @@ void call_binary_sfpu_operation(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _sub_int_,
-                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, true /* SIGN_MAGNITUDE_FORMAT */),
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, SIGN_MAGNITUDE_FORMAT),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
@@ -2380,7 +2382,7 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::snake_beta)
     {
-        // snake_beta uses sfpu_reciprocal internally; snake_beta_init forwards to sfpu_reciprocal_init.
+        // snake_beta uses sfpu_reciprocal_iter internally; snake_beta_init programs its Newton constant in every mode.
         SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX_MODE));
     }
     else

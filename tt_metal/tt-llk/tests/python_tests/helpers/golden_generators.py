@@ -3926,8 +3926,8 @@ class EltwiseBinaryGolden(FidelityMasking):
                 num_tiles_per_accumulation,
             )
 
-        # On Quasar with IMPLIED_MATH_FORMAT=Yes the dest register's physical storage is
-        # implied from the SrcA tag, so MX-output paths keep that precision through the golden
+        # On Quasar the dest register's physical storage follows the SrcA format,
+        # so MX-output paths keep that precision through the golden
         # and multi-tile accumulation rounds the same way as hardware.
         out_is_mx = data_format.is_mx_format()
         hw_dest_dtype = (
@@ -5036,7 +5036,7 @@ class ReduceGapoolGolden(FidelityMasking):
 
         fidelity_iter_count = self.MATH_FIDELITY_TO_ITER_COUNT[math_fidelity]
 
-        # On Quasar with implied_math_format, HW dest precision follows the SrcA tag:
+        # On Quasar HW dest precision follows the SrcA format:
         # Float16 → FP16A; Float16_b / MX inputs → BF16. MX-output paths keep that
         # precision through the gapool + face-accumulation chain instead of collapsing
         # inputs to the output dtype, which would force fp16 → bf16 before any math.
