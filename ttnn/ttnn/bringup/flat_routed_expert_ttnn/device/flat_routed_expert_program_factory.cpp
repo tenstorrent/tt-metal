@@ -61,11 +61,12 @@ struct Args {
 
 tt::DataFormat w_format(bool bf8) { return bf8 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Bfp4_b; }
 
-// the expert matmuls' fidelity: LoFi (bandwidth bound); MIMO_FL_FIDELITY=HiFi2 / HiFi3 / HiFi4 for accuracy probes
-MathFidelity expert_fidelity() {
+// the expert matmuls' fidelity: the config's (default LoFi); MIMO_FL_FIDELITY=LoFi / HiFi2 / HiFi3 / HiFi4 overrides
+// it for every flat expert (probes)
+MathFidelity expert_fidelity(uint32_t cfg_fidelity) {
     const char* f = std::getenv("MIMO_FL_FIDELITY");
     if (f == nullptr) {
-        return MathFidelity::LoFi;
+        return static_cast<MathFidelity>(cfg_fidelity);
     }
     const std::string v(f);
     return v == "HiFi2" ? MathFidelity::HiFi2
@@ -346,7 +347,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             std::string(KDIR) + name,
             rect_ranges(cores),
             ComputeConfig{
-                .math_fidelity = expert_fidelity(),
+                .math_fidelity = expert_fidelity(cfg.math_fidelity),
                 .fp32_dest_acc_en = fp32,
                 .dst_full_sync_en = full_sync,
                 .compile_args = ct,
@@ -413,6 +414,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         return std::min({room / (pw * 2048), 2 * MT, 8u});
     };
     auto yrm_def = [&](Defines d, uint32_t pw = 0) {
+        if (cfg.y_bf16) {
+            d["SE_Y_BF16"] = "1";  // (the y writers: bf16 tile pages)
+        }
         if (yrm) {
             d["SE_Y_RM"] = "1";
             // perf probes (read at program build): MIMO_FL_YRM_NOWRITE - the writers drop the y writes;
@@ -1059,6 +1063,12 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // bf16 row tiles of PCD pages each (as many whole row tiles as the region holds: MT for MT <= 16)
     auto out_cb = [&](const std::vector<CoreCoord>& cores, uint32_t pw, uint32_t bytes) {
         if (!yrm) {
+            if (cfg.y_bf16) {  // bf16 tiles: one block (the bfp8 double buffer's bytes hold one bf16 block)
+                const uint32_t tiles = bytes / (2 * BF8_TILE);
+                TT_FATAL(tiles * 2048 <= bytes, "flat_routed_expert: y_bf16 out CB");
+                arena_cb(16, p.o_off, tiles * 2048, cores, tt::DataFormat::Float16_b, 2048);
+                return;
+            }
             arena_cb(16, p.o_off, bytes, cores, tt::DataFormat::Bfp8_b, BF8_TILE);
             return;
         }

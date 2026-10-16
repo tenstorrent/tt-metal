@@ -144,6 +144,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
             x_bf16 (bool): x as bf16 tiles (the relays tilize to bf16; else bfp8). Must match the plan the weights were
                 laid out with (flat_routed_expert_plan(..., x_bf16)).
             h_bf16 (bool): h (gate/up -> down) as bf16 tiles (else bfp8); as x_bf16.
+            y_bf16 (bool): y as bf16 tiles (else bfp8; tiled y only): no bfp8 rounding of the output.
+            math_fidelity (int): the expert matmuls' fidelity (0 LoFi: exact for bfp4 weights; 2 HiFi2 for bfp8).
 
         Returns:
             ttnn.Tensor: y [rows, H] bfp8 TILE, or bf16 ROW_MAJOR with y_row_major (rows: token_index's length in
@@ -169,7 +171,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("down_fp32") = false,
         nb::arg("pack_stochastic_rounding") = false,
         nb::arg("x_bf16") = false,
-        nb::arg("h_bf16") = false);
+        nb::arg("h_bf16") = false,
+        nb::arg("y_bf16") = false,
+        nb::arg("math_fidelity") = 0);
 
     ttnn::bind_function<"flat_combine_overlap", "ttnn.bringup.">(
         mod,

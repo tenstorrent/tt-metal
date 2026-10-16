@@ -877,3 +877,24 @@ other 7 chips: busiest link (CPU model, this routing) stateless 653 rows = 187 u
 plan 554 (159 us), dense 726 (208 us): the sparse op is at 82% of its floor; the gain is mostly a better transport than
 ttnn.all_gather (53% of its floor), not sparsity (that grows on 4 x 4). Next for dispatch: the greedy plan (~-35 us,
 sequential over every token: needs a parallel / overlapped form), the own-row copy folded into latent down's untilize.
+
+### K3 block: the shared expert as a flat expert (2026-10-16)
+The shared expert (7168 -> 6144 -> 7168, bf8) runs as the flat routed expert with one-expert-for-every-token routing:
+3 experts of I 2048 (the gate/up split takes <= 64 tile columns per expert at H 7168 bf8: I 6144 has no split), each
+over all S own tokens (indexed rows 0..S-1 three times), y = the sum of the three parts (down over disjoint
+intermediate slices). New flat expert options (C++ config, no plan change): `y_bf16` (bf16 tiled y: the out CB single
+buffered in the bfp8 double buffer's region) and `math_fidelity` (per op; MIMO_FL_FIDELITY still overrides for
+probes). The sparse dispatch's manifest is now per call (manifest_spec; the persistent 123 KB on every core left the
+SE's arena no room) and its global semaphores are created at build (else they fragment L1 under the per-call buffers).
+Accuracy vs the exact bf8-weight model (se_err.py) and time (flat program, us):
+| config | rel | gain | block PCC | flat us |
+| LoFi, bfp8 x / y | 3.1% | 0.989 | 0.99589 | 466 |
+| LoFi, bf16 y | 3.3% | 0.982 | 0.99591 | 480 |
+| HiFi2, bf16 y | 2.0% | 1.013 | 0.99618 | 531 |
+| HiFi2, bf16 x + y (default) | 1.2% | 0.997 | 0.99619 | 529 |
+| HiFi3 / HiFi4, bf16 x + y | 1.1% | 1.003 | 0.9962 | 688 / 844 |
+LoFi truncates bf8 weights to 5 bits (a gain loss); HiFi2 restores them; bf16 x removes the tokens' bfp8 rounding.
+(ttnn.linear path: ~1.0%, block 0.99623.) Shared expert 767 -> 621 us (to row-major 49.5 + flat 529 + part sum
+42.6), block 4373 -> 4232 us, routed experts still LoFi. The flat SE is compute / pipeline bound (HiFi2 at 320 rows
+per part: DRAM floor 274 us); next: its own lane (overlapped with the routing / dispatch phase) rather than more
+single-op speed.

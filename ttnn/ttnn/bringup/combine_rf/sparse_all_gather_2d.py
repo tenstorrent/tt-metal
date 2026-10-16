@@ -505,10 +505,42 @@ def place_ports(mesh_device, chips, allowed=None):
     return port_core
 
 
+def ensure_semaphores(mesh_device, *, num_links=2, torus=(False, False)):
+    """Create the op's global semaphores now (persistent L1: create them before any per-call L1 allocation, or they
+    land under it and fragment the bank once it is freed)."""
+    chips, _, _ = mesh_plan(mesh_device, num_links, torus)
+    cores = sorted({(c.x, c.y) for c in place_ports(mesh_device, chips).values()})
+    key = (id(mesh_device), tuple(cores), "sparse_2d_sems")
+    if key not in _SEM_CACHE:
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
+        _SEM_CACHE[key] = (mesh_device, tuple(ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(4)), None)
+    return _SEM_CACHE[key][1]
+
+
+def manifest_spec(mesh_device, S, *, num_links=2, torus=(False, False)):
+    """(shape, dtype, layout, device, memory config) of the port cores' manifest rings for S own rows per chip:
+    allocate it per call (ttnn.allocate_tensor_on_device) and pass it as ``manifest`` (its contents need no zeroing:
+    the rings are consumed by count, and the counters are global semaphores the reader resets), instead of the
+    persistent one (~123 KB of every core's L1 at K3's 2560 rows)."""
+    R, C = tuple(mesh_device.shape)
+    chips, _, _ = mesh_plan(mesh_device, num_links, torus)
+    cores = sorted({(c.x, c.y) for c in place_ports(mesh_device, chips).values()})
+    GMAX = (C - 1) + (R - 1) - 1
+    man_words = 3 * (R * C * S + GMAX + 4) * 4
+    crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
+    mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(crs, [1, man_words], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return ttnn.Shape([1, 1, len(cores), man_words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, mc
+
+
 def sparse_all_gather_2d(
     output,
     plan_tensor,
     *,
+    manifest=None,
     num_links=2,
     torus=(False, False),
     group=8,
@@ -540,9 +572,11 @@ def sparse_all_gather_2d(
     ring_entries = N * S + GMAX + 4
     ring_bytes = ring_entries * 16
     man_words = 3 * ring_entries * 4
-    key = (id(mesh_device), tuple(all_cores), "sparse_2d", man_words)
+    key = (id(mesh_device), tuple(all_cores), "sparse_2d", man_words if manifest is None else "own")
+    sems = ensure_semaphores(mesh_device, num_links=num_links, torus=torus)
+    if key not in _SEM_CACHE and manifest is not None:
+        _SEM_CACHE[key] = (mesh_device, sems, None)
     if key not in _SEM_CACHE:
-        sems = tuple(ttnn.create_global_semaphore(mesh_device, core_set, 0) for _ in range(4))
         shard = ttnn.ShardSpec(core_set, [1, man_words], ttnn.ShardOrientation.ROW_MAJOR)
         man_t = ttnn.from_torch(
             torch.zeros(1, 1, len(all_cores), man_words, dtype=torch.int32),
@@ -557,6 +591,10 @@ def sparse_all_gather_2d(
     _, sems, man_t = _SEM_CACHE[key]
     cnt_addrs = [int(ttnn.get_global_semaphore_address(x)) for x in sems[:3]]
     ready_addr = int(ttnn.get_global_semaphore_address(sems[3]))
+    if manifest is not None:
+        sh = manifest.memory_config().shard_spec
+        assert int(sh.shape[1]) >= man_words and sh.grid == core_set, "manifest: manifest_spec(...) of this call"
+        man_t = manifest
     man_addr = int(man_t.buffer_address())
 
     out_ct = list(ttnn.TensorAccessorArgs(output).get_compile_time_args())

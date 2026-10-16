@@ -92,9 +92,15 @@ void kernel_main() {
 #ifdef SE_E2E
     // y is the bfp8 tile buffer shaped like the dispatch buffer: virtual expert v = (e, s) writes row tiles
     // region_tile(e) + s * MT + r, only those below the expert's token count (RT: per expert region tile, count tiles)
+#ifdef SE_Y_BF16  // (bf16 tiles)
+    constexpr uint32_t out_page = 2048;
+    constexpr auto y_fmt = DataFormat::Float16_b;
+#else
     constexpr uint32_t out_page = 1088;
+    constexpr auto y_fmt = DataFormat::Bfp8_b;
+#endif
     const InterleavedAddrGenFast<true> y = {
-        .bank_base_address = get_arg_val<uint32_t>(6), .page_size = out_page, .data_format = DataFormat::Bfp8_b};
+        .bank_base_address = get_arg_val<uint32_t>(6), .page_size = out_page, .data_format = y_fmt};
     const uint32_t e2e_args = 10 + n_gu;
 #endif
 #ifdef SE_DYN

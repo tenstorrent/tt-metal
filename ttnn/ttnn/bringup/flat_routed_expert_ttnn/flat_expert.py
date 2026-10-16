@@ -1936,6 +1936,8 @@ class FlatRoutedExpert:
         y_row_major=False,
         down_fp32=False,
         pack_stochastic_rounding=False,
+        y_bf16=False,
+        math_fidelity=0,
     ):
         """x: the row-major bf16 dispatch buffer [rows, H]; counts / regions: the routing's [1, n_global] uint32 rows.
         token_index ([1, rows] uint32): indexed mode, x is then e.g. the all-gathered tokens and flat row r reads x row
@@ -1964,4 +1966,6 @@ class FlatRoutedExpert:
             pack_stochastic_rounding=pack_stochastic_rounding,
             x_bf16=self.x_bf16,
             h_bf16=self.h_bf16,
+            y_bf16=y_bf16,
+            math_fidelity=math_fidelity,
         )

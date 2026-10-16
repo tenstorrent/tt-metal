@@ -94,8 +94,11 @@ ttnn::Tensor flat_routed_expert(
     bool down_fp32,
     bool pack_stochastic_rounding,
     bool x_bf16,
-    bool h_bf16) {
+    bool h_bf16,
+    bool y_bf16,
+    uint32_t math_fidelity) {
     using namespace tt::tt_metal;
+    TT_FATAL(!(y_bf16 && y_row_major), "flat_routed_expert: y_bf16 is for tiled y (row-major y is bf16 already)");
     FlatRoutedExpertConfig cfg{
         .hidden = x.logical_shape()[-1] * x_pages_per_row,
         .intermediate = intermediate,
@@ -109,7 +112,9 @@ ttnn::Tensor flat_routed_expert(
         .down_fp32 = down_fp32,
         .pack_stochastic_rounding = pack_stochastic_rounding,
         .x_bf16 = x_bf16,
-        .h_bf16 = h_bf16};
+        .h_bf16 = h_bf16,
+        .y_bf16 = y_bf16,
+        .math_fidelity = math_fidelity};
     auto* device = x.device();
     const auto plan = flat_routed_expert_plan(device, cfg);
     TT_FATAL(
@@ -118,7 +123,7 @@ ttnn::Tensor flat_routed_expert(
     const ttnn::Tensor output = ttnn::empty(
         ttnn::Shape(
             {token_index ? token_index->logical_shape()[-1] : x.logical_shape()[-2] / x_pages_per_row, cfg.hidden}),
-        y_row_major ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
+        y_row_major || y_bf16 ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
         y_row_major ? Layout::ROW_MAJOR : Layout::TILE,
         device,
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});

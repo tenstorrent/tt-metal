@@ -45,6 +45,12 @@ struct FlatRoutedExpertConfig {
     // (twice the x / h bytes and L1; at LoFi about half the expert's error vs fp32 math on the same weights)
     bool x_bf16 = false;
     bool h_bf16 = false;
+    // y as bf16 tiles (else bfp8; tiled y only): the out CB single-buffered in the bfp8 double buffer's region; no
+    // effect on the plan
+    bool y_bf16 = false;
+    // the expert matmuls' fidelity (ckernel MathFidelity: 0 LoFi, 2 HiFi2, 3 HiFi3, 4 HiFi4): LoFi takes 5 bits of
+    // the weights, exact for bfp4; bfp8 weights need HiFi2 (LoFi truncates them: a ~2% gain loss); no effect on the plan
+    uint32_t math_fidelity = 0;
     // combine overlap (flat_combine_overlap): the y writers (down cores, reader tails) report each local expert to
     // combine's collector once its rows have landed; the 4 report args sit at this runtime-arg index (0: off)
     uint32_t cmb_rt = 0;
@@ -63,6 +69,8 @@ struct FlatRoutedExpertConfig {
         "pack_stochastic_rounding",
         "x_bf16",
         "h_bf16",
+        "y_bf16",
+        "math_fidelity",
         "cmb_rt");
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -79,6 +87,8 @@ struct FlatRoutedExpertConfig {
             pack_stochastic_rounding,
             x_bf16,
             h_bf16,
+            y_bf16,
+            math_fidelity,
             cmb_rt);
     }
 };
