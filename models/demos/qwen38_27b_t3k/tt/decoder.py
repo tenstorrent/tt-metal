@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen38_27b_t3k.tt.decode_conv import make_actual_start, packed_decode_conv, row_selector
+from models.demos.qwen38_27b_t3k.tt.decode_conv import make_actual_start, packed_decode_conv
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
 DEFAULT_POLICY = {
@@ -86,7 +86,9 @@ class Qwen38Decoder(LightweightModule):
     CHUNK_SIZE = DEFAULT_POLICY["chunk_size"]
 
     @classmethod
-    def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, policy=None, replicated_mesh=False):
+    def from_state_dict(
+        cls, state_dict, *, hf_config, layer_idx, mesh_device, policy=None, replicated_mesh=False, conv_selectors=None
+    ):
         """Load an HF layer-local state dict (keys match Qwen3_5DecoderLayer)."""
         import torch
 
@@ -144,7 +146,7 @@ class Qwen38Decoder(LightweightModule):
                 self.weights[name] = upload(tensor, self._weight_dtype(name) if tensor.ndim == 2 else ttnn.bfloat16)
         if self.kind == "linear_attention":
             self.conv_actual_start = make_actual_start(mesh_device)
-            self.conv_selectors = {}
+            self.conv_selectors = {} if conv_selectors is None else conv_selectors
             conv = state_dict["linear_attn.conv1d.weight"]
             self.conv_taps = [upload(conv[:, 0, i].reshape(1, 1, -1)) for i in range(4)]
             self.a_neg = upload(-state_dict["linear_attn.A_log"].float().exp().reshape(1, 1, -1), ttnn.float32)
@@ -1008,21 +1010,9 @@ class Qwen38Decoder(LightweightModule):
         """
         if batch not in self.conv_selectors:
             raise ValueError(
-                f"No conv selector for batch {batch}; prime_conv_selectors covers {sorted(self.conv_selectors)}"
+                f"No conv selector for batch {batch}; Qwen38Model.prime_conv_selectors covers {sorted(self.conv_selectors)}"
             )
         return self.conv_selectors[batch]
-
-    def prime_conv_selectors(self, max_batch):
-        """Build every selector a decode can ask for, while no trace is live yet.
-
-        Allocating one later would place a persistent buffer beside a captured trace, which
-        the allocator cannot do safely. Only batches the packed path accepts are built.
-        """
-        if self.kind != "linear_attention":
-            return
-        for batch in range(8, max_batch + 1, 8):
-            if batch not in self.conv_selectors:
-                self.conv_selectors[batch] = row_selector(self.device, batch)
 
     def decode_forward(self, x, *, state, current_pos, page_table=None, cos=None, sin=None):
         """One token [B,1,5120] or compact [1,1,B,5120]."""

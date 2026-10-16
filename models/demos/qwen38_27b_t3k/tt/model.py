@@ -15,6 +15,7 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedd
 
 import ttnn
 from models.common.modules.tt_ccl import TT_CCL
+from models.demos.qwen38_27b_t3k.tt.decode_conv import row_selector
 from models.demos.qwen38_27b_t3k.tt.decoder import DecoderState
 from models.demos.qwen38_27b_t3k.tt.decoder_tp import Qwen38TPDecoder, resolve_mesh_tp, tp_policy
 from models.demos.qwen38_27b_t3k.tt.precision import decoder_policy, load_precision
@@ -129,6 +130,8 @@ class Qwen38Model:
         self.context = self.precision["max_context"]
         assert self.context == self.config.max_position_embeddings
         self.ccl = TT_CCL(mesh_device)
+        # One selector per batch width for the whole model: it reads nothing from a layer.
+        self.conv_selectors = {}
         self.checkpoint = Checkpoint(self.snapshot)
         self.layer_indices = (
             list(range(self.config.num_hidden_layers)) if layer_indices is None else list(layer_indices)
@@ -160,6 +163,7 @@ class Qwen38Model:
                     layer_idx=i,
                     mesh_device=mesh_device,
                     ccl=self.ccl,
+                    conv_selectors=self.conv_selectors,
                     policy={
                         **decoder_policy(self.precision, i),
                         **prefill_policy,
@@ -234,6 +238,18 @@ class Qwen38Model:
                 ttnn.ReplicateTensorToMesh(self.mesh) if shard is None else ttnn.ShardTensorToMesh(self.mesh, dim=shard)
             ),
         )
+
+    def prime_conv_selectors(self, max_batch):
+        """Build every packed-decode selector up front, while no trace is live yet.
+
+        Allocating one later would place a persistent buffer beside a captured trace, which the
+        allocator cannot do safely. Widths the packed path refuses are never asked for.
+        """
+        if not any(layer.kind == "linear_attention" for layer in self.layers):
+            return
+        for batch in range(8, max_batch + 1, 8):
+            if batch not in self.conv_selectors:
+                self.conv_selectors[batch] = row_selector(self.mesh, batch)
 
     def allocate_cache(self, *, batch_size, capacity):
         if not 1 <= batch_size <= MAX_SERVING_BATCH or not 1 <= capacity <= self.context:
