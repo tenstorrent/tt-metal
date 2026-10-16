@@ -1186,3 +1186,11 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   flips (S.swa.15: router 0.185, experts 0.154, block out 0.023), so those vs-golden limits are loose; the same-input
   checks (explained flips, matched-row rel) are the tight gate there.
 - Selftests: test_component_checks.py (a 2 % scale: PCC 1, err over its limit), test_swap_checks.py.
+
+## F82 (2026-10-16): verify: re-gate passed tasks without touching the run
+
+- `python -m models.demos.common.bringup.core.verify --spec S --tasks GLOB ...`: runs the gate commands of the matching
+  PASS tasks as their gates would, metrics and logs into runs/<run>/verify/<stamp>/ (summary.json); state.json,
+  results/ and the commits are untouched. After a change of limits (F76-F81) the overseer reruns every passed step's
+  frozen tests once and turns each failure into a fix job (overseer fix), instead of a gate run that would flip the
+  task to FAIL mid-run or overwrite its committed results. Selftest: test_verify.py.
