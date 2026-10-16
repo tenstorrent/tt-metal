@@ -29,7 +29,8 @@ import socket
 from loguru import logger
 
 import ttnn
-from models.demos.minimax_m3.tt.attention.kv_cache import BH_NUM_DRAM_BANKS, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+from models.demos.common.prefill.runners.migration import get_num_dram_banks
+from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
 # bf8_b / bf16 TILE byte sizes (32x32 tile). bf8_b = 1024 mantissa + 64 exponent bytes; bf16 = 2048.
 _TILE_BYTES = {ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
@@ -153,7 +154,7 @@ def build_and_serialize_kv_chunk_table(
                     "first_layer": 0,
                     "count": num_layers,
                     "base_addr": int(t.buffer_address()),
-                    "num_banks": BH_NUM_DRAM_BANKS,
+                    "num_banks": get_num_dram_banks(mesh_device),
                     "host_name": socket.gethostname(),
                     "fnids": local_fnids,
                 }
