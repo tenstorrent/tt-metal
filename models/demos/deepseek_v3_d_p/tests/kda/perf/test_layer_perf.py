@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
+    LayerNrmseThresholds,
     check_kimi_k3_accuracy,
     deallocate_state,
     make_kimi_k3_device_case,
@@ -56,7 +57,7 @@ _PERF_REFERENCE_MS = {
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
-_GALAXY_PERF_REFERENCE_MS = 2.077
+_GALAXY_PERF_REFERENCE_MS = 2.015
 _GALAXY_ACTUAL_START = 4 * 640 + 320
 # Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
 # they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
@@ -151,7 +152,13 @@ def _trace_wall_samples_ms(
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
-        validation = validate_first_replay(next_state, output) if validate_first_replay is not None else None
+        validation = (
+            validate_first_replay(
+                next_state, output, nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=0.007)
+            )
+            if validate_first_replay is not None
+            else None
+        )
 
         samples_ms = []
         for _ in range(_TIMING_SAMPLES):
@@ -236,6 +243,7 @@ def test_kimi_k3_layer_1_perf(
             mesh_device,
             tensor_parallel_axis,
             pcc_threshold=_PCC_THRESHOLD,
+            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=0.007),
         )
     finally:
         ttnn.deallocate(output)
