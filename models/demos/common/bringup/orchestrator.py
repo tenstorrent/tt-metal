@@ -892,11 +892,17 @@ class Orchestrator:
 
         b = task.get("brief") or {}
 
+        # F95: a test frozen without review IS the template: render it afresh, so the edits of an agent that was
+        # aborted or cut off (a crash) never reach the freeze
+        fresh = ("step" in b and "swapped" not in b and not self.component_review(b["block_type"])) or (
+            "swapped" in b and not self.swap_review(b["block_type"])
+        )
+
         def render():
             if "swapped" in b:
-                render_swap_test(self.spec, b["block_type"], b["swapped"])
+                render_swap_test(self.spec, b["block_type"], b["swapped"], overwrite=fresh)
             elif "step" in b:
-                render_component_test(self.spec, b["block_type"], b["step"])
+                render_component_test(self.spec, b["block_type"], b["step"], overwrite=fresh)
 
         render()
         previous, unreviewed = "", None  # the kwargs of the freeze without review, when the task has one
@@ -929,7 +935,13 @@ class Orchestrator:
                     f"  [{task['id']}] freeze without review failed, starting the test role: {previous.splitlines()[0]}"
                 )
         budget = self.policy(task, "test")["attempts"]
-        attempt = used = aborts = 0
+        attempt, cut = self.attempts_so_far(task["id"], "test")  # F95
+        used = aborts = 0
+        if cut is not None:
+            previous = (
+                f"A previous run was interrupted during test attempt {cut} (a crash or power loss); "
+                "the test was rendered afresh from its template.\n" + previous
+            )
         while used < budget:
             attempt += 1
             problems = self.run_agent(task, "test", attempt, self.brief(task, "test", attempt, previous))
@@ -981,10 +993,32 @@ class Orchestrator:
             p["escalate"] = "stop"  # a failed CPU gate (goldens, plan check) is not a TTNN problem
         return p
 
+    def attempts_so_far(self, tid: str, role: str) -> tuple[int, int | None]:
+        """F95: the last attempt number of ``role`` on this task (finished or interrupted), and the attempt a crash
+        interrupted (None if the task was not resumed from RUNNING in that role). New attempts continue the numbering,
+        so a resumed task never overwrites an earlier attempt's brief or transcript."""
+        e = self.led.state().get(tid, {})
+        seen = [r["attempt"] for r in e.get("agent_runs", []) if r.get("role") == role and r.get("attempt", 0) < 100]
+        resumes = [h for h in e.get("history") or [] if h.get("status") == "RESUMED"]
+        last = resumes[-1] if resumes else {}
+        after = [r for r in e.get("agent_runs", []) if r.get("role") == role and r.get("t", "") > last.get("t", "")]
+        cut = None
+        if last.get("from") == "RUNNING" and last.get("role") == role and not after:  # no agent ran since the resume
+            cut = last.get("attempt") if isinstance(last.get("attempt"), int) else None
+            seen += [cut] if cut is not None and cut < 100 else []
+        return max(seen, default=0), cut
+
     def attempt_loop(self, task: dict, role: str, first_failure: str = "") -> bool:
         previous = first_failure
         pol = self.policy(task, role)
-        attempt = used = aborts = 0
+        attempt, cut = self.attempts_so_far(task["id"], role)
+        used = aborts = 0
+        if cut is not None:
+            previous = (
+                f"A previous run was interrupted during {role} attempt {cut} of this task (a crash or power loss). "
+                "Its uncommitted changes are still in the tree: check them (git diff), keep what is right, revert "
+                "the rest.\n" + previous
+            )
         while used < pol["attempts"]:
             attempt += 1
             # the dashboard shows the agent at work, not the check that ran before it started
@@ -1628,8 +1662,17 @@ def main(argv=None) -> int:
         led = orch.led
         for tid, e in led.state().items():
             if isinstance(e, dict) and e.get("status") in ("STOPPED", "RUNNING"):  # RUNNING = an interrupted run
-                led.update(tid, status="TODO", history_add={"t": now(), "status": "RESUMED"})
+                h = {
+                    "t": now(),
+                    "status": "RESUMED",
+                    "from": e["status"],
+                    "role": e.get("role"),
+                    "attempt": e.get("attempt"),
+                }
+                led.update(tid, status="TODO", history_add=h)
     OV.clear_status(orch.run_dir)  # F84: the overseer's "stopped because" line ends when the run starts again
+    OV.agent_finished(orch.run_dir)  # F95: an agent record left by a crash names a dead (or reused) process
+    (orch.run_dir / OV.ABORT_FILE).unlink(missing_ok=True)
     pid_file = orch.run_dir / W.PID_FILE  # the supervisor's watch (watch.py) tells a stopped run from a quiet one
     pid_file.write_text(f"{os.getpid()} {now()}\n")
     # F70: the run's timeline (start / exit with its code) and every device run's lock wait and run time

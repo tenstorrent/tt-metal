@@ -1263,3 +1263,8 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   component_second_rel), not the bare rel_lim (DeepSeek-V4.1 attention: `small` rel_lim 0.0057, check limit 0.03).
 - F94: after the overseer aborts a test agent, the orchestrator re-renders the template and retries the freeze
   without review before any further test agent (the overseer may have fixed the check that sent it there).
+- F95 (owner): resumable after any kill. Start clears a stale AGENT.json / ABORT.json; `resume` records which role and
+  attempt a crash cut off; attempt numbers continue (attempts_so_far: no brief or transcript overwritten) and the
+  next brief says the attempt was cut off; a test frozen without review is always rendered afresh (an aborted test
+  agent's half-written coef check survived a restart and sent a second agent to fix it: DeepSeek-V4.1 attention).
+  Skill: stop doomed agents at once, the run is resumable.
