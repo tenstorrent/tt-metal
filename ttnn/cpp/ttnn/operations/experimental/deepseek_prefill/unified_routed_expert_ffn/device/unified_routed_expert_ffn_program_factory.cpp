@@ -1140,6 +1140,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // Clamped SiLU-GLU (DeepSeek V4), with limit=10.0 (ClampedSiluGluConfigDsV4) baked
         // into the kernel.
         compute_defines.emplace_back("CLAMPED_SILU_GLU", "1");
+    } else if (op.activation == RoutedExpertActivation::GeluTanhGlu) {
+        // GeGLU (Gemma 4): gelu_tanh(gate) * up. Keeps the SiLU code path and swaps the SFPU op.
+        compute_defines.emplace_back("GELU_TANH_GLU", "1");
     }
     if (fuse_bias) {
         // FUSE_BIAS: add gate/up bias (broadcast across rows) before the fused binary
