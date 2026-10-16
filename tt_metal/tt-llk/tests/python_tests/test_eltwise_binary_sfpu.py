@@ -77,6 +77,8 @@ from helpers.utils import (
     assert_bf16_separates_rne,
     assert_bit_exact,
     bf16_from_bits,
+    fp32_bits_as_int32,
+    int32_to_smag32,
     passed_test,
 )
 
@@ -1084,15 +1086,6 @@ QUANT_SWEEP = dict(
 )
 
 
-def _fp32_bits_as_int32(tensor):
-    return tensor.to(torch.float32).contiguous().view(torch.int32)
-
-
-def _int32_to_smag32(tensor):
-    values = tensor.to(torch.int64)
-    return (values.abs() | ((values < 0).to(torch.int64) << 31)).to(torch.int32)
-
-
 def _run_quant(
     mathop,
     sign_magnitude,
@@ -1120,20 +1113,21 @@ def _run_quant(
         a_float = (torch.rand(n, dtype=torch.float32) - 0.5) * 4000.0
 
     # Dyadic edges, so they do not depend on the random draw. 0.25 and 0.5 are
-    # exact in fp32. Lane 2 is an exact half (5.5). Lane 3 is in (-0.5, 0), which
+    # exact in fp32. Lane 2 is an exact half (4.5 = 3 * 0.5 + zp); 5.5 would
+    # round to 6 under both tie rules. Lane 3 is in (-0.5, 0), which
     # SFPSTOCHRND flushes to +0 on both Wormhole and Blackhole.
     a_float[0], scale[0] = 4000.0, 0.25
     a_float[1], scale[1] = -4000.0, 0.25
-    a_float[2], scale[2] = 5.0, 0.5
+    a_float[2], scale[2] = 3.0, 0.5
     a_float[3], scale[3] = -13.0, 0.25
 
     if a_is_int:
         a_vals = a_float.to(torch.int32)
-        a_staged = _int32_to_smag32(a_vals) if sign_magnitude else a_vals
+        a_staged = int32_to_smag32(a_vals) if sign_magnitude else a_vals
     else:
-        a_staged = _fp32_bits_as_int32(a_float)
+        a_staged = fp32_bits_as_int32(a_float)
 
-    src_A = torch.cat((a_staged, _fp32_bits_as_int32(scale)))
+    src_A = torch.cat((a_staged, fp32_bits_as_int32(scale)))
     input_dimensions = [64, 32]
     formats = InputOutputFormat(DataFormat.Int32, output_format)
     dest_acc = DestAccumulation.Yes
@@ -1143,18 +1137,21 @@ def _run_quant(
         out_dtype = torch.float32
     else:
         prod = a_float * scale + zero_point
-        rounded = torch.round(prod)
+        # SFPSTOCHRND rounds ties away from zero. torch.round ties to even, so
+        # 4.5 would become 4 and miss the tie the planted lane is there to hit.
+        rounded = torch.sign(prod) * torch.floor(prod.abs() + 0.5)
         clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
         # SFPSTOCHRND clears the sign when the magnitude rounds to 0, on both
         # Wormhole and Blackhole, so a negative product that rounds to 0 stays +0.
         neg_zero = (clamped == 0) & (prod < 0)
         if sign_magnitude:
-            golden_active = _int32_to_smag32(clamped)
+            golden_active = int32_to_smag32(clamped)
         else:
             golden_active = clamped.clone()
         assert (clamped == _QUANT_INT8_MIN).any() and (
             clamped == _QUANT_INT8_MAX
         ).any(), f"{mathop.name} stimuli never reach the int8 clamp"
+        assert clamped[2] == 5, f"{mathop.name} exact half must round away from zero"
         assert (
             neg_zero.any()
         ), f"{mathop.name} stimuli never round a negative value to 0"

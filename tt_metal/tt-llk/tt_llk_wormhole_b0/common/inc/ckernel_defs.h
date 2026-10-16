@@ -347,11 +347,8 @@ enum class BinaryOp : std::uint8_t
     // register, so it needs its own variant.
     NEXTAFTER      = 43,
     NEXTAFTER_BF16 = 44,
-    // LOGADDEXP, LOGADDEXP2 and COPY_DEST are the exception to the 1:1 mapping above:
-    // none has an SfpuType counterpart, so their inits pass a placeholder instead --
-    // `add1` in the tt-llk test helpers (sfpu_operations.h), `unused` in the tt-metal
-    // Compute API. QUANT, REQUANT and DEQUANT map to SfpuType::quant_int32 /
-    // requant_int32 / dequant_int32 rather than same-named enumerators.
+    // LOGADDEXP, LOGADDEXP2, and COPY_DEST have no SfpuType counterpart, so their
+    // inits pass a placeholder (`add1` in the test helpers, `unused` in Compute API).
     LOGADDEXP  = 45,
     LOGADDEXP2 = 46,
     // Quant family and Dest-to-Dest copy. Appended so the values above stay put.
