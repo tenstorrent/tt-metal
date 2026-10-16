@@ -55,21 +55,34 @@ MIRROR_HALF_ORDERS = 1  # ring_balanced + a resident cross-block operand: halves
 # block each way. 0: one shared order (each of the middle entries sends a whole block one way)
 ENTRIES_PER_BLOCK = 1  # entries per scatter block (overlap lamp; only 1 is built)
 KB_MIN_RESIDENT = 8  # smallest K-block the resident regime accepts (min(Kt, this))
-KB_MAX = int(
-    os.environ.get("MRS_KB_MAX", 16)
-)  # env: perf experiments only. largest K-block: the streamed operand needs several K-blocks per entry to overlap read / mcast / math
-# (focus case, diagonal senders: kb 64 -> 212 us, 32 -> 160 us, 16 -> 159 us, 8 -> 164 us on the fastest chip)
+# largest K-block: the streamed operand needs several K-blocks per entry to overlap read / mcast / math (focus case,
+# diagonal senders: kb 64 -> 212 us, 32 -> 160 us, 16 -> 159 us, 8 -> 164 us on the fastest chip; Refinement 2,
+# traced: 32 -> 134-139 us, 16 -> 127 us, 8 -> 131 us). env: perf experiments only
+KB_MAX = int(os.environ.get("MRS_KB_MAX", 16))
 L1_HEADROOM = 64 * 1024  # bytes kept free per core beyond the op's own footprint
 LAG_POLICY = os.environ.get("MRS_LAG", "auto")  # "auto": lag a relay finish only when its arrival is produced late
 # upstream; "always": the design's original rule (every add waits behind the next matmul). env: perf experiments only
 PREFETCH_STEPS = 1  # K-block windows a sender keeps reserved with DRAM reads in flight ahead of its multicast
-LOOKAHEAD_AFTER_BARRIER = 1  # 1: a sender issues its look-ahead reads after the current step's read barrier, so the
-# current step's reads do not share the DRAM with the next step's (the fill at step 0); 0: before it
-SENDERS_PER_LINE = 1  # each K-block window is split into this many contiguous parts (A by m rows, W by k rows), each
-# read + multicast by a different core of the line, so no single RISC serializes a whole window's reads and mcast
-MCAST_SENDER_PLACEMENT = "diagonal_disjoint"  # operand senders per line: "uniform" (first core: a column of DRAM
-# readers) | "diagonal" (A and W both start at index 0: the cores (i, i) send both families) | "diagonal_disjoint"
-# (diagonal, each W family's start shifted so no core sends two families; focus case: entry 0 drops 39 -> ~29 us)
+# Fill levers, per regime ("resident" | "stream"). The resident regime moves both operands only in entry 0, so its
+# first entry is DRAM-bound (the fill); the stream regime streams an operand every entry (Refinement 3 tunes it).
+# Each value below was measured traced on the focus (resident) and MiMo (stream) cases; the stream values are the
+# pre-Refinement-2 behaviour wherever the new one did not win there.
+LOOKAHEAD_AFTER_BARRIER = {"resident": 1, "stream": 0}  # 1: a sender issues its look-ahead reads after the current
+# step's read barrier, so the current step's reads do not share the DRAM with the next step's (focus: -1.5 us);
+# 0: before it (MiMo: better, the streamed reads need the extra overlap)
+READ_NOCS = {
+    "resident": (0, 1),
+    "stream": (0, 0),
+}  # (A, W) NoC of the matmul reader's DRAM reads. The reader owns every
+# read on both NoCs of its core (the writer only writes), so W on NoC1 adds DRAM-response links (focus: -2 us; both
+# operands on NoC1: +8 us; MiMo stream: neutral within noise, so left at NoC0)
+SENDERS_PER_LINE = {"resident": 2, "stream": 1}  # each K-block window is split into this many contiguous parts (A by
+# m rows, W by k rows), each read + multicast by a different core of the line, so no single RISC serializes a whole
+# window's reads and mcast (focus with W on NoC1: -1.3 us; MiMo stream: +3-5 us, noise-level)
+MCAST_SENDER_PLACEMENT = {"resident": "diagonal_disjoint", "stream": "diagonal"}  # operand senders per line:
+# "uniform" (first core: a column of DRAM readers) | "diagonal" (A and W both start at index 0: the cores (i, i) send
+# both families) | "diagonal_disjoint" (diagonal, each W family's start shifted so no core sends two families; focus:
+# -0.5-1 us; MiMo: +10 us, so the stream regime keeps "diagonal")
 FIN_ADD_FPU = 1  # finish adds on the FPU into fp32 DEST (1) or as SFPU fp32 adds (0). The hold reaches DEST through
 # srcA either way (no UnpackToDestFp32), so both see the same operand precision; the FPU add is ~3x cheaper per tile
 DEST_TILES_FP32_FULL_SYNC = 8  # DEST capacity with fp32 accumulation + full sync (subblock area cap)
@@ -660,7 +673,8 @@ def create_mesh_program_descriptor(ctx):
     w_shape_1d = ttnn.Mcast1DShape.PerRow if gd["orient"] == "m_on_x" else ttnn.Mcast1DShape.PerColumn
 
     nkb = Kt // kb
-    senders = int(os.environ.get("MRS_SENDERS", SENDERS_PER_LINE))  # env: perf experiments only
+    regime = "resident" if resident else "stream"
+    senders = int(os.environ.get("MRS_SENDERS", SENDERS_PER_LINE[regime]))  # env: perf experiments only
     a_split = -(-core_m // 2) if senders >= 2 and core_m >= 2 else core_m  # m rows of A part 0
     w_split = -(-kb // 2) if senders >= 2 and kb >= 2 else kb  # k rows of W part 0
     sb_h, sb_w = gd["sb"]
@@ -720,7 +734,9 @@ def create_mesh_program_descriptor(ctx):
             a_split,
             w_split,
             int(os.environ.get("MRS_PREFETCH", PREFETCH_STEPS)),  # env: perf experiments only
-            int(os.environ.get("MRS_LOOKAHEAD_AFTER_BARRIER", LOOKAHEAD_AFTER_BARRIER)),  # env: perf experiments only
+            int(os.environ.get("MRS_LOOKAHEAD_AFTER_BARRIER", LOOKAHEAD_AFTER_BARRIER[regime])),  # env: perf only
+            int(os.environ.get("MRS_A_READ_NOC", READ_NOCS[regime][0])),  # env: perf experiments only
+            int(os.environ.get("MRS_W_READ_NOC", READ_NOCS[regime][1])),  # env: perf experiments only
         ]
         + a_ct
         + w_ct
@@ -784,7 +800,7 @@ def create_mesh_program_descriptor(ctx):
         return out
 
     sender_plan = plan_mcast_senders(
-        os.environ.get("MRS_SENDER_PLACEMENT", MCAST_SENDER_PLACEMENT),  # env: perf experiments only
+        os.environ.get("MRS_SENDER_PLACEMENT", MCAST_SENDER_PLACEMENT[regime]),  # env: perf experiments only
         grid_m,
         grid_n,
         a_split < core_m,

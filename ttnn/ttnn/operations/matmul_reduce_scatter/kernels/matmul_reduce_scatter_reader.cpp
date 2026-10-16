@@ -56,7 +56,12 @@ void kernel_main() {
     constexpr uint32_t prefetch_steps = get_compile_time_arg_val(22);  // K-block windows a sender reads ahead
     constexpr bool lookahead_after_barrier = get_compile_time_arg_val(23) != 0;  // issue look-ahead reads after the
     // current step's read barrier (else before it)
-    constexpr auto a_args = TensorAccessorArgs<24>();
+    // NoC of each operand's DRAM reads. This kernel owns every read on both NoCs of its core (the writer only writes),
+    // so the second NoC adds DRAM-response links for the fill
+    constexpr uint8_t a_read_noc = get_compile_time_arg_val(24);
+    constexpr uint8_t w_read_noc = get_compile_time_arg_val(25);
+    constexpr bool two_read_nocs = a_read_noc != w_read_noc || a_read_noc != noc_index;
+    constexpr auto a_args = TensorAccessorArgs<26>();
     constexpr auto w_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     constexpr auto mc_a =
         McastArgs<get_named_compile_time_arg_val("a_ct_offset"), get_named_compile_time_arg_val("a_rt_offset")>();
@@ -138,7 +143,10 @@ void kernel_main() {
             for (uint32_t i = i0; i < i1; ++i) {
                 for (uint32_t kk = 0; kk < kb; ++kk) {
                     noc_async_read(
-                        a_acc.get_noc_addr(page0 + i * Kt + kk), dst + (i * kb + kk) * a_tile_bytes, a_tile_bytes);
+                        a_acc.get_noc_addr(page0 + i * Kt + kk, 0, a_read_noc),
+                        dst + (i * kb + kk) * a_tile_bytes,
+                        a_tile_bytes,
+                        a_read_noc);
                 }
             }
         }
@@ -157,7 +165,10 @@ void kernel_main() {
             for (uint32_t kk = k0; kk < k1; ++kk) {
                 for (uint32_t j = 0; j < n_valid; ++j) {
                     noc_async_read(
-                        w_acc.get_noc_addr(page0 + kk * Nt + j), dst + (kk * core_n + j) * w_tile_bytes, w_tile_bytes);
+                        w_acc.get_noc_addr(page0 + kk * Nt + j, 0, w_read_noc),
+                        dst + (kk * core_n + j) * w_tile_bytes,
+                        w_tile_bytes,
+                        w_read_noc);
                 }
             }
         }
@@ -172,6 +183,12 @@ void kernel_main() {
     // the same order (a, a2, b, b2).
     constexpr uint32_t NUM_TRIDS = 8;
     auto trid_of = [](uint32_t step) { return 1 + step % NUM_TRIDS; };
+    auto set_trid = [](uint32_t trid) {
+        noc_async_read_set_trid(trid, 0);
+        if constexpr (two_read_nocs) {
+            noc_async_read_set_trid(trid, 1);
+        }
+    };
     uint32_t a_slot = 0, w_slot = 0;      // window slot of the current step
     uint32_t a_issued = 0, w_issued = 0;  // steps whose window is reserved (and, if moving, whose reads are issued)
     // current step: reserve its window (blocking) and, as a sender of a moving step, issue its reads if no earlier
@@ -189,7 +206,7 @@ void kernel_main() {
         if (issued == s) {
             cb_reserve_back(cb, win_tiles);
             if (sender && moves_s) {
-                noc_async_read_set_trid(trid_of(s));
+                set_trid(trid_of(s));
                 issue(s, base + slot * win_bytes);
             }
             issued = s + 1;
@@ -218,7 +235,7 @@ void kernel_main() {
             cb_reserve_back(cb, ahead * win_tiles);  // free: returns immediately
             uint32_t t_slot = slot + (issued - s);
             t_slot = t_slot >= cap ? t_slot - cap : t_slot;
-            noc_async_read_set_trid(trid_of(issued));
+            set_trid(trid_of(issued));
             issue(issued, base + t_slot * win_bytes);
             ++issued;
         }
@@ -281,7 +298,10 @@ void kernel_main() {
                 look_ahead_both(s);
             }
             if ((a_sender && a_moves(s)) || (w_sender && w_moves(s))) {
-                noc_async_read_barrier_with_trid(trid_of(s));  // this step's reads only
+                noc_async_read_barrier_with_trid(trid_of(s), 0);  // this step's reads only
+                if constexpr (two_read_nocs) {
+                    noc_async_read_barrier_with_trid(trid_of(s), 1);
+                }
             }
             if constexpr (lookahead_after_barrier) {
                 // the current step's reads get the DRAM to themselves (the fill: every sender reads step 0 at once);
