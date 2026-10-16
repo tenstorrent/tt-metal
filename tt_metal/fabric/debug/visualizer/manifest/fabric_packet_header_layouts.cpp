@@ -59,8 +59,7 @@ namespace {
 template <typename H>
 constexpr std::array<Member, 4> packet_header_base_members() {
     return {
-        // A union keyed by noc_send_type, which layouts cannot describe yet.
-        LAYOUT_BYTES(H, command_fields),
+        LAYOUT_TAGGED_UNION(H, command_fields, noc_send_type),
         LAYOUT_MEMBER(H, payload_size_bytes),
         LAYOUT_MEMBER(H, noc_send_type),
         LAYOUT_MEMBER(H, src_ch_id),
@@ -111,10 +110,8 @@ template <int N>
 struct StructLayout<UDMHybridMeshPacketHeaderT<N>> {
     using T = UDMHybridMeshPacketHeaderT<N>;
     static constexpr std::string_view name = template_name<"UDMHybridMeshPacketHeaderT", N>;
-    static constexpr auto members = concat_members(
-        hybrid_mesh_members<T>(),
-        // A union keyed by noc_send_type, which layouts cannot describe yet.
-        std::array{LAYOUT_BYTES(T, udm_control)});
+    static constexpr auto members =
+        concat_members(hybrid_mesh_members<T>(), std::array{LAYOUT_TAGGED_UNION(T, udm_control, noc_send_type)});
 };
 
 #pragma GCC diagnostic pop

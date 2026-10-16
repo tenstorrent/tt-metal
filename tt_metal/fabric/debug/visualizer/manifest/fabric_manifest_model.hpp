@@ -359,6 +359,8 @@ struct Arch {
     CoreRegisters core_registers;
     // Every struct a schema names, as laid out on this architecture.
     std::vector<layout::StructType> types;
+    // Every tagged union a schema names.
+    std::vector<layout::UnionType> unions;
 };
 
 }  // namespace tt::tt_fabric::manifest
