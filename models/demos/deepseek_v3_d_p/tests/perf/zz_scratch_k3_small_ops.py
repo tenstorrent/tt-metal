@@ -66,4 +66,13 @@ def test_small_ops(mesh_device):
         logits, bias, n_groups=1, summed_experts_per_group=1, topk_groups=1, n_activated_experts=16, route_scale=1.0,
         stable_sort=False, epsilon=1e-20, score_func="sigmoid", padding_config=None, weights_layout=ttnn.ROW_MAJOR_LAYOUT))
     run(mesh_device, "sigmoid", lambda: ttnn.sigmoid(logits))
+    import os
+    from ttnn.bringup.combine_rf.router_topk import router_topk_prepare
+    l32 = dev(torch.randn(S, E) * 2, ttnn.TILE_LAYOUT, ttnn.float32)
+    s32 = ttnn.sigmoid(l32)
+    b32 = ttnn.add(s32, dev(torch.randn(1, E) * 0.01, ttnn.TILE_LAYOUT, ttnn.float32))
+    for pr in ("", "noweights"):
+        os.environ["TOPK_PROBE"] = pr
+        rt = router_topk_prepare(mesh_device, S=S, E=E, K=16)
+        run(mesh_device, f"router_topk {pr or 'full'}", lambda: rt(s32, b32))
     run(mesh_device, "topk k=16 (ttnn.topk)", lambda: ttnn.topk(logits, 16, dim=-1, largest=True, sorted=False))

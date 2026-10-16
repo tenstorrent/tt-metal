@@ -32,6 +32,7 @@ from ttnn.bringup.combine_rf.sparse_all_gather_2d import ensure_semaphores, mani
 from ttnn.bringup.combine_rf.fabric_all_gather_py import fabric_all_gather
 from ttnn.bringup.combine_rf.l1_zero import l1_zero_program
 from ttnn.bringup.combine_rf.layout_ops import layout_op_prepare
+from ttnn.bringup.combine_rf.router_topk import router_topk_prepare
 from ttnn.bringup.combine_rf.sparse_combine_rf import sparse_combine_rf_prepare
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import W_DTYPES, FlatRoutedExpert, _bank_sharded, flat_weight_regions
 
@@ -135,6 +136,14 @@ class TtK3TokenSplitMoE:
             w.bias.view(1, -1).expand(S, -1).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
             device=mesh_device, memory_config=dram, mesh_mapper=rep,
         )
+        # router selection: K3_TOPK=custom (default: sigmoid + bias add in fp32, router_topk writes the joint routing
+        # rows) or ttnn (moe_grouped_topk + layout / concat ops)
+        self.topk_custom = os.environ.get("K3_TOPK", "custom") == "custom"
+        self.bias32 = ttnn.from_torch(
+            w.bias.view(1, -1).float().contiguous(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device,
+            memory_config=dram, mesh_mapper=rep,
+        )
+        self.rtopk = router_topk_prepare(mesh_device, S=S, E=d.E, K=d.K, route_scale=d.route_scale)
         self.w_ld = tw(w.lat_down.T, ttnn.bfloat8_b)
         self.w_lu = tw(w.lat_up.T, ttnn.bfloat8_b)
         self.g_ln = ttnn.from_torch(
@@ -145,7 +154,7 @@ class TtK3TokenSplitMoE:
         # to (bf8 weights in its bank layout, fused gate/up + SiTU + down); dense: three ttnn.linear + situ_glu
         self.tilize = layout_op_prepare(mesh_device, "tilize")
         self.untilize = layout_op_prepare(mesh_device, "untilize")
-        self.untilize2 = layout_op_prepare(mesh_device, "untilize", pages_per_row=2)
+        self.untilize7 = layout_op_prepare(mesh_device, "untilize", pages_per_row=7)
         self.se_mode = os.environ.get("K3_SE", "flat")  # flat (local) | tp (TP over each mesh row) | dense
         self.se_flat = self.se_mode in ("flat", "tp")
         self.se_parts = int(os.environ.get("K3_SE_PARTS", "3"))
@@ -267,11 +276,11 @@ class TtK3TokenSplitMoE:
         self.key = 7_000_000 + id(self) % 1_000_000
 
     @staticmethod
-    def _linear(x, w, cfg):
+    def _linear(x, w, cfg, dtype=ttnn.bfloat16):
         """ttnn.linear with the 2D-multicast config for the shape (models/demos/glm53_flash_d_p/tt/mm_configs.mm2d):
         2-4x the default at 320 rows (zz_scratch_k3_dense_mm.py)."""
-        pc = mm_configs.linear_config(x, w, ttnn.bfloat16)
-        return ttnn.linear(x, w, compute_kernel_config=cfg, dtype=ttnn.bfloat16, program_config=pc)
+        pc = mm_configs.linear_config(x, w, dtype)
+        return ttnn.linear(x, w, compute_kernel_config=cfg, dtype=dtype, program_config=pc)
 
     def _warm_up(self):
         """Every dense op once on zero tokens (e.g. CCL semaphores are allocated on first use and kept)."""
@@ -289,10 +298,22 @@ class TtK3TokenSplitMoE:
         y = ttnn.add(yr, self.shared(x), dtype=ttnn.bfloat16)
         ttnn.synchronize_device(self.mesh)
         for t in (x, ids, wts, gi, lat, xg, o, n, yr, y):  # (gw is gi)
-            ttnn.deallocate(t)
+            if t is not None and t.is_allocated():
+                ttnn.deallocate(t)
 
     # -- the ops (per chip; tensors on the mesh) --
     def router(self, x, keep_logits=False):
+        if self.topk_custom:  # (fp32 logits / scores / biased scores, router_topk: the joint rows; ids = the rows)
+            logits = self._linear(x, self.w_gate, self.cfg_hi, ttnn.float32)
+            sc = ttnn.sigmoid(logits)
+            bs = ttnn.add(sc, self.bias32)
+            rows = self.rtopk(sc, bs)
+            ttnn.deallocate(sc)
+            ttnn.deallocate(bs)
+            if keep_logits:
+                return rows, None, logits
+            ttnn.deallocate(logits)
+            return rows, None
         logits = self._linear(x, self.w_gate, self.cfg_hi)
         wts, ids = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
             logits, self.bias, n_groups=1, summed_experts_per_group=1, topk_groups=1, n_activated_experts=self.d.K,
@@ -307,12 +328,16 @@ class TtK3TokenSplitMoE:
     def gather_routing(self, ids, wts):
         """ids (uint16 TILE [S, K]) / weights (bf16 row-major [S, K]) -> one [N S, 2 K] uint16 row-major tensor, each
         token's ids then its weights' bits (64 B a token), home-major (an all-gather over the columns, then the rows),
-        replicated: the planner reads a page per token (row_pages, joint)."""
-        ids_rm = ttnn.to_layout(ids, ttnn.ROW_MAJOR_LAYOUT)
-        w = wts if wts.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(wts, ttnn.ROW_MAJOR_LAYOUT)
-        w16 = ttnn.bitcast(w, ttnn.uint16)
-        both = ttnn.concat([ids_rm, w16], dim=1)
-        ttnn.deallocate(ids_rm)
+        replicated: the planner reads a page per token (row_pages, joint). With the custom top-k, ids are already the
+        joint rows (wts None)."""
+        if wts is None:
+            both = ids
+        else:
+            ids_rm = ttnn.to_layout(ids, ttnn.ROW_MAJOR_LAYOUT)
+            w = wts if wts.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(wts, ttnn.ROW_MAJOR_LAYOUT)
+            w16 = ttnn.bitcast(w, ttnn.uint16)
+            both = ttnn.concat([ids_rm, w16], dim=1)
+            ttnn.deallocate(ids_rm)
         if self.rgather_fabric:  # (one sparse_all_gather_2d, every row to every chip: own rows in place first)
             N, S, K = self.N, self.S, self.d.K
             buf = ttnn.allocate_tensor_on_device(
@@ -479,10 +504,10 @@ class TtK3TokenSplitMoE:
 
     def shared(self, x):
         if self.se_mode == "tp":  # (row all-gather, one flat expert on the row's tokens, reduce-scatter)
-            x_rm = self.untilize2(x)  # (a row as 2 pages of 7 KB: the fabric all-gather sends whole pages)
+            x_rm = self.untilize7(x)  # (a row as 7 pages of 2 KB: the fabric all-gather sends whole pages, the flat reads 2 KB segments)
             xg = fabric_all_gather(x_rm, cluster_axis=1, topology=ttnn.Topology.Linear, num_links=2, dim=0)
             ttnn.deallocate(x_rm)
-            y = self.se(xg, self.se_counts, self.se_regions, x_pages_per_row=2, down_fp32=True,
+            y = self.se(xg, self.se_counts, self.se_regions, x_pages_per_row=7, down_fp32=True,
                         pack_stochastic_rounding=self.se_srnd, y_bf16=self.se_ybf16, math_fidelity=self.se_fid)
             ttnn.deallocate(xg)
             ys = ttnn.reduce_scatter(y, 0, cluster_axis=1, num_links=2, topology=ttnn.Topology.Linear)
@@ -542,5 +567,6 @@ class TtK3TokenSplitMoE:
         inter = dict(ids=ids, wts=wts, gi=gi, gw=gw, lat=lat, xg=xg, yr=yr, ys=ys, logits=logits[0], routed=self.out) if keep else None
         if not keep:
             for t in (ids, wts, gi, lat, xg, yr, ys):  # (gw is gi)
-                ttnn.deallocate(t)
+                if t is not None and t.is_allocated():
+                    ttnn.deallocate(t)
         return (y, inter) if keep else y
