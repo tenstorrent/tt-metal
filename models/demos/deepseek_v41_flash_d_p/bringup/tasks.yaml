@@ -2044,6 +2044,13 @@ tasks:
     - router
     - experts
     layer: 1
+  frozen:
+    at: '2026-10-16T05:06:31'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_15_experts.py: 57bcab7f44da2ccdaa09be9fed1e646df7ff9526b1f11e9bceaea4fccc015c7e
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.swa_engram.shared_expert
   title: swa_engram shared_expert (mlp) on device, layer 1
   step: implement
