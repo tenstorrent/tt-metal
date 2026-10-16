@@ -19,18 +19,23 @@ from dataclasses import dataclass
 
 import pytest
 import torch
-from loguru import logger
-
 import ttnn
+from loguru import logger
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
-from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import (
+    DeepSeekV4FlashConfig,
+)
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import (
+    DeepSeekV4ProConfig,
+)
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
-from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import (
+    MistralSmall4Config,
+)
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     ACTIVATION_CLAMPED_SILU_GLU,
     ACTIVATION_SILU,
@@ -42,6 +47,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     routed_expert_weight_memory_config,
 )
+
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 _WARMUP_ITERS = 3
@@ -208,10 +214,14 @@ def _tile_ceil(n: int) -> int:
     return -(-n // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
 
-def _shard_per_device(
-    mesh_device, per_device: torch.Tensor, layout, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
-) -> ttnn.Tensor:
-    """Place per_device[d] on chip d with the leading device dim squeezed, so local shapes match production."""
+# A single host->device write above ~512 MiB never completes on some hosts (seen on a 2x p300c box with the
+# IOMMU on and KMD 2.9.0), and the full dispatch buffer is 0.5-1 GB per chip. In production that buffer is
+# produced on device by dispatch, so only the test upload is affected: large ROW_MAJOR tensors are written in
+# row slices and joined on device. The tensor the op sees (values, layout, DRAM interleaving) is unchanged.
+_MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+
+
+def _upload(mesh_device, per_device: torch.Tensor, layout, dtype, memory_config) -> ttnn.Tensor:
     host = ttnn.from_torch(
         per_device,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
@@ -219,6 +229,25 @@ def _shard_per_device(
         dtype=dtype,
     )
     return ttnn.to_device(ttnn.squeeze(host, dim=0), mesh_device, memory_config=memory_config)
+
+
+def _shard_per_device(
+    mesh_device, per_device: torch.Tensor, layout, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+) -> ttnn.Tensor:
+    """Place per_device[d] on chip d with the leading device dim squeezed, so local shapes match production."""
+    rows = per_device.shape[1] if per_device.dim() >= 3 else 0
+    row_bytes = per_device[0, 0].numel() * per_device.element_size() if rows else 0
+    if layout != ttnn.ROW_MAJOR_LAYOUT or rows * row_bytes <= _MAX_UPLOAD_BYTES:
+        return _upload(mesh_device, per_device, layout, dtype, memory_config)
+    step = max(1, _MAX_UPLOAD_BYTES // row_bytes)
+    parts = [
+        _upload(mesh_device, per_device[:, r : r + step].contiguous(), layout, dtype, memory_config)
+        for r in range(0, rows, step)
+    ]
+    joined = ttnn.concat(parts, dim=0, memory_config=memory_config)
+    for part in parts:
+        ttnn.deallocate(part)
+    return joined
 
 
 def _make_uint32_vectors(mesh_device, values: torch.Tensor) -> ttnn.Tensor:
