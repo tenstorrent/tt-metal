@@ -801,3 +801,18 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - OV-4: DS41-20 already states the F73 fix; known_issues.md not touched.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_17_moe_add.py`
   (CPU: `BRINGUP_IMPL=reference` / `stub` / `mutate:<kind> BRINGUP_MUTATE_STEP=moe_add` in front).
+
+## S.swa_engram.18 test review (layer 1, scaled, attempt 1)
+- Freeze failed: with BRINGUP_IMPL=reference only `swap_router_vs_golden` failed (0.984586 < 0.99, DS41-32): the
+  rendered test lacks tests 14-17's checks. Rebuilt from test_swap_swa_engram_17_moe_add.py (router, experts,
+  shared-expert and w2-span checks unchanged: DS41-32 / DS41-33 / DS41-34 / DS41-25), SWAPPED + ffn_residual.
+- The span check reads shared_out from the block trail (test 17's fix), so it still runs with ffn_residual last.
+  ffn_residual's output is the block out: no tail check follows it.
+- ffn_residual keeps the framework's checks (rel <= 2 x component error 0.0051); they catch every mutation,
+  noise1e-2 by rel 0.0100.
+- Results: reference PASS, stub FAIL, mutate:bf16 PASS (rel 0.0025), mutate:{noise1e-2, scale1.02 / 0.98, halfswap,
+  rowshift, quarterzero, sign} with BRINGUP_MUTATE_STEP=ffn_residual all FAIL; gate (device) PASS: pcc_swap_out
+  0.999781, device ffn_residual bit-equal to the CPU step, span 0.00023. Table in the test docstring.
+- OV-4: DS41-20 already states the F73 fix; known_issues.md not touched.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py`
+  (CPU: `BRINGUP_IMPL=reference` / `stub` / `mutate:<kind> BRINGUP_MUTATE_STEP=ffn_residual` in front).
