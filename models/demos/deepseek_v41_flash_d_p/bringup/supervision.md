@@ -152,3 +152,7 @@ Every intervention by the supervising session: time, task, trigger, classificati
 - FIX.3 (exact router) obsolete: with the nudge the device router passes. To be removed.
 - New finding: device hc mixes 4-34x above the floor, bias -4e-4 (not TF32): fix job after the new floor is in.
 - Plan: (1) nudge floor, (2) selections: explained flips, (3) official_taps hook + tap map (reference-role fix job) + R check + cached with goldens, (4) mixes fix job (held), (5) rerun every passed frozen test once, (6) end-to-end limits from the official drift (held, before L.*). Run paused until 1-3 are in.
+
+## 2026-10-16 ~11:00: F80 installed (275b1616f33, bbd20d27af3); R.5 added
+- Floor = calib x max(official arithmetic, input nudge); selections need explained flips; bf16 model and precision.yaml removed. CPU check on DS41: router flip limit 1.9 % of rows (nudge ~19 rows; device 3-8), norms rel limit 0.0033; the mixes need official_taps.yaml (inputs/out fp32) to get their true floor.
+- R.5 (reference role: official_taps hook + official_taps.yaml; gate testing.official_floor) inserted before S.enc_source.03; all 97 pending C.* depend on it; plan re-approved. Running `--only R.5`, then: release FIX.4 (mixes), rerun every passed frozen test once (no agents; failures -> fix jobs), resume. End-to-end limits from the official drift: before L.* (framework, mine).
