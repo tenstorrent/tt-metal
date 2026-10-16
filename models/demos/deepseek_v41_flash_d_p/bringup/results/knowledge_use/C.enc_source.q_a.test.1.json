@@ -1,0 +1,50 @@
+{
+ "used": [
+  {
+   "id": "K-36",
+   "how": "1 % noise slips calibrated limits: added a structural check (row energy of the normalized output) instead of tightening rel limits",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-14",
+   "how": "followed test_c_swa_kv.py's pattern: structural check on every auto input, local mutations sweep with the check added",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-1",
+   "how": "explained the wide rel limits (fp8 input flips under the nudge) and why only errors after the norm can be checked tightly",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-45",
+   "how": "new entry written by this step: the norm-energy check and its measured margins",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how to catch 1 % noise on an RMS-normalized output (no fp8 grid, no low-rank span): now DS41-45"
+ ],
+ "overseer": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.enc_source.q_a",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T18:41:39",
+  "head": "f8195631228",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.enc_source.q_a.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_q_a.py"
+  ]
+ }
+}
