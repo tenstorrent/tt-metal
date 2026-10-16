@@ -175,6 +175,14 @@ class MuseGlimmerGolden(LayerwiseGolden):
 
         AutoModelForCausalLM.register(MuseGlimmerConfig, MuseGlimmerForConditionalGeneration, exist_ok=True)
 
+    def make_cache(self, text_config):
+        """No config: transformers' DynamicCache(config) gives sliding layers a DynamicSlidingWindowLayer that keeps
+        only the last sliding_window - 1 (2047) positions. Built without it, every layer keeps K/V for every position,
+        as the other goldens store them; the masks come from the config either way, so the forward is unchanged."""
+        from transformers import DynamicCache
+
+        return DynamicCache()
+
     def layer_kwargs(self, i, kind, state):
         """MuseGlimmerTextModel.forward: NoPE layers (layer_rope_theta[i] == 0) get position_embeddings=None."""
         kwargs = super().layer_kwargs(i, kind, state)

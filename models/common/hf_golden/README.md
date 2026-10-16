@@ -92,7 +92,9 @@ weights, 123 GB GPU peak, 226 GB on disk (71 GB trimmed to 18 hidden layers).
 **Muse-Glimmer-30B:** dense; 3 sliding-window (2048, RoPE) layers per full NoPE layer, gated GQA, sandwich norms,
 normed embeddings, logits x output_multiplier then softcapped. BOS prefix (wikitext ppl at isl 10240: 7.02 BOS, 7.11
 raw, 7.15 chat; score PPL with the multiplier and softcap applied, or it reads in the billions). isl 56320 with
-`--attn-chunk 4096`: 0.8 min from cached weights, 18 GB GPU peak, 39 GB on disk.
+`--attn-chunk 4096`: 0.9 min from cached weights, 18 GB GPU peak, 41 GB on disk. Its K/V on
+sliding layers keep every position (make_cache: DynamicCache(config) would keep only the last 2047), and the first
+10240 positions of that trace are bit-identical to a bare isl 10240 run (hidden states and K/V, all 52 layers).
 
 **`--device cuda` under torch 2.11:** `torch.cuda.set_device` rejects a device without an index; pass `cuda:0`.
 
