@@ -621,17 +621,25 @@ def report_e2e_metrics(
     benchmark_profiler.start("run")
     opened_steps: list[str] = []
     measurements: list[tuple[str, str, float]] = []
-    seen_pairs: set[tuple[str, str]] = set()
+    seen_values: dict[tuple[str, str], float] = {}
     for name, value in metrics.items():
         step_name, measurement_name = _E2E_METRIC_MEASUREMENTS[name]
         pair = (step_name, measurement_name)
-        if pair in seen_pairs:
+        fvalue = float(value)
+        if pair in seen_values:
+            # Multiple metric names can alias to the same (step, measurement) pair. Deduping is fine
+            # when they agree, but silently dropping a conflicting value would publish the wrong
+            # number, so surface it instead.
+            if fvalue != seen_values[pair]:
+                raise ValueError(
+                    f"Conflicting values for metric alias '{name}' -> {pair}: " f"{seen_values[pair]} vs {fvalue}"
+                )
             continue
-        seen_pairs.add(pair)
+        seen_values[pair] = fvalue
         if step_name not in opened_steps:
             benchmark_profiler.start(step_name)
             opened_steps.append(step_name)
-        measurements.append((step_name, measurement_name, float(value)))
+        measurements.append((step_name, measurement_name, fvalue))
     for step_name in reversed(opened_steps):
         benchmark_profiler.end(step_name)
     benchmark_profiler.end("run")
