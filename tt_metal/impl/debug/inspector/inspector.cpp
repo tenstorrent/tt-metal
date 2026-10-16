@@ -39,6 +39,22 @@ inspector::Data* get_inspector_data() {
     return nullptr;
 }
 
+// The session of the context an object belongs to, or nullptr if the inspector is not active on that context.
+inspector::Data* session_of(const distributed::MeshDeviceImpl& mesh_device) {
+    return mesh_device.metal_context().get_inspector_data();
+}
+
+inspector::Data* session_of(const distributed::MeshDevice* mesh_device) {
+    return mesh_device != nullptr ? session_of(mesh_device->impl()) : nullptr;
+}
+
+// A program can outlive its context, so this must not create one (MetalContext::instance() would).
+inspector::Data* session_of(const detail::ProgramImpl& program) {
+    const ContextId context_id = program.get_context_id();
+    return MetalContext::instance_exists(context_id) ? MetalContext::instance(context_id).get_inspector_data()
+                                                     : nullptr;
+}
+
 // Error reporting policy for the TT_INSPECTOR_* macros. Set from the context's rtoptions before its session is
 // constructed. These settings only come from environment variables, so all envs agree on them.
 std::atomic<bool> g_initialization_is_important{false};
@@ -118,22 +134,21 @@ void Inspector::program_created(const detail::ProgramImpl* program) noexcept {
 }
 
 void Inspector::program_destroyed(const detail::ProgramImpl* program) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+    auto* data = session_of(*program);
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
         std::lock_guard<std::mutex> lock(data->programs_mutex);
-        auto& program_data = data->programs_data[program->get_id()];
-        data->logger.log_program_destroyed(program_data);
-        for (const auto& [kernel_id, _] : program_data.kernels) {
+        auto it = data->programs_data.find(program->get_id());
+        if (it == data->programs_data.end()) {
+            return;  // Not recorded by this session, e.g. created before the context was re-initialized.
+        }
+        data->logger.log_program_destroyed(it->second);
+        for (const auto& [kernel_id, _] : it->second.kernels) {
             data->kernel_id_to_program_id.erase(kernel_id);
         }
-        data->programs_data.erase(program->get_id());
+        data->programs_data.erase(it);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program destroyed: {}", e.what());
     }
@@ -262,12 +277,8 @@ void Inspector::program_set_binary_status(
 
 void Inspector::mesh_device_created(
     const distributed::MeshDeviceImpl* mesh_device, std::optional<int> parent_mesh_id) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+    auto* data = session_of(*mesh_device);
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -283,31 +294,26 @@ void Inspector::mesh_device_created(
 }
 
 void Inspector::mesh_device_destroyed(const distributed::MeshDeviceImpl* mesh_device) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+    auto* data = session_of(*mesh_device);
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
         std::lock_guard<std::mutex> lock(data->mesh_devices_mutex);
-        auto& mesh_device_data = data->mesh_devices_data[mesh_device->id()];
-        data->logger.log_mesh_device_destroyed(mesh_device_data);
-        data->mesh_devices_data.erase(mesh_device->id());
+        auto it = data->mesh_devices_data.find(mesh_device->id());
+        if (it == data->mesh_devices_data.end()) {
+            return;  // Not recorded by this session, e.g. created before the context was re-initialized.
+        }
+        data->logger.log_mesh_device_destroyed(it->second);
+        data->mesh_devices_data.erase(it);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh device destroyed: {}", e.what());
     }
 }
 
 void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_device) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+    auto* data = session_of(*mesh_device);
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -320,13 +326,10 @@ void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_
     }
 }
 
-void Inspector::mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+void Inspector::mesh_buffer_allocated(
+    const distributed::MeshBuffer* mesh_buffer, const distributed::MeshDevice* mesh_device) noexcept {
+    auto* data = session_of(mesh_device);
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -340,11 +343,9 @@ void Inspector::mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer
     }
 }
 
-void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+void Inspector::mesh_buffer_deallocated(
+    const distributed::MeshBuffer* mesh_buffer, const distributed::MeshDevice* mesh_device) noexcept {
+    auto* data = session_of(mesh_device);
     if (!data) {
         return;
     }
@@ -371,15 +372,12 @@ void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buff
 }
 
 void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        return;
-    }
     try {
         auto* mesh_device = socket->get_mesh_device();
+        auto* data = session_of(mesh_device);
+        if (!data) {
+            return;
+        }
         const distributed::SocketSenderSize sender_size(
             mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
         auto config_buffer = socket->get_config_buffer();
@@ -456,18 +454,16 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
 }
 
 void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        return;
-    }
     try {
+        auto* mesh_device = buffer->device();
+        auto* data = session_of(mesh_device);
+        if (!data) {
+            return;
+        }
         inspector::GlobalSemaphoreData semaphore_data;
         semaphore_data.address = buffer->address();
         semaphore_data.cores = cores;
-        for (const auto* device : buffer->device()->impl().get_devices()) {
+        for (const auto* device : mesh_device->impl().get_devices()) {
             semaphore_data.chip_ids.push_back(device->id());
         }
         std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
@@ -478,14 +474,11 @@ void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, 
 }
 
 void Inspector::global_semaphore_reset(const distributed::MeshBuffer* buffer, uint32_t value) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        return;
-    }
     try {
+        auto* data = session_of(buffer->device());
+        if (!data) {
+            return;
+        }
         std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
         if (auto it = data->global_semaphores_data.find(buffer); it != data->global_semaphores_data.end()) {
             it->second.reset_value = value;
