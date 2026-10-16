@@ -44,15 +44,16 @@ PROMPTS = [
 VARIANTS = {
     # Teja's branch as it was: whole decoder on device, default fidelity, approx GELU.
     "full_legacy": ("full", {"numerics": "legacy", "conv": "matmul"}),
-    "full_hifi4": ("full", {"numerics": "hifi", "conv": "matmul", "fidelity": "HiFi4"}),
+    "full_hifi4": ("full", {"numerics": "hifi", "conv": "matmul", "snake": "host", "fidelity": "HiFi4"}),
     "cont_legacy": ("continue", {"numerics": "legacy", "conv": "matmul"}),
-    "cont_hifi4": ("continue", {"numerics": "hifi", "conv": "matmul", "fidelity": "HiFi4"}),
-    "cont_hifi3": ("continue", {"numerics": "hifi", "conv": "matmul", "fidelity": "HiFi3"}),
-    "cont_conv1d_hifi4": ("continue", {"numerics": "hifi", "conv": "conv1d", "fidelity": "HiFi4"}),
-    "cont_conv1d_hifi3": ("continue", {"numerics": "hifi", "conv": "conv1d", "fidelity": "HiFi3"}),
+    "cont_hifi4": ("continue", {"numerics": "hifi", "conv": "matmul", "snake": "host", "fidelity": "HiFi4"}),
+    "cont_hifi3": ("continue", {"numerics": "hifi", "conv": "matmul", "snake": "host", "fidelity": "HiFi3"}),
+    "cont_conv1d_hifi4": ("continue", {"numerics": "hifi", "conv": "conv1d", "snake": "host", "fidelity": "HiFi4"}),
+    "cont_conv1d_hifi3": ("continue", {"numerics": "hifi", "conv": "conv1d", "snake": "host", "fidelity": "HiFi3"}),
     # Blaze codec_fast ports (2026-10-16): taps fused into one fp32-accumulated matmul, fused snake_beta.
-    "cont_fused": ("continue", {"numerics": "hifi", "conv": "fused", "fidelity": "HiFi4"}),
+    "cont_fused": ("continue", {"numerics": "hifi", "conv": "fused", "snake": "host", "fidelity": "HiFi4"}),
     "cont_snake": ("continue", {"numerics": "hifi", "conv": "matmul", "snake": "fused", "fidelity": "HiFi4"}),
+    "full_fast": ("full", {"numerics": "hifi", "conv": "fused", "snake": "fused", "fidelity": "HiFi4"}),
     "cont_fast": ("continue", {"numerics": "hifi", "conv": "fused", "snake": "fused", "fidelity": "HiFi4"}),
 }
 DEFAULT_VARIANTS = ["full_legacy", "full_hifi4", "cont_legacy", "cont_hifi4", "cont_hifi3"]

@@ -36,9 +36,9 @@ from models.demos.qwen3_tts.tt.ttnn_conv_decoder import TTNNConv1d, backend_comp
 LEGACY_NUMERICS = os.environ.get("TT_QWEN3_DECODE_NUMERICS", "hifi") == "legacy"
 SNAKE_EPS = 1e-9
 DECODE_MIN_BUCKET = int(os.environ.get("TT_QWEN3_DECODE_MIN_BUCKET", "32"))
-# SnakeBeta: "host" = mul, sin, square, mul, add on host-folded parameters; "fused" = one
-# ttnn.snake_beta SFPU op (fp32 inside, one bf16 rounding; Blaze codec_fast step A).
-SNAKE_MODE = os.environ.get("TT_QWEN3_DECODE_SNAKE", "host")
+# SnakeBeta: "fused" (default) = one ttnn.snake_beta SFPU op (fp32 inside, one bf16 rounding;
+# Blaze codec_fast step A); "host" = mul, sin, square, mul, add on host-folded parameters.
+SNAKE_MODE = os.environ.get("TT_QWEN3_DECODE_SNAKE", "fused")
 
 
 @contextmanager

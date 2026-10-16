@@ -26,11 +26,11 @@ from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 # conv1d measured +33 dB vs +29 dB for matmul at 205 vs ~290 ms, but it HANGS the chip
 # once the talker's traces have executed (first call after capture took 15 s, the next
 # one deadlocked), so it is blocked unless TT_QWEN3_ALLOW_UNSAFE_CONV1D=1.
-# "fused" stacks the k shifted inputs on the channel axis and runs ONE matmul against the
-# [k*in, out] weight: every tap sums in fp32 inside the matmul and rounds to bf16 once, as
-# conv1d does, but through the matmul reader only (Blaze codec_fast: the missing fp32
-# accumulation across taps was the decoder's dominant error).
-CONV_MODE = os.environ.get("TT_QWEN3_DECODE_CONV", "matmul")
+# "fused" (default) stacks the k shifted inputs on the channel axis and runs ONE matmul
+# against the [k*in, out] weight: every tap sums in fp32 inside the matmul and rounds to bf16
+# once, as conv1d does, but through the matmul reader only (Blaze codec_fast: the missing fp32
+# accumulation across taps was the decoder's dominant error; 28.8 -> 35.1 dB vs CPU).
+CONV_MODE = os.environ.get("TT_QWEN3_DECODE_CONV", "fused")
 # Math fidelity with fp32 accumulation. tt-metal warns that on Wormhole HiFi4 + fp32
 # accumulation can be less accurate than HiFi3 (hardware bug), so this is A/B-able.
 FIDELITY = os.environ.get("TT_QWEN3_DECODE_FIDELITY", "HiFi4")
