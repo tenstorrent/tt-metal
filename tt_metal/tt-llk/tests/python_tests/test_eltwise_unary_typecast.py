@@ -393,6 +393,8 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
 
 
 _FP32_EXP_MASK = 0xFF << _FP32_MANTISSA_BITS
+# The fp32 mantissa bits a bfloat16 does not keep.
+_BF16_DROPPED_BITS_MASK = 0xFFFF
 
 
 def _fp32_is_nan(bits: int) -> bool:
@@ -504,7 +506,7 @@ def test_eltwise_unary_typecast_fp32_to_fp16b_rounding_specials():
             ok = (
                 math.isnan(r)
                 and (math.copysign(1.0, r) < 0) == bool(b & _FP32_SIGN_BIT)
-                and (got & 0xFFFF) == 0
+                and (got & _BF16_DROPPED_BITS_MASK) == 0
             )
             expected = "nan" if not b & _FP32_SIGN_BIT else "-nan"
         else:
