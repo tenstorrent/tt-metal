@@ -1163,3 +1163,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   (compressors 1.04-1.23x, attention 1.04-2.3x at layers 3-24): the fp32 step read the golden's prefix caches while
   the official output came from the official run's own. The hook now also returns each layer's official state
   (`_state`: start / end, the reference's format); official_floor uses it (and the sources' end state) when given.
+- With the official state, attention passed (L3-L24 0.032-0.036 vs 0.055-0.075); the 3 compressors stayed out (rel
+  0.037 vs 2 x the nudge 0.015): the official compressor rounds to bf16 inside, and the fp32 step with those roundings
+  emulated reproduces it bit for bit (the agent's evidence). The check now passes a step over calib x its nudge only
+  with an `explained` entry in official_taps.yaml (the official arithmetic is then its floor; the overseer reviews).
