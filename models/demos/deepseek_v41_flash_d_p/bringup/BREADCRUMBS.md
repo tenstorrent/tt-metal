@@ -1142,3 +1142,20 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Re-run: the brief's gate; table `scripts/tt-probe.sh mhc_ds41_fix4 < tests/ttnn/unit_tests/operations/mhc_ds41_fix4/probes/probe_014.py`;
   fork `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_pre_ttnn/tests/test_mhc_pre_xing.py ttnn/ttnn/bringup/mhc_pre_ttnn/tests/test_mhc_pre_ttnn.py`
   and `... tests/unit tests/golden`; A/B `DS41_HC_SINKHORN=fpu`.
+
+## C.enc_source.q_a test review (attempt 1)
+- Freeze without review failed: the built-in sweep let noise1e-2 slip (rel limits 0.0158 golden / small / big, 0.0292
+  layer24, 0.0325 mixed come from the input nudge's fp8 flips, DS41-1; 1 % noise is rel 0.010). K-36, DS41-14.
+- q_a = q_norm(fp8_linear(attn_norm, wq_a)); official RMSNorm is fp32 with a bf16 output (hf/inference/model.py:281).
+  Added a norm-energy check on every auto input: bias = mean over rows of (rms(out_row / q_norm.weight) - 1),
+  |bias| <= NORM_BIAS 1.5e-5 (DS41-45). CPU probe (outside the tree): CPU / nudge / floor 2e-9; bf16 output
+  +1.4e-6 / -1.0e-6 / -3.6e-6 (golden / layer24 / mixed); noise1e-2 +7.6e-5 / +5.7e-5 / +5.6e-5; noise1e-3 <= 2.1e-6.
+  Rejected: column slope of log error on log |w| (q_norm.weight 1-99 % quantiles 0.84-1.25, too flat); per-row
+  rms spread (bf16 output 1.2e-4 vs noise 3.5e-4, margin too thin).
+- BRINGUP_IMPL=mutations runs a local sweep (controls reference, input nudge, bf16 output; every float mistake) with
+  the built-in verdict (evaluate + error_gate) plus the norm check: all controls pass, all mistakes caught
+  (noise1e-2 by norm_bias on all 5 inputs). Reference PASS, stub FAIL (bias -1, rel 1).
+- Gate (device; the q_a module already serves enc_source): PASS, err_q_a_L02 0.00806 <= 0.0737, vs CPU rel 9.2e-5,
+  norm_bias -8e-9 on every input, A,B,A bit-identical. Metrics `norm_bias_q_a_L02_<input>`.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_q_a.py`
+  (BRINGUP_IMPL=mutations | reference | stub for the freeze checks).
