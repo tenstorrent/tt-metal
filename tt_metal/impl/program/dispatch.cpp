@@ -1689,6 +1689,16 @@ public:
                         device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
                     CoreRange virtual_range(virtual_start, virtual_end);
                     auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+                    LOG_TRACE_LAZY(
+                        tt::LogDispatch,
+                        "CrossNodeDFB Index (MCAST): logical_range={}, virtual_range={}, noc_xy=0x{:x}, num_dests={}, "
+                        "L1_addr=0x{:x}, size={} bytes",
+                        core_range,
+                        virtual_range,
+                        noc_xy_addr,
+                        core_range.size(),
+                        start_addr,
+                        payload_bytes);
 
                     batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] =
                         std::vector<Transfer>{
@@ -1718,6 +1728,15 @@ public:
                             page_bytes,
                             gdfb.config_buffer().page_size());
                         const uint32_t page_addr = participant.config_page_addr;
+                        LOG_TRACE_LAZY(
+                            tt::LogDispatch,
+                            "CrossNodeDFB Config Page (UNICAST): logical_core={}, virtual_core={}, noc_xy=0x{:x}, "
+                            "L1_addr=0x{:x}, size={} bytes",
+                            logical_core,
+                            virtual_core,
+                            noc_xy_addr,
+                            page_addr,
+                            page_bytes);
                         absolute_config_transfers[std::make_pair(noc_xy_addr, /*num_dests=*/1u)][page_addr] =
                             std::vector<Transfer>{
                                 {.start = page_addr,
@@ -1773,6 +1792,16 @@ public:
                         device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
                     CoreRange virtual_range(virtual_start, virtual_end);
                     auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+                    LOG_TRACE_LAZY(
+                        tt::LogDispatch,
+                        "PrefetcherPipe Index (MCAST): logical_range={}, virtual_range={}, noc_xy=0x{:x}, "
+                        "num_dests={}, L1_addr=0x{:x}, size={} bytes",
+                        core_range,
+                        virtual_range,
+                        noc_xy_addr,
+                        core_range.size(),
+                        start_addr,
+                        payload_bytes);
 
                     batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] =
                         std::vector<Transfer>{
