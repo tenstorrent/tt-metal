@@ -1317,13 +1317,9 @@ _DIV_INT32_BOUNDARY_QUOTIENTS = [-1000, -1, 1, 1000]
 
 
 def _build_div_int32_signed_src():
-    """Two-tile Int32 override of signed (dividend, divisor) pairs for the int32 divisions.
+    """Two-tile Int32 signed (dividend, divisor) pairs, including mixed signs the positive sweep misses.
 
-    The sign-fixup branch (negate, then floor's remainder adjustment) only runs when the
-    operands differ in sign, and the positive-only int uniform sweep never gets there. Walks
-    the product of the signed extremes, INT32_MIN / -1 and zero dividends included, then
-    puts q * b - 1, q * b and q * b + 1 on both sides of every exact quotient so floor and
-    trunc disagree on one side and agree on the other.
+    Also places q*b-1, q*b, and q*b+1 so floor and trunc disagree on one side of each exact quotient.
     """
     pairs = list(
         itertools.product(_DIV_INT32_SIGNED_DIVIDENDS, _DIV_INT32_SIGNED_DIVISORS)
