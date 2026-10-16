@@ -22,6 +22,7 @@ import ttnn
 
 from .common import TILE, DramShardedMatmul, as_weight, cache_exists, cache_name, compute_config, mcast_1d_config
 from .moe_stream import DownStream, GateUpStream, ReduceExpand, is_dram_interleaved
+from .proj_stream import RouterScoreStream
 
 
 class TtMiMoMoE:
@@ -89,6 +90,7 @@ class TtMiMoMoE:
         self.down_program = mcast_1d_config((8, 8), TILE, self.hidden, self.inter_local, in0_block_w=8)
         self.decode_users = None
         self.gate_up_stream = None
+        self.router_scores = None
         self.down_stream = None
         self.ids_buf = None
 
@@ -222,6 +224,12 @@ class TtMiMoMoE:
             self.reduce_expand = ReduceExpand(
                 self.plan, self.hidden, self.plan.tp, self.down_stream.compute_config, DownStream.TINY_ROWS
             )
+            # Router logits, sigmoid and the bias add in one bank-local launch (scores and biased are persistent).
+            try:
+                bias = ttnn.to_torch(ttnn.get_device_tensors(self.score_bias)[0]).float().reshape(-1)
+                self.router_scores = RouterScoreStream(self.plan, self.hidden, self.num_experts, bias)
+            except AssertionError:
+                self.router_scores = None
 
     def reduce_residual(self, gathered, residual=None, norm=None):
         """Row all-gather of the chips' compact [1, 1, 32, H / 8] rows -> a new [1, 1, 32, H]: their chip-ordered sum
@@ -246,10 +254,14 @@ class TtMiMoMoE:
         """BFP4 decode: fp32 router logits, sigmoid and +bias, then one streaming program that selects every user's
         fp32 top-k, normalizes and masks the weights and computes gate|up + SwiGLU + routing weight; then the
         streaming down program (down and the sum over each user's pairs) on the expert ids that program wrote."""
-        logits = self._router_logits(x)
-        scores = ttnn.sigmoid(logits)
-        logits.deallocate(True)
-        biased = ttnn.add(scores, self.score_bias)
+        fused_router = self.router_scores is not None and self.router_scores.accepts(x, self.w_router)
+        if fused_router:
+            scores, biased = self.router_scores(x, self.w_router)  # persistent
+        else:
+            logits = self._router_logits(x)
+            scores = ttnn.sigmoid(logits)
+            logits.deallocate(True)
+            biased = ttnn.add(scores, self.score_bias)
 
         def dram(t):
             if t is None or is_dram_interleaved(t):
@@ -262,8 +274,9 @@ class TtMiMoMoE:
         for t, src in zip((x_in, s_in, b_in, m_in), srcs):
             if t is not src:
                 t.deallocate(True)
-        scores.deallocate(True)
-        biased.deallocate(True)
+        if not fused_router:
+            scores.deallocate(True)
+            biased.deallocate(True)
 
         out = self.down_stream(act, self.ids_buf, self.w_down, self.out_buf)  # compact [1, 1, 32, H / 8], persistent
         plan = self.plan
