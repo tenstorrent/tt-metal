@@ -58,6 +58,11 @@ def prepare_qkv_o(w, dims, v_scale, tp):
     return wqkv, o.contiguous()
 
 
+def unpad_o_rows(o, num_heads, head_dim, v_head_dim):
+    """Padded o_proj [heads * head_dim, hidden] -> [heads * v_head_dim, hidden]: drops the zero V-padding rows."""
+    return o.reshape(num_heads, head_dim, -1)[:, :v_head_dim].reshape(num_heads * v_head_dim, -1).contiguous()
+
+
 def prepare_grouped_decode_qkv_o(w, dims, v_scale, tp):
     """Decode weights for chips that share a KV head: every chip gets all Q heads of its group.
 
@@ -162,6 +167,19 @@ class TtMiMoAttention:
                 cache_name(cache_dir, prefix, "wqkv_ds"),
                 memory_config=self.decode_qkv.weight_memory_config,
             )
+            # Decode o_proj without the zero rows of the V padding (8 x 128 rows per chip), DRAM-sharded so it
+            # reads the width-sharded concat output directly. Prefill keeps the padded interleaved ``wo``.
+            self.decode_o = DramShardedMatmul(plan, self.nh_local * self.v_head_dim, hidden)
+            wo_full = wo if wo is not None else plan.to_torch_tp_concat(self.wo, dim=0)
+            wo_real = unpad_o_rows(wo_full, dims.num_heads, self.head_dim, self.v_head_dim)
+            self.wo_decode_ds = as_weight(
+                wo_real,
+                plan,
+                plan.shard(-2),
+                weight_dtype,
+                None,
+                memory_config=self.decode_o.weight_memory_config,
+            )
         self.sinks = self.decode_sinks = None
         if dims.has_sink:
             self.sinks = as_weight(sinks, plan, plan.shard(1), ttnn.bfloat16, cache_name(cache_dir, prefix, "sinks"))
@@ -218,9 +236,10 @@ class TtMiMoAttention:
         return xqkv
 
     def _decode_qkv(self, x, weight, width):
-        xqkv = self.decode_qkv(x, weight)
+        # Decode activations stay in L1: the head-split op reads an L1-interleaved input directly.
+        xqkv = self.decode_qkv(x, weight, memory_config=ttnn.L1_MEMORY_CONFIG)
         if xqkv.shape[-1] != width:
-            trimmed = ttnn.slice(xqkv, (0, 0, 0, 0), (1, 1, xqkv.shape[-2], width))
+            trimmed = ttnn.slice(xqkv, (0, 0, 0, 0), (1, 1, xqkv.shape[-2], width), memory_config=ttnn.L1_MEMORY_CONFIG)
             xqkv.deallocate(True)
             xqkv = trimmed
         return xqkv
@@ -357,32 +376,37 @@ class TtMiMoAttention:
             cache_position_modulo=self.cache_modulo,
             program_config=self.decode_sdpa_program,
             compute_kernel_config=self.sdpa_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         q_rot.deallocate(True)
-        batch_grid = ttnn.num_cores_to_corerangeset(batch, ttnn.CoreCoord(8, 8), row_wise=True)
-        sharded = ttnn.create_sharded_memory_config(
-            shape=(((self.nh_local + TILE - 1) // TILE) * TILE, self.head_dim),
-            core_grid=batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
+        # Drop V's padding columns (exact zeros) so the heads concat to K = 8 x 128 for the unpadded o_proj.
+        attn_real = ttnn.slice(
+            attn, (0, 0, 0, 0), (1, batch, self.nh_local, self.v_head_dim), memory_config=ttnn.L1_MEMORY_CONFIG
         )
-        attn_sharded = ttnn.to_memory_config(attn, sharded)
         attn.deallocate(True)
+        heads_pad = ((self.nh_local + TILE - 1) // TILE) * TILE
+        attn_sharded = ttnn.to_memory_config(attn_real, self._height_sharded(batch, heads_pad, self.v_head_dim))
+        attn_real.deallocate(True)
         attn_cat = ttnn.experimental.nlp_concat_heads_decode(attn_sharded, num_heads=self.nh_local)
         attn_sharded.deallocate(True)
-        attn_cat_dram = ttnn.to_memory_config(attn_cat, ttnn.DRAM_MEMORY_CONFIG)
-        attn_cat.deallocate(True)
-        out = ttnn.linear(
-            attn_cat_dram,
-            self.wo,
+        # The concat output (one 128-wide head per core) normally is already the DRAM-sharded matmul's input.
+        if attn_cat.memory_config() != self.decode_o.in_memory_config:
+            resharded = ttnn.to_memory_config(attn_cat, self.decode_o.in_memory_config)
+            attn_cat.deallocate(True)
+            attn_cat = resharded
+        out_l1 = ttnn.matmul(
+            attn_cat,
+            self.wo_decode_ds,
+            program_config=self.decode_o.program_config,
+            memory_config=self.decode_o.out_memory_config,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.mm_config,
         )
-        attn_cat_dram.deallocate(True)
-        return self.plan.all_reduce(out)
+        attn_cat.deallocate(True)
+        # The row all-reduce runs L1 to L1; the residual add reads its output from L1.
+        out = ttnn.to_memory_config(out_l1, ttnn.L1_MEMORY_CONFIG)
+        out_l1.deallocate(True)
+        return self.plan.all_reduce(out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     def _forward_decode_split(self, x, rot_mats, pos_owned, owner_mask, page_table, kv_cache):
         """Global-layer decode: all 16 Q heads of this chip's KV group, for the slots this chip owns."""
@@ -426,7 +450,7 @@ class TtMiMoAttention:
             scale=self.scale,
             program_config=self.decode_sdpa_program,
             compute_kernel_config=self.sdpa_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )  # [1, B, 16, 128]
         q_rot.deallocate(True)
         heads_pad = ((self.nh_decode + TILE - 1) // TILE) * TILE
@@ -434,17 +458,17 @@ class TtMiMoAttention:
         attn.deallocate(True)
         attn_cat = ttnn.experimental.nlp_concat_heads_decode(attn_sharded, num_heads=self.nh_decode)
         attn_sharded.deallocate(True)
-        attn_cat_dram = ttnn.to_memory_config(attn_cat, ttnn.DRAM_MEMORY_CONFIG)
+        attn_cat_l1 = ttnn.to_memory_config(attn_cat, ttnn.L1_MEMORY_CONFIG)
         attn_cat.deallocate(True)
         # Slots owned by the other chip of the pair were skipped here; zero them before the row all-reduce.
-        owned = ttnn.mul(attn_cat_dram, owner_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn_cat_dram.deallocate(True)
+        owned = ttnn.mul(attn_cat_l1, owner_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn_cat_l1.deallocate(True)
         out = ttnn.linear(
             owned,
             self.wo_decode,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.mm_config,
         )
         owned.deallocate(True)
-        return self.plan.all_reduce(out)
+        return self.plan.all_reduce(out, memory_config=ttnn.L1_MEMORY_CONFIG)

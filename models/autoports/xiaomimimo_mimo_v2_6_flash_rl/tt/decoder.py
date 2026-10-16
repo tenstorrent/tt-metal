@@ -45,19 +45,24 @@ class TtRMSNorm:
         )
         return mem, program
 
+    def decode_sharded(self, x):
+        """Decode norm of one tile row; the output stays width-sharded in L1 (no DRAM round trip)."""
+        mem, program = self._decode_configs(x.shape[-1])
+        x_sharded = ttnn.to_memory_config(x, mem)
+        y = ttnn.rms_norm(
+            x_sharded,
+            epsilon=self.eps,
+            weight=self.weight,
+            program_config=program,
+            memory_config=mem,
+            compute_kernel_config=self.config,
+        )
+        x_sharded.deallocate(True)
+        return y
+
     def __call__(self, x):
         if x.shape[-2] == TILE:
-            mem, program = self._decode_configs(x.shape[-1])
-            x_sharded = ttnn.to_memory_config(x, mem)
-            y = ttnn.rms_norm(
-                x_sharded,
-                epsilon=self.eps,
-                weight=self.weight,
-                program_config=program,
-                memory_config=mem,
-                compute_kernel_config=self.config,
-            )
-            x_sharded.deallocate(True)
+            y = self.decode_sharded(x)
             out = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
             y.deallocate(True)
             return out
@@ -191,7 +196,7 @@ class TtMiMoDecoderLayer:
 
     def attention_decode(self, x, rot_mats, cur_pos, page_table, kv_cache):
         """Decode attention block: input norm, attention (with its row all-reduce), residual add."""
-        h = self.input_norm(x)
+        h = self.input_norm.decode_sharded(x) if x.shape[-2] == TILE else self.input_norm(x)
         attn = self.attn.forward_decode(h, rot_mats[self.is_swa], cur_pos, self._page_table(page_table), kv_cache)
         h.deallocate(True)
         x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)

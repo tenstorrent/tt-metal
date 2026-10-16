@@ -195,8 +195,11 @@ class DramShardedMatmul:
         return torch.nn.functional.pad(blocks, (0, self.n_pad - self.n)).reshape(w.shape[0], tp * self.n_pad)
 
     def __call__(self, x, weight, memory_config=None):
-        """x [1, 1, 32, K] (interleaved) -> [1, 1, 32, n_pad] (``memory_config``, default DRAM interleaved)."""
-        x_sharded = ttnn.to_memory_config(x, self.in_memory_config)
+        """x [1, 1, 32, K] (interleaved or L1-sharded) -> [1, 1, 32, n_pad] (``memory_config``, default DRAM)."""
+        if x.memory_config() == self.in_memory_config:
+            x_sharded = x
+        else:
+            x_sharded = ttnn.to_memory_config(x, self.in_memory_config)
         out = ttnn.matmul(
             x_sharded,
             weight,
@@ -205,7 +208,8 @@ class DramShardedMatmul:
             dtype=self.out_dtype,
             compute_kernel_config=self.compute_kernel_config,
         )
-        x_sharded.deallocate(True)
+        if x_sharded is not x:
+            x_sharded.deallocate(True)
         result = ttnn.to_memory_config(out, memory_config or ttnn.DRAM_MEMORY_CONFIG)
         out.deallocate(True)
         return result
