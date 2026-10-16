@@ -307,14 +307,14 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         for n, st in enumerate(steps, 1):
             ctest = rel(spec, component_test_path(spec, bt, st.name))
             cid = f"C.{bt}.{st.name}"
-            metric = f"pcc_{st.name}_L{layer:02d}"
+            metric = f"err_{st.name}_L{layer:02d}"  # F81: the rel error (or missed fraction) vs the golden
             add(
                 cid,
                 f"{bt} {st.name} ({st.kind}) on device, layer {layer}",
                 "implement",
                 ["PL.1", comp_golden, *floor_dep],
                 f"{SAFE} {ctest}" + contract_cmds(st.name),
-                {metric: ">= limit"},  # F76: the noise floor the test records (testing/noise_floor.py)
+                {metric: "<= limit"},  # F76 / F81: calib x the noise floor the test records (testing/noise_floor.py)
                 device=True,
                 tests=[ctest],
                 freeze_extra=manifest,
@@ -329,7 +329,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
                 "implement",
                 [cid] + ([prev_swap] if prev_swap else []),
                 f"{SAFE} {stest}",
-                {"pcc_swap_out": ">= limit"},  # F76
+                {"err_swap_out": "<= limit"},  # F81: the block out's rel error vs the golden
                 device=True,
                 tests=[stest],
                 freeze_extra=manifest,

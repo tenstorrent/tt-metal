@@ -209,7 +209,9 @@ Owner rule (DeepSeek-V4.1 run1). Every accuracy limit of the component and swap 
 precision kinds) x the step's noise floor on the same comparison: the larger of the official code's own arithmetic
 on the same inputs (task R.5 taps it per step; the reference role writes the hook and `official_taps.yaml`) and the
 input nudge (the fp32 step on its inputs moved inside their official dtype's rounding cell; testing/noise_floor.py),
-and never below one rounding of the output to its official dtype. A selection flip must be explained by the nudge. The gate metrics read `>= limit` (the `<metric>_limit` the test
+and never below one rounding of the output to its official dtype. A selection flip must be explained by the nudge. The
+gated metrics are errors (rel L2 for float outputs, the missed fraction for integer ones, `err_*` `<= limit`); PCC is
+recorded as a diagnostic only, being blind to a scale or an offset. The gate metrics read `>= limit` (the `<metric>_limit` the test
 records). A fixed bar either lets real errors through or, when the reference's own dtypes cannot meet it, makes the
 agents raise the device precision above the reference to clear it, which the owner rejects: match the reference's
 precision, never exceed it to pass a test. When a gate fails on a fixed number, the number is the bug: fix the

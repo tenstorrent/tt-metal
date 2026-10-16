@@ -486,6 +486,7 @@ class Expect:
             self.golden_L = self._index_limits(self.floor["golden"], want, self.cases[0].start, 1.0)
         # the gate vs the golden (the template's metric): the frozen test's literal THRESHOLD, else the noise floor
         self.thr_how = "the frozen test's THRESHOLD"
+        self.thr_literal = thr is not None
         if thr is None:
             gm = (
                 "topk_overlap"
@@ -507,6 +508,20 @@ class Expect:
                 + f"; bf16 resolution {1 - rv:.3g})"
             )
         self.thr = thr
+        # F81: the gated error vs the golden: rel L2 for float outputs (PCC is blind to a scale or an offset), the
+        # missed fraction (1 - overlap / match) for integer outputs; limit = calib x the noise floor's error
+        if self.kind in ("float", "selection"):
+            fl = max(rel(o, want) for o in self.floor["golden"])
+            ag = (self.arith.get("vs_golden") or {}).get("rel") or 0.0
+            gres = rel(MU.bf16(self.cpu["golden"]), want)
+            m = max(fl, ag, gres)
+            self.err_limit = self.k * m
+            self.err_how = f"{self.k} x the noise floor's rel vs the golden {m:.3g}" + (
+                " (official arithmetic)" if ag >= fl else ""
+            )
+        else:
+            self.err_limit = 1.0 - self.thr
+            self.err_how = f"1 - the overlap limit ({self.thr_how})"
 
     def _index_limits(self, outs, want, start: int, f: float) -> dict:
         es = [index_fails(m, want, start, self.lim, 0.0, L={"overlap": 0.0, "worst_row": 0.0})[0] for m in outs]
@@ -623,6 +638,26 @@ def _worst_selection(es: list[dict]) -> dict:
     return out
 
 
+def error_value(out, want, ex) -> float:
+    """F81: rel L2 of a float output vs ``want``; the missed fraction (1 - overlap or match) of an integer output."""
+    if out.numel() != want.numel() or (out.is_floating_point() and not bool(torch.isfinite(out.float()).all())):
+        return math.inf
+    if ex.kind in ("float", "selection"):
+        return rel(out, want)
+    return 1.0 - gate_value(out, want, ex.kind, ex.mode)
+
+
+def error_gate(name: str, out, want, ex, quiet: bool = False) -> bool:
+    """The template's gated metric (F81): ``name`` = the error vs the golden, ``<name>_limit`` its limit (the ledger
+    gates ``<= limit``)."""
+    v, lim = error_value(out, want, ex), ex.err_limit
+    if not quiet:
+        metrics.record(name, v)
+        metrics.record(f"{name}_limit", lim)
+        print(f"{'ok  ' if v <= lim else 'FAIL'} {name}: {v:.6g} (<= {lim:.6g} = {ex.err_how})")
+    return v <= lim
+
+
 def golden_gate(name, out, want, kind, mode, thr, how: str = "") -> bool:
     """The template's gate (compare vs golden); index outputs are normalized and compared order-free. The limit is
     recorded as ``<name>_limit`` (F76: the ledger gates ``>= limit``)."""
@@ -668,7 +703,10 @@ def sweep(ex: Expect, gate_name: str) -> bool:
 
     def verdict(outs, stop_early):
         f = ex.evaluate(outs, quiet=True, stop_early=stop_early)
-        return f + ([] if golden_gate_quiet(outs["golden"], ex.want, ex.kind, ex.thr, ex.mode) else [gate_name])
+        ok = error_gate(gate_name, outs["golden"], ex.want, ex, quiet=True)
+        if ex.thr_literal:  # a frozen test's literal THRESHOLD still gates too
+            ok = golden_gate_quiet(outs["golden"], ex.want, ex.kind, ex.thr, ex.mode) and ok
+        return f + ([] if ok else [gate_name])
 
     rows, ok = [], True
 

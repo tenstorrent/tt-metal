@@ -34,6 +34,7 @@ from torch.overrides import TorchFunctionMode
 from models.demos.common.bringup.core import defaults, metrics
 
 SEEDS = int(defaults.get("noise_floor.seeds"))  # nudged runs per floor; the worst counts
+SWAP_SEEDS = int(defaults.get("noise_floor.swap_seeds"))  # a swap test's earlier steps and its nudged block
 FLIP_SPREAD = float(defaults.get("noise_floor.flip_spread"))  # a flip is explained within this x the nudge spread
 MANT = {"bf16": 7, "fp32": 23}
 TAPS_FILE = "official_taps.yaml"  # the reference role's map of the official code onto the framework's steps

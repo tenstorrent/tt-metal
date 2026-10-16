@@ -264,3 +264,13 @@ def test_every_column_is_checked_against_its_own_limit():
     # a column the precision model finds noisy gets a looser limit on its own terms
     noisy = CC.rel_limit(lim, torch.tensor([0.0, 0.01]), False, res[:2])
     assert noisy[0] == pytest.approx(2 * 2.0**-9) and noisy[1] == pytest.approx(0.02), "per column: 2 x e, no cap"
+
+
+def test_a_scale_error_fails_the_rel_gate_that_pcc_would_pass(gspec, monkeypatch):
+    """F81: a 2 % scale keeps PCC at 1 but fails the gated rel error (err_<step>, its limit from the noise floor)."""
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "mutate:scale1.02")
+    monkeypatch.setenv(MU.MUTATE_STEP_ENV, "attn_norm")
+    assert not run_component_test(s, "attn_norm", 0, checks="auto")
+    m = got()
+    assert m["pcc_attn_norm_L00"] > 0.9999 and m["err_attn_norm_L00"] > m["err_attn_norm_L00_limit"]
