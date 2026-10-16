@@ -204,7 +204,9 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
-        output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        # Output projection at HiFi3: on the 1M fp64 golden (layers.0, SP8xTP4) it cut output NRMSE 0.89% -> 0.68% for
+        # +0.015 ms per call; the state path is unaffected (tt_metal_tracker-kxn.9.8/9.13).
+        output_projection_math_fidelity=ttnn.MathFidelity.HiFi3,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
     )
