@@ -34,6 +34,10 @@ constexpr std::uint32_t RESHUFFLE_OUTPUT_TILE_OFFSET =
 // Legacy tile-header bytes before the 32 mask bytes.
 constexpr std::uint32_t RESHUFFLE_MASK_HEADER_BYTES = 16;
 
+// A group whose four targets are all the producer's skip sentinel drops on one compare. Only a fast
+// path: a group of other out-of-range targets still reaches the per-row >= RESHUFFLE_TILE_ROWS check.
+constexpr std::uint32_t RESHUFFLE_ALL_SKIP = 0xFFFFFFFF;
+
 constexpr std::uint32_t RESHUFFLE_SFPMEM_DONE = 0;
 
 // SFPTRANSP swizzles LREG0-3 and LREG4-7 independently.
@@ -100,13 +104,12 @@ inline void _reshuffle_store_quad_(const std::uint32_t bank, const std::uint32_t
         quad_addr + RESHUFFLE_RIGHT_ODD /*dest_reg_addr*/);
 }
 
-// Row ROW_IN_GROUP of the 4-row group at in_addr; byte ROW_IN_GROUP of idx_word is its target row.
-// A Dest reload needs one instruction between it and the store to the same slot, which the
-// scoreboard does not cover (tenstorrent/tt-metal#51345); the four stores alone put three between
-// each store and the next row's reload of that slot.
+// Row ROW_IN_GROUP of the 4-row group whose input quad is already loaded into LREG0-3; byte
+// ROW_IN_GROUP of idx_word is its target row. A Dest reload needs one instruction between it and
+// the store to the same slot, which the scoreboard does not cover (tenstorrent/tt-metal#51345);
+// the four stores alone put three between each store and the next row's reload of that slot.
 template <std::uint32_t ROW_IN_GROUP>
-inline __attribute__((always_inline)) void _reshuffle_rows_row_(
-    const std::uint32_t in_addr, const std::uint32_t idx_word) {
+inline __attribute__((always_inline)) void _reshuffle_rows_row_(const std::uint32_t idx_word) {
     const std::uint32_t out_row = (idx_word >> (8 * ROW_IN_GROUP)) & 0xFF;
     if (out_row >= RESHUFFLE_TILE_ROWS) {
         return;
@@ -115,7 +118,6 @@ inline __attribute__((always_inline)) void _reshuffle_rows_row_(
     constexpr std::uint32_t in_reg = RESHUFFLE_IN_BANK + ROW_IN_GROUP;
     const std::uint32_t out_reg = RESHUFFLE_OUT_BANK + (out_row & (RESHUFFLE_QUAD_ROWS - 1));
 
-    _reshuffle_load_quad_(RESHUFFLE_IN_BANK, in_addr);
     _reshuffle_load_quad_(RESHUFFLE_OUT_BANK, out_addr);
 
     // Now LREG j holds input row quad+j and LREG 4+j output row quad+j.
@@ -145,11 +147,17 @@ inline void calculate_reshuffle_rows(const std::uint32_t idx_addr) {
 #pragma GCC unroll 0
     for (std::uint32_t group = 0; group < RESHUFFLE_TILE_ROWS / RESHUFFLE_QUAD_ROWS; group++) {
         const std::uint32_t idx_word = mask[group];
+        if (idx_word == RESHUFFLE_ALL_SKIP) {
+            continue;
+        }
         const std::uint32_t in_addr = _reshuffle_quad_addr_(group * RESHUFFLE_QUAD_ROWS);
-        _reshuffle_rows_row_<0>(in_addr, idx_word);
-        _reshuffle_rows_row_<1>(in_addr, idx_word);
-        _reshuffle_rows_row_<2>(in_addr, idx_word);
-        _reshuffle_rows_row_<3>(in_addr, idx_word);
+        // The input quad serves all four rows: the input tile is never stored to, and the
+        // SFPTRANSP pair of every row returns the bank to load order.
+        _reshuffle_load_quad_(RESHUFFLE_IN_BANK, in_addr);
+        _reshuffle_rows_row_<0>(idx_word);
+        _reshuffle_rows_row_<1>(idx_word);
+        _reshuffle_rows_row_<2>(idx_word);
+        _reshuffle_rows_row_<3>(idx_word);
     }
 }
 
