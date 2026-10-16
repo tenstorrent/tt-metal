@@ -5,7 +5,11 @@ import pytest
 import torch
 from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
-from helpers.golden_generators import TILE_DIMENSIONS
+from helpers.golden_generators import (
+    TILE_DIMENSIONS,
+    EltwiseBinaryGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -40,10 +44,15 @@ from helpers.utils import passed_test
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-        ]
+            DataFormat.Float32,
+        ],
+        same=True,
     ),
     mathop=[MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul],
-    dest_acc=[DestAccumulation.No],
+    # Float32 input with a 32-bit Dest unpacks SrcA as Tf32, so the SrcA rows are
+    # 64 bytes apart instead of 32: the row-broadcast unpacker must take its
+    # SrcA Y-stride from the dst format.
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     srca_reuse_count=[2, 4, 8],
     math_fidelity=[
         MathFidelity.LoFi,
@@ -106,6 +115,7 @@ def test_unp_bcast_sub_sdpa(
 
     tilized_reconstructed_tiles = [tilize(tile) for tile in reconstructed_tiles]
 
+    binary_golden = get_golden_generator(EltwiseBinaryGolden)
     golden = []
 
     for tile_idx, reconstructed_tile in enumerate(tilized_reconstructed_tiles):
@@ -114,21 +124,26 @@ def test_unp_bcast_sub_sdpa(
             b_tile_idx = start_b_idx + reuse_idx
             if b_tile_idx < len(b_tiles):
                 b_tile = torch.tensor(b_tiles[b_tile_idx])
-
-                if mathop == MathOperation.Elwadd:
-                    result = reconstructed_tile + b_tile
-                elif mathop == MathOperation.Elwsub:
-                    result = reconstructed_tile - b_tile
-                elif mathop == MathOperation.Elwmul:
-                    result = reconstructed_tile * b_tile
-
-                golden.append(result)
+                golden.append(
+                    binary_golden(
+                        mathop,
+                        reconstructed_tile,
+                        b_tile,
+                        formats.output_format,
+                        math_fidelity,
+                        formats.input_format,
+                        dest_acc=dest_acc,
+                    )
+                )
 
     golden_tensor = torch.cat(golden).to(dtype=format_dict[formats.output_format])
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
     )
+
+    if srca_reuse_count > num_tiles_in_block:
+        pytest.skip("srca_reuse_count tiles must fit in one dest block")
 
     configuration = TestConfig(
         "sources/unpack_a_bcast_eltwise_test.cpp",

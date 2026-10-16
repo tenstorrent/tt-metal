@@ -332,16 +332,18 @@ inline void _llk_unpack_bcastA_B_mop_config_()
  * Sets the SrcA Y stride and per-unpacker datum counts (A unpacks one row, B unpacks a whole tile),
  * fills the replay buffer with the contiguous face-unpack instructions, and programs the MOP.
  *
+ * @param unpack_dst_format: SrcA register data format; sizes the SrcA Y-stride to one face row of that format.
  * @note Call @ref _llk_unpack_bcastA_B_uninit_ after this function to restore the modified stride and datum-count state.
  * @ref _llk_unpack_bcastA_B_ is the matching execute call.
  */
-inline void _llk_unpack_bcastA_B_init_()
+inline void _llk_unpack_bcastA_B_init_(const std::uint32_t unpack_dst_format)
 {
     // Manual setup for unpacker A
     // Only srcA Y stride can be set because other strides are never used.
     // Stride is applied in each UNPACR instruction with ADDRMOD.
-    // When applied it moves to next row on srcA side.
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(32);
+    // When applied it moves to next row on srcA side, so it is one face row in bytes of the
+    // SrcA register format: 32 for a 16-bit format, 64 for Tf32/Float32/Int32 (fp32 dest acc).
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(canonical_unpA_y_stride(unpack_dst_format));
 
     TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM - 1, 0);              // Directly set unpacker A counter to unpack one row
     TTI_SETADCXX(p_setadc::UNP_B, TILE_R_DIM * TILE_C_DIM - 1, 0); // Directly set unpacker B counter to unpack whole tile
@@ -397,9 +399,9 @@ inline void _llk_unpack_bcastA_B_init_()
  * @brief Restore unpacker state after an SDPA sub_bcast_row operation.
  *
  * Drains the unpacker, then restores the canonical srcA Y-stride established by
- * configure_unpack_AB (_llk_unpack_bcastA_B_init_ mutates it to the bcast-specific value 32). The
- * restore is order-independent because the canonical value is derivable from the dst format, so no
- * register snapshot is needed. The per-unpacker x-end datum counts are also reset to the canonical
+ * configure_unpack_AB (_llk_unpack_bcastA_B_init_ programs the same one-face-row value for the dst
+ * format). The restore is order-independent because the canonical value is derivable from the dst
+ * format, so no register snapshot is needed. The per-unpacker x-end datum counts are also reset to the canonical
  * face layout; x-start/x-end is transient and reprogrammed by the next operation's init (see
  * tt-llk#1036), so this is a deterministic safety reset rather than a required restore.
  *
@@ -414,7 +416,7 @@ inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t unpack_dst_format, 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
 
     // Restore canonical srcA Y-stride established by configure_unpack_AB.
-    // _llk_unpack_bcastA_B_init_ mutates Y-stride to the bcast-specific value (32); the
+    // _llk_unpack_bcastA_B_init_ programs the same format-derived one-row value; the
     // restore here is order-independent because the canonical value is derivable from
     // the dst format, so we do not need to snapshot the previous register value.
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(canonical_unpA_y_stride(unpack_dst_format));

@@ -48,7 +48,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             4 /* num_faces */,
             4 /* num_faces */);
-        _llk_unpack_bcastA_B_init_();
+        _llk_unpack_bcastA_B_init_(formats.unpack_A_dst);
         PROFILER_SYNC();
     }
     {
