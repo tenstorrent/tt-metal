@@ -264,7 +264,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/prepare_chunk_recurrence/device/kernels/compute/"
             "prepare_chunk_recurrence.cpp",
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O2},
         .dfb_bindings =
             {
                 m2::DFBBinding{q_dfb, "q", m2::DFBEndpointType::CONSUMER},
