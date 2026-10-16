@@ -200,7 +200,12 @@ export PREFILL_MODEL=my_model PREFILL_NUM_LAYERS=<L> \
 ```
 
 Left unset, the producer falls back to the adapter defaults (61 layers), which will not match a deeper
-runner. The ack count is `num_layers × chunks`, so the drain hangs.
+runner. The ack count is `num_layers × forwards`, so the drain hangs.
+
+With `PREFILL_FORWARD_CHUNKS=F > 1` (packed forwards, `ADDING_A_PREFILL_MODEL.md` section 2.1) both
+modules pack each forward with one run of consecutive chunks per slot, round-robin (or shuffled for
+`interleave: random`) until it holds F chunks or no slot has more, and fill the rest with empty entries.
+`p_burst` must be 0 there, and the warm-up chunks go out F per forward.
 
 For an arbitrary mapping instead of a uniform offset, replace `dst_slot_offset` with `pairs` (CLI
 equivalent: `--migrations "0:3,1:2"`). Source and destination sets must be disjoint in loopback, and
@@ -557,6 +562,7 @@ gets a branch there, and both gates work.
 | H2D socket | `PREFILL_H2D_SERVICE_ID` | `transport.h2d_service_id` | — |
 | layer depth | `PREFILL_NUM_LAYERS` | same var, exported | — |
 | chunk size | `PREFILL_CHUNK_SIZE` | same var, exported | — |
+| chunks per forward | `PREFILL_FORWARD_CHUNKS` (default 1) | `model.forward_chunks` or the same var, exported | — |
 | mesh | `PREFILL_SP` / `PREFILL_TP` | `transport.sp` / `.tp` | — |
 | KV table | `PREFILL_MIGRATION_TABLE_PATH` | `migration.table_path` | — |
 | device map | `PREFILL_MIGRATION_DEVICE_MAP_PATH` | `migration.device_map_path` | — |
