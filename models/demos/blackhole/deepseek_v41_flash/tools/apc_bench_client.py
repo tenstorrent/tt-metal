@@ -177,9 +177,72 @@ def mixed(long_words, n_short=8):
     return res
 
 
+import re
+
+
+def _num(t):
+    m = re.findall(r"-?\d[\d,]*\.?\d*", t.replace("$", ""))
+    return m[-1].replace(",", "").rstrip(".") if m else None
+
+
+def gsm(n, conc=16):
+    """GSM8K 8-shot accuracy over the first n questions of the sample file (greedy, 320 new tokens), ``conc`` concurrent requests"""
+    out = [None] * n
+    lock = threading.Lock()
+    nxt = [0]
+    t0 = time.time()
+
+    def worker():
+        while True:
+            with lock:
+                i = nxt[0]
+                nxt[0] += 1
+            if i >= n:
+                return
+            out[i] = stream(prompt_for(i), max_tokens=320)
+
+    ts = [threading.Thread(target=worker) for _ in range(conc)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    ok = 0
+    pred = []
+    for i, o in enumerate(out):
+        txt = o["text"]
+        mm = re.search(r"answer is\s*\$?(-?[\d,]+\.?\d*)", txt)
+        p = mm.group(1).replace(",", "").rstrip(".") if mm else _num(txt)
+        pred.append(p)
+        gold = QS[i]["answer"].replace(",", "")
+        try:
+            ok += float(p) == float(gold)
+        except Exception:
+            pass
+    res = dict(
+        label="gsm8k",
+        n=n,
+        correct=ok,
+        accuracy=ok / n,
+        wall=time.time() - t0,
+        pred=pred,
+        texts=[o["text"] for o in out],
+    )
+    print(json.dumps({k: v for k, v in res.items() if k not in ("pred", "texts")}), flush=True)
+    return res
+
+
 if __name__ == "__main__":
     out = sys.argv[1]
     res = {}
+    if "--gsm" in sys.argv:  # accuracy-only run: warm-up, then n questions
+        n = int(sys.argv[sys.argv.index("--gsm") + 1])
+        [stream(prompt_for(100 + k), max_tokens=8) for k in range(3)]
+        res["gsm"] = gsm(n)
+        res["seq"] = [
+            dict(ttft=x["ttft"], total=x["total"], text=x["text"], n=len(x["times"]))
+            for x in [stream(prompt_for(i), max_tokens=160) for i in range(0, 8)]
+        ]
+        json.dump(res, open(out, "w"))
+        print("DONE", flush=True)
+        sys.exit(0)
     if (
         "--only-mixed" in sys.argv
     ):  # mixed phase repeated: with --switch FILE the prefix cache is toggled (1 / 0 / 1) through the server's DSV41_APC_FILE between the runs
