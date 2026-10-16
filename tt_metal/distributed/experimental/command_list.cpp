@@ -474,9 +474,7 @@ CommandListData CommandListBuilderImpl::serialize_range(
             command_sequence,
             worker_launch_state.get_mcast_wptr(),
             expected_workers[*sub_device],
-            sub_device,
-            ProgramBinaryStatus::Committed,
-            dispatch_state.cq_id);
+            ProgramBinaryStatus::Committed);
 
         program_dispatch::for_each_program_command_sequence_chunk(
             command_sequence,

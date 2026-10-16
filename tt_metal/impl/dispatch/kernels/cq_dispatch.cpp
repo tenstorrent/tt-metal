@@ -1123,14 +1123,25 @@ static void process_wait() {
     if (wait_stream) {
         last_wait_count = count;
         last_wait_stream = stream;
+#ifdef ARCH_QUASAR
+        // The stream index names this CQ's L1 worker completion counter for the sub-device.
+        volatile uint32_t* sem_addr = worker_completion_sem_addr(stream, first_stream_used, completion_counter_offset);
+        while (!wrap_ge(*sem_addr, count));
+#else
         volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(
             static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
         do {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         } while (!stream_wrap_ge(*sem_addr, count));
+#endif
     }
     WAYPOINT("PWD");
 
+#ifdef ARCH_QUASAR
+    if (clear_stream) {
+        *worker_completion_sem_addr(stream, first_stream_used, completion_counter_offset) = 0;
+    }
+#else
     if (clear_stream) {
         // DEVICE_PRINT("DISPATCH WAIT CLEAR STREAM 0x{:08x} count {}\n", stream, count);
         static uint32_t local_worker_stream_reset_update = 0;
@@ -1145,6 +1156,7 @@ static void process_wait() {
             dispatch_telemetry_control->worker_stream_reset_update = ++local_worker_stream_reset_update;
         }
     }
+#endif
     if (clear_memory) {
         uintptr_t addr = load_aligned<uint32_t>(&cmd->wait.addr);
         // Same counter as above; a cached store here would race the workers' atomics.

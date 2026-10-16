@@ -179,7 +179,7 @@ HostMemDeviceCommand build_dispatch_terminate(MetalContext& metal_ctx, bool incl
     }
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
     HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
-    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
+    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
     cmd.add_dispatch_terminate();
     if (dispatch_sub_enabled) {
         cmd.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
@@ -206,7 +206,7 @@ HostMemDeviceCommand build_dispatch_prefetch_stall(MetalContext& metal_ctx) {
     HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     cmd.add_dispatch_wait_with_prefetch_stall(
-        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0, 0);
+        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0);
 
     return cmd;
 }
@@ -696,7 +696,7 @@ public:
         DeviceCommandCalculator wait_calc(metal_ctx);
         wait_calc.add_dispatch_wait();
         HostMemDeviceCommand wait_cmd(metal_ctx, wait_calc.write_offset_bytes());
-        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
+        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
         const uint8_t* wptr = reinterpret_cast<const uint8_t*>(wait_cmd.data());
         exec_buf_data.insert(exec_buf_data.end(), wptr, wptr + wait_cmd.size_bytes());
 
@@ -4045,7 +4045,7 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     }
 
     HostMemDeviceCommand barrier_cmd(metal_ctx, barrier_calc.write_offset_bytes());
-    barrier_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0U, 0U, 0U, 0);
+    barrier_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0U, 0U, 0U);
     dc.add_data(barrier_cmd.data(), barrier_cmd.size_bytes(), barrier_cmd.size_bytes());
     entry_sizes.push_back(barrier_cmd.size_bytes());
 

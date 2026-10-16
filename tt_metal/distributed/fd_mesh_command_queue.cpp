@@ -548,10 +548,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             program_cmd_seq,
             mcast_launch_msg_wptr,
             expected_num_workers_completed,
-            sub_device_id,
             dispatch_metadata,
-            program_binary_status,
-            static_cast<uint8_t>(this->id()));
+            program_binary_status);
 
         const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
         sub_device_recorder.record(local_devices, program.get_runtime_id(), sub_device_id);
@@ -1217,7 +1215,6 @@ void FDMeshCommandQueue::reset_worker_state(
         for (auto* device : devices) {
             entry.device_batches.push_back(program_dispatch::build_sub_device_setup_commands(
                 static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
-                id_,
                 workers_per_sub_device,
                 core_go_message_mapping,
                 reset_launch_msg_state));
@@ -1588,9 +1585,7 @@ void FDMeshCommandQueue::record_end() {
                 cached_program_command_sequence,
                 worker_launch_msg_state.get_mcast_wptr(),
                 trace_worker_descriptors[sub_device_id].num_completion_worker_cores,
-                sub_device_id,
-                ProgramBinaryStatus::Committed,
-                static_cast<uint8_t>(this->id()));
+                ProgramBinaryStatus::Committed);
 
             const SubDeviceRecorder trace_sub_device_recorder(mesh_device_, sub_device_id);
             if (trace_sub_device_recorder.enabled()) {
