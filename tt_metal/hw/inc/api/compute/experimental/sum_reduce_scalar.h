@@ -41,8 +41,8 @@ ALWI void sum_reduce_scalar_init(uint32_t icb) { copy_init(icb); }
  * unspecified. Slots 0..num_tiles-1 of DEST are clobbered.
  *
  * num_tiles is bounded twice. The hard ceiling is 8: the shared reduce tail moves
- * dest[i] to SrcA through a switch that only covers i in 0..7 and no-ops above that,
- * so a 9th tile would be silently dropped from the sum. Below that, the acquired DEST
+ * dest[i] to SrcA through a switch that only covers i in 0..7; a 9th tile trips an
+ * LLK_ASSERT (in release it re-reduces the stale SrcA tile). Below that, the acquired DEST
  * must also hold every copied tile until the reduce consumes it, which caps num_tiles
  * at get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>() --
  * 8 for half-sync/16-bit, 4 for half-sync/32-bit, 8 for full-sync/32-bit. Callers
