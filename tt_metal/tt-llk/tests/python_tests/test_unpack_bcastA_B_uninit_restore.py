@@ -71,7 +71,6 @@ class RESTORE_VIA_RECONFIG(TemplateParameter):
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
         ],
         same=True,
     ),

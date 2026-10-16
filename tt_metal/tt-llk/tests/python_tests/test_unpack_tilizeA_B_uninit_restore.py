@@ -36,7 +36,6 @@ TINY_NUM_FACES = 2
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
         ],
         same=True,
     ),

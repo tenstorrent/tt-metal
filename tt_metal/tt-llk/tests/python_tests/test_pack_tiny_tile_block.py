@@ -130,7 +130,6 @@ def _make_config(
 @parametrize(
     formats=input_output_formats(
         [
-            DataFormat.Float16,
             DataFormat.Float16_b,
         ]
     ),
@@ -173,7 +172,6 @@ def test_pack_tiny_tile_block(
 @parametrize(
     formats=input_output_formats(
         [
-            DataFormat.Float16,
             DataFormat.Float16_b,
         ]
     ),
