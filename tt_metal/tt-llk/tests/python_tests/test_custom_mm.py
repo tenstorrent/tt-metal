@@ -135,6 +135,16 @@ class CUSTOM_MM_READ_TRANSPOSED(TemplateParameter):
         return f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.custom_mm_read_transposed).lower()};"
 
 
+@dataclass
+class CUSTOM_MM_CLEANUP_RERUN(TemplateParameter):
+    """After the kernel's calls, every thread runs its hw_cleanup and the kernel runs again from the inits."""
+
+    rerun: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_CLEANUP_RERUN = {str(self.rerun).lower()};"
+
+
 class CustomMMStimuliConfig(StimuliConfig):
     """A into buffer_A (kt*2 faces of [M,16]), B tilized into buffer_B (kt*ct full tiles).
 
@@ -180,6 +190,7 @@ def _run_custom_mm(
     operands=None,
     read_transposed=False,
     group_finalize=True,
+    cleanup_rerun=False,
 ):
     """Run custom_mm and check it against the golden; return the (M, N) result.
 
@@ -271,6 +282,7 @@ def _run_custom_mm(
             ),
             CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
             CUSTOM_MM_READ_TRANSPOSED(read_transposed),
+            CUSTOM_MM_CLEANUP_RERUN(cleanup_rerun),
         ],
         runtimes=[
             # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
@@ -534,6 +546,31 @@ def test_custom_mm_banked_sequence(
         DestAccumulation.No,
         CUSTOM_MM_CALLS(num_calls=num_calls, banked=banked, bank_split=bank_split),
         split_acc=True,
+    )
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,kt,ct,num_calls,in1_format",
+    [pytest.param(*case[1:], id=case[0]) for case in BANKED_SEQUENCE_CASES],
+)
+def test_custom_mm_banked_after_hw_cleanup(M, kt, ct, num_calls, in1_format):
+    """A banked sequence, the hw_cleanup, then the same sequence with the same bank key.
+
+    The cleanup leaves the canonical Float16_b configuration in the second bank and must forget the key, so the
+    second bank init copies the block-float weights' configuration again; if it skipped the copy, the calls on the
+    second bank would read the weights as Float16_b.
+    """
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        CUSTOM_MM_CALLS(num_calls=num_calls, banked=True),
+        split_acc=True,
+        cleanup_rerun=True,
     )
 
 

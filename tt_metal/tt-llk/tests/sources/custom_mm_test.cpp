@@ -71,12 +71,13 @@ static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly acro
 #ifdef LLK_TRISC_UNPACK
 
 #include "experimental/llk_unpack_AB_custom_mm.h"
+#include "experimental/llk_unpack_hw_cleanup.h"
 #include "llk_unpack_common.h"
 
 // The kernel has one configuration, so any key but CUSTOM_MM_NO_BANK_KEY names it
 constexpr std::uint64_t BANK_KEY = 0;
 
-void run_kernel(RUNTIME_PARAMETERS params)
+void run_custom_mm(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -145,15 +146,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 }
 
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+    run_custom_mm(params);
+    if constexpr (CUSTOM_MM_CLEANUP_RERUN)
+    {
+        // The cleanup leaves the canonical configuration in the second bank, so the same key's bank init must copy again
+        _llk_unpack_hw_cleanup_canonical_<is_fp32_dest_acc_en>();
+        run_custom_mm(params);
+    }
+}
+
 #endif
 
 #ifdef LLK_TRISC_MATH
 
 #include "experimental/llk_math_custom_mm.h"
 #include "experimental/llk_math_custom_mm_reuse_dest_srcb.h"
+#include "experimental/llk_math_hw_cleanup.h"
 #include "llk_math_common.h"
 
-void run_kernel(RUNTIME_PARAMETERS params)
+void run_custom_mm(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -207,14 +220,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+    run_custom_mm(params);
+    if constexpr (CUSTOM_MM_CLEANUP_RERUN)
+    {
+        _llk_math_hw_cleanup_canonical_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        run_custom_mm(params);
+    }
+}
+
 #endif
 
 #ifdef LLK_TRISC_PACK
 
+#include "experimental/llk_pack_hw_cleanup.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
-void run_kernel(RUNTIME_PARAMETERS params)
+void run_custom_mm(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -242,6 +266,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+    run_custom_mm(params);
+    if constexpr (CUSTOM_MM_CLEANUP_RERUN)
+    {
+        _llk_pack_hw_cleanup_canonical_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        run_custom_mm(params);
+    }
 }
 
 #endif
