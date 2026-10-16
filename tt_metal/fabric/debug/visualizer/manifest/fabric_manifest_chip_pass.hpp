@@ -31,7 +31,7 @@ manifest::Chip join_chip(
     ChipId physical_chip_id);
 
 // The areas (L1, registers, etc) the HAL fixes on every router core, and the layout of every struct and union a schema
-// names.
+// names. The run's packet header config picks the header's layout and, by is_2d, the routing table's.
 manifest::Arch describe_arch(const tt::tt_metal::Hal& hal, const PacketHeaderConfig& packet_header);
 
 }  // namespace tt::tt_fabric

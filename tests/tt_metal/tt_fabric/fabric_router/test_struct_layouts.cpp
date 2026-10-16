@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Verifies the struct layout helper (the coverage check, the tagged union check, and how member types are classified
-// and named), the go_msg_t and launch_msg_t layouts built from the HAL, the packet header layouts and their send-type
-// unions, and the hand-listed EDMStatus enumerators.
+// Verifies the struct layout helper (the coverage check, the tagged union check, how member types are classified and
+// named, and the examples in its comments), the go_msg_t and launch_msg_t layouts built from the HAL, the packet header
+// layouts and their send-type unions, the routing table's layout in each routing mode, and the hand-listed EDMStatus
+// enumerators.
 
 #include <gtest/gtest.h>
 
@@ -97,6 +98,39 @@ struct Tagged {
 
 }  // namespace tt::tt_fabric::layout_test
 
+// The types the examples in struct_layout.hpp's comments describe.
+namespace tt::tt_fabric::layout_example {
+
+enum class Color : uint8_t { RED, GREEN, BLUE };
+
+struct Point {
+    uint16_t x;
+    uint16_t y;
+};
+
+struct Pixel {
+    Point at;
+    Color color;
+    int8_t brightness;
+    uint16_t counts[2];
+    uint8_t history;
+    uint8_t reserved;
+};
+
+enum class Kind : uint32_t { DOT, LINE };
+
+union Geometry {
+    Point dot;
+    uint32_t line[2];
+};
+
+struct Shape {
+    Kind kind;
+    Geometry geometry;
+};
+
+}  // namespace tt::tt_fabric::layout_example
+
 namespace tt::tt_fabric::layout {
 
 template <>
@@ -104,6 +138,43 @@ struct StructLayout<layout_test::Inner> {
     static constexpr std::array members = {
         LAYOUT_MEMBER(layout_test::Inner, x),
         LAYOUT_MEMBER(layout_test::Inner, y),
+    };
+};
+
+template <>
+struct StructLayout<layout_example::Point> {
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(layout_example::Point, x),
+        LAYOUT_MEMBER(layout_example::Point, y),
+    };
+};
+
+template <>
+struct StructLayout<layout_example::Pixel> {
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(layout_example::Pixel, at),
+        LAYOUT_MEMBER(layout_example::Pixel, color),
+        LAYOUT_MEMBER(layout_example::Pixel, brightness),
+        LAYOUT_MEMBER(layout_example::Pixel, counts),
+        LAYOUT_PACKED_BITS(layout_example::Pixel, history, layout_example::Color, 2),
+        LAYOUT_PAD(layout_example::Pixel, reserved),
+    };
+};
+
+template <>
+struct UnionLayout<layout_example::Geometry> {
+    using Tag = layout_example::Kind;
+    static constexpr std::array members = {
+        LAYOUT_UNION_MEMBER(layout_example::Geometry, dot, Tag::DOT),
+        LAYOUT_UNION_MEMBER(layout_example::Geometry, line, Tag::LINE),
+    };
+};
+
+template <>
+struct StructLayout<layout_example::Shape> {
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(layout_example::Shape, kind),
+        LAYOUT_TAGGED_UNION(layout_example::Shape, geometry, kind),
     };
 };
 
@@ -191,16 +262,25 @@ TEST(StructLayout, MemberTypesAndNames) {
 TEST(StructLayout, PackedTableCountsEntries) {
     constexpr std::array members = {
         LAYOUT_MEMBER(WithTable, id),
-        LAYOUT_PACKED(WithTable, table, "three_bit"),
+        LAYOUT_PACKED(WithTable, table, Shape),
         LAYOUT_MEMBER(WithTable, tail),
     };
     static_assert(validate_struct_members<WithTable>(members));
 
-    const Element expected = element::Packed{"three_bit", 3};
+    const Element expected = element::Packed{"Shape", 3};
     EXPECT_TRUE(members[1].type.element == expected);
     EXPECT_EQ(members[1].offset, 4u);
     EXPECT_EQ(members[1].type.size, 3u);
     EXPECT_EQ(members[1].type.count, 8u);
+}
+
+// An integer member packs at the width it is given, which every value of the entry enum must fit.
+TEST(StructLayout, PackedBitsTakesItsWidth) {
+    constexpr Member packed = LAYOUT_PACKED_BITS(WordAndByte, byte, Shape, 2);
+    EXPECT_EQ(packed.offset, 4u);
+    EXPECT_TRUE(packed.type == (Type{element::Packed{"Shape", 2}, 1, 4}));
+    static_assert(detail::enumerators_fit<Shape>(2));
+    static_assert(!detail::enumerators_fit<Shape>(1));
 }
 
 TEST(StructLayout, TypeOfCArray) {
@@ -321,6 +401,64 @@ TEST(StructLayout, UnionTypeNamesTagValues) {
     EXPECT_EQ(type.members[0].tag_value.value_or(""), "DOT");
     EXPECT_EQ(type.members[2].member.name, "box");
     EXPECT_EQ(type.members[2].tag_value.value_or(""), "BOX");
+}
+
+bool is_member(const Member& member, std::string_view name, uint32_t offset, const Type& type) {
+    return member.name == name && member.offset == offset && member.type == type;
+}
+
+// Every value the examples in struct_layout.hpp's comments state.
+TEST(StructLayout, HeaderExamples) {
+    namespace ex = layout_example;
+    static_assert(sizeof(ex::Pixel) == 12);
+    static_assert(sizeof(ex::Geometry) == 8);
+
+    constexpr auto& pixel = StructLayout<ex::Pixel>::members;
+    static_assert(validate_struct_members<ex::Pixel>(pixel));
+    EXPECT_TRUE((is_member(pixel[0], "at", 0, {element::Struct{"Point"}, 4, 0})));
+    EXPECT_TRUE((is_member(pixel[1], "color", 4, {element::Enum{"Color"}, 1, 0})));
+    EXPECT_TRUE((is_member(pixel[2], "brightness", 5, {element::Int{}, 1, 0})));
+    EXPECT_TRUE((is_member(pixel[3], "counts", 6, {element::Uint{}, 4, 2})));
+    EXPECT_TRUE((is_member(pixel[4], "history", 10, {element::Packed{"Color", 2}, 1, 4})));
+    EXPECT_TRUE((is_member(pixel[5], "reserved", 11, {element::Pad{}, 1, 0})));
+    EXPECT_TRUE((is_member(LAYOUT_BYTES(ex::Pixel, history), "history", 10, {element::Bytes{}, 1, 0})));
+    EXPECT_TRUE((is_member(LAYOUT_TAIL_PAD(WordAndByte, byte), "tail_padding", 5, {element::Pad{}, 3, 0})));
+
+    EXPECT_FALSE(
+        validate_struct_members<ex::Pixel>(std::array{pixel[1], pixel[0], pixel[2], pixel[3], pixel[4], pixel[5]}));
+    EXPECT_FALSE(validate_struct_members<ex::Pixel>(std::array{pixel[0], pixel[1], pixel[2], pixel[3], pixel[4]}));
+    const std::array head = {pixel[0], pixel[1], pixel[2], pixel[3], pixel[4]};
+    const auto joined = concat_members(head, std::array{LAYOUT_PAD(ex::Pixel, reserved)});
+    EXPECT_TRUE(validate_struct_members<ex::Pixel>(joined));
+
+    EXPECT_TRUE(type_of<ex::Color>() == (Type{element::Enum{"Color"}, 1, 0}));
+    EXPECT_TRUE(array_of<ex::Point>(3) == (Type{element::Struct{"Point"}, 12, 3}));
+
+    const StructType point = struct_type<ex::Point>();
+    EXPECT_EQ(point.name, "Point");
+    EXPECT_EQ(point.size, 4u);
+    ASSERT_EQ(point.members.size(), 2u);
+    EXPECT_TRUE((is_member(point.members[0], "x", 0, {element::Uint{}, 2, 0})));
+    EXPECT_TRUE((is_member(point.members[1], "y", 2, {element::Uint{}, 2, 0})));
+
+    constexpr auto& geometry_members = UnionLayout<ex::Geometry>::members;
+    static_assert(validate_union_members<ex::Geometry>(geometry_members));
+    const UnionType geometry = union_type<ex::Geometry>();
+    EXPECT_EQ(geometry.name, "Geometry");
+    EXPECT_EQ(geometry.size, 8u);
+    EXPECT_EQ(geometry.tag_enum, "Kind");
+    ASSERT_EQ(geometry.members.size(), 2u);
+    EXPECT_TRUE((is_member(geometry.members[0].member, "dot", 0, {element::Struct{"Point"}, 4, 0})));
+    EXPECT_EQ(geometry.members[0].tag_value.value_or(""), "DOT");
+    EXPECT_EQ(geometry.members[1].member.name, "line");
+    EXPECT_EQ(geometry.members[1].tag_value.value_or(""), "LINE");
+    EXPECT_FALSE(validate_union_members<ex::Geometry>(std::array{geometry_members[0]}));
+    EXPECT_TRUE(validate_union_members<ex::Geometry>(
+        std::array{geometry_members[0], LAYOUT_UNION_DEFAULT(ex::Geometry, line)}));
+
+    constexpr auto& shape = StructLayout<ex::Shape>::members;
+    static_assert(validate_struct_members<ex::Shape>(shape));
+    EXPECT_TRUE((is_member(shape[1], "geometry", 4, {element::Union{"Geometry", "kind"}, 8, 0})));
 }
 
 // go_msg_layout is built at run time, so this is where a change to go_msg_t fails, for each arch, with no device.
@@ -490,6 +628,64 @@ TEST(PacketHeaderLayouts, SendTypeUnions) {
             ASSERT_NE(s, nullptr) << type->name << "." << member.name;
             EXPECT_NE(find_type(described, s->name), nullptr)
                 << type->name << "." << member.name << " names " << s->name;
+        }
+    }
+}
+
+// A scatter write's chunk_encoding holds one NocScatterWriteChunkEncoding per chunk.
+TEST(PacketHeaderLayouts, ScatterChunkEncodingIsPacked) {
+    const Member& chunk_encoding = StructLayout<NocUnicastScatterCommandHeader>::members.back();
+    const Type expected{
+        element::Packed{"NocScatterWriteChunkEncoding", NOC_SCATTER_CHUNK_ENCODING_BITS},
+        1,
+        NOC_SCATTER_WRITE_MAX_CHUNKS};
+    EXPECT_EQ(chunk_encoding.name, "chunk_encoding");
+    EXPECT_TRUE(chunk_encoding.type == expected);
+}
+
+// In each routing mode, routing_l1_info_t's members cover it, its union holds that mode's table, only 2D reads
+// exit_node_table, and every struct and enum the layouts name is described: by those layouts, or by DescribedStructs
+// and DescribedEnums.
+TEST(StructLayout, RoutingTableInEachMode) {
+    const auto described = described_struct_types();
+    std::set<std::string_view> enums;
+    [&]<typename... Es>(std::type_identity<std::tuple<Es...>>) {
+        (enums.insert(enum_type<Es>().name), ...);
+    }(std::type_identity<DescribedEnums>{});
+
+    for (const bool is_2d : {false, true}) {
+        SCOPED_TRACE(is_2d ? "2D" : "1D");
+        const auto types = routing_table_struct_types(is_2d);
+        const StructType* routing = find_type(types, "routing_l1_info_t");
+        ASSERT_NE(routing, nullptr);
+        EXPECT_EQ(routing->size, sizeof(routing_l1_info_t));
+        EXPECT_TRUE(validate_members(routing->members, routing->size));
+
+        const Member* table_1d = find_member(*routing, "routing_path_table_1d");
+        const Member* table_2d = find_member(*routing, "route_table_2d");
+        const Member* exit_nodes = find_member(*routing, "exit_node_table");
+        const Member* direction_table = find_member(*routing, "intra_mesh_direction_table");
+        ASSERT_NE(exit_nodes, nullptr);
+        ASSERT_NE(direction_table, nullptr);
+        EXPECT_EQ(table_1d != nullptr, !is_2d);
+        EXPECT_EQ(table_2d != nullptr, is_2d);
+        EXPECT_EQ(std::holds_alternative<element::Pad>(exit_nodes->type.element), !is_2d);
+        EXPECT_TRUE(direction_table->type.element == (Element{element::Packed{"compressed_routing_values", 3}}));
+
+        for (const auto& type : types) {
+            EXPECT_EQ(find_type(described, type.name), nullptr) << type.name << " is also in DescribedStructs";
+            EXPECT_TRUE(validate_members(type.members, type.size)) << type.name;
+            for (const auto& member : type.members) {
+                if (const auto* s = std::get_if<element::Struct>(&member.type.element)) {
+                    EXPECT_TRUE(find_type(types, s->name) != nullptr || find_type(described, s->name) != nullptr)
+                        << type.name << "." << member.name << " names " << s->name;
+                } else if (const auto* e = std::get_if<element::Enum>(&member.type.element)) {
+                    EXPECT_TRUE(enums.contains(e->name)) << type.name << "." << member.name << " names " << e->name;
+                } else if (const auto* p = std::get_if<element::Packed>(&member.type.element)) {
+                    EXPECT_TRUE(enums.contains(p->entry_enum))
+                        << type.name << "." << member.name << " names " << p->entry_enum;
+                }
+            }
         }
     }
 }

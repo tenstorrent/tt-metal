@@ -107,7 +107,7 @@ inline std::string schema_name(const layout::Type& type) {
             } else if constexpr (std::is_same_v<E, element::Union>) {
                 return fmt::format("{}{}", k_union_schema, e.name);
             } else if constexpr (std::is_same_v<E, element::Packed>) {
-                return fmt::format("packed:{}", e.table);
+                return fmt::format("{}{}", k_enum_schema, e.entry_enum);
             } else if constexpr (std::is_same_v<E, element::Bytes>) {
                 return "bytes";
             } else if constexpr (std::is_same_v<E, element::Pad>) {
