@@ -142,6 +142,15 @@ class MuseGlimmerGenerator:
         """Device-sampled next tokens, LongTensor [global_batch]. `sampling` is a SamplingParams."""
         return self.decode_step(tokens, positions, sampling=sampling, sampling_params=sampling_params)
 
+    def _effective_sampling(self, sampling: dict | None) -> dict | None:
+        """Device sampling supports top_k in 1..32; apply that cap to the host-sampled first token too."""
+        if sampling is None or not self.device_sampling:
+            return sampling
+        sp = dict(sampling)
+        k = int(sp.get("top_k", 0))
+        sp["top_k"] = k if 0 < k <= 32 else 32
+        return sp
+
     @staticmethod
     def _sample(logits: torch.Tensor, sampling: dict | None, gen: torch.Generator) -> torch.Tensor:
         logits = torch.nan_to_num(logits.float(), nan=float("-inf"))
@@ -176,6 +185,7 @@ class MuseGlimmerGenerator:
         assert 0 < n <= self.global_batch_size
         if max_new_tokens <= 0:
             raise ValueError("max_new_tokens must be positive")
+        sampling = self._effective_sampling(sampling)
         gb = self.global_batch_size
         stop = set(stop_token_ids or [])
         gen = torch.Generator().manual_seed(seed)
