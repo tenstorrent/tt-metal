@@ -20,6 +20,8 @@ from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size
+from .sol_prepass import SolGeometry, SolPrepass
+from .sol_prepass_fused import SolPrepassFused
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -60,6 +62,16 @@ def prepare_rope_tables(cos: torch.Tensor, sin: torch.Tensor, head_dim: int) -> 
         zeros = torch.zeros(*sin.shape[:-1], pad, dtype=sin.dtype)
         cos, sin = torch.cat([cos, ones], dim=-1), torch.cat([sin, zeros], dim=-1)
     return cos, sin
+
+
+def _binding_has_sol_mode() -> bool:
+    """True if the installed ring_joint SDPA binding accepts the `sol_mode` keyword (probed from its TypeError text)."""
+    raw = ttnn._ttnn.operations.transformer.ring_joint_scaled_dot_product_attention
+    try:
+        raw()
+    except TypeError as e:
+        return "sol_mode" in str(e)
+    return False
 
 
 class MiniMaxH3Attention(Module):
@@ -105,8 +117,35 @@ class MiniMaxH3Attention(Module):
         is_sequence_parallel: bool = True,
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
+        sol_attn: bool = False,
+        sol_tau: float = 1.0,
+        sol_thresh_type: str = "diag",
+        sol_band: int = 1,
+        sol_dense_prefix: bool = True,
+        sol_mode: str = "gather",
+        sol_fused: bool = False,
     ) -> None:
         super().__init__()
+
+        # Sol-Attn block-sparse attention (opt-in; the dense path is untouched when off). The caller gates
+        # it per denoising step / layer through `sol_active`, and sets `sol_logical_n` / `sol_sink_tokens`
+        # (host ints) per request. `sol_last_density` reports the kept-block fraction of the last sparse call
+        # when `sol_report_density` is set (host readback; off in production).
+        self.sol_attn = sol_attn
+        self.sol_tau = sol_tau
+        self.sol_thresh_type = sol_thresh_type
+        self.sol_band = sol_band
+        self.sol_dense_prefix = sol_dense_prefix  # prefix (text+cond) query rows attend densely (NVlabs)
+        self.sol_mode = sol_mode  # "gather" (block gathering, chains off) or "chunk" (compute skip, chains on)
+        self.sol_fused = (
+            sol_fused  # fused pre-pass (sol_prepass_fused.SolPrepassFused) instead of the ttnn-op SolPrepass
+        )
+        self.sol_active = False
+        self.sol_logical_n: int | None = None
+        self.sol_sink_tokens = 0
+        self.sol_report_density = False
+        self.sol_last_density: float | None = None
+        self._sol_prepass: SolPrepass | None = None
 
         self.kv_gather_capacity = kv_gather_capacity
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
@@ -451,6 +490,60 @@ class MiniMaxH3Attention(Module):
             exp_approx_mode=False,  # NOTE: False is more correct
         )
 
+    # ------------------------------------------------------------------ Sol-Attn
+
+    def _sol_tensors(self, q_BHNE: ttnn.Tensor, k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor) -> dict:
+        """Run the routing pre-pass and return the ring op's `sol_*` keyword tensors."""
+        assert self.sol_logical_n is not None, "set sol_logical_n (host int) before a sparse forward"
+        rows = q_BHNE.shape[2]
+        sp_factor = self.parallel_config.sequence_parallel.factor
+        cfg = self._sdpa_program_config(rows, ring=True)
+        geo = SolGeometry(
+            shards=sp_factor,
+            rows=rows,
+            logical_n=self.sol_logical_n,
+            q_chunk=cfg.q_chunk_size,
+            k_chunk=cfg.k_chunk_size,
+        )
+        if self._sol_prepass is None:
+            prepass_cls = SolPrepassFused if self.sol_fused else SolPrepass
+            self._sol_prepass = prepass_cls(
+                mesh_device=self.mesh_device,
+                ccl_manager=self.ccl_manager,
+                sp_axis=self.sp_mesh_axis,
+                tau=self.sol_tau,
+                thresh_type=self.sol_thresh_type,
+                band=self.sol_band,
+                dense_prefix_queries=self.sol_dense_prefix,
+                mode=self.sol_mode,
+                # compaction generates the pooled-column bias on device, so the fused producer skips the ~87 MB bias write
+                **({"emit_bias": self.sol_mode != "compact"} if self.sol_fused else {}),
+            )
+        scale = self.head_dim**-0.5
+        self._sol_prepass.prepare(geo, self.sol_sink_tokens, scale)
+        out = self._sol_prepass(q_BHNE, k_BHNE, v_BHNE, scale=scale, report_density=self.sol_report_density)
+        if self.sol_report_density:
+            self.sol_last_density = self._sol_prepass.last_density
+        kwargs = {
+            "sol_block_mask": out["block_mask"],
+            "sol_pooled_k": out["pooled_k"],
+            "sol_pooled_v": out["pooled_v"],
+        }
+        if (
+            out.get("bias") is not None and self.sol_mode != "compact"
+        ):  # compact mode generates the bias on device and rejects a tensor
+            kwargs["sol_bias"] = out["bias"]
+        if self.sol_mode == "compact":
+            # Explicit op mode (sol-vid2's `sol_mode` keyword). The docstring never lists keyword names, so probe the raw
+            # binding: calling it with no arguments raises a TypeError whose text lists the accepted keywords. Compact
+            # must not silently fall back to gather (2026-10-16: every "compact" measurement before this fix was gather).
+            if not _binding_has_sol_mode():
+                raise RuntimeError(
+                    "sol_mode='compact' requested but the installed ring_joint SDPA binding has no sol_mode keyword"
+                )
+            kwargs["sol_mode"] = "compact"
+        return kwargs
+
     # ------------------------------------------------------------------ forward
 
     def forward(
@@ -571,6 +664,9 @@ class MiniMaxH3Attention(Module):
                 num_buffers_per_channel=32,
             )
         elif self.use_ring:
+            sol_kwargs = {}
+            if self.sol_attn and self.sol_active:
+                sol_kwargs = self._sol_tensors(q_BHNE, k_BHNE, v_BHNE)
             spatial_BHNE, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q_BHNE,
                 k_BHNE,
@@ -597,6 +693,7 @@ class MiniMaxH3Attention(Module):
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
                 ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
                 use_column_major_ccl=True,
+                **sol_kwargs,
             )
         else:
             spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(

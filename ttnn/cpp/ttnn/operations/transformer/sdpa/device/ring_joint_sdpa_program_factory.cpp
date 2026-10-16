@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+
+#include <cstdlib>
+#include <string>
 #include "kernels/chunked_q_mapping.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/ring_joint_ksplit.hpp"
@@ -44,6 +47,7 @@ using ttnn::Tensor;
 namespace {
 
 namespace ag_rt = ttnn::ring_attention_all_gather_async_detail;
+namespace ag_dyn = ttnn::experimental::prim::ring_attention_all_gather_async_dynamic;
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 // Circular sliding KV slab count (0 = unbounded); validation already required whole slabs and >= 2.
@@ -553,7 +557,9 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     const uint32_t joint_buffer_args = (joint_input_params.L != 0) ? kReaderJointBufferArgCount : 0;
     // 2 extra buffer slots for gathered_joint_k/v when the sharded-joint path is active
     const uint32_t gathered_joint_buffer_args = joint_input_params.joint_is_sharded ? 2 : 0;
-    const bool enable_kv_chains = !args.has_sliding_window();
+    // Sol-Attn gathers a different K/V chunk content per Q chunk, so nothing can be forwarded between cores.
+    const bool enable_kv_chains =
+        !args.has_sliding_window() && !(tensor_args.sol_enabled() && !tensor_args.sol_streams_chunks(args.sol_mode));
     const bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     const uint32_t head_chain_args = use_head_chain ? kRingJointChainConfigArgCount : 0;
     const uint32_t batch_chain_args =
@@ -1094,7 +1100,44 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // (validated divisible with >= 2 slabs). Wraps the local-slab derivation in
     // sliding_window_work_plan.hpp for the host halo layout, the reader, and the compute kernel.
     const uint32_t circular_kv_slab_count = derived_kv_slab_count(args, tensor_args);
-    const bool enable_kv_chains = !has_sliding_window;
+    // Sol-Attn block gathering: every core reads its own gathered K/V, no store-and-forward chains.
+    // Chunk mode keeps the chains (dense streaming) and skips in compute.
+    const bool sol_enabled = tensor_args.sol_enabled();
+    // Streaming modes (chunk, compact) keep the chains and the dense chunk loop; the kernels' "sol_chunk_mode" flag
+    // means exactly that, and "sol_compact" selects the block-mask / in-place compaction variant on top.
+    const bool sol_compact = tensor_args.sol_compact_mode(args.sol_mode);
+    const bool sol_chunk_mode = tensor_args.sol_streams_chunks(args.sol_mode);
+    if (tensor_args.sol_enabled()) {
+        // Emitted once per program creation (the kernels are created with these named args). The Sol tests read this
+        // line back from stderr and fail when a requested mode did not resolve (a docstring-gated keyword once made
+        // every "compact" run a silent gather run; DESIGN_BLOCK_COMPACT.md section 11).
+        log_info(
+            tt::LogOp,
+            "RingJointSDPA sol mode resolved: {} (requested '{}', compact={}, chunk={}, even_up={}, even_up_all={}, "
+            "gen_bias={})",
+            sol_compact ? "compact" : (sol_chunk_mode ? "chunk" : "gather"),
+            args.sol_mode,
+            sol_compact ? 1 : 0,
+            sol_chunk_mode && !sol_compact ? 1 : 0,
+            (sol_compact &&
+             ((std::getenv("TT_SOL_EVENUP") && std::string(std::getenv("TT_SOL_EVENUP")) == "1") ||
+              (std::getenv("TT_SOL_EVENUP_ALL") && std::string(std::getenv("TT_SOL_EVENUP_ALL")) == "1")))
+                ? 1
+                : 0,
+            (sol_compact && std::getenv("TT_SOL_EVENUP_ALL") && std::string(std::getenv("TT_SOL_EVENUP_ALL")) == "1")
+                ? 1
+                : 0,
+            !tensor_args.sol_bias.has_value() ? 1 : 0);
+    }
+    // No sol_bias tensor: the reader generates the pooled-chunk column-bias tiles (sol_bias_gen.hpp).
+    const bool sol_gen_bias = tensor_args.sol_bias_generated();
+    // Measurement knob (BIG_IDEAS_ATTENTION.md item 4): TT_SOL_CHAIN_LEN=L splits every head chain into linear chains
+    // of at most L cores (each with its own DRAM injector), shrinking the Sol chain union at the cost of 8/L x the
+    // K/V DRAM reads; applies to dense too; multicast chains are disabled when set. 0 / unset = unchanged. Not hashed:
+    // set it for the whole process.
+    const uint32_t sol_chain_len =
+        std::getenv("TT_SOL_CHAIN_LEN") ? static_cast<uint32_t>(std::atoi(std::getenv("TT_SOL_CHAIN_LEN"))) : 0u;
+    const bool enable_kv_chains = !has_sliding_window && !(sol_enabled && !sol_chunk_mode);
     const uint32_t kv_cache_batch_idx = args.cache_batch_idx().value_or(0);
     // L / L_local resolved once in resolve_ring_joint_input_params (full vs per-device joint seq).
     const uint32_t L = joint_input_params.L;
@@ -1138,6 +1181,29 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
+
+    // Sol-Attn geometry (DESIGN.md §3.1b). Blocks are 64 tokens (2 tiles) inside each shard; the pooled
+    // tensors hold ring_size x sol_nb_pad blocks; a pooled "chunk" is Sk_chunk_t pooled rows.
+    constexpr uint32_t kSolBlockTiles = 2;
+    uint32_t sol_nb = 0, sol_nb_pad = 0, sol_n_blocks_pad = 0, sol_nqc_pad = 0, sol_pooled_chunks = 0,
+             sol_pooled_last_tiles = 0, sol_mask_row_bytes = 0, sol_nkc = 0;
+    if (sol_enabled) {
+        // Chunk mode: mask rows are nkc_pad words, one per global K chunk (per-shard stride num_local_k_chunks).
+        sol_nkc = tt::div_up(kv_local_padded_Nt, Sk_chunk_t);
+        sol_n_blocks_pad = tensor_args.sol_pooled_k->logical_shape()[2];
+        sol_nb_pad = sol_n_blocks_pad / args.all_gather_operation_attributes.ring_size;
+        sol_nb = tt::div_up(kv_local_padded_Nt, kSolBlockTiles);
+        sol_nqc_pad = tensor_args.sol_block_mask->logical_shape()[2];
+        const uint32_t pooled_tiles = sol_n_blocks_pad / tt::constants::TILE_HEIGHT;
+        sol_pooled_chunks = tt::div_up(pooled_tiles, Sk_chunk_t);
+        sol_pooled_last_tiles = pooled_tiles - (sol_pooled_chunks - 1) * Sk_chunk_t;
+        // Compact mode reads per-shard slices of the block row (nb_pad words); the other modes read whole rows.
+        sol_mask_row_bytes =
+            (sol_compact ? sol_nb_pad : tensor_args.sol_block_mask->logical_shape()[3]) * sizeof(uint32_t);
+        TT_FATAL(!sol_chunk_mode || sol_nkc <= 64, "sol chunk mode: at most 64 K chunks per shard");
+        TT_FATAL(sol_nb <= sol_nb_pad, "sol: {} blocks per shard exceed the pooled row {}", sol_nb, sol_nb_pad);
+        TT_FATAL(Sk_chunk_t % kSolBlockTiles == 0, "sol: k chunk must hold whole blocks");
+    }
 
     // Global chunk has S Q slabs and R KV regions, with R/S extra KV stripes.
     // Kernels recover the region from this width divided by transport ring size.
@@ -1679,6 +1745,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TensorAccessorArgs(has_logical_l_tensor ? tensor_args.logical_l_tensor->buffer() : nullptr)
             .append_to(reader_compile_time_args);
     }
+    // Sol-Attn accessors (mask, pooled K, pooled V, bias) follow the logical-length pair; the reader
+    // places chains_base_offset after them when sol_enabled.
+    if (sol_enabled) {
+        TensorAccessorArgs(tensor_args.sol_block_mask->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(tensor_args.sol_pooled_k->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(tensor_args.sol_pooled_v->buffer()).append_to(reader_compile_time_args);
+        if (!sol_gen_bias) {
+            TensorAccessorArgs(tensor_args.sol_bias->buffer()).append_to(reader_compile_time_args);
+        }
+    }
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -2070,6 +2146,37 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
+    // Sol-Attn: reader->compute per-(ring iter, Q chunk) plan words, and the pooled-chunk column bias tiles.
+    // Plan page: 16 summary words, then the Q chunk's full mask row (scratch the reader scans in place).
+    // Single page: compute pops the plan at the start of each Q chunk, before any K chunk, and the two-deep
+    // K/V CBs throttle the reader harder than this does. A second page pushed the static CB region past the
+    // L1 buffers the full pipeline's CCL manager pins (clash by 1792 B at the 10 s shape).
+    const uint32_t cb_sol_plan =
+        sol_enabled ? allocate_cb((sol_compact ? 128 : 64) + sol_mask_row_bytes, 1, tt::DataFormat::UInt32)
+                    : inactive_cb;
+    // One pooled chunk of bias tiles in flight (bias is read once per pooled chunk, 4 pooled chunks per Q chunk per
+    // layer); 2*Sk_chunk_t pushed the static CB region past the L1 buffers at the 10 s / 15 s shapes.
+    const uint32_t cb_sol_bias = sol_enabled ? allocate_tile_cb(Sk_chunk_t, mask_tile_size, mask_df) : inactive_cb;
+    {
+        // L1 budget line for the Sol work (Q-batching needs a second accumulator set; DESIGN_BLOCK_COMPACT.md 12).
+        uint64_t cb_bytes = 0;
+        for (const auto& cb : desc.cbs) {
+            cb_bytes += cb.total_size;
+        }
+        log_info(
+            tt::LogOp,
+            "RingJointSDPA CBs: {} buffers, {} bytes (q {} t, k {} t, v {} t, qk {} t, out_im {} t, stats {} t; im "
+            "tile {} B)",
+            desc.cbs.size(),
+            cb_bytes,
+            q_tiles,
+            k_tiles,
+            v_tiles,
+            qk_tiles,
+            out_im_tiles,
+            statistics_tiles,
+            im_tile_size);
+    }
 
     const std::vector<uint32_t> cb_compile_time_args = {
         cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
@@ -2131,6 +2238,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         CoreCoord prev_physical = CoreCoord{0, 0};
         CoreCoord next_physical = CoreCoord{0, 0};
         uint32_t next_core_q_chunks = 0;
+        // Which linear chain of the head this core belongs to when head chains are split (TT_SOL_CHAIN_LEN); the
+        // Sol chain union only spans cores of the same group.
+        uint32_t chain_group = 0;
 
         // Multicast configuration (1D for V, 2D for K)
         CoreCoord mcast_start = CoreCoord{0, 0};        // Rectangle start (physical)
@@ -2277,7 +2387,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                                  uint32_t head,
                                  std::vector<ChainConfig>& chain_configs,
                                  const std::vector<CoreWork>& core_work,
-                                 bool require_single_head_injector = true) -> bool {
+                                 bool require_single_head_injector = true,
+                                 uint32_t chain_group = 0) -> bool {
         if (chain_segs.size() < 2) {
             return false;
         }
@@ -2300,6 +2411,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             auto& cfg = chain_configs[ci];
             cfg.participates = true;
             cfg.head = head;
+            cfg.chain_group = chain_group;
             cfg.is_injector = (idx == start);
             cfg.is_sink = (idx == chain_segs.size() - 1);
             if (idx > start) {
@@ -2791,7 +2903,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 chain_segs.emplace_back(
                     seg.core_idx, core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count);
             }
-            build_linear_chain(chain_segs, head_id, head_chain_configs, core_work);
+            if (sol_chain_len >= 2 && chain_segs.size() > sol_chain_len) {
+                // Split into consecutive groups of at most sol_chain_len cores; each group picks its own injector
+                // (first single-head core of the group) and cores before it read their own K/V.
+                uint32_t group = 0;
+                for (size_t start = 0; start < chain_segs.size(); start += sol_chain_len, ++group) {
+                    const size_t stop = std::min(chain_segs.size(), start + sol_chain_len);
+                    std::vector<ChainSegment> sub(chain_segs.begin() + start, chain_segs.begin() + stop);
+                    build_linear_chain(sub, head_id, head_chain_configs, core_work, true, group);
+                }
+            } else {
+                build_linear_chain(chain_segs, head_id, head_chain_configs, core_work);
+            }
         }
     }
 
@@ -2804,7 +2927,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         };
         std::vector<McastCandidate> candidates;
         candidates.reserve(head_segments.size());
-        bool all_eligible = true;
+        bool all_eligible = sol_chain_len == 0;  // split chains are never multicast
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
             const auto& segments = head_segments[head_id];
@@ -3119,6 +3242,48 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"dense_causal_skip", dense_causal_skip ? 1u : 0u},
         {"seg_accum", seg_accum ? 1u : 0u},
         {"kv_stripe_split", args.kv_stripe_split},
+        // Sol-Attn block-sparse mode (all zero / inactive CB ids when off).
+        {"sol_enabled", sol_enabled ? 1u : 0u},
+        {"sol_chunk_mode", sol_chunk_mode ? 1u : 0u},
+        {"sol_compact", sol_compact ? 1u : 0u},
+        // Compact-mode even-up rule, OFF by default since 2026-10-16: measured 8-14 ms slower than plain selection at
+        // 15 s (DESIGN_BLOCK_COMPACT.md 11.3) and the plain path is numerically right. TT_SOL_EVENUP=1 enables it
+        // (A/B); TT_SOL_EVENUP_ALL=1 is the debug probe (every full block exact; implies the rule on).
+        {"sol_even_up",
+         (sol_compact && ((std::getenv("TT_SOL_EVENUP") && std::string(std::getenv("TT_SOL_EVENUP")) == "1") ||
+                          (std::getenv("TT_SOL_EVENUP_ALL") && std::string(std::getenv("TT_SOL_EVENUP_ALL")) == "1")))
+             ? 1u
+             : 0u},
+        {"sol_even_up_all",
+         (sol_compact && std::getenv("TT_SOL_EVENUP_ALL") && std::string(std::getenv("TT_SOL_EVENUP_ALL")) == "1")
+             ? 1u
+             : 0u},
+        {"sol_nkc", sol_nkc},
+        {"sol_nb", sol_nb},
+        {"sol_nb_pad", sol_nb_pad},
+        {"sol_n_blocks_pad", sol_n_blocks_pad},
+        {"sol_nqc_pad", sol_nqc_pad},
+        {"sol_pooled_chunks", sol_pooled_chunks},
+        {"sol_pooled_last_tiles", sol_pooled_last_tiles},
+        // Debug/profiling only: TT_SOL_POOLED_OFF=1 drops the pooled correction chunks (wrong numerics; isolates their
+        // cost).
+        {"sol_pooled_off",
+         (sol_enabled && std::getenv("TT_SOL_POOLED_OFF") && std::string(std::getenv("TT_SOL_POOLED_OFF")) == "1")
+             ? 1u
+             : 0u},
+        // Debug/profiling only: TT_SOL_DRAIN_ALL=1 makes compute drain every streamed chunk in chunk mode (own kept
+        // bits treated as 0, chain union unchanged; wrong numerics). Its op time is the reader/chain floor of the
+        // streaming path.
+        {"sol_drain_all",
+         (sol_enabled && std::getenv("TT_SOL_DRAIN_ALL") && std::string(std::getenv("TT_SOL_DRAIN_ALL")) == "1") ? 1u
+                                                                                                                 : 0u},
+        {"sol_mask_row_bytes", sol_mask_row_bytes},
+        // Bias tiles generated on device (no sol_bias tensor). sol_logical_n is the host logical length (tokens);
+        // the reader prefers the live logical_n tensor when one is present (same rule as logical_nt).
+        {"sol_gen_bias", sol_gen_bias ? 1u : 0u},
+        {"sol_logical_n", static_cast<uint32_t>(args.logical_n)},
+        {"cb_sol_plan", sol_enabled ? cb_sol_plan : cb_kv_pad_derived},
+        {"cb_sol_bias", sol_enabled ? cb_sol_bias : cb_q_in},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
@@ -3137,6 +3302,24 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Code size, not correctness: at O3 the merge epilogue grows the q128 compute binaries past the 70,656 B
         // kernel config buffer ("Program size too large"). O2 cuts the three TRISC binaries by ~30%.
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
+    }
+
+    // Sol-Attn on-device bias generator table (see the reader arg layout below). bf16 round-to-nearest-even of
+    // the same fp32 values the Python pre-pass uploads (ln(len) / scale; -30000 for len 0).
+    constexpr uint32_t kSolLenBiasTableWords = 33;  // 66 bf16 entries, len 0..65 (65 unused)
+    std::array<uint32_t, kSolLenBiasTableWords> sol_len_bias_table{};
+    if (sol_enabled) {
+        const auto f2bf = [](float f) -> uint32_t {
+            uint32_t u = std::bit_cast<uint32_t>(f);
+            const uint32_t lsb = (u >> 16) & 1u;
+            u += 0x7FFFu + lsb;
+            return u >> 16;
+        };
+        constexpr float kSolBiasNeg = -30000.0f;  // sol_prepass.NEG
+        for (uint32_t len = 0; len <= 65; ++len) {
+            const float v = (len == 0 || len > 64) ? kSolBiasNeg : std::log(static_cast<float>(len)) / scale_value;
+            sol_len_bias_table[len / 2] |= f2bf(v) << (16 * (len % 2));
+        }
     }
 
     // Set reader rt args
@@ -3241,6 +3424,66 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
         if (ksplit_count > 1) {
             reader_args.push_back(ksplit_band(i));
+        }
+        if (sol_enabled) {
+            // Read by the kernel at rotated_args_base (sol excludes the rotated split and the K split).
+            // Layout: [mask, pooled K, pooled V, bias (0 when generated), n_members, my_start,
+            //          (generated bias only) kSolLenBiasTableWords packed bf16 table, members (start, count)...].
+            reader_args.push_back(tensor_args.sol_block_mask->buffer());
+            reader_args.push_back(tensor_args.sol_pooled_k->buffer());
+            reader_args.push_back(tensor_args.sol_pooled_v->buffer());
+            if (sol_gen_bias) {
+                reader_args.push_back(0u);
+            } else {
+                reader_args.push_back(tensor_args.sol_bias->buffer());
+            }
+            // Chunk mode, linear head chains: the chain's members as (q_chunk start within the head, count) plus
+            // this core's own start. At stream position j every member is on Q chunk start_m + j, so each core
+            // derives the same chain-wide kept set and the chain skips a chunk nobody needs in lockstep.
+            // Non-participants (head-boundary cores before the injector) get no members and skip on their own
+            // mask. Multicast chains and padded iterations are not covered: no union there (still correct).
+            std::vector<std::pair<uint32_t, uint32_t>> sol_members;
+            uint32_t sol_my_start = 0;
+            if (sol_chunk_mode && use_head_chain && !head_mcast_enabled && head_chain_configs[i].participates) {
+                const uint32_t h = head_chain_configs[i].head;
+                for (const auto& seg : head_segments[h]) {
+                    const auto& cfg = head_chain_configs[seg.core_idx];
+                    if (!cfg.participates || cfg.head != h || cfg.chain_group != head_chain_configs[i].chain_group) {
+                        continue;
+                    }
+                    const auto& w = core_work[seg.core_idx];
+                    uint32_t flat = w.global_q_start;
+                    for (uint32_t s = 0; s < seg.head_work_index; ++s) {
+                        flat += w.head_work[s].q_chunk_count;
+                    }
+                    const uint32_t start_in_head = flat % num_q_chunks;
+                    const uint32_t count = w.head_work[seg.head_work_index].q_chunk_count;
+                    if (seg.core_idx == i) {
+                        sol_my_start = start_in_head;
+                    }
+                    sol_members.emplace_back(start_in_head, count);
+                }
+                TT_FATAL(
+                    sol_members.size() <= 64,
+                    "sol chunk mode: head chain of {} members is too long",
+                    sol_members.size());
+            }
+            reader_args.push_back(static_cast<uint32_t>(sol_members.size()));
+            reader_args.push_back(sol_my_start);
+            // Generated bias only: column-bias value per block token count, bf16, two per word: entry[len] for
+            // len in [0, 64] (entry[0] = the "exact / padding" large negative). The generator weights each pooled
+            // column by its token count through exp((QK + ln(len)/scale - max) * scale) = len * exp(...), so this
+            // is the only place the bias values are defined (the Python pre-pass mirrors it). With a sol_bias
+            // tensor the layout is unchanged from before (members follow my_start directly).
+            if (sol_gen_bias) {
+                for (uint32_t w = 0; w < kSolLenBiasTableWords; ++w) {
+                    reader_args.push_back(sol_len_bias_table[w]);
+                }
+            }
+            for (const auto& [start, count] : sol_members) {
+                reader_args.push_back(start);
+                reader_args.push_back(count);
+            }
         }
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
@@ -3691,6 +3934,17 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     RingJointSDPAResult& output_tensors) {
     descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensors);
 
+    // The fused all-gather's GlobalSemaphore addresses are excluded from the program hash and baked into the
+    // all-gather reader/writer runtime args at creation ("smuggled-rta-ok: re-applied via
+    // override_runtime_arguments()" in the shared builder). The standalone all-gather op re-applies them on
+    // every cache hit; this op did not, so a cached program kept signalling the ping-pong semaphore it was
+    // created with while the host believed it alternated. Mirror the standalone patch here (dense gather
+    // kernels only; the sliding-window halo path uses a persistent halo semaphore).
+    const auto& ag_semaphores = args.all_gather_operation_attributes.semaphore;
+    const bool patch_ag_semaphores =
+        !args.has_sliding_window() &&
+        ag_semaphores.size() > std::max(ag_dyn::kForwardSemaphoreIdx, ag_dyn::kBackwardSemaphoreIdx);
+
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
         TT_FATAL(
@@ -3698,6 +3952,27 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
             "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
             coord,
             coordinate_range.end_coord());
+        // The non-sliding path always appends the four dense gather kernels at kFirstAllGatherKernelIndex.
+        if (patch_ag_semaphores) {
+            const auto patch_semaphore_arg = [&program](uint32_t kernel_idx, uint32_t arg_idx, uint32_t address) {
+                auto& args_by_core = tt::tt_metal::GetRuntimeArgs(program, kernel_idx);
+                for (auto& args_by_y : args_by_core) {
+                    for (auto& core_args : args_by_y) {
+                        if (arg_idx < core_args.size()) {
+                            core_args[arg_idx] = address;
+                        }
+                    }
+                }
+            };
+            const auto forward_sem_addr =
+                static_cast<uint32_t>(ag_semaphores.at(ag_dyn::kForwardSemaphoreIdx).address());
+            const auto backward_sem_addr =
+                static_cast<uint32_t>(ag_semaphores.at(ag_dyn::kBackwardSemaphoreIdx).address());
+            patch_semaphore_arg(kAllGatherReaderForwardKernelIndex, ag_dyn::kReaderSemaphoreArg, forward_sem_addr);
+            patch_semaphore_arg(kAllGatherWriterForwardKernelIndex, ag_dyn::kWriterSemaphoreArg, forward_sem_addr);
+            patch_semaphore_arg(kAllGatherReaderBackwardKernelIndex, ag_dyn::kReaderSemaphoreArg, backward_sem_addr);
+            patch_semaphore_arg(kAllGatherWriterBackwardKernelIndex, ag_dyn::kWriterSemaphoreArg, backward_sem_addr);
+        }
         apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
     }
 }

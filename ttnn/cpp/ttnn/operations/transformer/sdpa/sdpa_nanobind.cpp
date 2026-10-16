@@ -62,7 +62,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    const std::optional<ttnn::Tensor>& sol_block_mask,
+    const std::optional<ttnn::Tensor>& sol_pooled_k,
+    const std::optional<ttnn::Tensor>& sol_pooled_v,
+    const std::optional<ttnn::Tensor>& sol_bias,
+    const std::string& sol_mode) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -103,7 +108,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         slot_id,
         kv_actual_isl_tensor,
         kv_cache_num_layers,
-        kv_cache_layer_idx);
+        kv_cache_layer_idx,
+        sol_block_mask,
+        sol_pooled_k,
+        sol_pooled_v,
+        sol_bias,
+        sol_mode);
     return outputs;
 }
 
@@ -778,7 +788,12 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("slot_id").noconvert() = nb::none(),
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
-        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
+        nb::arg("sol_block_mask").noconvert() = nb::none(),
+        nb::arg("sol_pooled_k").noconvert() = nb::none(),
+        nb::arg("sol_pooled_v").noconvert() = nb::none(),
+        nb::arg("sol_bias").noconvert() = nb::none(),
+        nb::arg("sol_mode") = "auto");
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

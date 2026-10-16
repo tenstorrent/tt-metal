@@ -47,6 +47,9 @@ struct RingJointSDPAParams {
     bool circular_kv_cache = false;
     // Internal structural ratio, derived from Q/KV sequence distributions.
     uint32_t kv_stripe_split = 1;
+    // Sol-Attn exact-set granularity ("auto" = infer from the mask width: nkc_pad -> chunk, else gather; or an
+    // explicit "gather" | "chunk" | "compact"). Set after construction; hashed; see RingJointSDPAInputs::sol_*_mode.
+    std::string sol_mode = "auto";
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -133,7 +136,8 @@ struct RingJointSDPAParams {
         "circular_kv_cache",
         "kv_stripe_split",
         "all_gather_operation_attributes",
-        "all_gather_tensor_args");
+        "all_gather_tensor_args",
+        "sol_mode");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(joint_strategy),
@@ -155,7 +159,8 @@ struct RingJointSDPAParams {
             std::cref(circular_kv_cache),
             std::cref(kv_stripe_split),
             std::cref(all_gather_operation_attributes),
-            std::cref(all_gather_tensor_args));
+            std::cref(all_gather_tensor_args),
+            std::cref(sol_mode));
     }
 };
 
@@ -187,6 +192,45 @@ struct RingJointSDPAInputs {
     // host-side derivation stays valid and the kernels narrow it per dispatch.
     std::optional<Tensor> logical_n_tensor;
     std::optional<Tensor> logical_l_tensor;
+
+    // Sol-Attn block-sparse mode. Contract: models/tt_dit/models/transformers/minimax_h3/SOL_ATTN_INTERFACE.md.
+    // The routing pre-pass (sol_prepass.py today, the fused proxy-scoring kernel later) produces the first
+    // three; mask + pooled K + pooled V together, or none:
+    //   sol_block_mask  uint32 row-major [1, NH, nqc_pad, W]. Chunk mode (W = nkc_pad, global K chunks): 1 =
+    //                   compute this (local Q chunk, global K chunk) exactly. Gather mode (W = n_blocks_pad,
+    //                   global 64-token blocks): 1 = gather this block into the Q chunk's exact K/V chunks.
+    //   sol_pooled_k/v  bf16 tile [1, NH, n_blocks_pad, DH]: per-64-token-block mean K / mean V over the valid
+    //                   tokens, whole sequence, per-shard blocking (shard s at rows [s*nb_pad, (s+1)*nb_pad)).
+    //   sol_bias        OPTIONAL bf16 tile [1, NH, nqc_pad * 32, n_blocks_pad]: per Q chunk one tile row of
+    //                   column bias for the pooled logits (ln(len)/scale for approximated blocks, a large
+    //                   negative for exact and padding blocks). When absent the reader generates the same
+    //                   tile rows on device from the mask row and the block geometry (sol_bias_gen.hpp), which
+    //                   is the production path; the tensor form stays for A/B validation of the generator.
+    std::optional<Tensor> sol_block_mask;
+    std::optional<Tensor> sol_pooled_k;
+    std::optional<Tensor> sol_pooled_v;
+    std::optional<Tensor> sol_bias;
+
+    bool sol_enabled() const { return sol_block_mask.has_value(); }
+    bool sol_bias_generated() const { return sol_enabled() && !sol_bias.has_value(); }
+    // Exact-set granularity. "chunk": the mask is [1, NH, nqc_pad, nkc_pad] over K CHUNKS; the reader streams every
+    // chunk through the chained path (minus chain-wide skips) and compute drains the chunks the mask drops.
+    // "gather": block mask [1, NH, nqc_pad, n_blocks_pad]; the reader gathers kept blocks from DRAM (chains off).
+    // "compact": block mask too, but streamed through the chains like chunk mode; each core left-justifies its own
+    // kept blocks inside the chunk page and compute runs a narrowed step (DESIGN_BLOCK_COMPACT.md).
+    // "auto" infers chunk vs gather from the mask width (the pre-sol_mode behaviour).
+    bool sol_mask_is_chunk_width() const {
+        return sol_enabled() && sol_block_mask->logical_shape()[3] != sol_pooled_k->logical_shape()[2];
+    }
+    bool sol_chunk_mode(const std::string& mode) const {
+        return sol_enabled() && (mode == "chunk" || (mode == "auto" && sol_mask_is_chunk_width()));
+    }
+    bool sol_compact_mode(const std::string& mode) const { return sol_enabled() && mode == "compact"; }
+    bool sol_gather_mode(const std::string& mode) const {
+        return sol_enabled() && !sol_chunk_mode(mode) && !sol_compact_mode(mode);
+    }
+    // Streaming modes keep the K/V chains and the reader's dense chunk loop (chunk and compact).
+    bool sol_streams_chunks(const std::string& mode) const { return sol_chunk_mode(mode) || sol_compact_mode(mode); }
 
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
 

@@ -551,6 +551,94 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "RingJointSDPA attention_sink requires streaming compute; set fp32_dest_acc_en=false");
     }
 
+    if (tensor_args.sol_enabled()) {
+        TT_FATAL(
+            tensor_args.sol_pooled_k.has_value() && tensor_args.sol_pooled_v.has_value(),
+            "Sol-Attn mode needs sol_block_mask, sol_pooled_k and sol_pooled_v together (sol_bias is optional)");
+        TT_FATAL(!args.is_causal && !args.is_balanced, "Sol-Attn mode is non-causal only");
+        TT_FATAL(!has_joint_tensors, "Sol-Attn mode does not support joint attention tensors");
+        TT_FATAL(!has_latent_v, "Sol-Attn mode does not support latent-V");
+        TT_FATAL(
+            !args.has_sliding_window() && !tensor_args.is_chunked(args.kv_stripe_split),
+            "Sol-Attn mode: no sliding window / chunked prefill");
+        TT_FATAL(!tensor_args.attention_sink.has_value(), "Sol-Attn mode does not support attention_sink");
+        TT_FATAL(
+            !get_fp32_dest_acc_en(args.compute_kernel_config),
+            "Sol-Attn mode requires streaming compute; set fp32_dest_acc_en=false");
+        TT_FATAL(args.get_k_chunk_size() % 64 == 0, "Sol-Attn mode needs k_chunk_size to be a multiple of 64 (block)");
+        TT_FATAL(
+            args.sol_mode == "auto" || args.sol_mode == "gather" || args.sol_mode == "chunk" ||
+                args.sol_mode == "compact",
+            "sol_mode must be auto | gather | chunk | compact, got {}",
+            args.sol_mode);
+        TT_FATAL(
+            !tensor_args.sol_compact_mode(args.sol_mode) || tensor_args.sol_bias_generated(),
+            "sol_mode=compact generates its bias on device; do not pass sol_bias");
+        const auto& mask = tensor_args.sol_block_mask.value();
+        const auto& pk = tensor_args.sol_pooled_k.value();
+        const auto& pv = tensor_args.sol_pooled_v.value();
+        const auto& q_shape = input_tensor_q.logical_shape();
+        const auto& k_shape = tensor_args.input_k.logical_shape();
+        TT_FATAL(
+            mask.layout() == Layout::ROW_MAJOR && mask.dtype() == DataType::UINT32,
+            "sol_block_mask must be uint32 row-major");
+        std::vector<const Tensor*> sol_tile_tensors = {&pk, &pv};
+        if (tensor_args.sol_bias.has_value()) {
+            sol_tile_tensors.push_back(&tensor_args.sol_bias.value());
+        }
+        for (const auto* t : sol_tile_tensors) {
+            TT_FATAL(
+                t->layout() == Layout::TILE && t->dtype() == DataType::BFLOAT16,
+                "sol_pooled_k/v and sol_bias must be bf16 tile");
+            TT_FATAL(
+                t->buffer() != nullptr && t->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                "Sol-Attn tensors must be in DRAM");
+        }
+        TT_FATAL(
+            mask.buffer() != nullptr && mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "sol_block_mask must be in DRAM");
+        const uint32_t nqc = tt::div_up(q_shape[2], args.get_q_chunk_size());
+        const uint32_t n_blocks_pad = pk.logical_shape()[2];
+        const uint32_t nb_pad = n_blocks_pad / args.ring_size;
+        TT_FATAL(
+            n_blocks_pad % (32 * args.ring_size) == 0,
+            "sol pooled length {} must be ring_size x a tile multiple",
+            n_blocks_pad);
+        TT_FATAL(
+            nb_pad >= tt::div_up(k_shape[2], 64), "sol pooled blocks per shard {} < blocks in the K shard", nb_pad);
+        TT_FATAL(pk.logical_shape() == pv.logical_shape(), "sol_pooled_k and sol_pooled_v shapes differ");
+        TT_FATAL(
+            pk.logical_shape()[1] == q_shape[1] && pk.logical_shape()[3] == q_shape[3],
+            "sol_pooled_k must be [1, NH, n_blocks_pad, DH]");
+        const uint32_t nkc_local = tt::div_up(k_shape[2], args.get_k_chunk_size());
+        const uint32_t nkc_pad = tt::round_up(nkc_local * args.ring_size, 32u);
+        const uint32_t mask_width = tensor_args.sol_chunk_mode(args.sol_mode) ? nkc_pad : n_blocks_pad;
+        TT_FATAL(
+            mask.logical_shape()[1] == q_shape[1] && mask.logical_shape()[2] >= nqc &&
+                mask.logical_shape()[3] == mask_width,
+            "sol_block_mask must be [1, NH, >= {} q chunks, {} (blocks, or K chunks in chunk mode)], got {}",
+            nqc,
+            mask_width,
+            mask.logical_shape());
+        TT_FATAL(
+            !tensor_args.sol_streams_chunks(args.sol_mode) || nkc_local <= 64,
+            "sol chunk/compact mode: at most 64 K chunks per shard ({} given)",
+            nkc_local);
+        if (tensor_args.sol_bias.has_value()) {
+            const auto& bias = tensor_args.sol_bias.value();
+            TT_FATAL(
+                bias.logical_shape()[1] == q_shape[1] && bias.logical_shape()[2] >= nqc * 32 &&
+                    bias.logical_shape()[3] == n_blocks_pad,
+                "sol_bias must be [1, NH, >= {} rows, {} blocks], got {}",
+                nqc * 32,
+                n_blocks_pad,
+                bias.logical_shape());
+        }
+        // The on-device bias generator derives block lengths from the padded shard length and the live
+        // logical_n; it covers at most 64 K chunks per shard like chunk mode and needs the pooled rows to
+        // be whole tiles (checked above).
+    }
+
     std::vector<Tensor> sdpa_input_tensors = {input_tensor_q, gathered_input_tensor_k};
     if (has_gathered_v) {
         sdpa_input_tensors.push_back(tensor_args.gathered_v.value());
@@ -1184,9 +1272,21 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     if (tensor_args.attention_sink.has_value()) {
         input_tensors.emplace_back(tensor_args.attention_sink.value());
     }
+    if (tensor_args.sol_enabled()) {
+        input_tensors.emplace_back(tensor_args.sol_block_mask.value());
+        input_tensors.emplace_back(tensor_args.sol_pooled_k.value());
+        input_tensors.emplace_back(tensor_args.sol_pooled_v.value());
+        if (tensor_args.sol_bias.has_value()) {
+            input_tensors.emplace_back(tensor_args.sol_bias.value());
+        }
+    }
 
     return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
         input_tensors,
+        tensor_args.sol_enabled(),
+        tensor_args.sol_chunk_mode(args.sol_mode),
+        tensor_args.sol_compact_mode(args.sol_mode),
+        tensor_args.sol_bias_generated(),
         args.joint_strategy,
         args.scale,
         args.is_causal,
@@ -1356,7 +1456,12 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<uint32_t> sliding_window_size,
     const bool circular_kv_cache,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
-    const std::optional<ttnn::Tensor>& logical_l_tensor) {
+    const std::optional<ttnn::Tensor>& logical_l_tensor,
+    const std::optional<ttnn::Tensor>& sol_block_mask,
+    const std::optional<ttnn::Tensor>& sol_pooled_k,
+    const std::optional<ttnn::Tensor>& sol_pooled_v,
+    const std::optional<ttnn::Tensor>& sol_bias,
+    const std::string& sol_mode) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1581,6 +1686,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         sliding_window_size,
         circular_kv_cache,
         resolved_kv_stripe_split);
+    operation_attributes.sol_mode = sol_mode;
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
@@ -1599,7 +1705,11 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .slot_id = slot_id,
         .kv_actual_isl = kv_actual_isl_tensor,
         .logical_n_tensor = logical_n_tensor,
-        .logical_l_tensor = logical_l_tensor};
+        .logical_l_tensor = logical_l_tensor,
+        .sol_block_mask = sol_block_mask,
+        .sol_pooled_k = sol_pooled_k,
+        .sol_pooled_v = sol_pooled_v,
+        .sol_bias = sol_bias};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

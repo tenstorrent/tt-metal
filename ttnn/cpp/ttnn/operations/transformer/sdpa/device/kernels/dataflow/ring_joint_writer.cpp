@@ -951,7 +951,10 @@ void kernel_main() {
                 rotated_args_base, rotated_iter_stride, rotated_ordinal, global_q_start, global_q_end - global_q_start};
 
             const uint32_t last_q_index = q_per_core - 1;
-            const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2;
+            // Sol-Attn: a Q chunk can have a single gathered chunk on any iteration, so take the conservative
+            // ordering (flush the deferred save before the prefetch) unconditionally.
+            constexpr bool sol_enabled = get_named_compile_time_arg_val("sol_enabled") == 1;
+            const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2 || sol_enabled;
 
             // Saves use this iteration's chunk count. Restores must use the previous executed
             // iteration's count: gaining a float changes the last fixed slot from LAST to INNER,

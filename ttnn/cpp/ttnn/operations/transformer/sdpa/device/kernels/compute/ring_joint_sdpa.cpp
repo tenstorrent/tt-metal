@@ -227,6 +227,16 @@ void kernel_main() {
     // long-term state), merged into the long-term state (the restore CBs) afterwards, so no bf16 running sum spans
     // more than one shard's K chunks. A single running sum over a long prefix loses the late chunks' contribution.
     constexpr bool seg_accum_enabled = get_named_compile_time_arg_val("seg_accum") == 1;
+    // Sol-Attn block gathering (DESIGN.md §3.1b).
+    constexpr bool sol_enabled = get_named_compile_time_arg_val("sol_enabled") == 1;
+    constexpr bool sol_chunk_mode = get_named_compile_time_arg_val("sol_chunk_mode") == 1;
+    constexpr uint32_t cb_sol_plan = get_named_compile_time_arg_val("cb_sol_plan");
+    constexpr uint32_t cb_sol_bias = get_named_compile_time_arg_val("cb_sol_bias");
+    constexpr uint32_t sol_pooled_chunks = get_named_compile_time_arg_val("sol_pooled_chunks");
+    constexpr uint32_t sol_pooled_last_tiles = get_named_compile_time_arg_val("sol_pooled_last_tiles");
+    constexpr bool sol_drain_all = get_named_compile_time_arg_val("sol_drain_all") == 1;
+    constexpr bool sol_compact = get_named_compile_time_arg_val("sol_compact") == 1;
+    static_assert(!sol_enabled || (!ksplit_enabled && !seg_accum_enabled), "Sol-Attn excludes the K split");
     static_assert(!(ksplit_enabled && seg_accum_enabled));
     static_assert(
         !(ksplit_enabled || seg_accum_enabled) ||
@@ -636,7 +646,22 @@ void kernel_main() {
                 rotated_q_split_enabled,
                 dense_causal_skip,
                 kv_region_Nt,
-                (GROUPED_KV_SOURCE_COUNT > 1)>(
+                (GROUPED_KV_SOURCE_COUNT > 1),
+                RingStreamingMaskCtx<
+                    neginf_tile_idx,
+                    causal_diag_tile_idx,
+                    local_n_padded_tiles,
+                    global_n_partial_tile_idx,
+                    joint_l_partial_tile_idx,
+                    straddle_chunk_id>,
+                sol_enabled,
+                cb_sol_plan,
+                cb_sol_bias,
+                sol_pooled_chunks,
+                sol_pooled_last_tiles,
+                sol_chunk_mode,
+                sol_drain_all,
+                sol_compact>(
                 // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
                 // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
                 rotated_q_split_enabled ? 0u : global_q_start,
