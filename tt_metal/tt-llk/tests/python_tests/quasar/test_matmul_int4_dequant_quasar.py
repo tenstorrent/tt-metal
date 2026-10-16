@@ -61,6 +61,15 @@ MATMUL_GROUP_DIMS = [
     (1, 2, 8, 2),
 ]
 
+# Shapes timed by perf_matmul_int4_dequant_quasar.py: a single tile plus dest-full wide and
+# tall output grids at K=256, one to four groups. Validated here so perf stays a subset.
+PERF_GROUP_DIMS = [
+    (ct, rt, 8, group_kt)
+    for ct, rt in [(1, 1), (4, 1), (1, 4)]
+    for group_kt in [8, 4, 2]
+]
+MATMUL_GROUP_DIMS += [dims for dims in PERF_GROUP_DIMS if dims not in MATMUL_GROUP_DIMS]
+
 
 def matmul_group_dims(dest_sync):
     # 32-bit Dest halves the tile capacity.
