@@ -86,7 +86,7 @@ startup (`interleaved_mla_rope`). Its DSA indexer builds [N, 32, N] fp32 scores 
 `HF_GOLDEN_INDEXER_CHUNK=2048` scores 2048 query rows at a time, bit-identical (layers 0-3 at isl 10240, all 30
 tensors). No prefix (3.914 raw, 3.927 BOS, 3.927 chat). Use the BF16 checkpoint: Hy4-preview-FP8 is a post-hoc
 MXFP8 quantization with ~3% weight error per matmul. isl 56320 with `--attn-chunk 1024`: 11.1 min from cached
-weights, 123 GB GPU peak, 226 GB on disk (73 GB trimmed to 17 hidden layers).
+weights, 123 GB GPU peak, 226 GB on disk (71 GB trimmed to 18 hidden layers).
 
 **`--device cuda` under torch 2.11:** `torch.cuda.set_device` rejects a device without an index; pass `cuda:0`.
 
@@ -143,8 +143,8 @@ tolerance on GPU. Run it first on any new machine.
     metadata.json                              revision, versions, dtypes, every stored tensor and what it is
 ```
 
-`trim_trace.py` copies a trace keeping the layer hidden states of only some layers (embed, final and every layer's
-cache stay complete), hard-linked when on the same filesystem, with metadata.json's inventory and a `hidden_layers`
+`trim_trace.py` copies a trace keeping the layer hidden states of only some layers, always including decoder
+layers 0-4 (embed, final and every layer's cache stay complete), hard-linked when on the same filesystem, with metadata.json's inventory and a `hidden_layers`
 entry saying what was kept and why, and a fresh SHA256SUMS. At isl 56320 the 4-stream mHC hidden states dominate:
 DeepSeek-V4-Pro-0813 201 GB -> 79 GB keeping 19 of 61 layers, V4-Flash 83 GB -> 40 GB keeping 17 of 43. Keep each
 event layer with its input layer, so it can be run alone from golden input:

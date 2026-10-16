@@ -6,7 +6,8 @@
 
     python trim_trace.py <src>/<hf-repo>/isl<N> <dst-root> --layers 0-5,14,15,30-32
 
-Everything else is kept: embed, final, every layer's cache file. Files are hard-linked when src and dst share a
+The first ALWAYS_KEEP (5) decoder layers are kept whatever --layers says. Everything else is kept: embed, final,
+every layer's cache file. Files are hard-linked when src and dst share a
 filesystem (no extra space), else copied. metadata.json is rewritten: the layer-output inventory lists only the kept
 layers, and "hidden_layers" records the kept set and why. The token cache next to the trace is linked too, and a
 fresh <dst>/isl<N>.SHA256SUMS is written.
@@ -19,6 +20,9 @@ import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+
+ALWAYS_KEEP = 5  # decoder layers 0-4: in every trace's hidden states
 
 
 def parse_layers(spec: str) -> list[int]:
@@ -50,15 +54,15 @@ def sha256(path: Path) -> str:
 ap = argparse.ArgumentParser()
 ap.add_argument("trace", type=Path, help="<root>/<hf-repo>/isl<N>")
 ap.add_argument("dst_root", type=Path)
-ap.add_argument("--layers", required=True, help="hidden-state layers to keep, e.g. 0-5,14,15")
+ap.add_argument("--layers", required=True, help=f"hidden-state layers to keep, e.g. 14,15 (0-{ALWAYS_KEEP - 1} always)")
 ap.add_argument("--reason", default="", help="recorded in metadata.json")
 args = ap.parse_args()
 
 src = args.trace.resolve()
 meta = json.loads((src / "metadata.json").read_text())
 repo, n_layers = meta["hf_repo"], meta["num_layers"]
-keep = parse_layers(args.layers)
-assert keep and max(keep) < n_layers, f"layers must be within 0..{n_layers - 1}"
+keep = sorted(set(parse_layers(args.layers)) | set(range(min(ALWAYS_KEEP, n_layers))))
+assert max(keep) < n_layers, f"layers must be within 0..{n_layers - 1}"
 dst = args.dst_root / repo / src.name
 if (dst / "metadata.json").exists():
     raise SystemExit(f"{dst} already holds a trace")
