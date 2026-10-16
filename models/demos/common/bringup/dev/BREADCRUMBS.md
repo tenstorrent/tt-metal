@@ -1257,5 +1257,5 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F92: the block-out check after the last swapped step (_check_tail) takes the noise floor for int outputs too (a
   top-k): the nudged fp32 step's own selection flips. Was the fixed 0.01, which the CPU's own nudged indexer misses
   (0.026); DeepSeek-V4.1 S.enc_source.07 failed 6 attempts at 0.023 (DS41-50, the debugger's probe_006).
-- F93 (owner): the watch is a 30-minute heartbeat (default --timeout 1800); the skill says to check the run on every
+- F93 (owner): heartbeat in three layers, set up by every overseer session: the watch (default --timeout 1800, 30 min), a 30-min CronCreate timer, and the Stop hook skill/bringup/heartbeat_stop.py (no idle session on an unwatched or silently stopped run). The skill says to check the run on every
   wake and re-arm after every event. A stop at 20:33 went unseen: a DASHBOARD STALE wake was not re-armed.
