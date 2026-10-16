@@ -95,9 +95,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
 
     auto outputs = ttnn::prim::ttml_qkv_causal_conv1d_silu_bw(
         grad_q, grad_k, grad_v, input, history, tap0, tap1, tap2, tap3, params);
-    // Partials are fp32 [4, row_splits*32, C]: one fp32 row reduction (reducing an outer dim in fp32 is ~20x
-    // slower),
-    // then cast the [4, 1, C] result once.
+    // Partials come out as [4, row_splits * 32, C] so one row reduction finishes them; see the writer's page order.
     auto grad_taps =
         ttnn::typecast(ttnn::sum(outputs[1], ttsl::SmallVector<int>{1}, /*keepdim=*/true), ttnn::DataType::BFLOAT16);
     const auto grad_tap = [&](int32_t tap, const ttnn::Tensor& like) {

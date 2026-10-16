@@ -112,6 +112,8 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
                     grad_tap_partial,
                     grad_tap_tile_bytes,
                     {.offset_bytes = (tap * channel_tiles_per_block + tile_column) * grad_tap_tile_bytes},
+                    // tap outermost, then split: the host sums over rows in one fast reduction. With split
+                    // outermost that sum runs over an outer axis in fp32 and takes 1.6 ms instead of 0.07 ms.
                     {.page_id = (tap * row_splits + split) * channel_tiles + first_tile_column + tile_column});
             }
         }
