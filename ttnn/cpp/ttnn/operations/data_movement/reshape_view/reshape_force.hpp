@@ -26,6 +26,9 @@ ttnn::Tensor reshape_force_native(
 
 // The codegen implementation, unconditionally. Throws outside its scope instead of falling back, so a comparison
 // against native cannot measure native twice. The no-op, view and same-shape shortcuts are not applied.
+// `reshape_map_mode` and `skip_padding_fill` are ignored, as on the routed codegen path: the map mode only governs
+// native's tiled mapping tensor, and codegen zeroes tile padding, which skipping the fill permits; skipping only acts
+// with an explicit pad_value, which codegen rejects on a padded tile output.
 ttnn::Tensor reshape_force_codegen(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<int32_t>& shape,
