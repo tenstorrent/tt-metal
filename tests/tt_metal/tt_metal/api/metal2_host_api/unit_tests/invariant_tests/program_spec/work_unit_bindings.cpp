@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Local invariants of WorkUnitSpec::kernels (program_spec.hpp): for each DFB its kernels bind, exactly one
-// producer and one consumer instance, and, by default, at most one of its kernels binds a given scratchpad.
+// producer and one consumer instance, and, at most one of its kernels binds a given scratchpad.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
