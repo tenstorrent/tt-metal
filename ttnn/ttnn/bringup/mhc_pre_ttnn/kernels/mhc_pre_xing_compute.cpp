@@ -11,6 +11,9 @@
 //   L    = clamp(a_res * mix * r + b, lo, hi)             (L[i][j] at slot 2n + i n + j)
 //   comb = exp(L - rowmax_j L); iters x { rows: m / (rowsum + eps); columns: m / (colsum + eps) }
 // All lane-wise fp32 SFPU math: accurate exp, Newton-refined reciprocal / rsqrt, sums in index order.
+// MHC_XING_DEEPSEEK (defined only with deepseek=True; DeepSeek-V4's hc_split_sinkhorn_kernel, inference/kernel.py):
+//   pre  = sigmoid(...) + hc_eps; no clamp of L;
+//   comb = exp(L - rowmax) / rowsum + hc_eps; m / (colsum + hc_eps); (iters - 1) x { rows, columns } as above.
 //
 // y-mix (has_streams): per y column tile, DEST 0 = the pre-block tile, DEST 1..n = X_i[c] (UnpackToDestFp32, exact);
 // y = sum_i pre_i * X_i on the SFPU (one fp32 multiply, then fused multiply-adds in stream order) -> DEST 1 -> cb_y.
@@ -121,8 +124,16 @@ void coefficients() {
             if (k >= N) {
                 s = s + s;
             }
+#ifdef MHC_XING_DEEPSEEK
+            else {
+                s = s + Converter::as_float(get_arg_val<uint32_t>(RT_HC_EPS));
+            }
+#endif
             dst_reg[k] = s;
         } else {
+#ifdef MHC_XING_DEEPSEEK
+            dst_reg[k] = z;
+#else
             vFloat lo = Converter::as_float(get_arg_val<uint32_t>(RT_LO));
             vFloat hi = Converter::as_float(get_arg_val<uint32_t>(RT_HI));
             v_if(z < lo) { z = lo; }
@@ -130,6 +141,7 @@ void coefficients() {
             v_if(z > hi) { z = hi; }
             v_endif;
             dst_reg[k] = z;
+#endif
         }
     }
 }
@@ -151,8 +163,40 @@ void sinkhorn() {
             dst_reg[m_slot(i, j)] = ckernel::sfpu::_sfpu_exp_fp32_accurate_<false>(d);
         }
     }
+#ifdef MHC_XING_DEEPSEEK
+    // softmax over the row + eps, then one column normalisation; the loop below runs the remaining iters - 1
+#pragma GCC unroll 4
+    for (int i = 0; i < N; ++i) {
+        vFloat s = dst_reg[m_slot(i, 0)];
+#pragma GCC unroll 4
+        for (int j = 1; j < N; ++j) {
+            s = s + dst_reg[m_slot(i, j)];
+        }
+        vFloat rs = recip_pos(s);
+#pragma GCC unroll 4
+        for (int j = 0; j < N; ++j) {
+            dst_reg[m_slot(i, j)] = dst_reg[m_slot(i, j)] * rs + eps;
+        }
+    }
+#pragma GCC unroll 4
+    for (int j = 0; j < N; ++j) {
+        vFloat s = dst_reg[m_slot(0, j)];
+#pragma GCC unroll 4
+        for (int i = 1; i < N; ++i) {
+            s = s + dst_reg[m_slot(i, j)];
+        }
+        vFloat rc = recip_pos(s + eps);
+#pragma GCC unroll 4
+        for (int i = 0; i < N; ++i) {
+            dst_reg[m_slot(i, j)] = dst_reg[m_slot(i, j)] * rc;
+        }
+    }
+    const uint32_t loops = iters - 1;  // the host refuses iters < 1
+#else
+    const uint32_t loops = iters;
+#endif
 #pragma GCC unroll 0
-    for (uint32_t it = 0; it < iters; ++it) {
+    for (uint32_t it = 0; it < loops; ++it) {
 #pragma GCC unroll 4
         for (int i = 0; i < N; ++i) {
             vFloat s = dst_reg[m_slot(i, 0)];

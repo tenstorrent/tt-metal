@@ -127,6 +127,9 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
             comb = exp(L - rowmax); sinkhorn_iters x {m / (rowsum + hc_eps), then m / (colsum + hc_eps)}
         -> hc (..., T, n(n+2)) fp32 = [pre | post | comb row-major] (the layout tt/residual.py slices for
         mhc_post(comb_transposed=False)).
+        deepseek=True (default False): DeepSeek-V4's math (inference/kernel.py hc_split_sinkhorn_kernel):
+            pre  = sigmoid(z[0:n]) + hc_eps;  L = z[2n:] (no clamp; clamp_min / clamp_max ignored)
+            comb = exp(L - rowmax) / rowsum + hc_eps; m / (colsum + hc_eps); (sinkhorn_iters - 1) x {rows, columns}
         coefficients_given=True: input is a finished hc (..., T, n(n+2)); only pre is read.
         streams (..., T, n*C) fp32, optional: y = sum_i pre_i * streams[..., i*C:(i+1)*C] -> (..., T, C) fp32.
 
@@ -147,7 +150,8 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
         nb::arg("clamp_min") = -30.0,
         nb::arg("clamp_max") = 30.0,
         nb::arg("coefficients_given") = false,
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("deepseek") = false);
 
     ttnn::bind_function<"mhc_pre_xing_pack", "ttnn.bringup.">(
         mod,

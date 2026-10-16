@@ -245,6 +245,9 @@ ProgramDescriptor create_xing_program_descriptor(
     desc.kernels.push_back(make_kernel(
         "mhc_pre_xing_writer.cpp", all_cores, writer_ct, writer_rt, tt::tt_metal::WriterConfigDescriptor{}));
     desc.kernels.push_back(make_kernel("mhc_pre_xing_compute.cpp", all_cores, compute_ct, compute_rt, cc));
+    if (p.deepseek) {  // absent when off: Xing's program unchanged
+        desc.kernels.back().defines.emplace_back("MHC_XING_DEEPSEEK", "1");
+    }
     return desc;
 }
 
