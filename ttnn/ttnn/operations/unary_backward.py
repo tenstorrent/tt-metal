@@ -369,7 +369,7 @@ def _golden_function_acosh_bw_torch(grad_tensor, input_tensor, *args, device, **
 
     ``_golden_function_acosh`` disagrees with torch on 51,038 of the 65,536 BF16 inputs at grad = 1. For BF16 at
     the parameters the spec covers, this returns torch's result: its own at its special inputs and the exact
-    1/sqrt(x^2 - 1) elsewhere, in float64, rounded once to BF16, NaN included.
+    1/sqrt(x^2 - 1) elsewhere, in float64, rounded once to BF16, NaN included and stored as +inf, as the fused program's BF16 output holds it.
     Every other call keeps ``_golden_function_acosh``, as does a call the fused program does not
     serve: operands of two shapes, or a sharded ``memory_config`` (the composite runs there).
     """
@@ -400,6 +400,8 @@ def _golden_function_acosh_bw_torch(grad_tensor, input_tensor, *args, device, **
     inexact = torch.isfinite(result) & (f32.to(torch.float64) != result)
     bits = f32.view(torch.int32) - (inexact & (f32.to(torch.float64).abs() > result.abs())).to(torch.int32)
     rounded = (bits | inexact.to(torch.int32)).view(torch.float32).to(torch.bfloat16)
+    # The fused program stores a NaN as the BF16 pack does, 0x7F80 (+inf).
+    rounded = torch.where(torch.isnan(rounded), torch.full_like(rounded, math.inf), rounded)
     return [rounded]
 
 
