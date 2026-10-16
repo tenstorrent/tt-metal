@@ -81,11 +81,6 @@ struct OpenConfig {
     // paths and JIT include paths from it. `open_or_skip` does not read it.
     std::filesystem::path kernel_dir;
 
-    // Required executables always use the prepared pinned-input profile; the rest
-    // run at the reset shape. WayEnable cannot decrease without an ASIC reset,
-    // so a chip provisioned for the profile refuses the rest.
-    bool prepared_suite_requested = false;
-
     // Selected component memory layout profile. Default is Legacy.
     x280::LimLayout lim_layout = x280::LimLayout::Legacy;
 
@@ -187,19 +182,15 @@ inline void boot_held_chips(x280::X280Runtime& runtime, const std::vector<x280::
 
 /**
  * The runtime configuration `open_or_skip` opens `cfg` with: RequirePrepared, so
- * a case never primes; and for the prepared suites and the PacketInjection
- * layout, exactly the 14-way profile, which a chip at another shape refuses.
+ * a case never primes, and 14 LIM ways for every case, which a reset-held chip
+ * reaches and a chip whose tiles run at another shape refuses until a reset.
  */
 inline x280::RuntimeOpenConfig runtime_open_config(const OpenConfig& cfg) {
-    x280::RuntimeOpenConfig config{
+    return x280::RuntimeOpenConfig{
         .priming_policy = x280::LimEccPrimingPolicy::RequirePrepared,
+        .lim_shape = x280::LimShape{.lim_ways = x280::kPreparedLimWays},
         .lim_layout = cfg.lim_layout,
     };
-    if (cfg.prepared_suite_requested || cfg.lim_layout == x280::LimLayout::PacketInjection) {
-        config.lim_shape = x280::LimShape{.lim_ways = x280::kPreparedLimWays};
-        config.shape_change_policy = x280::LimShapeChangePolicy::RequireExact;
-    }
-    return config;
 }
 
 // The whole SetUp pattern in one call. Emits GTEST_SKIP() / ASSERT_* into
@@ -227,7 +218,7 @@ inline void open_or_skip(Fixture& f, const OpenConfig& cfg) {
         if (opened.requires_reset()) {
             why += "; reset the device (tt-smi -r <device>)";
         }
-        if (opened.requires_preparation() || opened.requires_reset()) {
+        if (opened.requires_preparation()) {
             why +=
                 "; an unprimed device is primed once by X280_ALLOW_LIM_ECC_PRIME=1 x280_prime_test, then "
                 "tt-smi -r <device>";

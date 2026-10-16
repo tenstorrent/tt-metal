@@ -163,7 +163,7 @@ The required prepared profile is:
 | Property | Required value |
 |---|---|
 | Cache/LIM shape | `WAYENABLE=1`, 14 LIM ways |
-| Case admission | `LimShape{14}` with `RequireExact` |
+| Case admission | `LimShape{14}` with `RequirePrepared` |
 | Pinned way | way 1 |
 | General-purpose cache | way 0 remains enabled |
 | Baseline active mask bits | `0b11` for every master |
@@ -196,8 +196,8 @@ coherently replace the bytes in already pinned lines before warmup, but they do
 not flush the region, change `WAYENABLE`, invalidate or repin lines, allocate a
 lease, or restore masks at case close.
 
-Both pipeline executables require this exact prepared profile. Latency
-members and both bandwidth executables run at the reset shape. Legacy/stress
+Both pipeline executables require this exact prepared profile; every
+benchmark opens at its 14 LIM ways ([harness.md](../harness.md#running-benchmarks)). Legacy/stress
 suites, cache experiments, and unreviewed executables are excluded from the
 prepared sequence.
 

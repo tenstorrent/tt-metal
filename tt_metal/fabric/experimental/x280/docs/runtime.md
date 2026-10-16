@@ -241,9 +241,9 @@ hierarchy. Individual configurations do not allocate cache leases, invalidate
 the region, change masks, or restore cache state when their fixtures close.
 The ordinary active-session STOP/cleanup and NoC-window cleanup still run.
 
-Both pipeline executables always require this prepared profile. The latency
-members and both transport-bandwidth executables run at the reset shape, so a
-chip left at 14 LIM ways skips them until an ASIC reset.
+Both pipeline executables always require this prepared profile, and every
+benchmark opens at its 14 LIM ways
+([harness.md](harness.md#running-benchmarks)).
 
 There is no teardown: an ASIC reset (`tt-smi -r <device>`) clears the pinning,
 the 14-way partition and the record together. Do not run cache-flush, repartition, ECC-priming, or

@@ -607,13 +607,6 @@ to close Metal, reset the device, recreate the mesh, and call `open` again.
 without changing hardware; reversible silicon tests use this policy through the
 public entry point.
 
-Shape changes have a separate policy:
-`RuntimeOpenConfig::shape_change_policy` defaults to `ApplyWhileReset`.
-`RequireExact` preflights the requested shape on all selected chips and refuses
-a mismatch before ECC priming or shape application. It does not pin cache ways
-or establish retained Zero Device storage. Unreadable shape observations are
-refused without attempting PLL recovery.
-
 The pipeline group uses a prepared cache policy for an ASIC-reset lifetime.
 Before each device case the pipeline_stage suite has the runtime prepare the
 fixed 4288-byte Zero Device region, placing it into way 1 and pinning it; the
@@ -622,10 +615,7 @@ Preparation requires the 14-LIM-way partition and operator-owned exclusive use
 of the device until the next reset. See
 [`runtime.md` / Prepared pipeline inputs](runtime.md#prepared-pipeline-inputs-x280-only).
 
-`RunSpec`'s `session::OpenConfig` marks whether the prepared profile is
-required; session opening uses 14 LIM ways and `RequireExact` when required. Pipeline configurations require it.
-The latency rows and both bandwidth executables run at the reset shape's 15 LIM
-ways.
+Every case opens at 14 LIM ways ([Running benchmarks](#running-benchmarks)).
 Each case still opens and closes its ordinary
 MeshDevice/runtime and performs normal active-session and NoC-window cleanup.
 Case boundaries do not change cache masks, invalidate the reserved region, or
@@ -1360,6 +1350,12 @@ to `X280_PLL_MHZ` (default 1750). A chip with only some L2CPUs out of reset
 cannot boot the rest, so its cases skip until `tt-smi -r`. Images default to
 `build/x280/` as the tests' do; each `X280_*_FW_IMAGE` variable, and
 `X280_IDLE_FW_IMAGE` for resident idle, names another file.
+
+Every benchmark opens at 14 LIM ways (`WAYENABLE=1`), the shape the
+pipeline_stage pinned input and the PacketInjection layout require. A chip whose
+L2CPUs are all held in reset reaches it automatically when the first case opens;
+a chip whose tiles already run at another shape returns `ResetRequired`, and its
+cases skip until `tt-smi -r <device>`.
 
 Every executable that launches a Metal kernel on a core-local RISC (an
 `IDLE_ETH` or `ACTIVE_ETH` Ethernet core, or a DRISC) requires

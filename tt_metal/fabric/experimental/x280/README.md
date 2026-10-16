@@ -101,8 +101,8 @@ TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD" build/test/tt_metal/x280/x280_
   ([docs/harness.md](docs/harness.md#running-benchmarks)). A chip with only some L2CPUs out of
   reset skips until the next reset.
 - The pipeline_stage executables have the runtime prepare their pinned input, once per reset of
-  the device; later runs reuse it. They and the packet_injection executables use the 14-way LIM
-  shape; a chip left at 14 ways skips the 15-way members until a reset.
+  the device; later runs reuse it. Every benchmark opens at 14 LIM ways
+  ([docs/harness.md](docs/harness.md#running-benchmarks)).
 - `x280_eth_credit` uses chips 0 and 1 over their Ethernet link; run it with every card visible
   ([docs/benchmarks/eth_credit.md](docs/benchmarks/eth_credit.md#running-it)).
 - Executables that launch Metal kernels on idle Ethernet or DRAM cores link slow dispatch in;

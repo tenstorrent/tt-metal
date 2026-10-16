@@ -51,7 +51,6 @@ protected:
                     .image_env_var = "X280_PACKET_INJECTION_FW_IMAGE",
                     .image_file = "firmware-packet-injection-throughput.bin",
                     .kernel_dir = x280::harness::artifacts::kernel_dir_of(__FILE__),
-                    .prepared_suite_requested = true,
                     .lim_layout = x280::LimLayout::PacketInjection,
                 },
             .suite_label = "packet_injection_erisc_to_x280_header",

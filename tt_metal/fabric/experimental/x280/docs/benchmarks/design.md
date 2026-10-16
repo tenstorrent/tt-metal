@@ -1486,8 +1486,8 @@ cannot establish. Between cases there is no cache flush, `WAYENABLE` change,
 mask change, repinning, allocation, or restoration. A failed preparation
 leaves the record aborted, and every later case skips until a reset.
 
-Both pipeline executables require `LimShape{14}` with `RequireExact`. Latency
-members and both bandwidth executables run at the reset shape.
+Both pipeline executables require `LimShape{14}`, at which every benchmark
+opens ([harness.md](../harness.md#running-benchmarks)).
 Legacy/stress suites, cache experiments, and unreviewed executables remain
 outside that sequence.
 

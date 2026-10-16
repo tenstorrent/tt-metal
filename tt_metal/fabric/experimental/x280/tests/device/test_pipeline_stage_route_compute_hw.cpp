@@ -35,7 +35,6 @@ protected:
                     .image_env_var = "X280_PIPELINE_STAGE_ROUTE_COMPUTE_FW_IMAGE",
                     .image_file = "firmware-pipeline-stage-route-compute.bin",
                     .kernel_dir = x280::harness::artifacts::kernel_dir_of(__FILE__),
-                    .prepared_suite_requested = true,
                 },
             .suite_label = "pipeline_stage_route_compute",
         };

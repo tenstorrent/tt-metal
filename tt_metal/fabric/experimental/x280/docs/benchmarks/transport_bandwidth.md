@@ -20,8 +20,7 @@ under the posted ordering mode does not wait for them, so it is an issue rate
 
 ## Running it
 
-Both executables run at the default 15-way LIM shape, so a chip left at 14 ways by a
-pipeline_stage or packet_injection run skips them until a reset. The harness boots resident idle
+Both executables open at 14 LIM ways like every benchmark, and the harness boots resident idle
 on a reset-held chip ([harness.md](../harness.md#running-benchmarks)).
 
 ```bash
