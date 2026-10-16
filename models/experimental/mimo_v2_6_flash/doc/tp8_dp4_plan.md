@@ -164,3 +164,39 @@ Where one MoE decode layer's ~650 us go (device, per chip): expert `sparse_matmu
 small ops. The expert matmuls read ~57 MB of BFP4 weights per call, so they run at about half of the
 bandwidth a DRAM-sharded matmul reaches. `tests/perf/kagent_moe_decode_{bench,check}.py` are the
 tt-kernel-agent perf and correctness commands for this layer (baseline 653 us, spread 0.04 %).
+
+## Decode DRAM utilization, 2026-10-16 (branch `mimo-v2.6/decode-perf`, MOPD)
+
+Traced device-resident greedy loop, 4 users per replica, median of 5 runs (`tests/perf/decode_bandwidth.py
+--steps 32 --repeats 5`). Utilization = useful bytes per chip per step / step time / 512 GB/s.
+
+| Change | 1 row ms/step | 1 row % | 4 rows % |
+|---|---|---|---|
+| Start of this round (MOPD port) | 16.50 | 42.3 | 37.8 |
+| Bank-streaming SWA qkv / global o | 16.28 | 42.9 | 37.9 |
+| Both RMSNorms fused into the block reductions | 15.85 | 44.0 | 39.5 |
+| RouterScoreStream (router + sigmoid + bias in one launch) | 15.33 | 45.5 | 40.0 |
+| Row all-gather over the fabric inside the reduce | 14.93 | 46.8 | 41.4 |
+| FPU chip sum in the reduce (median of 5 from here) | 14.55 | 48.0 | 43.3 |
+| SwaDecodeQkv + SWA paging by absolute position | 14.21 | 49.1 | 43.4 |
+| SWA o streamed into compact rows | 14.15 | 49.3 | 44.5 |
+| Down inside the fabric reduce launch | 14.01 | 49.8 | 44.1 |
+
+Accuracy at the end: top-1 0.975, logits PCC min 0.9608 / mean 0.9925 vs the fp32 reference; device loop tokens
+match the host loop.
+
+SWA KV is now paged by absolute position (`kv.SwaBlockTable`, the vLLM SlidingWindowSpec layout) instead of a
+512-token ring; 300 greedy tokens are identical with the sparse table and with every block backed.
+
+Measured but not kept: qkv prefetch into L1 during the reductions (`MIMO_QKV_PREFETCH=1`: qkv 23 -> 14.5 us, but
+the reductions stretch, net flat); the o projection inside the attention-side reduce launch (`MIMO_MERGE_O=1`: its
+~10 us dispatch is not hidden); `all_gather_async` (slower than `ttnn.all_gather` for 32 KB).
+
+Next steps toward 55% (12.7 ms/step), largest first:
+- GateUp waits ~9 us per layer for user 0's routing before it streams. The routing normalization runs in soft float
+  on the rv32im data-movement cores; integer fixed-point normalization (or routing in the router launch) should
+  recover most of it (~0.4 ms/step).
+- One attention-core launch per SWA layer: SwaDecodeQkv + windowed SDPA with sinks + head concat (~26 -> ~10 us
+  per layer, ~0.6 ms/step).
+- Router inside the post-attention reduce launch; GreedyHead scan / merge (~50 us/step); the 20 us single-core
+  embedding; layer 0's dense MLP.
