@@ -35,6 +35,7 @@ from fuser.validator import (
     REDUCE_PARAMS_REQUIRED,
     SRC_A_DIMS,
     SUB_BCAST_COL_REQUIRED,
+    TRANSPOSE_NEEDS_FULL_TILE,
     TRANSPOSE_WITHIN_FACE_REQUIRED,
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
@@ -181,6 +182,7 @@ UNPACKER_MAP = {
             INT32_NEEDS_UNPACK_TO_DEST,
             NO_TRANSPOSE_UNPACK_TO_DEST,
             _no_transpose_mismatch,
+            TRANSPOSE_NEEDS_FULL_TILE,
             reject(
                 lambda s, a, b: s.unpack_to_dest.value
                 and a.tile_shape.tile_dims != (32, 32),
@@ -276,6 +278,7 @@ FPU_MAP = {
             NO_BROADCAST,
             NO_TRANSPOSE_UNPACK_TO_DEST,
             _no_transpose_mismatch,
+            TRANSPOSE_NEEDS_FULL_TILE,
         ],
     ),
     "Matmul": (
