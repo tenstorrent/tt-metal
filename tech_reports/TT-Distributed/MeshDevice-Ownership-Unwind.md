@@ -601,3 +601,7 @@ nb::class_<MeshDevice>(mod, "MeshDevice", nb::dynamic_attr())
 - **Destruction timing follows reference counts.** Python handles, including the ones `tensor.device()` hands out, extend the device's life without anyone intending it. If `close()` was not called explicitly, `~MeshDevice` runs `close_impl`, including a distributed barrier ([`mesh_device.cpp:1042-1045`](../../tt_metal/distributed/mesh_device.cpp)), at whatever point the last reference happens to drop.
 - **Ownership runs upward.** A child owns its parent, and the parent owns the context, so teardown order falls out of reference counts instead of being visible in the code.
 - **The Python annotation is wrong** (§5), and the C++ ownership hides the mistake.
+
+## See also
+
+[MeshDevice-Ownership-Unwind-Side-Notes.md](MeshDevice-Ownership-Unwind-Side-Notes.md) records unrelated findings from this work (pre-existing test failures, build and CI pitfalls, coverage gaps).
