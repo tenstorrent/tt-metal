@@ -96,6 +96,10 @@ class QuantConfig:
     ff1_output_dtype: ttnn.DataType | None = None
     # Sprint 7 (A7). Output dtype of norm_out (proj_out input + its fp32 TP all-gather); None = fp32.
     norm_out_output_dtype: ttnn.DataType | None = None
+    # Sprint 7 (S05). ff1's fused tanh-GELU in the fast form (GELU_TANH param 1: x / (1 + exp(-2u)),
+    # within 1 BF16 ULP of the FP32 tanh form, ~-0.8 % of the 720p denoise). WAN5B_FF1_GELU=fast /
+    # accurate overrides the preset either way.
+    ff1_fast_gelu: bool = False
 
     @staticmethod
     def default() -> QuantConfig:
@@ -299,7 +303,25 @@ def _all_bf8_lofi_act8_mod16_ff8() -> QuantConfig:
     return base
 
 
+def _all_bf8_lofi_act8_out8_ff8() -> QuantConfig:
+    """`all_bf8_lofi_act8_out8` (the 5B default until S05) plus a bfloat8_b ff1 output into ff2 (A6 alone).
+
+    With a bf8 ff1 output the ff1 AG-matmul no longer pins its output to bf16, which is what lets
+    ff1 take the fabric-bound strided AG-matmul (its output follows its bf8 inputs); ff2's output
+    stays pinned bf16, so the residual stream is unchanged. Also runs ff1's GELU in the fast form.
+
+    The 5B default since S05 (2026-10-16, 160 W, x2 same hour, all with fast GELU): 720p denoise
+    6.992 -> 6.937 s, 480p 3.199 -> 3.113 s on the strided ff1; the bf8 ff1 output alone (strided
+    path off) 6.989 s. Fast GELU on its own: 720p 7.046 -> 6.989 s. PCC 99.9830 / 99.9832 %.
+    """
+    base = _all_bf8_lofi_act8_out8()
+    base.ff1_output_dtype = ttnn.bfloat8_b
+    base.ff1_fast_gelu = True
+    return base
+
+
 QuantConfig.all_bf8_lofi_act8 = staticmethod(_all_bf8_lofi_act8)
+QuantConfig.all_bf8_lofi_act8_out8_ff8 = staticmethod(_all_bf8_lofi_act8_out8_ff8)
 QuantConfig.all_bf8_lofi_act8_mod16_ff8 = staticmethod(_all_bf8_lofi_act8_mod16_ff8)
 QuantConfig.all_bf8_lofi_act8_out8 = staticmethod(_all_bf8_lofi_act8_out8)
 QuantConfig.all_bf8_lofi_act8_mod16 = staticmethod(_all_bf8_lofi_act8_mod16)
@@ -404,6 +426,9 @@ def apply_quant_config(model, config: QuantConfig) -> None:
         block.attn2.per_linear_compute_config = config.per_linear_compute_config
         # ff1 output dtype (A6).
         block.ffn.ff1_output_dtype = config.ff1_output_dtype
+        # ff1 GELU form (S05); only the Wan tanh-GELU epilogue is switched.
+        if block.ffn.ff1.fused_activation_fn in _FF1_GELU_FORMS.values():
+            block.ffn.ff1.fused_activation_fn = _FF1_GELU_FORMS[_ff1_gelu_form(config)]
 
         # Self-attention linears
         _apply_linear_config(block.attn1.to_qkv, config.self_attn_qkv, arch, f"blocks[{idx}].attn1.to_qkv", **act)
@@ -475,6 +500,16 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     )
 
 
+_FF1_GELU_FORMS = {"accurate": ttnn.UnaryOpType.GELU_TANH, "fast": (ttnn.UnaryOpType.GELU_TANH, True)}
+
+
+def _ff1_gelu_form(config: QuantConfig) -> str:
+    forced = os.environ.get("WAN5B_FF1_GELU", "").strip().lower()
+    if forced in _FF1_GELU_FORMS:
+        return forced
+    return "fast" if config.ff1_fast_gelu else "accurate"
+
+
 def set_quant_config(pipeline, config: QuantConfig) -> None:
     """Install a quantization config on a WanPipeline.
 
@@ -515,7 +550,7 @@ def set_quant_config(pipeline, config: QuantConfig) -> None:
 QUANT_CONFIG_ENV = "WAN5B_QUANT_CONFIG"
 """Name of a `QuantConfig` preset to use instead of the 5B default; `bf16` (or `none`) keeps bf16 weights."""
 
-QUANT_CONFIG_DEFAULT_5B = "all_bf8_lofi_act8_out8"
+QUANT_CONFIG_DEFAULT_5B = "all_bf8_lofi_act8_out8_ff8"
 """Preset applied when `WAN5B_QUANT_CONFIG` is unset: the fastest PCC-passing 5B configuration on a
 BH Galaxy (sprint 7, 720p T2V / I2V / 480p, PCC 99.983 % vs the torch reference)."""
 
@@ -546,6 +581,7 @@ def quant_config_from_env(var: str = QUANT_CONFIG_ENV) -> tuple[str, QuantConfig
             "all_bf8_lofi_act8_out8",
             "all_bf8_lofi_act8_mod16",
             "all_bf8_lofi_act8_mod16_ff8",
+            "all_bf8_lofi_act8_out8_ff8",
         ]
         msg = f"{var}={name!r} is not a QuantConfig preset; expected one of {presets}"
         raise ValueError(msg)

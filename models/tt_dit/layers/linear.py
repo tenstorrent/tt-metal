@@ -35,10 +35,12 @@ MATH_FIDELITY = {
 # "gelu":      exact GELU (piecewise CDF / FP32 erf), matches F.gelu().
 # "gelu_fast": 6-segment piecewise-linear LUT, ~1% absolute error vs exact GELU.
 # "gelu_tanh": FP32 tanh approximation, matches F.gelu(approximate="tanh").
+# "gelu_tanh_fast": the same function as x / (1 + exp(-2u)), within 1 BF16 ULP of "gelu_tanh".
 _FUSED_GELU_VARIANTS = {
     "gelu": (ttnn.UnaryOpType.GELU, False),
     "gelu_fast": (ttnn.UnaryOpType.GELU, True),
     "gelu_tanh": ttnn.UnaryOpType.GELU_TANH,
+    "gelu_tanh_fast": (ttnn.UnaryOpType.GELU_TANH, True),
 }
 
 

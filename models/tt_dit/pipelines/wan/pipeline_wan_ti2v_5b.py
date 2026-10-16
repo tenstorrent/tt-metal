@@ -13,7 +13,13 @@ import dataclasses
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.utils.conv3d import _BLOCKINGS, register_conv3d_configs
-from models.tt_dit.utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, register_matmul_configs
+from models.tt_dit.utils.matmul import (
+    FabricAGMMConfig,
+    FusedMMRSConfig,
+    register_fabric_agmm_configs,
+    register_fused_mmrs_configs,
+    register_matmul_configs,
+)
 
 _5B_CHECKPOINT = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 
@@ -140,8 +146,32 @@ def _register_5b_conv3d_tables() -> None:
     )
 
 
+def _register_5b_fabric_agmm_tables() -> None:
+    """ff1 on the fabric-bound strided AG-matmul (sprint 7, S05).
+
+    The matmul runs on 12x8 with the strided all-gather workers on rows 8-9. Only ff1 qualifies
+    among the 5B AG-matmuls: qkv is chunks=3, to_out has M > N and a fused addcmul. The op has no
+    output dtype override, so a call reaches it only when ff1's output dtype equals its input's,
+    i.e. under a bf8 ff1 output (`ff1_output_dtype`, preset `all_bf8_lofi_act8_out8_ff8`); every
+    other preset keeps all_gather_minimal_matmul_async. Winners of the sagmm sweep in
+    sweep_mm_block_sizes.py at bf8 / LoFi (WAN5B_SWEEP_DTYPE / WAN5B_SWEEP_FIDELITY), 160 W, against
+    374 us for ff1 on all_gather_minimal_matmul_async at 720p (Tracy, same precision).
+    `DISABLE_FABRIC_AGMM=1` turns it off.
+    """
+    grid, offset = ttnn.CoreCoord(12, 8), (0, 8)
+    register_fabric_agmm_configs(
+        {
+            ttnn.CoreCoord(12, 10): {
+                (2336, 3072, 3584, 1): FabricAGMMConfig(grid, offset, 10, 4, 10, 2, 2, 3, 8),  # 720p, 322.1 us
+                (1024, 3072, 3584, 1): FabricAGMMConfig(grid, offset, 4, 6, 10, 2, 2, 3, 8),  # 480p, 153.7 us
+            },
+        }
+    )
+
+
 _register_5b_matmul_tables()
 _register_5b_conv3d_tables()
+_register_5b_fabric_agmm_tables()
 
 # 720p exact-shape conv3d winners (measured on 4x8, 720p t=7; keyed by full shape tuple so the
 # 480p channel-keyed table is untouched). Complete (13/13 swept via bruteforce_conv3d_sweep.py
