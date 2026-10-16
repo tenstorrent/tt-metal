@@ -158,7 +158,8 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
  * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
  * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
  * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
- * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47483.
+ * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47483. On Blackhole the
+ * unpacker already takes a block of 16-bit or 8-bit tiles from one config context.
  *
  * Return value: None
  *
@@ -172,6 +173,22 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void transpose_block(uint32_t icb, uint32_t start_itile, uint32_t start_idst, uint32_t ntiles) {
+#if defined(ARCH_BLACKHOLE) && (defined(TRISC_MATH) || defined(TRISC_UNPACK))
+    const std::uint32_t dst_format = get_operand_dst_format(icb);
+    const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::UInt32) ||
+                                       (dst_format == (std::uint32_t)DataFormat::Int32);
+    // One tile per call reads no faster as a block
+    if (!enable_unpack_to_dest && ntiles > 1) {
+        LLK_SAN_FUNCTION();
+        UNPACK((llk_unpack_A_transpose_block(icb, start_itile, ntiles)));
+        for (uint32_t i = 0; i < ntiles; ++i) {
+            MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(
+                start_idst + i, icb)));
+        }
+        return;
+    }
+#endif
     for (uint32_t i = 0; i < ntiles; ++i) {
         transpose_tile<is_fp32_dest_acc_en>(icb, start_itile + i, start_idst + i);
     }
