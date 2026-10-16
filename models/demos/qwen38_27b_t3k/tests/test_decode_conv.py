@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.qwen38_27b_t3k.tt.decode_conv import make_actual_start, packed_decode_conv
+from models.demos.qwen38_27b_t3k.tt.decode_conv import make_actual_start, packed_decode_conv, row_selector
 from models.demos.qwen38_27b_t3k.tt.model import Checkpoint, checkpoint_path
 
 
@@ -44,6 +44,7 @@ def test_packed_decode_conv_matches_independent_users(device, batch, seed):
     history = upload(history_host)
     taps = [upload(tap, ttnn.TILE_LAYOUT) for tap in taps_host]
     actual_start = make_actual_start(device)
+    selector = row_selector(device, batch)
     reference = [
         ttnn.experimental.kda.qkv_causal_conv1d_silu(
             row[i : i + 1],
@@ -56,7 +57,7 @@ def test_packed_decode_conv_matches_independent_users(device, batch, seed):
         )
         for i in range(batch)
     ]
-    result = packed_decode_conv(row, history, taps, widths, actual_start)
+    result = packed_decode_conv(row, history, taps, widths, actual_start, selector)
     torch_reference = torch_conv_reference(row_host, history_host, taps_host, widths)
     for name, component, output in zip(("q", "k", "v"), range(3), result):
         expected = torch.cat([ttnn.to_torch(parts[component])[:, :1] for parts in reference])
@@ -69,7 +70,7 @@ def test_packed_decode_conv_matches_independent_users(device, batch, seed):
     # Changing one user's state must not leak into any other retained row.
     changed_history = ttnn.to_torch(history).clone()
     changed_history[batch // 2] *= -3
-    changed = packed_decode_conv(row, upload(changed_history), taps, widths, actual_start)
+    changed = packed_decode_conv(row, upload(changed_history), taps, widths, actual_start, selector)
     keep = [i for i in range(batch) if i != batch // 2]
     for original, modified in zip(result, changed):
         assert torch.equal(ttnn.to_torch(original)[keep], ttnn.to_torch(modified)[keep])
