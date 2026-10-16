@@ -42,9 +42,10 @@ Contract:
 
 from __future__ import annotations
 
+import re
 import warnings
 from enum import Enum
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, List, Literal, Optional, Sequence, Tuple, Union
 
 import ttnn
 
@@ -138,6 +139,10 @@ class FSDPState:
         # ones it resolves after :func:`ttml.materialize_module` runs. Order
         # is stable across unshard/reshard so reducing/gathering pairs line up.
         self.managed: List[Tuple[Parameter, int]] = []
+
+        # Params kept replicated by ``replicate=``: name -> the patterns that matched it.
+        # ``ttml.sync_gradients`` averages their grads.
+        self.replicated: dict[str, List[str]] = {}
 
         # id(autograd_tensor) -> cached sharded ttnn::Tensor, populated lazily
         # during the first pre-forward and reused across forwards to avoid a
@@ -361,6 +366,13 @@ def _param_shape(parameter: Parameter) -> List[int]:
     return list(inner.shape())
 
 
+def _param_placements(parameter: Parameter) -> Optional[List[Any]]:
+    inner = parameter.peek_tensor()
+    if isinstance(inner, TensorMetadata):
+        return _placements_from_mapper(inner.mapper)
+    return _get_placements(inner)
+
+
 def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int) -> Optional[int]:
     """Pick a shard dim for ``parameter``, or return ``None`` to skip it.
 
@@ -380,12 +392,7 @@ def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int) -> Optional
     case — same logical question, different source depending on whether the
     tensor exists yet.
     """
-    inner = parameter.peek_tensor()
-    if isinstance(inner, TensorMetadata):
-        placements = _placements_from_mapper(inner.mapper)
-    else:
-        placements = _get_placements(inner)
-    already_sharded = _sharded_tensor_dims(placements)
+    already_sharded = _sharded_tensor_dims(_param_placements(parameter))
     return _pick_shard_dim_from_shape(_param_shape(parameter), already_sharded, axis_index)
 
 
@@ -394,8 +401,8 @@ def _auto_shard_dim_for_param(parameter: Parameter, axis_index: int) -> Optional
 # ---------------------------------------------------------------------------
 
 
-def _collect_root_param_wrappers(module: AbstractModuleBase) -> List[Tuple[str, Parameter]]:
-    """Return ``[(dotted_name, Parameter), ...]`` for every Python
+def _collect_root_param_wrappers(module: AbstractModuleBase) -> List[Tuple[List[str], Parameter]]:
+    """Return ``[(dotted_names, Parameter), ...]`` for every Python
     :class:`~ttml.modules.parameter.Parameter` owned by ``module`` but NOT by
     any nested ``fully_shard``-wrapped submodule.
 
@@ -408,7 +415,8 @@ def _collect_root_param_wrappers(module: AbstractModuleBase) -> List[Tuple[str, 
     past materialize time).
 
     Dedup is by ``Parameter`` identity, so weight-tied references (one
-    ``Parameter`` referenced under multiple attribute names) count once.
+    ``Parameter`` referenced under multiple attribute names) count once;
+    ``dotted_names`` lists every such alias visible to ``module``.
     Implicitly assumes every parameter the model owns is exposed via a Python
     ``Parameter`` wrapper — true for every model in ``ttml.models``.
     """
@@ -421,8 +429,8 @@ def _collect_root_param_wrappers(module: AbstractModuleBase) -> List[Tuple[str, 
             fsdp_modules.add(id(child))
             fsdp_prefixes.append(name + ".")
 
-    seen_ids: set = set()
-    out: List[Tuple[str, Parameter]] = []
+    names_by_id: dict[int, List[str]] = {}
+    out: List[Tuple[List[str], Parameter]] = []
     for prefix, mod in module.named_modules():
         # Skip the wrapped sub-module roots themselves AND any of their
         # descendants. ``fsdp_prefixes`` items end in ".", so descendant paths
@@ -435,11 +443,12 @@ def _collect_root_param_wrappers(module: AbstractModuleBase) -> List[Tuple[str, 
         for attr_name, val in list(mod.__dict__.items()):
             if not isinstance(val, Parameter):
                 continue
-            if id(val) in seen_ids:
-                continue
-            seen_ids.add(id(val))
             full_name = f"{prefix}.{attr_name}" if prefix else attr_name
-            out.append((full_name, val))
+            if id(val) in names_by_id:
+                names_by_id[id(val)].append(full_name)
+                continue
+            names_by_id[id(val)] = [full_name]
+            out.append((names_by_id[id(val)], val))
     return out
 
 
@@ -679,6 +688,7 @@ def fully_shard(
     shard_dim: Union[int, Literal["auto"]] = "auto",
     mesh_axis: str = "fsdp",
     reshard_after_forward: bool = True,
+    replicate: Sequence[str] = (),
 ) -> AbstractModuleBase:
     """Wrap ``module`` with torch-style FSDP in place.
 
@@ -698,11 +708,20 @@ def fully_shard(
             are resharded between forward and backward (after forward) to keep peak memory
             low; the backward-pre callback re-gathers just in time. If ``False``, weights stay gathered.
             # TODO: Try this on the last block
+        replicate: Regex patterns of parameters to keep replicated instead of sharding,
+            for params too small to shard into whole tiles. Each is searched for
+            (``re.search``) in the parameter's dotted names relative to ``module``; a
+            tied parameter matches if any of its names does.
+            Raises if a matched parameter is already sharded on
+            ``mesh_axis``. The training loop must average their gradients over
+            ``mesh_axis`` with ``ttml.sync_gradients``; ``SFTTrainer`` and
+            ``GRPOTrainer`` already do.
     Returns:
         ``module`` (modified in place).
     """
     if _is_fsdp_wrapped_module(module):
         raise RuntimeError(f"Module {module.get_name()!r} already wrapped with fully_shard.")
+    replicate_res = _compile_replicate_patterns(replicate)
 
     mesh = ttml.mesh()
     if not mesh.has_axis(mesh_axis):
@@ -729,10 +748,23 @@ def fully_shard(
     # ``_shard_lazy_param`` (rewrites the mapper so materialize allocates
     # already-sharded — required for ~70B models) or ``_shard_eager_param``
     # (host-roundtrips the materialized tensor).
-    for rel_name, parameter in _collect_root_param_wrappers(module):
-        # Already FSDP-managed somewhere else (e.g. tied weight claimed by
-        # an inner block's FSDPState).
-        if getattr(parameter, "_fsdp_managed", False):
+    for names, parameter in _collect_root_param_wrappers(module):
+        rel_name = names[0]
+        # Already claimed by another wrapper (e.g. tied weight sharded or
+        # kept replicated by an inner block's FSDPState).
+        if getattr(parameter, "_fsdp_managed", False) or getattr(parameter, "_fsdp_replicated", False):
+            continue
+        # Match every alias of a tied parameter, not just the first-seen one.
+        matched = _matching_replicate_patterns(names, replicate_res)
+        if matched:
+            if _already_fsdp_sharded(_param_placements(parameter), axis_index):
+                raise RuntimeError(
+                    f"replicate: parameter {rel_name!r} (matched by {matched}) is already sharded on mesh "
+                    f"axis {mesh_axis!r}, so it cannot be kept replicated on it."
+                )
+            state.replicated[rel_name] = matched
+            # Claims the parameter so outer wrappers don't shard it through another alias.
+            parameter._fsdp_replicated = True
             continue
 
         shape = _param_shape(parameter)
@@ -823,6 +855,53 @@ def _mark_fsdp_managed(parameter: Parameter, shard_dim: int, axis_index: int) ->
     parameter.add_post_materialize_callback(_mirror_to_tensor)
 
 
+def _compile_replicate_patterns(patterns: Sequence[str], what: str = "replicate") -> List[re.Pattern]:
+    """Compile ``replicate`` patterns, raising if they aren't a list of usable regex strings.
+
+    A pattern that matches the empty string (e.g. ``""`` or ``"q_norm|"``) matches every name, which
+    would keep the whole model replicated, so it is rejected. ``what`` names the setting in errors.
+    """
+    if isinstance(patterns, (str, bytes)) or not isinstance(patterns, Sequence):
+        raise TypeError(f"{what} must be a list of regex patterns, got {patterns!r}")
+    compiled = []
+    for p in patterns:
+        if not isinstance(p, str):
+            raise TypeError(f"{what} patterns must be strings, got {p!r}")
+        try:
+            pattern = re.compile(p)
+        except re.error as e:
+            raise ValueError(f"{what}: invalid pattern {p!r}: {e}") from e
+        if pattern.search(""):
+            raise ValueError(f"{what}: pattern {p!r} matches the empty string, so it would match every parameter")
+        compiled.append(pattern)
+    return compiled
+
+
+def _matching_replicate_patterns(names: Union[str, Sequence[str]], patterns: Sequence[re.Pattern]) -> List[str]:
+    """Return the patterns found by ``re.search`` in ``names`` (one name, or all aliases of a tied parameter)."""
+    if isinstance(names, str):
+        names = [names]
+    return [p.pattern for p in patterns if any(p.search(n) for n in names)]
+
+
+def replicated_parameters(module: AbstractModuleBase) -> dict[str, List[str]]:
+    """Return ``{name: matching patterns}`` for every parameter ``replicate=`` kept replicated under ``module``."""
+    out: dict[str, List[str]] = {}
+    for prefix, mod in module.named_modules():
+        if _is_fsdp_wrapped_module(mod):
+            for name, patterns in mod._fsdp_state.replicated.items():
+                out[f"{prefix}.{name}" if prefix else name] = list(patterns)
+    return out
+
+
+def unmatched_replicate_patterns(module: AbstractModuleBase, patterns: Sequence[str]) -> List[str]:
+    """Return the ``patterns`` that kept no parameter under ``module`` replicated."""
+    if not any(_is_fsdp_wrapped_module(mod) for _, mod in module.named_modules()):
+        return []
+    matched = {p for ps in replicated_parameters(module).values() for p in ps}
+    return [p for p in patterns if p not in matched]
+
+
 def is_fsdp_managed(param_tensor: Any) -> bool:
     """Return True if ``param_tensor`` was sharded by an ``fully_shard`` call."""
     if getattr(param_tensor, "_fsdp_managed", False):
@@ -841,5 +920,7 @@ __all__ = [
     "fully_shard",
     "FSDPState",
     "is_fsdp_managed",
+    "replicated_parameters",
+    "unmatched_replicate_patterns",
     "fsdp_axis_of",
 ]
