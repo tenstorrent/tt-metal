@@ -48,7 +48,6 @@ from helpers.stimuli_generator import (
     compute_safe_input_magnitude_range,
     format_elem_max,
     generate_stimuli,
-    overlay_values,
 )
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -72,7 +71,7 @@ from helpers.tile_constants import (
     MAX_FACE_R_DIM,
     MAX_NUM_FACES,
 )
-from helpers.utils import fp32_to_bits, passed_test
+from helpers.utils import passed_test
 
 
 @pytest.fixture(autouse=True)
@@ -521,43 +520,33 @@ LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum, MathOperation.Ema)
 
 
 _INT32_SMAG_MAX = 2**31 - 1
-_INT32_MIN = -(2**31)
 # Must exceed every |scalar| so negative inputs straddle a negative scalar.
 UNARY_MAX_MIN_INT32_SPAN = 5000
 UNARY_MAX_MIN_FLOAT_SPAN = 4.0
+# Width of the bands at both int32 extremes (the sampler weights a band by its integer count).
+UNARY_MAX_MIN_INT32_EXTREME_BAND = 63
 
 
-def prepare_unary_max_min_inputs(
-    src_A: torch.Tensor,
-    mathop: MathOperation,
-    input_format: DataFormat,
-    scalar,
-    sign_magnitude: bool = False,
-) -> torch.Tensor:
-    """Stimuli straddling *scalar* on both signs, with ties and int32 extremes planted.
-    INT32_MIN only for a two's-complement Dest: sign-magnitude cannot represent it."""
-    torch_format = format_dict[input_format]
+def unary_max_min_stimuli_spec(mathop: MathOperation, scalar) -> StimuliSpec:
+    """Both-sign stimuli straddling *scalar*, plus exact ties (float) or both int32 extremes.
+    Edge values at the default scalar live in the sfpu_unary_max_min_*.yaml fuser tests.
+    """
     if mathop in UNARY_MAX_MIN_INT32_OPS:
-        s = int(scalar)
         span = UNARY_MAX_MIN_INT32_SPAN
         assert span > abs(
-            s
-        ), f"Int32 stimulus span {span} must exceed |scalar| {abs(s)}"
-        values = torch.randint(-span, span + 1, src_A.shape, dtype=torch.int64)
-        edges = [0, 1, -1, s, s - 1, s + 1, -s, -s - 1, -s + 1]
-        edges += [_INT32_SMAG_MAX, -_INT32_SMAG_MAX, 2**30, -(2**30)]
-        lowest = -_INT32_SMAG_MAX if sign_magnitude else _INT32_MIN
-        if not sign_magnitude:
-            edges.append(_INT32_MIN)
-        edges = [e for e in edges if lowest <= e <= _INT32_SMAG_MAX]
-        return overlay_values(values, edges).to(torch_format)
-
-    s = float(scalar)
+            scalar
+        ), f"Int32 span {span} must exceed |scalar| {abs(scalar)}"
+        band = UNARY_MAX_MIN_INT32_EXTREME_BAND
+        return StimuliSpec.uniform(
+            intervals=[
+                (-span, span),
+                (-_INT32_SMAG_MAX, -_INT32_SMAG_MAX + band),
+                (_INT32_SMAG_MAX - band, _INT32_SMAG_MAX),
+            ]
+        )
     span = UNARY_MAX_MIN_FLOAT_SPAN
-    assert span > abs(s), f"float stimulus span {span} must exceed |scalar| {abs(s)}"
-    values = -span + 2.0 * span * src_A.to(torch.float32)
-    edges = [0.0, -0.0, s, -s, s - 0.25, s + 0.25, 1.0, -1.0, span, -span]
-    return overlay_values(values, edges).to(torch_format)
+    assert span > abs(scalar), f"float span {span} must exceed |scalar| {abs(scalar)}"
+    return StimuliSpec.uniform(intervals=[(-span, span), (scalar, scalar)])
 
 
 def prepare_unary_inputs(
@@ -935,11 +924,7 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    *[
-        OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
-        for op in UNARY_MAX_MIN_FLOAT_OPS
-    ],
-    *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_INT32_OPS],
+    *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
     # tile) whose running total lives in LREG4-7 between calls. Every tile is swept with
     # first=true, which zeroes that carry, so tiles are independent; covering the
@@ -1119,6 +1104,15 @@ def test_eltwise_unary_sfpu_quasar(
         if (cfg.uniform_spec and not is_typecast)
         else None
     )
+    is_max_min = mathop in UNARY_MAX_MIN_OPS
+    if is_max_min:
+        default_scalar = (
+            INT_MAXMIN_SCALAR
+            if mathop in UNARY_MAX_MIN_INT32_OPS
+            else UNARY_MAX_MIN_VALUE
+        )
+        scalar = default_scalar if max_min_scalar is None else max_min_scalar
+        spec = unary_max_min_stimuli_spec(mathop, scalar)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -1128,25 +1122,12 @@ def test_eltwise_unary_sfpu_quasar(
         spec_B=spec,
     )
 
-    is_max_min = mathop in UNARY_MAX_MIN_OPS
-    if is_max_min:
-        default_scalar = (
-            INT_MAXMIN_SCALAR
-            if mathop in UNARY_MAX_MIN_INT32_OPS
-            else UNARY_MAX_MIN_VALUE
-        )
-        scalar = default_scalar if max_min_scalar is None else max_min_scalar
-
     # Prepare inputs with operation-specific ranges
     if is_typecast:
         src_A = _prepare_typecast_input(
             src_A, src_B, formats.input_format, formats.output_format
         )
-    elif is_max_min:
-        src_A = prepare_unary_max_min_inputs(
-            src_A, mathop, formats.input_format, scalar, max_min_sign_magnitude
-        )
-    else:
+    elif not is_max_min:
         src_A = prepare_unary_inputs(
             mathop, src_A, src_B, formats.input_format, formats.output_format
         )
@@ -1241,7 +1222,7 @@ def test_eltwise_unary_sfpu_quasar(
                     SFPU_UNARY_MAX_MIN_SCALAR(
                         int(max_min_scalar)
                         if mathop in UNARY_MAX_MIN_INT32_OPS
-                        else fp32_to_bits(float(max_min_scalar))
+                        else float(max_min_scalar)
                     )
                 ]
                 if is_max_min and max_min_scalar is not None

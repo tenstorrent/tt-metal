@@ -403,13 +403,16 @@ class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
 
 @dataclass
 class SFPU_UNARY_MAX_MIN_SCALAR(TemplateParameter):
-    """Unary max/min scalar bits (fp32, or two's-complement int32). A macro because the
-    dispatcher selects on ``#ifdef``; unset keeps its 0.0f / 1000 default."""
+    """Unary max/min scalar, emitted as fp32 bits (float) or two's-complement int32 (int).
+    A macro because the dispatcher selects on ``#ifdef``; unset keeps its 0.0f / 1000 default.
+    """
 
-    max_min_scalar_bits: int = 0
+    max_min_scalar: float | int = 0.0
 
     def convert_to_cpp(self) -> str:
-        return f"#define SFPU_UNARY_MAX_MIN_SCALAR {self.max_min_scalar_bits & 0xFFFFFFFF}u"
+        value = self.max_min_scalar
+        bits = _fp32_bits(value) if isinstance(value, float) else value & 0xFFFFFFFF
+        return f"#define SFPU_UNARY_MAX_MIN_SCALAR {bits:#010x}u"
 
 
 @dataclass

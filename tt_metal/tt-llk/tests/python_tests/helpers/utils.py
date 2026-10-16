@@ -4,7 +4,6 @@
 import json
 import os
 import shlex
-import struct
 import subprocess
 import sys
 import tempfile
@@ -212,11 +211,6 @@ def print_faces(operand1, tile_shape=None):
             )
 
     logger.debug("Tile faces:\n{}", "\n".join(lines))
-
-
-def fp32_to_bits(value: float) -> int:
-    """Return the IEEE-754 binary32 bit pattern of *value* as an unsigned int."""
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def run_shell_command(
