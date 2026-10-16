@@ -22,12 +22,12 @@
 //
 // The label contract: a tensor's TensorTopology describes the bytes each device holds. The mesh composer and the
 // serialiser trust it -- a Replicate axis is deduplicated to one shard -- so an over-claimed Replicate is data loss
-// and an under-claimed one is a spurious concat. Every op in the family used to edit the input's placements by
-// mesh-axis index, which is only meaningful for an N-D label (one placement per mesh axis). The collapsed 1-D label
-// `{N},[placement]` that ShardTensorToMesh / ReplicateTensorToMesh produce has a single placement for the whole mesh,
-// so the per-axis edit landed on index 0 whatever `cluster_axis` was. These helpers expand a collapsed label to one
-// placement per mesh axis first, apply the op's edit on `cluster_axis`, then decide whether the result is still
-// expressible per axis or has to collapse back to a 1-D label.
+// and an under-claimed one is a spurious concat. Editing the input's placements by mesh-axis index is only
+// meaningful for an N-D label (one placement per mesh axis): the collapsed 1-D label `{N},[placement]` that
+// ShardTensorToMesh / ReplicateTensorToMesh produce has a single placement for the whole mesh, so a per-axis edit of
+// it would land on index 0 whatever `cluster_axis` was. These helpers expand a collapsed label to one placement per
+// mesh axis first, apply the op's edit on `cluster_axis`, then decide whether the result is still expressible per
+// axis or has to collapse back to a 1-D label.
 //
 // Coverage: the devices an op reaches are the mesh's, not the label's. A cluster-axis op spans the mesh's full extent
 // along that axis and a whole-mesh op every device, so a label that covers fewer devices along the axis addressed (a

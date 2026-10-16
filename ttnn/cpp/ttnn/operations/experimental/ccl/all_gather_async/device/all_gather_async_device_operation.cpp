@@ -229,9 +229,9 @@ AllGatherAsyncDeviceOperation::topology_return_value_t AllGatherAsyncDeviceOpera
     const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
     // After all_gather the gathered axis is Replicate and the other mesh axes keep their placements; without a
     // cluster_axis the op spans the whole mesh and every placement becomes Replicate. The helper expands a
-    // collapsed 1-D label to one placement per mesh axis first (the per-axis edit used to land on index 0 for any
-    // cluster_axis) and refuses a gather that would interleave the shards of a 1-D-mapped tensor. `args.dim` is
-    // already normalised (all_gather_async_build_operation_args). No honest label (nullopt, already reported): the
+    // collapsed 1-D label to one placement per mesh axis first and refuses a gather that would interleave the shards
+    // of a 1-D-mapped tensor. `args.dim` is already normalised (all_gather_async_build_operation_args). No honest
+    // label (nullopt, already reported): the
     // output keeps the input's label. Returning {} would instead hand the framework the union over every tensor
     // argument, the persistent output buffer's label included.
     const auto& input_tensor = tensor_args.input_tensor;
