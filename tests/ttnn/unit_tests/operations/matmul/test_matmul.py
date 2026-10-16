@@ -10,7 +10,7 @@ import torch
 import math
 import ttnn
 
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     is_blackhole,
     skip_for_slow_dispatch,
 )

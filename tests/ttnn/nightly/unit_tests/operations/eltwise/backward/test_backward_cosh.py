@@ -9,7 +9,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     data_gen_with_range,
     compare_pcc,
 )
-from models.common.utility_functions import is_wormhole_b0, is_blackhole, run_for_wormhole_b0_or_blackhole
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0, is_blackhole, run_for_wormhole_b0_or_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc, generate_all_bfloat16_bitpatterns
 
 
@@ -129,8 +129,9 @@ def test_bw_cosh_nan_test2(input_shapes, device):
 # alone is below it, an infinite or NaN grad gives 0 too, where torch's product is grad's infinity or
 # NaN.
 # The output is grad times an infinity wherever f'(x) alone is beyond the largest finite value, and 0
-# there at a zero gradient, as the composite this program replaces computes it; torch keeps the exact
-# product.
+# there at a zero gradient unless f'(x) is infinite in float64 too (a pole, or past float64's range),
+# where a zero gradient gives torch's NaN, as the composite this program replaces computes it; torch
+# keeps the exact product.
 COSH_BW_GRADS = [
     "1",
     "-1",
@@ -269,6 +270,19 @@ def test_cosh_bw_exhaustive_bfloat16(grad, device):
     )
 
 
+# The calls the fused program serves.
+COSH_BW_FUSED_CALLS = (
+    "interleaved_tiles",
+    "interleaved_l1",
+    "height_sharded_dram",
+    "width_sharded_dram",
+    "nd_sharded_dram",
+    "sharded_to_interleaved",
+    "interleaved_to_sharded",
+    "mixed_placements",
+)
+
+
 def _cosh_bw_torch_gradient(grad, x):
     """Torch autograd in float32."""
     with torch.enable_grad():
@@ -290,34 +304,99 @@ def _cosh_bw_device_operations(call):
     return result, error, trace
 
 
+def _cosh_bw_placements(shape):
+    """Per call, the grad's and the input's memory configs and the output config it passes, if any."""
+    height, width = shape[0] * shape[1] * shape[2], shape[3]
+    L1, DRAM = ttnn.BufferType.L1, ttnn.BufferType.DRAM
+    layout = ttnn.TensorMemoryLayout
+
+    def cores(x, y):
+        return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x - 1, y - 1))})
+
+    def sharded(strategy, buffer, grid, shard):
+        return ttnn.MemoryConfig(strategy, buffer, ttnn.ShardSpec(grid, shard, ttnn.ShardOrientation.ROW_MAJOR))
+
+    def nd(buffer, grid):
+        spec = ttnn.NdShardSpec(
+            ttnn.Shape([1, 1, shape[2], shape[3] // 2]),
+            grid,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        )
+        return ttnn.MemoryConfig(buffer, spec)
+
+    height_l1 = sharded(layout.HEIGHT_SHARDED, L1, cores(2, 1), (height // 2, width))
+    block_l1 = sharded(layout.BLOCK_SHARDED, L1, cores(2, 2), (height // 2, width // 2))
+    height_dram = sharded(layout.HEIGHT_SHARDED, DRAM, cores(2, 1), (height // 2, width))
+    width_dram = sharded(layout.WIDTH_SHARDED, DRAM, cores(2, 1), (height, width // 2))
+    dram, l1 = ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG
+    return {
+        "interleaved_l1": (l1, l1, None),
+        "height_sharded": (height_l1, height_l1, None),
+        "width_sharded": (*(sharded(layout.WIDTH_SHARDED, L1, cores(2, 1), (height, width // 2)),) * 2, None),
+        "block_sharded": (block_l1, block_l1, None),
+        "height_sharded_dram": (height_dram, height_dram, None),
+        "width_sharded_dram": (width_dram, width_dram, None),
+        "nd_sharded": (nd(L1, cores(2, 2)), nd(L1, cores(2, 2)), None),
+        "nd_sharded_dram": (nd(DRAM, cores(2, 1)), nd(DRAM, cores(2, 1)), None),
+        "sharded_to_interleaved": (height_dram, height_dram, dram),
+        "interleaved_to_sharded": (dram, dram, width_dram),
+        "mixed_placements": (height_dram, width_dram, l1),
+        "interleaved_to_l1_sharded": (dram, dram, block_l1),
+        "grad_in_l1": (l1, dram, None),
+        "sharded_output_without_spec": (height_l1, height_l1, ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG),
+    }
+
+
 @run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
 @pytest.mark.parametrize(
     "call",
-    ["interleaved_tiles", "broadcast_grad", "row_major", "mixed_layouts", "grad_in_l1", "height_sharded", "float32"],
+    [
+        "interleaved_tiles",
+        "interleaved_l1",
+        "height_sharded_dram",
+        "width_sharded_dram",
+        "nd_sharded_dram",
+        "sharded_to_interleaved",
+        "interleaved_to_sharded",
+        "mixed_placements",
+        "height_sharded",
+        "width_sharded",
+        "block_sharded",
+        "nd_sharded",
+        "interleaved_to_l1_sharded",
+        "broadcast_grad",
+        "row_major",
+        "mixed_layouts",
+        "grad_in_l1",
+        "sharded_output_without_spec",
+        "float32",
+    ],
 )
 def test_cosh_bw_runs_the_fused_program_only_where_it_applies(call, device):
-    """BF16 operands of one shape in interleaved tiles with one placement run the fused program, and
-    match torch; every other call keeps the composite, which broadcasts and takes any layout, placement
-    and dtype."""
-    shape = (1, 2, 32, 64)
+    """BF16 operands of one shape in tiles, interleaved or sharded in DRAM, with one placement or an
+    output config run the fused program and match torch; every other call keeps the composite, which
+    broadcasts and takes any layout, placement and dtype, and is faster where a tensor is sharded in L1."""
+    shape = (1, 2, 64, 128)
     generator = torch.Generator().manual_seed(0)
     x = (4 * torch.randn(shape, generator=generator)).to(torch.bfloat16)
-    g = torch.randn((1, 1, 32, 64) if call == "broadcast_grad" else shape, generator=generator).to(torch.bfloat16)
+    g = torch.randn((1, 1, 64, 128) if call == "broadcast_grad" else shape, generator=generator).to(torch.bfloat16)
     dtype = ttnn.float32 if call == "float32" else ttnn.bfloat16
     layouts = {"row_major": (ttnn.ROW_MAJOR_LAYOUT,) * 2, "mixed_layouts": (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT)}
     grad_layout, input_layout = layouts.get(call, (ttnn.TILE_LAYOUT,) * 2)
-    shard = ttnn.create_sharded_memory_config(
-        shape, core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.HEIGHT
+    placements = _cosh_bw_placements(shape)
+    shard = placements["height_sharded"][0]
+    grad_memory, input_memory, output_memory = placements.get(
+        call, (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, None)
     )
-    memory = {"grad_in_l1": (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG), "height_sharded": (shard, shard)}
-    grad_memory, input_memory = memory.get(call, (ttnn.DRAM_MEMORY_CONFIG,) * 2)
     tt_g = ttnn.from_torch(g, dtype=dtype, layout=grad_layout, device=device, memory_config=grad_memory)
     tt_x = ttnn.from_torch(x, dtype=dtype, layout=input_layout, device=device, memory_config=input_memory)
+    memory = {} if output_memory is None else {"memory_config": output_memory}
 
-    result, error, trace = _cosh_bw_device_operations(lambda: ttnn.cosh_bw(tt_g, tt_x)[0])
+    result, error, trace = _cosh_bw_device_operations(lambda: ttnn.cosh_bw(tt_g, tt_x, **memory)[0])
 
-    assert ("UnaryBackwardDeviceOperation" in trace) == (call == "interleaved_tiles"), trace
-    if call != "interleaved_tiles":
+    assert ("UnaryBackwardDeviceOperation" in trace) == (call in COSH_BW_FUSED_CALLS), trace
+    if call not in COSH_BW_FUSED_CALLS:
         # The composite's own results, or its refusal of a call (some refuse row-major operands), are
         # its tests' to judge; here it only has to be the program that ran.
         assert error is not None or list(result.shape) == list(shape)
@@ -325,3 +404,17 @@ def test_cosh_bw_runs_the_fused_program_only_where_it_applies(call, device):
     assert error is None, error
     expected = _cosh_bw_torch_gradient(g, x)
     assert_with_pcc(expected, ttnn.to_torch(result).float(), 0.999)
+    if call != "interleaved_tiles":
+        # A layout moves tiles, not arithmetic: the result is where the call asks for it, and is the
+        # interleaved call's bit for bit, so the exhaustive test's accuracy holds in every layout.
+        placement = tt_x.memory_config()
+        if output_memory is not None:
+            placement = ttnn.from_torch(
+                g, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=output_memory
+            ).memory_config()
+        assert result.memory_config() == placement
+        interleaved = ttnn.cosh_bw(
+            ttnn.from_torch(g, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
+            ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
+        )[0]
+        assert torch.equal(ttnn.to_torch(result).view(torch.int16), ttnn.to_torch(interleaved).view(torch.int16))
