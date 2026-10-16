@@ -34,10 +34,7 @@
                 "no-enable-prefix-caching": true,
                 "hf-overrides": "{\"architectures\":[\"TTDeepseekV41ForCausalLM\"]}",
                 "speculative_config": "{\"method\": \"custom_class\", \"model\": \"vllm_tt_plugin.model_owned_drafter\", \"num_speculative_tokens\": 5}",
-                "port": "8000",
-                "limit-mm-per-prompt": "{\"image\": 16}",
-                "mm-processor-cache-gb": 0,
-                "chat-template-content-format": "openai"
+                "port": "8000"
             },
             "override_tt_config": {
                 "fabric_config": "FABRIC_1D_RING",
@@ -59,7 +56,6 @@
                 "TT_METAL_CACHE": "/cache/kernels",
                 "EXTRA_MODELS_DIR": "../../tt-metal/models/demos/blackhole",
                 "DSV41_BUILD_SLOTS": "0",
-                "DSV41_VISION": "1",
                 "DSV41_VLLM_CHUNK": "512"
             },
             "tensor_cache_timeout": 7200.0,
@@ -90,7 +86,6 @@
             "MAX_MODEL_LENGTH": "1048576",
             "DSV41_VLLM_STATS_EVERY": "16",
             "DSV41_BUILD_SLOTS": "0",
-            "DSV41_VISION": "1",
             "DSV41_VLLM_CHUNK": "512"
         },
         "tt_metal_commit": null,
@@ -112,8 +107,7 @@
             "sample_on_device_mode": "all"
         },
         "supported_modalities": [
-            "text",
-            "image"
+            "text"
         ],
         "subdevice_type": null,
         "uses_tensor_model_cache": true,
