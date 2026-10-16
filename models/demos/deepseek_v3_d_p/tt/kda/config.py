@@ -182,7 +182,7 @@ _DECAY_OUT_BLOCK_TILES = 32
 
 
 def decay_projection_program_config(
-    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int, fused_activation: ttnn.UnaryWithParam | None
+    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
     """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over the whole worker grid.
 
@@ -208,6 +208,6 @@ def decay_projection_program_config(
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
-        fused_activation=fused_activation,
+        fused_activation=None,
         fuse_batch=True,
     )
