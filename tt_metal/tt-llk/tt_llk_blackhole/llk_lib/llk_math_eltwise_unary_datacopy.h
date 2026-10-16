@@ -90,6 +90,10 @@ inline void _llk_math_eltwise_unary_datacopy_(
 
             // Disable zero flag to prevent mantissa flushing when exponent bits are 0.
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+
+            // UNPACK_TO_DEST covers only unpacker 0 and MOVD2B doesn't wait for SrcB valid, so wait for
+            // _llk_unpack_A_'s SrcB handoff (unpacker 1) before the broadcasts below write the bank.
+            math::srcb_bank_wait();
         }
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)

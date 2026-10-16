@@ -381,6 +381,8 @@ inline void _llk_unpack_A_uninit_()
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function, and
  *       @ref _llk_unpack_A_uninit_ after it as the matching teardown (currently a no-op).
+ * @note With unpack_to_dest, a 32-bit input and BType != NONE, this also hands the math thread one SrcB bank
+ *       per tile; only @ref _llk_math_eltwise_unary_datacopy_ with the same BType releases it.
  * @ref _llk_math_eltwise_unary_datacopy_ on the math thread consumes the tile unpacked here.
  */
 template <
