@@ -816,3 +816,40 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - OV-4: DS41-20 already states the F73 fix; known_issues.md not touched.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py`
   (CPU: `BRINGUP_IMPL=reference` / `stub` / `mutate:<kind> BRINGUP_MUTATE_STEP=ffn_residual` in front).
+
+## FIX.1 routed experts in bfp8 at load (implement, attempt 2; OV-6)
+- What: `tt/experts.py` builds every routed expert's weights ONCE at load as bfloat8_b (EXPERTS_IMPL=bfp8, the new
+  default): `fp4_dequant` (exact e2m1 x e8m0, bf16-exact) -> W13 [2I, H] (w1 rows | w3 rows) and W2 [H, I], kept in the
+  stored [N, K] orientation, used with `ttnn.linear(..., transpose_b=True)`. The per-chunk decode is gone from the
+  default path; the old path is EXPERTS_IMPL=fp4_decode (packed codes on device, `_decode` every chunk), comparison
+  only. Rest of the expert math (dispatch, routing-weight pieces, ClampedSiluGlu, x r, fp8 q(h), combine, sum)
+  unchanged.
+- Orientation (DS41-35, contradicts DS41-10's "exact in both"): bfp8 groups 16 values along the last dim. As stored
+  [N, K] a group sits inside one 32-wide e8m0 block -> always exact. As W^T [K, N] it spans 16 output rows with their
+  own scales: 48 of the run's 2304 matrices (layers 0-3, 14, 20, 21, 24 x 96 experts x 3) would round (layer 0 expert
+  3 w2: -0.5 at 2^-3 next to 3 x 2^-8). `_bfp8_exact` asserts exactness per tensor at load; it agrees with ttnn's own
+  packing (`tt/perf_experts.py::test_bfp8_check_matches_ttnn`, 5.5 min host-only).
+- transpose_b is done inside the matmul (mcast program configs; other configs would transpose B as a separate op and
+  re-quantize bfp8): `test_transpose_b_exact` shows bfp8 [N, K] + transpose_b bit-identical to bf16 W^T, same time
+  (w1 | w3 [2048, 5120] x [5120, 4608] 3.3 ms; w2 1.5 ms; HiFi4 + fp32 acc).
+- Fused op: `ttnn.bringup.unified_routed_expert_moe` does not fit. DeepSeek's expert needs the token's routing weight
+  multiplied into h BEFORE the fp8 act quant (q(r h) != r q(h), DS41-23) and q(h) between the activation and w2; the op
+  runs gate/up/act/down in one program with neither (no per-row weight input, no in-kernel fp8 block-32 quant), and
+  dropping q(h) is not a bf16 rounding of the model's step. Extending the fork = a per-row weight input + an SFPU
+  block-32 amax / ue8m0 / e4m3 quant in the compute kernel: a kernel feature, left for a perf step. Kept the loop.
+- Time (layer 0, 2x2, chunk 2048, random routing, `tt/perf_experts.py::test_time_experts`, mean of 3 synchronized calls
+  after 2 warm-ups): before fp4_decode 610.7 ms, after bfp8 318.7 ms per layer per chunk; outputs bit-identical
+  between the two. Load: 3.6 s -> 43.7 s (host dequant + bfp8 packing, 24 slots x 2 tensors). Matmuls are ~115 ms
+  of the 319 (24 x (3.3 + 1.5)); the rest is the fp32 elementwise / fp8_qdq chain at cap = 2048 rows per expert (16x
+  the mean 128 rows: the loop cannot see counts without a host read). Next lever: a count-aware expert op.
+- Memory (plan.yaml / plan.md still say packed fp4 at 0.53 B / value; not in this step's paths): bfp8 1.0625 B / value,
+  37.6 MB per expert, 0.84 GiB per layer per chip at 24 experts per chip (this scaled 2x2 and galaxy_4x4): 6.7 GiB for
+  this run's 8 layers on 2x2 (fits). The deployment galaxy_4x4 at 40 layers would need 33.6 GiB of experts per chip
+  (> 32 GB): there fp4_decode (or an in-op fp4 decode) stays the only exact option; owner / plan decision.
+  galaxy_8x4 (12 per chip): 16.8 GiB.
+- Gate PASS (all four): test_c_swa_experts pcc 0.999706 (vs CPU rel 0.0022), test_c_swa_engram_experts pcc 0.999577
+  (rel 0.0025), test_swap_swa_15_ffn_residual pcc_swap_out 0.999874, test_swap_swa_engram_18_ffn_residual
+  pcc_swap_out 0.999781 (experts vs CPU rel 0.0024, vs golden 0.990515: the same as before, the outputs are
+  bit-identical). The chained gate outlives the agent tool's 600 s limit; run its four commands one at a time.
+- Re-run: gate command of the brief; timing `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all
+  models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py -s` (both impls + the exactness checks).
