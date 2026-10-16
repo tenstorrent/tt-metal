@@ -55,7 +55,8 @@ private:
 // - When this copy is the only owner, set_tensor() resets in place, so a reference returned by
 //   get_tensor(NATIVE) follows the new tensor. A reference to the derived copy does not.
 // - A write that bypasses get_value_for_update(), e.g. a kernel writing through a get_tensor() handle, is not seen.
-// - Not thread-safe: a tensor is driven from one host thread.
+// - Not thread-safe: a tensor is driven from one host thread. Writes and refreshes are ordered by the one command
+//   queue tt-train opens.
 //
 // Non-float tensors (e.g. uint32 ids) are returned as stored for every precision.
 class AutocastTensor {
@@ -69,17 +70,15 @@ public:
 
     void set_tensor(const ttnn::Tensor &tensor);
     // set_tensor() with tensor cast to the native dtype, so loading values (a checkpoint, a weights file) keeps the
-    // stored precision. The cast applies between bf16 and fp32. Any other tensor, or any tensor for an empty
-    // AutocastTensor, is set as is and shares its buffer, as with set_tensor().
+    // stored precision. The cast applies between bf16 and fp32. A tensor of the native dtype, an empty tensor, or any
+    // tensor for an empty AutocastTensor is set as is and shares its buffer, as with set_tensor(). Any other dtype
+    // mismatch is a TT_FATAL.
     void assign(const ttnn::Tensor &tensor);
     [[nodiscard]] const ttnn::Tensor &get_tensor(
         PreferredPrecision preferred_precision = PreferredPrecision::HALF) const;
 
     // precision must be NATIVE or the native precision itself; anything else is a TT_FATAL.
     [[nodiscard]] MutableTensorView get_value_for_update(PreferredPrecision precision = PreferredPrecision::NATIVE);
-
-    [[nodiscard]] bool has_half() const;
-    [[nodiscard]] bool has_full() const;
 
 private:
     // Version of the native tensor; every read goes through here. A buffer-level version from ttnn would be

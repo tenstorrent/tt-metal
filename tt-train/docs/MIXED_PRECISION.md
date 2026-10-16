@@ -35,7 +35,9 @@ The native tensor is the source of truth, and the derived copy is refreshed from
   others alone. When that copy is the only owner, it resets in place, so a reference returned earlier by
   `get_tensor(NATIVE)` follows the new tensor. A reference to the derived copy does not.
 - **Limits.** A write that bypasses `get_value_for_update()`, such as a kernel writing through a `get_value()`
-  handle, is not seen. The tensor is driven from one host thread.
+  handle, is not seen. The tensor is driven from one host thread. The ordering also relies on one command queue: the
+  view bumps the version on the host after the kernel is enqueued, and the refresh cast is enqueued later on the same
+  queue, so it runs after the write. tt-train opens one queue (`sources/ttml/core/mesh_device.cpp`).
 
 ## Writing a tensor in place
 
@@ -79,21 +81,21 @@ a new path in an existing one (for example a config option that changes which te
 The checkpoint loaders and `Tensor.assign()` keep the precision a tensor is stored in: the model decides it, not the
 file.
 
-- `Tensor::assign()` sets a value cast to the dtype the tensor is stored in. The cast applies between bf16 and fp32;
-  any other value, or any value for an empty tensor, is taken as is. The Python `Tensor.assign()` calls it, so the
-  in-place initializers in `ttml.init` keep each tensor's dtype.
+- `Tensor::assign()` sets a value cast to the dtype the tensor is stored in. The cast applies between bf16 and fp32.
+  A value of the stored dtype, an empty value, or any value for an empty tensor is taken as is; any other dtype
+  mismatch is an error. The Python `Tensor.assign()` calls it, so the in-place initializers in `ttml.init` keep each
+  tensor's dtype.
 - `ttml.autograd.assign_numpy()` loads a numpy array into a tensor in its stored dtype, converted on the host: an
   fp32 tensor gets the exact values, a bf16 tensor the values rounded with `ml_dtypes`. `ttml.checkpointing` (which
   loads parameters and optimizer state into the live tensors), the safetensors loaders, the SFT trainer's default
   checkpoint loader and `LinearLayer.__setstate__` use it.
-- Transfers through `SocketManager` carry the bf16 view, from C++ and from Python. `RemoteOptimizer` and the Python
-  `SocketManager.recv()` write a bf16 tensor in place through `get_value_for_update()`; any other tensor receives
-  into a bf16 buffer that `assign()` installs, so it keeps the dtype it is stored in.
 - C++ checkpoints are written as stored (`get_value(NATIVE)`), and `read_autograd_tensor` loads parameters and
   optimizer state through `assign()`. A checkpoint from an fp32 run resumes into a bf16 model as bf16, and the other
   way round, and the AdamW moments follow the parameters, as the fused kernel requires.
-- Gradients load as bf16, whatever dtype they were saved in: backward produces bf16 gradients, and the fused AdamW
-  and SGD kernels accept only bf16.
+- Transfers through `SocketManager` carry the bf16 view, from C++ and from Python. `SocketManager::recv_value()`
+  receives a tensor's value: a bf16 tensor in place through `get_value_for_update()`, any other tensor into a bf16
+  buffer that `assign()` installs, so it keeps the dtype it is stored in. `RemoteOptimizer` and the Python
+  `SocketManager.recv()` receive values this way.
 
 ## Reading values from Python
 
@@ -105,7 +107,7 @@ file.
 ## Why this design
 
 - **Dropping the other copy on every write** would be the smallest change, but for fp32 parameters it reallocates the
-  bf16 compute copy every step, and keeping that copy alive needs the same bookkeeping as a version counter.
+  bf16 compute copy every step, and the copy's buffer address moves each time.
 - **No cached copy at all** can never be stale, but a weight is read by several ops per step, so it would be cast
   and allocated several times per step, and `get_value()` could no longer return a reference.
 - **Letting both copies be written** would round the fp32 tensor to bf16 on write and erase its sub-ulp progress.

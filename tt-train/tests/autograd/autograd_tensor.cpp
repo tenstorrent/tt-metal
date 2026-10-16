@@ -5,9 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -18,6 +16,7 @@
 #include "optimizers/adamw_composite.hpp"
 #include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/sgd.hpp"
+#include "test_utils/optimizer_state.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
@@ -56,20 +55,8 @@ Parameter make_parameter(ttnn::DataType dtype) {
     return {autograd::create_tensor(value, /* requires_grad */ true), core::from_xtensor(g0, device)};
 }
 
-using NamedTensors = std::vector<std::pair<std::string, autograd::TensorPtr>>;
-
-// The tensors in an optimizer's state, such as its moments or momentum buffers, by "<entry>/<parameter>".
-NamedTensors state_tensors(const optimizers::OptimizerBase& optimizer) {
-    NamedTensors tensors;
-    for (const auto& [key, value] : optimizer.get_state_dict()) {
-        if (const auto* named = std::get_if<serialization::NamedParameters>(&value)) {
-            for (const auto& [name, tensor] : *named) {
-                tensors.emplace_back(key + "/" + name, tensor);
-            }
-        }
-    }
-    return tensors;
-}
+using test_utils::NamedTensors;
+using test_utils::state_tensors;
 
 // Reads each tensor's `derived` view, so a cached copy exists, then runs `step`. Afterwards each stored value must
 // have moved, and its `derived` view must be exactly the cast of it.
@@ -107,6 +94,15 @@ void expect_full_view_tracks_fused_step(const Config& config) {
     // The state is written in place too. The first step created all of it (SGD allocates its momentum buffer then),
     // so a second step checks it.
     expect_views_track(state_tensors(optimizer), autograd::PreferredPrecision::FULL, [&] { optimizer.step(); });
+}
+
+// AdamWFullPrecision updates its fp32 master weights and moments in place. Their bf16 views must follow. It creates
+// all of its state at construction, so one step checks every tensor.
+void expect_half_view_tracks_full_precision_step(const optimizers::AdamWFullPrecisionConfig& config) {
+    auto [theta, grad] = make_parameter(ttnn::DataType::BFLOAT16);
+    theta->set_grad(grad);
+    optimizers::AdamWFullPrecision optimizer(serialization::NamedParameters{{"theta", theta}}, config);
+    expect_views_track(state_tensors(optimizer), autograd::PreferredPrecision::HALF, [&] { optimizer.step(); });
 }
 
 const ttnn::Shape kShape({1, 1, 32, 32});
@@ -166,16 +162,11 @@ TEST_F(AutogradTensorTest, AutocastTensorFromFLOAT32) {
         ttml::core::ones(ttnn::Shape({1, 1, 1, 32}), &autograd::ctx().get_device(), ttnn::DataType::FLOAT32);
     auto autocast_tensor = autograd::AutocastTensor(tt_tensor);
 
-    EXPECT_TRUE(autocast_tensor.has_full());
-    EXPECT_FALSE(autocast_tensor.has_half());
-
     const auto& full = autocast_tensor.get_tensor(autograd::PreferredPrecision::FULL);
     EXPECT_EQ(full.dtype(), ttnn::DataType::FLOAT32);
-    EXPECT_FALSE(autocast_tensor.has_half());
 
     const auto& half = autocast_tensor.get_tensor(autograd::PreferredPrecision::HALF);
     EXPECT_EQ(half.dtype(), ttnn::DataType::BFLOAT16);
-    EXPECT_TRUE(autocast_tensor.has_half());
 }
 
 TEST_F(AutogradTensorTest, AutocastTensorFromBFLOAT16) {
@@ -183,40 +174,27 @@ TEST_F(AutogradTensorTest, AutocastTensorFromBFLOAT16) {
         ttml::core::ones(ttnn::Shape({1, 1, 1, 32}), &autograd::ctx().get_device(), ttnn::DataType::BFLOAT16);
     auto autocast_tensor = autograd::AutocastTensor(tt_tensor);
 
-    EXPECT_TRUE(autocast_tensor.has_half());
-    EXPECT_FALSE(autocast_tensor.has_full());
-
     const auto& half = autocast_tensor.get_tensor(autograd::PreferredPrecision::HALF);
     EXPECT_EQ(half.dtype(), ttnn::DataType::BFLOAT16);
-    EXPECT_FALSE(autocast_tensor.has_full());
 
     const auto& full = autocast_tensor.get_tensor(autograd::PreferredPrecision::FULL);
     EXPECT_EQ(full.dtype(), ttnn::DataType::FLOAT32);
-    EXPECT_TRUE(autocast_tensor.has_full());
 }
 
 TEST_F(AutogradTensorTest, AutocastTensorSetTensorInvalidatesCache) {
     auto fp32_tensor =
         ttml::core::ones(ttnn::Shape({1, 1, 1, 32}), &autograd::ctx().get_device(), ttnn::DataType::FLOAT32);
     auto autocast_tensor = autograd::AutocastTensor(fp32_tensor);
-
-    EXPECT_TRUE(autocast_tensor.has_full());
-    EXPECT_FALSE(autocast_tensor.has_half());
-
-    [[maybe_unused]] const auto& half = autocast_tensor.get_tensor(autograd::PreferredPrecision::HALF);
-    EXPECT_TRUE(autocast_tensor.has_full());
-    EXPECT_TRUE(autocast_tensor.has_half());
+    // Caches a bf16 copy of the ones.
+    (void)autocast_tensor.get_tensor(autograd::PreferredPrecision::HALF);
 
     auto bf16_tensor =
         ttml::core::zeros(ttnn::Shape({1, 1, 1, 32}), &autograd::ctx().get_device(), ttnn::DataType::BFLOAT16);
     autocast_tensor.set_tensor(bf16_tensor);
 
-    EXPECT_TRUE(autocast_tensor.has_half());
-    EXPECT_FALSE(autocast_tensor.has_full());
-
-    [[maybe_unused]] const auto& full = autocast_tensor.get_tensor(autograd::PreferredPrecision::FULL);
-    EXPECT_TRUE(autocast_tensor.has_half());
-    EXPECT_TRUE(autocast_tensor.has_full());
+    const auto& full = autocast_tensor.get_tensor(autograd::PreferredPrecision::FULL);
+    EXPECT_EQ(full.dtype(), ttnn::DataType::FLOAT32);
+    EXPECT_TRUE(all_equal(full, 0.0F)) << "the copy cached before set_tensor() was returned";
 }
 
 TEST_F(AutogradTensorTest, AutocastTensorFullViewTracksWritesToBf16Native) {
@@ -339,6 +317,21 @@ TEST_F(AutogradTensorTest, AssignEmptyValueEmptiesTheTensor) {
     EXPECT_FALSE(core::is_tensor_initialized(tensor->get_value(autograd::PreferredPrecision::NATIVE)));
 }
 
+// Only bf16 and fp32 are cast; a value of any other dtype must match the stored one.
+TEST_F(AutogradTensorTest, AssignRejectsNonFloatDtypeMismatch) {
+    for (const auto float_dtype : {ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32}) {
+        auto stored_float = autograd::create_tensor(filled(1.0F, float_dtype));
+        EXPECT_ANY_THROW(stored_float->assign(filled(2.0F, ttnn::DataType::UINT32)));
+        EXPECT_EQ(stored_float->get_value(autograd::PreferredPrecision::NATIVE).dtype(), float_dtype);
+
+        auto stored_uint = autograd::create_tensor(filled(1.0F, ttnn::DataType::UINT32));
+        EXPECT_ANY_THROW(stored_uint->assign(filled(2.0F, float_dtype)));
+    }
+    auto stored_uint = autograd::create_tensor(filled(1.0F, ttnn::DataType::UINT32));
+    EXPECT_NO_THROW(stored_uint->assign(filled(2.0F, ttnn::DataType::UINT32)));
+    EXPECT_EQ(stored_uint->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::UINT32);
+}
+
 TEST_F(AutogradTensorTest, FullViewTracksFusedAdamWStep) {
     optimizers::AdamWConfig config;
     config.lr = 1e-2F;
@@ -384,17 +377,17 @@ TEST_F(AutogradTensorTest, NativeValueTracksFusedAdamWStepOnFp32Parameter) {
     expect_views_track({{"theta", theta}}, autograd::PreferredPrecision::HALF, [&] { optimizer.step(); });
 }
 
-// AdamWFullPrecision updates its fp32 master weights in place. Their bf16 view must follow.
-TEST_F(AutogradTensorTest, MasterWeightHalfViewTracksAdamWFullPrecisionStep) {
-    auto [theta, grad] = make_parameter(ttnn::DataType::BFLOAT16);
-    theta->set_grad(grad);
+TEST_F(AutogradTensorTest, HalfViewTracksAdamWFullPrecisionStep) {
     optimizers::AdamWFullPrecisionConfig config;
     config.lr = 1e-2F;
-    optimizers::AdamWFullPrecision optimizer(serialization::NamedParameters{{"theta", theta}}, config);
-    expect_views_track(
-        {{"master_weights/theta", optimizer.get_master_weights().at("theta")}},
-        autograd::PreferredPrecision::HALF,
-        [&] { optimizer.step(); });
+    expect_half_view_tracks_full_precision_step(config);
+}
+
+TEST_F(AutogradTensorTest, HalfViewTracksAdamWFullPrecisionStepWithAmsgrad) {
+    optimizers::AdamWFullPrecisionConfig config;
+    config.lr = 1e-2F;
+    config.amsgrad = true;
+    expect_half_view_tracks_full_precision_step(config);
 }
 
 // Stochastic rounding applies to bf16 parameters only; an fp32 parameter is updated without it.
