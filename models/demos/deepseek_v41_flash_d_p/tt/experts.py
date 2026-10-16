@@ -21,23 +21,32 @@ dispatched row's own fp32 weight. Dispatch carries only the row, so the row carr
            extract [cap, H + 3 Egp] -> x rows | piece columns
            r   = pieces @ Sel_j  (bf16 0/1 selector [3 Egp, 32]: one nonzero product per tile-dot, the three pieces in
                                   different K tiles, summed exactly in fp32 DEST, DS41-16) -> max over 32 equal columns
-           g, u = ttnn.linear(x, W1^T / W3^T decoded, HiFi4 + fp32 acc, fp32 out)
+           g | u = ttnn.linear(x, [W1; W3], transpose_b, HiFi4 + fp32 acc, fp32 out)   (bfp8 [N, K] at load;
+                                                                fp4_decode: two linears on per-chunk decoded bf16 W^T)
            h   = silu(min(g, 10)) * clamp(u, +-10) * r            fp32 (SFPU)
-           y   = ttnn.linear(fp8_qdq(h), W2^T decoded) -> bf16    (insert / combine are bf16-only)
+           y   = ttnn.linear(fp8_qdq(h), W2, transpose_b) -> bf16  (insert / combine are bf16-only)
            insert
       -> ttnn.bringup.combine (axis 0, init_zeros: the other group's slots read 0) -> [S/SP, K, H] bf16
       -> fp32 sum over the K slots (SFPU adds; weights already applied) = this group's partial [S/SP, H] fp32
       -> sum over the TP axis (the dispatch groups): gather_add (exact fp32, K-30) or reduce_scatter (setting
          EXPERTS_SUM), keep the chip's hidden columns -> experts_out [S/SP, H/TP] fp32
 
-Weights (plan.md "Weights", DS41-10): the checkpoint's e2m1 codes and e8m0 scales, 0.53 B per value, never bfp8 / bfp4.
-Per expert matrix W [N, K] the device holds W^T = T [K, N] as 8 nibble planes, P [K/8, N] int32, word (w, n) nibble i
-= code(T[i K/8 + w, n]) (a lossless re-packing of the same codes at load), and the scales as bf16 2^e [K/32, N]. The
-decode (bit-exact, probed on device against reference/weights.py:fp4_dequant) runs every chunk (setting EXPERTS_IMPL
-'loop', components.yaml note: a temporary departure from agent rule 5 until the fork option decodes in the expert op):
+Weights (setting EXPERTS_IMPL, DS41-10 / DS41-35):
+  bfp8 (default)  every routed expert's w1 / w3 / w2 converted ONCE at load: the checkpoint's e2m1 x e8m0 values
+                  (reference/weights.py:fp4_dequant, exact in bf16) uploaded as bfloat8_b in the stored [N, K]
+                  orientation (ttnn.linear transpose_b), w1 | w3 fused to one [2I, H] matrix per expert. bfp8 holds
+                  every value exactly there (one exponent per 16 values along K, inside one e8m0 block; asserted per
+                  tensor at load, `_bfp8_exact`); W^T would not (DS41-35). 1.06 B per value: 0.84 GiB per layer per
+                  chip at 24 experts per chip (this run's scaled 2x2 and galaxy_4x4). No per-chunk weight work.
+  fp4_decode      the previous path: the checkpoint's packed codes kept on the device (0.53 B per value) and decoded
+                  to a bf16 W^T for every expert in every chunk (a per-chunk weight rebuild, against agent rule 5;
+                  kept for comparison only). Per matrix W [N, K] the device holds W^T = T [K, N] as 8 nibble planes,
+                  P [K/8, N] int32, word (w, n) nibble i = code(T[i K/8 + w, n]), and the scales as bf16 2^e [K/32, N];
     plane i: (P >> 4i) & 15 -> ttnn.gather from the 16-entry e2m1 table (EXPERTS_DECODE 'gather') or the composed
              arithmetic (0.5 c + 0.5 relu(c - 4) + relu(c - 6), sign from bit 3; 'arith')
     T = concat(planes, rows) * (Rep [K, K/32] @ S^T)  (the 0/1 Rep matmul repeats each scale over its 32 rows, exact)
+The fused ttnn.bringup.unified_routed_expert_moe cannot run this expert: the routing weight must multiply h before
+its fp8 act quant and q(h) sits between the activation and w2; the op has neither (BREADCRUMBS FIX.1).
 
 The per-expert cap is the whole chunk (a token picks an expert once; the counts stay on the device), the flat
 dispatch buffer K x the cap (all K of a token's experts may sit on one chip). expert counts / region offsets are
@@ -52,6 +61,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v41_flash_d_p.reference.weights import fp4_dequant
 
 from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, tp_sum
 from .quant import fp8_qdq
@@ -63,6 +73,8 @@ BLOCK = 32  # e8m0 scale group along the expert's K
 TRUNC_BF16 = -65536  # 0xFFFF0000 as int32: keep the bf16 part of an fp32's bits
 FP4_VALUES = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0)
 NAMES = ("w1", "w3", "w2")
+BFP8_GROUP = 16  # bfloat8_b: one shared exponent per 16 values of a tile face row (along the last dim)
+BFP8_MANT = 7  # magnitude bits under the shared exponent (the leading one included)
 
 
 def _ceil(a: int, b: int) -> int:
@@ -100,6 +112,17 @@ def pack_planes(packed: torch.Tensor, scale: torch.Tensor) -> tuple[torch.Tensor
     return words, st
 
 
+def _bfp8_exact(t: torch.Tensor) -> bool:
+    """True when bfloat8_b holds every value of t (bf16 / fp32, last dim a multiple of 16) exactly: within each group
+    of 16 values along the last dim, every value is an integer multiple of 2^(E - 6), E = the group's largest binary
+    exponent (7 magnitude bits under the shared exponent; zeros are exact)."""
+    g = t.float().reshape(-1, BFP8_GROUP)
+    amax = g.abs().amax(dim=-1, keepdim=True)
+    _, e = torch.frexp(amax)  # amax = m 2^e, m in [0.5, 1): leading bit 2^(e - 1)
+    q = torch.ldexp(g, BFP8_MANT - e)  # the 7-bit grid: leading bit -> 2^6
+    return bool((q == q.round()).all()) and bool((q.abs() < 2**BFP8_MANT).all())
+
+
 class TtExperts:
     def __init__(
         self,
@@ -113,15 +136,16 @@ class TtExperts:
         swiglu_limit: float,
         max_chunk: int,
         num_links: int = 1,
+        impl: str | None = None,
     ):
         """ck: reference/weights.Checkpoint (experts read one at a time, packed). max_chunk: the largest chunk (all
-        mesh rows together)."""
+        mesh rows together). impl: EXPERTS_IMPL value (None: the setting)."""
         rows, cols = tuple(mesh.shape)
         n = rows * cols
         E = int(num_experts)
         assert E % n == 0, f"{E} experts do not split over {n} chips"
-        self.impl = settings.get("EXPERTS_IMPL")
-        assert self.impl == "loop", self.impl
+        self.impl = impl or settings.get("EXPERTS_IMPL")
+        assert self.impl in ("bfp8", "fp4_decode"), self.impl
         self.decode_mode = settings.get("EXPERTS_DECODE")
         self.sum_mode = settings.get("EXPERTS_SUM")
         self.mesh, self.layer, self.num_links = mesh, layer, num_links
@@ -167,6 +191,17 @@ class TtExperts:
             for le in range(self.epc)
         ]
 
+        if self.impl == "bfp8":
+            self._load_bfp8(ck, gtab)
+        else:
+            self._load_fp4(ck, gtab)
+        self._seq = {}
+        self._modules(self.max_chunk // rows)  # the serving chunk's dispatch / combine sizes, built at load
+
+    def _load_fp4(self, ck, gtab):
+        """fp4_decode: per local slot le and matrix, nibble planes + scales (one mesh tensor whose chip (r, c) shard
+        is expert (c rows + r) epc + le), and the decode constants."""
+        rows, cols, mesh, layer = self.dgs, self.ngroups, self.mesh, self.layer
         # decode constants: the e2m1 table per plane height, the scale-repeat matrices per K
         self.lut, self.rep = {}, {}
         for k in (self.H, self.I):
@@ -179,7 +214,6 @@ class TtExperts:
             rep[0, 0, torch.arange(k), torch.arange(k) // BLOCK] = 1.0
             self.rep[k] = _replicate(mesh, rep, ttnn.bfloat16)
 
-        # weights: per local slot le and matrix, one mesh tensor whose chip (r, c) shard is expert (c rows + r) epc + le
         self.planes = [dict() for _ in range(self.epc)]
         self.scales = [dict() for _ in range(self.epc)]
         for le in range(self.epc):
@@ -219,8 +253,43 @@ class TtExperts:
                     memory_config=DRAM,
                     mesh_mapper=get_ep_mesh_mapper(mesh),
                 )
-        self._seq = {}
-        self._modules(self.max_chunk // rows)  # the serving chunk's dispatch / combine sizes, built at load
+
+    def _load_bfp8(self, ck, gtab):
+        """bfp8: per local slot le, W13 [2I, H] (w1 rows | w3 rows) and W2 [H, I] bfloat8_b as stored ([N, K], used
+        with transpose_b), one mesh tensor each whose chip (r, c) shard is expert (c rows + r) epc + le. Built once.
+
+        Orientation matters (DS41-35): bfloat8_b shares one exponent per 16 values along the last dim. Along K (as
+        stored) a group lies inside one 32-wide e8m0 block, so it holds e2m1 values (0.5 .. 6, 4 bits) under one
+        scale: always exact. Along N (W^T) a group spans 16 output rows with their own scales, and a few w2 groups
+        (layer 0: 2-3 of 737,280 per matrix) mix 2^-3 and 2^-8 scales: not exact."""
+        rows, cols, mesh, layer, H, I = self.dgs, self.ngroups, self.mesh, self.layer, self.H, self.I
+        self.w13, self.w2 = [], []
+        for le in range(self.epc):
+            w13 = torch.empty(cols, rows, 2 * I, H, dtype=torch.bfloat16)
+            w2 = torch.empty(cols, rows, H, I, dtype=torch.bfloat16)
+            for c in range(cols):
+                for r in range(rows):
+                    p = ck.expert(layer, int(gtab[c, r, le]))
+                    w = {nm: fp4_dequant(*p[nm]) for nm in NAMES}  # [N, K] fp32, e2m1 x 2^e (exact in bf16)
+                    assert w["w1"].shape == (I, H) and w["w2"].shape == (H, I), (w["w1"].shape, w["w2"].shape)
+                    w13[c, r, :I] = w["w1"]
+                    w13[c, r, I:] = w["w3"]
+                    w2[c, r] = w["w2"]
+                    for t in w.values():
+                        assert bool(torch.equal(t.to(torch.bfloat16).float(), t)), "e2m1 x 2^e not bf16-exact"
+            for t, nm in ((w13, "w1 | w3"), (w2, "w2")):
+                assert _bfp8_exact(t), f"layer {layer} slot {le} {nm}: bfloat8_b would round a value (DS41-35)"
+            for t, out in ((w13, self.w13), (w2, self.w2)):
+                out.append(
+                    ttnn.from_torch(
+                        t,
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh,
+                        memory_config=DRAM,
+                        mesh_mapper=get_ep_mesh_mapper(mesh),
+                    )
+                )
 
     # ------------------------------------------------------------------ sizes (built once per rows-per-chip)
     def _modules(self, s: int):
@@ -261,7 +330,7 @@ class TtExperts:
 
     # ------------------------------------------------------------------ weights
     def _decode(self, le: int, nm: str) -> ttnn.Tensor:
-        """W^T [K, N] bf16 (exact) of local expert le's matrix nm, from its nibble planes and scales."""
+        """fp4_decode: W^T [K, N] bf16 (exact) of local expert le's matrix nm, from its nibble planes and scales."""
         P = self.planes[le][nm]
         kp, nn = P.shape[-2], P.shape[-1]
         k = kp * PLANES
@@ -339,13 +408,23 @@ class TtExperts:
 
     def _ffn(self, xt: ttnn.Tensor, r: ttnn.Tensor, le: int) -> ttnn.Tensor:
         """One expert over its extracted rows: xt [cap, H] bf16 (q(x)), r [cap, 1] fp32 -> [cap, H] bf16."""
-        cfg, lim = self.cfg, self.lim
-        w1 = self._decode(le, "w1")
-        g = ttnn.linear(xt, w1, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM)
-        ttnn.deallocate(w1)
-        w3 = self._decode(le, "w3")
-        u = ttnn.linear(xt, w3, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM)
-        ttnn.deallocate(w3)
+        cfg, lim, I = self.cfg, self.lim, self.I
+        if self.impl == "bfp8":
+            gu = ttnn.linear(
+                xt, self.w13[le], transpose_b=True, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM
+            )
+            lead = list(gu.shape)[:-1]  # [.., cap]: the weight's [1, 1] batch dims lead the output
+            z = [0] * len(lead)
+            g = ttnn.slice(gu, z + [0], lead + [I], memory_config=DRAM)
+            u = ttnn.slice(gu, z + [I], lead + [2 * I], memory_config=DRAM)
+            ttnn.deallocate(gu)
+        else:
+            w1 = self._decode(le, "w1")
+            g = ttnn.linear(xt, w1, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM)
+            ttnn.deallocate(w1)
+            w3 = self._decode(le, "w3")
+            u = ttnn.linear(xt, w3, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM)
+            ttnn.deallocate(w3)
         if lim > 0:
             g2 = ttnn.minimum(g, lim, memory_config=DRAM)
             u2 = ttnn.clamp(u, -lim, lim, memory_config=DRAM)
@@ -361,9 +440,14 @@ class TtExperts:
         ttnn.deallocate(h)
         hq = fp8_qdq(hr, dtype=ttnn.bfloat16)
         ttnn.deallocate(hr)
-        w2 = self._decode(le, "w2")
-        y = ttnn.linear(hq, w2, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM)
-        ttnn.deallocate(w2)
+        if self.impl == "bfp8":
+            y = ttnn.linear(
+                hq, self.w2[le], transpose_b=True, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM
+            )
+        else:
+            w2 = self._decode(le, "w2")
+            y = ttnn.linear(hq, w2, dtype=ttnn.float32, compute_kernel_config=cfg, memory_config=DRAM)
+            ttnn.deallocate(w2)
         ttnn.deallocate(hq)
         yb = ttnn.typecast(y, ttnn.bfloat16, memory_config=DRAM)
         ttnn.deallocate(y)
@@ -462,6 +546,16 @@ class TtExperts:
         ttnn.deallocate(full)
         return out
 
+    def free(self):
+        """Release the device weights (tests that build several layers' or impls' experts in one process)."""
+        mats = [getattr(self, "w13", []), getattr(self, "w2", [])]
+        for d in getattr(self, "planes", []) + getattr(self, "scales", []):
+            mats.append(list(d.values()))
+        for ts in mats:
+            for t in ts:
+                ttnn.deallocate(t)
+        self.w13, self.w2, self.planes, self.scales = [], [], [], []
+
     def __call__(self, x: ttnn.Tensor, dense: ttnn.Tensor, idx: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """experts_out [1, 1, s, H/TP] fp32 (rows over axis 0, hidden columns over axis 1)."""
         part = self.partial(x, dense, idx)
@@ -512,7 +606,7 @@ def _combine(m, buf, meta, counts, region_offsets, seq_len):
     )
 
 
-def build_experts(mesh, ck, cfg, layer: int, chunk: int) -> TtExperts:
+def build_experts(mesh, ck, cfg, layer: int, chunk: int, impl: str | None = None) -> TtExperts:
     """The routed experts of one layer (reference Config: n_experts, topk_experts, dim, inter, swiglu_limit)."""
     return TtExperts(
         mesh,
@@ -524,4 +618,5 @@ def build_experts(mesh, ck, cfg, layer: int, chunk: int) -> TtExperts:
         top_k=cfg.topk_experts,
         swiglu_limit=cfg.swiglu_limit,
         max_chunk=chunk,
+        impl=impl,
     )
