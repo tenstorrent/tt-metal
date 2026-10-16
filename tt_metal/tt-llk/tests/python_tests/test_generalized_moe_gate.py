@@ -38,7 +38,7 @@ import struct
 
 import pytest
 import torch
-from conftest import skip_for_quasar
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -719,6 +719,84 @@ def test_generalized_moe_gate_ties():
     ), f"weights {got_weights.tolist()} do not normalize {selected_payload.tolist()}"
 
 
+# The ttnn op's Blackhole route for one ungrouped block (generalized_moe_gate<..., sfpu_sort>): the SFPU-only generic
+# sort replaces the merge tree, and the finalize tail and step2 are shared. On distinct keys both sorts return the same
+# descending top-8, so the answer is the same bit for bit, through either front end.
+@skip_for_wormhole
+@parametrize(topk=[4, 6, 8], softmax=[False, True], sigmoid=[False, True])
+def test_generalized_moe_gate_sfpu_sort(topk, softmax, sigmoid):
+    ids = _ids_face()
+    if sigmoid:
+        payload, bias = _sigmoid_stimuli(seed=79, grouped=False)
+        tiles = [payload, _id_tile(ids), _zeros(), _zeros()]
+    else:
+        payload, bias, _ = _gate_stimuli(seed=31 + topk + int(softmax))
+        tiles = _gate_tiles(payload, ids)
+
+    def gate(sfpu_sort, id_tile=None, identity_indices=False):
+        return _config(
+            GENERALIZED_MOE_GATE(
+                mode=MODE_GATE,
+                sigmoid=sigmoid,
+                topk=topk,
+                softmax=softmax,
+                eps=_bits(EPS),
+                scale=_bits(SCALE),
+                sfpu_sort=sfpu_sort,
+                identity_indices=identity_indices,
+            ),
+            tiles if id_tile is None else [tiles[0], id_tile, *tiles[2:]],
+            src_b=bias,
+        )
+
+    # The identity route writes the op's id tile, the transposed arange, itself: it gets a zero id tile and has to
+    # match the sort given that tile.
+    tree, sort, transposed, identity = _run(
+        gate(False),
+        gate(True),
+        gate(True, _id_tile(ids.T.contiguous())),
+        gate(True, _zeros(), identity_indices=True),
+    )
+    for region in (SCORES, IDS):
+        assert torch.equal(
+            sort[region][0, :8], tree[region][0, :8]
+        ), f"region {region}: {sort[region][0, :8].tolist()} vs the merge tree's {tree[region][0, :8].tolist()}"
+        assert torch.equal(
+            identity[region][0, :8], transposed[region][0, :8]
+        ), f"identity ids region {region}: {identity[region][0, :8].tolist()} vs {transposed[region][0, :8].tolist()}"
+
+
+# Ties: which tied expert wins is not in the contract (the two sorts break ties differently), the eight largest keys,
+# distinct ids and weights that normalize the selected payload are.
+@skip_for_wormhole
+def test_generalized_moe_gate_sfpu_sort_ties():
+    generator = torch.Generator().manual_seed(5)
+    key = torch.randint(0, 22, (256,), generator=generator).to(torch.float32) / 4.0
+    payload = torch.randint(1, 9, (256,), generator=generator).to(torch.float32) / 4.0
+    faces = _run(
+        _config(
+            GENERALIZED_MOE_GATE(
+                mode=MODE_GATE, eps=_bits(EPS), scale=_bits(SCALE), sfpu_sort=True
+            ),
+            _gate_tiles(payload.reshape(16, 16).to(torch.bfloat16), _ids_face()),
+            src_b=(key - payload).reshape(16, 16).to(torch.bfloat16),
+        )
+    )
+    got_weights, got_ids = _gate_output(faces)
+    assert (
+        len(set(got_ids.tolist())) == 8 and got_ids.max() < 256
+    ), f"bad ids: {got_ids.tolist()}"
+    selected = key[got_ids.to(torch.int64)].sort(descending=True).values
+    assert torch.equal(
+        selected, key.sort(descending=True).values[:8]
+    ), f"not the eight largest keys: {selected.tolist()}"
+    selected_payload = payload[got_ids.to(torch.int64)]
+    want = selected_payload * (SCALE / (selected_payload.sum() + EPS))
+    assert torch.allclose(
+        got_weights, want, rtol=2e-2, atol=1e-3
+    ), f"weights {got_weights.tolist()}"
+
+
 # The multi-block path stops at merge16_to_run, leaving a re-mergeable run and no normalize.
 # idx_offset is the block's expert-id base. The metal path leaves it 0 and carries global ids in the
 # id tile instead, so this is the only cover it has. 1792 is the largest legal value: the offset goes
@@ -1117,11 +1195,8 @@ def test_generalized_moe_gate_step1_hi(knobs):
     ), "step1_hi touched the scratch region"
 
 
-# step1 and step1_hi<d2b_dst=0, b2d_base=0> program byte-identical MOPs today: the same two
-# MOV_4_ROWS from DEST row 0, the same TRNSPSRCB, the same eight MOV_1_ROW back to rows 0-7, both at
-# num_tiles=3. The grouped path calls step1 and the ungrouped path calls step1_hi, so nothing else
-# would notice if one were edited and the other left behind. That equivalence is the claim here, and
-# it is also what lets the step1_hi test above stand as step1's layout cover.
+# On Wormhole step1 and step1_hi<0, 0> program byte-identical MOPs but the grouped and ungrouped paths call different
+# ones, so nothing else notices one drifting from the other; on Blackhole step1 runs step1_hi<0, 0> itself.
 def test_generalized_moe_gate_step1_matches_step1_hi():
     tags, tiles = _tag_tiles()
 

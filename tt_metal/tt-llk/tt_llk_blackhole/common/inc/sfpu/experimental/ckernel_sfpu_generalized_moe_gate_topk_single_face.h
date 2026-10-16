@@ -15,6 +15,7 @@
 #include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h"
 
 namespace ckernel
 {
@@ -638,6 +639,9 @@ inline void _gmg_merge16_to_run()
  * @tparam topk: number of experts to keep (<= 8); ranks >= topk are zeroed before normalize. 8 = full top-8.
  * @tparam output_softmax: true = softmax over the selected top-k (exp before the mask, max-subtracted);
  *         false = linear renormalize (score / Σ).
+ * @tparam presorted: the top-8 already sits in descending order down column 0 of rows 0-7 (an SFPU sort
+ *         such as the generic gate's left it there, in the same SFPU call, so the Dst RWC counter is still 0);
+ *         skip the merge and keep the tail.
  * @param eps: denominator stabilization added to the normalization sum.
  * @param scale: routed scaling factor applied to the normalized scores.
  * @note Calls @ref _gmg_merge16_core (which resets the Dst RWC counter and enables index tracking) and reads
@@ -645,7 +649,7 @@ inline void _gmg_merge16_to_run()
  *       normalize tails. Clobbers LREG0-7 (and LREG14). TERMINAL variant — it normalizes and writes the
  *       output; @ref _gmg_merge16_to_run is the non-normalizing run-producing variant.
  */
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t topk = 8, bool output_softmax = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t topk = 8, bool output_softmax = false, bool presorted = false>
 inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uint32_t scale)
 {
     // topk is restricted to {4, 6, 8}: the rank-mask below is correct only for these. topk 1-3 fall into the
@@ -655,10 +659,13 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
     // fail loudly here too rather than emit silently-wrong output.
     static_assert(topk == 4 || topk == 6 || topk == 8, "topk must be one of {4, 6, 8} (rank-mask is correct only for these)");
 
-    // Final combine: merge the two runs at {0,2}+{4,6} -> global top-8 (sorted DESCENDING), then normalize.
-    // (For 256 the two runs are topA/topB; for >256 they are the last two block/subtree runs of the tree.)
-    _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
-    bitonic_topk_store8_even_cols_split_indices_single_face<is_fp32_dest_acc_en>();
+    if constexpr (!presorted)
+    {
+        // Final combine: merge the two runs at {0,2}+{4,6} -> global top-8 (sorted DESCENDING), then normalize.
+        // (For 256 the two runs are topA/topB; for >256 they are the last two block/subtree runs of the tree.)
+        _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+        bitonic_topk_store8_even_cols_split_indices_single_face<is_fp32_dest_acc_en>();
+    }
 
     // SOFTMAX OUTPUT (over the selected top-k): exp the sorted scores in place, BEFORE the top-n mask and
     // the normalize. linear-normalize(exp(s-M)) = exp(s_i)/Σexp(s) = softmax (the exp(M) factor cancels), so
@@ -784,6 +791,59 @@ inline void _init_generalized_moe_gate_topk()
     // uses reg 14 to broadcast, which would clobber the reciprocal constants if they were initialized ahead
     // of time, so both WH and BH set them up within those fns. Kept (empty) because the topk_init wrapper
     // chain calls it on both arches.
+}
+
+// The id tile the host uploads for one block, face 0 of DEST tile 1: id(r, c) = 16 c + r (the transposed arange).
+// A 4-row load at offset 0 holds row r, even column c in the lane whose LTILEID is 16 r + c.
+inline void _generalized_moe_gate_write_transposed_ids_()
+{
+    constexpr std::uint32_t ids = generic_moe_gate_indices_tile;
+    TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG1, 1);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0xF);
+    TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+    TTI_SFPSHFT(4, 0, p_sfpu::LREG2, 1);
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    // Four rows down add 4, the odd column of a pair adds 16.
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 0);
+    TTI_SFPIADD(16, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 2);
+    TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 4);
+    TTI_SFPIADD(20, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 6);
+    TTI_SFPIADD(8, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 8);
+    TTI_SFPIADD(24, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 10);
+    TTI_SFPIADD(12, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 12);
+    TTI_SFPIADD(28, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 14);
+}
+
+// The one-block route when the host's ids are that identity: write them, then the generic SFPU-only sort.
+template <bool APPROXIMATION_MODE>
+inline void _generalized_moe_gate_identity_sort_()
+{
+    _generalized_moe_gate_write_transposed_ids_();
+    _generic_moe_gate_topk_<false, 8, 256, false, true, false>(0, 0);
+}
+
+// Sort and finalize in one SFPU pass: no done, start or SFPU wait on the math pipe between them.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t topk, bool output_softmax, bool identity_indices>
+inline void _generalized_moe_gate_sort_finalize_(std::uint32_t eps, std::uint32_t scale)
+{
+    if constexpr (identity_indices)
+    {
+        _generalized_moe_gate_identity_sort_<APPROXIMATION_MODE>();
+    }
+    else
+    {
+        _generic_moe_gate_topk_<false, 8, 256, false, true, false>(0, 0);
+    }
+    _generalized_moe_gate_finalize_ungrouped<APPROXIMATION_MODE, is_fp32_dest_acc_en, topk, output_softmax, true>(eps, scale);
 }
 
 } // namespace sfpu

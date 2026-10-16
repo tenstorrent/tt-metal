@@ -36,3 +36,15 @@ inline void llk_math_generalized_moe_gate_eltwise_binary(
         is_fp32_dest_acc_en,
         math_fidelity>(num_faces, dst_index);
 }
+
+template <GeneralizedMoeGateEltwiseBinaryMode mode>
+inline void llk_math_generalized_moe_gate_eltwise_binary_direct_init() {
+    SAN_HOOK(unsupported());
+    _llk_math_generalized_moe_gate_eltwise_binary_direct_init_<mode>();
+}
+
+template <GeneralizedMoeGateEltwiseBinaryMode mode>
+inline void llk_math_generalized_moe_gate_eltwise_binary_direct(std::uint32_t dst_index) {
+    SAN_HOOK(unsupported());
+    _llk_math_generalized_moe_gate_eltwise_binary_direct_<mode>(dst_index);
+}
