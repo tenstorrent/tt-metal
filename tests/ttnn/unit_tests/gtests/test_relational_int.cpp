@@ -135,6 +135,8 @@ INSTANTIATE_TEST_SUITE_P(
         RelationalUnaryParam{0, 0, 4, 4},                         // eq, ge, le
         RelationalUnaryParam{17, -96, 64, 64},                    // gt, ge, ne
         RelationalUnaryParam{100, 458, 128, 128},                 // lt, ne
-        RelationalUnaryParam{564, -118, 64, 128}));               // gt, ne
+        RelationalUnaryParam{564, -118, 64, 128},                 // gt, ne
+        RelationalUnaryParam{-2147483648, -2147483648, 128, 32},  // eq, ge, le at INT32_MIN
+        RelationalUnaryParam{-2147483648, 0, 128, 32}));          // lt, le, ne at INT32_MIN
 
 }  // namespace ttnn::operations::unary::test

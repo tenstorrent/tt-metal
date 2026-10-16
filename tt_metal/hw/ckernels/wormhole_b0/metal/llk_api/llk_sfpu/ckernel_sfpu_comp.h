@@ -16,27 +16,6 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-// These constants and function should ideally go to SFPI
-// Copied from ckernel_sfpu_int_sum.h to avoid dependency complications
-#ifndef SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
-#define SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
-
-#define BIT_MASK_32 0xFFFFFFFF
-#define SIGN 0x80000000
-#define MAGNITUDE 0x7FFFFFFF
-
-// Convert from sign-magnitude to two's complement format
-sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
-    v_if(value & SIGN) {
-        vInt magnitude = value & MAGNITUDE;
-        value = (~magnitude + 1) & BIT_MASK_32;
-    }
-    v_endif;
-    return value;
-}
-
-#endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
-
 inline void equal_zero_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -266,26 +245,18 @@ inline void calculate_nez_uint32() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
-    // Convert both operands to two's complement format
-    //
-    // LOGIC:
-    // - Scalar is already in two's complement (from host)
-    // - Convert SFPU input data from sign-magnitude to two's complement
-    // - Perform comparison with both in two's complement format
-
-    // Scalar stays in original two's complement format
+    // Both operands are two's complement: the scalar comes from the host as such, and int32 tiles
+    // sit in Dest as such, so read the word as it is (I32 layout, SFPLOAD mod0 INT32) and compare.
+    // The Wormhole Default vInt layout is SM32 (SFPLOAD mod0 INT32_SM), whose sign-magnitude ->
+    // two's complement conversion has no encoding for -2^31 and turns it into 0; a software
+    // re-conversion of that word cannot bring INT32_MIN back, so eq/ne misclassified it.
     vInt converted_scalar = scalar;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
+        vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
         vInt val = 0;
 
-        // Convert input data from sign-magnitude to two's complement
-        v = sfpu_sign_mag_to_twos_comp(v);
-
-        // Now both operands are in two's complement format
-        // Use simple comparison like Blackhole
         if constexpr (COMP_MODE == SfpuType::unary_ne) {
             v_if(v != converted_scalar) { val = 1; }
             v_endif;
@@ -294,7 +265,7 @@ inline void calculate_comp_unary_int(int scalar) {
             v_endif;
         }
 
-        dst_reg[0] = val;
+        dst_reg[0].mode<sfpi::DataLayout::I32>() = val;
         dst_reg++;
     }
 }
