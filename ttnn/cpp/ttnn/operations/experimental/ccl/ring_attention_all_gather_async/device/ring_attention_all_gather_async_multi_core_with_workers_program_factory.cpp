@@ -24,8 +24,133 @@
 #include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include <cstdlib>
 #include <optional>
 #include <tuple>
+#include <set>
+#include <tt-metalium/experimental/device.hpp>
+
+// EXPERIMENT (RING_AG_PLACE_ETH=1): place every (link, direction) worker on the free core nearest (NoC1 hops) to the
+// Ethernet core its fabric connection forwards through, per chip, as fabric_all_gather does. Slot = link * 2 +
+// is_forward. A writer signals its target chip's worker of the same slot, so the targets' placements are needed too.
+namespace ring_ag_placement_experiment {
+struct Placement {
+    std::vector<CoreCoord> self, forward_writer_target, backward_writer_target;
+};
+inline thread_local std::optional<Placement> g_override;
+// EXPERIMENT (RING_AG_FAB=1, implies RING_AG_PLACE_ETH): fabric_all_gather's link-worker program for the
+// standalone gather (kernels ring_ag_fab_reader.cpp / ring_ag_fab_sender.cpp).
+inline bool fab_enabled() {
+    static const bool value = std::getenv("RING_AG_FAB") != nullptr;
+    return value;
+}
+inline bool enabled() {
+    static const bool value = std::getenv("RING_AG_PLACE_ETH") != nullptr || fab_enabled();
+    return value;
+}
+inline bool fused_enabled() {  // RING_AG_PLACE_ETH_FUSED=1: also in fused ops, outside the consumer's grid
+    static const bool value = std::getenv("RING_AG_PLACE_ETH_FUSED") != nullptr;
+    return value;
+}
+// Cores at or beyond min_core (the fused op's CCL core offset) are free for the gather workers.
+inline std::vector<CoreCoord> place_impl(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const ttnn::MeshCoordinate& coord,
+    const std::optional<ttnn::MeshCoordinate>& forward,
+    const std::optional<ttnn::MeshCoordinate>& backward,
+    uint32_t num_links,
+    CoreCoord min_core,
+    uint32_t end_row = UINT32_MAX) {
+    auto* device = mesh_device->get_device(coord);
+    const auto grid = mesh_device->compute_with_storage_grid_size();
+    std::vector<CoreCoord> allowed;
+    for (uint32_t y = min_core.y; y < std::min<uint32_t>(grid.y, end_row); ++y) {
+        for (uint32_t x = min_core.x; x < grid.x; ++x) {
+            allowed.emplace_back(x, y);
+        }
+    }
+    std::set<std::pair<size_t, size_t>> taken;
+    std::vector<std::optional<CoreCoord>> slots(num_links * 2);
+    for (uint32_t is_forward = 0; is_forward < 2; ++is_forward) {
+        const auto& neighbor = is_forward ? backward : forward;  // the writer's fabric target (see emit_worker_runtime_args)
+        if (!neighbor.has_value()) {
+            continue;
+        }
+        for (uint32_t link = 0; link < num_links; ++link) {
+            const auto eth_core = tt::tt_fabric::get_forwarding_eth_core(
+                mesh_device->get_fabric_node_id(coord), mesh_device->get_fabric_node_id(*neighbor), link);
+            const auto closest = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
+                                     *device, eth_core, tt::tt_metal::NOC::NOC_1)
+                                     .logical_coord;
+            std::optional<CoreCoord> best;
+            uint32_t best_hops = UINT32_MAX;
+            for (const auto& candidate : allowed) {
+                if (taken.contains({candidate.x, candidate.y})) {
+                    continue;
+                }
+                const uint32_t hops = candidate == closest ? 0
+                                                           : tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                                                                 device, candidate, closest, tt::tt_metal::NOC::NOC_1);
+                if (hops < best_hops) {
+                    best_hops = hops;
+                    best = candidate;
+                }
+            }
+            taken.insert({best->x, best->y});
+            slots[link * 2 + is_forward] = best;
+            log_info(tt::LogOp, "ring_ag place: chip {} link {} fwd {} eth {} worker {}", coord, link, is_forward, eth_core, *best);
+        }
+    }
+    std::vector<CoreCoord> cores;
+    for (auto& slot : slots) {
+        if (!slot.has_value()) {
+            for (const auto& candidate : allowed) {
+                if (!taken.contains({candidate.x, candidate.y})) {
+                    slot = candidate;
+                    taken.insert({candidate.x, candidate.y});
+                    break;
+                }
+            }
+        }
+        cores.push_back(*slot);
+    }
+    return cores;
+}
+inline std::vector<CoreCoord> place(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const ttnn::Tensor& tensor,
+    const ttnn::MeshCoordinate& coord,
+    ttnn::ccl::Topology topology,
+    std::optional<uint32_t> cluster_axis,
+    uint32_t num_links) {
+    return place_impl(
+        mesh_device,
+        coord,
+        ttnn::ccl::get_physical_neighbor_from_physical_coord(tensor, coord, 1, topology, cluster_axis),
+        ttnn::ccl::get_physical_neighbor_from_physical_coord(tensor, coord, -1, topology, cluster_axis),
+        num_links,
+        CoreCoord{0, 0});
+}
+// Linear line along `axis` (the fused path has no cluster axis at hand: it is where the neighbours differ).
+inline std::vector<CoreCoord> place_linear(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const ttnn::MeshCoordinate& coord,
+    uint32_t axis,
+    uint32_t num_links,
+    CoreCoord min_core,
+    uint32_t end_row) {
+    auto neighbor = [&](int step) -> std::optional<ttnn::MeshCoordinate> {
+        const int value = static_cast<int>(coord[axis]) + step;
+        if (value < 0 || value >= static_cast<int>(mesh_device->shape()[axis])) {
+            return std::nullopt;
+        }
+        ttnn::MeshCoordinate result = coord;
+        result[axis] = static_cast<uint32_t>(value);
+        return result;
+    };
+    return place_impl(mesh_device, coord, neighbor(1), neighbor(-1), num_links, min_core, end_row);
+}
+}  // namespace ring_ag_placement_experiment
 
 namespace ttnn::experimental::prim {
 
@@ -61,6 +186,21 @@ tt::tt_metal::ProgramDescriptor build_ring_attention_all_gather_program_descript
         operation_attributes.topology,
         operation_attributes.cluster_axis);
 
+    if (ring_ag_placement_experiment::enabled()) {
+        auto* md = tensor_args.input_tensor[0].device();
+        const auto place_at = [&](const std::optional<MeshCoordinate>& c) {
+            return c.has_value() ? ring_ag_placement_experiment::place(
+                                       md,
+                                       tensor_args.input_tensor[0],
+                                       *c,
+                                       operation_attributes.topology,
+                                       operation_attributes.cluster_axis,
+                                       operation_attributes.num_links)
+                                 : std::vector<CoreCoord>{};
+        };
+        ring_ag_placement_experiment::g_override = ring_ag_placement_experiment::Placement{
+            place_at(mesh_coordinate), place_at(backward_coord), place_at(forward_coord)};
+    }
     ring_attention_all_gather_async_multi_core_with_workers_helper(
         desc,
         tensor_args.input_tensor,
@@ -76,6 +216,7 @@ tt::tt_metal::ProgramDescriptor build_ring_attention_all_gather_program_descript
         operation_attributes.semaphore,
         operation_attributes.sub_device_id,
         empty_fused_op_signaler);
+    ring_ag_placement_experiment::g_override.reset();
 
     return desc;
 }
@@ -131,6 +272,12 @@ void RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::override_run
     patch_semaphore_arg(dyn::kWriterForwardKernelIdx, dyn::kWriterSemaphoreArg, forward_sem_addr);
     patch_semaphore_arg(dyn::kReaderBackwardKernelIdx, dyn::kReaderSemaphoreArg, backward_sem_addr);
     patch_semaphore_arg(dyn::kWriterBackwardKernelIdx, dyn::kWriterSemaphoreArg, backward_sem_addr);
+    if (ring_ag_placement_experiment::fab_enabled()) {  // the downstream-started counter: the other direction's
+        patch_semaphore_arg(dyn::kReaderForwardKernelIdx, dyn::kReaderSemaphoreArg + 1, backward_sem_addr);
+        patch_semaphore_arg(dyn::kWriterForwardKernelIdx, dyn::kWriterSemaphoreArg + 1, backward_sem_addr);
+        patch_semaphore_arg(dyn::kReaderBackwardKernelIdx, dyn::kReaderSemaphoreArg + 1, forward_sem_addr);
+        patch_semaphore_arg(dyn::kWriterBackwardKernelIdx, dyn::kWriterSemaphoreArg + 1, forward_sem_addr);
+    }
 }
 
 }  // namespace ttnn::experimental::prim
@@ -148,6 +295,14 @@ constexpr uint32_t kWidthDimension = 3;
 // Independent performance tunables. Keep these named rather than deriving one from another: the reader prefetch
 // window and writer header pool protect different pipelines.
 constexpr uint32_t kPrefetchPackets = 4;
+// EXPERIMENT: main-path prefetch depth (the CB holds 2x this many packets), overridable for tuning.
+uint32_t main_prefetch_packets() {
+    static const uint32_t value = [] {
+        const char* env = std::getenv("RING_AG_PREFETCH_PACKETS");
+        return env != nullptr ? std::max<uint32_t>(1, static_cast<uint32_t>(std::atoi(env))) : kPrefetchPackets;
+    }();
+    return value;
+}
 // The halo writer scatters up to the fabric's scatter-write chunk limit (NOC_SCATTER_WRITE_MAX_CHUNKS).
 constexpr uint32_t kMaxHaloPagesPerPacket = 4;
 constexpr uint32_t kPacketHeaderSlots = 8;
@@ -804,6 +959,42 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const auto direction_core_slot = [](uint32_t link, bool is_forward) {
         return link * ring_attention_all_gather_async_detail::kRingDirectionCount + static_cast<uint32_t>(is_forward);
     };
+    struct ResetFusedOverride {
+        bool active = false;
+        ~ResetFusedOverride() {
+            if (active) {
+                ring_ag_placement_experiment::g_override.reset();
+            }
+        }
+    } reset_fused_override;
+    if (fuse_op && ring_ag_placement_experiment::fused_enabled()) {
+        reset_fused_override.active = true;
+        TT_FATAL(topology == ttnn::ccl::Topology::Linear, "RING_AG_PLACE_ETH_FUSED: Linear only");
+        const auto& neighbor = forward_device_coord.has_value() ? forward_device_coord : backward_device_coord;
+        TT_FATAL(neighbor.has_value(), "RING_AG_PLACE_ETH_FUSED: no neighbour");
+        uint32_t axis = 0;
+        while ((*neighbor)[axis] == target_device_coord[axis]) {
+            ++axis;
+        }
+        const auto place_at = [&](const std::optional<MeshCoordinate>& c) {
+            // with the attention grid moved down (RING_SDPA_GRID_ORIGIN_Y), the rows above it; else the CCL region
+            const char* origin_env = std::getenv("RING_SDPA_GRID_ORIGIN_Y");
+            const uint32_t origin_y = origin_env != nullptr ? static_cast<uint32_t>(std::atoi(origin_env)) : 0u;
+            return c.has_value() ? ring_ag_placement_experiment::place_linear(
+                                       mesh_device,
+                                       *c,
+                                       axis,
+                                       num_links,
+                                       origin_y > 0 ? CoreCoord{0, 0} : core_grid_offset,
+                                       origin_y > 0 ? origin_y : UINT32_MAX)
+                                 : std::vector<CoreCoord>{};
+        };
+        ring_ag_placement_experiment::g_override = ring_ag_placement_experiment::Placement{
+            place_at(target_device_coord), place_at(backward_device_coord), place_at(forward_device_coord)};
+    }
+    if (ring_ag_placement_experiment::g_override.has_value()) {
+        sender_reserved_cores = ring_ag_placement_experiment::g_override->self;
+    }
     for (uint32_t link = 0; link < num_links; ++link) {
         backward_workers.push_back(WorkerPlacement{
             .core = sender_reserved_cores[direction_core_slot(link, kBackwardDirection)], .link = link});
@@ -821,6 +1012,164 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const CoreRangeSet sender_forward_core_ranges = placements_to_core_ranges(forward_workers);
     const CoreRangeSet sender_backward_core_ranges = placements_to_core_ranges(backward_workers);
 
+    if (ring_ag_placement_experiment::fab_enabled() && ring_ag_placement_experiment::g_override.has_value()) {
+        namespace dyn = ttnn::experimental::prim::ring_attention_all_gather_async_dynamic;
+        TT_FATAL(!fuse_op && !kv_actual_isl.has_value() && !partial_readiness_enabled, "RING_AG_FAB: standalone only");
+        TT_FATAL(topology == ttnn::ccl::Topology::Linear && !rank_mapping.full_mesh, "RING_AG_FAB: Linear axis only");
+        TT_FATAL(dim == kSequenceDimension && !input_batch_slice_idx.has_value(), "RING_AG_FAB: dim 2 only");
+        const uint32_t page_bytes = input_tensor[0].buffer()->aligned_page_size();
+        for (uint32_t i = 0; i < input_tensor.size(); ++i) {
+            for (const auto* buffer : {input_tensor[i].buffer(), output_tensor[i].buffer()}) {
+                TT_FATAL(
+                    buffer->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                        buffer->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+                        buffer->aligned_page_size() == page_bytes,
+                    "RING_AG_FAB: interleaved DRAM tensors with one page size only");
+            }
+        }
+        const uint32_t fabric_payload_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+        const uint32_t pages_per_fabric_chunk = std::max<uint32_t>(1, fabric_payload_bytes / page_bytes);
+        const uint32_t fabric_chunk_bytes = pages_per_fabric_chunk * page_bytes;
+        constexpr uint32_t kMaxChunksPerCbBatch = 8, kFabricChunkCbBudgetBytes = 112 * 1024;
+        const uint32_t chunks_per_cb_batch = std::max<uint32_t>(
+            1, std::min<uint32_t>(kMaxChunksPerCbBatch, kFabricChunkCbBudgetBytes / (2 * fabric_chunk_bytes)));
+        const uint32_t chunk_cb = tt::CB::c_in0;
+        CoreRangeSet all_workers = sender_forward_core_ranges.merge(sender_backward_core_ranges);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2 * chunks_per_cb_batch * fabric_chunk_bytes,
+            .core_ranges = all_workers,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(chunk_cb),
+                .data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].dtype()),
+                .page_size = page_bytes,
+            }}},
+        });
+        const uint32_t num_inputs = input_tensor.size();
+        std::vector<uint32_t> reader_ct{chunk_cb, page_bytes, pages_per_fabric_chunk, num_dram_banks, chunks_per_cb_batch, num_inputs};
+        tt::tt_metal::TensorAccessorArgs(input_tensor[0].buffer()).append_to(reader_ct);
+        tt::tt_metal::TensorAccessorArgs(output_tensor[0].buffer()).append_to(reader_ct);
+        std::vector<uint32_t> sender_ct{
+            chunk_cb, page_bytes, pages_per_fabric_chunk, num_dram_banks, chunks_per_cb_batch, fabric_payload_bytes, num_inputs};
+        tt::tt_metal::TensorAccessorArgs(output_tensor[0].buffer()).append_to(sender_ct);
+        constexpr const char* kKernelDir =
+            "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/";
+        auto make_kernel = [&](bool sender, const CoreRangeSet& cores) {
+            KernelDescriptor kernel{};
+            kernel.kernel_source = std::string(kKernelDir) + (sender ? "ring_ag_fab_sender.cpp" : "ring_ag_fab_reader.cpp");
+            kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            kernel.core_ranges = cores;
+            kernel.config = sender ? tt::tt_metal::DataMovementConfigDescriptor{
+                                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                                         .noc = tt::tt_metal::NOC::RISCV_1_default}
+                                   : tt::tt_metal::DataMovementConfigDescriptor{
+                                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                                         .noc = tt::tt_metal::NOC::RISCV_0_default};
+            kernel.compile_time_args = sender ? sender_ct : reader_ct;
+            return kernel;
+        };
+        // kernel order and semaphore arg positions follow ring_attention_all_gather_async_dynamic
+        KernelDescriptor kernels[4] = {
+            make_kernel(false, sender_forward_core_ranges),
+            make_kernel(true, sender_forward_core_ranges),
+            make_kernel(false, sender_backward_core_ranges),
+            make_kernel(true, sender_backward_core_ranges)};
+        const auto& override_placement = *ring_ag_placement_experiment::g_override;
+        const uint32_t G = ring_size, p = ring_index;
+        for (const bool is_forward : {kForwardDirection, kBackwardDirection}) {
+            // a forward worker sends to backward_device_coord (see emit_worker_runtime_args): step -1 in ring index
+            const auto& target = is_forward ? backward_device_coord : forward_device_coord;
+            const int step = is_forward ? -1 : 1;
+            const auto& target_placement =
+                is_forward ? override_placement.forward_writer_target : override_placement.backward_writer_target;
+            const uint32_t own_sem = semaphore.at(is_forward ? dyn::kForwardSemaphoreIdx : dyn::kBackwardSemaphoreIdx).address();
+            const uint32_t other_sem = semaphore.at(is_forward ? dyn::kBackwardSemaphoreIdx : dyn::kForwardSemaphoreIdx).address();
+            std::vector<uint32_t> outgoing;
+            if (target.has_value()) {
+                for (int r = static_cast<int>(p); r >= 0 && r < static_cast<int>(G); r -= step) {
+                    outgoing.push_back(static_cast<uint32_t>(r));
+                }
+            }
+            const uint32_t shards_expected_from_upstream = step == 1 ? p : G - 1 - p;
+            for (uint32_t link = 0; link < num_links; ++link) {
+                const CoreCoord core = override_placement.self.at(direction_core_slot(link, is_forward));
+                KernelDescriptor::RTArgList reader_args;
+                for (uint32_t v : {0u, 0u, own_sem, other_sem, G, link, num_links, static_cast<uint32_t>(outgoing.size())}) {
+                    reader_args.push_back(v);
+                }
+                for (uint32_t r : outgoing) {
+                    reader_args.push_back(r);
+                }
+                KernelDescriptor::RTArgList sender_args;
+                CoreCoord started_core{0, 0}, downstream_core{0, 0};
+                uint32_t mesh_id = 0, chip_id = 0;
+                if (target.has_value()) {
+                    started_core = mesh_device->worker_core_from_logical_core(
+                        target_placement.at(direction_core_slot(link, !is_forward)));
+                    downstream_core = mesh_device->worker_core_from_logical_core(
+                        target_placement.at(direction_core_slot(link, is_forward)));
+                    const auto node = mesh_device->get_fabric_node_id(*target);
+                    mesh_id = *node.mesh_id;
+                    chip_id = node.chip_id;
+                }
+                for (uint32_t v :
+                     {link,
+                      num_links,
+                      static_cast<uint32_t>(target.has_value()),
+                      G,
+                      own_sem,
+                      other_sem,
+                      static_cast<uint32_t>(started_core.x),
+                      static_cast<uint32_t>(started_core.y),
+                      static_cast<uint32_t>(downstream_core.x),
+                      static_cast<uint32_t>(downstream_core.y),
+                      mesh_id,
+                      chip_id,
+                      shards_expected_from_upstream,
+                      static_cast<uint32_t>(outgoing.size())}) {
+                    sender_args.push_back(v);
+                }
+                for (uint32_t r : outgoing) {
+                    sender_args.push_back(r);
+                }
+                for (uint32_t i = 0; i < num_inputs; ++i) {
+                    const auto shape = input_tensor[i].padded_shape();
+                    const auto out_shape = output_tensor[i].padded_shape();
+                    TT_FATAL(out_shape[kSequenceDimension] == G * shape[kSequenceDimension], "RING_AG_FAB: output shape");
+                    const uint32_t num_outer_slices = shape[kBatchDimension] * shape[kHeadDimension];
+                    const uint32_t pages_per_outer_slice =
+                        (shape[kSequenceDimension] / tt::constants::TILE_HEIGHT) * (shape[kWidthDimension] / tt::constants::TILE_WIDTH);
+                    reader_args.push_back(num_outer_slices);
+                    reader_args.push_back(pages_per_outer_slice);
+                    reader_args.push_back(input_tensor[i].buffer());
+                    reader_args.push_back(output_tensor[i].buffer());
+                    sender_args.push_back(num_outer_slices);
+                    sender_args.push_back(pages_per_outer_slice);
+                    sender_args.push_back(output_tensor[i].buffer());
+                }
+                if (target.has_value()) {
+                    std::vector<uint32_t> fabric_args;
+                    tt::tt_fabric::append_fabric_connection_rt_args(
+                        mesh_device->get_fabric_node_id(target_device_coord),
+                        mesh_device->get_fabric_node_id(*target),
+                        link,
+                        desc,
+                        core,
+                        fabric_args);
+                    for (uint32_t v : fabric_args) {
+                        sender_args.push_back(v);
+                    }
+                }
+                const uint32_t kernel_base = is_forward ? dyn::kReaderForwardKernelIdx : dyn::kReaderBackwardKernelIdx;
+                kernels[kernel_base].emplace_runtime_args(core, reader_args);
+                kernels[kernel_base + 1].emplace_runtime_args(core, sender_args);
+            }
+        }
+        for (auto& kernel : kernels) {
+            desc.kernels.push_back(std::move(kernel));
+        }
+        return;
+    }
+
     const uint32_t max_pages_per_packet = max_payload_size_bytes / l1_scratch_cb_page_size_bytes;
     TT_FATAL(
         max_pages_per_packet > 0,
@@ -831,7 +1180,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         output_bank_owned_schedule ? max_pages_per_packet : std::min(max_pages_per_packet, kMaxScatterPagesPerPacket);
     // Must be >= kDoubleBufferingFactor * prefetch_packets * num_pages_per_packet for deadlock-free buffering
     // (see PREFETCH_PACKETS in ring_attention_all_gather_reader.cpp).
-    const uint32_t cb_num_pages = kDoubleBufferingFactor * kPrefetchPackets * num_pages_per_packet;
+    const uint32_t cb_num_pages = kDoubleBufferingFactor * main_prefetch_packets() * num_pages_per_packet;
     const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
@@ -948,7 +1297,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
-            kPrefetchPackets,                                   // kPrefetchPackets
+            main_prefetch_packets(),                            // kPrefetchPackets
             // Appended last so main's arg order is untouched; the reader reads it as kHasSlotMetadata
             // and kReaderFixedCompileTimeArgCount (asserted just below) counts it.
             static_cast<uint32_t>(has_slot_metadata),  // kHasSlotMetadata
@@ -1066,6 +1415,49 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         kBackwardDirection,
         unicast_forward_args[0],
         unicast_forward_args[1]);
+    // EXPERIMENT (RING_AG_FAB_PATH=1): fabric_all_gather's data path and RISC/NoC split (reader on NCRISC/NoC0, sender
+    // on BRISC/NoC1) for the plain bank-owned schedule; same args, protocol and fused-op signals.
+    const bool all_interleaved = [&] {
+        for (uint32_t i = 0; i < input_tensor.size(); ++i) {
+            for (const auto* buffer : {input_tensor[i].buffer(), output_tensor[i].buffer()}) {
+                if (buffer->buffer_layout() != tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }();
+    if (std::getenv("RING_AG_FAB_PATH") != nullptr && output_bank_owned_schedule && !partial_readiness_enabled &&
+        !effective_split_forwarding && all_interleaved) {
+        // RING_AG_FAB_PATH_CFG = <reader RISC><reader NoC>: n0 (fabric_all_gather: NCRISC/NoC0, default), b1 (the ring's
+        // own split: BRISC/NoC1), n1, b0. The sender takes the other RISC and the other NoC.
+        std::string cfg = std::getenv("RING_AG_FAB_PATH_NOSWAP") != nullptr ? "b1" : "n0";
+        if (const char* env = std::getenv("RING_AG_FAB_PATH_CFG")) {
+            cfg = env;
+        }
+        TT_FATAL(cfg.size() == 2 && (cfg[0] == 'n' || cfg[0] == 'b') && (cfg[1] == '0' || cfg[1] == '1'), "RING_AG_FAB_PATH_CFG");
+        const auto reader_risc = cfg[0] == 'n' ? tt::tt_metal::DataMovementProcessor::RISCV_1
+                                               : tt::tt_metal::DataMovementProcessor::RISCV_0;
+        const auto sender_risc = cfg[0] == 'n' ? tt::tt_metal::DataMovementProcessor::RISCV_0
+                                               : tt::tt_metal::DataMovementProcessor::RISCV_1;
+        const auto reader_noc = cfg[1] == '0' ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1;
+        const auto sender_noc = cfg[1] == '0' ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
+        for (auto* kernel : {&sender_reader_forward_kernel, &sender_reader_backward_kernel}) {
+            kernel->config = tt::tt_metal::DataMovementConfigDescriptor{.processor = reader_risc, .noc = reader_noc};
+            kernel->defines.emplace_back("RING_AG_FAB_PATH", "1");
+        }
+        for (auto* kernel : {&sender_writer_forward_kernel, &sender_writer_backward_kernel}) {
+            kernel->config = tt::tt_metal::DataMovementConfigDescriptor{.processor = sender_risc, .noc = sender_noc};
+            kernel->defines.emplace_back("RING_AG_FAB_PATH", "1");
+        }
+        log_info(tt::LogOp, "ring_ag: fabric_all_gather data path");
+    }
+    if (fuse_op && std::getenv("RING_AG_SKIP") != nullptr) {  // EXPERIMENT: gather kernels return immediately
+        for (auto* kernel : {&sender_reader_forward_kernel, &sender_writer_forward_kernel, &sender_reader_backward_kernel,
+                             &sender_writer_backward_kernel}) {
+            kernel->defines.emplace_back("RING_AG_EXPERIMENT_SKIP", "1");
+        }
+    }
 
     /* All gather fusion */
     // Inline equivalent of AllGatherFusedOpSignaler::init_all_gather for the descriptor
@@ -1220,7 +1612,15 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         auto& reader_kernel = is_forward ? sender_reader_forward_kernel : sender_reader_backward_kernel;
         reader_kernel.emplace_runtime_args(placement.core, reader_args);
 
-        const CoreCoord worker_virtual_core = mesh_device->worker_core_from_logical_core(placement.core);
+        CoreCoord worker_virtual_core = mesh_device->worker_core_from_logical_core(placement.core);
+        if (ring_ag_placement_experiment::g_override.has_value()) {
+            const auto& targets = is_forward ? ring_ag_placement_experiment::g_override->forward_writer_target
+                                             : ring_ag_placement_experiment::g_override->backward_writer_target;
+            if (!targets.empty()) {
+                worker_virtual_core =
+                    mesh_device->worker_core_from_logical_core(targets.at(direction_core_slot(placement.link, is_forward)));
+            }
+        }
         KernelDescriptor::RTArgList writer_args;
         writer_args.push_back(static_cast<uint32_t>(dim));
         writer_args.push_back(static_cast<uint32_t>(worker_virtual_core.x));

@@ -77,9 +77,15 @@
 #include "ckernel_sfpu_reduce.h"
 #include "ckernel_sfpu_max_pool_indices.h"
 #endif
+#define MATH_REAL(...) __VA_ARGS__
+#ifdef SDPA_EXPERIMENT_NO_MATH  // EXPERIMENT: math thread work disabled
+#define MATH(...)
+#else
 #define MATH(...) __VA_ARGS__
+#endif
 #else
 #define MATH(...)
+#define MATH_REAL(...)
 #endif
 
 #ifdef TRISC_PACK
@@ -109,9 +115,15 @@
 #include "llk_unpack_untilize_api.h"
 #endif
 #include "llk_io_unpack.h"
+#define UNPACK_REAL(...) __VA_ARGS__
+#ifdef SDPA_EXPERIMENT_NO_MATH  // EXPERIMENT: unpack thread work disabled (CB sync kept)
+#define UNPACK(...)
+#else
 #define UNPACK(...) __VA_ARGS__
+#endif
 #else
 #define UNPACK(...)
+#define UNPACK_REAL(...)
 #endif
 
 namespace ckernel {

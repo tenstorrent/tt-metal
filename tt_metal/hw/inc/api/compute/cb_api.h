@@ -41,7 +41,7 @@ namespace ckernel {
  * | ntiles    | The number of tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  * */
 // clang-format on
-ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_wait_tiles(cbid, ntiles))); }
+ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK_REAL((llk_wait_tiles(cbid, ntiles))); }
 
 // clang-format off
 /**
@@ -73,7 +73,7 @@ ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_wait_tiles
  * | ntiles    | The number of tiles to be popped     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
 // clang-format on
-ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_pop_tiles(cbid, ntiles))); }
+ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) { UNPACK_REAL((llk_pop_tiles(cbid, ntiles))); }
 
 // clang-format off
 /**
@@ -172,14 +172,14 @@ ALWI uint32_t get_tile_l1_byte_address(uint32_t operand_id, uint32_t tile_index)
 ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
     uint32_t address = 0;
 
-    UNPACK({
+    UNPACK_REAL({
         address = get_tile_l1_byte_address(get_operand_id(cb_id), tile_index);
 
         mailbox_write(ckernel::ThreadId::MathThreadId, address);
         mailbox_write(ckernel::ThreadId::PackThreadId, address);
     })
 
-    MATH(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    MATH_REAL(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
     PACK(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return address;
@@ -202,7 +202,7 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
 ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t element_offset) {
     uint32_t value = 0;
 
-    UNPACK({
+    UNPACK_REAL({
         uint32_t byte_address = get_tile_l1_byte_address(get_operand_id(cb_id), tile_index);
 
         value = reinterpret_cast<volatile uint32_t*>(byte_address)[element_offset];
@@ -211,7 +211,7 @@ ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t elem
         mailbox_write(ckernel::ThreadId::PackThreadId, value);
     })
 
-    MATH(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    MATH_REAL(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
     PACK(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return value;

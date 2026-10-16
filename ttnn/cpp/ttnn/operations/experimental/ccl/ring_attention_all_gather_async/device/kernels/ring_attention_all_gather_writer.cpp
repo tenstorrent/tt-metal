@@ -10,6 +10,7 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
@@ -17,6 +18,7 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
 #include "ring_attention_rank_mapping.hpp"
+#include "ring_attention_fab_walk.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <utility>
@@ -93,11 +95,31 @@ static_assert(
     !partial_readiness_enabled || (num_targets_forward_direction > 0 && num_targets_backward_direction > 0),
     "partial readiness requires both ring directions");
 
+// Packets kept in flight before one flush, as in fabric_all_gather's sender: half the CB (cb_output holds
+// kDoubleBufferingFactor * prefetch packets), so the reader keeps filling the other half. Each in-flight packet needs
+// its own header (a header must not change until its packet has left L1) and its own CB slot.
+constexpr uint32_t kMaxPacketsInFlight = 8;
+volatile tt_l1_ptr PACKET_HEADER_TYPE* g_batch_hdrs[kMaxPacketsInFlight];
+uint32_t g_packets_in_flight = 1;
+
+// cb_pop_front wraps the read pointer only when it lands exactly on fifo_limit, so a multi-packet pop must not cross
+// the end of the FIFO: split it there.
+FORCE_INLINE void pop_packets(CircularBuffer& cb_output, uint32_t num_packets) {
+    constexpr uint32_t slot_bytes = packet_size_in_pages * output_page_size;
+    const auto& cb_iface = get_local_cb_interface(cb_output_id);
+    const uint32_t packets_to_end = (cb_iface.fifo_limit - cb_iface.fifo_rd_ptr) / slot_bytes;
+    if (num_packets > packets_to_end) {
+        cb_output.pop_front(packet_size_in_pages * packets_to_end);
+        num_packets -= packets_to_end;
+    }
+    cb_output.pop_front(packet_size_in_pages * num_packets);
+}
+
 template <typename AddrGenType, typename FabricSender>
 FORCE_INLINE void write_bank_owned_slices(
     CircularBuffer& cb_output,
     AddrGenType& output_addrgen,
-    volatile PACKET_HEADER_TYPE* pkt_hdr,
+    volatile PACKET_HEADER_TYPE* /*pkt_hdr*/,
     FabricSender& fabric_direction_connection,
     uint32_t output_page_base,
     uint32_t valid_pages,
@@ -105,18 +127,34 @@ FORCE_INLINE void write_bank_owned_slices(
     uint32_t bank_stride) {
     ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
         output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
+    const auto& cb_iface = get_local_cb_interface(cb_output_id);
+    constexpr uint32_t slot_bytes = packet_size_in_pages * output_page_size;
     uint32_t first_page_offset = 0;
     uint32_t batch = 0;
+    uint32_t in_flight = 0;
     while (schedule.next_packet(first_page_offset, batch)) {
-        cb_output.wait_front(packet_size_in_pages);
-        fabric_write_unidir(
-            output_page_base + first_page_offset,
-            output_addrgen,
-            pkt_hdr,
-            fabric_direction_connection,
-            cb_output.get_read_ptr(),
-            batch * output_page_size);
-        cb_output.pop_front(packet_size_in_pages);
+        if (in_flight == g_packets_in_flight) {
+            noc_async_writes_flushed();
+            pop_packets(cb_output, in_flight);
+            in_flight = 0;
+        }
+        cb_output.wait_front(packet_size_in_pages * (in_flight + 1));
+        uint32_t slot_addr = cb_iface.fifo_rd_ptr + in_flight * slot_bytes;
+        if (slot_addr >= cb_iface.fifo_limit) {
+            slot_addr -= cb_iface.fifo_size;
+        }
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = g_batch_hdrs[in_flight];
+        const uint32_t payload_bytes = batch * output_page_size;
+        tt::tt_fabric::linear::to_noc_unicast_write(
+            payload_bytes, hdr, output_page_base + first_page_offset, output_addrgen, 0);
+        fabric_direction_connection.wait_for_empty_write_slot();
+        fabric_direction_connection.send_current_slot_non_blocking(
+            slot_addr, payload_bytes, reinterpret_cast<uint32_t>(hdr));
+        ++in_flight;
+    }
+    if (in_flight > 0) {
+        noc_async_writes_flushed();
+        pop_packets(cb_output, in_flight);
     }
 }
 
@@ -138,6 +176,9 @@ FORCE_INLINE void discard_bank_owned_slices(
 }
 
 void kernel_main() {
+#ifdef RING_AG_EXPERIMENT_SKIP
+    return;  // EXPERIMENT: gather disabled (only valid with the consumer's waits off)
+#endif
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, kNumFixedCompileTimeArgs + num_inputs>();
     constexpr uint32_t kMetaArgsOffset = has_metadata
                                              ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
@@ -258,6 +299,15 @@ void kernel_main() {
 
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
+    {
+        const uint32_t cb_packets =
+            get_local_cb_interface(cb_output_id).fifo_size / (packet_size_in_pages * output_page_size);
+        g_packets_in_flight = std::max<uint32_t>(1, std::min<uint32_t>(kMaxPacketsInFlight, cb_packets / 2));
+    }
+    for (uint32_t i = 0; i < kMaxPacketsInFlight; ++i) {
+        g_batch_hdrs[i] = PacketHeaderPool::allocate_header();
+        ccl_routing_utils::fabric_set_line_unicast_route(g_batch_hdrs[i], unicast_route_info);
+    }
 
     fabric_connection.open();
     tt::tt_fabric::WorkerToFabricEdmSender* fabric_direction_connection =
@@ -281,11 +331,85 @@ void kernel_main() {
         }
     };
 
+#ifdef RING_AG_FAB_PATH
+    // fabric_all_gather's sender (see ring_attention_fab_walk.hpp): one packet per chunk from an 8-header pool, the
+    // CB batch popped once its packets have left L1, and the slice-arrived increment fused onto the slice's last packet.
+    ring_attention_fab_walk::SliceGeometry<num_inputs> fab_geometry;
+    for (uint32_t input_idx = 0; input_idx < num_inputs; ++input_idx) {
+        fab_geometry.outer_slices[input_idx] = input_batch_head_count[input_idx];
+        fab_geometry.valid_pages[input_idx] = input_valid_pages[input_idx];
+        fab_geometry.input_pages[input_idx] = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
+        fab_geometry.output_pages[input_idx] = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+    }
+    fab_geometry.first_lane = worker_link[0];
+    fab_geometry.lane_stride = num_links;
+    fab_geometry.num_dram_banks = num_dram_banks;
+    fab_geometry.pages_per_chunk = packet_size_in_pages;
+    constexpr uint32_t fab_chunk_bytes = packet_size_in_pages * output_page_size;
+    const uint32_t fab_chunk_slots = get_local_cb_interface(cb_output_id).fifo_size / fab_chunk_bytes;
+    ring_attention_fab_walk::CbBatches fab_batches{fab_chunk_slots, fab_chunk_slots / 2};
+    uint32_t fab_next_header = 0, fab_unflushed_headers = 0;
+    auto fab_next_free_header = [&]() {  // flush before a header is reused
+        if (fab_unflushed_headers == kMaxPacketsInFlight) {
+            noc_async_writes_flushed();
+            fab_unflushed_headers = 0;
+        }
+        ++fab_unflushed_headers;
+        auto* header = g_batch_hdrs[fab_next_header];
+        fab_next_header = (fab_next_header + 1) % kMaxPacketsInFlight;
+        return header;
+    };
+    auto fab_pop_batch = [&]() {
+        noc_async_writes_flushed();  // the batch's chunks and headers have left L1
+        fab_unflushed_headers = 0;
+        cb_pop_front(cb_output_id, packet_size_in_pages * fab_batches.in_batch);
+        fab_batches.close();
+    };
+    auto fab_send_slice = [&](uint32_t rank) {
+        const uint32_t slice_chunks = fab_geometry.chunks_per_slice();
+        uint32_t chunks_sent = 0;
+        fab_geometry.for_each_chunk([&](auto input_constant, uint32_t outer, uint32_t page, uint32_t num_pages) {
+            constexpr uint32_t input = decltype(input_constant)::value;
+            cb_wait_front(cb_output_id, packet_size_in_pages * (fab_batches.in_batch + 1));
+            const uint32_t chunk_slot = get_read_ptr(cb_output_id) + fab_batches.in_batch * fab_chunk_bytes;
+            const uint64_t dst_noc_addr =
+                std::get<input>(outputs_tuple).get_noc_addr(fab_geometry.output_page(input, rank, outer, page), 0, 0);
+            const uint32_t payload_bytes = num_pages * output_page_size;
+            auto* header = fab_next_free_header();
+            if (++chunks_sent == slice_chunks) {
+                header->to_noc_fused_unicast_write_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                        dst_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
+                    payload_bytes);
+            } else {
+                header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, payload_bytes);
+            }
+            fabric_direction_connection->wait_for_empty_write_slot();
+            fabric_direction_connection->send_current_slot_non_blocking(
+                chunk_slot, payload_bytes, reinterpret_cast<uint32_t>(header));
+            if (++fab_batches.in_batch == fab_batches.capacity()) {
+                fab_pop_batch();
+            }
+        });
+        if (fab_batches.in_batch > 0) {
+            fab_pop_batch();
+        }
+        if (slice_chunks == 0) {  // none of this slice is in our lanes: still count it downstream
+            signal_output_ready();
+        }
+    };
+#endif
     uint32_t slice_writes = 0;
     constexpr uint32_t my_tensor_rank =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             my_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
+#ifdef RING_AG_FAB_PATH
+    if constexpr (num_targets_in_direction > 0) {
+        fab_send_slice(my_tensor_rank);
+    }
+    if (false)
+#endif
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         /**
          * Write out the local slice to forward and backward devices
@@ -427,7 +551,9 @@ void kernel_main() {
 
     // The completion marker is the only marker in the legacy protocol and the second marker in
     // partial-readiness mode. num_hops=1 is correct for both supported Fabric topologies.
+#ifndef RING_AG_FAB_PATH  // fused onto the slice's last packet
     signal_output_ready();
+#endif
 
     uint32_t writes_expected = 0;
     if constexpr (topology == Topology::Linear) {
@@ -478,6 +604,11 @@ void kernel_main() {
         const uint32_t slice_tensor_rank =
             ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                 slice_transport_rank, mesh_rows, mesh_cols, snake_orientation);
+#ifdef RING_AG_FAB_PATH
+        (void)is_split_forwarded_slice;
+        fab_send_slice(slice_tensor_rank);
+        if (false)
+#endif
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
             const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
@@ -600,7 +731,9 @@ void kernel_main() {
             }
         }
 
+#ifndef RING_AG_FAB_PATH  // fused onto the slice's last packet
         signal_output_ready();
+#endif
 
         slice_writes++;
     }

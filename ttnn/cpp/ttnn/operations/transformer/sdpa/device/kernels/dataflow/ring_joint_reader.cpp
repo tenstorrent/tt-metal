@@ -411,8 +411,13 @@ void kernel_main() {
         get_arg_val<uint32_t>(argidx++),
         get_arg_val<uint32_t>(argidx++),
         get_arg_val<uint32_t>(argidx++)};
+#if defined(SDPA_EXPERIMENT_NO_CCL_WAIT)
+    constexpr bool kWaitForOpSignal = false;  // EXPERIMENT: do not wait for the all-gather's slice signals
+#else
+    constexpr bool kWaitForOpSignal = true;
+#endif
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
-        true, /* wait_for_op_signal */
+        kWaitForOpSignal, /* wait_for_op_signal */
         argidx);
 
     // Rotated Q split: first runtime arg past the fused-op signaler block. Captured here because

@@ -1715,8 +1715,8 @@ static void sdpa_inner_loop_step(
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         if constexpr (qktv_first_group_reads_inplace_row) {
                             // UNPACK half of the rendezvous posted above.
-                            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-                            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                            UNPACK_REAL((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                            UNPACK_REAL((t6_semaphore_get<>(semaphore::PACK_DONE)));
                         }
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
@@ -1772,8 +1772,8 @@ static void sdpa_inner_loop_step(
                         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
                     }
                     // Block kt's in-place exp must be committed before its V matmul unpacks it.
-                    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-                    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                    UNPACK_REAL((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                    UNPACK_REAL((t6_semaphore_get<>(semaphore::PACK_DONE)));
                     if (accumulate_in_l1) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
@@ -1806,8 +1806,8 @@ static void sdpa_inner_loop_step(
         // Without an explicit handshake, UNPACK can see stale L1 bytes — observed as wildly
         // wrong V matmul output (rmse > 1) on small-DHt + small-chunk causal shapes.
         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+        UNPACK_REAL((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+        UNPACK_REAL((t6_semaphore_get<>(semaphore::PACK_DONE)));
 
         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).

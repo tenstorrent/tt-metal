@@ -30,6 +30,10 @@ namespace ckernel {
  */
 [[deprecated("Use tile_regs_acquire() instead")]]
 ALWI void acquire_dst() {
+#ifdef SDPA_EXPERIMENT_NO_MATH
+    return;  // EXPERIMENT: no math, so no dest handoff
+#endif
+
     MATH((llk_math_wait_for_dest_available()));
 
     PACK((llk_packer_wait_for_math_done()));
@@ -43,6 +47,10 @@ ALWI void acquire_dst() {
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
  */
 ALWI void tile_regs_acquire() {
+#ifdef SDPA_EXPERIMENT_NO_MATH
+    return;  // EXPERIMENT: no math, so no dest handoff
+#endif
+
     MATH((llk_math_wait_for_dest_available()));
 }
 
@@ -52,6 +60,10 @@ ALWI void tile_regs_acquire() {
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
  */
 ALWI void tile_regs_wait() {
+#ifdef SDPA_EXPERIMENT_NO_MATH
+    return;  // EXPERIMENT: no math, so no dest handoff
+#endif
+
     PACK((llk_packer_wait_for_math_done()));
 }
 
@@ -71,6 +83,10 @@ ALWI void tile_regs_wait() {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Use tile_regs_release() instead")]]
 ALWI void release_dst() {
+#ifdef SDPA_EXPERIMENT_NO_MATH
+    return;  // EXPERIMENT: no math, so no dest handoff
+#endif
+
     MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
     PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
 }
@@ -81,13 +97,21 @@ ALWI void release_dst() {
  * Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void tile_regs_commit() { MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>())); }
+ALWI void tile_regs_commit() {
+#ifdef SDPA_EXPERIMENT_NO_MATH
+    return;  // EXPERIMENT: no math, so no dest handoff
+#endif
+ MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>())); }
 
 /**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tile_regs_release() {
+#ifdef SDPA_EXPERIMENT_NO_MATH
+    return;  // EXPERIMENT: no math, so no dest handoff
+#endif
+
     PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
 }
 

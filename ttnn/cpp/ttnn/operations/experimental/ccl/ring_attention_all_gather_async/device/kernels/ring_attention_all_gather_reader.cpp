@@ -14,6 +14,7 @@
 #include "ring_attention_all_gather_metadata.hpp"
 #include "ring_attention_rank_mapping.hpp"
 #include "ring_attention_prefetch_utils.hpp"
+#include "ring_attention_fab_walk.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <utility>
@@ -128,7 +129,17 @@ FORCE_INLINE void prefetch_bank_owned_slices(
     }
 }
 
+// True when no input is sharded: then an output packet's pages (k, k + num_dram_banks, ...) are also physically
+// contiguous in the input, so the local slice is read with one NoC read per packet, like forwarded slices.
+template <typename Tuple, size_t... I>
+constexpr bool all_inputs_interleaved(const Tuple& args, std::index_sequence<I...>) {
+    return (!std::decay_t<decltype(std::get<I>(args))>::is_sharded && ...);
+}
+
 void kernel_main() {
+#ifdef RING_AG_EXPERIMENT_SKIP
+    return;  // EXPERIMENT: gather disabled (only valid with the consumer's waits off)
+#endif
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, kNumFixedCompileTimeArgs + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
@@ -191,6 +202,7 @@ void kernel_main() {
     auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx);
     arg_idx += num_inputs;
     auto input_tensor_addrgens = make_abstract_tensor_accessor_wrappers(inputs_tuple);
+    constexpr bool inputs_interleaved = all_inputs_interleaved(inputs_args, std::make_index_sequence<num_inputs>{});
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
     arg_idx += num_inputs;
     auto output_tensor_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
@@ -251,6 +263,57 @@ void kernel_main() {
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             my_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
+#ifdef RING_AG_FAB_PATH
+    // fabric_all_gather's reader (see ring_attention_fab_walk.hpp): chunk walk over every input of a slice, CB
+    // batches cut when full, at the end of the CB and at the end of the slice.
+    constexpr uint32_t fab_num_targets_in_direction =
+        direction == 1 ? num_targets_backward_direction : num_targets_forward_direction;
+    ring_attention_fab_walk::SliceGeometry<num_inputs> fab_geometry;
+    for (uint32_t input_idx = 0; input_idx < num_inputs; ++input_idx) {
+        fab_geometry.outer_slices[input_idx] = input_batch_head_count[input_idx];
+        fab_geometry.valid_pages[input_idx] = input_valid_pages[input_idx];
+        fab_geometry.input_pages[input_idx] = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
+        fab_geometry.output_pages[input_idx] = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+    }
+    fab_geometry.first_lane = worker_link[0];
+    fab_geometry.lane_stride = num_links;
+    fab_geometry.num_dram_banks = num_dram_banks;
+    fab_geometry.pages_per_chunk = packet_size_in_pages;
+    ring_attention_fab_walk::CbBatches fab_batches{2 * prefetch_packets, prefetch_packets};
+    constexpr uint32_t fab_chunk_bytes = packet_size_in_pages * input_tensor_page_size;
+    uint32_t fab_write_ptr = 0;
+    auto fab_push_batch = [&]() {
+        noc_async_read_barrier();
+        cb_push_back(cb_output_id, packet_size_in_pages * fab_batches.in_batch);
+        fab_batches.close();
+    };
+    auto fab_read_slice = [&](bool from_output, uint32_t rank) {
+        fab_geometry.for_each_chunk([&](auto input_constant, uint32_t outer, uint32_t page, uint32_t num_pages) {
+            constexpr uint32_t input = decltype(input_constant)::value;
+            if (fab_batches.in_batch == 0) {
+                cb_reserve_back(cb_output_id, packet_size_in_pages * fab_batches.capacity());
+                fab_write_ptr = get_write_ptr(cb_output_id);
+            }
+            const uint64_t src =
+                from_output
+                    ? std::get<input>(outputs_tuple).get_noc_addr(
+                          fab_geometry.output_page(input, rank, outer, page), 0, noc_index)
+                    : std::get<input>(inputs_tuple).get_noc_addr(
+                          input_batch_base[input] + outer * fab_geometry.input_pages[input] + page, 0, noc_index);
+            noc_async_read(src, fab_write_ptr + fab_batches.in_batch * fab_chunk_bytes, num_pages * input_tensor_page_size);
+            if (++fab_batches.in_batch == fab_batches.capacity()) {
+                fab_push_batch();
+            }
+        });
+        if (fab_batches.in_batch > 0) {
+            fab_push_batch();
+        }
+    };
+    if constexpr (fab_num_targets_in_direction > 0) {
+        fab_read_slice(false, my_tensor_rank);
+    }
+    if (false)
+#endif
     // Read the local slice into the packet CB before sending it over Fabric.
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
@@ -263,7 +326,7 @@ void kernel_main() {
                 if constexpr (partial_readiness_enabled) {
                     const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
                         input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
-                    prefetch_bank_owned_slices<false>(
+                    prefetch_bank_owned_slices<inputs_interleaved>(
                         noc_obj,
                         cb_output,
                         cb_fifo_limit,
@@ -274,7 +337,7 @@ void kernel_main() {
                         first_pages,
                         worker_link[input_idx],
                         num_links);
-                    prefetch_bank_owned_slices<false>(
+                    prefetch_bank_owned_slices<inputs_interleaved>(
                         noc_obj,
                         cb_output,
                         cb_fifo_limit,
@@ -286,7 +349,7 @@ void kernel_main() {
                         worker_link[input_idx],
                         num_links);
                 } else {
-                    prefetch_bank_owned_slices<false>(
+                    prefetch_bank_owned_slices<inputs_interleaved>(
                         noc_obj,
                         cb_output,
                         cb_fifo_limit,
@@ -410,6 +473,11 @@ void kernel_main() {
             (topology == Topology::Ring && (slices_received < (writes_expected + 1)))) {
             // The last slice we relay is the diametric shard of our downstream neighbor
             const bool is_split_forwarded_slice = split_forwarding_enabled && (slices_received == writes_expected);
+#ifdef RING_AG_FAB_PATH
+            (void)is_split_forwarded_slice;
+            fab_read_slice(true, sender_tensor_rank);
+            if (false)
+#endif
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
                 const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
                 const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
@@ -553,8 +554,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             args.ccl_core_grid_offset.x >= args.program_config.value().compute_with_storage_grid_size.x,
             "SDPA coregrid overlaps with AllGather coregrid (column-major)");
     } else {
+        // EXPERIMENT (RING_SDPA_GRID_ORIGIN_Y): the attention grid may start below row 0, leaving rows above it free.
+        const char* origin_env = std::getenv("RING_SDPA_GRID_ORIGIN_Y");
+        const uint32_t origin_y = origin_env != nullptr ? static_cast<uint32_t>(std::atoi(origin_env)) : 0u;
         TT_FATAL(
-            args.ccl_core_grid_offset.y >= args.program_config.value().compute_with_storage_grid_size.y,
+            args.ccl_core_grid_offset.y < origin_y ||
+                args.ccl_core_grid_offset.y >= origin_y + args.program_config.value().compute_with_storage_grid_size.y,
             "SDPA coregrid overlaps with AllGather coregrid (row-major)");
     }
 

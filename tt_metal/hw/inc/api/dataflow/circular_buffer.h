@@ -54,7 +54,7 @@ public:
 
     void wait_front(int32_t num_pages) {
 #ifdef COMPILE_FOR_TRISC
-        UNPACK((llk_wait_tiles(cb_id_, num_pages)));
+        UNPACK_REAL((llk_wait_tiles(cb_id_, num_pages)));
 #else
         cb_wait_front(cb_id_, num_pages);
 #endif
@@ -62,7 +62,7 @@ public:
 
     void pop_front(int32_t num_pages) {
 #ifdef COMPILE_FOR_TRISC
-        UNPACK((llk_pop_tiles(cb_id_, num_pages)));
+        UNPACK_REAL((llk_pop_tiles(cb_id_, num_pages)));
 #else
         cb_pop_front(cb_id_, num_pages);
 #endif
@@ -72,7 +72,7 @@ public:
     uint32_t get_tile_address(uint32_t tile_index) {
         uint32_t address = 0;
 
-        UNPACK({
+        UNPACK_REAL({
             uint32_t operand_id = get_operand_id(cb_id_);
             uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
             uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
@@ -82,7 +82,7 @@ public:
             mailbox_write(ckernel::ThreadId::PackThreadId, address);
         })
 
-        MATH(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        MATH_REAL(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
         PACK(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
         return address;
@@ -91,7 +91,7 @@ public:
     uint32_t read_tile_value(uint32_t tile_index, uint32_t element_offset) {
         uint32_t value = 0;
 
-        UNPACK({
+        UNPACK_REAL({
             uint32_t operand_id = get_operand_id(cb_id_);
             uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
             uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
@@ -103,7 +103,7 @@ public:
             mailbox_write(ckernel::ThreadId::PackThreadId, value);
         })
 
-        MATH(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        MATH_REAL(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
         PACK(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
         return value;

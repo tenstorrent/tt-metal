@@ -34,6 +34,20 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <cstdlib>
+
+// EXPERIMENT (RING_SDPA_GRID_ORIGIN_Y=n): the attention grid starts at logical row n instead of 0, so the rows above
+// it are free for the all-gather workers (next to the Ethernet cores).
+namespace ring_joint_grid_origin_experiment {
+inline uint32_t sdpa_grid_origin_y() {
+    static const uint32_t value = [] {
+        const char* env = std::getenv("RING_SDPA_GRID_ORIGIN_Y");
+        return env != nullptr ? static_cast<uint32_t>(std::atoi(env)) : 0u;
+    }();
+    return value;
+}
+}  // namespace ring_joint_grid_origin_experiment
+using ring_joint_grid_origin_experiment::sdpa_grid_origin_y;
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <hostdevcommon/common_values.hpp>
 
@@ -854,7 +868,9 @@ void apply_ring_joint_scalar_runtime_args(
     const auto validate_grid = [&](const auto& grid_args) {
         TT_FATAL(grid_args.size() >= layout.grid_size.x, "RingJoint runtime argument grid is missing columns");
         for (uint32_t x = 0; x < layout.grid_size.x; ++x) {
-            TT_FATAL(grid_args[x].size() >= layout.grid_size.y, "RingJoint runtime argument grid is missing rows");
+            TT_FATAL(
+                grid_args[x].size() >= layout.grid_size.y + sdpa_grid_origin_y(),
+                "RingJoint runtime argument grid is missing rows");
         }
     };
     validate_grid(compute_grid_args);
@@ -891,7 +907,7 @@ void apply_ring_joint_scalar_runtime_args(
         runtime_plan.kv_pad_q_mapping.q_valid_tile_count,
         ring_work_masks.active_ring_iter_mask};
     for (uint32_t i = 0; i < num_cores; ++i) {
-        const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x};
+        const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x + sdpa_grid_origin_y()};
 
         // Patch EVERY core, exactly as the create-time build sets these scalars on all cores
         // unconditionally. A core with no Q chunks (global_q_start == global_q_end) is NOT dead: in the
@@ -1265,7 +1281,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             ? (args.program_config->exp_approx_mode.has_value() ? args.program_config->exp_approx_mode.value() : true)
             : true;
 
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    auto core_grid = CoreRange({0, sdpa_grid_origin_y()}, {grid_size.x - 1, grid_size.y - 1 + sdpa_grid_origin_y()});
     CoreRangeSet core_grid_set(core_grid);
     uint32_t num_cores = grid_size.x * grid_size.y;
 
@@ -2196,7 +2212,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         const uint32_t unit = (y % ksplit_rows_per_split) * grid_size.x + x;
         const bool owns_unit = y / ksplit_rows_per_split < ksplit_count && unit < total_q_chunks;
         auto& work = core_work.at(i);
-        work.physical_core = device->worker_core_from_logical_core(CoreCoord{x, y});
+        work.physical_core = device->worker_core_from_logical_core(CoreCoord{x, y + sdpa_grid_origin_y()});
         work.global_q_start = owns_unit ? unit : total_q_chunks;
         work.global_q_count = owns_unit ? 1 : 0;
         if (owns_unit && enable_kv_chains) {
@@ -2204,7 +2220,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
     }
     for (uint32_t i = 0; ksplit_count == 1 && i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+        CoreCoord core = {i % grid_size.x, i / grid_size.x + sdpa_grid_origin_y()};
         uint32_t chunk_count = base_chunks_per_core + ((i < cores_doing_extra_work) ? extra_chunks_per_core : 0);
         if (next_global_chunk >= total_q_chunks) {
             chunk_count = 0;
@@ -2328,8 +2344,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .max_q = row_max_q,
             .num_receivers = grid_size.x - 1,
             .injector_physical = injector_physical,
-            .phys_start = device->worker_core_from_logical_core(CoreCoord{0, row}),
-            .phys_end = device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, row}),
+            .phys_start = device->worker_core_from_logical_core(CoreCoord{0, row + sdpa_grid_origin_y()}),
+            .phys_end = device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, row + sdpa_grid_origin_y()}),
         };
     };
 
@@ -2938,6 +2954,34 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Update mcast compile-time args
     const bool head_mcast_enabled = (mcast_chains > 0);
+    {  // EXPERIMENT: chain summary
+        uint32_t participants = 0, injectors = 0, max_len = 0;
+        std::map<uint32_t, uint32_t> chain_len;
+        for (const auto& cfg : head_chain_configs) {
+            if (cfg.participates) {
+                ++participants;
+                injectors += cfg.is_injector ? 1 : 0;
+                max_len = std::max(max_len, ++chain_len[cfg.head]);
+            }
+        }
+        log_info(
+            tt::LogOp,
+            "RJ chains: use_head_chain {} k_batch_chain {} gqa {} heads_chained {} participants {} injectors {} max_len {} "
+            "head_mcast {}/{} k_mcast {} grid {}x{} q_chunks {}",
+            use_head_chain,
+            k_uses_batch_chain,
+            gqa_grouped_kv,
+            chain_len.size(),
+            participants,
+            injectors,
+            max_len,
+            mcast_chains,
+            head_segments.size(),
+            k_mcast_enabled,
+            grid_size.x,
+            grid_size.y,
+            total_q_chunks);
+    }
 
     if (use_head_chain) {
         reader_compile_time_args[sem_args_offset + kRingJointChainMcastEnabledCompileArgOffset] =
@@ -2978,6 +3022,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
+    // EXPERIMENT: RING_SDPA_NO_CCL_WAIT=1 skips the all-gather waits; RING_SDPA_NO_DM=1 also turns the dataflow
+    // kernels' bulk NoC reads/writes into no-ops (compute-only timing, garbage results).
+    KernelDescriptor::Defines dataflow_defines = kernel_defines;
+    if (std::getenv("RING_SDPA_NO_CCL_WAIT") != nullptr) {
+        dataflow_defines.emplace_back("SDPA_EXPERIMENT_NO_CCL_WAIT", "1");
+    }
+    if (std::getenv("RING_SDPA_NO_DM") != nullptr) {
+        dataflow_defines.emplace_back("SDPA_EXPERIMENT_NO_DM", "1");
+    }
 
     // Build kernel descriptors locally so we can append per-core runtime args
     // before pushing them into desc.kernels at the end. KernelDescriptor creation
@@ -3004,7 +3057,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compute_compile_time_args.size());
 
     reader_kernel.compile_time_args = reader_compile_time_args;
-    reader_kernel.defines = kernel_defines;
+    reader_kernel.defines = dataflow_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
     // Layout: metadata block first (when present), then the logical-length pair, so the kernel's base index
     // is ring_joint::kReaderMetadataCommonArgCount (or kWriterMetadataCommonArgCount) when its metadata block
@@ -3047,7 +3100,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel.core_ranges = core_grid_set;
     writer_kernel.compile_time_args = writer_compile_time_args;
-    writer_kernel.defines = kernel_defines;
+    writer_kernel.defines = dataflow_defines;
     writer_kernel.config = WriterConfigDescriptor{};
     if (kv_pad_from_metadata || has_logical_length_tensor) {
         KernelDescriptor::RTArgList writer_common_args;
@@ -3080,6 +3133,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
     compute_kernel.defines = kernel_defines;
+    if (std::getenv("RING_SDPA_NO_MATH") != nullptr) {  // EXPERIMENT: compute keeps only its CB handshakes
+        compute_kernel.defines.emplace_back("SDPA_EXPERIMENT_NO_MATH", "1");
+    }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -3093,7 +3149,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+        CoreCoord core = {i % grid_size.x, i / grid_size.x + sdpa_grid_origin_y()};
 
         // Prefer the computed even distribution above for chain construction
         const auto& work = core_work.at(i);

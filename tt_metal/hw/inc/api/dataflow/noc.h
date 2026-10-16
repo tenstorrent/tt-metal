@@ -200,6 +200,9 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         const NocOptVals& noc_opts = {}) const {
+#ifdef SDPA_EXPERIMENT_NO_DM
+        return;  // EXPERIMENT: bulk data movement disabled (semaphores use separate calls)
+#endif
         if constexpr (has_flag(opts, NocOptions::TXN_ID)) {
             DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, noc_opts.trid);
             noc_async_read_set_trid(noc_opts.trid, noc_id_);
@@ -300,6 +303,9 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         const NocOptVals& noc_opts = {}) const {
+#ifdef SDPA_EXPERIMENT_NO_DM
+        return;  // EXPERIMENT: bulk data movement disabled (semaphores use separate calls)
+#endif
         // TODO (#33966): Need to make sure set state was called and with same template params
         if constexpr (has_flag(opts, NocOptions::TXN_ID)) {
             static_assert(
@@ -356,6 +362,9 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         const NocOptVals& noc_opts = {}) const {
+#ifdef SDPA_EXPERIMENT_NO_DM
+        return;  // EXPERIMENT: bulk data movement disabled (semaphores use separate calls)
+#endif
         NOC_ASSERT_NOT_ZERO_MODE();  // no NoC write between async_write_zeros and write_zeros_l1_barrier
         constexpr bool posted = has_flag(opts, NocOptions::POSTED);
 
@@ -437,6 +446,9 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_mcast_t<Dst>& dst_args,
         bool linked = false) const {
+#ifdef SDPA_EXPERIMENT_NO_DM
+        return;  // EXPERIMENT: bulk data movement disabled (semaphores use separate calls)
+#endif
         static_assert(!has_flag(opts, NocOptions::TXN_ID), "Mcasts with transaction id are not supported yet");
         static_assert(
             !has_flag(opts, NocOptions::POSTED),
