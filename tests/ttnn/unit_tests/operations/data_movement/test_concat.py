@@ -11,7 +11,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
-from models.common.utility_functions import is_watcher_enabled, is_n300
+from tt_py_test_utils_common.utility_functions import is_watcher_enabled, is_n300
 
 torch.manual_seed(0)
 
@@ -598,28 +598,62 @@ def test_concat_1d(device, layout, dim, input_shapes):
     assert_equal(torch_output_tensor, output)
 
 
-@pytest.mark.parametrize("num_inputs", [47, 48, 100])
-def test_concat_many_inputs(device, num_inputs):
-    """
-    Regression test for concat hang with many tiled inputs.
-    Fixed by commit 85d11279d27 (re-calculated batch size).
-    Previously hung at 48+ inputs with ETH dispatch on N300.
-    """
-    torch_input = torch.zeros((1,), dtype=torch.bfloat16)
-    torch_expected = torch.concat([torch_input] * num_inputs, dim=0)
+TWO_CORE_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
 
-    input_tensor = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+
+@pytest.mark.parametrize(
+    "num_inputs, shapes, dim, layout, sub_core_grids",
+    [
+        # 47 is the most inputs one concat kernel takes; 48 is the first count that is batched.
+        (47, [(1,)], 0, ttnn.TILE_LAYOUT, None),
+        (48, [(1,)], 0, ttnn.TILE_LAYOUT, None),
+        (100, [(1,)], 0, ttnn.TILE_LAYOUT, None),
+        # Row-major reader. Split over the full grid, cores start mid-block and cross input boundaries.
+        (33, [(1, 1, 8, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, None),
+        (119, [(1, 1, 8, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, None),
+        # Each core reads more than one output block, so it wraps from the last input back to the first
+        # after starting mid-block. Inputs cycle through the shapes, so they have different page counts.
+        (33, [(1, 131, 32, 32), (1, 131, 64, 32), (1, 131, 96, 32)], 2, ttnn.TILE_LAYOUT, None),
+        (33, [(1, 131, 1, 64), (1, 131, 2, 64), (1, 131, 3, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, None),
+        (33, [(1, 7, 32, 32), (1, 7, 64, 32), (1, 7, 96, 32)], 2, ttnn.TILE_LAYOUT, TWO_CORE_GRID),
+        (33, [(1, 7, 1, 64), (1, 7, 2, 64), (1, 7, 3, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, TWO_CORE_GRID),
+        # Every other input is empty along dim, so the reader has to step past 0-page blocks.
+        (33, [(1, 1, 8, 64), (1, 1, 0, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, None),
+    ],
+)
+def test_concat_many_inputs(device, num_inputs, shapes, dim, layout, sub_core_grids):
+    """
+    Regression test for concat with many interleaved inputs.
+    TILE: hung at 48+ inputs with ETH dispatch on N300; fixed by commit 85d11279d27 (re-calculated batch size).
+    TILE and ROW_MAJOR: above 32 inputs the readers' per-input stack frame overwrote TLS on Quasar
+    (abort at 33-36 inputs, hang at 40+), #59906.
+    Every input is distinct, so a reader that reads the wrong input or page shows up as a mismatch.
+    """
+    torch_inputs = [
+        torch.rand(shapes[i % len(shapes)], dtype=torch.float32).to(torch.bfloat16) for i in range(num_inputs)
+    ]
+    torch_expected = torch.concat(torch_inputs, dim=dim)
+
+    input_tensors = []
+    for torch_input in torch_inputs:
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if layout == ttnn.TILE_LAYOUT:
+            tiled_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(input_tensor)
+            input_tensor = tiled_tensor
+        input_tensors.append(input_tensor)
+
+    output_tensor = ttnn.concat(
+        input_tensors, dim=dim, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=sub_core_grids
     )
-    tiled_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(input_tensor)
-
-    output_tensor = ttnn.concat([tiled_tensor] * num_inputs, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(tiled_tensor)
+    for input_tensor in input_tensors:
+        ttnn.deallocate(input_tensor)
 
     output_host = ttnn.to_torch(output_tensor)
     assert_equal(torch_expected, output_host)

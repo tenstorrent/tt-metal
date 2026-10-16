@@ -10,7 +10,11 @@ in the runner's order over a recording fused-decoder stub. What a replay
 computes on the device is not something a host test can attest.
 """
 
+import ast
+import dataclasses
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -21,6 +25,7 @@ from models.demos.gemma4.tests.unit.dflash_contract_harness import (
     _ordinary,
     _prefill,
     _propose,
+    _sampling,
     _start_solo,
     _table,
     _tensor,
@@ -57,18 +62,97 @@ def test_declares_the_contract_rail(adapter):
     assert caps["spec_requirements"] == ("device_propose",)
     assert caps["spec_hidden_handoff"] == ("on_device",)
     assert caps["supports_sample_on_device"] is True
+    assert caps["max_device_top_k"] == 32
+    assert caps["supports_device_penalties"] is False
     assert caps["supports_chunked_prefill"] is True
     assert caps["supports_async_decode"] is False
     assert caps["supports_async_spec_decode"] is False
 
 
+def test_block_output_adapters_do_not_inherit_contract_sampling_limits(adapter):
+    for cls in (adapter.Gemma4DFlashForCausalLM, adapter.Gemma4MTPForCausalLM):
+        assert cls.model_capabilities["output_tokens_per_step"] > 1
+        assert "max_device_top_k" not in cls.model_capabilities
+        assert "supports_device_penalties" not in cls.model_capabilities
+
+
+def _plugin_sampling_router():
+    """The plugin's ``SamplingInputBatch`` and ``TTModelRunner``, or a skip.
+
+    The routing under test is plugin code. The tt-metal unit-test image has
+    only the conftest's ``vllm_tt_plugin`` stub, so these tests run where the
+    plugin is installed or on PYTHONPATH.
+    """
+    input_batch = pytest.importorskip("vllm_tt_plugin.input_batch")
+    model_runner = pytest.importorskip("vllm_tt_plugin.model_runner")
+    return input_batch.SamplingInputBatch, model_runner.TTModelRunner
+
+
+@pytest.mark.parametrize(
+    ("temperature", "top_k", "device_sampling"),
+    [
+        (0.0, 262144, True),
+        (0.7, 1, True),
+        (0.7, 32, True),
+        (0.7, 33, False),
+        (0.7, 262144, False),
+    ],
+)
+def test_contract_sampled_top_k_uses_host_when_the_device_cannot_honor_it(adapter, temperature, top_k, device_sampling):
+    SamplingInputBatch, TTModelRunner = _plugin_sampling_router()
+
+    sampling = SamplingInputBatch(1)
+    sampling.temperature[0] = temperature
+    sampling.top_k[0] = top_k
+    runner = SimpleNamespace(
+        sample_on_device_mode="decode_only",
+        num_devices=8,
+        tt_data_parallel_size=1,
+        model=SimpleNamespace(model_capabilities=adapter.Gemma4DFlashContractForCausalLM.model_capabilities),
+        model_config=SimpleNamespace(logits_processors=[]),
+        input_batch=SimpleNamespace(
+            sampling=sampling,
+            req_id_to_index={"request": 0},
+            no_penalties=True,
+            no_allowed_token_ids=True,
+            max_num_logprobs=None,
+        ),
+    )
+
+    assert TTModelRunner.check_perform_device_sampling(runner, True, False) is device_sampling
+
+
+def test_contract_penalty_request_uses_host_sampler(adapter):
+    SamplingInputBatch, TTModelRunner = _plugin_sampling_router()
+
+    sampling = SamplingInputBatch(1)
+    sampling.temperature[0] = 0.7
+    sampling.top_k[0] = 2
+    runner = SimpleNamespace(
+        sample_on_device_mode="decode_only",
+        num_devices=8,
+        tt_data_parallel_size=1,
+        model=SimpleNamespace(model_capabilities=adapter.Gemma4DFlashContractForCausalLM.model_capabilities),
+        model_config=SimpleNamespace(logits_processors=[]),
+        input_batch=SimpleNamespace(
+            sampling=sampling,
+            req_id_to_index={"request": 0},
+            no_penalties=False,
+            no_allowed_token_ids=True,
+            max_num_logprobs=None,
+        ),
+    )
+
+    assert TTModelRunner.check_perform_device_sampling(runner, True, False) is False
+
+
 @pytest.mark.parametrize("value", ["1", "true"])
-def test_async_gate_parses_like_the_other_gates(value):
+def test_dflash_cannot_enable_resident_decode_with_an_environment_override(value):
     with pytest.MonkeyPatch.context() as patch:
         module = import_adapter(patch, {"GEMMA4_CONTRACT_ASYNC": value})
         caps = module.Gemma4DFlashContractForCausalLM.model_capabilities
-        assert caps["supports_async_decode"] is True
-        assert caps["supports_async_spec_decode"] is True
+        assert caps["supports_async_decode"] is False
+        assert caps["supports_async_spec_decode"] is False
 
 
 def test_verify_count_pins_the_inherited_width_arithmetic(adapter):
@@ -153,7 +237,6 @@ def test_solo_prefill_then_ordinary_step_bootstraps_and_answers_from_the_replay(
     assert _names(model, "decode") == []  # the plain decode never ran
     assert model._dflash_retained is None
     assert model._dflash_owner_tables[0].tolist() == _table([10]).tolist()
-    assert model._slots_prefilled_since_decode == {0}
     assert model._spec_owner_slot == 0
 
 
@@ -422,7 +505,6 @@ def test_straddle_verify_answers_the_drafted_row_and_decodes_the_peer(model):
     assert int(out.argmax_ids[1, 0]) == 600
     assert _names(model, "decode") == [("decode", [150, 40], [-1, 9])]
     assert not model._spec_active and model._dflash_retained is None
-    assert model._slots_prefilled_since_decode == {0}
     proposal = _propose(
         model,
         [[201, 202, 251, -1, -1, -1], [600, -1, -1, -1, -1, -1]],
@@ -465,19 +547,66 @@ def test_verify_for_a_row_whose_slot_owns_nothing_raises_even_at_the_owners_row(
         _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10], slot_remap=[3])
 
 
-def test_straddle_verify_converts_host_logits_at_the_steps_row_count(model):
+def test_straddle_verify_rejects_host_sampling_before_consuming_a_proposal(model, expect_error):
     _start_solo(model)
-    out = _verify(
-        model,
-        [[150, 201, 202, 203, 204, 205], [40, 0, 0, 0, 0, 0]],
-        [list(range(3, 9)), [9, 10, 11, 12, 13, 14]],
-        [5, 0],
-        keys=[10, 20],
-        result=DeviceResult(_logits(2, 500)),
-        sampling=False,
-    )
-    assert int(out.argmax_ids[1, 0]) == 501
-    assert model.model[0].convert_calls == [(2, False)]
+    ordinary_result = DeviceResult(_logits(2, 500))
+    model.results.append(ordinary_result)
+    retained = model._dflash_retained
+    events = list(model.events)
+    with expect_error(ValueError, "cannot apply host sampling controls"):
+        _verify(
+            model,
+            [[150, 201, 202, 203, 204, 205], [40, 0, 0, 0, 0, 0]],
+            [list(range(3, 9)), [9, 10, 11, 12, 13, 14]],
+            [5, 0],
+            keys=[10, 20],
+            sampling=False,
+        )
+    assert model.events == events
+    assert model.results == [ordinary_result]
+    assert model._dflash_retained is retained and not retained.consumed
+    assert model._spec_active
+
+
+def test_draftless_host_verify_does_not_bootstrap_an_argmax_session(model, expect_error):
+    _prefill(model)
+    pending = model._spec_pending
+    events = list(model.events)
+    with expect_error(ValueError, "cannot apply host sampling controls"):
+        _verify(model, [[3, 0, 0, 0, 0, 0]], [list(range(2, 8))], [0], keys=[10], sampling=False)
+    assert model.events == events
+    assert model._spec_pending is pending and not model._spec_active
+
+
+@pytest.mark.parametrize(
+    "message, step_kwargs",
+    [
+        (
+            "cannot return requested logprobs",
+            lambda: dict(sampling_params=_sampling(1, enable_log_probs=True, num_logprobs=0)),
+        ),
+        ("cannot apply a grammar bitmask", lambda: dict(grammar_bitmask=torch.full((1, 19), -1, dtype=torch.int32))),
+    ],
+    ids=["logprobs", "grammar"],
+)
+@pytest.mark.parametrize("retained", [False, True])
+def test_verify_rejects_unsupported_outputs_before_mutating_the_session(
+    model, expect_error, retained, message, step_kwargs
+):
+    if retained:
+        _start_solo(model)
+        tokens, positions, valid = [150, 201, 202, 203, 204, 205], list(range(3, 9)), 5
+    else:
+        _prefill(model)
+        tokens, positions, valid = [3, 0, 0, 0, 0, 0], list(range(2, 8)), 0
+    proposal = model._dflash_retained
+    pending = model._spec_pending
+    events = list(model.events)
+    with expect_error(ValueError, message):
+        _verify(model, [tokens], [positions], [valid], keys=[10], **step_kwargs())
+    assert model.events == events
+    assert model._spec_pending is pending and model._dflash_retained is proposal
+    assert proposal is None or not proposal.consumed
 
 
 def test_batched_draftless_verify_decodes_column_zero_only(model):
@@ -577,14 +706,41 @@ def test_a_draftless_verify_without_the_owner_keeps_its_outstanding_proposal(mod
     assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
 
 
-# -- device-resident decode inputs after drafter-served steps ---------------------
+# -- caller-owned decode updates after drafter-served steps ----------------------
 
 
-def test_the_first_plain_decode_after_a_straddle_reloads_host_inputs(model):
-    """The traced decode keeps tokens and positions on the device and reloads them
-    only on a layout change. The owner's rows were answered from the drafter, so
-    the peers' decode in the straddle and the owner's first plain decode after
-    it both carry reset_batch."""
+def test_drafter_history_does_not_override_the_reload_commands(model):
+    commands = dict(
+        reload_inputs=True, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False
+    )
+    _start_solo(model)
+    _verify(
+        model,
+        [[150, 201, 202, 203, 204, 205], [40, 0, 0, 0, 0, 0]],
+        [list(range(3, 9)), [9, 10, 11, 12, 13, 14]],
+        [5, 0],
+        keys=[10, 20],
+        result=DeviceResult(_tensor([0, 600])),
+        **commands,
+    )
+    assert model.decode_commands == [commands]
+    _ordinary(model, [251, 600], [6, 10], [10, 20], result="device", **commands)
+    assert model.decode_commands == [commands, commands]
+    _ordinary(model, [7, 8], [7, 11], [10, 20], result="device", reload_inputs=False)
+    assert model.reloads == [True, True, False]
+
+
+def _decline_after_a_verify(model):
+    """The drafter answers the first ordinary step and a verify, then the next proposal declines."""
+    _start_solo(model)
+    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    model.model_args[0].max_seq_len = 11
+    _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
+    return [251], [6], [10]
+
+
+def _peer_joins_an_outstanding_proposal(model):
+    """The drafted row is answered from its proposal and runs the peer's plain decode at position -1."""
     _start_solo(model)
     _verify(
         model,
@@ -594,27 +750,32 @@ def test_the_first_plain_decode_after_a_straddle_reloads_host_inputs(model):
         keys=[10, 20],
         result=DeviceResult(_tensor([0, 600])),
     )
-    assert model.reloads == [True]
-    _ordinary(model, [251, 600], [6, 10], [10, 20], result="device")
-    assert model.reloads == [True, True]
-    _ordinary(model, [7, 8], [7, 11], [10, 20], result="device")
-    assert model.reloads == [True, True, False]
+    return [251, 600], [6, 10], [10, 20]
 
 
-def test_the_first_plain_decode_after_a_decline_reloads_host_inputs(model):
-    _start_solo(model)
-    _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
-    model.model_args[0].max_seq_len = 11
-    _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
-    _ordinary(model, [251], [6], [10], result="device")
-    _ordinary(model, [9], [7], [10], result="device")
-    assert model.reloads == [True, False]
+@pytest.mark.parametrize(
+    "history", [_decline_after_a_verify, _peer_joins_an_outstanding_proposal], ids=["decline", "peer-joined"]
+)
+def test_a_plain_decode_after_a_drafter_served_step_refuses_resident_inputs(model, expect_error, history):
+    """A drafter-served row never updated the plain decode's resident token and
+    position. Without reload_inputs the plain decode would start from the stale
+    token, so the step raises before the device runs; a reloading decode clears it."""
+    anchors, positions, keys = history(model)
+    decodes = _names(model, "decode")
+    with expect_error(RuntimeError, "reload_inputs=False"):
+        _ordinary(model, anchors, positions, keys, result="device", reload_inputs=False)
+    assert _names(model, "decode") == decodes
+    out = _ordinary(model, anchors, positions, keys)
+    assert out == "device"
+    _ordinary(model, [a + 1 for a in anchors], [p + 1 for p in positions], keys, result="device", reload_inputs=False)
+    assert model.reloads[-2:] == [True, False]
 
 
-def test_a_plain_decode_with_no_drafter_history_does_not_force_a_reload(model):
+@pytest.mark.parametrize("reload_inputs", [True, False])
+def test_plain_decode_forwards_the_reload_command(model, reload_inputs):
     _prefill(model, prompt_len=2, key=10, rows=2)
-    _ordinary(model, [3, 4], [2, 2], [10, 12], result="device")
-    assert model.reloads == [False]
+    _ordinary(model, [3, 4], [2, 2], [10, 12], result="device", reload_inputs=reload_inputs)
+    assert model.reloads == [reload_inputs]
 
 
 def test_release_logs_committed_tokens_per_step_for_the_session(model, adapter, monkeypatch):
@@ -629,6 +790,289 @@ def test_release_logs_committed_tokens_per_step_for_the_session(model, adapter, 
     summary = [m for m in messages if "contract summary" in m]
     assert summary == ["Gemma4DFlash contract summary: 2 steps, 4 tokens, 2.00 tokens/step"]
     assert model._dflash_steps == 0 and model._dflash_committed == 0
+
+
+# -- rows that cannot use the fused argmax output --------------------------------
+
+_NOT_GREEDY = [
+    {"temperature": 1.0},
+    {"presence_penalty": 0.5},
+    {"frequency_penalty": 0.5},
+    {"repetition_penalty": 1.2},
+]
+_NOT_GREEDY_IDS = ["temperature", "presence-penalty", "frequency-penalty", "repetition-penalty"]
+
+
+@pytest.mark.parametrize("values", _NOT_GREEDY, ids=_NOT_GREEDY_IDS)
+def test_a_solo_row_that_does_not_sample_greedily_runs_the_plain_decode(model, values):
+    """The session answers with the target's argmax ids. The plain decode draws
+    with the row's own parameters, so the row takes it and its taps are freed."""
+    _prefill(model, prompt_len=2, key=10)
+    taps = list(model._spec_pending[0])
+    out = _ordinary(model, [3], [2], [10], result="device", sampling_params=_sampling(1, **values))
+    assert out == "device"
+    assert _names(model, "decode") == [("decode", [3], [2])]
+    assert _names(model, "bootstrap") == [] and model._spec_decoder.replays == 0
+    assert model._spec_pending is None and all(tap.releases == 1 for tap in taps)
+
+
+@pytest.mark.parametrize("active", [False, True], ids=["pending-prefill", "active-session"])
+def test_a_greedy_solo_row_under_a_grammar_bitmask_runs_the_plain_decode(model, active):
+    """The fused replay's argmax never sees the bitmask, so a greedy row under
+    one takes the plain decode and leaves speculation."""
+    if active:
+        _start_solo(model)
+        token, position = 150, 3
+    else:
+        _prefill(model, prompt_len=2, key=10)
+        token, position = 3, 2
+    replays = model._spec_decoder.replays
+    bitmask = torch.full((1, 19), -1, dtype=torch.int32)
+    out = _ordinary(model, [token], [position], [10], result="device", grammar_bitmask=bitmask)
+    assert out == "device"
+    assert _names(model, "decode") == [("decode", [token], [position])]
+    assert model._spec_decoder.replays == replays
+    assert model._spec_pending is None and not model._spec_active
+
+
+def test_a_sampled_solo_row_is_never_proposed_for(model):
+    sampled = _sampling(1, temperature=1.0)
+    _prefill(model, prompt_len=2, key=10)
+    _ordinary(model, [3], [2], [10], result="device", sampling_params=sampled)
+    proposal = _propose(model, [[600, -1, -1, -1, -1, -1]], [[3, -1, -1, -1, -1, -1]])
+    assert proposal.num_valid.tolist() == [0]
+    out = _ordinary(model, [600], [3], [10], result="device", sampling_params=sampled)
+    assert out == "device"
+    assert model._spec_decoder.replays == 0 and not model._spec_active
+
+
+@pytest.mark.parametrize(
+    "enable_log_probs",
+    [True, [True], torch.tensor(True), torch.tensor([True])],
+    ids=["scalar", "list", "scalar-tensor", "row-tensor"],
+)
+@pytest.mark.parametrize("active", [False, True], ids=["pending-prefill", "active-session"])
+def test_a_row_requesting_logprobs_keeps_the_ordinary_result_and_releases_its_session(model, enable_log_probs, active):
+    if active:
+        _start_solo(model)
+        token, position = 150, 3
+        taps = []
+    else:
+        _prefill(model, prompt_len=2, key=10)
+        token, position = 3, 2
+        taps = list(model._spec_pending[0])
+    replays = model._spec_decoder.replays
+    sampling = dataclasses.replace(_sampling(1, num_logprobs=0), enable_log_probs=enable_log_probs)
+    result = (_tensor([600]), torch.tensor([-0.5]))
+
+    out = _ordinary(model, [token], [position], [10], result=result, sampling_params=sampling)
+
+    assert out is result
+    assert _names(model, "decode") == [("decode", [token], [position])]
+    assert model._spec_decoder.replays == replays
+    assert model._spec_pending is None and not model._spec_active
+    assert model._dflash_retained is None and all(tap.releases == 1 for tap in taps)
+    proposal = _propose(model, [[600, -1, -1, -1, -1, -1]], [[position + 1, -1, -1, -1, -1, -1]])
+    assert proposal.num_valid.tolist() == [0]
+
+
+def test_logprobs_for_another_row_leave_the_session_owners_proposal_alone(model):
+    _start_solo(model)
+    sampling = _sampling(2, enable_log_probs=[False, True], num_logprobs=0)
+    result = (_tensor([0, 600]), torch.tensor([0.0, -0.5]))
+
+    out = _ordinary(model, [0, 40], [-1, 9], [0, 20], result=result, sampling_params=sampling)
+
+    assert out is result
+    assert model._spec_active and not model._dflash_retained.consumed
+    out = _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
+
+
+def test_logprobs_on_padding_do_not_disqualify_the_live_row(model):
+    _prefill(model, prompt_len=2, key=10)
+    out = _ordinary(
+        model,
+        [3, 0, 0, 0],
+        [2, -1, -1, -1],
+        [10, 0, 0, 0],
+        sampling_params=_sampling(4, enable_log_probs=[False, True, True, True]),
+    )
+    assert out.tolist() == [150, 0, 0, 0]
+    assert len(_names(model, "bootstrap")) == 1 and _names(model, "decode") == []
+
+
+def test_a_greedy_row_with_top_k_and_top_p_still_speculates(model):
+    _prefill(model, prompt_len=2, key=10)
+    out = _ordinary(model, [3], [2], [10], sampling_params=_sampling(1, top_k=20, top_p=0.9))
+    assert out.tolist() == [150]
+    assert len(_names(model, "bootstrap")) == 1
+
+
+@pytest.mark.parametrize(
+    "temperature, bootstraps",
+    [([0.0, 1.0, 1.0, 1.0], True), ([1.0, 0.0, 0.0, 0.0], False)],
+    ids=["greedy-live-row", "sampled-live-row"],
+)
+def test_a_padded_step_reads_only_the_live_rows_sampling(model, temperature, bootstraps):
+    _prefill(model, prompt_len=2, key=10)
+    out = _ordinary(
+        model,
+        [3, 0, 0, 0],
+        [2, -1, -1, -1],
+        [10, 0, 0, 0],
+        result="device",
+        sampling_params=_sampling(4, temperature=temperature),
+    )
+    assert (len(_names(model, "bootstrap")) == 1) is bootstraps
+    if bootstraps:
+        assert out.tolist() == [150, 0, 0, 0]
+        assert model.results == ["device"]  # the plain decode never ran
+    else:
+        assert out == "device"
+
+
+def test_a_draftless_verify_of_a_greedy_solo_row_starts_the_session(model):
+    _prefill(model, prompt_len=2, key=10)
+    out = _verify(model, [[3, 0, 0, 0, 0, 0]], [list(range(2, 8))], [0], keys=[10])
+    assert out.argmax_ids[0].tolist() == [150, -1, -1, -1, -1, -1]
+    assert len(_names(model, "bootstrap")) == 1 and _names(model, "decode") == []
+
+
+@pytest.mark.parametrize("values", _NOT_GREEDY, ids=_NOT_GREEDY_IDS)
+def test_a_draftless_verify_of_a_solo_row_that_does_not_sample_greedily_takes_the_plain_decode(model, values):
+    """Column 0 is the plain decode's device draw for the row, not the session's argmax."""
+    _prefill(model, prompt_len=2, key=10)
+    taps = list(model._spec_pending[0])
+    out = _verify(
+        model,
+        [[3, 0, 0, 0, 0, 0]],
+        [list(range(2, 8))],
+        [0],
+        keys=[10],
+        result=DeviceResult(_tensor([600])),
+        sampling_params=_sampling(1, **values),
+    )
+    assert out.argmax_ids[0].tolist() == [600, -1, -1, -1, -1, -1]
+    assert _names(model, "decode") == [("decode", [3], [2])]
+    assert _names(model, "bootstrap") == [] and model._spec_decoder.replays == 0
+    assert model._spec_pending is None and all(tap.releases == 1 for tap in taps)
+
+
+@pytest.mark.parametrize("step", ["ordinary", "verify"])
+def test_a_sampled_row_leaves_another_requests_outstanding_proposal_alone(model, step):
+    """The owner is not in this step and its drafts come on its next step."""
+    _start_solo(model)
+    sampled = _sampling(2, temperature=[0.0, 1.0])
+    if step == "ordinary":
+        out = _ordinary(model, [0, 40], [-1, 9], [0, 20], result="device", sampling_params=sampled)
+        assert out == "device"
+    else:
+        out = _verify(
+            model,
+            [_PAD, [40, 0, 0, 0, 0, 0]],
+            [_PAD, [9, 10, 11, 12, 13, 14]],
+            [0, 0],
+            keys=[0, 20],
+            result=DeviceResult(_tensor([0, 600])),
+            sampling_params=sampled,
+        )
+        assert int(out.argmax_ids[1, 0]) == 600
+    assert model._spec_active and not model._dflash_retained.consumed
+    out = _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
+    assert out.argmax_ids.tolist() == [[250, 251, 252, 253, 254, 255]]
+
+
+def test_a_session_owner_seen_sampling_on_a_later_step_ends_its_session(model):
+    """A request that changes from greedy to sampled must leave its argmax session."""
+    _prefill(model, prompt_len=2, key=10)
+    first = _verify(model, [[3, 0, 0, 0, 0, 0]], [[2, 3, 4, 5, 6, 7]], [0], keys=[10])
+    assert first.argmax_ids[0, 0] == 150
+    assert model._spec_active
+    out = _ordinary(model, [150], [3], [10], result="device", sampling_params=_sampling(1, temperature=1.0))
+    assert out == "device"
+    assert not model._spec_active and model._dflash_retained is None
+    assert ("release_decoder", False) in model.events
+    proposal = _propose(model, [[600, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]])
+    assert proposal.num_valid.tolist() == [0]
+
+
+@pytest.mark.parametrize("verify", [False, True], ids=["ordinary", "draftless-verify"])
+@pytest.mark.parametrize("sampling_values", [{"temperature": 1.0}, {"presence_penalty": 0.5}])
+def test_sampled_request_after_greedy_completion_uses_the_real_decode_contract(
+    model, adapter, monkeypatch, verify, sampling_values
+):
+    """Run the real decode interface over recording trace and sampling operations."""
+    _start_solo(model)
+    model.release_request(0)
+    _prefill(model, prompt_len=2, key=20)
+
+    source_path = Path(__file__).resolve().parents[2] / "tt" / "generator.py"
+    tree = ast.parse(source_path.read_text())
+    mixin = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "ChunkedPrefillPageTableGuardMixin"
+    )
+    decode = next(node for node in mixin.body if isinstance(node, ast.FunctionDef) and node.name == "decode_forward")
+    module = ast.Module(
+        body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), decode],
+        type_ignores=[],
+    )
+    namespace = {"torch": torch, "Mode": SimpleNamespace(DECODE="decode")}
+    exec(compile(ast.fix_missing_locations(module), str(source_path), "exec"), namespace)
+
+    def plain(self, *args, page_tables_per_layer=None, **kwargs):
+        return namespace["decode_forward"](self, *args, **kwargs)
+
+    trace_calls, sample_calls = [], []
+
+    def trace(**kwargs):
+        trace_calls.append(kwargs)
+        return "logits"
+
+    def sample(logits, **kwargs):
+        assert logits == "logits"
+        sample_calls.append(kwargs)
+        return _tensor([600])
+
+    monkeypatch.setattr(adapter.Gemma4ForCausalLM, "decode_forward", plain)
+    monkeypatch.setattr(model, "_clear_sequential_batch_page_tables", lambda: None, raising=False)
+    monkeypatch.setattr(model, "mode", "prefill", raising=False)
+    monkeypatch.setattr(model, "data_parallel", 1, raising=False)
+    monkeypatch.setattr(model.model[0], "switch_mode", lambda mode: None, raising=False)
+    monkeypatch.setattr(model, "_decode_forward_trace_text", trace, raising=False)
+    monkeypatch.setattr(model, "sample_decode_on_device", sample, raising=False)
+    sampling_params = _sampling(1, **sampling_values)
+    kwargs = dict(sampling_params=sampling_params, read_from_device=False)
+    if verify:
+        out = _verify(model, [[40, 0, 0, 0, 0, 0]], [[2, 3, 4, 5, 6, 7]], [0], keys=[20], **kwargs)
+        assert out.argmax_ids[0].tolist() == [600, -1, -1, -1, -1, -1]
+    else:
+        out = _ordinary(model, [40], [2], [20], **kwargs)
+        assert out.tolist() == [600]
+    assert not model._spec_active and model._spec_pending is None
+    assert len(trace_calls) == len(sample_calls) == 1
+    assert trace_calls[0]["tokens"][0].tolist() == [[40]]
+    assert trace_calls[0]["current_pos"][0].tolist() == [2]
+    assert trace_calls[0]["reload_inputs"] is True
+    assert trace_calls[0]["reload_page_table"] is False
+    assert sample_calls[0]["sampling_params"] is sampling_params
+    assert sample_calls[0]["reload_sampling_params"] is True
+    assert sample_calls[0]["reset_sampling_state"] is True
+
+
+def test_argmax_eligibility_reads_per_row_values_and_shared_scalars(adapter):
+    can_use_argmax = adapter.Gemma4DFlashContractForCausalLM._dflash_row_can_use_argmax
+    lists = _sampling(2, temperature=[0.0, 0.7])
+    assert can_use_argmax(lists, 0) and not can_use_argmax(lists, 1)
+    tensors = dataclasses.replace(lists, temperature=torch.zeros(2), repetition_penalty=torch.tensor([1.0, 1.1]))
+    assert can_use_argmax(tensors, 0) and not can_use_argmax(tensors, 1)
+    shared = dataclasses.replace(_sampling(1), presence_penalty=0.0, frequency_penalty=0.2)
+    assert not can_use_argmax(shared, 0)
+    assert can_use_argmax(dataclasses.replace(shared, frequency_penalty=0.0), 0)
+    log_probs = dataclasses.replace(_sampling(2), enable_log_probs=torch.tensor([False, True]))
+    assert can_use_argmax(log_probs, 0) and not can_use_argmax(log_probs, 1)
 
 
 # -- identity and release --------------------------------------------------------

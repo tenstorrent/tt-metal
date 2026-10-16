@@ -96,8 +96,11 @@ void kernel_main() {
     constexpr uint32_t dfb_beta_id = dfb::beta;
 #endif
 #if defined RMSNORM and not defined FUSE_PRE_ADD
-    constexpr uint32_t dfb_xmm_id = dfb_in0;  // x minus mean
+    // RMSNorm without a residual has no x - E[x] stage: "xmm" is the resident input shard itself.
+    constexpr bool xmm_is_input_shard = true;
+    constexpr uint32_t dfb_xmm_id = dfb_in0;
 #else
+    constexpr bool xmm_is_input_shard = false;
     constexpr uint32_t dfb_xmm_id = dfb::xmm;  // x minus mean
 #endif
     // RMSNorm normalizes by the mean of squares, so it has no mean to reduce and the E[x] chain's
@@ -437,13 +440,9 @@ void kernel_main() {
     dfb_xmm2.wait_front(num_tiles_per_block);
 #endif
 
-#if defined RMSNORM and not defined FUSED_PRE_ADD
-    reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
-#else
-    if constexpr (FLOAT32_DTYPE) {
+    if constexpr (xmm_is_input_shard || FLOAT32_DTYPE) {
         reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
     }
-#endif
 
     dfb_xmm2.wait_front(num_tiles_per_block);
 
@@ -538,18 +537,12 @@ void kernel_main() {
     if constexpr (!do_gamma && !do_beta) {
         pack_reconfig_data_format(dfb_out_id);
     }
-// (x - Ex) * 1/[sqrt(Var + eps)]
-#if defined RMSNORM and not defined FUSE_PRE_ADD
+    // (x - Ex) * 1/[sqrt(Var + eps)]
     if constexpr (FLOAT32_DTYPE) {
         reconfig_data_format(dfb_xmm_id, dfb_ex_global_id);
-    } else {
+    } else if constexpr (xmm_is_input_shard) {
         reconfig_data_format_srca(dfb_ex2_id, dfb_xmm_id);
     }
-#else
-    if constexpr (FLOAT32_DTYPE) {
-        reconfig_data_format(dfb_xmm_id, dfb_ex_global_id);
-    }
-#endif
     mul_bcast_cols_init(dfb_xmm_id, dfb_ex_global_id);
     index_h_offset = 0;
     // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
@@ -593,11 +586,12 @@ void kernel_main() {
     }
     dfb_im.push_back(num_tiles_per_block);
 
-#if !(defined RMSNORM and not defined FUSE_PRE_ADD)
-    // RMSNorm without a fused pre-add reads x straight from the resident input shard (xmm aliases in0),
-    // which is never pushed and so must not be popped (see the x - E[x] pass above).
-    dfb_xmm.pop_front(num_tiles_per_block);
-#endif
+    // xmm was pushed by x - E[x] (LayerNorm) or by the pre-add (RMSNorm + FUSE_PRE_ADD).
+    // RMSNorm without a fused pre-add reads x straight from the resident input shard
+    // (xmm aliases in0), which is never pushed and so must not be popped.
+    if constexpr (!xmm_is_input_shard) {
+        dfb_xmm.pop_front(num_tiles_per_block);
+    }
 
 #ifdef FUSE_GAMMA
     {
