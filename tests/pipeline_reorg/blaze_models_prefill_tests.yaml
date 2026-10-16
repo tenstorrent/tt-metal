@@ -1396,7 +1396,7 @@
       timeout -k 2m 35m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # 5 min; the runner idles in the H2D recv between chunks
-        python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=2040
+        python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k gptoss120b_1k -vvv --tb=short --timeout=2040
       '
     )
 
