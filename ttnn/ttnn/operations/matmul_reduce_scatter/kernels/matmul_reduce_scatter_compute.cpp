@@ -20,56 +20,73 @@
 // UNPACK thread's fifo_rd_ptr at it, and the last subblock pops each window right after consuming it, so the read
 // pointer is exact again at the end.
 // Then finish_block for the lagged entry (or this one): copy (chain start), hold + arrival (relay / fin with one
-// upstream), or hold + fwd + bwd (fin with two upstreams). FIN_ADD_FPU: FPU adds (hold + arrival, then the second
-// arrival through DEST reuse); else SFPU fp32 adds (FPU fwd+bwd into D1, SFPU D0 += D1).
+// upstream), or hold + fwd + bwd (fin with two upstreams): FPU adds (hold + arrival, then the second arrival through
+// DEST reuse). (The SFPU-add finish variant was deleted in Perf 2: the deferred finish must repeat the fused ops.)
 // Every cross-device add runs in fp32 DEST; the result is packed to bf16 into cb_finished.
+
+// FUSED FINISH (Perf 2, graduated from perf_experiments/fused_finish). The finish of an entry folds into the
+// matmul's LAST super-block: each output subblock accumulates its last-super-block matmul in fp32 DEST, the earlier
+// super-blocks' fp32 hold is added IN DEST (DEST += hold + 0: FPU add accumulated onto DEST against a zero tile) and
+// the arrival(s) by DEST_TO_SRCA reuse adds (DEST -> srcA, arrival -> srcB, FPU add into fp32 DEST), and the subblock
+// is packed bf16 straight into cb_finished, pushed per subblock row group (the streamed fin writer stores a row group
+// while the next one computes). The last super-block's fp32 L1-acc pack, the hold re-read and the separate finish pass
+// disappear. WHEN: the arrival is transport-bound (it lands about when this entry's matmul ends), so waiting for it
+// inside the matmul stalls the FPU (focus +4 us when every entry waits). After the first subblock of the last
+// super-block has accumulated, UNPACK checks (non-blocking CB credit read) whether the arrival(s) landed and broadcasts
+// the answer to MATH and PACK through the TRISC mailboxes (the get_tile_address pattern), so all three threads branch
+// alike.
+//   landed (or no arrival: chain start)  -> every subblock: DEST += hold + 0, += arrival(s) (reuse), pack bf16
+//   not landed (late)                    -> every subblock: DEST += hold + 0, pack fp32 IN PLACE over its hold
+//                                           tiles; the separate finish adds the arrival(s) after the matmul
+// DETERMINISM: both branches run the identical op sequence on identical values. The late branch stores the
+// (DEST + hold) sum exactly (fp32 pack) and the finish reads it back through srcA, which is the same fp32 -> srcA
+// conversion the fused branch's DEST_TO_SRCA move applies, then the same FPU adds with the same operands in the
+// same registers. So the bits never depend on the run-time arrival timing (test_regression::test_deterministic).
+// A lagged entry (arrival produced at the same entry index upstream) and the entry right behind it keep the old
+// path (finish behind the next matmul; cb_finished's FIFO order).
+//
+// RAW LLK — measured helper bypass (fused finish; do NOT "fix" back to the finish_block helper chains for the fused
+// entries): compute_kernel_lib::add / copy / eltwise_chain own the DEST lifecycle (acquire, op, pack, release per tile
+// batch) and read their operands from the CB front. The fused finish must (1) run its adds on a DEST the caller
+// already acquired and filled with a matmul subblock, without acquiring or packing, (2) accumulate onto that DEST
+// (ELWADD acc_to_dest, DEST += hold + 0) and chain DEST_TO_SRCA reuse adds of tiles addressed row-strided inside a
+// fronted slot, (3) pack row-strided into a caller-reserved cb_finished region pushed per row group, and (4) let the
+// late branch pack in place into an already-pushed slot (packer write pointer rewound). No helper mode expresses an
+// op on caller-owned, pre-filled DEST. The run-time decision is a non-blocking CB credit read on UNPACK broadcast by
+// the TRISC mailboxes (no helper exists for either). Measured (QB2 1x4 ring, traced, max over chips): focus
+// 119.0-119.1 -> 116.6-117.2 us, GLM 185.7 -> 182.1, MiMo 205.3 -> 204.4-205.0 (perf_experiments/fused_finish).
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"  // permanent stage zones (free when the profiler is off)
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
+#include "api/compute/eltwise_binary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 
 namespace ckl = compute_kernel_lib;
 
 constexpr uint32_t ROLE_COPY = 0, ROLE_ADD_FWD = 1, ROLE_ADD_BWD = 2, ROLE_ADD_BOTH = 3;
 
-template <uint32_t cb_hold, uint32_t cb_finished, uint32_t cb_arr_fwd, uint32_t cb_arr_bwd, uint32_t P, bool fpu_add>
+template <uint32_t cb_hold, uint32_t cb_finished, uint32_t cb_arr_fwd, uint32_t cb_arr_bwd, uint32_t P>
 ALWI void finish_block(uint32_t role) {
     MaybeDeviceZoneScope("FIN");
     using namespace ckl;
     constexpr auto shape = IterationShape::tiles(P);
+    // FPU adds into fp32 DEST; the hold reaches DEST through srcA (no UnpackToDestFp32). This separate finish runs only
+    // for lagged / post-lag / late entries and must repeat the fused finish's op sequence exactly (determinism).
     if (role == ROLE_COPY) {
         copy<input(cb_hold), output(cb_finished)>(shape);
-    } else if constexpr (fpu_add) {
-        // FPU adds into fp32 DEST. The hold reaches DEST through srcA here exactly as through CopyTile in the SFPU
-        // variant (no UnpackToDestFp32), so the sum sees the same operand precision at a fraction of the cost.
-        if (role == ROLE_ADD_FWD) {
-            add<input(cb_hold), input(cb_arr_fwd), output(cb_finished)>(shape);
-        } else if (role == ROLE_ADD_BWD) {
-            add<input(cb_hold), input(cb_arr_bwd), output(cb_finished)>(shape);
-        } else {
-            eltwise_chain(
-                shape,
-                BinaryFpu<BinaryFpuOp::Add, input(cb_hold), input(cb_arr_fwd)>{},
-                DestReuseBinary<BinaryFpuOp::Add, input(cb_arr_bwd), DestReuseType::DEST_TO_SRCA>{},
-                PackTile<output(cb_finished)>{});
-        }
+    } else if (role == ROLE_ADD_FWD) {
+        add<input(cb_hold), input(cb_arr_fwd), output(cb_finished)>(shape);
+    } else if (role == ROLE_ADD_BWD) {
+        add<input(cb_hold), input(cb_arr_bwd), output(cb_finished)>(shape);
     } else {
-        if (role == ROLE_ADD_FWD) {
-            binary_sfpu<AddBinary<>, input(cb_hold), input(cb_arr_fwd), output(cb_finished)>(shape);
-        } else if (role == ROLE_ADD_BWD) {
-            binary_sfpu<AddBinary<>, input(cb_hold), input(cb_arr_bwd), output(cb_finished)>(shape);
-        } else {
-            eltwise_chain(
-                shape,
-                CopyTile<input(cb_hold)>{},
-                BinaryFpu<BinaryFpuOp::Add, input(cb_arr_fwd), input(cb_arr_bwd), Dst::D1>{},
-                AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                PackTile<output(cb_finished)>{});
-        }
+        eltwise_chain(
+            shape,
+            BinaryFpu<BinaryFpuOp::Add, input(cb_hold), input(cb_arr_fwd)>{},
+            DestReuseBinary<BinaryFpuOp::Add, input(cb_arr_bwd), DestReuseType::DEST_TO_SRCA>{},
+            PackTile<output(cb_finished)>{});
     }
 }
 
@@ -85,9 +102,9 @@ void kernel_main() {
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(8);
     constexpr uint32_t P = get_compile_time_arg_val(9);              // slot tiles (the largest wave)
     constexpr uint32_t num_entries = get_compile_time_arg_val(10);   // G x num_waves
-    constexpr bool fin_add_fpu = get_compile_time_arg_val(11) != 0;  // finish adds on the FPU (else SFPU fp32 adds)
-    constexpr uint32_t num_waves = get_compile_time_arg_val(12);
-    constexpr uint32_t super_block = get_compile_time_arg_val(13);  // K-windows per DEST-resident pack (divides nkb)
+    constexpr uint32_t num_waves = get_compile_time_arg_val(11);
+    constexpr uint32_t super_block = get_compile_time_arg_val(12);  // K-windows per DEST-resident pack (divides nkb)
+    constexpr uint32_t cb_zero = get_compile_time_arg_val(13);      // one bf16 zero tile (the writer fills it)
     static_assert(super_block >= 1 && num_k_blocks % super_block == 0, "super-block must divide the K-blocks");
     // runtime args: per wave rows | cols << 8 | sb_h << 16 | sb_w << 24, then per entry role | lag << 8
     constexpr uint32_t roles_idx = num_waves;
@@ -95,8 +112,86 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_k_window, cb_weight_k_window, cb_partial_hold);
 
     CircularBuffer act_buf(cb_act_k_window), weight_buf(cb_weight_k_window), hold_buf(cb_partial_hold);
+    CircularBuffer fin_buf(cb_finished), fwd_buf(cb_arrivals_fwd), bwd_buf(cb_arrivals_bwd);
+    cb_wait_front(cb_zero, 1);  // the writer's zero tile; never popped
 
-    auto matmul_entry = [&](uint32_t e) {
+    // UNPACK: have the entry's arrival(s) landed (non-blocking)? Broadcast to MATH and PACK by mailbox.
+    auto arrivals_landed = [&](uint32_t role) -> bool {
+        uint32_t ready = 1;
+        UNPACK(({
+            auto landed = [&](uint32_t cb) {
+                const uint16_t rec = (uint16_t)reg_read((uint32_t)get_cb_tiles_received_ptr(cb));
+                return (uint16_t)(rec - (uint16_t)get_local_cb_interface(cb).tiles_acked) >= P;
+            };
+            if (role == ROLE_ADD_FWD || role == ROLE_ADD_BOTH) {
+                ready &= landed(cb_arrivals_fwd) ? 1u : 0u;
+            }
+            if (role == ROLE_ADD_BWD || role == ROLE_ADD_BOTH) {
+                ready &= landed(cb_arrivals_bwd) ? 1u : 0u;
+            }
+#ifdef FF_FORCE_LATE  // test-only: every arrival entry takes the late branch (determinism / bit-equality check)
+            ready = 0;
+#endif
+#ifdef FF_FORCE_FUSED  // test-only: every arrival entry takes the fused branch (blocks on the arrival below)
+            ready = 1;
+#endif
+            mailbox_write(ckernel::ThreadId::MathThreadId, ready);
+            mailbox_write(ckernel::ThreadId::PackThreadId, ready);
+        }));
+        MATH((ready = mailbox_read(ckernel::ThreadId::UnpackThreadId)));
+        PACK((ready = mailbox_read(ckernel::ThreadId::UnpackThreadId)));
+        return ready != 0;
+    };
+
+    // In-DEST finish ops of one output subblock after its last-super-block matmul: DEST_TO_SRCA reuse adds of
+    // `hold` (when set) then of the arrivals (when with_arrivals). Tiles sit row-strided at col_base + r * cols (the
+    // slot's dense wave layout); DEST tile r * w + c. Matmul state on entry and exit: srcA = W, srcB = A, matmul MOP.
+    auto finish_in_dest =
+        [&](uint32_t role, bool hold, bool with_arrivals, uint32_t col_base, uint32_t cols, uint32_t h, uint32_t w) {
+            uint32_t srcb = cb_act_k_window;
+            bool any = false;
+            auto reuse_add = [&](uint32_t cb) {
+                // srcA carries DEST at the hold's (fp32 -> srcA) width, exactly as the hold reaches srcA when unpacked
+                reconfig_data_format(any ? cb_partial_hold : cb_weight_k_window, cb_partial_hold, srcb, cb);
+                srcb = cb;
+                any = true;
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb);
+                for (uint32_t r = 0; r < h; ++r) {
+                    for (uint32_t c = 0; c < w; ++c) {
+                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                            cb, r * cols + col_base + c, r * w + c);
+                    }
+                }
+            };
+            if (hold) {
+                // DEST += hold + 0: one FPU add accumulated onto DEST (srcA = hold, srcB = the zero tile), no DEST move
+                reconfig_data_format(cb_weight_k_window, cb_partial_hold, cb_act_k_window, cb_zero);
+                add_init(cb_partial_hold, cb_zero, true /* acc_to_dest */);
+                for (uint32_t r = 0; r < h; ++r) {
+                    for (uint32_t c = 0; c < w; ++c) {
+                        add_tiles(cb_partial_hold, cb_zero, r * cols + col_base + c, 0, r * w + c);
+                    }
+                }
+                srcb = cb_zero;
+                any = true;
+            }
+            if (with_arrivals) {
+                if (role == ROLE_ADD_FWD || role == ROLE_ADD_BOTH) {
+                    reuse_add(cb_arrivals_fwd);
+                }
+                if (role == ROLE_ADD_BWD || role == ROLE_ADD_BOTH) {
+                    reuse_add(cb_arrivals_bwd);
+                }
+            }
+            if (any) {
+                reconfig_data_format(cb_partial_hold, cb_weight_k_window, srcb, cb_act_k_window);
+                ckernel::matmul_block_init(cb_act_k_window, cb_weight_k_window, false, w, h, kb);
+            }
+        };
+
+    // One entry's matmul. fusable: its finish folds into the last super-block (an arrival entry: only if the
+    // arrival landed by the end of that super-block's first subblock). Returns whether the finish is complete.
+    auto matmul_entry = [&](uint32_t e, bool fusable, uint32_t role) -> bool {
         MaybeDeviceZoneScope("MM");
         const uint32_t wave = get_arg_val<uint32_t>(e % num_waves);
         const uint32_t rows = wave & 0xFF, cols = (wave >> 8) & 0xFF;
@@ -109,8 +204,28 @@ void kernel_main() {
         ckernel::matmul_block_init(cb_act_k_window, cb_weight_k_window, false, sb_w, sb_h, kb);
         const uint32_t S = e == 0 ? 1 : super_block;
         const uint32_t n_super = num_k_blocks / S;
-        hold_buf.reserve_back(P);  // one fp32 slot per entry
+        const bool has_arrival = role != ROLE_COPY;
+        const bool hold_prev = n_super > 1;  // earlier super-blocks to add in the last one
+        // a fused chain start with one super-block never touches the hold
+        const bool use_hold = !(fusable && !has_arrival && !hold_prev);
+        if (use_hold) {
+            hold_buf.reserve_back(P);  // one fp32 slot per entry
+        }
+        bool fused = fusable && !has_arrival;  // an arrival entry decides at its last super-block
+        bool late = false;                     // fusable arrival entry whose arrival had not landed
+        uint32_t slot_wr = 0;                  // PACK: the hold slot's write pointer (the late branch packs in place)
         for (uint32_t g = 0; g < n_super; ++g) {
+            const bool last_super = g == n_super - 1;
+            if (fusable && last_super && hold_prev) {
+                PACK((slot_wr = get_local_cb_interface(cb_partial_hold).fifo_wr_ptr));
+                hold_buf.push_back(P);  // every earlier super-block is packed (PACK program order)
+                hold_buf.wait_front(P);
+            }
+            if (fused && last_super) {  // chain start: known up front
+                PACK((pack_reconfig_data_format(cb_finished)));
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                fin_buf.reserve_back(P);
+            }
             uint32_t a_rd0 = 0, w_rd0 = 0, a_step = 0, w_step = 0;
             UNPACK(({
                 a_rd0 = get_local_cb_interface(cb_act_k_window).fifo_rd_ptr;
@@ -158,34 +273,93 @@ void kernel_main() {
                             weight_buf.pop_front(w_win);
                         }
                     }
+                    if (fusable && has_arrival && last_super && first_sb) {
+                        if (arrivals_landed(role)) {
+                            fused = true;
+                            if (role == ROLE_ADD_FWD || role == ROLE_ADD_BOTH) {
+                                fwd_buf.wait_front(P);  // landed: returns at once
+                            }
+                            if (role == ROLE_ADD_BWD || role == ROLE_ADD_BOTH) {
+                                bwd_buf.wait_front(P);
+                            }
+                            PACK((pack_reconfig_data_format(cb_finished)));
+                            PACK((llk_pack_reconfig_l1_acc(0)));
+                            fin_buf.reserve_back(P);
+                        } else {
+                            late = true;
+                            PACK((llk_pack_reconfig_l1_acc(0)));  // the (DEST + hold) sum overwrites the hold
+                        }
+                    }
+                    const uint32_t col_base = sr * row_group + sc * sb_w;
+                    if (last_super && (fused || late)) {
+                        finish_in_dest(role, hold_prev, fused, col_base, cols, sb_h, sb_w);
+                    }
                     tile_regs_commit();
                     tile_regs_wait();
-                    PACK((llk_pack_reconfig_l1_acc(g == 0 ? 0 : 1)));
-                    ckl::pack_subblock_row_strided(0, cb_partial_hold, sr * row_group + sc * sb_w, cols, sb_h, sb_w);
+                    if (last_super && fused) {
+                        // earlier row groups are pushed: offsets are relative to this row group
+                        ckl::pack_subblock_row_strided(0, cb_finished, sc * sb_w, cols, sb_h, sb_w);
+                    } else if (last_super && late && hold_prev) {
+                        // in place over this subblock's hold tiles (the slot is already pushed)
+                        PACK(({
+                            auto& ch = get_local_cb_interface(cb_partial_hold);
+                            const uint32_t wr = ch.fifo_wr_ptr;
+                            ch.fifo_wr_ptr = slot_wr;
+                            ckl::pack_subblock_row_strided(0, cb_partial_hold, col_base, cols, sb_h, sb_w);
+                            ch.fifo_wr_ptr = wr;
+                        }));
+                    } else {
+                        PACK((llk_pack_reconfig_l1_acc(g == 0 || late ? 0 : 1)));
+                        ckl::pack_subblock_row_strided(0, cb_partial_hold, col_base, cols, sb_h, sb_w);
+                    }
                     tile_regs_release();
+                }
+                if (last_super && fused) {
+                    fin_buf.push_back(row_group);  // the streamed fin writer can store this row group now
                 }
             }
         }
-        hold_buf.push_back(P);
+        if (fused) {
+            if (rows * cols < P) {
+                fin_buf.push_back(P - rows * cols);  // a ragged wave: the nominal slot stays whole
+            }
+            if (fusable && hold_prev) {
+                hold_buf.pop_front(P);
+            } else if (use_hold) {  // a single-super-block arrival entry reserved a slot it did not need
+                hold_buf.push_back(P);
+                hold_buf.wait_front(P);
+                hold_buf.pop_front(P);
+            }
+            if (role == ROLE_ADD_FWD || role == ROLE_ADD_BOTH) {
+                fwd_buf.pop_front(P);
+            }
+            if (role == ROLE_ADD_BWD || role == ROLE_ADD_BOTH) {
+                bwd_buf.pop_front(P);
+            }
+        } else if (!(fusable && hold_prev)) {  // (a fusable entry with earlier super-blocks pushed its slot already)
+            hold_buf.push_back(P);
+        }
         PACK((llk_pack_reconfig_l1_acc(0)));  // the finish chains pack plainly
+        return fused;
     };
 
     constexpr uint32_t NONE = 0xFFFFFFFF;
     uint32_t pending = NONE;
     for (uint32_t e = 0; e < num_entries; ++e) {
-        matmul_entry(e);
+        const uint32_t word = get_arg_val<uint32_t>(roles_idx + e);
+        const uint32_t role = word & 0xFF;
+        const bool lag = (word >> 8) & 1;  // host: arrival expected late -> finish behind the next matmul
+        const bool fusable = !lag && pending == NONE;
+        const bool fused = matmul_entry(e, fusable, role);
         if (pending != NONE) {
-            finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P, fin_add_fpu>(
+            finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(
                 get_arg_val<uint32_t>(roles_idx + pending) & 0xFF);
             pending = NONE;
         }
-        const uint32_t role = get_arg_val<uint32_t>(roles_idx + e) & 0xFF;
-        const bool lag =
-            (get_arg_val<uint32_t>(roles_idx + e) >> 8) & 1;  // host: arrival expected late -> finish later
         if (lag) {
             pending = e;  // the add waits for its arrival behind the next entry's matmul
-        } else {
-            finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P, fin_add_fpu>(role);
+        } else if (!fused) {
+            finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(role);
         }
     }
 }

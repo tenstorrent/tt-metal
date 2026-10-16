@@ -266,3 +266,127 @@ Considered but not tested (cap):
 |---|---|---|---|---|---|
 | `compute_kernel_lib::matmul_block` | capability | The loop order is fixed K-block-outer / subblock-inner. It acquires and packs DEST per (K-block, subblock), so there is no mode that keeps an output subblock in DEST across several K-blocks and packs it once. It also cannot address a fronted multi-window region that the CB ring wrapped: the caller has to rewrite the UNPACK `fifo_rd_ptr` per window and pop the windows on the last subblock. | 112800 (focus compute floor); 126400 whole op | 109100 floor (S=2); 123500 whole op | `matmul_reduce_scatter_compute.cpp:99` (`matmul_entry`, raw `ckernel::matmul_block` at :150) |
 | `dataflow_kernel_lib` mcast `ReceiverPipe::receive()` | capability | `receive()` fuses the consumer-ready ack (semaphore up to the sender) with the blocking data-valid wait. There is no split ack / wait API, so a receiver cannot ack as soon as its slot is reserved and wait later, and the wait cannot run a caller poll hook (here, landing fabric arrivals). | 126100-126600 (focus whole op) | 123100-124000 | `matmul_reduce_scatter_reader.cpp:44` (`rx_ack`), `:51` (`rx_wait`) |
+
+## Perf 2 — perf tournament round 2 (focus: Kimi K2.7 o_proj, 640x2048x7168, scatter -1)
+- **Date**: 2026-10-16
+- **Config**: the flagged LOOSE_CASES[0] exactly: A bf16 (1,1,640,2048), W bf8b (2048,7168), scatter -1, Ring, cluster_axis 1, 2 links, HiFi2, user `fp32_dest_acc_en=False`. The op's internal fp32 full-sync DEST was kept, and no precision knob was touched.
+- **Setup**: QB2 1x4 TORUS_XY, traced (`MRS_PERF_TRACE=1`). Op latency = max over the 4 chips of DEVICE KERNEL DURATION. Each number is the median of 3 replays from one fresh-cache run, with the permanent zones on.
+
+### Measured breakdown (focus, before = post-Perf-1)
+- **Whole op**: 118.9–119.2 µs.
+- **Cumulative peel** (`MRS_ABLATE`):
+
+  | Variant | µs |
+  |---|---|
+  | full | 119.1 |
+  | no DRAM | 113.7 |
+  | + no mcast (the compute floor) | 109.3 |
+  | + no compute (transport only) | 58.3 |
+
+- **Stage zones**, device 0:
+  - MM per entry: 34.0 / 23.3 / 23.4 / 23.3 µs. On the compute floor: 24.7 / 23.6 / 23.6 / 23.5.
+  - FIN per entry: 1.4 / 1.4 / 1.4 / 3.0 µs, i.e. 6.3 µs on the serial compute timeline.
+  - Fin write tail: about 4–6 µs.
+  - Transport hides behind the matmul.
+- **Entry-0 window timeline** (per-core NCRISC zones):
+  - The first window's DRAM reads finish at about 5.0 µs, but its A+W multicast completes only at about 12.0 µs.
+  - Later windows arrive about every 5.2 µs, against about 6 µs of compute per window.
+- **Ranked bottleneck**:
+  1. Entry-0 first-window fill, about 9.8 µs. DRAM roofline: entry 0 moves 6.5 MB, about 14.6 µs at 447 GB/s, which is below compute; only about 3.6 µs of first-window fill is inherent.
+  2. Serial FIN, 6.3 µs, plus the fin write tail.
+  3. MM payload, 95 µs at about 91% of HiFi2 FPU peak.
+  4. Transport, 58 µs, hidden.
+- **Marker-budget note**: on MiMo, `perf_zone_report.py` shows the 254-marker cap reached. Its per-step RD_* zones fire 32 times per core, so the MiMo breakdown is not trustworthy; focus is at 134 markers. This is recorded for the next round and was not changed here.
+
+### Portfolio (hard cap: 2 experiments)
+1. **`fused_finish`** (compute): fold the finish into the matmul's last super-block. The hold and arrivals are added in DEST, and the result is packed as bf16 straight into `cb_finished`.
+2. **`entry0_ramp`** (reader + compute): sub-window entry 0's first K-window(s), so compute starts after a smaller fill.
+
+Considered but not tested (cap): half-sync DEST / bf16 matmul DEST. These touch the precision datapath, so they are not a lever here.
+
+### Verdicts
+- **`fused_finish` — WIN.**
+
+  | Option | Focus µs | rel-RMS | Graduatable? |
+  |---|---|---|---|
+  | base | 119.0–119.1 | 0.00486 | — |
+  | fuse every entry (3 variants: preload / post-add / mixed) | 123.2–125.3 | 0.00488–0.00511 | no: regression |
+  | fuse only chain starts and the last entry | 121.9 | — | no: regression |
+  | run-time decision at the start of the last super-block | 117.1–117.4 | 0.00502 | no: not deterministic |
+  | run-time decision after the first subblock, accumulating add | 114.8–115.7 | 0.00498 | no: fails `test_deterministic` |
+  | deterministic, hold added by reuse | 117.4 | 0.00489 | yes (MiMo +1.4 µs) |
+  | **deterministic, `DEST += hold + 0` (graduated)** | **116.6–117.2** | **0.00497** | **yes** |
+
+  - Fusing every entry regressed because the arrivals are transport-bound: each one lands about when its entry's matmul ends, so waiting for it inside the matmul stalls the FPU.
+  - The two non-deterministic options round differently depending on run-time arrival timing.
+  - Domain: everywhere; no measured regression on any guard cell.
+- **`entry0_ramp` — NULL.**
+
+  | Option | Focus µs | GLM µs |
+  |---|---|---|
+  | base | 118.9–119.3 | 185.9–186.1 |
+  | best: sender-part pieces, all 4 entry-0 windows | 118.3–118.6 (−0.7, noise level) | 187.0–187.4 (+1.0–1.3, 3 sessions) |
+  | equal pieces of 2–4 | 120.2–123.8 | — |
+
+  - Equal pieces also cost +5 µs in the stream regime.
+  - Cause: each extra multicast round costs 0.5–1.1 µs. A round waits for every receiver on its line, and A lines cross W lines, so each round behaves like a grid-wide sync.
+  - Entry 0 is also stream-bound (about 5.3 µs per window vs about 6 µs of compute), so an earlier start only waits on the stream.
+  - Diagnosis of the 6–7 µs first-window landing:
+    - W tile-read issue takes about 1.7 µs.
+    - The next-window read issue sits on the critical path twice.
+    - b2 is acknowledged only after b lands.
+  - Rel-RMS was unchanged (0.00486). Artifacts: `perf_experiments/entry0_ramp/`.
+
+### What graduated: `fused_finish`, one path everywhere
+- **Compute** (`kernels/matmul_reduce_scatter_compute.cpp`): every non-lagged entry fuses its finish into the matmul's last super-block.
+  - Chain starts fuse always.
+  - Arrival entries decide at run time. After the last super-block's first subblock, UNPACK checks the arrival CB without blocking and broadcasts the answer to MATH and PACK through the TRISC mailboxes.
+  - **Fused branch**:
+    1. `DEST += hold + 0`: an FPU add accumulated onto DEST, against the zero tile.
+    2. DEST_TO_SRCA reuse adds of the arrival(s).
+    3. A bf16 pack straight into `cb_finished`, pushed per subblock row group, so the streamed fin writer overlaps the last row groups.
+  - **Late branch**: `DEST += hold + 0`, then an fp32 pack in place over the hold. The separate FPU finish then adds the arrival(s) with the same op sequence, so the bits do not depend on timing.
+    - Bit-equality was checked by forcing all entries late, forcing all fused, and two normal runs: identical bits on all 9 perf and guard cells.
+    - `test_regression::test_deterministic` passes.
+- **Carve-out ("cannot", kernel-side)**: a lagged entry, and the entry right behind it, keep the separate finish. The lagged entry's arrival is by construction not there yet, and the follower must let the pending finish push first, because `cb_finished` is FIFO. Lag fires only on Linear and ring-mock / fabric-config cells.
+- **Deleted**: the SFPU-add finish variant (`FIN_ADD_FPU` / `MRS_FIN_ADD_FPU` and its kernel branch, compute CT arg 11). The deferred finish must repeat the fused FPU ops exactly. The last super-block's fp32 L1-acc pack and the hold re-read are gone on fused entries.
+- **Writer**: fills a one-page bf16 zero tile, `cb_zero` (CB 7), once at kernel start. Writer CT arg 7 = `cb_zero`; the TensorAccessor args move to 8.
+- **Descriptor**:
+  - `CB_ZERO = 7`, one page on the matmul cores;
+  - `footprint()` +2 KiB;
+  - compute CT args 11-13 = waves, super_block, cb_zero.
+- **Instrumentation**: the `MM` zone now contains the fused finish. `FIN` fires only for late, lagged and post-lag entries; on focus it no longer fires at all. Focus markers stay at 134.
+- **Docs**: the `op_design.md` finish rows and the CB table (`cb_zero`), and `l1_ledger.md` (focus 958 KiB, MiMo 1330 of 1363 KiB).
+
+### Whole op, before → after (traced, median of 3 replays, max over chips)
+| Cell (guard set: one per kernel path x placement) | before | after | Δ |
+|---|---|---|---|
+| **Focus** 640x2048x7168, ring, 2 links | 118.9–119.2 | **116.7–116.9** | **−2.3 (−1.9%)** |
+| GLM 640x4096x6144 | 185.9 | 182.4–182.8 | −3.3 |
+| MiMo 2048x2048x4096 sd -2, fp32acc (W resident) | 205.1 | 204.9 | flat |
+| Focus, Linear (lag fires) | 152.9 | 151.5–152.7 | flat |
+| Focus, 1 link | 151.3 | 151.4–151.8 | flat |
+| K3 FFN 640x8448x7168 (stream regime) | 540.8 | 537.2–537.8 | −3 |
+| 640x1536x2048 (S=1) | 54.5 | 54.4 | flat |
+| 640x1536x128 (grid 10x1) | 31.0–31.3 | 30.9–31.1 | flat |
+| A bf8b x W bf16 640x2048x6144 | 137.6 | 136.2–137.0 | −1 |
+
+- **Focus after**: MM per entry (including the fused finish) is 34.8 / 25.2 / 24.3 / 25.8 µs; the last MM ends at 112.4 µs, and the write barrier ends at 114.9–116.4 µs.
+- **No guard cell regressed.** No carve-out was earned by measurement.
+- **Accuracy**:
+  - Perf harness rel-RMS: focus 0.00486 → 0.00497, GLM 0.00503, MiMo 0.00502; gate 0.035.
+  - Precision baseline 6/6: focus 0.00454 → 0.00466, MiMo 0.00455 → 0.00471, A bf8b × W bf4b 0.00238 (unchanged).
+  - The about 2% rel-RMS rise comes from the accumulate-onto-DEST FPU add. It stays well inside every gate; the precision contract (dtypes, fidelity, DEST mode) is unchanged.
+- **Golden** (EVAL_CAPTURE_L1=0):
+  - `test_golden.py` 939/939, run in 3 shape slices: 433 + 338 + 168.
+  - `test_regression.py` 6/6, `test_ring_mock.py` 72/72, `test_fabric_configs.py` 24/24.
+  - Acceptance file 41 + 24, run per placement group. As in Perf 1, a single session shows the harness's fixture errors (`SetFabricConfig ... while devices are still open`), not op failures.
+- **SUPPORTED unchanged.**
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::copy` / `add` / `eltwise_chain` (`finish_block` chains) | capability | Every helper owns the full DEST lifecycle (acquire, op, pack, release) and reads operands from the CB front. None can apply an eltwise add to a DEST the caller already acquired and filled with a matmul subblock. Also missing: `acc_to_dest` adds (`DEST += a + b`); DEST_TO_SRCA reuse adds on tiles addressed row-strided inside a fronted slot; a row-strided pack into a caller-reserved region pushed per row group; an in-place pack into an already-pushed slot. | 119000–119100 (focus whole op) | 116600–117200 | `matmul_reduce_scatter_compute.cpp:149` (`finish_in_dest`), `:193` (`matmul_entry` fused branch) |
+| no helper (CB / TRISC sync family) | capability | No API offers a non-blocking "have N pages landed?" check on a CB from UNPACK, or a broadcast of a run-time decision from UNPACK to MATH/PACK. Without it, all three TRISCs cannot take the same data-dependent branch, and that branch is what lets the fusion skip late arrivals instead of stalling the FPU. Fusing every entry unconditionally measured 123.2–125.3 µs, a regression. | 123200 (always fuse, blocking) | 116600–117200 | `matmul_reduce_scatter_compute.cpp:119` (`arrivals_landed`) |
+
+All ideas measured: 1 graduated (`fused_finish`), 1 null (`entry0_ramp`). Focus is 2.3 µs faster (118.9–119.2 → 116.7–116.9 µs), GLM is 3.3 µs faster, and no guard cell regressed.

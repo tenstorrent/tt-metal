@@ -1,0 +1,192 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x16) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=16 PYTHONPATH=/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal:/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal python -m tracy -r -m pytest -p tests.plugins.up_front_collect -x /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_ramp/test_ramp_perf.py -s --rootdir=/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_ramp
+========================================
+2026-10-16 17:03:41.077 | INFO     | __main__:main:364 - Using port 8086
+2026-10-16 17:03:41.077 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-10-16 17:03:41.133 | INFO     | __main__:run_workload:399 - Test process started
+2026-10-16 17:03:42.049 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/malimpic/.cache/ttnn,model_cache_path=/home/malimpic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_ramp
+configfile: ../../../../../../pytest.ini
+plugins: timeout-2.4.0, split-0.11.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, repeat-0.9.4, benchmark-5.2.3, dash-2.15.0, anyio-4.15.1
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 4 items
+2026-10-16 17:03:43.818 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-10-16 17:03:43.818 | info     |             UMD | Cluster constructor started. (cluster.cpp:405)
+2026-10-16 17:03:43.819 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:131)
+2026-10-16 17:03:43.819 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:150)
+2026-10-16 17:03:43.823 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:654)
+2026-10-16 17:03:43.824 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:154)
+2026-10-16 17:03:43.971 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-10-16 17:03:44.108 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-10-16 17:03:44.235 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-10-16 17:03:44.345 | warning  |             UMD | Sysmem (0x40000000 bytes) using regular pages; pre-allocate hugepages for better DMA performance (e.g. 1 × 1GB or 512 × 2MB; on AArch64 also 2 × 512MB). (silicon_sysmem_manager.cpp:105)
+2026-10-16 17:03:44.345 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:172)
+2026-10-16 17:03:44.345 | info     |             UMD | IOMMU: enabled (cluster.cpp:146)
+2026-10-16 17:03:44.345 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:149)
+2026-10-16 17:03:44.345 | info     |             UMD | Cluster constructor completed. (cluster.cpp:719)
+2026-10-16 17:03:44.347 | info     |             UMD | Starting devices in cluster (cluster.cpp:1305)
+2026-10-16 17:03:44.691 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1314)
+2026-10-16 17:03:44.723 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:435)
+2026-10-16 17:03:44.723 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:497)
+2026-10-16 17:03:44.723 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-10-16 17:03:44.724 | info     |          Fabric | Loaded physical groupings from: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-16 17:03:44.724 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:897)
+2026-10-16 17:03:44.724 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-10-16 17:03:44.724 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-10-16 17:03:44.724 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1731)
+2026-10-16 17:03:44.724 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-10-16 17:03:44.725 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_2D_TORUS_XY, reinitializing control plane (metal_env.cpp:331)
+2026-10-16 17:03:44.725 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:435)
+2026-10-16 17:03:44.725 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:497)
+2026-10-16 17:03:44.725 | warning  |          Fabric | TopologyMapper auto-discovery: requested fabric type TORUS_XY could not be realized on the discovered physical topology; using MESH which maps all 4 physical chips. This is expected on galaxies that do not have wrap-around (torus) cabling on every axis. (topology_mapper.cpp:1737)
+2026-10-16 17:03:44.725 | info     |          Fabric | Loaded physical groupings from: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-16 17:03:44.726 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:897)
+2026-10-16 17:03:44.726 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-10-16 17:03:44.726 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-10-16 17:03:44.726 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1731)
+2026-10-16 17:03:44.726 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-10-16 17:03:44.779 | warning  |           Metal | Failed to create shared memory /tt_device_154095681932321_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-16 17:03:44.779 | warning  |           Metal | Failed to create shared memory /tt_device_154095681932320_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-16 17:03:44.780 | warning  |           Metal | Failed to create shared memory /tt_device_154095681931329_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-16 17:03:44.780 | warning  |           Metal | Failed to create shared memory /tt_device_154095681931328_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-16 17:03:44.790 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-10-16 17:03:44.796 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
+2026-10-16 17:03:44.801 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:49)
+2026-10-16 17:03:44.806 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-10-16 17:03:44.806 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-16 17:03:44.843 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-16 17:03:44.843 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D_TORUS_XY (fabric_firmware_initializer.cpp:336)
+DEV 0 rel_rms 0.00487
+DEV 1 rel_rms 0.00487
+DEV 2 rel_rms 0.00487
+DEV 3 rel_rms 0.00487
+PLAN M640_K4096_N6144_sd-1: {'xblock': 'resident', 'schedule': 'ring_balanced', 'kb': 16, 'depths': (4, 4), 'super_block': 2, 'hold_depth': 1, 'grid': (10, 8), 'strip': 'row', 'half_split': 'n', 'waves': 1, 'ramp': (0, 1, 0, [0, 0, 0, 0, 0, 0, 0, 0])} rel_rms(last device) 0.00487
+DEV 0 rel_rms 0.00490
+DEV 1 rel_rms 0.00486
+DEV 2 rel_rms 0.00486
+DEV 3 rel_rms 0.00490
+PLAN M640_K2048_N7168_sd-1_linear: {'xblock': 'resident', 'schedule': 'line', 'kb': 16, 'depths': (4, 4), 'super_block': 2, 'hold_depth': 2, 'grid': (10, 8), 'strip': 'row', 'half_split': 'k', 'waves': 1, 'ramp': (0, 1, 0, [0, 0, 0, 0, 0, 0, 0, 0])} rel_rms(last device) 0.00490
+DEV 0 rel_rms 0.00487
+DEV 1 rel_rms 0.00487
+DEV 2 rel_rms 0.00487
+DEV 3 rel_rms 0.00486
+PLAN M640_K8448_N7168_sd-1: {'xblock': 'stream', 'schedule': 'ring_balanced', 'kb': 12, 'depths': (4, 4), 'super_block': 2, 'hold_depth': 1, 'grid': (10, 8), 'strip': 'row', 'half_split': 'k', 'waves': 1, 'ramp': (0, 1, 0, [0, 0, 0, 0, 0, 0, 0, 0])} rel_rms(last device) 0.00486
+DEV 0 rel_rms 0.00485
+DEV 1 rel_rms 0.00486
+DEV 2 rel_rms 0.00485
+DEV 3 rel_rms 0.00489
+PLAN M640_K1536_N128_sd-1: {'xblock': 'resident', 'schedule': 'ring_balanced', 'kb': 16, 'depths': (3, 3), 'super_block': 1, 'hold_depth': 1, 'grid': (10, 1), 'strip': 'row', 'half_split': 'k', 'waves': 1, 'ramp': (0, 1, 0, [0, 0, 0, 0, 0, 0, 0, 0])} rel_rms(last device) 0.00489
+
+UP_FRONT_INLINE: collect pass over 4 item(s) took 8.9s
+UP_FRONT_INLINE: compile route local (programs=0, farm_min=10)
+
+UP_FRONT_COLLECT: 0 ops stashed across 0 bodies -> 0 unique programs (swallowed 0, skipped-capture 4)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=0 fallback=0
+UP_FRONT_COLLECT: nothing to compile
+UP_FRONT_COLLECT_RESULT: status=ok reason=nothing_to_compile unique=0 programs=0 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=0 compile_s=0.0 collect_s=8.9 route=local
+UP_FRONT_INLINE: compile step took 0.0s; starting the real pass
+
+ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_ramp/test_ramp_perf.py::test_perf_case[M640_K4096_N6144_sd-1] 2026-10-16 17:03:52.679 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:435)
+2026-10-16 17:03:52.679 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:497)
+2026-10-16 17:03:52.679 | warning  |          Fabric | TopologyMapper auto-discovery: requested fabric type TORUS_XY could not be realized on the discovered physical topology; using MESH which maps all 4 physical chips. This is expected on galaxies that do not have wrap-around (torus) cabling on every axis. (topology_mapper.cpp:1737)
+2026-10-16 17:03:52.679 | info     |          Fabric | Loaded physical groupings from: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto (physical_grouping_descriptor_core.cpp:813)
+2026-10-16 17:03:52.679 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:897)
+2026-10-16 17:03:52.679 | info     |          Fabric | Matching MESH mgd groupings to MESH groupings (physical_grouping_descriptor_matching.cpp:1428)
+2026-10-16 17:03:52.679 | info     |          Fabric | Grouping valid candidates by node difference (physical_grouping_descriptor_matching.cpp:1522)
+2026-10-16 17:03:52.679 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': 1 topology match(es), committed: 2x2_Mesh_flat (MESH) (physical_grouping_descriptor_matching.cpp:1731)
+2026-10-16 17:03:52.679 | info     |          Fabric | Physical groupings: Mesh graph descriptor 'M0': MGD placement fallback M0 (MESH) embeds on PSD (physical_grouping_descriptor_matching.cpp:1848)
+2026-10-16 17:03:52.729 | warning  |           Metal | Failed to create shared memory /tt_device_154095681932321_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-16 17:03:52.730 | warning  |           Metal | Failed to create shared memory /tt_device_154095681932320_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-16 17:03:52.730 | warning  |           Metal | Failed to create shared memory /tt_device_154095681931329_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-16 17:03:52.730 | warning  |           Metal | Failed to create shared memory /tt_device_154095681931328_memory: Permission denied (memory_stats_shm.cpp:57)
+2026-10-16 17:03:52.733 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-10-16 17:03:52.733 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
+2026-10-16 17:03:52.734 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:49)
+2026-10-16 17:03:52.736 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-10-16 17:03:52.736 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-16 17:03:52.749 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-16 17:03:52.749 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D_TORUS_XY (fabric_firmware_initializer.cpp:336)
+DEV 0 rel_rms 0.00487
+DEV 1 rel_rms 0.00487
+DEV 2 rel_rms 0.00487
+DEV 3 rel_rms 0.00487
+PLAN M640_K4096_N6144_sd-1: {'xblock': 'resident', 'schedule': 'ring_balanced', 'kb': 16, 'depths': (4, 4), 'super_block': 2, 'hold_depth': 1, 'grid': (10, 8), 'strip': 'row', 'half_split': 'n', 'waves': 1, 'ramp': (0, 1, 0, [0, 0, 0, 0, 0, 0, 0, 0])} rel_rms(last device) 0.00487
+PASSED
+ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_ramp/test_ramp_perf.py::test_perf_case[M640_K2048_N7168_sd-1_linear] DEV 0 rel_rms 0.00490
+DEV 1 rel_rms 0.00486
+DEV 2 rel_rms 0.00486
+DEV 3 rel_rms 0.00490
+PLAN M640_K2048_N7168_sd-1_linear: {'xblock': 'resident', 'schedule': 'line', 'kb': 16, 'depths': (4, 4), 'super_block': 2, 'hold_depth': 2, 'grid': (10, 8), 'strip': 'row', 'half_split': 'k', 'waves': 1, 'ramp': (0, 1, 0, [0, 0, 0, 0, 0, 0, 0, 0])} rel_rms(last device) 0.00490
+PASSED
+ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_ramp/test_ramp_perf.py::test_perf_case[M640_K8448_N7168_sd-1] DEV 0 rel_rms 0.00487
+DEV 1 rel_rms 0.00487
+DEV 2 rel_rms 0.00487
+DEV 3 rel_rms 0.00486
+PLAN M640_K8448_N7168_sd-1: {'xblock': 'stream', 'schedule': 'ring_balanced', 'kb': 12, 'depths': (4, 4), 'super_block': 2, 'hold_depth': 1, 'grid': (10, 8), 'strip': 'row', 'half_split': 'k', 'waves': 1, 'ramp': (0, 1, 0, [0, 0, 0, 0, 0, 0, 0, 0])} rel_rms(last device) 0.00486
+PASSED
+ttnn/ttnn/operations/matmul_reduce_scatter/perf_experiments/entry0_ramp/test_ramp_perf.py::test_perf_case[M640_K1536_N128_sd-1] DEV 0 rel_rms 0.00485
+DEV 1 rel_rms 0.00486
+DEV 2 rel_rms 0.00485
+DEV 3 rel_rms 0.00489
+PLAN M640_K1536_N128_sd-1: {'xblock': 'resident', 'schedule': 'ring_balanced', 'kb': 16, 'depths': (3, 3), 'super_block': 1, 'hold_depth': 1, 'grid': (10, 1), 'strip': 'row', 'half_split': 'k', 'waves': 1, 'ramp': (0, 1, 0, [0, 0, 0, 0, 0, 0, 0, 0])} rel_rms(last device) 0.00489
+PASSEDUP_FRONT_INLINE: real pass took 7.0s
+
+
+- generated xml file: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+3.27s call     test_ramp_perf.py::test_perf_case[M640_K8448_N7168_sd-1]
+1.69s call     test_ramp_perf.py::test_perf_case[M640_K4096_N6144_sd-1]
+0.91s teardown test_ramp_perf.py::test_perf_case[M640_K1536_N128_sd-1]
+0.90s call     test_ramp_perf.py::test_perf_case[M640_K2048_N7168_sd-1_linear]
+0.14s setup    test_ramp_perf.py::test_perf_case[M640_K4096_N6144_sd-1]
+0.08s call     test_ramp_perf.py::test_perf_case[M640_K1536_N128_sd-1]
+0.00s setup    test_ramp_perf.py::test_perf_case[M640_K8448_N7168_sd-1]
+0.00s setup    test_ramp_perf.py::test_perf_case[M640_K2048_N7168_sd-1_linear]
+0.00s setup    test_ramp_perf.py::test_perf_case[M640_K1536_N128_sd-1]
+0.00s teardown test_ramp_perf.py::test_perf_case[M640_K2048_N7168_sd-1_linear]
+0.00s teardown test_ramp_perf.py::test_perf_case[M640_K4096_N6144_sd-1]
+0.00s teardown test_ramp_perf.py::test_perf_case[M640_K8448_N7168_sd-1]
+============================== 4 passed in 16.04s ==============================
+2026-10-16 17:04:00.764 | info     |    BuildKernels | JIT cache stats: 99/99 hits (100.0%) [99 cached, 242 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-10-16 17:04:00.764 | info     |    BuildKernels | JIT telemetry: 26 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-10-16 17:04:00.778 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-10-16 17:04:00.778 | info     |             UMD | Closing devices in cluster (cluster.cpp:1319)
+2026-10-16 17:04:01.286 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1329)
+2026-10-16 17:04:01.287 | info     |             UMD | Cluster destructor started. (cluster.cpp:1050)
+2026-10-16 17:04:01.287 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1063)
+2026-10-16 17:04:01.624 | INFO     | __main__:main:463 - Copying /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/build/profiler/build_wasm/traces/entry0_ramp_2026_10_16_17_04_01.tracy
+2026-10-16 17:04:01.631 | INFO     | __main__:main:466 - Copied /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/build/profiler/build_wasm/traces/entry0_ramp_2026_10_16_17_04_01.tracy
+2026-10-16 17:04:01.631 | INFO     | __main__:main:475 - embed.tracy -> traces/entry0_ramp_2026_10_16_17_04_01.tracy
+2026-10-16 17:04:01.632 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-10-16 17:04:01.632 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-10-16 17:04:01.632 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-10-16 17:04:03.377 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-10-16 17:04:03.431 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-10-16 17:04:03.431 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-10-16 17:04:09.237 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2107 - Getting device ops
+2026-10-16 17:04:09.237 | INFO     | tracy.process_ops_logs:append_device_data:1081 - Appending device data
+2026-10-16 17:04:13.033 | INFO     | tracy.process_ops_logs:generate_reports:1412 - OPs' perf analysis is finished! Generating reports ...
+2026-10-16 17:04:13.033 | INFO     | tracy.process_ops_logs:generate_reports:1432 - Copying runtime artifacts
+2026-10-16 17:04:13.170 | INFO     | tracy.process_ops_logs:generate_reports:1441 - Generating OPs CSV
+2026-10-16 17:04:13.249 | INFO     | tracy.process_ops_logs:generate_reports:1897 - OPs csv generated at: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/profiler/reports/2026_10_16_17_04_13/ops_perf_results_2026_10_16_17_04_13.csv
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 4 item(s) took 8.9s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=0, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 0 ops stashed across 0 bodies -> 0 unique programs (swallowed 0, skipped-capture 4)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=0 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: nothing to compile
+PRECOMPILE: UP_FRONT_INLINE: compile step took 0.0s; starting the real pass
+SAFE_PYTEST: PROFILER CSV: /home/malimpic/localdev/2026_10_15/1521_malimpic_matmul-reduce-scatter-eval/clones/matmul_reduce_scatter_run1/tt-metal/generated/profiler/reports/2026_10_16_17_04_13/ops_perf_results_2026_10_16_17_04_13.csv
+SAFE_PYTEST_RESULT: PASS

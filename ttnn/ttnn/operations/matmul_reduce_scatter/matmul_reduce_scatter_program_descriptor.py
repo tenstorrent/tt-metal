@@ -40,6 +40,7 @@ CB_FINISHED = 3  # finished sub-block (bf16), staging offset 0; read remotely by
 CB_ARRIVALS_FWD = 4  # forward arrival zone slots (written by the upstream port over the fabric)
 CB_ARRIVALS_BWD = 5  # backward arrival zone slots
 CB_PORT_CHUNKS = 6  # port cores: gathered chunks waiting for the fabric sender
+CB_ZERO = 7  # one bf16 zero tile (the writer fills it once): the fused finish's DEST += hold + 0 FPU add
 
 # ---- knobs (single source of truth) ------------------------------------------------------------------------------
 DEPTH_IN0 = 3  # stream regime: A K-block windows (one computing, one landing, PREFETCH_STEPS read ahead by a sender)
@@ -111,8 +112,6 @@ MCAST_SENDER_PLACEMENT = {"resident": "diagonal_disjoint", "stream": "diagonal"}
 # "uniform" (first core: a column of DRAM readers) | "diagonal" (A and W both start at index 0: the cores (i, i) send
 # both families) | "diagonal_disjoint" (diagonal, each W family's start shifted so no core sends two families; focus:
 # -0.5-1 us; MiMo: +10 us, so the stream regime keeps "diagonal")
-FIN_ADD_FPU = 1  # finish adds on the FPU into fp32 DEST (1) or as SFPU fp32 adds (0). The hold reaches DEST through
-# srcA either way (no UnpackToDestFp32), so both see the same operand precision; the FPU add is ~3x cheaper per tile
 DEST_TILES_FP32_FULL_SYNC = 8  # DEST capacity with fp32 accumulation + full sync (subblock area cap)
 
 TILE = 32
@@ -418,7 +417,7 @@ def footprint(
     hold = HOLD_TILE_BYTES * hold_depths[resident] * P
     sl = slots[resident]
     staging = STAGE_TILE_BYTES * max(staging_floor_tiles, (DEPTH_HANDOFF + sl["fwd"] + sl["bwd"]) * P)
-    return a + w + hold + staging
+    return a + w + hold + staging + STAGE_TILE_BYTES  # + the zero tile (CB_ZERO)
 
 
 def choose_k_block(Kt, budget, force_resident, **geo):
@@ -927,11 +926,11 @@ def create_mesh_program_descriptor(ctx):
         nkb,
         P,
         num_entries,
-        int(os.environ.get("MRS_FIN_ADD_FPU", FIN_ADD_FPU)),  # env: perf experiments only
         W,
         ctx["super_block"],  # K-windows a subblock accumulates in DEST per pack (entry 0 packs per window)
+        CB_ZERO,
     ]
-    writer_ct = [CB_FINISHED, P, W, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, num_entries] + o_ct
+    writer_ct = [CB_FINISHED, P, W, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, num_entries, CB_ZERO] + o_ct
     max_port_cores = -(-n_cores // L)  # matmul cores one port serves (link(k) = k mod L)
     port_ct = [
         CB_PORT_CHUNKS,
@@ -1185,6 +1184,7 @@ def create_mesh_program_descriptor(ctx):
                     CB_ARRIVALS_BWD, staging, zone_bwd_off, slots["bwd"] * P * STAGE_TILE_BYTES, mm_crs
                 ),
                 cb(CB_PORT_CHUNKS, 2 * PORT_GROUP * chunk_tiles, STAGE_TILE_BYTES, ttnn.bfloat16, used_port_crs),
+                cb(CB_ZERO, 1, STAGE_TILE_BYTES, ttnn.bfloat16, mm_crs),
             ]
             r, c = coord
             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program

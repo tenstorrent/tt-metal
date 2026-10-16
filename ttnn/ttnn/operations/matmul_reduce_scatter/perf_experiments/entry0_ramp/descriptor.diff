@@ -1,0 +1,108 @@
+--- baseline_descriptor.py.orig	2026-10-16 16:07:02.266169934 +0000
++++ mrs_ramp/matmul_reduce_scatter_program_descriptor.py	2026-10-16 17:07:04.814415330 +0000
+@@ -465,6 +465,60 @@
+     return 1, base
+
+
++RAMP = os.environ.get("MRS_RAMP", "0")  # entry0_ramp experiment knob (see ramp_plan)
++
++
++def ramp_plan(kb, nkb, spec=None, w_split=None):
++    """Entry-0 ramp: (windows, pieces, a_whole, ends[8]). spec: "0" (off) | "<R>[g][a][p][xW]": the first W (default 1)
++    K-windows of entry 0 travel in R k-pieces, equal ("4": kb/4 each) or geometric ("3g": kb/4, kb/4, kb/2); "a": the
++    whole A window travels with piece 0 (only W is ramped); "p": a sender issues its look-ahead reads after its last
++    send of a ramped step ("1p": no pieces, the look-ahead move only); "f": after piece 0's read barrier; "o": reads + look-ahead keep the unramped timing (only mcast rounds and pushes
++    are pieced); "d": compute keeps one DEST unit per window and waits for the pieces inside the first subblock;
++    "b" (with "o"): the W part-0 senders issue their look-ahead after their last send of the step | "e<k1>,<k2>,..[a][xW]": explicit piece ends."""
++    spec = RAMP if spec is None else spec
++    off = (0, 1, 0, [0] * 8)
++    if spec in ("", "0"):
++        return off
++    windows = 1
++    if "x" in spec:
++        spec, w = spec.split("x")
++        windows = int(w)
++    la_post = "p" in spec
++    la_first = "f" in spec
++    la_own = "o" in spec
++    dest = "d" in spec
++    bpost = "b" in spec
++    spec = spec.replace("p", "").replace("f", "").replace("o", "").replace("d", "").replace("b", "")
++    a_whole = spec.endswith("a")
++    spec = spec.rstrip("a")
++    if spec.startswith("w"):  # the pieces are the W window's two sender parts (no extra multicast round)
++        if w_split is None or w_split >= kb:
++            return off
++        ends = [w_split, kb]
++    elif spec.startswith("e"):
++        ends = [int(x) for x in spec[1:].split(",")]
++    else:
++        geo = spec.endswith("g")
++        R = int(spec.rstrip("g"))
++        R = min(R, kb)
++        if geo:
++            sizes = [max(1, kb >> (R - 1))] + [max(1, kb >> (R - i)) for i in range(1, R)]
++            sizes[-1] = kb - sum(sizes[:-1])
++        else:
++            sizes = [kb * (i + 1) // R - kb * i // R for i in range(R)]
++        ends = [sum(sizes[: i + 1]) for i in range(len(sizes))]
++    ends = [e for i, e in enumerate(ends) if e <= kb and (i == 0 or e > ends[i - 1])]
++    if not ends or ends[-1] != kb:
++        ends.append(kb)
++    R = len(ends)
++    windows = min(windows, nkb)
++    if R <= 1 and not (la_post or la_own):
++        return off
++    while windows * (R - 1) > 7:
++        windows -= 1
++    return (windows, R, int(a_whole) | (int(la_post) << 1) | (int(la_first) << 2) | (int(la_own) << 3) | (int(dest) << 4) | (int(bpost) << 5), ends + [0] * (8 - R))
++
++
+ def _place_ports(strip, gx, gy, L):
+     """{(d, l): logical core} in the transport strip, nearest the Ethernet row."""
+     cores = {}
+@@ -728,6 +782,7 @@
+         "strip": gd["strip"],
+         "half_split": half_split,
+         "waves": waves["n"],
++        "ramp": None,  # set by create_mesh_program_descriptor (needs the W part split)
+     }
+
+     staging_tiles = (DEPTH_HANDOFF + slots["fwd"] + slots["bwd"]) * P
+@@ -850,6 +905,11 @@
+     senders = int(os.environ.get("MRS_SENDERS", SENDERS_PER_LINE[regime]))  # env: perf experiments only
+     a_split = -(-win_m // 2) if senders >= 2 and win_m >= 2 else win_m  # m rows of A part 0
+     w_split = -(-kb // 2) if senders >= 2 and kb >= 2 else kb  # k rows of W part 0
++    ramp = ramp_plan(kb, nkb, w_split=w_split)
++    ramp_ct = [ramp[0], ramp[1], ramp[2]] + list(ramp[3])
++    import sys as _sys
++
++    _sys.modules[__package__]._LAST_PLAN["ramp"] = ramp
+     rA = int(resident and scatter_dim == -1)
+     rW = int(resident and scatter_dim == -2)
+     depth_a, depth_w = ctx["depths"]
+@@ -912,6 +972,7 @@
+             int(os.environ.get("MRS_W_READ_NOC", READ_NOCS[regime][1])),  # env: perf experiments only
+             W,
+         ]
++        + ramp_ct
+         + a_ct
+         + w_ct
+     )
+@@ -930,7 +991,7 @@
+         int(os.environ.get("MRS_FIN_ADD_FPU", FIN_ADD_FPU)),  # env: perf experiments only
+         W,
+         ctx["super_block"],  # K-windows a subblock accumulates in DEST per pack (entry 0 packs per window)
+-    ]
++    ] + ramp_ct
+     writer_ct = [CB_FINISHED, P, W, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, num_entries] + o_ct
+     max_port_cores = -(-n_cores // L)  # matmul cores one port serves (link(k) = k mod L)
+     port_ct = [
+@@ -952,6 +1013,7 @@
+     ablate_compute = [("SKIP_COMPUTE", "1"), ("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1")] if "compute" in ablate else []
+     ablate_reader = [("MRS_SKIP_DRAM", "1")] if "dram" in ablate else []
+     ablate_reader += [("MRS_SKIP_MCAST", "1")] if "mcast" in ablate else []
++    ablate_reader += [("MRS_DIAG", "1")] if os.environ.get("MRS_DIAG") else []  # entry0_ramp diagnosis zones
+     dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
+         processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
+     )

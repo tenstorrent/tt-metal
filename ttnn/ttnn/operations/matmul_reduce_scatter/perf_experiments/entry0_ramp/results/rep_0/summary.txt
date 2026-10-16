@@ -1,0 +1,8 @@
+case 0: replays 186.3 186.0 186.1  median 186.1 us
+case 1: replays 156.3 156.9 152.5  median 156.3 us
+case 2: replays 540.0 540.8 541.3  median 540.8 us
+case 3: replays 31.1 32.2 31.6  median 31.6 us
+case 4: replays 186.0 186.0 185.9  median 186.0 us
+case 5: replays 152.4 149.4 149.8  median 149.8 us
+case 6: replays 541.6 540.3 540.4  median 540.4 us
+case 7: replays 31.4 31.9 31.7  median 31.7 us

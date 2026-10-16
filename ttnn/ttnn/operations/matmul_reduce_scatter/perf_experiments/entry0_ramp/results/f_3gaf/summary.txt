@@ -1,0 +1,2 @@
+case 0: replays 120.0 119.9 120.1  median 120.0 us
+case 1: replays 120.0 119.8 119.8  median 119.8 us

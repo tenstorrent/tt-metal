@@ -1,0 +1,389 @@
+--- baseline_kernels/matmul_reduce_scatter_reader.cpp	2026-10-16 16:07:02.265609384 +0000
++++ mrs_ramp/kernels/matmul_reduce_scatter_reader.cpp	2026-10-16 17:07:04.814600063 +0000
+@@ -92,7 +92,39 @@
+     constexpr uint8_t w_read_noc = get_compile_time_arg_val(25);
+     constexpr bool two_read_nocs = a_read_noc != w_read_noc || a_read_noc != noc_index;
+     constexpr uint32_t num_waves = get_compile_time_arg_val(26);  // entries per block (entry e is wave e mod num_waves)
+-    constexpr auto a_args = TensorAccessorArgs<27>();
++    // ENTRY-0 RAMP (perf_experiments/entry0_ramp): the first ramp_windows K-windows of entry 0 travel in ramp_pieces
++    // contiguous k-pieces [ramp_end[p-1], ramp_end[p]) — read, multicast and pushed piece by piece, so compute starts
++    // on the first piece instead of the whole first window. A: per piece, one multicast round per m row of a part
++    // (the window is [m][k]), or (ramp_a_whole) the whole A window travels with piece 0. W: k rows are contiguous, so
++    // a piece is one round per W part it intersects. Push counts re-sum to the window (ring-wrap invariant intact).
++    constexpr uint32_t ramp_windows = get_compile_time_arg_val(27);
++    constexpr uint32_t ramp_pieces = get_compile_time_arg_val(28);
++    constexpr uint32_t ramp_flags = get_compile_time_arg_val(29);
++    constexpr bool ramp_a_whole = (ramp_flags & 1) != 0;
++    // la_post: in a ramped step a sender issues its look-ahead reads right after its LAST send of the step (not between
++    // the step's read barrier and its multicasts, where they delay the multicast by the read-issue time)
++    constexpr bool ramp_la_post = (ramp_flags & 2) != 0;
++    // la_first: in a ramped step a sender issues its look-ahead reads right after piece 0's read barrier (the unramped
++    // path's point for a sender whose reads all sit in piece 0); default: after the step's last piece barrier
++    constexpr bool ramp_la_first = (ramp_flags & 4) != 0;
++    // la_own: the reads and the look-ahead keep the unramped timing exactly (a sender waits for ALL its reads of the
++    // step, then issues its look-ahead, before the first piece); only the multicast rounds and the pushes are pieced
++    constexpr bool ramp_la_own = (ramp_flags & 8) != 0;
++    // la_bpost (with la_own): the W part-0 ("b") senders — the head of the W chain — issue their look-ahead after
++    // their last send of the ramped step instead (every other sender keeps the unramped point)
++    constexpr bool ramp_la_bpost = (ramp_flags & 32) != 0;
++    constexpr uint32_t ramp_end[8] = {
++        get_compile_time_arg_val(30),
++        get_compile_time_arg_val(31),
++        get_compile_time_arg_val(32),
++        get_compile_time_arg_val(33),
++        get_compile_time_arg_val(34),
++        get_compile_time_arg_val(35),
++        get_compile_time_arg_val(36),
++        get_compile_time_arg_val(37)};
++    static_assert(ramp_pieces >= 1 && ramp_pieces <= 8 && (ramp_windows == 0 || ramp_end[ramp_pieces - 1] == kb));
++    static_assert(ramp_windows <= num_k_blocks && ramp_windows * (ramp_pieces - 1) <= 7, "ramp trids 9..15");
++    constexpr auto a_args = TensorAccessorArgs<38>();
+     constexpr auto w_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
+     constexpr auto mc_a =
+         McastArgs<get_named_compile_time_arg_val("a_ct_offset"), get_named_compile_time_arg_val("a_rt_offset")>();
+@@ -193,7 +225,7 @@
+     auto a_moves = [&](uint32_t step) { return !(resident_a && step >= num_k_blocks); };
+     auto w_moves = [&](uint32_t step) { return !(resident_w && step >= num_k_blocks); };
+     // DRAM reads of the parts this core sends, into window `dst`
+-    auto issue_a = [&](uint32_t step, uint32_t dst) {
++    auto issue_a = [&](uint32_t step, uint32_t dst, uint32_t k_lo, uint32_t k_hi) {
+ #ifndef MRS_SKIP_DRAM  // perf ablation only
+         MaybeDeviceZoneScope("RD_DRAM");
+         const uint32_t wave = wave_of(step);
+@@ -208,7 +240,7 @@
+             const uint32_t i1_nom = part == 0 ? a_split : core_m;
+             const uint32_t i1 = i1_nom < m_valid_w ? i1_nom : m_valid_w;
+             for (uint32_t i = i0; i < i1; ++i) {
+-                for (uint32_t kk = 0; kk < kb; ++kk) {
++                for (uint32_t kk = k_lo; kk < k_hi; ++kk) {
+                     noc_async_read(
+                         a_acc.get_noc_addr(page0 + i * Kt + kk, 0, a_read_noc),
+                         dst + (i * kb + kk) * a_tile_bytes,
+@@ -219,7 +251,7 @@
+         }
+ #endif
+     };
+-    auto issue_w = [&](uint32_t step, uint32_t dst) {
++    auto issue_w = [&](uint32_t step, uint32_t dst, uint32_t k_lo, uint32_t k_hi) {
+ #ifndef MRS_SKIP_DRAM  // perf ablation only
+         MaybeDeviceZoneScope("RD_DRAM");
+         const uint32_t wave = wave_of(step);
+@@ -230,8 +262,8 @@
+             if (!w_sends[part]) {
+                 continue;
+             }
+-            const uint32_t k0 = part == 0 ? 0 : w_split;
+-            const uint32_t k1 = part == 0 ? w_split : kb;
++            const uint32_t k0 = (part == 0 ? 0 : w_split) > k_lo ? (part == 0 ? 0 : w_split) : k_lo;
++            const uint32_t k1 = (part == 0 ? w_split : kb) < k_hi ? (part == 0 ? w_split : kb) : k_hi;
+             for (uint32_t kk = k0; kk < k1; ++kk) {
+                 for (uint32_t j = 0; j < n_valid_w; ++j) {
+                     noc_async_read(
+@@ -259,6 +291,30 @@
+             noc_async_read_set_trid(trid, 1);
+         }
+     };
++    auto ramped = [&](uint32_t step) { return step < ramp_windows; };
++    auto piece_lo = [&](uint32_t p) { return p == 0 ? 0u : ramp_end[p - 1]; };
++    // piece trid: the last piece of a ramped step keeps the step's trid; earlier pieces use 9..15
++    auto piece_trid = [&](uint32_t step, uint32_t p) {
++        return p + 1 == ramp_pieces ? trid_of(step) : 9 + step * (ramp_pieces - 1) + p;
++    };
++    // a step's DRAM reads of one operand (is_a: A, whose ramp_a_whole pieces are [0, kb) then empty)
++    auto issue_step = [&](uint32_t step, uint32_t dst, bool is_a, auto&& issue) {
++        if (ramped(step)) {
++            for (uint32_t p = 0; p < ramp_pieces; ++p) {
++                set_trid(piece_trid(step, p));
++                if (is_a && ramp_a_whole) {
++                    if (p == 0) {
++                        issue(step, dst, 0, kb);
++                    }
++                } else {
++                    issue(step, dst, piece_lo(p), ramp_end[p]);
++                }
++            }
++        } else {
++            set_trid(trid_of(step));
++            issue(step, dst, 0, kb);
++        }
++    };
+     uint32_t a_slot = 0, w_slot = 0;      // window slot of the current step
+     uint32_t a_issued = 0, w_issued = 0;  // steps whose window is reserved (and, if moving, whose reads are issued)
+     // current step: reserve its window (blocking) and, as a sender of a moving step, issue its reads if no earlier
+@@ -272,15 +328,15 @@
+                                uint32_t slot,
+                                auto&& issue,
+                                uint32_t base,
+-                               uint32_t win_bytes) {
++                               uint32_t win_bytes,
++                               bool is_a) {
+         if (issued == s) {
+             while (!cb_pages_reservable_at_back(cb, win_tiles)) {
+                 try_land();  // compute may be waiting for an arrival credit before it frees this window
+             }
+             cb_reserve_back(cb, win_tiles);
+             if (sender && moves_s) {
+-                set_trid(trid_of(s));
+-                issue(s, base + slot * win_bytes);
++                issue_step(s, base + slot * win_bytes, is_a, issue);
+             }
+             issued = s + 1;
+         }
+@@ -296,7 +352,8 @@
+                           auto&& moves,
+                           auto&& issue,
+                           uint32_t base,
+-                          uint32_t win_bytes) {
++                          uint32_t win_bytes,
++                          bool is_a) {
+         if (!sender) {
+             return;
+         }
+@@ -308,8 +365,7 @@
+             cb_reserve_back(cb, ahead * win_tiles);  // free: returns immediately
+             uint32_t t_slot = slot + (issued - s);
+             t_slot = t_slot >= cap ? t_slot - cap : t_slot;
+-            set_trid(trid_of(issued));
+-            issue(issued, base + t_slot * win_bytes);
++            issue_step(issued, base + t_slot * win_bytes, is_a, issue);
+             ++issued;
+         }
+     };
+@@ -325,7 +381,8 @@
+             a_moves,
+             issue_a,
+             a_base,
+-            a_win_bytes);
++            a_win_bytes,
++            true);
+         look_ahead(
+             s,
+             w_sender,
+@@ -337,7 +394,126 @@
+             w_moves,
+             issue_w,
+             w_base,
+-            w_win_bytes);
++            w_win_bytes,
++            false);
++    };
++    // one multicast round of a family: sender sends [off, off + bytes) of the window; a receiver acks (unless its ack
++    // for this round was already sent early) and waits
++    uint32_t sends_left = 0;  // la_post: this core's sends still to issue in the current ramped step
++    uint32_t cur_step = 0;
++    auto round_a = [&](auto& tx, const auto& mc, uint32_t dst, uint32_t off, uint32_t bytes, bool acked) {
++        if (tx) {
++            --sends_left;
++#ifdef MRS_DIAG
++            MaybeDeviceZoneScope("DG_TXSEND");
++#endif
++            tx->template send<SourceL1Guard::CallerManaged>(dst + off, dst + off, bytes);
++            if ((ramp_la_post || (ramp_la_bpost && w_sends[0])) && sends_left == 0) {
++                look_ahead_both(cur_step);
++            }
++        } else {
++#ifdef MRS_DIAG
++            MaybeDeviceZoneScope("DG_RXWAIT");
++#endif
++            if (!acked) {
++                rx_ack(mc, noc);
++            }
++            rx_wait(mc, try_land);
++        }
++    };
++    // a ramped step (entry 0 only: both operands move): per piece, wait its reads (senders), multicast its A rounds
++    // (a, a2) then its W rounds (b, b2: the parts it intersects), and push its tiles. Piece 0's first A round was
++    // acked at reserve time (as the unramped path).
++    auto load_ramped = [&](uint32_t s) {
++        const uint32_t a_dst = a_base + a_slot * a_win_bytes;
++        const uint32_t w_dst = w_base + w_slot * w_win_bytes;
++        cur_step = s;
++        sends_left = 0;
++        for (uint32_t p = 0; p < ramp_pieces; ++p) {  // this core's send rounds in the step
++            if (!ramp_a_whole || p == 0) {
++                const uint32_t rows0 = ramp_a_whole ? 1 : a_split, rows1 = ramp_a_whole ? 1 : core_m - a_split;
++                sends_left += (a_sends[0] ? rows0 : 0) + (mc_a2.active && a_sends[1] ? rows1 : 0);
++            }
++            for (uint32_t part = 0; part < 2; ++part) {
++                const uint32_t q0 = part == 0 ? 0 : w_split, q1 = part == 0 ? w_split : kb;
++                if (w_sends[part] && q0 < ramp_end[p] && q1 > piece_lo(p)) {
++                    ++sends_left;
++                }
++            }
++        }
++        for (uint32_t p = 0; p < ramp_pieces; ++p) {
++            const uint32_t k_lo = piece_lo(p), k_hi = ramp_end[p];
++            if (p > 0 && (a_sender || w_sender) && !ramp_la_own) {
++#ifdef MRS_DIAG
++                MaybeDeviceZoneScope("DG_PBAR");
++#endif
++                noc_async_read_barrier_with_trid(piece_trid(s, p), 0);
++                if constexpr (two_read_nocs) {
++                    noc_async_read_barrier_with_trid(piece_trid(s, p), 1);
++                }
++            }
++            if (lookahead_after_barrier && !ramp_la_post && !ramp_la_own &&
++                p == (ramp_la_first ? 0 : ramp_pieces - 1)) {
++                look_ahead_both(s);  // after the step's last reads, as the unramped path
++            }
++#ifndef MRS_SKIP_MCAST
++            // A rounds. Both A families' first rounds of a piece are acked together at the piece start (piece 0: at
++            // reserve time), as the unramped path acks both A parts early, so a and a2 multicast concurrently
++            if (!ramp_a_whole && p > 0) {
++                if (a_rx) {
++                    rx_ack(mc_a, noc);
++                }
++                if constexpr (mc_a2.active) {
++                    if (a2_rx) {
++                        rx_ack(mc_a2, noc);
++                    }
++                }
++            }
++            if (!ramp_a_whole || p == 0) {
++                for (uint32_t part = 0; part < (mc_a2.active ? 2u : 1u); ++part) {
++                    const uint32_t i0 = part == 0 ? 0 : a_split;
++                    const uint32_t i1 = part == 0 ? a_split : core_m;
++                    if (ramp_a_whole || (k_lo == 0 && k_hi == kb)) {  // the whole part: one round (as unramped)
++                        if (part == 0) {
++                            round_a(a_tx, mc_a, a_dst, a_part_off[0], a_part_bytes[0], true);
++                        } else if constexpr (mc_a2.active) {
++                            round_a(a2_tx, mc_a2, a_dst, a_part_off[1], a_part_bytes[1], true);
++                        }
++                        continue;
++                    }
++                    for (uint32_t i = i0; i < i1; ++i) {
++                        const uint32_t off = (i * kb + k_lo) * a_tile_bytes;
++                        const uint32_t bytes = (k_hi - k_lo) * a_tile_bytes;
++                        const bool acked = i == i0;
++                        if (part == 0) {
++                            round_a(a_tx, mc_a, a_dst, off, bytes, acked);
++                        } else if constexpr (mc_a2.active) {
++                            round_a(a2_tx, mc_a2, a_dst, off, bytes, acked);
++                        }
++                    }
++                }
++            }
++            // W rounds: rows [k_lo, k_hi) of each part they intersect (fused ack + wait, after A)
++            for (uint32_t part = 0; part < (mc_b2.active ? 2u : 1u); ++part) {
++                const uint32_t q0 = part == 0 ? 0 : w_split, q1 = part == 0 ? w_split : kb;
++                const uint32_t r0 = q0 > k_lo ? q0 : k_lo, r1 = q1 < k_hi ? q1 : k_hi;
++                if (r0 >= r1) {
++                    continue;
++                }
++                const uint32_t off = r0 * core_n * w_tile_bytes, bytes = (r1 - r0) * core_n * w_tile_bytes;
++                if (part == 0) {
++                    round_a(w_tx, mc_b, w_dst, off, bytes, false);
++                } else if constexpr (mc_b2.active) {
++                    round_a(w2_tx, mc_b2, w_dst, off, bytes, false);
++                }
++            }
++#endif
++            const uint32_t a_tiles = ramp_a_whole ? (p == 0 ? a_window_tiles : 0) : core_m * (k_hi - k_lo);
++            if (a_tiles) {
++                cb_push_back(cb_act_k_window, a_tiles);
++            }
++            cb_push_back(cb_weight_k_window, (k_hi - k_lo) * core_n);
++        }
+     };
+     auto load_step = [&](uint32_t s) {
+         // Every earlier multicast has left L1 before this step issues any read: a slot read into at step s (for a
+@@ -356,7 +532,8 @@
+                 a_slot,
+                 issue_a,
+                 a_base,
+-                a_win_bytes);
++                a_win_bytes,
++                true);
+             reserve_current(
+                 s,
+                 w_sender,
+@@ -367,7 +544,8 @@
+                 w_slot,
+                 issue_w,
+                 w_base,
+-                w_win_bytes);
++                w_win_bytes,
++                false);
+             if (a_moves(s)) {
+                 // my A slot is reserved (free): ack the A senders now, before my own reads land, so no A multicast
+                 // waits for a W reader's DRAM barrier
+@@ -385,24 +563,63 @@
+             }
+             if ((a_sender && a_moves(s)) || (w_sender && w_moves(s))) {
+                 MaybeDeviceZoneScope("RD_BARRIER");
+-                noc_async_read_barrier_with_trid(trid_of(s), 0);  // this step's reads only
++                const uint32_t t = ramped(s) ? piece_trid(s, 0) : trid_of(s);  // this step's (first piece's) reads
++                noc_async_read_barrier_with_trid(t, 0);
+                 if constexpr (two_read_nocs) {
+-                    noc_async_read_barrier_with_trid(trid_of(s), 1);
++                    noc_async_read_barrier_with_trid(t, 1);
++                }
++                if (ramp_la_own && ramped(s)) {
++                    for (uint32_t p = 1; p < ramp_pieces; ++p) {
++                        noc_async_read_barrier_with_trid(piece_trid(s, p), 0);
++                        if constexpr (two_read_nocs) {
++                            noc_async_read_barrier_with_trid(piece_trid(s, p), 1);
++                        }
++                    }
+                 }
+             }
+-            if constexpr (lookahead_after_barrier) {
++            if (lookahead_after_barrier && (!ramped(s) || (ramp_la_own && !(ramp_la_bpost && w_sends[0])))) {
+                 // the current step's reads get the DRAM to themselves (the fill: every sender reads step 0 at once);
+                 // the look-ahead reads then overlap this step's multicast
+                 look_ahead_both(s);
+             }
+         }
+-        {
++        if (ramped(s)) {
++            MaybeDeviceZoneScope("RD_MCAST");
++            load_ramped(s);
++        } else {
+             MaybeDeviceZoneScope("RD_MCAST");
+             const uint32_t a_dst = a_base + a_slot * a_win_bytes;
+             const uint32_t w_dst = w_base + w_slot * w_win_bytes;
+             // CallerManaged: send() returns once the multicast is issued; the source slot is protected by the flush at
+             // the start of the next step (no read targets it before then).
+ #ifndef MRS_SKIP_MCAST  // perf ablation only
++#ifdef MRS_DIAG  // diagnosis only (entry0_ramp): per-family zones of step 0 (sender: send + its write barrier)
++            if (s == 0) {
++                auto tx_diag = [&](auto& tx, uint32_t dst, uint32_t off, uint32_t bytes, auto&& name_tag) {
++                    {
++                        MaybeDeviceZoneScope("DG_TXSEND");
++                        tx->template send<SourceL1Guard::CallerManaged>(dst + off, dst + off, bytes);
++                    }
++                    MaybeDeviceZoneScope("DG_TXDONE");
++                    noc_async_write_barrier();
++                };
++                auto rx_diag = [&](const auto& mc, bool ack) {
++                    MaybeDeviceZoneScope("DG_RXWAIT");
++                    if (ack) {
++                        rx_ack(mc, noc);
++                    }
++                    rx_wait(mc, try_land);
++                };
++                if (a_tx) { tx_diag(a_tx, a_dst, a_part_off[0], a_part_bytes[0], 0); } else { rx_diag(mc_a, false); }
++                if constexpr (mc_a2.active) {
++                    if (a2_tx) { tx_diag(a2_tx, a_dst, a_part_off[1], a_part_bytes[1], 0); } else { rx_diag(mc_a2, false); }
++                }
++                if (w_tx) { tx_diag(w_tx, w_dst, w_part_off[0], w_part_bytes[0], 0); } else { rx_diag(mc_b, true); }
++                if constexpr (mc_b2.active) {
++                    if (w2_tx) { tx_diag(w2_tx, w_dst, w_part_off[1], w_part_bytes[1], 0); } else { rx_diag(mc_b2, true); }
++                }
++            } else
++#endif
+             if (a_moves(s)) {
+                 if (a_tx) {
+                     a_tx->template send<SourceL1Guard::CallerManaged>(
+@@ -438,9 +655,9 @@
+                 }
+             }
+ #endif
++            cb_push_back(cb_act_k_window, a_window_tiles);
++            cb_push_back(cb_weight_k_window, w_window_tiles);
+         }
+-        cb_push_back(cb_act_k_window, a_window_tiles);
+-        cb_push_back(cb_weight_k_window, w_window_tiles);
+         a_slot = a_slot + 1 == a_cap_windows ? 0 : a_slot + 1;
+         w_slot = w_slot + 1 == w_cap_windows ? 0 : w_slot + 1;
+     };

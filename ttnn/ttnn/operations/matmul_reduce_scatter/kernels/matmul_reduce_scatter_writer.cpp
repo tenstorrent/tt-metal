@@ -24,7 +24,8 @@ void kernel_main() {
     constexpr uint32_t depth_handoff = get_compile_time_arg_val(4);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t num_entries = get_compile_time_arg_val(6);  // G x num_waves
-    constexpr auto out_args = TensorAccessorArgs<7>();
+    constexpr uint32_t cb_zero = get_compile_time_arg_val(7);  // compute's fused-finish zero tile (filled here once)
+    constexpr auto out_args = TensorAccessorArgs<8>();
     constexpr uint32_t KIND_FWD = 0, KIND_BWD = 1, KIND_FIN = 2;
     constexpr uint32_t consumed_fwd_id = 0, consumed_bwd_id = 1;
 
@@ -43,6 +44,14 @@ void kernel_main() {
         return valid <= off ? 0u : (valid - off < ext ? valid - off : ext);
     };
 
+    {  // one bf16 zero tile: compute's fused finish adds the hold as DEST += hold + 0 (never popped)
+        cb_reserve_back(cb_zero, 1);
+        volatile tt_l1_ptr uint32_t* z = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_zero));
+        for (uint32_t i = 0; i < tile_bytes / 4; ++i) {
+            z[i] = 0;
+        }
+        cb_push_back(cb_zero, 1);
+    }
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
     volatile tt_l1_ptr uint32_t* consumed_fwd =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(consumed_fwd_id));
