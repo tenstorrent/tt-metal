@@ -24,7 +24,7 @@ import ttml
 import ttnn
 from safetensors.numpy import save_file
 from ttml.common.schedulers import WarmupConstantScheduler, WarmupCosineScheduler
-from ttml.common.utils import create_optimizer, no_grad
+from ttml.common.utils import create_optimizer, no_grad, validate_clip_grad_norm
 
 from .callback import TrainerCallback
 
@@ -961,7 +961,8 @@ class GRPOTrainer:
         self.model = tt_model
 
         optimizer = create_optimizer(tt_model, self.optimizer_dict)
-        scheduler = None
+        if grpo_cfg.use_clip_grad_norm:
+            validate_clip_grad_norm(tt_model)
 
         # Device-parallelism state. The trainer currently only handles either
         # single-device or DDP; tensor parallelism is not supported here. We
@@ -1329,15 +1330,15 @@ class GRPOTrainer:
         _deallocate_tensors([nlog_new, mask_new, adv_ttml, loss])
 
     def _apply_gradients(self) -> None:
-        """Grad sync + optional grad clip + ``on_before_optimizer_step`` +
+        """Grad sync + ``on_before_optimizer_step`` + optional grad clip +
         ``optimizer.step()`` + ``zero_grad`` + LR scheduler step.
         Writes ``lr`` and per-callback timings to ``self.metrics``.
 
         Ordering:
           1. Grad sync (FSDP / parallelism-context DDP / named-mesh DDP).
-          2. ``ttml.core.clip_grad_norm`` AFTER grad sync so every rank clips
+          2. Callback ``on_before_optimizer_step`` fires (sees unclipped grads).
+          3. ``ttml.core.clip_grad_norm`` AFTER grad sync so every rank clips
              the identical reduced grads. Guarded by ``config.use_clip_grad_norm``.
-          3. Callback ``on_before_optimizer_step`` fires.
           4. ``optimizer.step()`` + ``zero_grad``.
           5. ``self._lr_scheduler.step()`` sets the next step's LR.
         """
@@ -1358,14 +1359,14 @@ class GRPOTrainer:
             # this reduction.
             ttml.sync_gradients(self.model.parameters(), axis_names=("dp",))
 
+        for cb in self.callbacks:
+            self._time_callback(cb, "on_before_optimizer_step", self)
+
         if self.config.use_clip_grad_norm:
             ttml.core.clip_grad_norm(
                 self.model.parameters(),
                 self.config.clip_grad_norm_max_norm,
             )
-
-        for cb in self.callbacks:
-            self._time_callback(cb, "on_before_optimizer_step", self)
 
         self.metrics["lr"] = self._optimizer.get_lr()
         self._optimizer.step()
