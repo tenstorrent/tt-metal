@@ -295,7 +295,7 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
     }
     const bool inject_unannounced_failure = retain_test == "1";
 
-    // The host owns both clocks: the device ABI no longer carries either.
+    // The host owns both clocks: the device ABI carries neither.
     const uint64_t tensix_hz = expected_aiclk_hz;
     const uint64_t mtime_hz = x280::harness::measurement::kX280MtimeHz;
 

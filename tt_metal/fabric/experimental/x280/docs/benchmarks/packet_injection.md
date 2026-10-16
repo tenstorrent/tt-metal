@@ -1,6 +1,6 @@
 # Packet Injection Characterization
 
-The 2026-09-23 rerun includes both throughput families and all four latency/backpressure variants.
+The 40-configuration rerun includes both throughput families and all four latency/backpressure variants.
 Its worker records retain native CPU measurements where the interval is local.
 Current schema-2 records retain raw wall ticks and per-run AICLK evidence for
 offline conversion. Historical captures below retain their original schemas
@@ -343,7 +343,7 @@ its run by `run_value`, then carries `start_event` (`release_issued`),
 50 MHz `x280_mtime` domain rather than the run's AICLK evidence. The interval and the P*N
 headers and bytes it covers are derived offline from those. On a failed run or an invalid
 interval `aggregate_error` is `run_failed` or `invalid_interval`, and the raw endpoints are
-kept. Run records at PI schema 5 or earlier, such as the 2026-09-23 campaign's, predate the
+kept. Run records at PI schema 5 or earlier predate the
 aggregate record; the frozen tabulator (`docs/measurement.md` "Collection and reproduction")
 reads them, and the live campaign validator requires the aggregate record.
 
@@ -352,7 +352,7 @@ placement, memory budgets and cleanup status. Both run records carry `released_g
 `released_endpoints`, the release X280 executed (`pi_run_result_t`): the group's receiver
 count, zero for none, and the unicast endpoint count. The run record also carries
 `release_guards`, the guard words armed (zero for a unicast release), and
-`release_guards_overwritten`. Records written before 2026-10-01 carry
+`release_guards_overwritten`. Earlier records carry
 `release_multicast_safe` instead, the flag the host passed: 1 released tiles that filled their
 bounding box by one multicast, 0 released one unicast per tile.
 
@@ -779,7 +779,8 @@ each run the shared `Producer` against their own SPSC ring into the one shared
 X280 consumer image (the throughput variant). There is no second single-writer
 implementation: `writers=1` is the same loop, protocol and result schema as every
 larger point. § Measured operation below states what is timed, and § Credit-protocol cost
-compares it with the single-writer prototype it replaced.
+compares its per-header cost with that of a single-writer prototype that never
+waits for credit.
 
 **Axes.** The GTest executable `x280_packet_injection_erisc_to_x280_header`
 registers `Axes/PacketInjectionEriscToX280Header.Run/<writers>_b<B>`:
@@ -907,7 +908,7 @@ env TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD" \
   --gtest_filter='Axes/PacketInjectionEriscToX280Header.Run/writers2_b1'
 ```
 
-**Silicon (2026-09-30).** A Blackhole p150b, tile 0 at
+**Silicon.** A Blackhole p150b, tile 0 at
 1750 MHz with 14 LIM ways, exposes 8 inactive IDLE_ETH cores, so `writers_all`
 is 8 there and `writers8` duplicates it. Every point passed at N=1024, S=16, C=1,
 K=1 with W calibrated, every resident slot and guard byte intact, and clean AICLK
@@ -934,7 +935,7 @@ ticks, and one writer's wall delta over the aggregate interval implies about
 1.35 GHz, matching the AICLK evidence. The scaling campaign below re-ran these
 nine points and reproduced them within 0.09%.
 
-**Scaling campaign (2026-09-30).** Card 0 as above, three runs per point through
+**Scaling campaign.** Card 0 as above, three runs per point through
 `run_characterization.py`.
 Rates are X280 `mtime` aggregates, mean [min, max] over the runs; stall
 episodes, counter writes and wall ticks are per writer. W is calibrated per point.
@@ -988,8 +989,8 @@ publication paces it, an attribution from the response to B rather than from
 the counters. C=8, K=16 is the edge of the S=16 grid, so where larger visits and
 credit batches stop helping is not measured.
 
-With the credit posted through the counter window (mode 2), as built now, the
-2026-10-15 whole-suite campaign reads the same S=16, B=1 grid differently: the
+With the credit posted through the counter window (mode 2), as built now, a
+whole-suite run reads the same S=16, B=1 grid differently: the
 visit cap K is the lever and C is nearly flat at fixed K. Across all writers,
 (C, K) = (1, 16), (4, 16) and (8, 16) run 19.622, 19.660 and 19.580 M headers/s,
 within 0.4%, and (1, 8), (4, 8) and (8, 8) run 16.137, 16.458 and 16.362, within
@@ -998,10 +999,10 @@ per visit, while one writer runs 2.576 M headers/s with no stall episode, so it
 is writer-bound. C=1, K=16 still writes one credit per header and costs 51.0 ns
 per header, so a posted credit costs at most about 89 X280 cycles.
 
-The first `writers1` attempt, on 2026-09-29 against firmware that still released
-each tile through a one-tile multicast group, failed at the release
-(`PI_ERROR_STOPPED` from the producer, `PI_ERROR_PEER_FAILED` from X280): a
-one-tile broadcast does not reach an Ethernet tile.
+X280 releases every Ethernet writer by its own endpoint, and the suite fails a
+run whose release used a group: a broadcast, even a one-tile one, does not reach
+an Ethernet tile, and such a release fails (`PI_ERROR_STOPPED` from the
+producer, `PI_ERROR_PEER_FAILED` from X280).
 
 ### Measured operation
 
@@ -1036,7 +1037,7 @@ prototype's, is Fabric 2.0 ID 15.
 The prototype never waits on its consumer: its X280 validation pass runs after
 the ERISC batch ends. The unified member's writer waits for ring credit from the
 X280 consumer, so the difference between the two per-header costs is the cost of
-the credit protocol at the unified member's settings. On 2026-09-30 the
+the credit protocol at the unified member's settings. The
 prototype's `DRAINED` point took 420.17 ERISC wall ticks per header and
 `writers1_b1` (S=16, C=1, K=1) 973.4, so the credit protocol costs 553.2 ticks per
 header there. 992 of 1,024 measured headers entered the credit wait: the writer
@@ -1073,21 +1074,6 @@ consumer counted the same traffic independently, per worker, and every run's
 Those measurements predate schema 3 and do not qualify the core-sync boundary.
 They remain the throughput, latency, and backpressure baseline; their five binaries
 were byte-identical to a clean build of the schema-2 commit that recorded them.
-
-On 2026-09-22, schema 3 was exercised on Blackhole device 0 against the
-tt-metal of the time. Both BRISC and NCRISC compiled for all five variants.
-All five variants then completed on silicon. Focused synchronization runs covered
-one BRISC tile, one paired BRISC/NCRISC tile, a dense four-tile row released as
-one rectangle, two sparse tiles released as ordered singletons, and B=4/C=3/K=5
-warmup and measured traffic. A producer rejected before arrival published its
-original `PI_ERROR_BAD_ARGS`; host polling observed `PI_READY_FAILED`, issued
-runtime STOP, and the X280 recovery release completed collection and cleanup.
-The opt-in unannounced-failure case rejected the producer's peer coordinate,
-left completion at `PI_READY_NONE`, reported `data_quiescent=0`, and entered
-`retain_failed_run()` after the recovery grace period; the reserved device was
-then reset and reprovisioned.
-These runs used an uncommitted working tree, so they
-qualify the implementation behavior but are not reproducible commit evidence.
 
 **L1 page order is confirmed ordered rather than assumed.** The strongest case is
 T=4 paired, where eight producers occupy eight pages and the host's per-page

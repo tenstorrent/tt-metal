@@ -265,7 +265,7 @@ private:
          * W6 still follows W5's acknowledgement, so it is issued only after W5
          * was accepted at the L2CPU: that W5 is then visible to X280 loads from
          * LIM rests on the L2CPU applying accepted writes to LIM in arrival
-         * order, an owner assumption (docs/measurement.md "Unconfirmed hardware
+         * order, assumed (docs/measurement.md "Unconfirmed hardware
          * assumptions", item 2),
          * since NoC/Counters.md defines the ack for "L1 or register space"
          * only. */

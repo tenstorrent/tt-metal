@@ -2,8 +2,8 @@
 
 The maintained P2P, transport-bandwidth, pipeline-stage, packet-injection,
 core-sync and eth_credit suites retain native measurements. Legacy experiments are excluded.
-`characterization_manifest.json` selects 246 configurations: 28 of the 40 of the
-2026-09-23 campaign (39 evidenced prior configurations and the explicitly
+`characterization_manifest.json` selects 246 configurations: 28 of the 40 of an
+earlier campaign (39 evidenced prior configurations and the explicitly
 authorized first fixed-4×4 core-sync run, less its ten DRISC and idle-ERISC
 `pipeline_stage` configurations and its two X280 `route_forward` COPY ones), the nine
 `packet_injection/erisc_to_x280_header` points at C=1, K=1 (writers 1, 2, 4, 8
@@ -11,7 +11,7 @@ and all at B=1; B=4 and B=8 at writers 1 and 4), twelve points of its
 consumer-settings sweep (writers 1 and all at B=1 for six further (C, K)
 settings), eight more at the selected C=8, K=16 (the rest of that writer curve
 and B set, and N=4096 at writers all), the Tensix `brisc.T1` throughput
-point at C=8, K=16, 63 sweep points, all measured in the 2026-10-14 whole-suite campaign (the six
+point at C=8, K=16, 63 sweep points, all measured in a whole-suite run (the six
 `packet.throughput.{brisc,paired}.T{2,4,8}` load points, 12
 `packet.throughput.{brisc,paired}.T4.{c4k8,c8k16,s4,s8,s64,b4}` capacity points
 at the T=4 load knee, each changing one of C/K, S or B from its T4 point, 16
@@ -48,9 +48,9 @@ ERISC point the device cannot host -- more writers than inactive Ethernet cores,
 none at all, or `IDLE_ETH` not enabled -- is an availability skip, and like every
 skip it fails coverage.
 Warmup/sample counts come from those configurations, except that one omitting
-an AICLK-gated suite's warm-up leaves it to calibration (below). The 2026-09-23 campaign
+an AICLK-gated suite's warm-up leaves it to calibration (below). The earlier 40-configuration campaign
 collected one run each, with separately retained diagnostic attempts; the
-2026-09-30 ERISC header-ingress campaigns collected three runs of each ERISC
+ERISC header-ingress campaigns collected three runs of each ERISC
 point and one of each Tensix cross-check.
 
 | Interval | Wall measurement | Native CPU measurement |
@@ -323,8 +323,8 @@ DRISC counter stall, gating and reset behaviour is not established.
 
 The results rely on the Blackhole behaviours below, which no document read
 confirms; the code relying on each names it. Items keep fixed numbers, which the code
-cites; numbers absent from the list are not assumptions this tree relies on. Items marked as owner assumptions or decisions are taken as given
-(owner, 2026-10-06) on the evidence named, items marked closed need no assumption, and
+cites; numbers absent from the list are not assumptions this tree relies on. Items marked assumed or chosen are taken as given
+on the evidence named, items marked closed need no assumption, and
 the others are open.
 
 - Item 1: a TT-link MMIO write lands only after an earlier TT-link L1 write on
@@ -332,7 +332,7 @@ the others are open.
   slot). Wormhole `EthernetTile/EthernetTxRx.md` "RX Queue Memory Ordering"
   orders no packets of different kinds; Blackhole's RX counters move before L1
   commit ("RX Queue Memory Map").
-- Item 2, owner assumption: publication into LIM is ordered by the writer.
+- Item 2, assumed: publication into LIM is ordered by the writer.
   Each publisher writes its data, waits for the write acks, then writes the
   flag, so the flag is issued only after the data writes were accepted at the
   L2CPU (eth_credit W6 after W5, packet_injection's produced counter,
@@ -342,34 +342,32 @@ the others are open.
   Front Port and L3 ordering are undocumented. No document says the ack waits
   for the LIM write; `NoC/Counters.md` defines the ack for "L1 or register
   space".
-- Item 3, owner assumption: a store through a mode-1 window stalls at the store
+- Item 3, assumed: a store through a mode-1 window stalls at the store
   until BRESP, which follows its NoC write's completion (the store-to-BRESP
   TURN, eth_credit's W1 before W2). No X280 document
   says the store, rather than a later fence, waits for BRESP. Evidence: the
   X280 TURN falls from 440 to 76 ticks on a tile whose completion blocking a
   mode-3 store disabled.
-- Item 5, owner decision: `rdcycle` counts the cycles the hart executes and
+- Item 5, chosen: `rdcycle` counts the cycles the hart executes and
   does not advance while the hart stalls on memory, a NoC transaction or a
   BRESP, so every X280 CPU-cycle column is executed cycles, not elapsed time;
   elapsed time and timeouts use `mtime`. Evidence: the SiFive X280 MC Manual
-  21G3.04.00 §3.10.2.1 ("clock cycles the hart has executed"), and a
-  2026-06-25 migration-worker 16 MiB READ on which rdcycle trailed mtime by
-  about 50 ms. The transport_bandwidth store-bound loops show cpu/wall = 35.000 at
+  21G3.04.00 §3.10.2.1 ("clock cycles the hart has executed"). The transport_bandwidth store-bound loops show cpu/wall = 35.000 at
   1750 MHz, so those loops did not stall the hart measurably. The manual's
   §5.13 says the cycle counter advances at `rtc_clock`, which the in-tree PLL
   measurement (rdcycle about 35 times mtime at 1750 MHz) contradicts.
-- Item 6, owner assumption: CLINT `mtime` counts at 50 MHz independent of the
+- Item 6, assumed: CLINT `mtime` counts at 50 MHz independent of the
   X280 PLL (every X280 wall interval and the PLL measurement,
   `PI_ASSUMED_MTIME_HZ`). Manual §5.13.1 defers the `rtc_toggle` rate to an
   X280 MC User Guide. Evidence: a PLL sweep fits X280 TURN as a fixed cycle
   count plus a clock-independent time in `mtime` ticks.
-- Item 8, owner assumption: a write in flight through an L2CPU TLB window lands
+- Item 8, assumed: a write in flight through an L2CPU TLB window lands
   at its old target when the window is cleared (core_sync release).
   No L2CPU document states it. Evidence:
   `WormholeB0/PCIExpressTile/TLBs.md` states it for Wormhole PCIe TLBs, and every
   core_sync multicast release passes on silicon with no lost write, as did every
   pipeline_stage four-window clear recorded before the move into tt-metal.
-- Item 9, owner assumption: an 8-byte LIM slot is one ECC granule with no
+- Item 9, assumed: an 8-byte LIM slot is one ECC granule with no
   read-modify-write into its neighbours (core_sync slots). Manual §14.2.6 gives
   L3 ECC as SECDED with no width; `L2CPUTile/Caches.md` gives none. Evidence:
   manual §14.4.8 gives a 64+8-bit granule as an example, and §14.2.1 places LIM
@@ -384,20 +382,19 @@ the others are open.
   `BabyRISCV/MemoryOrdering.md` "L0 data cache" documents it for Tensix only;
   the poll invalidates on every pass on all three targets, which is correct
   either way.
-- Item 14, owner assumption: an X280 load observes an aligned NoC write of
+- Item 14, assumed: an X280 load observes an aligned NoC write of
   16 B or less into LIM whole (`PI_ASSUMED_COUNTER_ATOMICITY`, the 4-byte
   produced counter). No document covers LIM. Evidence: such a write lies in one
   atomic 16 B NoC unit (`WormholeB0/NoC/Ordering.md`, stated for L1), which
   the NOC2AXI slave writes as one AXI beat.
 - Item 15: samples a hart copies from the pinned cache way into LIM's export
   region are host-visible (`PI_ASSUMED_PIN_EXPORT`). No document covers it.
-- Item 20, owner assumption: a store through a mode-2 (Posted Writes) window
+- Item 20, assumed: a store through a mode-2 (Posted Writes) window
   gets an early BRESP and returns before its NoC write lands, and a later read
   through the window can pass a write still in flight (transport_bandwidth
   `x280_to_tensix` `RETIRED`). `L2CPUTile/TLBWindows.md`
-  names the mode only. Evidence: hardware review 2026-09-03 ("returns a fake
-  AXI BRESP quickly").
-- Item 21, owner assumption (2026-10-13): successive stores of one hart to one
+  names the mode only; the early BRESP is not documented.
+- Item 21, assumed: successive stores of one hart to one
   address through one counter window (`kernels/shared/x280_counter_window.h`:
   mode 2, static VC 2, unicast) land at the destination in program order
   (packet_injection's credit, `PI_ASSUMED_STATIC_VC_ORDER`; eth_credit's W2 and

@@ -40,7 +40,7 @@ static inline noc_window_status_t x280_counter_window_open(uint32_t slot, x280_n
  * accepted, not delivered, and cannot fail; only the peer observes delivery.
  *
  * Successive stores to one address through one counter window land in program
- * order (owner assumption, docs/measurement.md item 21). Nothing orders them
+ * order (assumed, docs/measurement.md item 21). Nothing orders them
  * against stores to other addresses or through other windows, so a counter
  * that covers data needs that data complete first. A misaimed window loses the
  * write or hangs the hart.

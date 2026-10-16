@@ -1199,9 +1199,9 @@ an inherited filter, `tt-smi -r <N>` for a device outside it prints
   `l2cpu_risc_reset_n`, the per-cluster reset the table describes — the table
   calls bits 0–3 reserved, and the read-modify-write preserves them either way
   (`reset_unit.L2CPU_RESET`). And the one-way property is specifically that the cluster bits
-  cannot put cores *back* into reset — "the core resets can be used to release
-  the x280 cores from reset (after a tile reset), but cannot be used to put the
-  cores back into reset". Nothing in this
+  can release the cores from reset but cannot put them *back* into reset: the
+  hardware-bug caution under `BlackholeA0/L2CPUTile/README.md` "Reset" says a
+  running hart returns to reset only through a whole-ASIC reset. Nothing in this
   tree ever clears a bit, so the NOC hang that clearing one causes is out of reach.
 - There is no public `X280Hart`. Per-hart protocol records remain
   internal tile state. A public hart becomes justified only by separately

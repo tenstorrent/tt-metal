@@ -217,7 +217,7 @@ TEST(EthCreditAbi, OnlyDoneIsAMeasurementAndEveryFailureIsTerminal) {
     }
 }
 
-// eth_credit ABI migration spec §1: no schema field; every record begins
+// docs/benchmarks/eth_credit.md § Result block: no schema field; every record begins
 // {magic, kernel_id}; the result block keeps its other offsets and 256 bytes.
 TEST(EthCreditAbi, ResultBlockHasFixedSizeAndHeaderFirst) {
     EXPECT_EQ(sizeof(ec_result_t), EC_RESULT_BYTES);
@@ -834,7 +834,7 @@ TEST(EthCreditFit, EachWindowReportsItselfAndExactBytesOver) {
 }
 
 // ---------------------------------------------------------------------------
-// Window placement (ABI migration spec §3): compute_layout() and admit()
+// Window placement (docs/benchmarks/eth_credit.md § Host sequence): compute_layout() and admit()
 // refuse any window whose placement cannot end at or below 2^32, without
 // wrapping, as EC_CHECK_CAPACITY on the window's base constraint
 // (EC_CONSTRAINT_ETH_BASE for cap.eth, EC_CONSTRAINT_LIM_BASE for cap.lim).
@@ -1125,7 +1125,7 @@ TEST(EthCreditAdmission, StallBudgetConvertsOnEachRolesClock) {
 }
 
 // ---------------------------------------------------------------------------
-// Arguments (ABI migration spec §2: E0 and E1 share one 32-word prefix,
+// Arguments (docs/benchmarks/eth_credit.md § Arguments: E0 and E1 share one 32-word prefix,
 // `.erisc`, first in both records; runtime word i is the record's i-th uint32
 // in declaration order; one host function derives every role from one layout).
 // ---------------------------------------------------------------------------
@@ -1722,8 +1722,8 @@ TEST(EthCreditArgChecksFwdTargets, CoordinatesAndAreasAtTheirEdges) {
 
 // §Argument checks, prefix: identity, the shape against the expected one, and
 // the scalar controls, each BAD_PARAM/ARGS. Checked through both roles, since
-// they share the prefix (ABI migration spec §2); each case mutates the shared
-// ec_erisc_args_t field by name. The role follows from kernel_id (spec §3), so
+// they share the prefix (docs/benchmarks/eth_credit.md § Arguments); each case mutates the shared
+// ec_erisc_args_t field by name. The role follows from kernel_id (same section), so
 // a record carrying E1's, E0's or any forwarder's id of either chip is refused
 // by the other role, and a correct record is refused against another expected
 // shape. The unmutated record is accepted, so each refusal is the case's doing.
@@ -1983,7 +1983,7 @@ TEST(EthCreditArgChecksPrefix, PreviousLayoutRecordIsRefusedAsTheAbiMismatch) {
 }
 
 // §Argument checks, prefix: stream ids 1..31, else STREAM_ID/STREAM with value
-// = the id and bound = its index p (ABI migration spec §3). E0 also checks
+// = the id and bound = its index p (docs/benchmarks/eth_credit.md § Arguments). E0 also checks
 // local_stream_id. A repeat within the first P entries of erisc.stream_id
 // (both roles) or of E0's local_stream_id is STREAM_ID/STREAM with value = the
 // repeated id and bound = the earlier index holding it. Every ordered pair

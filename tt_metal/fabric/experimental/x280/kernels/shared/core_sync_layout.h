@@ -5,7 +5,7 @@
 // kernels/shared/core_sync_layout.h -- Slot layout and tokens for core_sync_barrier.
 //
 // Each slot is 8 bytes, taken to be one LIM ECC granule, so no two writers share
-// a granule. The 8-byte granule width is an owner assumption (docs/measurement.md
+// a granule. The 8-byte granule width is assumed (docs/measurement.md
 // "Unconfirmed hardware assumptions", item 9): the SiFive X280 MC Manual
 // 21G3.04.00 §14.2.6 gives L3 ECC as SECDED with no width. The documentation
 // does not say whether a sub-granule write becomes a read-modify-write, so a

@@ -197,19 +197,19 @@ typedef enum {
  * in every run. Item numbers are those of docs/measurement.md "Unconfirmed hardware assumptions". */
 /** A write issued after the data writes' acks reaches X280 loads from LIM after
  * the data, because the L2CPU applies accepted writes to LIM in arrival order:
- * owner assumption (item 2); NoC/Counters.md defines the ack for L1 and
+ * assumed (item 2); NoC/Counters.md defines the ack for L1 and
  * registers only. */
 #define PI_ASSUMED_INBOUND (1u << 0)
 /** An X280 load observes an aligned NoC write of 16 B or less into LIM, such as
- * the 4-byte counter, whole: owner assumption (item 14);
+ * the 4-byte counter, whole: assumed (item 14);
  * WormholeB0/NoC/Ordering.md's atomic units are for L1. */
 #define PI_ASSUMED_COUNTER_ATOMICITY (1u << 1)
 /** A store through a mode-1 window returns only after its NoC write completes:
- * owner assumption (item 3); no X280 document says the store, not a later fence, waits.
+ * assumed (item 3); no X280 document says the store, not a later fence, waits.
  * No packet-injection store relies on it, so the host does not report it; the
  * bit stays reserved so a recorded mask keeps its meaning. */
 #define PI_ASSUMED_BRIDGE_COMPLETION (1u << 2)
-/** CLINT mtime counts at X280_MTIME_HZ: owner assumption (item 6). */
+/** CLINT mtime counts at X280_MTIME_HZ: assumed (item 6). */
 #define PI_ASSUMED_MTIME_HZ (1u << 3)
 /** Samples copied from the pinned cache way into the export region are
  * host-visible: open (item 15). */
@@ -218,7 +218,7 @@ typedef enum {
  * documented (item 16; TensixTile/DebugTimestamper.md, "The 64-bit counter"). */
 #define PI_ASSUMED_LOCAL_TIMER_ORDER (1u << 5)
 /** Successive credit stores to one producer's consumed mirror, through one
- * posted static-VC counter window, land in program order: owner assumption
+ * posted static-VC counter window, land in program order: assumed
  * (item 21). */
 #define PI_ASSUMED_STATIC_VC_ORDER (1u << 6)
 
