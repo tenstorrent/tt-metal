@@ -111,7 +111,8 @@ constexpr const char* kPlanCapsViolation = "tile-row plan exceeds its size caps"
 // Native reshapes one output tile per core per round and reads every source tile it touches; tile rows reads each
 // source once per batch. Tile rows wins on any of three clauses: native reads at least 8x what the batches read,
 // the batches save at least 16 reads per output tile, or every output tile is whole face halves of its sources.
-// Both thresholds are judged on the full plan. Fitted on Blackhole.
+// Both thresholds are judged on the full plan. Fitted on Blackhole; Wormhole cross-arch CI shows no routed loss at
+// this cut.
 constexpr uint64_t kTileRowsMinReadCut = 8;
 // Source reads tile rows saves per output tile that pay for copying its rows one run at a time, whatever the ratio.
 // Width changes below the read cut save at most 6 and lose; a merge of a few heads gathers each output tile from 32
