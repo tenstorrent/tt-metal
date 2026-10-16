@@ -9,7 +9,7 @@ The residual stream is replicated on every chip of the row (each sub-block ends 
 import ttnn
 
 from .attention import TtMiMoAttention
-from .common import TILE, as_weight, cache_name, compute_config
+from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
 from .moe import TtMiMoMoE
 
 
@@ -81,22 +81,50 @@ class TtMiMoDenseMLP:
             g = weights["gate_proj"].T.contiguous()
             u = weights["up_proj"].T.contiguous()
             d = weights["down_proj"].T.contiguous()
-        self.w_gate = as_weight(g, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, prefix, "w_gate"))
-        self.w_up = as_weight(u, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, prefix, "w_up"))
-        self.w_down = as_weight(d, plan, plan.shard(-2), weight_dtype, cache_name(cache_dir, prefix, "w_down"))
+        w_gate = as_weight(g, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, prefix, "w_gate"))
+        w_up = as_weight(u, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, prefix, "w_up"))
+        w_down = as_weight(d, plan, plan.shard(-2), weight_dtype, cache_name(cache_dir, prefix, "w_down"))
         self.config = compute_config(ttnn.MathFidelity.HiFi2)
+        # Decode reads each weight once per step: DRAM-sharded matmuls (one reader core per bank) run at ~2x the
+        # bandwidth of the interleaved linears here (gate / up 74 us -> ~34 us each). The weights are resharded once
+        # on device; prefill uses interleaved copies made per call.
+        hidden, inter = w_gate.shape[-2], w_gate.shape[-1]
+        self.up_mm = DramShardedMatmul(plan, hidden, inter, compute_kernel_config=self.config)
+        self.down_mm = DramShardedMatmul(plan, inter, hidden, compute_kernel_config=self.config)
+        assert self.up_mm.n_pad == inter and self.down_mm.n_pad == hidden
+        self.w_gate = ttnn.to_memory_config(w_gate, self.up_mm.weight_memory_config)
+        self.w_up = ttnn.to_memory_config(w_up, self.up_mm.weight_memory_config)
+        self.w_down = ttnn.to_memory_config(w_down, self.down_mm.weight_memory_config)
+        for w in (w_gate, w_up, w_down):
+            w.deallocate(True)
 
     def forward(self, x, token_mask=None):
+        if x.shape[-2] == TILE:
+            gate = self.up_mm(x, self.w_gate)
+            up = self.up_mm(x, self.w_up)
+            act = ttnn.mul(
+                gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            gate.deallocate(True)
+            up.deallocate(True)
+            out = self.down_mm(act, self.w_down)
+            act.deallocate(True)
+            return self.plan.all_reduce(out)
         kw = dict(dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.config)
-        gate = ttnn.linear(x, self.w_gate, **kw)
-        up = ttnn.linear(x, self.w_up, **kw)
+        w_gate, w_up, w_down = (
+            ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG) for w in (self.w_gate, self.w_up, self.w_down)
+        )
+        gate = ttnn.linear(x, w_gate, **kw)
+        up = ttnn.linear(x, w_up, **kw)
         act = ttnn.mul(
             gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         gate.deallocate(True)
         up.deallocate(True)
-        out = ttnn.linear(act, self.w_down, **kw)
+        out = ttnn.linear(act, w_down, **kw)
         act.deallocate(True)
+        for w in (w_gate, w_up, w_down):
+            w.deallocate(True)
         return self.plan.all_reduce(out)
 
 
