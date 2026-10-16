@@ -70,6 +70,34 @@ def test_mm_encoder_perf(mesh_device):
     inputs = processor.apply_chat_template(
         msgs, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt", enable_thinking=False
     )
+    if os.environ.get("PROBE_VIDEO") == "1":
+        # Time one frame of the synthetic video instead of the image (31B: 630
+        # patches per frame vs 2520 for the image; the encoder pads both).
+        import av
+        import numpy as np
+        from transformers.video_utils import VideoMetadata
+
+        container = av.open("/home/ttuser/ashai/gemma4/mm_samples/shapes.mp4")
+        stream = container.streams.video[0]
+        frames = np.stack([f.to_ndarray(format="rgb24") for f in container.decode(stream)])
+        fps = float(stream.average_rate)
+        meta = VideoMetadata(
+            total_num_frames=int(frames.shape[0]),
+            fps=fps,
+            width=int(frames.shape[2]),
+            height=int(frames.shape[1]),
+            duration=frames.shape[0] / fps,
+            video_backend="pyav",
+            frames_indices=list(range(int(frames.shape[0]))),
+        )
+        vmsgs = [{"role": "user", "content": [{"type": "video"}, {"type": "text", "text": "Describe this video."}]}]
+        vtext = processor.apply_chat_template(vmsgs, add_generation_prompt=True, tokenize=False, enable_thinking=False)
+        vin = processor(text=vtext, videos=[frames], video_metadata=[meta], do_sample_frames=False, return_tensors="pt")
+        inputs = {
+            "pixel_values": vin["pixel_values_videos"][0, :1],
+            "image_position_ids": vin["video_position_ids"][0, :1],
+        }
+        logger.info(f"video frame: pixel_values_videos {tuple(vin['pixel_values_videos'].shape)} -> one frame")
     pv = inputs["pixel_values"].to(torch.bfloat16)
     pos = inputs["image_position_ids"].to(torch.long)
     num_patches = int(pos.shape[1])

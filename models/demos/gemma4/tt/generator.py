@@ -158,8 +158,17 @@ def vision_state_dict_for(state_dict, model_path):
 
 
 def _vision_encoder_seq_len(num_patches: int, max_qkv_mm_seq_len: int = 2048) -> int:
-    """Padded encoder seq length (multiple of max_qkv_mm_seq_len) >= num_patches."""
-    return ((num_patches // max_qkv_mm_seq_len) + 1) * max_qkv_mm_seq_len
+    """Padded encoder seq length >= num_patches that the vision blocks can run at.
+
+    The attention chunks its qkv matmul by ``max_qkv_mm_seq_len`` rows above that
+    length and its output projection by 1024, the MLP by 512, so a sequence above
+    ``max_qkv_mm_seq_len`` must be a multiple of it; below, a multiple of 1024 is
+    enough. That halves the rows a 630-patch video frame runs at (1024, not 2048);
+    a 2520-patch image still pads to 4096.
+    """
+    if num_patches <= max_qkv_mm_seq_len:
+        return max(1024, -(-num_patches // 1024) * 1024)
+    return -(-num_patches // max_qkv_mm_seq_len) * max_qkv_mm_seq_len
 
 
 # Same 128k batched-prefill token ceiling as the shared Generator
