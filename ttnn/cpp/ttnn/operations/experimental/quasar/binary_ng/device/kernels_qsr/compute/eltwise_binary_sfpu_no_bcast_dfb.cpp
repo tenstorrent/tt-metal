@@ -64,6 +64,8 @@ FORCE_INLINE void process_sfpu_tiles(
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
+        // Each tile's post activation runs its own SFPU init, which can overwrite what the binary op set up (a
+        // TANH init rewrites the constant that divide's reciprocal reads), so the binary init runs before every tile.
         BINARY_SFPU_INIT;
 #endif
 #if ISCLOSE_OP
