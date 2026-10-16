@@ -1838,6 +1838,13 @@ tasks:
     - ffn_hc
     - ffn_collapse
     layer: 1
+  frozen:
+    at: '2026-10-16T03:15:18'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_12_ffn_collapse.py: e5f763c2f40d9cc94be530023221534e87d490a901643ee239a96fbea74e3894
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.swa_engram.ffn_norm
   title: swa_engram ffn_norm (norm) on device, layer 1
   step: implement
