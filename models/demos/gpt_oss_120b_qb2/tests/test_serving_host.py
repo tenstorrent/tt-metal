@@ -265,9 +265,9 @@ def test_serving_report_serializes_fabric_without_mutating_capabilities(monkeypa
     adapter.generator = SimpleNamespace(capability_report=lambda: {})
     adapter.mesh_device = SimpleNamespace(shape=(1, 4))
     adapter.max_model_len = 131072
-    adapter.max_batch_size = 32
+    adapter.max_batch_size = 1
     adapter._sliding_layers = list(range(0, 36, 2))
-    adapter._ring_block_base = 4640
+    adapter._ring_block_base = 2049
     adapter._cache_tensor_indices = []
     adapter._cache_shapes = []
     adapter.serving_counters = {}
@@ -630,3 +630,41 @@ def test_fixed_sampling_failure_blocks_further_shared_decode():
     with pytest.raises(RuntimeError, match="prior deferred"):  # allow-pytest.raises: host-only
         contract_decode(generator, reuse_sampling_state=True)
     assert inner._decode_forward_trace_text.call_count == submits
+
+
+def test_vllm_defaults_match_the_qualified_single_sequence_profile(monkeypatch):
+    monkeypatch.delenv("GPT_OSS_120B_KV_POOL_BLOCKS", raising=False)
+    assert TTGptOssForCausalLM.tt_supported_decode_batch_sizes == (1,)
+    assert (
+        TTGptOssForCausalLM.get_max_tokens_all_users(
+            model_name="openai/gpt-oss-120b",
+            num_devices=4,
+            tt_data_parallel=1,
+            max_model_len=131072,
+            max_num_seqs=1,
+        )
+        == 131072
+    )
+
+
+@pytest.mark.parametrize("requested", [0, 2, 4, 32, 64])
+def test_vllm_capacity_refuses_unqualified_concurrency(requested):
+    with pytest.raises(ValueError, match="single active sequence"):  # allow-pytest.raises: host-only
+        TTGptOssForCausalLM.get_max_tokens_all_users(
+            model_name="openai/gpt-oss-120b",
+            num_devices=4,
+            tt_data_parallel=1,
+            max_model_len=131072,
+            max_num_seqs=requested,
+        )
+
+
+@pytest.mark.parametrize("requested", [0, 2, 32])
+def test_vllm_initialization_refuses_unqualified_concurrency_before_mesh_use(requested):
+    with pytest.raises(ValueError, match="single active sequence"):  # allow-pytest.raises: host-only
+        TTGptOssForCausalLM.initialize_vllm_model(
+            hf_config=None,
+            mesh_device=None,
+            max_batch_size=requested,
+            max_seq_len=131072,
+        )

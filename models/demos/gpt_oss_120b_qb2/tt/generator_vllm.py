@@ -52,9 +52,9 @@ from models.demos.gpt_oss_120b_qb2.tt.sliding_ring import (
 )
 from models.tt_transformers.tt.common import get_padded_prefill_len
 
-MAX_CONCURRENT_SEQS = 32
+MAX_CONCURRENT_SEQS = 1
 FULL_CONTEXT_BLOCKS = math.ceil(HF_CONTEXT_LENGTH / PAGE_SIZE)
-KV_POOL_BLOCKS_DEFAULT = 4640
+KV_POOL_BLOCKS_DEFAULT = 2049
 ENV_KV_POOL_BLOCKS = "GPT_OSS_120B_KV_POOL_BLOCKS"
 ENV_CHUNK_WARMUP = "GPT_OSS_120B_CHUNK_WARMUP"
 ENV_PREFIX_CACHING = "GPT_OSS_120B_PREFIX_CACHING"
@@ -196,9 +196,8 @@ class TTGptOssForCausalLM:
 
     decode_input_update_contract = 1
     _HYBRID_KV_CACHE_GROUPS_ENABLED = not SLIDING_RING_ENABLED
-    # Both widths are prepared during warmup. Advertising them lets the shared
-    # runner keep singleton host-sampling requests at B1 instead of padding an
-    # exact full-vocabulary fallback to the serving-width B32 eager graph.
+    # Declare the supported serving width before model construction so the
+    # shared runner selects the same B1 graph for device and host sampling.
     tt_supported_decode_batch_sizes = decode_trace_buckets(MAX_CONCURRENT_SEQS)
     model_capabilities = {
         "supports_prefix_caching": PREFIX_CACHING_ENABLED,
@@ -300,8 +299,7 @@ class TTGptOssForCausalLM:
             )
         if not 1 <= int(max_num_seqs) <= MAX_CONCURRENT_SEQS:
             raise ValueError(
-                f"GPT-OSS 120B vLLM serving supports 1..{MAX_CONCURRENT_SEQS} concurrent sequences; "
-                f"got max_num_seqs={max_num_seqs}"
+                "GPT-OSS 120B vLLM serving supports a single active sequence; " f"got max_num_seqs={max_num_seqs}"
             )
         if not SLIDING_RING_ENABLED:
             return LEGACY_SCHEDULER_KV_GROUPS * HF_CONTEXT_LENGTH
@@ -365,8 +363,7 @@ class TTGptOssForCausalLM:
             raise ValueError("GPT-OSS 120B vLLM integration supports tensor parallelism on one TT mesh only")
         if not 1 <= int(max_batch_size) <= MAX_CONCURRENT_SEQS:
             raise ValueError(
-                f"GPT-OSS 120B vLLM serving supports 1..{MAX_CONCURRENT_SEQS} concurrent sequences; "
-                f"got max_batch_size={max_batch_size}"
+                "GPT-OSS 120B vLLM serving supports a single active sequence; " f"got max_batch_size={max_batch_size}"
             )
         if optimizations is not None:
             raise ValueError("GPT-OSS serving always loads the selected datatype-sweep policy")

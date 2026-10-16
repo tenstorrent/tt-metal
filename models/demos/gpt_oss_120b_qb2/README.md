@@ -30,15 +30,16 @@ as `20b3ff3e`; its generator and regression-test sources match this tree exactly
 | Checkpoint | `openai/gpt-oss-120b`, revision `b5c939de8f754692c1647ca79fbf85e8c1e70f8a` |
 | Decoder | All 36 layers; 1×4 tensor parallelism, ring fabric |
 | Maximum context | 131,072 tokens, including output |
-| Decode buckets | 1, 4, 8 and 32; requests 9–16 use the 32-row bucket |
-| Serving capacity | At most 32 sequences; shared full-attention pool of 4,640 blocks of 64 tokens |
+| Selected decode bucket | 1 |
+| Selected serving capacity | One active sequence; full-attention pool of 2,049 blocks of 64 tokens |
 | Sliding attention | A 768-token ring per device slot; 128-token attention window |
 | Weights | BF4 experts; BF8 attention and LM head; BF16 router, embedding and norms |
 | Precision policy | [precision.json](precision.json), required at startup |
 
-The pool reserves one output block per admitted sequence. At 32 sequences the
-scheduler can hold 294,912 prompt/context tokens across users; it cannot hold 32
-full-length contexts simultaneously. Check available disk before loading: the
+The selected pool holds one full-length context and reserves one output block.
+Clients may submit concurrent requests; the scheduler serves one active sequence
+at a time. Multi-sequence configurations remain under investigation and are not
+qualified by the one-sequence result. Check available disk before loading: the
 checkpoint occupies about 61 GiB and the selected decoder tensor cache about
 63 GiB, with additional space needed for terminal tensors and conversion.
 
@@ -148,7 +149,8 @@ export TT_METAL_HOME="$PWD"
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export GPT_OSS_120B_FULL_MODEL_TENSOR_CACHE="$TT_METAL_CACHE"
 export TT_MODEL_CLASS_OVERRIDES='TTGptOssForCausalLM=models.demos.gpt_oss_120b_qb2.tt.generator_vllm:TTGptOssForCausalLM'
-export GPT_OSS_120B_KV_POOL_BLOCKS=4640
+export GPT_OSS_120B_KV_POOL_BLOCKS=2049
+export GPT_OSS_120B_BATCHED_PREFILL=0
 export GPT_OSS_120B_SLIDING_RING=1
 export GPT_OSS_120B_PREFIX_CACHING=1
 export GPT_OSS_120B_CHUNK_WARMUP=8192
@@ -159,7 +161,7 @@ python -m vllm.entrypoints.openai.api_server \
   --model "$GPT_OSS_120B_SNAPSHOT" \
   --served-model-name openai/gpt-oss-120b \
   --host 127.0.0.1 --port 8000 \
-  --dtype bfloat16 --block-size 64 --max-num-seqs 32 \
+  --dtype bfloat16 --block-size 64 --max-num-seqs 1 \
   --max-model-len 131072 --max-num-batched-tokens 8192 \
   --enable-chunked-prefill --enable-prefix-caching --async-scheduling \
   --structured-outputs-config '{"reasoning_parser":"openai_gptoss","enable_in_reasoning":false}' \
