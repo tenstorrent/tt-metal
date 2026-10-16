@@ -69,21 +69,28 @@ void kernel_main() {
     };
 
     for (uint32_t e = 0; e < num_entries; ++e) {
-        {
-            MRS_ZONE("FIN_WAIT");
-            cb_wait_front(cb_finished, (outstanding + 1) * P);
-        }
         const uint32_t kind = get_arg_val<uint32_t>(kinds_idx + e);
         const uint32_t slot = finished_base + (e % depth_handoff) * P * tile_bytes;
         if (kind == KIND_FIN) {
+            // stream the output: write each valid tile as soon as the finish has packed it, so the DRAM writes of
+            // every core overlap the finish adds instead of all landing after them (the call's tail)
             for (uint32_t i = 0; i < m_valid; ++i) {
                 const uint32_t page = (row0 + i) * out_n_tiles + col0;
+                {
+                    MRS_ZONE("FIN_WAIT");
+                    cb_wait_front(cb_finished, outstanding * P + i * core_n + n_valid);
+                }
                 for (uint32_t j = 0; j < n_valid; ++j) {
                     noc_async_write(slot + (i * core_n + j) * tile_bytes, out.get_noc_addr(page + j), tile_bytes);
                 }
             }
+            cb_wait_front(cb_finished, (outstanding + 1) * P);
             noc_async_write_barrier();
         } else {
+            {
+                MRS_ZONE("FIN_WAIT");
+                cb_wait_front(cb_finished, (outstanding + 1) * P);
+            }
             noc_semaphore_inc(kind == KIND_FWD ? fwd_mailbox : bwd_mailbox, 1);
         }
         queue[(head + outstanding) % depth_handoff] = kind;

@@ -50,19 +50,28 @@ PREFER_PORT_ROW_STRIP = True  # ports in logical row 0, right under the Ethernet
 # the column strip -> 137-145 us with the row strip, despite 14 vs 12 tiles per core: the transport tail shrinks)
 PORT_PLACEMENT = "eth"  # "eth": each port nearest its link's Ethernet core | "spread": evenly along the strip
 PORT_GROUP = 4  # chunks per port batch (cb_port_chunks holds 2 batches); <= 8 (header pool)
+MIRROR_HALF_ORDERS = 1  # ring_balanced + a resident cross-block operand: halves split along the streamed operand's
+# multicast lines and walk the equal-distance blocks in mirrored orders (build_schedule), so each entry sends half a
+# block each way. 0: one shared order (each of the middle entries sends a whole block one way)
 ENTRIES_PER_BLOCK = 1  # entries per scatter block (overlap lamp; only 1 is built)
 KB_MIN_RESIDENT = 8  # smallest K-block the resident regime accepts (min(Kt, this))
-KB_MAX = 16  # largest K-block: the streamed operand needs several K-blocks per entry to overlap read / mcast / math
+KB_MAX = int(
+    os.environ.get("MRS_KB_MAX", 16)
+)  # env: perf experiments only. largest K-block: the streamed operand needs several K-blocks per entry to overlap read / mcast / math
 # (focus case, diagonal senders: kb 64 -> 212 us, 32 -> 160 us, 16 -> 159 us, 8 -> 164 us on the fastest chip)
 L1_HEADROOM = 64 * 1024  # bytes kept free per core beyond the op's own footprint
 LAG_POLICY = os.environ.get("MRS_LAG", "auto")  # "auto": lag a relay finish only when its arrival is produced late
 # upstream; "always": the design's original rule (every add waits behind the next matmul). env: perf experiments only
 PREFETCH_STEPS = 1  # K-block windows a sender keeps reserved with DRAM reads in flight ahead of its multicast
+LOOKAHEAD_AFTER_BARRIER = 1  # 1: a sender issues its look-ahead reads after the current step's read barrier, so the
+# current step's reads do not share the DRAM with the next step's (the fill at step 0); 0: before it
 SENDERS_PER_LINE = 1  # each K-block window is split into this many contiguous parts (A by m rows, W by k rows), each
 # read + multicast by a different core of the line, so no single RISC serializes a whole window's reads and mcast
-MCAST_SENDER_PLACEMENT = (
-    "diagonal"  # operand senders per line: "uniform" (first core: a column of DRAM readers) | "diagonal"
-)
+MCAST_SENDER_PLACEMENT = "diagonal_disjoint"  # operand senders per line: "uniform" (first core: a column of DRAM
+# readers) | "diagonal" (A and W both start at index 0: the cores (i, i) send both families) | "diagonal_disjoint"
+# (diagonal, each W family's start shifted so no core sends two families; focus case: entry 0 drops 39 -> ~29 us)
+FIN_ADD_FPU = 1  # finish adds on the FPU into fp32 DEST (1) or as SFPU fp32 adds (0). The hold reaches DEST through
+# srcA either way (no UnpackToDestFp32), so both see the same operand precision; the FPU add is ~3x cheaper per tile
 DEST_TILES_FP32_FULL_SYNC = 8  # DEST capacity with fp32 accumulation + full sync (subblock area cap)
 
 TILE = 32
@@ -112,25 +121,35 @@ def _role(p, b, h, G, kind):
     return ("bwd", db == H, db)
 
 
-def build_schedule(p, G, kind):
-    """roles[(b, h)] and this chip's entry order: the other blocks by descending distance-to-owner (ties: fwd first,
-    then lower b), then its own block last."""
+def build_schedule(p, G, kind, mirror=False):
+    """roles[(b, h)] and this chip's entry order per half, entries[h]: the other blocks by descending distance-to-owner
+    (ties: fwd first, then lower b), then its own block last. Both halves share one order, except with `mirror`
+    (ring_balanced only): each half sorts by its own role distance and half 1 breaks ties bwd first. Then the
+    equal-distance blocks of the two directions (G = 4: the fwd and bwd neighbours' blocks) run in opposite orders in
+    the two halves, so every entry sends half a block each way instead of a whole block one way (the last one-way
+    block is the transport tail). Deadlock freedom is unchanged: within a half, a relay at distance d waits for an
+    arrival of distance d + 1, which every chip's same half produces at an earlier entry index."""
     roles = {(b, h): _role(p, b, h, G, kind) for b in range(G) for h in (0, 1)}
 
-    def sort_key(b):
-        key = max(roles[(b, h)][2] for h in (0, 1))
-        return (-key, 0 if roles[(b, 0)][0] == "fwd" else 1, b)
+    def sort_key(b, h):
+        if not mirror:
+            key = max(roles[(b, hh)][2] for hh in (0, 1))
+            return (-key, 0 if roles[(b, 0)][0] == "fwd" else 1, b)
+        first = "fwd" if h == 0 else "bwd"
+        return (-roles[(b, h)][2], 0 if roles[(b, h)][0] == first else 1, b)
 
-    entries = sorted((b for b in range(G) if b != p), key=sort_key) + [p]
+    others = [b for b in range(G) if b != p]
+    entries = {h: sorted(others, key=lambda b: sort_key(b, h)) + [p] for h in (0, 1)}
     return roles, entries
 
 
-def plan_transport(G, kind):
-    """Per chip position: roles, entries, per (half, direction) arrival list (this chip's entry order), and the
-    arrival thresholds (position in the upstream's send order). slots[d] = zone slots per direction (max over chips
-    and halves, so every chip shares one staging layout)."""
+def plan_transport(G, kind, mirror=False):
+    """Per chip position: roles, entries[h], per (half, direction) arrival list (this chip's half-h entry order), and
+    the arrival thresholds (position in the upstream's half-h send order). slots[d] = zone slots per direction (max over
+    chips and halves, so every chip shares one staging layout)."""
     ring = kind != "line"
-    sch = {p: build_schedule(p, G, kind) for p in range(G)}
+    mirror = mirror and kind == "ring_balanced"
+    sch = {p: build_schedule(p, G, kind, mirror) for p in range(G)}
 
     def up(p, d):
         q = p - 1 if d == "fwd" else p + 1
@@ -146,19 +165,24 @@ def plan_transport(G, kind):
             for d in _DIRS:
                 u = up(p, d)
                 lst = []
-                for b in entries:
+                for b in entries[h]:
                     r = roles[(b, h)]
                     if r[0] == d and not r[1]:
                         assert u is not None and sch[u][0][(b, h)][0] == d, (p, b, h, d)
                         lst.append(b)
                     elif r[0] == "fin" and u is not None and sch[u][0][(b, h)][0] == d:
                         lst.append(b)
-                seq = [b for b in sch[u][1] if sch[u][0][(b, h)][0] == d] if u is not None else []
+                seq = [b for b in sch[u][1][h] if sch[u][0][(b, h)][0] == d] if u is not None else []
                 assert sorted(seq) == sorted(lst), (p, h, d, seq, lst)
                 arrivals[(h, d)] = lst
                 thresholds[(h, d)] = {b: i + 1 for i, b in enumerate(seq)}
                 # the upstream's entry index that produces each arrival (drives the per-entry lag decision)
-                produced_at[(h, d)] = {b: sch[u][1].index(b) for b in seq}
+                produced_at[(h, d)] = {b: sch[u][1][h].index(b) for b in seq}
+                # deadlock freedom (mirrored orders): a relay waits only for an arrival produced at an earlier
+                # upstream entry index
+                for b in lst if mirror else []:
+                    if roles[(b, h)][0] != "fin":
+                        assert produced_at[(h, d)][b] < entries[h].index(b), (p, b, h, d)
         chips[p] = dict(roles=roles, entries=entries, arrivals=arrivals, thresholds=thresholds, produced_at=produced_at)
     slots = {d: max(1, max(len(chips[p]["arrivals"][(h, d)]) for p in range(G) for h in (0, 1))) for d in _DIRS}
     return chips, slots
@@ -181,6 +205,38 @@ def _subblock(core_m, core_n, cap=DEST_TILES_FP32_FULL_SYNC, prefer_tall=False):
             if h * w > best[0] * best[1] or (h * w == best[0] * best[1] and tie_better):
                 best = (h, w)
     return best
+
+
+def plan_mcast_senders(placement, grid_m, grid_n, a_two_parts, w_two_parts, a_shape_1d, w_shape_1d):
+    """[(family, Mcast1D shape, starting_sender_index | None (absent), Mcast1DSenderPlacement)] for "a", "a2", "b",
+    "b2". A lines are indexed by gm (length grid_n, sender at gn = (start + gm) % grid_n when diagonal), W lines by gn
+    (length grid_m, sender at gm = (start + gn) % grid_m). Part-1 senders start half a line further along. With
+    "diagonal_disjoint" each W family's start is the smallest one whose sender cores overlap the senders already
+    placed the least, so one NCRISC never serializes the DRAM reads + multicasts of both operands."""
+    diag = placement in ("diagonal", "diagonal_disjoint")
+    mode = ttnn.Mcast1DSenderPlacement.Diagonal if diag else ttnn.Mcast1DSenderPlacement.Uniform
+
+    def cores(fam, start):
+        if fam == "a":
+            return {(gm, (start + gm) % grid_n if diag else start) for gm in range(grid_m)}
+        return {((start + gn) % grid_m if diag else start, gn) for gn in range(grid_n)}
+
+    taken, plan = set(), []
+    for prefix, shape_1d, active, line_len in (
+        ("a", a_shape_1d, True, grid_n),
+        ("a2", a_shape_1d, a_two_parts, grid_n),
+        ("b", w_shape_1d, True, grid_m),
+        ("b2", w_shape_1d, w_two_parts, grid_m),
+    ):
+        if not active:
+            plan.append((prefix, shape_1d, None, mode))
+            continue
+        start = 0 if len(prefix) == 1 else line_len // 2
+        if placement == "diagonal_disjoint" and prefix[0] == "b":
+            start = min(range(line_len), key=lambda s0: (len(cores("b", s0) & taken), (s0 - start) % line_len))
+        taken |= cores(prefix[0], start)
+        plan.append((prefix, shape_1d, start, mode))
+    return plan
 
 
 def choose_grid(gx, gy, block_m, block_n, L):
@@ -484,12 +540,25 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         kb = max(d for d in range(1, kb + 1) if Kt % d == 0 and d <= int(os.environ["MRS_KB"]))
     if os.environ.get("MRS_SB_TALL"):  # perf experiments only: prefer taller subblocks on ties
         gd["sb"] = _subblock(core_m, core_n, prefer_tall=True)
+    # halves: split along the streamed operand's multicast lines when the other operand is resident (W lines = fixed gn
+    # for scatter -1, A lines = fixed gm for scatter -2), so the two halves may compute different blocks; else the
+    # row-major split of the core index
+    half_split = "k"
+    if resident and int(os.environ.get("MRS_MIRROR", MIRROR_HALF_ORDERS)) and kind == "ring_balanced":  # env: perf
+        if scatter_dim == -1 and gd["grid_n"] >= 2:
+            half_split = "n"
+        elif scatter_dim == -2 and gd["grid_m"] >= 2:
+            half_split = "m"
+    if half_split != "k":
+        chips_sched, slots_m = plan_transport(G, kind, mirror=True)
+        assert slots_m == slots, (slots_m, slots)  # arrival counts do not depend on the order
     hooks._LAST_PLAN = {
         "xblock": "resident" if resident else "stream",
         "schedule": kind,
         "kb": kb,
         "grid": (gd["grid_m"], gd["grid_n"]),
         "strip": gd["strip"],
+        "half_split": half_split,
     }
 
     staging_tiles = (DEPTH_HANDOFF + slots["fwd"] + slots["bwd"]) * P
@@ -527,6 +596,7 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         resident=resident,
         slots=slots,
         sched=chips_sched,
+        half_split=half_split,
         compute_kernel_config=compute_kernel_config,
         gx=gx,
         gy=gy,
@@ -564,7 +634,12 @@ def create_mesh_program_descriptor(ctx):
 
     mm_cores = [(gm, gn, mm_core(gm, gn)) for gm in range(grid_m) for gn in range(grid_n)]  # k = row-major index
     n_cores = len(mm_cores)
-    half = lambda k: 0 if k < -(-n_cores // 2) else 1
+    if ctx["half_split"] == "n":
+        half = lambda k: int(mm_cores[k][1] >= -(-grid_n // 2))
+    elif ctx["half_split"] == "m":
+        half = lambda k: int(mm_cores[k][0] >= -(-grid_m // 2))
+    else:
+        half = lambda k: 0 if k < -(-n_cores // 2) else 1
     link_of = lambda k: k % L
     mm_crs = ttnn.CoreRangeSet([ttnn.CoreRange(mm_core(0, 0), mm_core(grid_m - 1, grid_n - 1))])
     ports_of = {}  # per chip: {(d, l): logical port core}
@@ -645,6 +720,7 @@ def create_mesh_program_descriptor(ctx):
             a_split,
             w_split,
             int(os.environ.get("MRS_PREFETCH", PREFETCH_STEPS)),  # env: perf experiments only
+            int(os.environ.get("MRS_LOOKAHEAD_AFTER_BARRIER", LOOKAHEAD_AFTER_BARRIER)),  # env: perf experiments only
         ]
         + a_ct
         + w_ct
@@ -664,6 +740,7 @@ def create_mesh_program_descriptor(ctx):
         sb_w,
         P,
         G,
+        int(os.environ.get("MRS_FIN_ADD_FPU", FIN_ADD_FPU)),  # env: perf experiments only
     ]
     writer_ct = [CB_FINISHED, P, core_n, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, G] + o_ct
     max_port_cores = -(-n_cores // L)  # matmul cores one port serves (link(k) = k mod L)
@@ -683,6 +760,7 @@ def create_mesh_program_descriptor(ctx):
     ablate = set(filter(None, os.environ.get("MRS_ABLATE", "").split(",")))
     ablate_compute = [("SKIP_COMPUTE", "1"), ("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1")] if "compute" in ablate else []
     ablate_reader = [("MRS_SKIP_DRAM", "1")] if "dram" in ablate else []
+    ablate_reader += [("MRS_SKIP_MCAST", "1")] if "mcast" in ablate else []
     zones = [("MRS_ZONES", "1")] if os.environ.get("MRS_ZONES") else []
     ablate_compute = ablate_compute + zones
     ablate_reader = ablate_reader + zones
@@ -692,18 +770,28 @@ def create_mesh_program_descriptor(ctx):
     port_vcore_of = {coord: {key: virt(c) for key, c in ports.items()} for coord, ports in ports_of.items()}
 
     def unit_walks(sc, d, l):
-        """Port (d, l)'s units on a chip with schedule sc: [(entry, block, mask, h1_first, [k in walk order])]."""
+        """Port (d, l)'s units on a chip with schedule sc: [(entry, {half: block}, mask, h1_first)]. A unit is one
+        entry index; with mirrored orders the two halves may hold different blocks at that index."""
         out = []
-        for e, b in enumerate(sc["entries"]):
-            mask = sum(1 << h for h in link_halves[l] if sc["roles"][(b, h)][0] == d)
+        for e in range(len(sc["entries"][0])):
+            blk = {h: sc["entries"][h][e] for h in (0, 1)}
+            mask = sum(1 << h for h in link_halves[l] if sc["roles"][(blk[h], h)][0] == d)
             if not mask:
                 continue
             # walk a chain-start half (ready right after its matmul) before a relay half (waits for its arrival)
-            h1_first = int(mask == 3 and sc["roles"][(b, 1)][1] and not sc["roles"][(b, 0)][1])
-            order = (1, 0) if h1_first else (0, 1)
-            ks = [k for hh in order if mask >> hh & 1 for k in range(n_cores) if link_of(k) == l and half(k) == hh]
-            out.append((e, b, mask, h1_first, ks))
+            h1_first = int(mask == 3 and sc["roles"][(blk[1], 1)][1] and not sc["roles"][(blk[0], 0)][1])
+            out.append((e, blk, mask, h1_first))
         return out
+
+    sender_plan = plan_mcast_senders(
+        os.environ.get("MRS_SENDER_PLACEMENT", MCAST_SENDER_PLACEMENT),  # env: perf experiments only
+        grid_m,
+        grid_n,
+        a_split < core_m,
+        w_split < kb,
+        a_shape_1d,
+        w_shape_1d,
+    )
 
     mesh_desc = ttnn.MeshProgramDescriptor()
     for grp in ctx["groups"]:
@@ -733,7 +821,7 @@ def create_mesh_program_descriptor(ctx):
                 m_valid = min(core_m, block_m - gm * core_m)
                 n_valid = min(core_n, block_n - gn * core_n)
                 ent_words, roles_k, kinds_k = [], [], []
-                for b in entries:
+                for b in entries[h]:
                     r = roles[(b, h)]
                     mask = 0
                     if r[0] in _DIRS and not r[1]:
@@ -749,7 +837,7 @@ def create_mesh_program_descriptor(ctx):
                     lag = lag or any(
                         sc["produced_at"][(h, d)][b] >= e_idx for d, bit in (("fwd", 1), ("bwd", 2)) if mask & bit
                     )
-                    lag = int(lag and e_idx + 1 < len(entries))
+                    lag = int(lag and e_idx + 1 < len(entries[h]))
                     ent_words += [b | (mask << 16) | (lag << 20), thr_f | (thr_b << 16)]
                     roles_k.append([ROLE_COPY, ROLE_ADD_FWD, ROLE_ADD_BWD, ROLE_ADD_BOTH][mask] | (lag << 8))
                     kinds_k.append(KIND_FIN if r[0] == "fin" else (KIND_FWD if r[0] == "fwd" else KIND_BWD))
@@ -807,30 +895,13 @@ def create_mesh_program_descriptor(ctx):
                 config=dm("RISCV_0", NOC1),
             )
             mc_cfg = ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True)
-            placement = os.environ.get("MRS_SENDER_PLACEMENT", MCAST_SENDER_PLACEMENT)
-            snd = ttnn.Mcast1DFixedSenderConfig(
-                starting_sender_index=0,
-                sender_placement=ttnn.Mcast1DSenderPlacement.Diagonal
-                if placement == "diagonal"
-                else ttnn.Mcast1DSenderPlacement.Uniform,
-            )
             kernels = [reader]
-            # part 0 senders on the diagonal; part 1 senders half a line further along (a different core per line)
-            for prefix, shape_1d, split, extent, line_len in (
-                ("a", a_shape_1d, a_split, core_m, grid_n),
-                ("b", w_shape_1d, w_split, kb, grid_m),
-            ):
+            for prefix, shape_1d, start, placement in sender_plan:
+                if start is None:
+                    ttnn.attach_absent(kernels[0], prefix)
+                    continue
+                snd = ttnn.Mcast1DFixedSenderConfig(starting_sender_index=start, sender_placement=placement)
                 ttnn.Mcast1D(mesh, mm_crs, shape_1d, snd, mc_cfg).attach(program, prefix, kernels)
-                if split < extent:
-                    snd2 = ttnn.Mcast1DFixedSenderConfig(
-                        starting_sender_index=line_len // 2,
-                        sender_placement=ttnn.Mcast1DSenderPlacement.Diagonal
-                        if placement == "diagonal"
-                        else ttnn.Mcast1DSenderPlacement.Uniform,
-                    )
-                    ttnn.Mcast1D(mesh, mm_crs, shape_1d, snd2, mc_cfg).attach(program, prefix + "2", kernels)
-                else:
-                    ttnn.attach_absent(kernels[0], prefix + "2")
             reader = kernels[0]
 
             # ---- port cores ----
@@ -849,9 +920,9 @@ def create_mesh_program_descriptor(ctx):
                     vc = virt(c)
                     core_words.append(vc.x | (vc.y << 8) | (half(k) << 16) | (k << 20))
                 units = []
-                for e, b, mask, h1_first, _ in unit_walks(sc, d, l):
-                    s0 = down["arrivals"][(0, d)].index(b) if mask & 1 else 0
-                    s1 = down["arrivals"][(1, d)].index(b) if mask & 2 else 0
+                for e, b, mask, h1_first in unit_walks(sc, d, l):
+                    s0 = down["arrivals"][(0, d)].index(b[0]) if mask & 1 else 0
+                    s1 = down["arrivals"][(1, d)].index(b[1]) if mask & 2 else 0
                     units.append(e | (mask << 8) | (h1_first << 10) | (s0 << 16) | (s1 << 24))
                 consumed_id = 0 if d == "fwd" else 1
                 pr_rt[pcore.x][pcore.y] = [staging_addr, mailbox_addr, consumed_id, len(core_words), len(units)] + (

@@ -9,9 +9,14 @@ Each case does WARMUP calls (compile + cache) then MEASURED calls; read the per-
 "DEVICE KERNEL DURATION [ns]" of the generic op rows in the profiler CSV. The op's latency is the
 MAX over the group's devices of one call (the slowest chip finishes the reduce-scatter).
 Correctness is checked on the last call against each case's precision gate.
+
+MRS_PERF_TRACE=1 measures traced: WARMUP eager calls, then one call captured into a trace and replayed MEASURED times
+(the like-for-like comparison with the traced unfused baseline; it removes the host dispatch skew between chips).
 """
 
 from __future__ import annotations
+
+import os
 
 import pytest
 import torch
@@ -30,6 +35,8 @@ from ttnn.operations.matmul_reduce_scatter import matmul_reduce_scatter
 
 WARMUP = 2
 MEASURED = 3
+TRACE = os.environ.get("MRS_PERF_TRACE", "0") == "1"
+TRACE_REGION_BYTES = 1 << 20
 
 
 def _open(mesh_shape, fabric_config):
@@ -48,6 +55,8 @@ def _open(mesh_shape, fabric_config):
     )
     params = get_updated_device_params({"fabric_config": fabric_config})
     params.pop("fabric_config")
+    if TRACE:
+        params["trace_region_size"] = TRACE_REGION_BYTES
     return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), **params)
 
 
@@ -80,17 +89,29 @@ def test_perf_case(perf_mesh, case):
     ta = create_ttnn_input_tensor(a, perf_mesh, dtype=case["dtype"], layout=ttnn.TILE_LAYOUT)
     tw = create_ttnn_input_tensor(w, perf_mesh, dtype=case["weight_dtype"], layout=ttnn.TILE_LAYOUT)
     ckc = ttnn.ComputeConfigDescriptor(math_fidelity=ex["math_fidelity"], fp32_dest_acc_en=ex["fp32_dest_acc_en"])
+    run = lambda: matmul_reduce_scatter(
+        ta,
+        tw,
+        cluster_axis=case["cluster_axis"],
+        scatter_dim=case["scatter_dim"],
+        topology=case["topology"],
+        num_links=case["num_links"],
+        compute_kernel_config=ckc,
+    )
     out = None
-    for _ in range(WARMUP + MEASURED):
-        out = matmul_reduce_scatter(
-            ta,
-            tw,
-            cluster_axis=case["cluster_axis"],
-            scatter_dim=case["scatter_dim"],
-            topology=case["topology"],
-            num_links=case["num_links"],
-            compute_kernel_config=ckc,
-        )
+    if TRACE:
+        for _ in range(WARMUP):
+            ttnn.deallocate(run())
+        trace_id = ttnn.begin_trace_capture(perf_mesh, cq_id=0)
+        out = run()
+        ttnn.end_trace_capture(perf_mesh, trace_id, cq_id=0)
+        for _ in range(MEASURED):
+            ttnn.execute_trace(perf_mesh, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(perf_mesh)
+        ttnn.release_trace(perf_mesh, trace_id)
+    else:
+        for _ in range(WARMUP + MEASURED):
+            out = run()
     ttnn.synchronize_device(perf_mesh)
     expected = pytorch_matmul_reduce_scatter(a, w, case["cluster_axis"], case["scatter_dim"])
     cols = tuple(perf_mesh.shape)[1]

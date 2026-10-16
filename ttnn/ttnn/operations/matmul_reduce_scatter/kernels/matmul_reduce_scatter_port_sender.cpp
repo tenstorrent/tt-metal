@@ -103,6 +103,7 @@ void kernel_main() {
         lim = group - rpos % group;
     };
     for (uint32_t un = 0; un < num_units; ++un) {
+        MRS_ZONE("SEND_UNIT");
         const uint32_t unit = get_arg_val<uint32_t>(units_idx + un);
         const uint32_t half_mask = (unit >> 8) & 0x3;
         const uint32_t slot0 = (unit >> 16) & 0xFF;

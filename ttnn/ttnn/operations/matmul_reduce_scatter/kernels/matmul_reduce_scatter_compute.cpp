@@ -6,7 +6,8 @@
 // Per entry: matmul_block_entry — core_m x core_n x Kt through matmul_block, K-blocks of kb, packer L1 accumulation
 // into ONE caller-reserved fp32 slot of cb_partial_hold (TileRowMajor + Interm + caller_owns_pack_target).
 // Then finish_block for the lagged entry (or this one): copy (chain start), hold + arrival (relay / fin with one
-// upstream: SFPU fp32 add), or hold + fwd + bwd (fin with two upstreams: FPU fwd+bwd into D1, SFPU D0 += D1).
+// upstream), or hold + fwd + bwd (fin with two upstreams). FIN_ADD_FPU: FPU adds (hold + arrival, then the second
+// arrival through DEST reuse); else SFPU fp32 adds (FPU fwd+bwd into D1, SFPU D0 += D1).
 // Every cross-device add runs in fp32 DEST; the result is packed to bf16 into cb_finished.
 
 #include <cstdint>
@@ -26,24 +27,40 @@ namespace ckl = compute_kernel_lib;
 
 constexpr uint32_t ROLE_COPY = 0, ROLE_ADD_FWD = 1, ROLE_ADD_BWD = 2, ROLE_ADD_BOTH = 3;
 
-template <uint32_t cb_hold, uint32_t cb_finished, uint32_t cb_arr_fwd, uint32_t cb_arr_bwd, uint32_t P>
+template <uint32_t cb_hold, uint32_t cb_finished, uint32_t cb_arr_fwd, uint32_t cb_arr_bwd, uint32_t P, bool fpu_add>
 ALWI void finish_block(uint32_t role) {
     MRS_ZONE("FIN");
     using namespace ckl;
     constexpr auto shape = IterationShape::tiles(P);
     if (role == ROLE_COPY) {
         copy<input(cb_hold), output(cb_finished)>(shape);
-    } else if (role == ROLE_ADD_FWD) {
-        binary_sfpu<AddBinary<>, input(cb_hold), input(cb_arr_fwd), output(cb_finished)>(shape);
-    } else if (role == ROLE_ADD_BWD) {
-        binary_sfpu<AddBinary<>, input(cb_hold), input(cb_arr_bwd), output(cb_finished)>(shape);
+    } else if constexpr (fpu_add) {
+        // FPU adds into fp32 DEST. The hold reaches DEST through srcA here exactly as through CopyTile in the SFPU
+        // variant (no UnpackToDestFp32), so the sum sees the same operand precision at a fraction of the cost.
+        if (role == ROLE_ADD_FWD) {
+            add<input(cb_hold), input(cb_arr_fwd), output(cb_finished)>(shape);
+        } else if (role == ROLE_ADD_BWD) {
+            add<input(cb_hold), input(cb_arr_bwd), output(cb_finished)>(shape);
+        } else {
+            eltwise_chain(
+                shape,
+                BinaryFpu<BinaryFpuOp::Add, input(cb_hold), input(cb_arr_fwd)>{},
+                DestReuseBinary<BinaryFpuOp::Add, input(cb_arr_bwd), DestReuseType::DEST_TO_SRCA>{},
+                PackTile<output(cb_finished)>{});
+        }
     } else {
-        eltwise_chain(
-            shape,
-            CopyTile<input(cb_hold)>{},
-            BinaryFpu<BinaryFpuOp::Add, input(cb_arr_fwd), input(cb_arr_bwd), Dst::D1>{},
-            AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-            PackTile<output(cb_finished)>{});
+        if (role == ROLE_ADD_FWD) {
+            binary_sfpu<AddBinary<>, input(cb_hold), input(cb_arr_fwd), output(cb_finished)>(shape);
+        } else if (role == ROLE_ADD_BWD) {
+            binary_sfpu<AddBinary<>, input(cb_hold), input(cb_arr_bwd), output(cb_finished)>(shape);
+        } else {
+            eltwise_chain(
+                shape,
+                CopyTile<input(cb_hold)>{},
+                BinaryFpu<BinaryFpuOp::Add, input(cb_arr_fwd), input(cb_arr_bwd), Dst::D1>{},
+                AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
+                PackTile<output(cb_finished)>{});
+        }
     }
 }
 
@@ -62,6 +79,7 @@ void kernel_main() {
     constexpr uint32_t sb_w = get_compile_time_arg_val(11);
     constexpr uint32_t P = get_compile_time_arg_val(12);
     constexpr uint32_t num_entries = get_compile_time_arg_val(13);
+    constexpr bool fin_add_fpu = get_compile_time_arg_val(14) != 0;  // finish adds on the FPU (else SFPU fp32 adds)
     static_assert(P == core_m * core_n, "P is the per-core sub-block");
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_k_window, cb_weight_k_window, cb_partial_hold);
@@ -107,7 +125,7 @@ void kernel_main() {
     for (uint32_t e = 0; e < num_entries; ++e) {
         matmul_block_entry();
         if (pending != NONE) {
-            finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(
+            finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P, fin_add_fpu>(
                 get_arg_val<uint32_t>(pending) & 0xFF);
             pending = NONE;
         }
@@ -116,7 +134,7 @@ void kernel_main() {
         if (lag) {
             pending = e;  // the add waits for its arrival behind the next entry's matmul
         } else {
-            finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P>(role);
+            finish_block<cb_partial_hold, cb_finished, cb_arrivals_fwd, cb_arrivals_bwd, P, fin_add_fpu>(role);
         }
     }
 }

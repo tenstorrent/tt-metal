@@ -54,7 +54,9 @@ void kernel_main() {
     constexpr uint32_t a_split = get_compile_time_arg_val(20);         // m rows of part 0 (core_m: one part)
     constexpr uint32_t w_split = get_compile_time_arg_val(21);         // k rows of part 0 (kb: one part)
     constexpr uint32_t prefetch_steps = get_compile_time_arg_val(22);  // K-block windows a sender reads ahead
-    constexpr auto a_args = TensorAccessorArgs<23>();
+    constexpr bool lookahead_after_barrier = get_compile_time_arg_val(23) != 0;  // issue look-ahead reads after the
+    // current step's read barrier (else before it)
+    constexpr auto a_args = TensorAccessorArgs<24>();
     constexpr auto w_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     constexpr auto mc_a =
         McastArgs<get_named_compile_time_arg_val("a_ct_offset"), get_named_compile_time_arg_val("a_rt_offset")>();
@@ -172,19 +174,19 @@ void kernel_main() {
     auto trid_of = [](uint32_t step) { return 1 + step % NUM_TRIDS; };
     uint32_t a_slot = 0, w_slot = 0;      // window slot of the current step
     uint32_t a_issued = 0, w_issued = 0;  // steps whose window is reserved (and, if moving, whose reads are issued)
-    auto advance = [&](uint32_t s,
-                       bool sender,
-                       bool moves_s,
-                       uint32_t& issued,
-                       uint32_t cb,
-                       uint32_t win_tiles,
-                       uint32_t slot,
-                       uint32_t cap,
-                       auto&& moves,
-                       auto&& issue,
-                       uint32_t base,
-                       uint32_t win_bytes) {
-        if (issued == s) {  // the current step: reserve (blocking) and, as a sender of a moving step, issue its reads
+    // current step: reserve its window (blocking) and, as a sender of a moving step, issue its reads if no earlier
+    // look-ahead did
+    auto reserve_current = [&](uint32_t s,
+                               bool sender,
+                               bool moves_s,
+                               uint32_t& issued,
+                               uint32_t cb,
+                               uint32_t win_tiles,
+                               uint32_t slot,
+                               auto&& issue,
+                               uint32_t base,
+                               uint32_t win_bytes) {
+        if (issued == s) {
             cb_reserve_back(cb, win_tiles);
             if (sender && moves_s) {
                 noc_async_read_set_trid(trid_of(s));
@@ -192,6 +194,19 @@ void kernel_main() {
             }
             issued = s + 1;
         }
+    };
+    // look-ahead: a sender reserves up to prefetch_steps future windows (only when free) and issues their reads
+    auto look_ahead = [&](uint32_t s,
+                          bool sender,
+                          uint32_t& issued,
+                          uint32_t cb,
+                          uint32_t win_tiles,
+                          uint32_t slot,
+                          uint32_t cap,
+                          auto&& moves,
+                          auto&& issue,
+                          uint32_t base,
+                          uint32_t win_bytes) {
         if (!sender) {
             return;
         }
@@ -208,13 +223,39 @@ void kernel_main() {
             ++issued;
         }
     };
+    auto look_ahead_both = [&](uint32_t s) {
+        look_ahead(
+            s,
+            a_sender,
+            a_issued,
+            cb_act_k_window,
+            a_window_tiles,
+            a_slot,
+            a_cap_windows,
+            a_moves,
+            issue_a,
+            a_base,
+            a_win_bytes);
+        look_ahead(
+            s,
+            w_sender,
+            w_issued,
+            cb_weight_k_window,
+            w_window_tiles,
+            w_slot,
+            w_cap_windows,
+            w_moves,
+            issue_w,
+            w_base,
+            w_win_bytes);
+    };
     auto load_step = [&](uint32_t s) {
         // Every earlier multicast has left L1 before this step issues any read: a slot read into at step s (for a
         // step t <= s + cap - 1) was last a multicast source at step t - cap <= s - 1.
         noc_async_writes_flushed();
         {
             MRS_ZONE("RD_RESV");
-            advance(
+            reserve_current(
                 s,
                 a_sender,
                 a_moves(s),
@@ -222,12 +263,10 @@ void kernel_main() {
                 cb_act_k_window,
                 a_window_tiles,
                 a_slot,
-                a_cap_windows,
-                a_moves,
                 issue_a,
                 a_base,
                 a_win_bytes);
-            advance(
+            reserve_current(
                 s,
                 w_sender,
                 w_moves(s),
@@ -235,13 +274,19 @@ void kernel_main() {
                 cb_weight_k_window,
                 w_window_tiles,
                 w_slot,
-                w_cap_windows,
-                w_moves,
                 issue_w,
                 w_base,
                 w_win_bytes);
+            if constexpr (!lookahead_after_barrier) {
+                look_ahead_both(s);
+            }
             if ((a_sender && a_moves(s)) || (w_sender && w_moves(s))) {
                 noc_async_read_barrier_with_trid(trid_of(s));  // this step's reads only
+            }
+            if constexpr (lookahead_after_barrier) {
+                // the current step's reads get the DRAM to themselves (the fill: every sender reads step 0 at once);
+                // the look-ahead reads then overlap this step's multicast
+                look_ahead_both(s);
             }
         }
         {
@@ -250,6 +295,7 @@ void kernel_main() {
             const uint32_t w_dst = w_base + w_slot * w_win_bytes;
             // CallerManaged: send() returns once the multicast is issued; the source slot is protected by the flush at
             // the start of the next step (no read targets it before then).
+#ifndef MRS_SKIP_MCAST  // perf ablation only
             if (a_moves(s)) {
                 if (a_tx) {
                     a_tx->template send<SourceL1Guard::CallerManaged>(
@@ -282,6 +328,7 @@ void kernel_main() {
                     }
                 }
             }
+#endif
         }
         cb_push_back(cb_act_k_window, a_window_tiles);
         cb_push_back(cb_weight_k_window, w_window_tiles);
