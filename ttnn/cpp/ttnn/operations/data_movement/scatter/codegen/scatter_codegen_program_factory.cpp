@@ -404,24 +404,25 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryInterleaved::create_
     writer_desc.compile_time_args = writer_ct;
     writer_desc.config = WriterConfigDescriptor{};
 
-    // Per-core RT is the sequential assigned-core ORDINAL (0, 1, 2, ...), not the work offset. Kernel
-    // ABI: reader [index_addr, src_addr, n, tile_w, tile_h, core_id, page_map...], writer [in_addr,
-    // out_addr, n, core_id].
+    // Buffer addresses are common (per-kernel) runtime args, so a program-cache hit rebinds four slots
+    // in total rather than four per core. Per-core RT is the sequential assigned-core ORDINAL (0, 1,
+    // 2, ...), not the work offset. Kernel ABI: reader common [index_addr, src_addr], per-core [n,
+    // tile_w, tile_h, core_id, page_map...]; writer common [in_addr, out_addr], per-core [n, core_id].
+    reader_desc.emplace_common_runtime_args({index_t.buffer(), src_t.buffer()});
+    writer_desc.emplace_common_runtime_args({in_t.buffer(), output_tensor.buffer()});
     const uint32_t tile_w = in_t.tensor_spec().tile().get_width();
     const uint32_t tile_h = in_t.tensor_spec().tile().get_height();
     const auto page_map_vec = to_vector(attributes.page_map);
     uint32_t id = 0;
     for (const auto& [core, n] : scatter_assigned_cores(split, attributes.Ht)) {
         KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(index_t.buffer());
-        reader_args.push_back(src_t.buffer());
         reader_args.push_back(n);
         reader_args.push_back(tile_w);
         reader_args.push_back(tile_h);
         reader_args.push_back(id);
         reader_args.append(page_map_vec);
         reader_desc.emplace_runtime_args(core, reader_args);
-        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), n, id});
+        writer_desc.emplace_runtime_args(core, {n, id});
         id++;
     }
 
@@ -491,21 +492,22 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryStreaming::create_de
     writer_desc.compile_time_args = writer_ct;
     writer_desc.config = WriterConfigDescriptor{};
 
+    // Same common/per-core split as the interleaved factory; the kernels share the ABI.
+    reader_desc.emplace_common_runtime_args({index_t.buffer(), src_t.buffer()});
+    writer_desc.emplace_common_runtime_args({in_t.buffer(), output_tensor.buffer()});
     const uint32_t tile_w = in_t.tensor_spec().tile().get_width();
     const uint32_t tile_h = in_t.tensor_spec().tile().get_height();
     const auto page_map_vec = to_vector(attributes.page_map);
     uint32_t id = 0;
     for (const auto& [core, n] : scatter_assigned_cores(split, attributes.Wt_output)) {
         KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(index_t.buffer());
-        reader_args.push_back(src_t.buffer());
         reader_args.push_back(n);
         reader_args.push_back(tile_w);
         reader_args.push_back(tile_h);
         reader_args.push_back(id);
         reader_args.append(page_map_vec);
         reader_desc.emplace_runtime_args(core, reader_args);
-        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), n, id});
+        writer_desc.emplace_runtime_args(core, {n, id});
         id++;
     }
 
@@ -595,19 +597,21 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryRowMajor::create_des
     writer_desc.compile_time_args = writer_ct;
     writer_desc.config = WriterConfigDescriptor{};
 
-    // Per-core RT is the contiguous [start, n) stick range (offset before count). Kernel ABI: reader
-    // [index_addr, src_addr, start, n, page_map...], writer [in_addr, out_addr, start, n].
+    // Buffer addresses are common (per-kernel) runtime args, so a program-cache hit rebinds four
+    // slots in total rather than four per core. Per-core RT is the contiguous [start, n) stick range
+    // (offset before count). Kernel ABI: reader common [index_addr, src_addr], per-core [start, n,
+    // page_map...]; writer common [in_addr, out_addr], per-core [start, n].
+    reader_desc.emplace_common_runtime_args({index_t.buffer(), src_t.buffer()});
+    writer_desc.emplace_common_runtime_args({in_t.buffer(), output_tensor.buffer()});
     const auto page_map_vec = to_vector(attributes.page_map);
     uint32_t start = 0;
     for (const auto& [core, n] : scatter_assigned_cores(split, attributes.num_sticks)) {
         KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(index_t.buffer());
-        reader_args.push_back(src_t.buffer());
         reader_args.push_back(start);
         reader_args.push_back(n);
         reader_args.append(page_map_vec);
         reader_desc.emplace_runtime_args(core, reader_args);
-        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), start, n});
+        writer_desc.emplace_runtime_args(core, {start, n});
         start += n;
     }
 
@@ -697,17 +701,18 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryBf16ReduceRowMajor::
     writer_desc.compile_time_args = writer_ct;
     writer_desc.config = WriterConfigDescriptor{};
 
+    // Same common/per-core split as the plain ROW_MAJOR factory: the writer kernel is shared.
+    reader_desc.emplace_common_runtime_args({index_t.buffer(), src_t.buffer()});
+    writer_desc.emplace_common_runtime_args({in_t.buffer(), output_tensor.buffer()});
     const auto page_map_vec = to_vector(attributes.page_map);
     uint32_t start = 0;
     for (const auto& [core, n] : scatter_assigned_cores(split, attributes.num_sticks)) {
         KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(index_t.buffer());
-        reader_args.push_back(src_t.buffer());
         reader_args.push_back(start);
         reader_args.push_back(n);
         reader_args.append(page_map_vec);
         reader_desc.emplace_runtime_args(core, reader_args);
-        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), start, n});
+        writer_desc.emplace_runtime_args(core, {start, n});
         start += n;
     }
 
