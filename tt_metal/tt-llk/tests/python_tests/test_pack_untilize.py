@@ -273,3 +273,36 @@ def test_pack_untilize_narrow_row(
         narrow_row=True,
         row_num_datums=row_num_datums,
     )
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float32,
+            DataFormat.Int32,
+        ]
+    ),
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    # [64, 128] with a 32-bit Dest splits the tile-row into two blocks (block_ct_dim < full_ct_dim).
+    input_dimensions=[[32, 64], [64, 128]],
+    dest_sync=[DestSync.Half],
+    tile_dst_ct_offset=[0],
+)
+def test_pack_untilize_single_face_tile(
+    formats,
+    dest_acc,
+    input_dimensions,
+    dest_sync,
+    tile_dst_ct_offset,
+):
+    """16x16 tiles (num_faces == 1, face_r_dim == 16): all 16 rows of every tile must be packed."""
+    _run_pack_untilize(
+        formats,
+        dest_acc,
+        input_dimensions,
+        dest_sync,
+        tile_dst_ct_offset,
+        tile_dimensions=[16, 16],
+    )

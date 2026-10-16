@@ -240,6 +240,7 @@ inline void _llk_pack_untilize_uninit_()
  * @param address: L1 destination base address for the block.
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param tile_dst_rt_offset: Runtime row-tile offset into the destination register.
  * @note Call @ref _llk_pack_untilize_init_ with matching template/runtime args before this function, and
  *       @ref _llk_pack_untilize_uninit_ once all untilize-pack calls are complete.
@@ -252,13 +253,24 @@ template <
     std::uint32_t row_num_datums     = TILE_C_DIM,
     std::uint32_t tile_dst_ct_offset = 0>
 inline void _llk_pack_untilize_(
-    const std::uint32_t address, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t tile_dst_rt_offset = 0)
+    const std::uint32_t address,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t face_r_dim         = FACE_R_DIM,
+    const std::uint32_t num_faces          = 4,
+    const std::uint32_t tile_dst_rt_offset = 0)
 {
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal, row_num_datums>(address, pack_dst_format);
 
-    const std::uint32_t num_rows = (face_r_dim < FACE_R_DIM) ? face_r_dim : TILE_R_DIM / 4;
+    // MOP runs (Dest rows) per block. Each enabled packer reads one Dest row per run from its own row
+    // offset (packers 0..3 at Dest rows 0, 8, 32 and 40, see _llk_init_packer_dest_offset_registers_):
+    // a 32x32 tile is covered by all 4 packers and a 16-row two-face tile by packers 0 and 1, so 8 runs
+    // cover them. A single-face tile (num_faces == 1) enables packer 0 only, so it has to walk all
+    // face_r_dim rows itself; tiles with fewer than FACE_R_DIM rows also use one packer and need
+    // face_r_dim runs.
+    const std::uint32_t num_rows = (face_r_dim < FACE_R_DIM) ? face_r_dim : ((num_faces == 1) ? FACE_R_DIM : TILE_R_DIM / 4);
 
     for (std::uint32_t row = 0; row < num_rows; row++)
     {
