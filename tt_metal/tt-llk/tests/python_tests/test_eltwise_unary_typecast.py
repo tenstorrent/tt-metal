@@ -138,15 +138,15 @@ def _matrix_spec(formats: InputOutputFormat) -> StimuliSpec:
 
 
 def _uint16_full_range_spec() -> StimuliSpec:
-    """Every UInt16 value, with the bf16-inexact boundary and the extremes pinned.
+    """Random draws over the whole UInt16 range, with six values pinned per tile.
 
-    256 is the last integer bfloat16 holds exactly; 257, 0x8000 and 0xFFFF have to
-    be rounded, so the int -> bf16 rounding is exercised and not just the load. (The
-    matrix caps integer inputs at 255 for the sake of its integer outputs.)
-
-    Pinned ties: 257 and 0x8080 sit halfway between two bf16 values with the lower
-    one even, so nearest-even gives 256 / 0x8000 where the kernel's ties-away gives
-    258 / 0x8100; 259 is a tie whose truncation (258) differs from both.
+    The matrix caps integer inputs at 255 for the sake of its integer outputs, so
+    nothing there needs the int -> bf16 rounding; here about 1k draws from
+    [0, 0xFFFF] do, and the pins cover its edges: 256 is the last integer bfloat16
+    holds exactly; 257 and 0x8080 are ties with the lower neighbour even, so
+    nearest-even gives 256 / 0x8000 where the kernel's ties-away gives 258 / 0x8100;
+    259 is a tie whose truncation (258) differs from both; 0x8000 is exact and
+    pins the bit-15 boundary; 0xFFFF rounds up to 65536.
     """
     pinned = torch.tensor([256, 257, 259, 0x8000, 0x8080, 0xFFFF])
 
