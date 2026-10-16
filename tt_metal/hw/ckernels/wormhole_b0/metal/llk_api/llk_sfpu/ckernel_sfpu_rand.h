@@ -21,10 +21,19 @@ inline void rand_prng() {
     TTI_SFPMOV(0, prng_source, DEST, sfpmov_mod1_from_special);
 }
 
+// rand_row stores every SFPU row under ADDR_MOD_6 with dest incr 2 (even columns, then odd columns, of
+// each group of four Dst rows). Any op whose init rewrites ADDR_MOD_6 (e.g. topk_tile_init, dest incr 32)
+// leaves rand writing the wrong rows, so a caller that keeps the PRNG stream (no reseed) must still
+// re-program the slot before rand.
 template <bool APPROXIMATION_MODE>
-inline void rand_init(std::uint32_t seed) {
+inline void rand_addrmod_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+template <bool APPROXIMATION_MODE>
+inline void rand_init(std::uint32_t seed) {
+    rand_addrmod_init<APPROXIMATION_MODE>();
     // The all-ones state is the lock-up state of the hardware XNOR LFSR.
     if (seed == 0xFFFFFFFF) {
         seed = 0xFFFFFFFE;

@@ -41,8 +41,13 @@ static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
     constexpr uint32_t rand_scale = 0x43800000U;  // 256.0f
     constexpr uint32_t rand_from = 0;
 
+    // seed == 0 keeps the PRNG stream that ttnn.manual_seed started, but rand_tile still needs its
+    // address mode: top_k below reprograms that slot (dest incr 32), so a later draw without this
+    // init writes only the first row group of each face and packs stale dest rows as digits.
     if (seed != 0) {
         rand_tile_init(seed);
+    } else {
+        rand_tile_addrmod_init();
     }
     dfb_obj.reserve_back(1);
 
