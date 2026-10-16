@@ -14,7 +14,7 @@ from PIL import Image
 
 import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
-from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig, is_dram_harvested
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
@@ -113,6 +113,7 @@ def test_pipeline_inference(
         device=mesh_device,
         config=WanPipelineConfig.default(
             mesh_shape=mesh_device.shape,
+            dram_harvested=is_dram_harvested(mesh_device),
             dit_parallel_config=parallel_config,
             vae_parallel_config=vae_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
