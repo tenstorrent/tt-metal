@@ -200,17 +200,16 @@ def test_mm_encoder_perf(mesh_device):
         return
 
     if os.environ.get("PROBE_PROFILE") == "1":
-        # Device-profiler split of ONE encoder call (TT_METAL_DEVICE_PROFILER=1), the
-        # decode-roofline way: graph-capture the op order once, flush the device
-        # profiler after every call, then name the last N x ops rows by order
-        # (``decode_roofline_report.py --ops-json ... --steps N``).
+        # Device-time measurement (TT_METAL_DEVICE_PROFILER=1 under ``python -m tracy -p``):
+        # the profiler buffers hold ~2400 markers per core, so a whole 27-block tower
+        # call overflows them and a mid-call flush breaks the post-processing at
+        # mesh close. Profile ONE block instead: capture block 0's real inputs on a
+        # normal call (its input is cloned because the block frees it), replay the
+        # block N times with a profiler flush between replays, name the device rows
+        # from a graph capture of one replay (``decode_roofline_report.py --ops-json``)
+        # and scale by the block count. The unified (12B) embedder is small enough
+        # to profile whole.
         from models.demos.gemma4.tests.unit.test_decode_roofline import _device_ops_in_order
-
-        if getattr(tower, "projects_to_text", False):
-            call = lambda: tower(pv, pos)[0]
-        else:
-            seq_len = _vision_encoder_seq_len(num_patches)
-            call = lambda: tower(pv, pos, seq_len)[0]
 
         def _flush():
             try:
@@ -218,45 +217,64 @@ def test_mm_encoder_perf(mesh_device):
             except Exception:
                 pass
 
-        # One encoder call overflows the per-core profiler buffers (27 blocks x ~46
-        # device ops): flush after every block so no marker is dropped. The sync
-        # inflates wall time only; device durations are unaffected.
         enc = next((v for v in vars(tower).values() if isinstance(getattr(v, "blocks", None), list)), None)
         if enc is not None:
-            for blk in enc.blocks:
-                orig = blk.forward
+            seq_len = _vision_encoder_seq_len(num_patches)
+            call = lambda: tower(pv, pos, seq_len)[0]
+            blk = enc.blocks[0]
+            saved = {}
+            orig = blk.forward
 
-                def _wrapped(*a, _orig=orig, **k):
-                    out = _orig(*a, **k)
-                    ttnn.synchronize_device(mesh_device)
-                    _flush()
-                    return out
+            def _capture(x, rot_mats, cu_window_seqlens=None):
+                if "x" not in saved:
+                    saved["x"] = ttnn.clone(x)
+                    saved["rot"] = rot_mats
+                    saved["cu"] = cu_window_seqlens
+                return orig(x, rot_mats, cu_window_seqlens)
 
-                blk.forward = _wrapped
-            logger.info(f"profile mode: flushing the device profiler after each of {len(enc.blocks)} blocks")
-        for _ in range(2):  # compile + warm
+            blk.forward = _capture
             o = call()
             ttnn.synchronize_device(mesh_device)
             o.deallocate(True)
+            blk.forward = orig
+            unit = lambda: orig(ttnn.clone(saved["x"]), saved["rot"], saved["cu"])
+            units_per_encode, unit_name = len(enc.blocks), "vision_block"
+        else:
+            unit = lambda: tower(pv, pos)[0]
+            units_per_encode, unit_name = 1, "unified_embedder"
+        for _ in range(2):  # compile + warm
+            o = unit()
+            ttnn.synchronize_device(mesh_device)
+            o.deallocate(True)
+        wall = _timed(mesh_device, unit, iters, warmup=0)
         _flush()
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-        o = call()
+        o = unit()
         ttnn.synchronize_device(mesh_device)
         captured = ttnn.graph.end_graph_capture()
         o.deallocate(True)
         ops = _device_ops_in_order(captured)
         ops_json = out_path.replace(".json", "_ops.json")
         json.dump({"ops": ops}, open(ops_json, "w"))
-        logger.info(f"captured {len(ops)} graph ops for one encoder call -> {ops_json}")
         _flush()
         for _ in range(iters):
-            o = call()
+            o = unit()
             ttnn.synchronize_device(mesh_device)
             _flush()
             o.deallocate(True)
         _flush()
-        json.dump({"model": model_path, "profiled_calls": iters, "ops_json": ops_json}, open(out_path, "w"))
-        logger.info("PROBE_RESULT " + json.dumps({"profiled_calls": iters, "ops_json": ops_json}))
+        result = {
+            "model": model_path,
+            "num_patches": num_patches,
+            "unit": unit_name,
+            "units_per_encode": units_per_encode,
+            "profiled_calls": iters,
+            "unit_wall_ms": wall,
+            "graph_ops": len(ops),
+            "ops_json": ops_json,
+        }
+        json.dump(result, open(out_path, "w"), indent=1)
+        logger.info("PROBE_RESULT " + json.dumps(result))
         return
     if getattr(tower, "projects_to_text", False):
         result["vision_kind"] = "unified_embedder"
