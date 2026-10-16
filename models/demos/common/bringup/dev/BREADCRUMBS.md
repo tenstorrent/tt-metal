@@ -1239,3 +1239,14 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - Agent rule 16 (forks first; then TTNN, forked when it needs changing; composing last, with the reason); the plan
   role maps components to the forks first; the skill: check INDEX.md before a note or fix job names an op, and in
   every plan / gate commit review.
+
+## F87-F89 (2026-10-16): resumed fix jobs gate first; the dashboard never paints a passed step red; own-floor warns
+- F87: a task resumed after a stop (a fix job too, precheck False) runs its gate before an agent: FIX.4's restart
+  started an agent on work already done (about 30 min). orchestrator.py, selftest test_a_resumed_fix_gates_before_an_agent.
+- F88: F81 renamed every gate metric (pcc_* -> err_*), so the 85 steps passed before it had no metric of the new name and
+  the page painted them red (the word 'limit' reached the page). resolve_thresholds never passes 'limit'; a passed step
+  gated under an earlier rule gets a note. export.red_passed (the page's own check) writes dashboard/CHECK.txt; the
+  watch reports DASHBOARD RED; STALE_AFTER 15 -> 2 min.
+- F89 (owner): the own-floor row / column / additive-bias checks (F83) print WARN and record <tag>_floor_warn; only the
+  overall error (and the other existing checks) gate. S.swa.15 failed on kv's column bias 2.27 x (limit 2) and the
+  router's own floor (1e3 x, likely a flaw for selection outputs: review later).

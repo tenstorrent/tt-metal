@@ -506,6 +506,9 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
             else ""
         ),
         f"{fl['unexplained']} rows select an entry the nudge does not explain" if fl and fl["unexplained"] else "",
+    ]
+    bad = [b for b in bad if b]
+    warn = [  # F89: the own-floor row / column / bias checks warn, never gate (owner)
         f"row {own['row_at']} is {own['row_floor']:.3g} x its own floor (limit {k:g})"
         if own and own["row_floor"] > k
         else "",
@@ -521,7 +524,7 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
             else ""
         ),
     ]
-    bad = [b for b in bad if b]
+    warn = [w for w in warn if w]
     print(
         f"{'ok  ' if not bad else 'FAIL'} {tag} vs the CPU step on the same inputs: rel={e['rel']:.6f} "
         f"(<= {rel_lim:.5f}{f', component error {err:.5f}' if err is not None else ''}) row={e['row']:.6f} "
@@ -535,6 +538,9 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         )
         + (f" ({'; '.join(bad)})" if bad else "")
     )
+    if warn:
+        metrics.record(f"{tag}_floor_warn", 1)
+        print(f"WARN {tag} (not gating, for the owner's review; do not work on it): {'; '.join(warn)}")
     return NF.waive(s, block_type, st.name, ok and not bad, got, tag)  # F85: an owner waiver, recorded
 
 

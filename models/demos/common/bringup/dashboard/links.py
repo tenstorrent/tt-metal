@@ -25,7 +25,7 @@ from pathlib import Path
 import yaml
 
 FILE = "links.yaml"
-STALE_AFTER = 15 * 60
+STALE_AFTER = 2 * 60  # the orchestrator re-exports after every gate; the owner reads the published page
 
 
 def path(bringup_dir: Path) -> Path:
@@ -63,6 +63,13 @@ def stale(bringup_dir: Path, stale_after: float = STALE_AFTER, now: float | None
     links = d.get("links") or {}
     if not links:
         return None
+    check = Path(bringup_dir) / "dashboard" / "CHECK.txt"  # export.CHECK_FILE: passed tasks the page shows red
+    if check.exists() and check.read_text().strip():
+        bad = check.read_text().strip().splitlines()
+        return (
+            f"DASHBOARD RED: {len(bad)} passed tasks show red (an export bug; fix it before publishing): "
+            + "; ".join(bad[:3])
+        )
     files = [Path(bringup_dir) / "dashboard" / f for f in ("index.html", "teletext.html")]
     newest = max((f.stat().st_mtime for f in files if f.exists()), default=0)
     published = published_at(run_dir) if run_dir else float(d.get("published_at") or 0)
