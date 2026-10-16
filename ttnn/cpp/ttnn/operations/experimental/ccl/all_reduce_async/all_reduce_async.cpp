@@ -198,7 +198,7 @@ ttnn::Tensor all_reduce_async(
     // Everything below runs on intermediates whose labels nobody reads (the result is relabelled on every path), so
     // the helper's refusals for them are silenced: a collapsed Shard{d} reduce-scattered on d is column-major and
     // would otherwise be refused although the all_reduce result is labelled honestly.
-    [[maybe_unused]] const ttnn::operations::ccl::common::CallerRelabelsScope caller_relabels;
+    [[maybe_unused]] const ttnn::operations::ccl::common::SilenceIntermediateRefusals silence_refusals;
     uint32_t resolved_num_links = num_preferred_links.has_value()
                                       ? *num_preferred_links
                                       : ttnn::operations::ccl::common::get_num_links(*mesh_device_ptr, std::nullopt);
@@ -368,7 +368,7 @@ ttnn::Tensor all_reduce_async(
     // the helper's refusals for them are silenced. Without this a collapsed Shard{d} reduced along the outer axis
     // when finding_scatter_dim picks d is refused twice -- the reduce_scatter intermediate is column-major and the
     // all_gather of it interleaves -- although the all_reduce result is labelled honestly from `input_tensor`.
-    [[maybe_unused]] const ttnn::operations::ccl::common::CallerRelabelsScope caller_relabels;
+    [[maybe_unused]] const ttnn::operations::ccl::common::SilenceIntermediateRefusals silence_refusals;
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     const bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -409,7 +409,8 @@ ttnn::Tensor all_reduce_async(
         // AllGather (1, B, C, H, W) -> (num_devices, B, C, H, W)
         composite_dim = 0;
         // The unsqueezed tensor carries the input's label verbatim, so a collapsed Shard{0} input reads as sharded on
-        // the new gather dim; the gather is an intermediate (CallerRelabelsScope above), so its label is not refused.
+        // the new gather dim; the gather is an intermediate (SilenceIntermediateRefusals above), so its label is not
+        // refused.
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,

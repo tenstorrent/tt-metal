@@ -61,8 +61,8 @@ bool strict_ccl_topology() { return ttnn::CONFIG.get<"strict_ccl_topology">(); }
 // output lacks -- but can over-claim Replicate for the scatter family, so the latter logs at error level.
 using Family = RefusalFamily;
 
-// CallerRelabelsScope objects alive on this thread (see the header): while positive, refusals are silent.
-thread_local int caller_relabels_depth = 0;
+// SilenceIntermediateRefusals objects alive on this thread (see the header): while positive, refusals are silent.
+thread_local int silence_intermediate_refusals_depth = 0;
 
 // Each distinct message is logged once per process: a model that trips the same refusal in every layer would
 // otherwise flood the log. The set is bounded; once it holds kMaxRememberedMessages distinct messages it is cleared,
@@ -81,15 +81,15 @@ bool first_time(const std::string& message) {
 
 }  // namespace
 
-CallerRelabelsScope::CallerRelabelsScope() { ++caller_relabels_depth; }
+SilenceIntermediateRefusals::SilenceIntermediateRefusals() { ++silence_intermediate_refusals_depth; }
 
-CallerRelabelsScope::~CallerRelabelsScope() { --caller_relabels_depth; }
+SilenceIntermediateRefusals::~SilenceIntermediateRefusals() { --silence_intermediate_refusals_depth; }
 
-// No honest label: nullopt without a word inside a CallerRelabelsScope (the label is an intermediate's that the
-// caller replaces), TT_FATAL under strict mode, otherwise a log line and nullopt so the device op returns the input's
-// label and a host relabel site skips the relabel.
+// No honest label: nullopt without a word inside a SilenceIntermediateRefusals scope (the label is an intermediate's
+// that the caller replaces), TT_FATAL under strict mode, otherwise a log line and nullopt so the device op returns the
+// input's label and a host relabel site skips the relabel.
 std::optional<TensorTopology> refuse(const std::string& what, RefusalFamily family) {
-    if (caller_relabels_depth > 0) {
+    if (silence_intermediate_refusals_depth > 0) {
         return std::nullopt;
     }
     if (strict_ccl_topology()) {

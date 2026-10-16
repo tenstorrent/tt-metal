@@ -460,7 +460,7 @@ class TestCollapsedInputs:
         composite branch returned {4}, [Replicate] (the inner all_broadcast edited index 0 and the local sum kept it),
         claiming all four devices identical -- the over-claim tt-train's force_replicate_axes then repeated. The inner
         gather would now be refused as interleaving under strict mode; all_reduce_async runs it inside the helper's
-        CallerRelabelsScope (its label is never read) and relabels the result itself."""
+        SilenceIntermediateRefusals (its label is never read) and relabels the result itself."""
         tensor, data = _collapsed_tensor((4, 1, 1, 32), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 0), seed=36)
         _assert_collapsed(tensor, 0, "input sanity check")
 
