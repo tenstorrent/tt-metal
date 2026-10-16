@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <variant>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
@@ -106,12 +107,11 @@ struct DataflowBufferSpec {
     // of the memory for the duration of Program execution.
     //
     // The user-managed device memory object is declared at ProgramSpec scope and bound here.
-    // (Currently, only TensorParameter is supported.) The actual memory address is supplied
-    // at runtime via ProgramRunArgs.
+    // The actual memory address is supplied at runtime via ProgramRunArgs.
     //
-    // The bound memory object must have L1-based storage, and its allocation on each node must be
-    // large enough to hold the DFB (entry_size * num_entries).
-    std::optional<TensorParamName> borrowed_from = std::nullopt;
+    // The bound memory object must have SRAM-based storage, and its allocation on each node
+    // must be large enough to hold the DFB (entry_size * num_entries).
+    std::optional<std::variant<TensorParamName, RawAllocationParamName>> borrowed_from = std::nullopt;
 
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)
