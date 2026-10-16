@@ -102,3 +102,19 @@ inline void _llk_unpack_gather_compress_(const std::uint32_t l1_row_16_idx = 0)
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, l1_row_16_idx);
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 }
+
+/**
+ * @brief Undo @ref _llk_unpack_gather_compress_hw_configure_: disable the UNPACKER1 ARG FIFO and re-enable the
+ * SrcB zero flag.
+ *
+ * Without this, any later UNPACR1_STRIDE (e.g. a strided tilize into SrcB) would block on the ARG FIFO. The stride
+ * registers are left as-is, since every strided init reprograms them, and OUT_DATA_FORMAT is left at the gather
+ * format, so reconfigure SrcB if the next op's format differs.
+ *
+ * @note Call after the last @ref _llk_unpack_gather_compress_ once its UNPACRs have drained.
+ */
+inline void _llk_unpack_gather_compress_uninit_()
+{
+    cfg_rmw(THCON_UNPACKER1_REG0_ENABLE_ARG_FIFO_RMW, 0);
+    cfg_rmw(ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW, 0);
+}
