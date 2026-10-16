@@ -62,6 +62,28 @@ def fp32_bits(value):
     return int(torch.tensor([float(value)], dtype=torch.float32).view(torch.int32).item()) & 0xFFFFFFFF
 
 
+def semaphore_descriptor(ranges):
+    """Semaphore 0 (initial value 0) of a program on ``ranges``, or None if the bindings take other arguments."""
+    attempts = [dict(id=0, core_ranges=ranges, initial_value=0), dict(core_ranges=ranges, initial_value=0)]
+    core_type = getattr(getattr(ttnn, "CoreType", None), "Worker", None)
+    if core_type is not None:
+        attempts.append(dict(core_type=core_type, core_ranges=ranges, initial_value=0))
+    for kwargs in attempts:
+        try:
+            return ttnn.SemaphoreDescriptor(**kwargs)
+        except (TypeError, AttributeError):
+            continue
+    return None
+
+
+def noc_coords(device, cores):
+    """Virtual NoC coordinates of logical worker ``cores`` (the same on every chip), or None without the lookup."""
+    try:
+        return [device.worker_core_from_logical_core(c) for c in cores]
+    except (AttributeError, TypeError, RuntimeError):
+        return None
+
+
 def bank_vcs(cores):
     """Readers in the same core row get different VCs (as DeepSeek-B1's DRAM streaming matmul)."""
     vcs = []
@@ -508,11 +530,82 @@ class ReduceExpand:
             cb(self.cb_res, self.tiles_per_core),
             cb(self.cb_x, self.tiles_per_core * self.row_blocks),
         ]
+        # With a norm as well: y (the residual sum, for the norm), y^2, the J / M constants, the row sums, this
+        # core's partial, every core's user rows of their partials, gamma and the normalized tiles.
+        self.cb_y, self.cb_sq, self.cb_const, self.cb_rs, self.cb_part = 6, 7, 8, 9, 10
+        self.cb_gather, self.cb_gamma, self.cb_h = 11, 12, 13
+        fp32_page = full.get_tile_size(ttnn.float32)
 
-    def __call__(self, gathered, out, residual=None):
+        def cb32(index, pages):
+            fmt = ttnn.CBFormatDescriptor(
+                buffer_index=index, data_format=ttnn.float32, page_size=fp32_page, tile=ttnn.TileDescriptor(full)
+            )
+            return ttnn.CBDescriptor(
+                total_size=pages * fp32_page, core_ranges=self.core_ranges, format_descriptors=[fmt]
+            )
+
+        self.norm_cbs = self.residual_cbs + [
+            cb(self.cb_y, self.tiles_per_core),
+            cb32(self.cb_sq, 1),
+            cb32(self.cb_const, 2),
+            cb32(self.cb_rs, 1),
+            cb32(self.cb_part, 1),
+            cb32(self.cb_gather, 1),
+            cb(self.cb_gamma, self.tiles_per_core),
+            cb(self.cb_h, self.tiles_per_core),
+        ]
+        self.norm_compute_config = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+        )
+        self.noc_cores = noc_coords(device, self.cores)
+        self.norm_consts = None
+        if self.noc_cores is not None and semaphore_descriptor(self.core_ranges) is not None:
+            # J (all ones) and M (M[r][c] = 1 when r % rows == c % rows) as two fp32 tiles.
+            r = torch.arange(TILE)
+            m = (r.reshape(-1, 1) % rows == r.reshape(1, -1) % rows).float()
+            self.norm_consts = ttnn.from_torch(
+                torch.cat([torch.ones(TILE, TILE), m], dim=1).reshape(1, 1, TILE, 2 * TILE),
+                device=device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=plan.replicate(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+    def compact_gamma(self, plan, gamma):
+        """RMSNorm weight ``gamma`` (torch [hidden]) packed like the compact tiles: row 4c + u of compact tile tc holds
+        gamma over tile column c * compact_tiles + tc, for every user u. [1, 1, 32, hidden / 8] bf16 DRAM tiles."""
+        g = gamma.float().reshape(self.row_blocks, self.compact_tiles, TILE)  # [c, tc, j]
+        rows = TILE // self.row_blocks
+        packed = g.reshape(self.row_blocks, 1, self.compact_width).expand(-1, rows, -1)
+        packed = packed.reshape(1, 1, TILE, self.compact_width)
+        return ttnn.from_torch(
+            packed.contiguous(),
+            device=plan.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=plan.replicate(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    @property
+    def can_norm(self):
+        return self.norm_consts is not None
+
+    def __call__(self, gathered, out, residual=None, norm=None):
         """gathered [1, 1, 32, chips * hidden / 8], out [1, 1, 32, hidden] (bf16 DRAM interleaved tiles); returns
         ``out``. ``residual`` [1, 1, 32, hidden] (bf16 DRAM interleaved tiles): out = residual + the bf16-rounded sum
-        in rows 0-3 and the residual's rows 4-31 (the all-reduce and the residual add in one program)."""
+        in rows 0-3 and the residual's rows 4-31 (the all-reduce and the residual add in one program).
+
+        ``norm`` (with ``residual``): (gamma from ``compact_gamma``, norm_out, eps). Also writes RMSNorm(out) * gamma of
+        the user rows into rows 0-3 of ``norm_out`` ([1, 1, 32, hidden] bf16 DRAM tiles whose rows 4-31 the caller
+        keeps zero), so the next block's norm is part of this program."""
+        if norm is not None:
+            assert residual is not None and self.can_norm
+            return self._call_norm(gathered, out, residual, *norm)
         tensors = (gathered, out) + ((residual,) if residual is not None else ())
         for t in tensors:
             assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
@@ -573,6 +666,118 @@ class ReduceExpand:
         io = [gathered] + ([residual] if residual is not None else []) + [out]
         ttnn.generic_op(io, program)
         return out
+
+    def _call_norm(self, gathered, out, residual, gamma, norm_out, eps):
+        for t in (gathered, out, residual, gamma, norm_out):
+            assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
+            assert t.shape[-2] == TILE
+        assert gathered.shape[-1] == self.chips * self.compact_width
+        assert out.shape[-1] == self.hidden and residual.shape[-1] == self.hidden and norm_out.shape[-1] == self.hidden
+        assert gamma.shape[-1] == self.compact_width
+        cores = len(self.cores)
+        assert cores * (TILE // self.row_blocks) == TILE, "each core's user rows fill one block of the gather tile"
+        noc = []
+        for c in self.noc_cores:
+            noc += [c.x, c.y]
+
+        reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for i, core in enumerate(self.cores):
+            first = i * self.tiles_per_core
+            reader_rt[core.x][core.y] = [
+                gathered.buffer_address(),
+                first,
+                residual.buffer_address(),
+                gamma.buffer_address(),
+                self.norm_consts.buffer_address(),
+            ]
+            writer_rt[core.x][core.y] = [
+                out.buffer_address(),
+                first,
+                residual.buffer_address(),
+                norm_out.buffer_address(),
+                i,
+            ] + noc
+            compute_rt[core.x][core.y] = []
+
+        sem_id = 0
+        reader_ct = [
+            self.cb_in,
+            self.cb_res,
+            self.tiles_per_core,
+            self.compact_tiles,
+            self.chips,
+            self.row_blocks,
+            self.cb_gamma,
+            self.cb_const,
+            self.cb_gather,
+            cores,
+            sem_id,
+        ]
+        writer_ct = [
+            self.cb_sum,
+            self.cb_x,
+            self.tiles_per_core,
+            self.compact_tiles,
+            self.row_blocks,
+            self.cb_part,
+            self.cb_gather,
+            self.cb_h,
+            cores,
+            sem_id,
+        ]
+        compute_ct = [
+            self.cb_in,
+            self.cb_mid,
+            self.cb_res,
+            self.cb_sum,
+            self.tiles_per_core,
+            self.chips,
+            self.cb_y,
+            self.cb_sq,
+            self.cb_const,
+            self.cb_rs,
+            self.cb_part,
+            self.cb_gather,
+            self.cb_gamma,
+            self.cb_h,
+            fp32_bits(1.0 / self.hidden),
+            fp32_bits(eps),
+        ]
+        reader = ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/moe_reduce_norm_reader.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=self.core_ranges,
+            compile_time_args=reader_ct,
+            runtime_args=reader_rt,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_0_default
+            ),
+        )
+        writer = ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/moe_expand_norm.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=self.core_ranges,
+            compile_time_args=writer_ct,
+            runtime_args=writer_rt,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_1_default
+            ),
+        )
+        compute = ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/moe_reduce_norm_compute.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=self.core_ranges,
+            compile_time_args=compute_ct,
+            runtime_args=compute_rt,
+            config=self.norm_compute_config,
+        )
+        program = ttnn.ProgramDescriptor(
+            kernels=[reader, writer, compute],
+            cbs=self.norm_cbs,
+            semaphores=[semaphore_descriptor(self.core_ranges)],
+        )
+        ttnn.generic_op([gathered, residual, gamma, self.norm_consts, out, norm_out], program)
+        return out, norm_out
 
 
 class CompactRows:

@@ -25,6 +25,7 @@ from . import kv as kv_lib
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
+from .moe_stream import zero_output
 from .rope import MiMoRotarySetup
 
 
@@ -136,6 +137,7 @@ class TtMiMoModel:
         self.decode_trace = None
         self.greedy_head = None
         self.decode_users = None
+        self.norm_buffers = None
         # Chip c's vocab shard starts at c * vocab_local: added to its local top-k ids for the device greedy.
         offsets = (torch.arange(plan.tp, dtype=torch.int32) * self.vocab_local).reshape(plan.tp, 1, 1, 1)
         self.vocab_offset = ttnn.from_torch(
@@ -167,6 +169,21 @@ class TtMiMoModel:
             if layer.is_moe:
                 layer.mlp.set_decode_users(num_users)
         self.set_page_tables(tables)
+        self._setup_fused_norms()
+
+    def _setup_fused_norms(self):
+        """Let every compact-decode layer's block reductions also compute the following RMSNorm (the post-attention
+        norm, then the next layer's input norm or the final norm), through two persistent buffers."""
+        if self.norm_buffers is None:
+            self.norm_buffers = (
+                zero_output(self.plan, self.cfg.hidden_size),
+                zero_output(self.plan, self.cfg.hidden_size),
+            )
+        for i, layer in enumerate(self.layers):
+            if layer.fused_norm is not None or not layer.can_fuse_norms():
+                continue
+            nxt = self.layers[i + 1].input_norm if i + 1 < len(self.layers) else self.final_norm
+            layer.set_fused_norms(self.plan, nxt, self.norm_buffers)
 
     def set_page_tables(self, tables):
         """tables: {is_swa: int32 [tp, max_batch, blocks_per_user]} (per chip slot -> physical block)."""
@@ -193,8 +210,11 @@ class TtMiMoModel:
         tt_tokens.deallocate(True)
         return ttnn.reshape(x, (1, 1, tokens.numel(), self.cfg.hidden_size))
 
-    def _logits(self, x):
-        h = self.final_norm(x)
+    def _logits(self, x, h=None):
+        """``h``: final_norm(x) when the last layer's reduction already computed it (a persistent buffer)."""
+        own_h = h is None
+        if own_h:
+            h = self.final_norm(x)
         logits = ttnn.linear(
             h,
             self.lm_head,
@@ -202,7 +222,8 @@ class TtMiMoModel:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.lm_config,
         )
-        h.deallocate(True)
+        if own_h:
+            h.deallocate(True)
         return logits
 
     # ------------------------------------------------------------------ prefill
@@ -290,11 +311,14 @@ class TtMiMoModel:
             False: self.rope_setups["full"].decode_rot_mats(cos_full, sin_full),
         }
         positions = {"pos": cur_pos_tt, "pos_owned": pos_owned_tt, "owner_mask": owner_mask_tt}
+        h = None
         for i, layer in enumerate(self.layers):
-            y = layer.forward_decode(x, rot_mats, positions, self.page_table_tt, self.kv_caches[i], mask_tt)
+            y, h = layer.forward_decode(
+                x, rot_mats, positions, self.page_table_tt, self.kv_caches[i], mask_tt, h=h, return_norm=True
+            )
             x.deallocate(True)
             x = y
-        logits = self._logits(x)
+        logits = self._logits(x, h)
         x.deallocate(True)
         for t in (*rot_mats[True], *rot_mats[False]):
             t.deallocate(True)

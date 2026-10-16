@@ -45,6 +45,10 @@ class TtRMSNorm:
         )
         return mem, program
 
+    def torch_weight(self):
+        """The weight as a torch [hidden] tensor (read back from chip 0; it is replicated)."""
+        return ttnn.to_torch(ttnn.get_device_tensors(self.weight)[0]).float().reshape(-1)
+
     def __call__(self, x, memory_config=None):
         """``memory_config``: where the decode (one tile row) output goes; DRAM interleaved by default."""
         if x.shape[-2] == TILE:
@@ -164,6 +168,21 @@ class TtMiMoDecoderLayer:
             )
         else:
             self.mlp = TtMiMoDenseMLP(plan, layer_idx, w.get("mlp"), cache_dir=cache_dir, weight_dtype=mlp_dtype)
+        self.fused_norm = None
+
+    def can_fuse_norms(self):
+        return self._compact_decode() and self.mlp.reduce_expand.can_norm
+
+    def set_fused_norms(self, plan, next_norm, buffers):
+        """Compact decode with both block reductions also computing the following RMSNorm: the attention block's
+        reduction writes post_norm(x2) into ``buffers[1]`` and the MoE block's writes ``next_norm`` (the next layer's
+        input norm, or the final norm) of the layer output into ``buffers[0]``; forward_decode(h=..., return_norm=True)
+        passes the latter on. ``buffers``: persistent zero [1, 1, 32, hidden] bf16 DRAM tensors shared by all layers."""
+        red = self.mlp.reduce_expand
+        self.fused_norm = {
+            "post": (red.compact_gamma(plan, self.post_norm.torch_weight()), buffers[1], self.post_norm.eps),
+            "next": (red.compact_gamma(plan, next_norm.torch_weight()), buffers[0], next_norm.eps),
+        }
 
     def _ffn(self, x, token_mask, decode=False):
         h = self.post_norm(x)
@@ -204,23 +223,37 @@ class TtMiMoDecoderLayer:
         """The MoE streaming decode serves users in rows 0-3 only: both block reductions then move only those rows."""
         return self.is_moe and self.mlp.gate_up_stream is not None
 
-    def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, token_mask=None):
+    def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, token_mask=None, h=None, return_norm=False):
+        """``h``: input_norm(x) when the previous layer's reduction already computed it (see set_fused_norms).
+        ``return_norm``: return (y, the next norm of y or None)."""
         if not self._compact_decode():
             x2 = self.attention_decode(x, rot_mats, cur_pos, page_table, kv_cache)
             y = self._ffn(x2, token_mask, decode=True)
             x2.deallocate(True)
-            return y
-        # Each block's row all-reduce is a compact all-gather; ReduceExpand sums the chips and adds the residual.
-        h = self.input_norm(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+            return (y, None) if return_norm else y
+        # Each block's row all-reduce is a compact all-gather; ReduceExpand sums the chips and adds the residual
+        # (with fused norms, it also computes the following RMSNorm).
+        fused = self.fused_norm
+        own_h = h is None
+        if own_h:
+            h = self.input_norm(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         gathered = self.attn.forward_decode(
             h, rot_mats[self.is_swa], cur_pos, self._page_table(page_table), kv_cache, compact=True
         )
-        h.deallocate(True)
-        x2 = self.mlp.reduce_residual(gathered, x)
+        if own_h:
+            h.deallocate(True)
+        if fused is not None:
+            x2, h2 = self.mlp.reduce_residual(gathered, x, norm=fused["post"])
+        else:
+            x2 = self.mlp.reduce_residual(gathered, x)
         if gathered is not self.attn.compact_buf:
             gathered.deallocate(True)
-        h2 = self.post_norm(x2)
-        y = self.mlp.forward_decode(h2, token_mask, residual=x2)
-        h2.deallocate(True)
+        if fused is None:
+            h2 = self.post_norm(x2)
+        nxt = fused["next"] if fused is not None and return_norm else None
+        out = self.mlp.forward_decode(h2, token_mask, residual=x2, norm=nxt)
+        if fused is None:
+            h2.deallocate(True)
         x2.deallocate(True)
-        return y
+        y, h_next = out if nxt is not None else (out, None)
+        return (y, h_next) if return_norm else y

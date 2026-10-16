@@ -17,6 +17,8 @@ import ttnn
 
 from .common import TILE, DramShardedMatmul, compute_config
 from .moe_stream import bank_vcs, dram_bank_cores
+from .moe_stream import noc_coords as _noc_coords
+from .moe_stream import semaphore_descriptor as _semaphore
 
 KERNEL_DIR = "models/experimental/mimo_v2_6_flash/tt/kernels/proj"
 
@@ -30,28 +32,6 @@ def _cb(index, dtype, pages, ranges):
     page = tile.get_tile_size(dtype)
     fmt = ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page, tile=ttnn.TileDescriptor(tile))
     return ttnn.CBDescriptor(total_size=pages * page, core_ranges=ranges, format_descriptors=[fmt])
-
-
-def _semaphore(ranges):
-    """Semaphore 0 (initial value 0) of a program on ``ranges``, or None if the bindings take other arguments."""
-    attempts = [dict(id=0, core_ranges=ranges, initial_value=0), dict(core_ranges=ranges, initial_value=0)]
-    core_type = getattr(getattr(ttnn, "CoreType", None), "Worker", None)
-    if core_type is not None:
-        attempts.append(dict(core_type=core_type, core_ranges=ranges, initial_value=0))
-    for kwargs in attempts:
-        try:
-            return ttnn.SemaphoreDescriptor(**kwargs)
-        except (TypeError, AttributeError):
-            continue
-    return None
-
-
-def _noc_coords(device, cores):
-    """Virtual NoC coordinates of logical worker ``cores`` (the same on every chip), or None without the lookup."""
-    try:
-        return [device.worker_core_from_logical_core(c) for c in cores]
-    except (AttributeError, TypeError, RuntimeError):
-        return None
 
 
 def _kernel(name, cores, ct_args, rt_args, config):
