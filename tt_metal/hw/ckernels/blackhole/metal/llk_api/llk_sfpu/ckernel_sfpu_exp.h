@@ -238,7 +238,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_prgm_(sfpi::vFloat val, C0 c0, C1 c1
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
  *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
  */
-template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
+template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE /*maybe_unused*/, int ITERATIONS>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // Iteration-invariant constants. Loaded once before the loop.
     //
@@ -262,8 +262,8 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 
     // Number of instructions in one iteration of the loop body. Used by the
     // load_replay_buf record and TTI_REPLAY/replay below; MUST match exactly the
-    // count of TTI_ instructions emitted by the recorded lambda, or the replay
-    // buffer will misalign.
+    // count of instructions (TTI_ or TT_) emitted by the recorded lambda, or the
+    // replay buffer will misalign.
     //
     //   Base body:                                                15
     //     SFPLOAD, SFPMAD, SFPLOADI(255), SFPSWAP,
@@ -725,10 +725,10 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
-            // CLAMP_NEGATIVE is forwarded for API symmetry with the WH kernel,
-            // but on BH the negative-input handling is applied unconditionally
-            // because the SFPGT mask hides in an SFPMAD latency window and is
-            // effectively free (no other instruction to interleave with SFPMAD).
+            // CLAMP_NEGATIVE is forwarded for signature symmetry with the WH kernel
+            // and is unused by both: the negative-input handling is unconditional
+            // on both arches because the integer trick needs xlog2 >= 0 (here an
+            // SFPGT mask hidden in an SFPMAD latency window, on WH a lower clamp).
             _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         } else {
             // The replayed form uses no SFPLOADMACRO, but DISABLE_SFPLOADMACRO (TT_METAL_DISABLE_SFPLOADMACRO, the
