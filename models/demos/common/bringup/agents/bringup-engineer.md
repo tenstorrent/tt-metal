@@ -117,6 +117,10 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    the evidence (the stage, its numbers vs the floor), say so in your summary (answer `disagree` on a note or fix
    that asks for more), and stop: the owner waives it (`tests.waivers`) and it is debugged once the model produces
    output tokens.
+   Never hand-compose a numerical path TTNN or a bring-up fork already has (an RMS norm from multiply / add / rsqrt,
+   a softmax from exp / sum / reciprocal): use the op, and when it does not fit as is (e.g. a row split over chips
+   needing only its statistic), extend the fork behind an option (bringup-fork-op skill) rather than rebuilding it;
+   ttnn/ttnn/bringup/INDEX.md lists the forks (rms_norm_ttnn is AI-generated and fast).
 15. Every box. When the brief has a "Boxes" section, the code must run on every box it lists, not only on this run's:
    read chip counts and the mesh shape from the mesh, never from constants that fit this box; size anything that
    depends on the chip count (cache stripes, a chip's share of a chunk, alignment) for every listed box (e.g. the least
