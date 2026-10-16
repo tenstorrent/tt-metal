@@ -27,6 +27,7 @@ A gate metric written ``>= limit`` in tasks.yaml is compared with the ``<metric>
 from __future__ import annotations
 
 import json
+import math
 
 import torch
 from torch.overrides import TorchFunctionMode
@@ -224,3 +225,89 @@ def flips(scores, k: int, got_support, nudge_scores: list) -> dict:
         "unexplained": int(far.any(-1).sum()),
         "frac": diff.any(-1).sum().item() / nrows,
     }
+
+
+# ---------------------------------------------------------------- each row and column against its own floor (F83)
+def _r(t: torch.Tensor, shape) -> torch.Tensor:
+    return t.double().reshape(shape[0], -1) if len(shape) >= 1 else t.double().reshape(1, -1)
+
+
+def _c(t: torch.Tensor, shape) -> torch.Tensor:
+    return t.double().reshape(-1, shape[-1]) if len(shape) >= 2 else t.double().reshape(-1, 1)
+
+
+def own_floor(got, want, outs, res_dtype: str = "bf16", scale: float = 1.0) -> dict:
+    """F83: every row and every column of ``got`` against its own noise floor, and the signed additive bias.
+
+    Per row r (and per column c, over the rows): ||got_r - want_r|| / max(the floor's ||out_r - want_r|| (the worst
+    nudged run), one rounding of want_r to ``res_dtype``) x 1 / scale: no division by a tiny norm and no fixed floor;
+    a row that is exact on the device and in the floor counts 0. Additive bias per column: |mean over the rows of
+    (got - want)| over the larger of the floor's own |mean|, the largest random mean C columns of the floor's rms give
+    (sqrt(2 ln 2C) x rms / sqrt(rows)) and the same for one rounding. The worst row (column) is allowed the expected
+    excess of the worst of N (1 + sqrt(2 ln 2N / m), m its length) over a typical one.
+    ``scale`` >= 1 widens every floor by the official arithmetic's excess over the nudge (a whole-output ratio).
+    Returns the worst ratios (gated <= calib), where they are, and the worst column's signed bias over its rms."""
+    w = want.double()
+    shape = w.shape
+    g = got.double().reshape(shape)
+    res = round_to(w, res_dtype).double() if w.is_floating_point() else w
+    out = {}
+    for name, f, dim in (("row", _r, 1), ("col", _c, 0)):
+        if name == "col" and len(shape) < 2:
+            continue
+        e_dev = (f(g, shape) - f(w, shape)).norm(dim=dim)
+        e_fl = torch.stack([(f(o.double().reshape(shape), shape) - f(w, shape)).norm(dim=dim) for o in outs]).amax(0)
+        e_res = (f(res, shape) - f(w, shape)).norm(dim=dim)
+        # the worst of N rows (columns) of m elements sits ~ 1 + sqrt(2 ln 2N / m) above a typical one (chi statistics)
+        n_, m_ = e_dev.numel(), max(f(w, shape).shape[dim], 1)
+        denom = scale * torch.maximum(e_fl, e_res) * (1 + math.sqrt(2 * math.log(2 * n_) / m_))
+        ratio = torch.where(
+            e_dev == 0,
+            torch.zeros_like(e_dev),
+            torch.where(denom > 0, e_dev / denom.clamp_min(1e-300), torch.full_like(e_dev, math.inf)),
+        )
+        j = int(ratio.argmax().item())
+        out[f"{name}_floor"], out[f"{name}_at"] = float(ratio[j].item()), j
+    if len(shape) >= 2:
+        n = _c(w, shape).shape[0]
+        d_dev = (_c(g, shape) - _c(w, shape)).mean(0)
+        d_fl = [(_c(o.double().reshape(shape), shape) - _c(w, shape)) for o in outs]
+        # a random error's column mean is ~ rms / sqrt(rows); the largest of C such means ~ sqrt(2 ln 2C) of that
+        spread = math.sqrt(2 * math.log(2 * d_dev.numel())) / math.sqrt(n)
+        lim = torch.stack([x.mean(0).abs() for x in d_fl] + [x.pow(2).mean(0).sqrt() * spread for x in d_fl]).amax(0)
+        r_res = _c(res, shape) - _c(w, shape)  # one rounding: its mean, and the random mean its rms allows
+        lim = scale * torch.maximum(lim, torch.maximum(r_res.mean(0).abs(), r_res.pow(2).mean(0).sqrt() * spread))
+        ratio = torch.where(
+            d_dev == 0,
+            torch.zeros_like(d_dev),
+            torch.where(lim > 0, d_dev.abs() / lim.clamp_min(1e-300), torch.full_like(d_dev, math.inf)),
+        )
+        j = int(ratio.argmax().item())
+        rms = _c(w, shape)[:, j].pow(2).mean().sqrt().item()
+        out.update(
+            bias_floor=float(ratio[j].item()), bias_at=j, bias_signed=float(d_dev[j].item() / rms) if rms > 0 else 0.0
+        )
+    return out
+
+
+# ---------------------------------------------------------------- owner waivers (F85)
+def waiver(s, block_type: str | None, step: str) -> str:
+    """The owner's waiver of a step's noise-floor checks (spec tests.waivers: {<step> | <block type>.<step>: reason}),
+    e.g. a gap the device's arithmetic cannot close at its normal settings, to be fixed later. '' when none."""
+    w = s.get("tests.waivers") or {}
+    return str(w.get(f"{block_type}.{step}") or w.get(step) or "").strip()
+
+
+def waive(s, block_type, step: str, ok: bool, out, tag: str) -> bool:
+    """A waived step passes its noise-floor checks when its output is whole (finite, the right size); the failure is
+    printed and recorded (<tag>_waived = 1), never hidden."""
+    why = waiver(s, block_type, step)
+    if ok or not why:
+        return ok
+    whole = isinstance(out, torch.Tensor) and (not out.is_floating_point() or bool(torch.isfinite(out.float()).all()))
+    metrics.record(f"{tag}_waived", 1)
+    print(
+        f"WAIVED {tag}: the noise-floor checks above failed; owner waiver: {why}"
+        + ("" if whole else " (but the output is not whole: FAIL)")
+    )
+    return whole

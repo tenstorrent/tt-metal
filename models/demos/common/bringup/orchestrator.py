@@ -1609,6 +1609,7 @@ def main(argv=None) -> int:
         for tid, e in led.state().items():
             if isinstance(e, dict) and e.get("status") in ("STOPPED", "RUNNING"):  # RUNNING = an interrupted run
                 led.update(tid, status="TODO", history_add={"t": now(), "status": "RESUMED"})
+    OV.clear_status(orch.run_dir)  # F84: the overseer's "stopped because" line ends when the run starts again
     pid_file = orch.run_dir / W.PID_FILE  # the supervisor's watch (watch.py) tells a stopped run from a quiet one
     pid_file.write_text(f"{os.getpid()} {now()}\n")
     # F70: the run's timeline (start / exit with its code) and every device run's lock wait and run time

@@ -256,6 +256,15 @@ def resolve_thresholds(thr: dict, vals: dict, recorded: dict) -> tuple[dict, str
     return out, note
 
 
+def _overseer_status(spec, led) -> str | None:
+    """F84: why the overseer has the run stopped (overseer status), shown while it is set."""
+    from models.demos.common.bringup import overseer as OV
+    from models.demos.common.bringup.core.gate import run_name
+
+    rec = OV.status(spec.run_dir(run_name(led)))
+    return f"{rec['text']} (since {rec['t'][11:16]})" if rec else None
+
+
 def build(spec) -> dict:
     led = Ledger(spec.bringup_dir)
     tasks_spec, state = led.tasks(), led.state()
@@ -364,6 +373,7 @@ def build(spec) -> dict:
     plan_mem = res / "plan_memory.json"
     return {
         "generated": time.strftime("%Y-%m-%d %H:%M"),
+        "overseer_status": _overseer_status(spec, led),
         "branch": git(spec.repo, "rev-parse", "--abbrev-ref", "HEAD"),
         "head": git(spec.repo, "rev-parse", "--short", "HEAD"),
         "title": f"{spec.data.get('hf_id', spec.model).split('/')[-1]} chunked prefill",

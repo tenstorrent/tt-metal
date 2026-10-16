@@ -557,7 +557,34 @@ class Expect:
             if cl is not None:  # never tighter than col_factor x the whole-output limit (Gemma mlp: one column 1.06 x)
                 cl = cl.clamp_min(self.lim["component_col_factor"] * rl)
             L = float_limits(self.lim, f, rl, model, second, cl, res, self.k)
+            # F83: rows and columns against their own floors (below) replace the worst-row, row-ratio and per-column
+            # limits, which divided by small norms behind a fixed 1e-6 floor
+            L.update(row=math.inf, ratio=math.inf, col=None)
             e, bad = float_fails(got, ref, L)
+            if got.numel() == ref.numel() and not bad:
+                outs = self.floor["golden"] if vs_golden else self.floor[case.name]
+                base = self.gold_model["rel"] if vs_golden else self.model_err[case.name]["rel"]
+                ar = (
+                    (self.arith.get("vs_golden" if vs_golden else "vs_step") or {}).get("rel")
+                    if case.name == "golden"
+                    else None
+                )
+                nud = max(rel(o, ref) for o in outs)
+                scale = (
+                    max(1.0, (ar or 0.0) / nud) if nud > 0 else 1.0
+                )  # the official arithmetic's excess over the nudge
+                own = NF.own_floor(got, ref, outs, "bf16" if vs_golden else self.out_dtype, scale)
+                e.update(own)
+                kk = f * self.k
+                if own["row_floor"] > kk:
+                    bad.append(f"row {own['row_at']} is {own['row_floor']:.3g} x its own floor (limit {kk:g})")
+                if case.name == "golden" and own.get("col_floor", 0) > kk:
+                    bad.append(f"column {own['col_at']} is {own['col_floor']:.3g} x its own floor (limit {kk:g})")
+                if case.name == "golden" and own.get("bias_floor", 0) > kk:
+                    bad.append(
+                        f"column {own['bias_at']} has an additive bias of {own['bias_signed']:+.3g} of its rms, "
+                        f"{own['bias_floor']:.3g} x its floor (limit {kk:g})"
+                    )
         elif self.kind == "selection":
             e, bad = selection_fails(got, ref, self.lim, f, L=self.golden_L if vs_golden else self.L[case.name])
             if not vs_golden and case.name in self.scores and got.numel() == ref.numel():
