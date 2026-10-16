@@ -1025,6 +1025,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         model = self.model[0]
         assert model.mtp is not None, "MTP head not built (checkpoint has no MTP weights?)"
         model.set_gdn_fused_decode(True)
+        # O's lean attention decode cut draft acceptance when the seed path used it (model.py _forward_seed_bucket_tp
+        # forces lean_decode=False for that reason); keep the drafter on the validated non-lean path unless opted in.
+        if os.environ.get("QWEN36_MTP_LEAN_DECODE", "0") != "1":
+            model.mtp.attention.lean_decode = False
         return self
 
     def _engine(self):
