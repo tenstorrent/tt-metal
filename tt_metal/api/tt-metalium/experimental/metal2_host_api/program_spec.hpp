@@ -30,6 +30,7 @@ namespace tt::tt_metal::experimental {
 //      o scratchpads
 //  - user-managed resources (parameters)
 //      o tensor parameters
+//      o raw allocation parameters (advanced option)
 //      o prefetcher pipe parameters (advanced option)
 //
 // It also specifies the device nodes (physical location) where kernels will run,
@@ -78,24 +79,42 @@ struct ProgramSpec {
     // Kernels that make up the Program
     Group<KernelSpec> kernels;
 
+    //----------------------------------------------------------------------------
     // Program-scope resources (allocated for the Program's execution lifetime)
-    // DFBs, semaphores, and scratchpads
+
+    // Dataflow buffers enable FIFO-style communication between kernels.
     Group<DataflowBufferSpec> dataflow_buffers;
+
+    // Semaphores enable synchronization between kernels.
     Group<SemaphoreSpec> semaphores;
+
+    // Scratchpads provide temporary local read/write storage for kernels.
+    // (with no inter-kernel synchronization capabilities)
     Group<ScratchpadSpec> scratchpads;
 
+    //----------------------------------------------------------------------------
+    // User-managed resources (lifetime is explicitly user-managed)
+    //
+    // A user-managed resource is allocated and managed independently of the Program's
+    // execution. User-managed resources the Program requires are declared here;
+    // the specific resources that the Program's kernels will operate on are supplied
+    // (via ProgramRunArgs) when the Program is enqueued for execution.
+
     // Tensor parameter declarations
-    // Provides ids and layout specs for tensors the Program's kernels will operate on
-    // (The actual MeshTensors are supplied via ProgramRunArgs.)
+    // Describes the tensors the Program's kernels will operate on and their properties
     Group<TensorParameter> tensor_parameters;
 
+    // See Advanced Options for additional user-managed resource parameters
+    // (experimental features, and features for advanced users)
+
+    //----------------------------------------------------------------------------
     // WorkUnit specifications:
     // A valid ProgramSpec has at least one WorkUnitSpec.
     // Each kernel must be referenced by at least one WorkUnitSpec.
     Group<WorkUnitSpec> work_units;
 
+    //----------------------------------------------------------------------------
     // Advanced options (see advanced_options.hpp)
-    // Experimental PrefetcherPipe parameter declarations live here.
     ProgramAdvancedOptions advanced_options;
 };
 
