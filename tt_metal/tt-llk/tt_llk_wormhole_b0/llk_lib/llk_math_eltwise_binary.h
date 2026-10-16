@@ -482,17 +482,12 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::Tensor
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param loop_count: Number of faces to process.
  * @param face_offset: Index of the first face within the tile.
- * @param clear_fp32_dst_acc: Ignored. The face clear follows is_fp32_dest_acc_en; kept for the caller's signature.
  * @param dst_index: Tile index into the destination register.
  * @param face_r_dim: Face row dimension; used for HiFi partial-face dest spacing.
  */
 template <bool is_fp32_dest_acc_en, EltwiseBinaryReuseDestType binary_reuse_dest, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void eltwise_binary_run_with_dest_reuse(
-    const std::uint32_t loop_count,
-    const std::uint32_t face_offset,
-    [[maybe_unused]] const bool clear_fp32_dst_acc,
-    const std::uint32_t dst_index,
-    const std::uint32_t face_r_dim)
+    const std::uint32_t loop_count, const std::uint32_t face_offset, const std::uint32_t dst_index, const std::uint32_t face_r_dim)
 {
     constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
 
@@ -504,8 +499,7 @@ inline void eltwise_binary_run_with_dest_reuse(
         // Clear DEST face-by-face when reusing dest as source. ZEROACC's 16-row mode clears a
         // physical 16-row block; a 32-bit DEST face spans two of them (its 16 rows live in the
         // lower halves of two consecutive blocks), so the clear geometry follows the DEST width
-        // alone. ELWMUL always accumulates into DEST, so the clear is never optional:
-        // clear_fp32_dst_acc has no say in it.
+        // alone. ELWMUL always accumulates into DEST, so the clear is never optional.
         auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << (is_fp32_dest_acc_en ? 3 : 2));
         if constexpr (is_fp32_dest_acc_en)
         {
@@ -541,7 +535,6 @@ inline void eltwise_binary_run_with_dest_reuse(
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB> (NONE is rejected)
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
- * @param clear_fp32_dst_acc: Clears index in destination register when float32 mode is enabled
  * @note Call @ref _llk_math_eltwise_binary_with_dest_reuse_init_ with matching template args before this function.
  */
 template <
@@ -551,7 +544,7 @@ template <
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest>
-inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape tensor_shape, std::uint32_t dst_index, const bool clear_fp32_dst_acc)
+inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape tensor_shape, std::uint32_t dst_index)
 {
     static_assert(binary_reuse_dest != EltwiseBinaryReuseDestType::NONE, "Use _llk_math_eltwise_binary_standard_ for no dest reuse");
     static_assert(
@@ -614,7 +607,7 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
                 // face_offset = face_row * num_faces_c_dim (position in face array)
                 const std::uint32_t face_offset = face_row * num_faces_c_dim;
                 eltwise_binary_run_with_dest_reuse<is_fp32_dest_acc_en, binary_reuse_dest, math_fidelity>(
-                    num_faces_c_dim, face_offset, clear_fp32_dst_acc, dst_index, tensor_shape.face_r_dim);
+                    num_faces_c_dim, face_offset, dst_index, tensor_shape.face_r_dim);
                 TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
             }
         }
@@ -622,7 +615,7 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
         {
             // NONE/ROW/SCALAR: process all faces with ZEROACC
             eltwise_binary_run_with_dest_reuse<is_fp32_dest_acc_en, binary_reuse_dest, math_fidelity>(
-                num_faces, 0 /*face_offset*/, clear_fp32_dst_acc, dst_index, tensor_shape.face_r_dim);
+                num_faces, 0 /*face_offset*/, dst_index, tensor_shape.face_r_dim);
 
             if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
             {
@@ -687,7 +680,8 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape tensor_sha
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
- * @param clear_fp32_dst_acc: Clears index in destination register when float32 mode is enabled
+ * @param clear_fp32_dst_acc: No effect on Wormhole. The dest-reuse ELWMUL face clear always follows
+ *        is_fp32_dest_acc_en; the parameter stays for the shared caller signature (Blackhole still honours it).
  * @note Call @ref _llk_math_eltwise_binary_init_ with matching template args before this function, and
  *       @ref _llk_math_eltwise_binary_uninit_ after it to restore modified state.
  * @note On the unpack thread, @ref _llk_unpack_AB_ must feed the operand tiles into SrcA/SrcB.
@@ -699,7 +693,7 @@ template <
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity                   = MathFidelity::LoFi,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_math_eltwise_binary_(const ckernel::TensorShape tensor_shape, std::uint32_t dst_index, const bool clear_fp32_dst_acc = false)
+inline void _llk_math_eltwise_binary_(const ckernel::TensorShape tensor_shape, std::uint32_t dst_index, [[maybe_unused]] const bool clear_fp32_dst_acc = false)
 {
     // Zero-flag leak guard. ELWADD/ELWMUL/ELWSUB honor ALU_ACC_CTRL_Zero_Flag_disabled_src; a prior
     // copy_init/datacopy op leaking PRESERVE here changes denormal Src results. eltwise_binary_init
@@ -716,7 +710,7 @@ inline void _llk_math_eltwise_binary_(const ckernel::TensorShape tensor_shape, s
     else
     {
         _llk_math_eltwise_binary_with_dest_reuse_<eltwise_binary_type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, math_fidelity, binary_reuse_dest>(
-            tensor_shape, dst_index, clear_fp32_dst_acc);
+            tensor_shape, dst_index);
     }
 }
 
