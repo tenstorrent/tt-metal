@@ -175,7 +175,7 @@ inline void custom_mm_m8_moves(const std::uint32_t j, const std::uint32_t tile_r
 template <bool split_acc>
 inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
 {
-    const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
+    const std::uint32_t replay_buf_len = custom_mm_tile_replay_len(operandB_face_r_dim);
 
     load_replay_buf(
         ckernel::math::replay_buf_offset,
@@ -434,7 +434,7 @@ inline void _llk_math_custom_mm_(
         "custom_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
         "this call left it at keep, so denormal Src operands would not be flushed");
 
-    const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
+    const std::uint32_t replay_buf_len = custom_mm_tile_replay_len(operandB_face_r_dim);
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     // Run mop kt_dim - 1 times, the last inner dim is handled separately to choose whether to run finalization or not
