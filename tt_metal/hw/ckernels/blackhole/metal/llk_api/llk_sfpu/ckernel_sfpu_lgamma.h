@@ -96,9 +96,10 @@ inline void calculate_lgamma_adjusted(
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
-        // Stirling's (z - 0.5) * log(z) - z is inf - inf for an infinite z (the reflection turns
-        // in = -inf into z = +inf), so the override runs in both Dest modes: +inf is exact in
-        // bf16 and fp32 alike, and lgamma(+-inf) = +inf.
+        // Stirling's (z - 0.5) * log(z) - z is inf - inf for an infinite z. in = +inf never enters
+        // the reflection arm, so only this override repairs it; in = -inf is a pole (floor(-inf) is
+        // -inf) that the arm above already returns +inf for. The override runs in both Dest modes:
+        // +inf is exact in bf16 and fp32 alike, and lgamma(+-inf) = +inf.
         v_if(sfpi::is_inf(in)) { result = std::numeric_limits<float>::infinity(); }
         v_endif;
 
