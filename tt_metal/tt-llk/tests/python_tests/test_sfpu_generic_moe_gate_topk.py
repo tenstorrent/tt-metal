@@ -220,7 +220,13 @@ def test_sfpu_generic_moe_gate_topk(
 def test_sfpu_generic_moe_gate_partial_face(
     num_total_experts, num_selected_experts, normalize
 ):
-    _check_moe_gate(num_selected_experts, True, normalize, True, num_total_experts)
+    _check_moe_gate(
+        num_selected_experts,
+        full_sort=True,
+        normalize=normalize,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
+    )
 
 
 @blackhole_only
@@ -237,17 +243,23 @@ def test_sfpu_generic_moe_gate_partial_face_negative_keys(
     The partial-face sweep above uses keys >= 1.0, which any padding value below
     1.0 loses to, -inf or not. Softmax router logits are mostly negative, and
     against those only a true -inf padding stays out of the top-k: a +0 padding
-    (or any positive value) outranks every active expert and phantom ids >=
-    num_total_experts come back as winners. 32 and 80 exercise the partial
-    4-row padding, 64 the quarter-face filler (top-8) and the full 4-row
-    padding (top-16).
+    (or any positive value) outranks every active expert. Which winners come
+    back then depends on where the padding sits:
+
+    * Experts padded in the bias tile -- 32 and 80 (partial 4-row padding), and
+      64 on the top-16 path (full 4-row padding up to 128) -- come back as
+      phantom winners with ids >= num_total_experts.
+    * A 64-expert remainder on the top-8 path (64 with top-4 here, which pads
+      nothing) is sorted through the quarter-face network, whose unused half
+      is filled with the same -inf constant but carries id 0 / score 0, so the
+      fillers come back as the winners.
     """
     _check_moe_gate(
         num_selected_experts,
-        True,
-        normalize,
-        True,
-        num_total_experts,
+        full_sort=True,
+        normalize=normalize,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
         negative_keys=True,
     )
 
@@ -277,10 +289,10 @@ def test_sfpu_generic_moe_gate_biased_scores(
     """
     _check_moe_gate(
         num_selected_experts,
-        full_sort,
-        normalize,
-        True,
-        num_total_experts,
+        full_sort=full_sort,
+        normalize=normalize,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
         scores_include_bias=scores_include_bias,
         generate_indices=generate_indices,
         spread_biased_scores=True,
@@ -299,10 +311,10 @@ def test_sfpu_generic_moe_gate_biased_scores_multiple_faces(
     """Copy biased payloads across all active faces before the global merge."""
     _check_moe_gate(
         num_selected_experts,
-        True,
-        normalize,
-        True,
-        num_total_experts,
+        full_sort=True,
+        normalize=normalize,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
         scores_include_bias=True,
         spread_biased_scores=True,
     )
