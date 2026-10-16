@@ -84,18 +84,24 @@ TABLE = {
     ),
     # ---- routed experts (tt/experts.py)
     "EXPERTS_IMPL": Setting(
-        "loop",
-        ("loop",),
-        "routed experts: loop = per local expert extract -> decode the expert's packed fp4 planes into bf16 W^T "
-        "(composed chain, every chunk) -> ttnn.linear SwiGLU with the routing weight and fp8 q(h) before w2 -> insert "
-        "(components.yaml note: a temporary departure from agent rule 5 until the unified_routed_expert_ffn fork "
-        "decodes the packed weights in the op)",
+        "bfp8",
+        ("bfp8", "fp4_decode"),
+        "routed experts (tt/experts.py), per local expert extract -> ttnn.linear SwiGLU with the routing weight and "
+        "fp8 q(h) before w2 -> insert, on: bfp8 = every expert's w1 | w3 and w2 converted to bfloat8_b ONCE at load, "
+        "kept as stored [N, K] and used with transpose_b (exact: every e2m1 x e8m0 value, asserted at load; W^T would "
+        "round 48 of the run's 2304 matrices, DS41-35), no per-chunk weight work (FIX.1, OV-6); fp4_decode = the "
+        "packed fp4 codes kept on the device and decoded to bf16 W^T for every expert in every chunk (a per-chunk "
+        "weight rebuild against agent rule 5; half the weight memory; comparison only). Layer 0, 2x2, chunk 2048, "
+        "timed loop tt/perf_experts.py: bfp8 319 ms vs fp4_decode 611 ms per layer per chunk, outputs bit-identical; "
+        "load 44 s vs 4 s. The fused unified_routed_expert_moe does not fit (no routing weight and fp8 q(h) between "
+        "the activation and w2)",
     ),
     "EXPERTS_DECODE": Setting(
         "gather",
         ("gather", "arith"),
-        "the e2m1 code -> value step of the expert weight decode: gather = ttnn.gather from the 16-entry table "
-        "(4.0 ms per [2304, 5120] matrix); arith = composed float arithmetic (6.4 ms); both bit-exact",
+        "EXPERTS_IMPL=fp4_decode only: the e2m1 code -> value step of the expert weight decode: gather = "
+        "ttnn.gather from the 16-entry table (4.0 ms per [2304, 5120] matrix); arith = composed float arithmetic "
+        "(6.4 ms); both bit-exact",
     ),
     "EXPERTS_SUM": Setting(
         "gather_add",
