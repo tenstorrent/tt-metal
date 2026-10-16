@@ -24,6 +24,7 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_xing4_0_29b_a4b.py` | XingChen-AGI/Xing4.0-29B-A4B | repo remote code (MLA + mHC + MoE) |
 | `generate_golden_mimo_v2_6_flash_rl.py` | XiaomiMiMo/MiMo-V2.6-Flash-RL | repo remote code, FP8/MXFP4 dequantized (see below) |
 | `generate_golden_glm_5_3_flash.py` | zai-org/GLM-5.3-Flash-BF16 | transformers `glm5_next` (KDA + DSA + mHC), needs transformers >= 5.17 |
+| `generate_golden_muse_glimmer_30b.py` | meta-models/Muse-Glimmer-30B | transformers `muse_glimmer` (text backbone), needs transformers >= 5.17 |
 | `generate_golden_hy3.py` | tencent/Hy3 | transformers `hy_v3` (GQA + MoE) |
 | `generate_golden_hy4_preview.py` | tencent/Hy4-preview | transformers `hy_v4` (DSA + sinks + IHC), needs transformers >= 5.17 |
 | `generate_golden_whole_model.py` | Qwen/Qwen3.8-27B, Llama-3.1-8B, Mistral-Medium-3.5 | whole model, one forward (see below) |
@@ -87,6 +88,11 @@ startup (`interleaved_mla_rope`). Its DSA indexer builds [N, 32, N] fp32 scores 
 tensors). No prefix (3.914 raw, 3.927 BOS, 3.927 chat). Use the BF16 checkpoint: Hy4-preview-FP8 is a post-hoc
 MXFP8 quantization with ~3% weight error per matmul. isl 56320 with `--attn-chunk 1024`: 11.1 min from cached
 weights, 123 GB GPU peak, 226 GB on disk (71 GB trimmed to 18 hidden layers).
+
+**Muse-Glimmer-30B:** dense; 3 sliding-window (2048, RoPE) layers per full NoPE layer, gated GQA, sandwich norms,
+normed embeddings, logits x output_multiplier then softcapped. BOS prefix (wikitext ppl at isl 10240: 7.02 BOS, 7.11
+raw, 7.15 chat; score PPL with the multiplier and softcap applied, or it reads in the billions). isl 56320 with
+`--attn-chunk 4096`: 0.8 min from cached weights, 18 GB GPU peak, 39 GB on disk.
 
 **`--device cuda` under torch 2.11:** `torch.cuda.set_device` rejects a device without an index; pass `cuda:0`.
 
