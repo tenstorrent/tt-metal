@@ -1,0 +1,40 @@
+# F80: the dtypes DeepSeek's inference/model.py (bf16 default dtype, the GPU configuration of generate.py) holds each
+# block step's inputs and output in (testing/noise_floor.py). Inputs in the framework step's input order
+# (reference/ds41_ref.py:block_steps); `fixed` = a quantizer's output (fp8 / fp4 values, an exact model value: not
+# nudged); integer inputs (topk) are never nudged. The capture: reference/official_taps.py (hook official_taps).
+#
+# Packed boundaries (in / x / out [S, 4H + 4]) hold bf16 streams and the fp32 pending pre weights in model.py; one
+# dtype per input, so they are marked bf16 (the streams: 4H of the 4H + 4 columns).
+steps:
+  engram_rows: {inputs: [], out: bf16}                    # ParallelEngramEmbedding: fp8 x e8m0 rows .to(bf16)
+  engram_kv: {inputs: [bf16], out: bf16}                  # fp8 Linear: act_quant(bf16 rows) -> fp8_gemm -> bf16
+  engram_add: {inputs: [bf16, bf16], out: bf16}           # Engram.forward: fp32 math, (h + g v).to(x.dtype)
+  attn_hc: {inputs: [bf16], out: fp32}                    # Block.hc_mixes: x.float(), fp32 Sinkhorn, handed on fp32
+  attn_collapse: {inputs: [bf16], out: bf16}              # Block.hc_pre: fp32 sum, .to(x.dtype)
+  attn_norm: {inputs: [bf16], out: bf16}                  # RMSNorm: fp32 math, .to(dtype)
+  q_a: {inputs: [bf16], out: bf16}                        # q_norm(wq_a(x)): fp8 GEMM -> bf16 -> RMSNorm -> bf16
+  kv: {inputs: [bf16], out: bf16}                         # kv_norm(wkv(x)), RoPE, act_quant in place: fp8 values in bf16
+  compressor:                                             # compress_kv_cache / indexer k_cache rows: fp4 values in bf16
+    inputs: [bf16]
+    out: bf16
+    explained: >-
+      model.py rounds inside the step to bf16 ahead of its fp4 quantizers: Compressor.forward returns
+      self.norm(kv.to(dtype)) (bf16 pooled latent before the RMSNorm and bf16 after it; ratio 1: bf16 wkv on bf16 x),
+      Indexer.wk and k_norm run in bf16, and RoPE is copied back into the bf16 tensors before fp4 (kv: e4m3 scale per
+      16; index k: e8m0 per 32), so fp4 steps flip against the fp32 step (rel 0.037 vs 2 x input nudge 0.030-0.036).
+      Evidence: reference/official_checks.py (PYTHONPATH=$PWD python -m
+      models.demos.deepseek_v41_flash_d_p.reference.official_checks) runs the hook official_taps on the component
+      golden's chunk 1 and recomputes the fp32 step with those bf16 points emulated: equal to the official output bit
+      for bit (equal fraction 1.000000) at L2 (ratio 2), L14 (ratio 2) and L20 (ratio 1); official vs the plain fp32
+      step rel 0.0373 / 0.0366 / 0.0371. DS41-38.
+  indexer: {inputs: [bf16, bf16, fixed]}                  # attn_norm, q_resid, compressed; output int32 top-k
+  attention: {inputs: [bf16, fixed, fixed, fixed], out: bf16}  # q_resid, kv, (compressed), (topk: int); wo_b -> bf16
+  attn_residual: {inputs: [bf16, fp32, bf16], out: bf16}  # hc_post(attn_out, residual, post, comb).type_as(attn_out)
+  ffn_hc: {inputs: [bf16], out: fp32}
+  ffn_collapse: {inputs: [bf16, fp32], out: bf16}         # h_mid bf16, the attention mixes fp32
+  ffn_norm: {inputs: [bf16], out: bf16}
+  router: {inputs: [bf16], out: fp32}                     # Gate: linear(x.float(), w.float()), fp32 weights
+  experts: {inputs: [bf16, fp32], out: fp32}              # MoE y: fp32 sum of bf16 expert outputs
+  shared_expert: {inputs: [bf16], out: bf16}              # Expert.forward: w2 fp8 GEMM -> bf16
+  moe_add: {inputs: [fp32, bf16], out: bf16}              # (y + shared).type_as(x)
+  ffn_residual: {inputs: [bf16, fp32, bf16], out: bf16}   # hc_post streams bf16, packed with the fp32 ffn pre

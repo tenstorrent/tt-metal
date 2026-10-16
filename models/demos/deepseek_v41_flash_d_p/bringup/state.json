@@ -3024,6 +3024,195 @@
   "started": "2026-10-14T20:29:26",
   "status": "PASS"
  },
+ "R.5": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "a6040463dda99d7874c694d2cb03f4ca50548dea",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "f79eb5ef26240477e033b63ac67f0d83ac81e0d7",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "66a5e036-1cf7-411a-b995-5d6230717b79"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/R.5.reference.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "a6040463dda99d7874c694d2cb03f4ca50548dea",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "3e7e220212a453b7eed5bf825b35835f44f48325",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": [
+     "no knowledge report R.5.reference.1.json"
+    ],
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/R.5.reference.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [
+     "aborted by the overseer: R.5 is not about rewriting the reference: write only (a) the hook official_taps(spec, layers, tokens, chunk, chunk_size) in bringup/hooks.py and (b) bringup/official_taps.yaml (schema and contract: models/demos/common/bringup/testing/official_floor.py and noise_floor.py). A working capture already exists for chunk 0, layers 0-3 (a CPU experiment, not the run's code): /localdev/dnijemcevic/bringup/noise_floor_experiments_2026-10-16/official_floor.py, function capture_official: it builds the official oracle (reference/hf_oracle.build_oracle, dtype bf16 = the official GPU configuration) and maps attn_hc / ffn_hc = Block.hc_mixes (told apart by fn is blk.hc_attn_fn), attn_collapse / ffn_collapse = the 1st / 2nd Block.hc_pre, attn_residual / ffn_residual = the 1st / 2nd Block.hc_post, attn_norm / ffn_norm = the RMSNorm modules, attention = blk.attn (inputs: the q_norm output and the kv_norm output object, roped and fp8-quantized in place afterwards: read it after the run), router = blk.ffn.gate (dense weights scattered from (weights, indices)). Still to map: the remaining steps of every block type (q_a, kv, experts, shared_expert, moe_add, engram_*, compressor, indexer, ...), every step's inputs in the framework step's input order, the chunk you are asked for (run chunks 0..chunk; the tests use the component golden's last chunk) and the dtypes in official_taps.yaml (the official code's own: e.g. the mixes are computed and handed on in fp32; kv is a quantizer's output: fixed). The gate is python -m models.demos.common.bringup.testing.official_floor (CPU)."
+    ],
+    "rc": 143,
+    "role": "reference",
+    "seconds": 20.0,
+    "session_id": "20c75353-f0fd-4d4d-a69a-b0591f7718c6",
+    "t": "2026-10-16T10:25:14"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 2,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/R.5.reference.2.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "a6040463dda99d7874c694d2cb03f4ca50548dea",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "3e7e220212a453b7eed5bf825b35835f44f48325",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/R.5.reference.2.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "reference",
+    "seconds": 3891.3,
+    "session_id": "e2e328b8-89f5-4ecf-9444-fb69e47f29cd",
+    "t": "2026-10-16T11:30:07"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/R.5.reference.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "a6040463dda99d7874c694d2cb03f4ca50548dea",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "2f87f9479b908514a7d07c3689212b691a2831ba",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/R.5.reference.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "reference",
+    "seconds": 1245.1,
+    "session_id": "742976b8-4523-40b6-9b62-5fbf1e7a8609",
+    "t": "2026-10-16T12:10:28"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/R.5.reference.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "a6040463dda99d7874c694d2cb03f4ca50548dea",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "f79eb5ef26240477e033b63ac67f0d83ac81e0d7",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/R.5.reference.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "reference",
+    "seconds": 1835.1,
+    "session_id": "66a5e036-1cf7-411a-b995-5d6230717b79",
+    "t": "2026-10-16T12:45:38"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 3,
+  "duration_s": 968.7,
+  "history": [
+   {
+    "s": 1.4,
+    "status": "FAIL",
+    "t": "2026-10-16T10:24:53"
+   },
+   {
+    "status": "ABORTED",
+    "t": "2026-10-16T10:25:14",
+    "why": "R.5 is not about rewriting the reference: write only (a) the hook official_taps(spec, layers, tokens, chunk, chunk_size) in bringup/hooks.py and (b) bringup/official_taps.yaml (schema and contract: models/demos/common/bringup/testing/official_floor.py and noise_floor.py). A working capture already exists for chunk 0, layers 0-3 (a CPU experiment, not the run's code): /localdev/dnijemcevic/bringup/noise_floor_experiments_2026-10-16/official_floor.py, function capture_official: it builds the official oracle (reference/hf_oracle.build_oracle, dtype bf16 = the official GPU configuration) and maps attn_hc / ffn_hc = Block.hc_mixes (told apart by fn is blk.hc_attn_fn), attn_collapse / ffn_collapse = the 1st / 2nd Block.hc_pre, attn_residual / ffn_residual = the 1st / 2nd Block.hc_post, attn_norm / ffn_norm = the RMSNorm modules, attention = blk.attn (inputs: the q_norm output and the kv_norm output object, roped and fp8-quantized in place afterwards: read it after the run), router = blk.ffn.gate (dense weights scattered from (weights, indices)). Still to map: the remaining steps of every block type (q_a, kv, experts, shared_expert, moe_add, engram_*, compressor, indexer, ...), every step's inputs in the framework step's input order, the chunk you are asked for (run chunks 0..chunk; the tests use the component golden's last chunk) and the dtypes in official_taps.yaml (the official code's own: e.g. the mixes are computed and handed on in fp32; kv is a quantizer's output: fixed). The gate is python -m models.demos.common.bringup.testing.official_floor (CPU)."
+   },
+   {
+    "s": 1.4,
+    "status": "FAIL",
+    "t": "2026-10-16T11:30:12"
+   },
+   {
+    "s": 763.6,
+    "status": "FAIL",
+    "t": "2026-10-16T11:44:01"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-10-16T12:14:59"
+   },
+   {
+    "s": 968.7,
+    "status": "PASS",
+    "t": "2026-10-16T13:01:50"
+   }
+  ],
+  "last_run": "2026-10-16T13:01:50",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/R.5.log",
+  "metrics": {
+   "official_taps_errors": 0,
+   "official_taps_steps": 129,
+   "official_taps_unmapped": 0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "reference",
+  "started": "2026-10-16T12:45:41",
+  "status": "PASS",
+  "waiting": null
+ },
  "S.enc_source.01": {
   "attempts": 0,
   "duration_s": 55.1,

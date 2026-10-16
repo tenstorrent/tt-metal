@@ -1,0 +1,49 @@
+{
+ "used": [
+  {
+   "id": "DS41-38",
+   "how": "explained only the compressor in official_taps.yaml, with the bf16-emulation evidence moved into reference/official_checks.py (bit-equal at L2/L14/L20); DS41-38's Fix now points there",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-39",
+   "how": "kept the hook's per-layer official _state unchanged; attention passes on it, so attention needs no explanation",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "OV-7",
+   "answer": "done",
+   "evidence": "hook official_taps and official_taps.yaml as before (map unchanged); gate: ok official taps: 129 steps, chunk 1 (0 errors, 0 unmapped)"
+  },
+  {
+   "id": "OV-9",
+   "answer": "done",
+   "evidence": "reference/official_checks.py (from /tmp/r5chk/chk.py, runs on the hook's taps, exits 1 unless bit-equal): official == bf16-emulated step, equal 1.000000 at L2 (ratio 2), L14 (ratio 2), L20 (ratio 1); fp32 step rel 0.0373/0.0366/0.0371. official_taps.yaml compressor has explained naming it; no dtype changed, no other step explained. Gate python -m models.demos.common.bringup.testing.official_floor: 129 steps, 0 errors, 0 unmapped (3 compressor notes)."
+  }
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "R.5",
+  "role": "reference",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T12:45:37",
+  "head": "014011cffcb",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/official_taps.yaml",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/R.5.reference.1.json",
+   "models/demos/deepseek_v41_flash_d_p/reference/official_checks.py",
+   "models/demos/deepseek_v41_flash_d_p/reference/official_taps_check.py"
+  ]
+ },
+ "cited_only": []
+}
