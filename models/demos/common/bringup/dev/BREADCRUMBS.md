@@ -1272,3 +1272,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   at tiny scales a correct device meets absolute floors (fp8 scale, eps) the nudge model does not cover. DeepSeek-V4.1
   attention L2: small 0.035 > 0.03 with every other input well inside; golden 0.035 vs 0.16. Every standard mistake
   is still caught (sweep selftests).
+- F97: an owner waiver passes a step only when its output is whole AND within component_scaled_rel (0.2) of the
+  reference: it covers a precision gap, never a wrong module. F85 passed any finite output, so DeepSeek-V4.1 ffn_hc
+  (waived) passed with a zero stub and its freeze sent a test agent to a test it could not fix.
