@@ -370,9 +370,9 @@ class ttKDA:
 
     def _input_projection_gate_tiles(self, grid: ttnn.CoreCoord, program_config, width: int) -> int:
         """Output-gate tile columns the input projection keeps: its per-core width without the gate's columns plus
-        one tile (K3 at 640 rows: 293 tiles fill 25 of 26 per core column; at 27, 31 gate tiles fit). The extra
-        tile column costs the input projection less than the 15 tiles it takes from the gate, whose matmul sets the
-        relay's window."""
+        one or two tiles (K3 at 640 rows: 293 tiles fill 25 of 26 per core column; at 28, 43 gate tiles fit). An
+        extra tile column costs the input projection less than the tiles it takes from the gate, whose matmul sets
+        the relay's window."""
         base_tiles = -(-(width - self.config.v_dim) // ttnn.TILE_SIZE)
         if program_config.tuned_projection_matmuls:
             out_k, out_n = tuple(self.weights.output_projection.shape)[-2:]
@@ -381,11 +381,13 @@ class ttKDA:
             )[0]
             if base is None:
                 return 0
-            base_per_core = base.per_core_N
+            # K3 at 640 rows: two tile columns, 43 gate tiles (in_proj 336 -> 345 us, the gate's window 115 -> 107 us).
+            extra = 2
         else:
-            # The matmul program's own blocking (T=2048 and T=2560: 25 tiles per core).
+            # The matmul program's own blocking (T=2048 and T=2560: 25 tiles per core) and one more column.
             base_per_core = -(-base_tiles // grid.x)
-        per_core = base_per_core + 1
+            extra = 1
+        per_core = (base.per_core_N if program_config.tuned_projection_matmuls else base_per_core) + extra
         return max(0, min(self.config.v_dim // ttnn.TILE_SIZE, per_core * grid.x - base_tiles))
 
     def _idle_projection_heads(self, grid: ttnn.CoreCoord, program_config, base_width: int) -> int:
