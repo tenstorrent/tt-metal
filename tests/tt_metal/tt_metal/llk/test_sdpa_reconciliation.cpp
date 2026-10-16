@@ -306,7 +306,12 @@ void run_sdpa_merged_kv(
     auto output = make_buffer(rounds * v_tiles * short_tile_bytes);
     auto output_stats = make_buffer(rounds * short_tile_bytes);
     for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_16, tt::CBIndex::c_17}) {
-        const auto tiles = cb == tt::CBIndex::c_17 ? 1 : (cb == tt::CBIndex::c_0 ? qk_tiles : v_tiles);
+        auto tiles = v_tiles;
+        if (cb == tt::CBIndex::c_17) {
+            tiles = 1;
+        } else if (cb == tt::CBIndex::c_0) {
+            tiles = qk_tiles;
+        }
         CreateCircularBuffer(
             program,
             core,
