@@ -24,7 +24,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer dc_rm(dfb::dc_rm);
     DataflowBuffer dc_views(dfb::dcv_rm);
     DataflowBuffer output(dfb::output);
-    DataflowBuffer grad_tap(dfb::grad_tap);
+    DataflowBuffer grad_tap(dfb::acc);  // the finished partial, accumulated in place by the packer
     Scratchpad<uint16_t> window(scratch::dc_window);
     Noc noc;
 

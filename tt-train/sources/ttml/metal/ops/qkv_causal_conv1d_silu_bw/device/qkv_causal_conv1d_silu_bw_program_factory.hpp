@@ -27,7 +27,7 @@ struct QkvCausalConv1dSiluBackwardDataflowBuffer {
 };
 
 // Every L1 buffer of the program, sized in tiles. Used by both the program factory and the L1 budget check.
-inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 14> qkv_conv_bw_dataflow_buffers(
+inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 13> qkv_conv_bw_dataflow_buffers(
     uint32_t channel_tiles_per_block, tt::DataFormat input_format) {
     const auto bf16 = input_format;
     constexpr auto fp32 = tt::DataFormat::Float32;
@@ -40,8 +40,7 @@ inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 14> qkv_conv_bw_dat
         {"sigmoid", qkv_conv_bw_dst_tiles, bf16},
         {"dc_tile", channel_tiles_per_block, bf16},
         {"dc_rm", 2 * channel_tiles_per_block, bf16},
-        {"acc", 8 * channel_tiles_per_block, fp32},  // grad_tap running sum [4][channel_tiles], previous and next
-        {"grad_tap", 4 * channel_tiles_per_block, fp32},
+        {"acc", 4 * channel_tiles_per_block, fp32},  // grad_tap partial [4][channel_tiles], packer-accumulated in place
         {"dcv_rm", 4 * channel_tiles_per_block, bf16},  // 4 shifted row-major views of the dc window
         {"dcv_tile", 4 * channel_tiles_per_block, bf16},
         {"output", 2 * channel_tiles_per_block, bf16},

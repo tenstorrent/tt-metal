@@ -138,19 +138,16 @@ template <uint32_t channel_tiles_per_block>
     dc_tile.push_back(channel_tiles_per_block);
 }
 
-// acc[tap][tile_column] += dc * view_tap. The running sum is kept in an fp32 DFB and packed as fp32 (grad_tap too),
-// but each
-// add unpacks acc into SrcA, which holds tf32 (10-bit mantissa), so the accumulation is tf32 rather than full fp32.
-// The last own step writes the sum to grad_tap instead of acc.
+// acc[tap][tile_column] += dc * view_tap. The partial lives in the acc pages in L1 and the packer adds each step's
+// products onto them in place (pack_reconfig_l1_acc), in fp32: nothing is unpacked back into the engine, so no
+// tf32 rounding. The pages are reserved once per item, written out of order by tile index, and pushed to the
+// writer on the last own step.
 template <uint32_t channel_tiles_per_block, bool first, bool last>
-[[gnu::noinline]] void accumulate_grad_tap(DataflowBuffer& acc, DataflowBuffer& grad_tap) {
+[[gnu::noinline]] void accumulate_grad_tap(DataflowBuffer& acc) {
     constexpr uint32_t total = tap_count * channel_tiles_per_block;
-    constexpr uint32_t dest_id = last ? dfb::grad_tap : dfb::acc;
-    DataflowBuffer& dest = last ? grad_tap : acc;
-    if constexpr (!first) {
-        acc.wait_front(total);
+    if constexpr (first) {
+        acc.reserve_back(total);
     }
-    dest.reserve_back(total);
     for (uint32_t base = 0; base < total; base += dst_tiles) {
         const uint32_t n = batch_size<total>(base);
         tile_regs_acquire();
@@ -159,24 +156,18 @@ template <uint32_t channel_tiles_per_block, bool first, bool last>
         for (uint32_t i = 0; i < n; ++i) {
             mul_tiles(dfb::dc_tile, dfb::act_tile, (base + i) % channel_tiles_per_block, base + i, i);
         }
-        if constexpr (!first) {
-            reconfig_data_format_srca(dfb::acc);
-            add_reuse_dest_init<DEST_TO_SRCB>(dfb::acc);
-            for (uint32_t i = 0; i < n; ++i) {
-                add_reuse_dest_tiles<DEST_TO_SRCB>(dfb::acc, base + i, i);
-            }
-        }
         tile_regs_commit();
         tile_regs_wait();
-        pack_reconfig_data_format(dest_id);
+        pack_reconfig_data_format(dfb::acc);
+        pack_reconfig_l1_acc(first ? 0 : 1);
         for (uint32_t i = 0; i < n; ++i) {
-            pack_tile(i, dest_id);
+            pack_tile<true>(i, dfb::acc, base + i);
         }
+        pack_reconfig_l1_acc(0);
         tile_regs_release();
     }
-    dest.push_back(total);
-    if constexpr (!first) {
-        acc.pop_front(total);
+    if constexpr (last) {
+        acc.push_back(total);
     }
 }
 
@@ -198,7 +189,6 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer sigmoid(dfb::sigmoid);
     DataflowBuffer dc_tile(dfb::dc_tile);
     DataflowBuffer acc(dfb::acc);
-    DataflowBuffer grad_tap(dfb::grad_tap);
     DataflowBuffer dc_views(dfb::dcv_tile);
     DataflowBuffer output(dfb::output);
     DataflowBuffer ones(dfb::ones);
@@ -230,13 +220,13 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
                 const bool first = step == 0;
                 const bool last = step + 1 == own_steps;
                 if (first && last) {
-                    accumulate_grad_tap<channel_tiles_per_block, true, true>(acc, grad_tap);
+                    accumulate_grad_tap<channel_tiles_per_block, true, true>(acc);
                 } else if (first) {
-                    accumulate_grad_tap<channel_tiles_per_block, true, false>(acc, grad_tap);
+                    accumulate_grad_tap<channel_tiles_per_block, true, false>(acc);
                 } else if (last) {
-                    accumulate_grad_tap<channel_tiles_per_block, false, true>(acc, grad_tap);
+                    accumulate_grad_tap<channel_tiles_per_block, false, true>(acc);
                 } else {
-                    accumulate_grad_tap<channel_tiles_per_block, false, false>(acc, grad_tap);
+                    accumulate_grad_tap<channel_tiles_per_block, false, false>(acc);
                 }
             }
             compute_kernel_lib::untilize<channel_tiles_per_block, dfb::dc_tile, dfb::dc_rm>(1);
