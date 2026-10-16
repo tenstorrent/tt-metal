@@ -123,7 +123,6 @@ tt_metal/api/ @tenstorrent/metalium-api-owners
 tt_metal/api/tt-metalium/experimental/disaggregation/ @SeanNijjar @ubcheema # disaggregation experimental APIs
 tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT # fabric experimental APIs
 tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
-tt_metal/api/tt-metalium/experimental/trace_allocation_tracker.hpp @tenstorrent/metalium-api-owners @ifabijanic-tt
 tt_metal/api/tt-metalium/experimental/command_list.hpp @anashTT @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT
 tt_metal/api/tt-metalium/experimental/dispatch_telemetry.hpp @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/api/tt-metalium/experimental/udm/ @yugaoTT @SeanNijjar
@@ -174,7 +173,6 @@ tt_metal/hw/inc/api/compute/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @
 tt_metal/hw/inc/api/compute/experimental/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT @atatuzunerTT
 tt_metal/hw/inc/experimental/udm/ @yugaoTT @SeanNijjar
 tt_metal/impl/allocator/ @abhullar-tt @tt-aho
-tt_metal/impl/allocator/trace_allocation_tracker.cpp @abhullar-tt @tt-aho @ifabijanic-tt
 tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @cfjchu @TT-BrianLiu
 tt_metal/impl/context/ @jbaumanTT @aliuTT @cfjchu @ruizhangTT @abhullar-tt
 tt_metal/impl/data_format/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT
@@ -333,7 +331,6 @@ tests/tt_metal/tt_metal/deployment/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-
 
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core
-ttnn/ttnn/tools/trace_allocation_tracker.py @tenstorrent/metalium-developers-ttnn-core @ifabijanic-tt
 # nanobind
 ttnn/ttnn/distributed/ttrun.py @Riddy21 @p1-0tr
 ttnn/**/*nanobind* @tenstorrent/metalium-developers-ttnn-core @nsextonTT
