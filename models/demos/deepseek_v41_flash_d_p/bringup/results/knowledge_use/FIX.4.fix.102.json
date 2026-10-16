@@ -1,0 +1,32 @@
+{
+ "used": [
+  {"id": "DS41-43", "how": "took its CPU 'perfect device' result (no single-pass weight passes the own-floor column checks) as the lead; checked its premise against the official code (model.py:956 fp32 F.linear, no TF32) and re-ran the whole gate: bit-identical numbers", "traced": true, "cited": true},
+  {"id": "DS41-42", "how": "the remaining column biases are hc_fn's 9-bit rounding in srcA (tt/common.fpu_weight); kept FP32_WEIGHT_ROUND=srca", "traced": true, "cited": true},
+  {"id": "DS41-40", "how": "kept HC_SINKHORN=sfpu_fp32 (mhc_pre_xing deepseek=True); the Sinkhorn is exact, not the residual", "traced": false, "cited": true},
+  {"id": "K-30", "how": "explains why the swaps (fp32 streams) fail more: x truncated to TF32 on unpack; S.swa.15 ffn_hc rel 1.95e-4 > 1.5e-4", "traced": false, "cited": true},
+  {"id": "device_floor_probes/REPORT.md", "how": "used its numbers (SFPU ops fp32-exact, FPU the limit; fidelity / fp32 acc / packer_l1_acc change nothing) instead of re-measuring", "traced": false, "cited": true},
+  {"id": "OV-10", "how": "the overseer's 'do NOT extend the rms_norm fork, leave the RMS stage' (after the owner's note in the brief, with the probe's sum x^2 1e-6 / rsqrt 5e-7) is why the rms_norm fork was not extended", "traced": false, "cited": true}
+ ],
+ "contradicted": [],
+ "missing": [
+  "the knowledge checker's rule that a 'Detail: known_issues_detail.md' entry needs a detail heading equal to the entry's bold title (models/demos/common/bringup/knowledge/check.py:136) is not in the agent rules; attempt 101 failed on it",
+  "where durable CPU evidence scripts go when the allowed paths have no test directory (tests/ttnn/unit_tests/... is outside them); here: the run folder runs/run1/evidence/FIX.4/ plus the code in known_issues_detail.md"
+ ],
+ "overseer": [
+  {"id": "FIX.4", "answer": "disagree", "evidence": "What remains is the device's own arithmetic at normal settings (HiFi4, fp32 acc, approx off, weights rounded at load). Gate re-run per test on the current tree: every err_* and err_swap_out passes and every component vs-CPU rel passes (L0 attn 1.07e-5 <= 3.52e-5, was 6.1e-4); only the own-floor checks fail: column bias 5-23 x (L0 attn col 22 +1.38e-4 of rms = the 9-bit weight's rounding; host emulation alone +1.57e-4), row 900 2.5 x (FPU accumulation, Sinkhorn exact 1.25e-7). A CPU perfect device with only hc_fn rounded fails the same checks with TF32 at 4 of 5 steps and needs >= 12 bits (DS41-43; evidence runs/run1/evidence/FIX.4/weight_floor_cpu.py); the official code is fp32 F.linear (model.py:956), so only a split / exact matmul would pass (owner: no). Swaps also fail on fp32 streams truncated to TF32 on unpack (K-30; S.swa.15 ffn_hc rel 1.95e-4 > 1.5e-4); round_tf32(x) is an owner perf pick (+1.94 ms/call). Waiver requested for the hc own-floor checks. Bookkeeping of attempt 101 fixed: out-of-scope file moved out of the repo, DS41-43 <= 600 chars with a matching detail section."},
+  {"id": "OV-11", "answer": "done", "evidence": "Unchanged since attempt 3: tt/settings.py HC_SINKHORN sfpu_fp32 | fpu, default and max_precision sfpu_fp32; fork option mhc_pre_xing(deepseek=False by default, Xing program unchanged). Measured: Sinkhorn alone fpu 5.9e-4..1.2e-3 vs sfpu_fp32 6.5e-8..7.6e-8; rsqrt + Sinkhorn 0.45 vs 0.031 ms (BREADCRUMBS FIX.4 attempt 3)."},
+  {"id": "OV-12", "answer": "done", "evidence": "Unchanged since attempt 3: no mhc_split_sinkhorn fork in the tree; mhc_pre_xing extended behind deepseek=True with DeepSeek's sequence and used by tt/mhc.py (default), the old op selectable with DS41_HC_SINKHORN=fpu; per-step before / after numbers in BREADCRUMBS FIX.4 attempt 3."}
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p", "run": "run1", "task": "FIX.4", "role": "fix", "attempt": 102,
+  "agent": "ttnn-expert-debugger", "t": "2026-10-16T17:00:00", "head": "880421ffdb2",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.4.fix.102.json",
+   "tests/ttnn/unit_tests/operations/mhc_ds41_fix4/cpu/weight_floor_cpu.py (removed: moved out of the repo)"
+  ]
+ }
+}

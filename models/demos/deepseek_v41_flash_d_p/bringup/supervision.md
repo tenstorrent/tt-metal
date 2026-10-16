@@ -156,3 +156,30 @@ Every intervention by the supervising session: time, task, trigger, classificati
 ## 2026-10-16 ~11:00: F80 installed (275b1616f33, bbd20d27af3); R.5 added
 - Floor = calib x max(official arithmetic, input nudge); selections need explained flips; bf16 model and precision.yaml removed. CPU check on DS41: router flip limit 1.9 % of rows (nudge ~19 rows; device 3-8), norms rel limit 0.0033; the mixes need official_taps.yaml (inputs/out fp32) to get their true floor.
 - R.5 (reference role: official_taps hook + official_taps.yaml; gate testing.official_floor) inserted before S.enc_source.03; all 97 pending C.* depend on it; plan re-approved. Running `--only R.5`, then: release FIX.4 (mixes), rerun every passed frozen test once (no agents; failures -> fix jobs), resume. End-to-end limits from the official drift: before L.* (framework, mine).
+
+## 2026-10-16 13:15: R.5 passed (bd800529e37); F81 (rel gates) and F82 (verify) installed; re-verification running
+- R.5: 129 float steps tapped, 0 errors, 0 unmapped; the compressor `explained` entry checked against model.py:462/485 (bf16 inside before fp4) with reference/official_checks.py as evidence. Floors match the brainstorm (attn_hc nudge 1.8e-5, attention arith 0.026, attn_norm 1.7e-3).
+- F81 (c014e5a2962, 78ebff160b1): 272 gates now err_* <= limit, plan re-approved. F82 (5bb4281cd5c): core.verify.
+- FIX.4 released (placed when the run resumes). Re-verifying every passed C.* + S.swa.15, S.swa_engram.18, S.enc_source.02 (tmux ds41verify -> runs/run1/verify/f81/) before resuming (FIX.4 edits model code). Failures -> fix jobs.
+- Owner: no multi-pass / split / exact matmuls ("if it doesn't work, let it be, continue and we'll fix it later"). FIX.4 narrowed to bugs / lower-precision choices at normal settings; a hardware-limited gap gets a per-step waiver (F85, tests.waivers in the spec: noise-floor failures reported WAIVED, the gate passes, the dashboard lists them). Probe agent (device_floor_probes/) told to skip split matmuls.
+- 15:20 Device-floor probe (device_floor_probes/REPORT.md): the hc error is the Sinkhorn kernel ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn (FPU TF32 truncations, ~85 per output; 7.2e-4 of 7.4e-4), not the hardware: the same Sinkhorn from fp32 SFPU ops = 5e-8. RMS stage exact; linear at its best. FIX.4 attempt 1 (15 min, no changes yet) aborted with that (OV-10): fork the Sinkhorn op, fp32 on the SFPU, keep it fast; L0 attn_hc may stay ~3.3x (linear, no multi-pass) -> waiver candidate.
+- Owner caught it: FIX.4 attempt 2 was forking ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn, but the mhc_pre_ttnn fork already has an fp32 SFPU Sinkhorn (ttnn.bringup.mhc_pre_xing, ~21 us/call on xing40). Aborted (2nd abort of FIX.4), OV-12: extend mhc_pre_xing with the DeepSeek variant behind options (pre + eps; softmax + eps first, then column / (sum + eps), then iters-1 x (row, column); no clamp), delete the mhc_split_sinkhorn fork. OV-10 closed (superseded), though attempt 3's brief was written before the close and still shows it (OV-12 says not to fork). My miss: I pointed FIX.4 at the experimental op without checking INDEX.md for an existing fork; the agent rule (251b184af93) now says to check INDEX.md first.
+- Pending install at the next pause (dev worktree /localdev/dnijemcevic/tt-metal2-dev, uncommitted on 00c3c7528cf): F86 forks-first (agent rule 16, plan role, skill: notes / fix jobs / plan and gate-commit reviews check INDEX.md first).
+
+## 2026-10-16 17:20 FIX.4 stopped on the column checks; owner waiver; fork reviewed
+- FIX.4 (3 attempts + 3 debugger attempts) STOPPED: overall error within its limit at every hc step; only the own-floor
+  column / additive-bias checks fail (L0 attn_hc col 22 bias 23x). Agent's CPU evidence (DS41-43): a device exact except
+  hc_fn's rounding fails at 9-10 mantissa bits, passes at 12; the FPU holds at most 10. Hardware, not a bug.
+- Owner signed the waiver: spec tests.waivers attn_hc + ffn_hc (every layer); intake re-approved on their word
+  (db9b91e5127). DS41-43 promoted to the shared knowledge with F86 (8c37409faa0).
+- Fork review (mhc_pre_ttnn, deepseek option): default off, off program / hash unchanged, new kernel code behind
+  MHC_XING_DEEPSEEK; overseer reran the model cases on device: xing 93 passed, glm 10 passed. Accepted; FIX.4 work
+  committed c50953498f6. Perf: hc step 0.77 -> 0.41 ms per call (faster). Resume: FIX.4 prechecks its gate.
+
+## 2026-10-16 18:15 FIX.4 official gate failed on non-hc own-floor checks; own-floor now warns (owner)
+- FIX.4 gate (overseer attempt 1): 5 hc step tests passed; S.swa.15 failed on kv column bias 2.27 x (limit 2) and the
+  router's own floor (1e3 x; likely a flaw of the check on selection outputs). Overseer attempt 2 started; stopped by
+  the overseer (orchestrator + agent killed by PID; its edits were notes only).
+- Owner: no circling on small excesses. F89: own-floor row / column / bias checks warn, never gate. F87: a resumed
+  task gates first; a resumed fix job that still fails stops for the overseer, never another agent. F88: dashboard red
+  bug fixed + self-check. Commit 775ff4eff70. Resume: FIX.4 gates once, no agent.

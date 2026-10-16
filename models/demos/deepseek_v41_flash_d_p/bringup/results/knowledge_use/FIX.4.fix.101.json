@@ -1,0 +1,31 @@
+{
+ "used": [
+  {"id": "DS41-42", "how": "started from its claim that the remaining column bias is the weight's fixed rounding; confirmed on the device (probe_010: col 22 device +1.38e-4 vs host 9-bit emulation +1.57e-4) and then tested every weight width against the gate's own floor (cpu/weight_floor_cpu.py)", "traced": true, "cited": true},
+  {"id": "DS41-40", "how": "kept HC_SINKHORN=sfpu_fp32; measured the Sinkhorn exact on the worst row (1.25e-7), so it was ruled out for row 900", "traced": true, "cited": true},
+  {"id": "DS41-16", "how": "the device-vs-emulation mixes error (5.6e-5, column means -1.2e-5..-4e-5) is the FPU's accumulation; it explains row 900", "traced": false, "cited": true},
+  {"id": "K-30", "how": "the reason the operand swap (weight in srcB at full TF32) was not taken: fp32 x would then be truncated to 9 bits in srcA", "traced": false, "cited": true},
+  {"id": "device_floor_probes/REPORT.md", "how": "used its SFPU-exact and 'fidelity / fp32 acc / packer_l1_acc change nothing' numbers instead of re-measuring them", "traced": false, "cited": true}
+ ],
+ "contradicted": [],
+ "missing": [
+  "the own-floor checks nudge the inputs only: any fixed weight rounding is a per-column bias outside the floor; for the hc steps it takes >= 12 mantissa bits of hc_fn to pass (DS41-43), which no single-pass FPU format holds"
+ ],
+ "overseer": [
+  {"id": "FIX.4", "answer": "disagree", "evidence": "What remains is the device's own arithmetic at its normal settings. 1) A CPU 'perfect device' through the gate's own Expect / floor (exact fp32 step, only hc_fn rounded) fails the vs-CPU column-bias check with TF32 RNE at 4 of 5 steps (5.3 / 2.9 / 1.65 ok / 4.1 / 7.4 x), with today's 9 bits at 5 of 5 (26.5 / 11.3 / 5.9 / 5.2 / 3.6 x), and with 11 bits at 2 of 5; only 12 bits passes. FPU sources hold at most TF32, and split / exact matmuls are ruled out by the owner (cpu/weight_floor_cpu.py). 2) Device stage by stage, L0 attn_hc chunk 1 (probe_010.py): sum x^2 exact (4.7e-7); SFPU Sinkhorn exact (1.25e-7); mixes vs fp64 7.5e-5, of which the 9-bit weight alone is 5.0e-5 and the FPU accumulation 5.6e-5. Column 22's bias +1.38e-4 = the weight's rounding (host alone +1.57e-4). Row 900, 2.5 x = ordinary FPU accumulation (its mixes error 1.47e-2 is below the median row's 2.88e-2) amplified by that row's Sinkhorn. err_* pass (L0 attn 0.00123 <= 0.00247; attempt 5: all err_* and err_swap_out pass). Waiver requested for the hc own-floor row / column / bias checks. No code changed. BREADCRUMBS FIX.4 attempt 101; known_issues DS41-43 + detail."},
+  {"id": "OV-11", "answer": "done", "evidence": "Unchanged (attempt 3): tt/settings.py HC_SINKHORN sfpu_fp32 | fpu, default and max_precision sfpu_fp32; fork option mhc_pre_xing(deepseek=False default)."},
+  {"id": "OV-12", "answer": "done", "evidence": "Unchanged (attempt 3): no mhc_split_sinkhorn fork; mhc_pre_xing extended behind deepseek=True and used in tt/mhc.py; measurements in BREADCRUMBS FIX.4 attempt 3."}
+ ],
+ "cited_only": ["DS41-43"],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p", "run": "run1", "task": "FIX.4", "role": "fix", "attempt": 101,
+  "agent": "ttnn-expert-debugger", "t": "2026-10-16T16:34:06", "head": "880421ffdb2",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.4.fix.101.json",
+   "tests/ttnn/unit_tests/operations/mhc_ds41_fix4/probes/probe_010.py",
+   "tests/ttnn/unit_tests/operations/mhc_ds41_fix4/cpu/weight_floor_cpu.py"
+  ]
+ }
+}
