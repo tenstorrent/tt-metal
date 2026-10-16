@@ -215,6 +215,7 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
             stash.clear()
             qkv_chunks.clear()
         shape = list(x.padded_shape)
+        device = x.device()  # x is freed after the post-attention add (decoder.py, prefill)
         # L1 placement of the fused op's short-lived tensors (batched ISL 512 defaults, _common.py):
         #   QWEN_FUSED_ADD_NORM_OUT_L1=1   both norms' outputs (read by QKV / FF1+FF3) go to L1 interleaved
         #   QWEN_FUSED_ADD_NORM_SUM1_L1=1  the post-attention residual sum (add 2's a, alive across the MLP only)
@@ -352,11 +353,11 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
         def _before_mm(b):
             if want_prealloc_ff and wo is not None and b is wo and "n1" not in prealloc:
                 prealloc["n1"] = ttnn.allocate_tensor_on_device(
-                    ttnn.Shape(shape), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, x.device(), out_mc
+                    ttnn.Shape(shape), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, device, out_mc
                 )
             if want_prealloc and w2 is not None and b is w2 and "n" not in prealloc:
                 alloc = lambda shp: ttnn.allocate_tensor_on_device(
-                    ttnn.Shape(shp), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, x.device(), out_mc
+                    ttnn.Shape(shp), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, device, out_mc
                 )
                 if n_chunks > 1:
                     part = shape[:-2] + [shape[-2] // n_chunks, shape[-1]]

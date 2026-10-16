@@ -368,7 +368,7 @@ class TransformerBlock(LightweightModule):
             post_attn_add_dtype = ttnn.bfloat8_b if ffnorm_in_bfp8 else (ttnn.bfloat16 if TG else None)
             hidden_states = ttnn.add(residual, attn_out, memory_config=skip_mem_cfg, dtype=post_attn_add_dtype)
             residual = hidden_states
-            if mode == "prefill":
+            if mode == Mode.PREFILL:  # Mode is a plain Enum: a string compare never matches
                 x.deallocate(True)
         else:
             hidden_states = attn_out
