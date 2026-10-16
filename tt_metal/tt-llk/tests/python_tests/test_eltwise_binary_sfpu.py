@@ -91,18 +91,6 @@ def _skip_fp32_no_dest_acc(formats, dest_acc):
         pytest.skip(reason)
 
 
-def _skip_bh_float16_no_dest_acc(formats, dest_acc):
-    """Blackhole can't run Float16 SFPU input without a 32-bit dest intermediate."""
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and formats.input_format == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        pytest.skip(
-            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
-        )
-
-
 def _resolve_perf_args(is_perf, perf_report, run_types):
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -667,7 +655,6 @@ FLOAT_SWEEP = dict(
     formats=input_output_formats(
         [
             DataFormat.Float32,
-            DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Bfp8_b,
         ]
@@ -699,7 +686,6 @@ DIV_SWEEP = dict(
     formats=input_output_formats(
         [
             DataFormat.Float32,
-            DataFormat.Float16,
             DataFormat.Float16_b,
         ]
     ),
@@ -709,7 +695,6 @@ FLOAT_EXTENDED_SWEEP = dict(
     formats=input_output_formats(
         [
             DataFormat.Float32,
-            DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Bfp8_b,
         ]
@@ -733,16 +718,12 @@ ATAN2_SWEEP = dict(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 EQ_NE_SWEEP = dict(
-    formats=input_output_formats(
-        [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
-    ),
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     mathop=[MathOperation.SfpuElwEq, MathOperation.SfpuElwNe],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 FLOAT_COMPARISON_SWEEP = dict(
-    formats=input_output_formats(
-        [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
-    ),
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     mathop=[
         MathOperation.SfpuElwLt,
         MathOperation.SfpuElwGt,
@@ -772,7 +753,6 @@ def test_eltwise_binary_sfpu_float(
     **run_kwargs,
 ):
     _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     # Bfp8_b quantization can map small positive operands to zero, making xlogy's
     # logarithm -inf. LOGADDEXP and LOGADDEXP2 are skipped here too: their +/-200
@@ -816,7 +796,6 @@ def test_eltwise_binary_sfpu_div(formats, dest_acc, **run_kwargs):
     # DIV routes through the dedicated production kernel (calculate_sfpu_binary_div);
     # split out from the float sweep since the reciprocal path is precision-sensitive.
     _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     sfpu_binary(
         formats,
@@ -832,7 +811,6 @@ def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop, **run_kwa
     # max/min (SFPSWAP) and fmod/remainder (fp32 reciprocal) binary kernels with no
     # dedicated production BinaryOp; driven through the same in-DST harness as add/sub.
     _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     # fmod/remainder divide by b via a reciprocal, and Bfp8_b's coarse quantization blows up
     # the quotient for small divisors. It only shows when the output is Bfp8_b as well: a
@@ -901,7 +879,6 @@ def test_eltwise_binary_sfpu_eq_ne(formats, dest_acc, mathop, **run_kwargs):
     # Eq/Ne(a, b) with a = tile0, b = tile1. Crafted paired stimuli give a non-constant 0/1
     # golden so the equal branch is exercised (the default random sweep never is).
     _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _eq_ne_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
@@ -914,7 +891,6 @@ def test_eltwise_binary_sfpu_float_comparison(formats, dest_acc, mathop, **run_k
     # comparisons from the non-strict ones, and the wide gaps keep every other element's
     # verdict independent of rounding. See _comparison_stimuli_specs.
     _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _comparison_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
@@ -1471,7 +1447,6 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
     why a single tensor holding every pole cannot report which behaviour changed.
     """
     _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     # Cat B. Two independent gates, both must pass: BINARY_SPECIALS_READY_OPS says the golden
     # defines an answer for a non-finite operand, specials_safe() says the pipeline delivers one
@@ -1757,7 +1732,6 @@ BCAST_SWEEP = dict(
     formats=input_output_formats(
         [
             DataFormat.Float32,
-            DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Bfp8_b,
         ],
@@ -1905,7 +1879,6 @@ def test_eltwise_binary_sfpu_bcast(
     **run_kwargs,
 ):
     _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     # Mirror sfpu_binary(): on Blackhole, Float16/Float32 inputs require
     # dest_acc=Yes (32-bit dest), so silently upgrade the parametrized value.

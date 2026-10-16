@@ -136,7 +136,6 @@ _FULL_FORMAT_MATRIX_OPS = frozenset(
 
 _FULL_FORMATS = [
     DataFormat.Float32,
-    DataFormat.Float16,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
 ]
