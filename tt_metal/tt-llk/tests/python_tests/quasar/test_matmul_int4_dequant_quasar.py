@@ -22,6 +22,7 @@ from helpers.llk_params import (
 from helpers.param_config import DEST_SYNC_TILE_LIMITS, parametrize
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
+from helpers.stimuli_generator import integer_format_bounds
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
@@ -48,15 +49,9 @@ TILE_ELEMENTS = TILE * TILE
 # Weight (B) formats against Int8 activations (A); Int8 x Int8 is the control.
 WEIGHT_FORMATS = [DataFormat.Int8, DataFormat.Int4]
 
-# Value range the unpacker can see. Both are sign-magnitude, so -8 / -128 have no encoding.
-INT_RANGES = {
-    DataFormat.Int4: (-7, 7),
-    DataFormat.Int8: (-127, 127),
-}
-
 
 def generate_int_matrix(fmt: DataFormat, dimensions, seed: int):
-    lo, hi = INT_RANGES[fmt]
+    lo, hi = integer_format_bounds(fmt)
     generator = torch.Generator().manual_seed(seed)
     return torch.randint(
         lo, hi + 1, (dimensions[0] * dimensions[1],), generator=generator

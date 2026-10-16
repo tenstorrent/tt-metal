@@ -24,6 +24,7 @@ from helpers.llk_params import (
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block, parametrize
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
+from helpers.stimuli_generator import integer_format_bounds
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
@@ -40,14 +41,6 @@ from helpers.test_variant_parameters import (
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
-# Value range the unpacker can see for each L1 format. Int4 is sign-magnitude
-# S1.3, so -8 has no encoding; Int8 is sign-magnitude too, so -128 is excluded.
-INT_RANGES = {
-    DataFormat.Int4: (-7, 7),
-    DataFormat.UInt4: (0, 15),
-    DataFormat.Int8: (-127, 127),
-}
-
 # (input, output, dest_acc). Int32 output needs a 32-bit Dest.
 INT4_UNPACK_COMBINATIONS = [
     (InputOutputFormat(DataFormat.Int8, DataFormat.Int8), DestAccumulation.No),
@@ -62,7 +55,7 @@ INT4_UNPACK_COMBINATIONS = [
 def generate_int_stimuli(fmt: DataFormat, input_dimensions, seed: int):
     # Every representable value appears in each tile; the shuffle keeps any
     # nibble-order or face-order mistake from lining up with a pattern.
-    lo, hi = INT_RANGES[fmt]
+    lo, hi = integer_format_bounds(fmt)
     num_elements = input_dimensions[0] * input_dimensions[1]
     values = torch.arange(lo, hi + 1, dtype=torch.int32).repeat(
         num_elements // (hi - lo + 1) + 1
