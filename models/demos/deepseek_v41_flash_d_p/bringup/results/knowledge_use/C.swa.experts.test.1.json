@@ -1,44 +1,49 @@
 {
  "used": [
   {
-   "id": "DS41-1",
-   "how": "explained the 1.7 % gap of the fp32 step vs the bf16 golden as fp8 re-roundings, not a reference bug; measured by input jitter",
-   "traced": false,
+   "id": "DS41-22",
+   "how": "kept the vs-golden row / ratio allowance; its noted noise1e-2 slip is what this review fixed; entry updated with the row-scaling check",
+   "traced": true,
    "cited": true
   },
   {
-   "id": "DS41-14",
-   "how": "looked for an fp8-grid structural check to catch noise1e-2; the experts output has no grid, so the slip is documented instead",
+   "id": "DS41-25",
+   "how": "checked whether the w2 span check carries over: six experts span 6 x 2304 > 5120, so a different structural check was needed",
    "traced": true,
    "cited": true
   },
   {
    "id": "K-36",
-   "how": "measured device-floor (precision model) vs the 1 % noise mutation: noise below the floor, documented the slip",
-   "traced": true,
+   "how": "1 % noise below the device floor: added a structural check (row error scales with row norm) instead of tightening limits",
+   "traced": false,
    "cited": false
   },
   {
-   "id": "K-35",
-   "how": "measured the golden's own row / ratio error for this layer and added it to the vs-golden limits rather than copying limits",
+   "id": "K-56",
+   "how": "deleted the tt-probe directory tests/ttnn/unit_tests/operations/ds41_experts_test after dumping the CPU expect tensors",
    "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-44",
+   "how": "the slope check uses float64, asserts finite values and writes `not b >= limit` so NaN fails",
+   "traced": null,
    "cited": false
   }
  ],
  "contradicted": [],
  "missing": [
-  "the built-in vs-golden checks add the golden's own error to rel and column limits but not to worst-row / row-ratio limits; quantized steps (fp8 / fp4) fail them with the CPU reference itself"
+  "a structural check for a 1 % noise mutation on outputs with no grid and no subspace (sum of several GEMMs): row-error vs row-norm scaling"
  ],
  "overseer": [
   {
    "id": "OV-4",
    "answer": "done",
-   "evidence": "DS41-20 already said RESOLVED by F73; now states the limit is 2 x (swap_step_calib, defaults.yaml:35) the step's own component error, no cap"
+   "evidence": "DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x the step's own component error, no cap'; touched known_issues.md (DS41-22) and left DS41-20 as is"
   }
  ],
  "cited_only": [
-  "DS41-20",
-  "DS41-22"
+  "DS41-20"
  ],
  "meta": {
   "model": "deepseek_v41_flash_d_p",
@@ -47,8 +52,8 @@
   "role": "test",
   "attempt": 1,
   "agent": "bringup-engineer",
-  "t": "2026-10-15T17:28:06",
-  "head": "2201bf8f3e6",
+  "t": "2026-10-16T01:42:53",
+  "head": "2c7fefed7c1",
   "touched": [
    "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
    "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
