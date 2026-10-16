@@ -43,6 +43,7 @@ sharded role (tp / fsdp) goes on the smaller axis unless ``TTML_TEST_DP_AXIS=0``
 from __future__ import annotations
 
 import contextlib
+import gc
 import os
 from typing import Optional
 
@@ -92,6 +93,17 @@ def _num_available_devices() -> int:
         return 0
 
 
+def _release_metal_env_quietly() -> None:
+    """Close the device mesh and release the process-global ``MetalEnv`` (the conftest's _release_metal_env, which
+    is not importable from here), ignoring failures."""
+    try:
+        gc.collect()
+        ttml.close_device_mesh()
+        ttml.core.distributed.release_metal_env()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _restore_mgd_path(previous: Optional[str]) -> None:
     if previous is None:
         os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
@@ -131,6 +143,10 @@ def _named_mesh_or_skip(fresh_device_mesh, shape: tuple[int, ...], axis_names: t
         os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
     elif not os.environ.get("TT_MESH_GRAPH_DESC_PATH") and _num_available_devices() != needed:
         pytest.skip(f"needs a bundled MGD for arch={arch!r} shape={shape}, or TT_MESH_GRAPH_DESC_PATH.")
+    # The conftest's host-size check asks the live MetalEnv how many devices exist, and this module's earlier 1x2
+    # fixtures created that MetalEnv for a line; release it so the check creates one from the descriptor set above.
+    # The conftest releases it again before opening, which is harmless with no mesh open.
+    _release_metal_env_quietly()
     try:
         with contextlib.ExitStack() as stack:
             try:
