@@ -278,6 +278,17 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class SFPU_CLOBBER_LREGS(TemplateParameter):
+    """Fill the SFPU registers with garbage before the op's init (``clobber_sfpu_lregs()``).
+
+    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it.
+    """
+
+    def convert_to_cpp(self) -> str:
+        return "#define SFPU_CLOBBER_LREGS"
+
+
+@dataclass
 class SFPU_BINOP_MODE(TemplateParameter):
     """Select the float unary-with-scalar binop at compile time.
 
@@ -399,6 +410,32 @@ class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
     def convert_to_cpp(self) -> str:
         bits = struct.unpack("<I", struct.pack("<f", self.relu_max_threshold))[0]
         return f"#define SFPU_RELU_MAX_THRESHOLD {bits:#010x}u"
+
+
+@dataclass
+class SFPU_UNARY_MAX_MIN_SCALAR(TemplateParameter):
+    """Unary max/min scalar, emitted as fp32 bits (float) or two's-complement int32 (int).
+    A macro because the dispatcher selects on ``#ifdef``; unset keeps its 0.0f / 1000 default.
+    """
+
+    max_min_scalar: float | int = 0.0
+
+    def convert_to_cpp(self) -> str:
+        value = self.max_min_scalar
+        bits = _fp32_bits(value) if isinstance(value, float) else value & 0xFFFFFFFF
+        return f"#define SFPU_UNARY_MAX_MIN_SCALAR {bits:#010x}u"
+
+
+@dataclass
+class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
+    """Int32 unary max/min on a sign-magnitude Dest (macro, like SFPU_UNARY_MAX_MIN_SCALAR)."""
+
+    max_min_sign_magnitude: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if not self.max_min_sign_magnitude:
+            return ""
+        return "#define SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE 1"
 
 
 @dataclass
