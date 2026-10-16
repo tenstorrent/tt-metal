@@ -293,6 +293,23 @@ _FP32_SIGN_BIT = 1 << 31
 _UINT32_WRAP = 1 << 32
 
 
+def _fp32_bits_to_tensor(bits: list[int]) -> torch.Tensor:
+    """float32 tensor holding exactly the given fp32 bit patterns.
+
+    torch.int32 is signed, so a pattern with the sign bit set is wrapped to its
+    negative int32 before the bitwise view.
+    """
+    return torch.tensor(
+        [b - _UINT32_WRAP if b & _FP32_SIGN_BIT else b for b in bits],
+        dtype=torch.int32,
+    ).view(torch.float32)
+
+
+def _tensor_to_fp32_bits(tensor: torch.Tensor) -> list[int]:
+    """The fp32 bit patterns of a tensor as unsigned ints (the inverse wrap)."""
+    return [b & 0xFFFFFFFF for b in tensor.to(torch.float32).view(torch.int32).tolist()]
+
+
 def _fp32_bits(unbiased_exp: int, mantissa: int) -> int:
     """Positive fp32 bit pattern for 1.mantissa * 2^unbiased_exp."""
     return ((unbiased_exp + _FP32_EXP_BIAS) << _FP32_MANTISSA_BITS) | mantissa
@@ -355,17 +372,8 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     # the bit patterns over the whole operand afterwards.
     assert len(patterns) <= src_A.numel()
     bits = patterns + [0] * (src_A.numel() - len(patterns))
-    src_A = (
-        torch.tensor(
-            [b - _UINT32_WRAP if b & _FP32_SIGN_BIT else b for b in bits],
-            dtype=torch.int32,
-        )
-        .view(torch.float32)
-        .to(src_A.dtype)
-    )
-    src_bits = [
-        b & 0xFFFFFFFF for b in src_A.to(torch.float32).view(torch.int32).tolist()
-    ]
+    src_A = _fp32_bits_to_tensor(bits).to(src_A.dtype)
+    src_bits = _tensor_to_fp32_bits(src_A)
     golden = [_fp32_to_uint8_wrap(b) for b in src_bits]
 
     configuration = _build_typecast_config(
@@ -470,16 +478,10 @@ def test_eltwise_unary_typecast_fp32_to_fp16b_rounding_specials():
     specials = _fp32_to_fp16b_special_bits()
     assert len(specials) <= src_A.numel()
     bits = specials + _fp32_random_normal_bits(src_A.numel() - len(specials), seed=7301)
-    src_A = torch.tensor(
-        [b - _UINT32_WRAP if b & _FP32_SIGN_BIT else b for b in bits],
-        dtype=torch.int32,
-    ).view(torch.float32)
+    src_A = _fp32_bits_to_tensor(bits)
     # torch rounds float32 -> bfloat16 to nearest-even and overflows to inf, like the
     # kernel; it canonicalises NaN (dropping the sign), so NaN lanes are checked apart.
-    golden_bits = [
-        g & 0xFFFFFFFF
-        for g in src_A.to(torch.bfloat16).to(torch.float32).view(torch.int32).tolist()
-    ]
+    golden_bits = _tensor_to_fp32_bits(src_A.to(torch.bfloat16))
 
     configuration = _build_typecast_config(
         formats,
