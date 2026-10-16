@@ -1,0 +1,62 @@
+{
+ "used": [
+  {
+   "id": "DS41-14",
+   "how": "ported the kv test's structural output checks (grid + exact-match fraction) to the compressor's two fp4 halves",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-46",
+   "how": "set the mismatch limit to 2 x the input nudge's worst at this layer (measured 0.0114), not a fixed precision-model value",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-36",
+   "how": "calibrated rel limits miss scale 1.02 / 0.98: added a structural (grid) check instead of tightening rel limits",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-33",
+   "how": "scale error is invisible to the rel / PCC limits here; caught it with the fp4 grid check",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-38",
+   "how": "emulated model.py's bf16 points ahead of fp4 as a candidate device mistake; found it exceeds the chunk0 / small / big limits (now DS41-47)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-47",
+   "how": "new entry written by this step: fp4 grid check, mismatch 0.023, keep compressor intermediates fp32 on the device",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the second-input (chunk0, small, big) rel limits come from the input nudge only, so the official code's own bf16 intermediates (DS41-38) fail them: now DS41-47"
+ ],
+ "overseer": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.enc_source.compressor",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T19:11:01",
+  "head": "d6e023d7f28",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.enc_source.compressor.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_compressor.py"
+  ]
+ }
+}
