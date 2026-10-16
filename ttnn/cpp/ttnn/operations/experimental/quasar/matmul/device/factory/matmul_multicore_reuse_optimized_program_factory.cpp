@@ -376,6 +376,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
     KernelSpec::CompilerOptions::Defines compute_defines(mm_kernel_defines);
 
+    // A core's consecutive output blocks walk the M blocks of a batch, then move to the next batch
+    // (per_core_N == N, so a batch has no N blocks to walk).
+    const uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
+    const uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
+    const uint32_t out_m_block_stride = per_core_M_per_batch * N;
+
     // ---- Reader kernel (reads in0) ----
     // RTA carries the per-core in0 start tile id; the legacy 3rd RTA (per-core block count) is named
     // "batch" kernel-side (preserved verbatim from the legacy kernel).
@@ -406,10 +412,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"num_blocks", num_blocks},
                 {"bcast_B", (uint32_t)bcast_batch},
                 {"MtKt", M * K},
+                {"m_blocks_per_batch", m_blocks_per_batch},
+                {"in0_m_block_stride", in0_m_block_stride},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"in0_tensor_start_tile_id", "batch"},
+                .runtime_arg_names = {"in0_tensor_start_tile_id", "batch", "start_m_block"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -453,10 +461,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"out_num_subblocks_w", out_num_subblocks_w},
                 {"out_num_subblocks_h", out_num_subblocks_h},
                 {"MtNt", M * N},
+                {"m_blocks_per_batch", m_blocks_per_batch},
+                {"out_m_block_stride", out_m_block_stride},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id"},
+                .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id", "start_m_block"},
             },
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -555,12 +565,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     }
     const auto cores = corerange_to_cores(all_cores, num_cores, row_major);
 
-    uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
     uint32_t n_blocks_per_batch = N / per_core_N;
     uint32_t blocks_per_batch = m_blocks_per_batch * n_blocks_per_batch;
     uint32_t in0_batch_stride = M * K;
     uint32_t in1_batch_stride = K * N;
-    uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
     uint32_t in1_n_block_stride = per_core_N * (transpose_b ? K : 1);
 
     ProgramRunArgs::KernelRunArgs reader_run_args{.kernel = RO_READER_KERNEL};
@@ -590,6 +598,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             {
                 {"in0_tensor_start_tile_id", in0_start_tile_id},
                 {"batch", num_output_blocks_per_core},
+                {"start_m_block", start_m_block},
             });
         AddRuntimeArgsForNode(
             reader_writer_rtas,
@@ -598,6 +607,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"in1_tensor_start_tile_id", in1_start_tile_id},
                 {"batch", num_output_blocks_per_core},
                 {"out_tensor_start_tile_id", out_start_tile_id},
+                {"start_m_block", start_m_block},
             });
 
         num_blocks_written += num_output_blocks_per_core;
