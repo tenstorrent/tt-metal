@@ -285,6 +285,36 @@ std::optional<D2DStageGateConfig> enabled_stage_gate(const D2DStreamConfig& cfg)
     return std::nullopt;
 }
 
+// Most gates a receiver can have. Each takes L1-alignment bytes of service-core L1.
+constexpr uint32_t kMaxStageGates = 1024;
+
+// Checks the receiver's stage-gate config. Runs before anything is allocated or
+// exchanged with the peer, so a bad config throws before the sender launches.
+void validate_stage_gate(const D2DStreamConfig& cfg) {
+    const auto gate = enabled_stage_gate(cfg);
+    if (!gate) {
+        return;
+    }
+    TT_FATAL(
+        gate->num_gates <= kMaxStageGates,
+        "D2DStreamService: stage_gate num_gates ({}) must be at most {}",
+        gate->num_gates,
+        kMaxStageGates);
+    TT_FATAL(cfg.metadata_size_bytes > 0, "D2DStreamService: stage_gate requires metadata_size_bytes > 0");
+    for (const uint32_t offset : {gate->slot_id_offset_bytes, gate->gate_mode_offset_bytes}) {
+        TT_FATAL(
+            offset % sizeof(uint32_t) == 0 && offset + sizeof(uint32_t) <= cfg.metadata_size_bytes,
+            "D2DStreamService: stage-gate metadata offset {} must be 4-byte aligned and within "
+            "metadata_size_bytes ({})",
+            offset,
+            cfg.metadata_size_bytes);
+    }
+    TT_FATAL(
+        gate->slot_id_offset_bytes != gate->gate_mode_offset_bytes,
+        "D2DStreamService: stage-gate slot_id and gate_mode must be distinct metadata words (both at offset {})",
+        gate->slot_id_offset_bytes);
+}
+
 // Chunk plan + sizing shared by both sides, derived from an allocated backing
 // tensor (identical on both sides under the symmetric-mapping invariant).
 struct CommonPlan {
@@ -1331,19 +1361,6 @@ ReceiverSideResources build_receiver_side(
     const auto gate = enabled_stage_gate(cfg);
     std::map<distributed::MeshCoordinate, DeviceAddr> stage_gate_addrs;
     if (gate) {
-        TT_FATAL(common.metadata_enabled, "D2DStreamService: stage_gate requires metadata_size_bytes > 0");
-        for (const uint32_t offset : {gate->slot_id_offset_bytes, gate->gate_mode_offset_bytes}) {
-            TT_FATAL(
-                offset % sizeof(uint32_t) == 0 && offset + sizeof(uint32_t) <= common.metadata_size_bytes,
-                "D2DStreamService: stage-gate metadata offset {} must be 4-byte aligned and within "
-                "metadata_size_bytes ({})",
-                offset,
-                common.metadata_size_bytes);
-        }
-        TT_FATAL(
-            gate->slot_id_offset_bytes != gate->gate_mode_offset_bytes,
-            "D2DStreamService: stage-gate slot_id and gate_mode must be distinct metadata words (both at offset {})",
-            gate->slot_id_offset_bytes);
         stage_gate_addrs =
             allocate_service_core_words(mesh, service_cores, gate->num_gates, tt::tt_metal::hal::get_l1_alignment());
     }
@@ -1571,6 +1588,7 @@ D2DStreamService::create_pair(
         "D2DStreamService: sender_mesh shape {} must equal receiver_mesh shape {} (1:1 coord mapping)",
         sender_mesh->shape(),
         receiver_mesh->shape());
+    CMAKE_UNIQUE_NAMESPACE::validate_stage_gate(cfg);
 
     // Run the mapper once; both sides share the per-shard spec + topology.
     auto mo = CMAKE_UNIQUE_NAMESPACE::run_mapper(cfg);
@@ -1723,6 +1741,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
         "D2DStreamService::create_receiver must run on the receiver rank (local rank {}, endpoints.receiver_rank {})",
         *ctx->rank(),
         *endpoints.receiver_rank);
+    CMAKE_UNIQUE_NAMESPACE::validate_stage_gate(cfg);
 
     auto mo = CMAKE_UNIQUE_NAMESPACE::run_mapper(cfg);
     Tensor receiver_backing = create_device_tensor(mo.per_shard_spec, receiver_mesh.get(), mo.topology);

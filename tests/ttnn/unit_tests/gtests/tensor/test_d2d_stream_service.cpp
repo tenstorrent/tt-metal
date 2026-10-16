@@ -2487,6 +2487,18 @@ TEST_F(D2DStreamServiceTest, StageGateRejectsBadConfig) {
     expect_rejected(/*slot=*/kGateMetadataBytes - 2, kGateModeOffsetBytes);  // straddles the end
     expect_rejected(/*slot=*/4, /*mode=*/4);                                 // same word
     expect_rejected(/*slot=*/0, /*mode=*/0);                                 // offsets left at their defaults
+    {
+        auto cfg = make_stage_gate_config(sender_mesh);
+        cfg.stage_gate->num_gates = 1u << 30;
+        EXPECT_ANY_THROW((void)D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg)))
+            << "huge num_gates";
+    }
+    {
+        auto cfg = make_stage_gate_config(sender_mesh);
+        cfg.metadata_size_bytes = 0;
+        EXPECT_ANY_THROW((void)D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg)))
+            << "no metadata";
+    }
     // The service still comes up with a valid layout afterwards.
     auto [sender, receiver] =
         D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_stage_gate_config(sender_mesh));
