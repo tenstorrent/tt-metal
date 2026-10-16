@@ -37,8 +37,9 @@ def layer_weights(cfg):
     return {LAYERS[0]: swa, LAYERS[1]: 1.0 - swa}
 
 
-def build(row, cfg, layer_idx):
-    """Decoder layer ``layer_idx`` from the model's tensor cache, its paged KV cache and page table."""
+def build(row, cfg, layer_idx, decode_users=None):
+    """Decoder layer ``layer_idx`` from the model's tensor cache, its paged KV cache and page table.
+    ``decode_users``: set up the MoE's decode path for that many users (the full-layer scripts)."""
     plan = MeshPlan(row)
     dims = cfg.attention_dims(layer_idx)
     ropes = {
@@ -58,6 +59,8 @@ def build(row, cfg, layer_idx):
     tables, num_blocks = kv_lib.page_tables(USERS, MAX_BATCH, blocks, plan.tp, layer.attn.rep, seed=layer_idx)
     kv = layer.attn.allocate_kv_cache(num_blocks, BLOCK, ttnn.bfloat8_b)
     page_table = kv_lib.per_chip(plan, tables, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    if decode_users is not None and layer.is_moe:
+        layer.mlp.set_decode_users(decode_users)
     return dict(plan=plan, ropes=ropes, layer=layer, kv=kv, page_table=page_table, row=row)
 
 
@@ -85,6 +88,35 @@ def prefill(state, cfg, seed):
         for t in (x_tt, h, attn, y):
             t.deallocate(True)
     return outs
+
+
+def prefill_layer(state, cfg, seed, return_inputs=False):
+    """Fill every user's KV cache through the whole layer (TtMiMoDecoderLayer.forward_prefill: attention and FFN).
+    Returns the outputs [len, hidden] (and the inputs with ``return_inputs``)."""
+    g = torch.Generator().manual_seed(seed)
+    layer, outs, xs = state["layer"], [], []
+    for u, n in enumerate(PROMPT_LENS):
+        x = (torch.randn(n, cfg.hidden_size, generator=g) * HIDDEN_STD).bfloat16()
+        x_tt = to_tt(state, x)
+        y = layer.forward_prefill(x_tt, u, state["page_table"], state["kv"])
+        outs.append(state["plan"].to_torch_replicated(y).float()[0, 0, :n])
+        xs.append(x.float())
+        x_tt.deallocate(True)
+        y.deallocate(True)
+    return (outs, xs) if return_inputs else outs
+
+
+def token_mask(state):
+    """[1, 1, 32, 1] bf16: 1 for the USERS active decode slots."""
+    m = torch.zeros(1, 1, MAX_BATCH, 1)
+    m[0, 0, :USERS] = 1
+    return ttnn.from_torch(
+        m, device=state["row"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=state["plan"].replicate()
+    )
+
+
+def decode_layer(state, x_tt, rot, cur_pos, mask):
+    return state["layer"].forward_decode(x_tt, rot, cur_pos, state["page_table"], state["kv"], mask)
 
 
 def decode_inputs(state, cfg, step, seed):
