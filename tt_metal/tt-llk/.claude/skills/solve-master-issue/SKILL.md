@@ -1,7 +1,7 @@
 ---
 name: solve-master-issue
-description: Work a master/umbrella GitHub issue (many sub-problems in one issue or as sub-issues) to completion UNATTENDED — split it into items, find a fail-without/pass-with test per item, open a DRAFT PR per fixed item, handle bot reviews, dispatch sanity + nightly CI, fix PR-caused failures, rebase past unrelated main breakage, until each PR is green or fails only in proven-unrelated tests AND every bot comment (on every push, including CI-fix pushes) is addressed — fixed if valid, pushed back on if wrong, with a short reply. Never idles; while anything waits on bots/CI/device, it advances another item. Use when the user hands over an issue with N problems and says to work through it without them.
-argument-hint: <issue URL or owner/repo#N> [extra constraints]
+description: Work a master/umbrella GitHub issue (many sub-problems in one issue or as sub-issues) OR a local findings file (a bug-audit CONFIRMED.json / OPEN.md, or any list of file:line problems) to completion UNATTENDED — split it into items, group items that touch the same function/op into one PR (capped so the PR body still fits), find a fail-without/pass-with test per item, open a DRAFT PR per group, handle bot reviews, dispatch sanity + nightly CI only once bots are quiet and only within a CI budget (default 5 Sanity + 5 Nightly runs in flight) so other developers are not crowded off the runners, fix PR-caused failures, rebase past unrelated main breakage, until each PR is green or fails only in proven-unrelated tests AND every bot comment (on every push) is addressed. Writes progress back into the findings file (and commits/pushes or syncs it) so a re-run or another box never repeats work. Never idles; while anything waits on bots/CI/device/budget, it advances another item. Headless driver (run_unattended.sh) survives disconnects. Use when the user hands over an issue or a findings file with N problems and says to work through it without them.
+argument-hint: <issue URL | owner/repo#N | /path/to/findings.json|.md> [--sync-cmd '<cmd>'] [--ci-budget sanity=5,nightly=5] [--group-max 8] [--only-open] [--unattended --run-name <name>] [extra constraints]
 user_invocable: true
 ---
 
@@ -30,20 +30,36 @@ to/resolve **bot** threads, dispatch and cancel workflow runs you dispatched. It
 authorization to: mark a PR ready for review, merge, touch anyone else's PR/branch/runs, reply to a
 human thread, or file anything without a shipped-code repro.
 
+**Two kinds of source.** A GitHub issue (URL or `owner/repo#N`), or a **local findings file**: a
+path ending in `.json` or `.md` — the bug-audit skill's `CONFIRMED.json` / `OPEN.md`, or any list of
+`file:line` problems with a summary. With a file there is no parent issue: items are grouped (§1b),
+issues go to **tt-metal** (never tt-llk), and the file itself is the shared record of what has been
+done (§0b) — it is marked after every state change and pushed, so a re-run, a crash, or another box
+never repeats work. Options (anywhere in the arguments): `--sync-cmd '<cmd>'` (how to publish the file
+when it is not in a git repo — e.g. a mirror's pack-and-push script), `--ci-budget sanity=N,nightly=M`
+(default 5,5), `--group-max N` (default 8 items per PR), `--only-open` (work only items with no state
+at all — skip ones already filed upstream), `--unattended --run-name <name>` (set by
+`run_unattended.sh`: end the turn instead of sleeping when everything waits; write `DONE` at the end).
+
 Conventions used below: `<me>` = `gh api user -q .login`; `$SKILL` =
-`tt_metal/tt-llk/.claude/skills/solve-master-issue` (scripts in `$SKILL/scripts/`); `$MASTER_ISSUE_DIR`
-= where ledgers live, default `~/.claude/master-issues` — point it at shared storage if you have some,
-so a run can be resumed from another machine. Scripts avoid `gh run list --branch` and
-`gh run rerun --failed`, which older `gh` (2.4) lacks.
+`tt_metal/tt-llk/.claude/skills/solve-master-issue` (scripts in `$SKILL/scripts/`) — if that path
+does not exist in the checkout you are in (the skill's branch is not merged there), `$SKILL` is
+`$(readlink -f ~/.claude/skills/solve-master-issue)`; `$MASTER_ISSUE_DIR` = where ledgers live,
+default `~/.claude/master-issues` — point it at shared storage if you have some, so a run can be
+resumed from another machine. Scripts avoid `gh run list --branch` and `gh run rerun --failed`, which
+older `gh` (2.4) lacks.
 
 | script | use |
 |---|---|
 | `mkwt.sh <name> <branch>` | worktree off origin/main (or the existing branch on resume) |
 | `dispatch.sh [--match <regex>] "<workflow>" <ref> [-f k=v]` | dispatch a workflow **and get its run id** (gh prints none); `--match` pins the run's identity when the workflow+ref is shared |
+| `ci_budget.sh [--need-nightly N] [sanity=5] [nightly=5]` | room for one more PR's CI? counts **my** in-flight Sanity / Nightly(+e2e) dispatches on GitHub; exit 0 = dispatch, 1 = queue it (§6) |
 | `ci_triage.sh <run_id>` | every non-green job of a run with its failing tests |
 | `main_job_status.sh "<workflow>" "<job>"` | is the same job failing on main — on the same tests? |
 | `bot_threads.sh <pr>` | bot feedback still unanswered; ack handled summaries by URL |
 | `bots_pending.sh <pr>` | what must still finish before the head SHA is "bots quiet"; exit 0 + empty = quiet |
+| `findings.py list\|mark\|reconcile\|sync <file> …` | the findings file as source: open items as JSON; write state + links per item (dups follow); GitHub-vs-file drift on resume; commit+push or `--sync-cmd` |
+| `run_unattended.sh <run-name> <args…>` | detached headless driver: `claude -p` turns, resumed every 15 min until `DONE` (§2) |
 
 The two gate scripts print nothing when there is nothing left — and also when GitHub could not be
 read, so their **exit status is part of the gate**: a non-zero exit is "not quiet / not answered",
@@ -60,10 +76,12 @@ retry after the poll interval. Never treat an empty failed read as done.
    `flock /tmp/tt-device-$(hostname).lock <cmd>`. Hangs and corrupt results from two sessions on one
    card look exactly like the bug you are hunting.
 3. **Read the whole issue** — body, every comment, and its native sub-issues
-   (`gh api repos/<o>/<r>/issues/<N>/sub_issues`). No truncation.
+   (`gh api repos/<o>/<r>/issues/<N>/sub_issues`). No truncation. File source: §0b instead.
 4. **Repo routing.** The PR goes to the repo that owns the code *now*: tt-llk is frozen, its code lives
-   in `tt-metal/tt_metal/tt-llk`, so tt-llk issues get tt-metal PRs. Sub-issues go under the parent, in
-   the parent's repo. Cross-repo `Fixes` needs the `owner/repo#N` form.
+   in `tt-metal/tt_metal/tt-llk`, so tt-llk issues get tt-metal PRs. **Every issue this skill creates
+   goes to tenstorrent/tt-metal** — a tt-llk parent still gets its native sub-issue link (cross-repo
+   sub-issues are allowed), but the child itself lives in tt-metal. Cross-repo `Fixes` needs the
+   `owner/repo#N` form.
 5. **Check for overlap** — `gh pr list --author <me> --state open` and open PRs touching the same
    files. An overlapping stale draft is a note in your PR, not a blocker.
    **Stay clear of the Copilot pipeline** (`squad-plan` → `issue-monster` → `copilot-flow-ready` →
@@ -79,6 +97,43 @@ retry after the poll interval. Never treat an empty failed read as done.
    the ledger before acting** — the summary loses details like run ids.
 7. If persistent memory is available, write a resume note pointing at the ledger; update it at
    milestones (PR opened, CI verdict), not every step.
+
+## 0b. A findings file as the source
+
+The file is the record shared with the user and with any later run, so it is kept truthful at every
+step; the ledger holds the operational detail (run ids, counters) that the file does not.
+
+1. **Read it with the script, not by eye:** `findings.py list <file>` prints one JSON line per open
+   canonical item — key (`path:line`, `#n` when two findings share a line), severity, class, summary,
+   failure scenario, suggested fix, evidence, the arch-copies / same-defect duplicates that ride along.
+   `--all` adds items that already carry a state. Items the audit's filed check marked `already_filed`
+   (an open upstream issue exists) are worked too unless `--only-open` — link `Fixes <that issue>`
+   instead of filing; skip any with an assignee or an open PR. `filed_closed` items: skip if the
+   closing fix postdates the tree the finding was confirmed on, else treat as open and say so.
+2. **Reconcile before touching anything** (every start and resume): `findings.py reconcile <file>`.
+   It looks for your PRs and issues whose body carries `audit-key: <key>` — every issue and PR body this
+   skill writes has one line per item — and writes any missing mark into the file, reports PRs closed
+   without merge (a decision for the user, never silently reopened) and items left `in-progress`
+   (resume from their worktree/branch if present, else restart). Cheap: two bulk queries, matched
+   offline; only drift reaches you. Its purpose is the window the marks cannot close — a crash between
+   `gh pr create` and the mark, or a push that failed.
+3. **Mark on every state change, then sync:**
+   ```bash
+   $SKILL/scripts/findings.py mark <file> <key>... --state in-progress --branch <b> --worktree <wt> --group <g>
+   $SKILL/scripts/findings.py mark <file> <key>... --state issue --issue <url>
+   $SKILL/scripts/findings.py mark <file> <key>... --state pr --pr <url> --sha <sha>      # dups get it too
+   $SKILL/scripts/findings.py mark <file> <key>... --state done|skipped|needs-user --note '<why>'
+   $SKILL/scripts/findings.py sync <file> [--sync-cmd '<cmd>']      # commit+push, or the sync command
+   ```
+   `sync` commits and pushes the file when it lives in a git repo with an upstream (GitLab or GitHub
+   alike), runs `--sync-cmd` when it does not (the bug-audit runs use a pack-and-push mirror script),
+   and otherwise says the file is local-only (then say so in the report). Sync **immediately after
+   each PR opens**, after each issue, and at least every **30 min** while items are in progress —
+   `sync` takes a lock, so run it in the background and keep going. A crash loses at most the step in
+   flight.
+4. Key → location: strip any worktree prefix; the key is stable across checkouts. Two audit items
+   that are one defect (`duplicate_of`, `also_at … (arch-copy|same-defect)`) are **one item** with all
+   the sites listed; the mark propagates to the duplicates automatically.
 
 ## 1. Split into items and triage
 
@@ -99,6 +154,28 @@ file(s), claimed defect, arch(es), what hardware a test needs, and an initial cl
 overlap with the harder items. Two items that are the same defect share one PR and one sub-issue
 (say so in the sub-issue).
 
+## 1b. Group items into PRs (fewer PRs, fewer CI runs)
+
+One PR per *group*, one sub-issue per group, one CI round per group. Grouping happens after triage,
+before any fix, and is written into the ledger (`group` column) and the file (`--group`).
+
+**Same group when** (any of): same function or op (the WH and BH copies of one defect, the SFPU kernel
+and its ckernel wrapper, a kernel and the `llk_api` layer that calls it); same file within ~100 lines;
+the audit's own `same-defect` / `arch-copy` links; one test file would prove all of them. **Never the
+same group when:** different owners' areas (a `models/` kernel with an LLK header), one item is a
+`design` or `needs-user` item (it would block the others), or the fixes would conflict textually.
+
+**Cap, measured not guessed:** before the group is closed, render its PR body (template in §4) with
+every item's problem, fix, test, and fail-without/pass-with result. It must fit GitHub's 65,536-char
+body limit with **≥ 20 % headroom** (CI links, the tested-on section and review replies grow it), and
+the sub-issue body likewise. Over → split along the weakest link (different file first, then
+different function). Soft cap `--group-max` (default **8**) items per PR for reviewability: beyond it,
+split even if the body fits. Items that match nothing go out alone, as today.
+
+**Inside a group** each item still gets its own fail-without/pass-with proof, in the group's single
+worktree, one commit per item (test + fix), so a reviewer can drop one without unpicking the rest. The
+PR body lists items in a table; CI runs once for the whole group.
+
 ## 2. The scheduler — how to never idle
 
 Each item moves through: `triage → repro → fix → verify → PR → bot-review → CI → done | parked`.
@@ -112,17 +189,42 @@ Each item moves through: `triage → repro → fix → verify → PR → bot-rev
   no tt-metal build. At most 2 concurrent builds, always `run_in_background`.
 - **GitHub API** — poll each run at most every 2 min (`gh run watch -i 120 --exit-status <id>`); many
   tight pollers trip secondary rate limits and then *everything* stalls.
+- **CI budget** — shared with every other developer. At most **5 Sanity** and **5 Nightly(+LLK e2e)**
+  runs of yours in flight at once (`--ci-budget`), counted on GitHub by `ci_budget.sh`, never from the
+  ledger alone. A full budget blocks **only the dispatch step of that one PR**: the PR is opened, its
+  reviews are requested and answered, it enters `ci-queue` in the ledger, and the skill goes straight
+  on to the next item — triage, repro, fix, test, next PR. Queued PRs get their CI, in order and
+  nearest-to-done first, as slots free up (§6). Probe/fix pairs, re-dispatches after a rebase, and
+  rerun-failed-jobs calls all draw on the same budget.
 - **Thinking/reading** — unlimited; parallelize with subagents.
 
 **The loop**, after every action and every notification:
-1. Anything finished? (bot review, CI run, build, background test) → handle it now.
+1. Anything finished? (bot review, CI run, build, background test) → handle it now. A finished CI run
+   also frees a budget slot: check `ci_budget.sh` and dispatch the head of the `ci-queue`.
 2. Otherwise pick the next **unblocked** action across all items, preferring: device work if the
    device is free → items earliest in the pipeline → reading/analysis for parked items.
 3. Before any wait, **arm it in the background** — a background Bash `gh run watch -i 120
    --exit-status <id>` (re-invokes you when it exits), or `Monitor` with an until-loop — then go
    straight to step 2.
 4. Only when *every* item is genuinely waiting on something external may you stop, with a background
-   `sleep 1800` heartbeat armed and the ledger's "pending events" table current.
+   `sleep 1800` heartbeat armed and the ledger's "pending events" table current. **Unattended**
+   (`--unattended`): arm nothing that must outlive the turn — write the pending table and the file
+   marks, sync, and **end the turn**; `run_unattended.sh` resumes the session every 15 min, and the
+   first thing the resumed turn does is step 1 for everything that finished meanwhile. A turn's end
+   kills its background shells, so anything local that must outlive it — a build, a long test sweep,
+   a `findings.py sync` — is started with `nohup setsid … > <ledger dir>/<what>.log 2>&1 &`, its pid
+   and log recorded in the pending table, and its log read on the next turn instead of re-running it.
+
+**Surviving a disconnect.** Never run the skill in a foreground terminal you might lose. Launch it
+detached — from the repo root, with `$MASTER_ISSUE_DIR` on shared storage:
+```bash
+nohup setsid $SKILL/scripts/run_unattended.sh <run-name> <source> [options] > /dev/null 2>&1 &
+tail -f $MASTER_ISSUE_DIR/<run-name>/driver.log        # attempt-NN.log holds each turn's output
+touch $MASTER_ISSUE_DIR/<run-name>/STOP                # stop after the current turn
+```
+Each attempt is one `claude -p` turn in auto mode that resumes the same session (so context carries);
+if the session is lost, the next turn starts fresh and rebuilds state from the ledger and the file
+marks (§0b reconcile). The skill writes `$MASTER_ISSUE_DIR/<run-name>/DONE` only with the final report.
 
 **Parallelism:** fan out independent items to subagents for triage, root-causing, and writing fix+test.
 **You create the worktree** (`mkwt.sh`) and pass the path — don't use `isolation: "worktree"`, its
@@ -185,6 +287,13 @@ CI runner and the gate still holds — both arms, not just pass-with:
 Another box with the board, if one is reachable, is the same thing with the device lock (§0) on that
 host — but CI is the default because it leaves a link anyone can check.
 
+**Where a board comes from, in order:** (1) this box (`tt-smi -s`); (2) another box of the user's
+that already has the board — `ListAgents` shows their other sessions and the hostnames in the user's
+notes; use it only if `ssh <host> true` works with the keys you have (never add keys or change auth to
+get there), through that host's device lock; (3) **CI silicon**, above. This skill does not reserve
+machines: if the user wants a reservation it is a line in the report, and the item proceeds through CI
+silicon meanwhile — a missing board is never a reason to park.
+
 **Fix:** `mkwt.sh <issue>-<item> <me>/<branch>`. Minimal fix derived from the codebase's correct
 sibling usage. **Check the sibling arch** for the same defect — same line is not the same bug, but a
 one-sided fix on a symmetric defect draws a valid bot comment; fix both only if both are proven,
@@ -199,13 +308,19 @@ breakage). Pre-commit hooks: if a hook rewrites and aborts, re-add and make a **
 ## 4. Open the DRAFT PR
 
 In order:
-1. **Sub-issue** for the item (skip if it already exists as one — then just `Fixes` it). Body states the
-   bug on its own terms: what breaks, scenario, evidence, `file:line`. Then: native child link
+1. **Sub-issue** for the item or group (skip if it already exists as one — then just `Fixes` it). Body
+   states the bug on its own terms: what breaks, scenario, evidence, `file:line`; a group's issue has
+   one section per item. **Issues are always created in tenstorrent/tt-metal**, whatever repo the
+   source issue or the file came from — tt-llk is frozen (§0.4). With a parent issue: native child link
    (`gh api --method POST repos/<o>/<r>/issues/<PARENT>/sub_issues -F sub_issue_id=<child .id>` — the
-   numeric `id`, with `-F`), assign `<me>`. Verify the link took.
+   numeric `id`, with `-F`), assign `<me>`, verify the link took. With a file source there is no parent:
+   a standalone issue, assign `<me>`, and one `audit-key: <key>` line per item at the end of the body
+   (what `findings.py reconcile` matches on). Then `findings.py mark … --state issue --issue <url>`.
 2. Push the branch; `gh pr create --draft`. Body: problem, fix, the test and its fail-without /
-   pass-with result, what was and wasn't run on hardware (be exact — name the board), `Fixes <child>`.
-   Comment on the child with the PR link.
+   pass-with result, what was and wasn't run on hardware (be exact — name the board), `Fixes <issue>`.
+   A group's body: a table (item · file:line · defect · test · fail-without/pass-with), then one short
+   section per item; `Fixes` each issue; the `audit-key:` lines at the end. Comment on the issue with
+   the PR link. Then `findings.py mark … --state pr --pr <url> --sha <sha>` and `findings.py sync`.
 3. **Public-repo rule:** no RTL signal names, `.sv` paths, waveform decodes, or internal tracker ids
    in code comments, commits, PR bodies, or replies.
 4. Ledger (and resume note): item → sub-issue, PR, branch, worktree, head SHA.
@@ -310,8 +425,20 @@ per PR**; every additional run must be justified in the ledger by exactly one of
 breakage. A bot finding that arrives while CI is already running is handled, but the fix is held
 (batched) until that CI run reports, so one re-run covers both.
 
-Once bots are quiet on the current head SHA, dispatch on the branch and record run ids. A manual
-dispatch is **not** the nightly by default: every test family the cron schedule turns on is an
+**Budget gate, right before every dispatch** (first run, re-run after a fix or rebase, probe/fix
+pair, rerun-failed-jobs alike):
+```bash
+$SKILL/scripts/ci_budget.sh [--need-nightly 2]   # 2 when LLK e2e is needed too; exit 0 = go, 1 = queue
+```
+Exit 1 → the PR's status becomes `ci-queue(<since>)` in the ledger and **nothing else about it
+waits**: reviews stay answered, and the scheduler moves to other items. The queue drains in order,
+PRs nearest to done first (a re-run after a one-line CI fix before a first run), one PR per freed
+slot, whenever a run of yours completes — check the budget in step 1 of the loop, not on a timer. Both
+lanes of a PR are dispatched together or not at all, so a PR never holds a Sanity slot while waiting
+for a Nightly one. The point is pacing, not throughput: other developers share these runners.
+
+Once bots are quiet on the current head SHA **and the budget has room**, dispatch on the branch and
+record run ids. A manual dispatch is **not** the nightly by default: every test family the cron schedule turns on is an
 opt-in `workflow_dispatch` input that defaults to false, so a bare dispatch reports success with the
 test jobs skipped. "Full Nightly" for this skill is the set of scheduled suites that execute kernels:
 ```bash
@@ -385,6 +512,7 @@ and every job is green or has a recorded unrelated verdict with evidence (main r
 failing tests, or log line showing infra); `bot_threads.sh <PR>` exits 0 and prints nothing (or what's
 left is in the report as a decision for the user); and the fail-without/pass-with test still holds.
 Record it, update the PR body's "tested on" section if it changed, and leave the PR as **draft**.
+File source: `findings.py mark … --state done --pr <url> --sha <sha>` and sync.
 
 ## 7. Revisit parked items
 
@@ -395,12 +523,17 @@ only because its board is not on this box is not parked — it is waiting on a C
 
 ## 8. Final report (and the end state of the ledger)
 
-One table: item · class · status · sub-issue · PR · fail-without/pass-with evidence · CI verdict
-(green / unrelated failures with links) · bot comments: fixed / pushed back / left for the user (counts).
+One table: item · group · class · status · sub-issue · PR · fail-without/pass-with evidence · CI
+verdict (green / unrelated failures with links) · bot comments: fixed / pushed back / left for the user
+(counts) · time spent in `ci-queue`.
 Then, separately:
 - PRs frozen by a human request, with the quote;
 - items parked for the user — each with the exact decision needed and the options;
 - human review threads awaiting them, quoted briefly;
-- anything run on only one arch/board.
+- anything run on only one arch/board;
+- file source: counts by state in the file, whether the last `sync` pushed (or is local-only), and
+  the reconcile findings (PRs closed without merge, drift repaired).
 
-Write it to the ledger, and update the resume note.
+Write it to the ledger, update the resume note, run a final `findings.py sync`, and — unattended —
+`touch $MASTER_ISSUE_DIR/<run-name>/DONE` **only now**: not while any PR is in `ci-queue`, `ci`, or
+`bot-review`, and not while any item is `in-progress`.
