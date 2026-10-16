@@ -4944,3 +4944,44 @@ def test_matmul_bcast_in0_reuse_outer_blocks(device, per_core_M, out_block_h, pe
             for b in range(in1_B):
                 assert_with_pcc(expected[0, b], output[0, b], 0.999)
     assert device.cache_entries_counter.total == 1
+
+
+# Pins the Mt > 1 escape: padded-h check passes but logical h would silently read padding into logical outputs.
+@pytest.mark.parametrize(
+    "config_kind, m, n, k, bias_h, match",
+    [
+        ("reuse", 64, 32, 32, 16, "Unsupported bias shape"),
+        ("mcast1d", 64, 32, 32, 16, "logical bias h"),
+    ],
+)
+def test_matmul_rejects_bias_with_mismatched_logical_h(device, expect_error, config_kind, m, n, k, bias_h, match):
+    torch.manual_seed(0)
+    a_t = ttnn.from_torch(torch.randn(m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b_t = ttnn.from_torch(torch.randn(k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    bias_t = ttnn.from_torch(torch.randn(bias_h, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    if config_kind == "reuse":
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(1, 1),
+            in0_block_w=k // 32,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=m // 32,
+            per_core_N=n // 32,
+        )
+    else:
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+            in0_block_w=k // 32,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=m // 32,
+            out_block_w=n // 32,
+            per_core_M=m // 32,
+            per_core_N=n // 32,
+            fuse_batch=True,
+            mcast_in0=True,
+        )
+
+    with expect_error(RuntimeError, match):
+        ttnn.linear(a_t, b_t, bias=bias_t, program_config=program_config)
