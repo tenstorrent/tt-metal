@@ -37,7 +37,7 @@ Metal Trace is a performance optimization feature that minimizes host overhead f
 When capturing, the operation dispatching commands are saved into a DRAM buffer allocated for this purpose.
 The commands contain the addresses of the operands, input/output shapes etc.
 
-When replaying, the same chain of operations is executed again. Whichever addresses were read from and written to during capture will be read from and written to again. No allocator operations or checks are performed. Importantly, the operation's program factory (#TODO link to explanation of what this is) doesn't run again.
+When replaying, the same chain of operations is executed again. Whichever addresses were read from and written to during capture will be read from and written to again. No allocator operations or checks are performed. The operation's [program factory](../../docs/source/ttnn/ttnn/adding_new_ttnn_operation.rst#programdescriptor-pattern-recommended) defines its device program, including kernels, circular buffers, and arguments. It does not run again during replay.
 
 # Requirements and important details
 
