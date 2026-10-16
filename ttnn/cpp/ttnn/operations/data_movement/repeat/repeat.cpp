@@ -288,12 +288,14 @@ bool same_placement(const MemoryConfig& a, const MemoryConfig& b) {
 using repeat::interleaved_in;
 
 // Gives a spec-less sharded output the spec native would land it in; the legs need it to plan the final write.
+// An ND-only config is a requested placement, not a spec-less one: it passes through untouched, and the
+// support gate (which needs a legacy shard_spec) sends it to native, which places it as requested.
 MemoryConfig resolve_codegen_output_mem_config(
     const ttnn::Tensor& working_tensor,
     const ttsl::SmallVector<uint32_t>& working_repetition_vector,
     const MemoryConfig& output_mem_config) {
     if (!output_mem_config.is_sharded() || output_mem_config.shard_spec().has_value() ||
-        working_tensor.storage_type() != StorageType::DEVICE) {
+        output_mem_config.nd_shard_spec().has_value() || working_tensor.storage_type() != StorageType::DEVICE) {
         return output_mem_config;
     }
     const auto& shape = working_tensor.logical_shape();
