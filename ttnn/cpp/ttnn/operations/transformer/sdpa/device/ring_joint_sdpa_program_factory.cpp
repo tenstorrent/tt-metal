@@ -3327,11 +3327,23 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             "compute.q_valid_tile_count");
         compute_args.push_checked(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
-        // Rotated Q split: one remainder_start per active ordinal.
+        // Static multicast loop count (the reader's padded slot loop); rotated groups derive theirs per ordinal.
+        uint32_t static_mcast_q_count = global_q_end - global_q_start;
+        if (enable_kv_chains && !use_rotated_q_split) {
+            if (k_uses_batch_chain && k_mcast_enabled) {
+                static_mcast_q_count = std::max(static_mcast_q_count, k_chain_max_q[i]);
+            }
+            if (gqa_grouped_kv && gqa_mcast_enabled) {
+                static_mcast_q_count = std::max(static_mcast_q_count, gqa_chain_max_q[i]);
+            }
+        }
+        compute_args.push_back(static_mcast_q_count);
+        // Rotated Q split: per active ordinal [remainder_start, group_has_remainder].
         if (use_rotated_q_split) {
             for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
                 const auto& sched = rotated_sched[i][ring_iter];
                 compute_args.push_back(sched.remainder_start);
+                compute_args.push_back(sched.group_has_remainder);
             }
         }
         if (ksplit_count > 1) {

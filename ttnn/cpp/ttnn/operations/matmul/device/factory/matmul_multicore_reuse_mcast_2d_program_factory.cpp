@@ -1732,7 +1732,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
     // When accumulating in fp32 with the K reduction split across blocks, the intermediate partials
-    // buffer holds Float32 and is reloaded into DEST between blocks by copy_block_matmul_partials.
+    // buffer holds Float32 and is reloaded into DEST between blocks by copy_block.
     // Unless the reload's view is marked UnpackToDest, that reload is routed through SrcA and rounded
     // to TF32 (10 mantissa bits), so the fp32 partial loses precision on every block boundary and
     // accuracy degrades as the number of K-blocks grows. The mode is set on the alias when bias
