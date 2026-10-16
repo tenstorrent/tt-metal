@@ -189,3 +189,7 @@ Every intervention by the supervising session: time, task, trigger, classificati
   check had no noise floor for int outputs; the CPU's own nudged indexer gives 0.026). Agents correctly changed no code.
 - Action: F92 (tail floor for int outputs), F91 (sweep: within-limit mistakes do not slip; owner OK), F93 (30-min
   heartbeat; the stop went unseen for ~25 min). Selftests 430 passed. Resume S.enc_source.07 (gates first, F87).
+
+## 2026-10-16 21:47 C.enc_source.attention: KNOWLEDGE CONTRADICTED K-31
+- The agent: K-31 says sparse_sdpa high_precision has "no sink"; the fork accepts attention_sink with it (CHANGELOG
+  "sparse_sdpa: attention_sink under high_precision", device op checks only fp32 DEST and dtypes). Verified; K-31 fixed.
