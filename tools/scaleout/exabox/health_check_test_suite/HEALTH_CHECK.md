@@ -3,8 +3,8 @@
 Pre-cluster hardware sanity check for Blackhole Galaxy 6U systems. Captures a
 `tt-smi` snapshot, decodes per-chip telemetry, runs a reset stability loop,
 invokes the `unit_tests_deployment` gtest binary, and on the longer tiers folds
-in the first-step triage tools and the QSFP tests. Emits a single JSON
-report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
+in the first-step triage tools, the QSFP tests and the sys-triage bundle. Emits
+a single JSON report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
 
 ## Quick start
 
@@ -33,6 +33,9 @@ Output goes to `./diag_report.json` by default; gtest logs to `./logs/<test>.log
 | `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | ~5 min + triage + ~7 min | Pre-deployment validation |
 | `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | ~18 min + triage + ~7 min | Final deploy gate |
 | `pre_reboot` | none | — | host_side + device_side | yes, if installed | snapshot + triage + ~7 min | Collect data before a BMC reboot |
+
+`pre_reboot` also ends with the [sys-triage phase](#sys-triage-phase) when the
+package and BMC credentials are available; it collects a bundle and never gates.
 
 `pre_reboot` collects data; it does not check the unit. It runs on a unit that is
 about to be power cycled through the BMC, so it records the state first and runs
@@ -313,6 +316,63 @@ timeout is 1200 s as a backstop. That has to stay well inside
 kills the process group and takes the report with it — so raise it when running
 `medium`, `deploy` or `pre_reboot` on a host that has the package.
 
+## sys-triage phase
+
+The last phase runs `sys-triage`, the syseng tool that collects a Blackhole
+Galaxy triage bundle: a directory of text files covering the Quanta FW stack
+(BMC, CPLD, Redfish device versions, KMD, ASIC FW bundle, UBB PHY), the full FRU,
+MB/PDB and per-tray CPLD DIAG, `tt-smi -s`, `ipmitool sdr elist`, `lspci -vvv`,
+`dmesg` and `journalctl -k`, each chip's reset-unit scratch registers and its
+`tt-fw-terminal` vuart. It is forensics for whoever picks up the ticket, not
+findings for this report to judge, so the phase **never gates** the run.
+
+It runs on `pre_reboot` only, as its last step: the bundle is the record of the
+unit's state before the BMC power cycles it, and the vuart and scratch reads are
+worth most on a unit nothing has reset since it misbehaved. It follows the QSFP
+tests because it opens every chip, so nothing may run beside it. The other tiers
+record it as **SKIP** with the reason.
+
+**Where it comes from.** `sys-triage` ships in the same syseng `.deb` as
+`tt-bh-glx-cluster-debug` and is probed for on PATH the same way
+(`--sys-triage-path` overrides). No package, or a package version that does not
+ship it yet, means **SKIP** with the reason; nothing else in the run changes.
+
+**BMC credentials are required.** `sys-triage` refuses to start without the BMC
+address, user and password, so the phase reports **SKIP** naming whichever is
+missing. Each comes from `--bmc-ip` / `--bmc-user` / `--bmc-password`, else from
+`$BMC_IP` / `$BMC_USER` / `$BMC_PASSWORD` — the variables `sys-triage` itself
+reads, so a launcher that already exports them needs no flags. They reach the
+tool through its environment only: never its argv, the logged command or the
+report, and the password is scrubbed from the captured output. Prefer the
+variable over `--bmc-password`, which is visible in the process list.
+
+| Status | Meaning |
+|---|---|
+| **PASS** | `triage.txt` written, nothing reported missing |
+| **WARN** | The bundle was written, but `sys-triage` printed `warning:` lines for sections it could not collect. They are listed in `details` and kept in `data.warnings`. |
+| **SKIP** | No bundle: the tier doesn't ask, the package or the credentials are missing, the run timed out (900 s backstop), or it exited without writing `triage.txt` |
+
+The bundle lands in `<output_dir>/logs/sys_triage/` beside `sys_triage.log`, so
+`collect_run_artifacts()` attaches it to the JIRA ticket with no extra wiring.
+
+**In a container** (`run_diag_docker.sh`), on `pre_reboot` only, a few host tools
+and paths the image lacks are provided, each best-effort and after the packages
+every tier needs, since a missing one costs a section of the bundle and nothing
+else. Other tiers get the same container as before the phase existed. An image
+whose baked-in suite predates the phase has the `--skip-sys-triage` and
+`--sys-triage-path` flags dropped rather than rejected, and simply runs without it.
+
+- `kmod` (`modinfo`, `lsmod`) for the KMD row. `sys-triage` builds the whole
+  FW-stack table in one pass, so without `modinfo` it loses the entire table,
+  not just that row (`warning: fw-version failed: ... 'modinfo'`).
+- `curl` for the Redfish device versions.
+- `systemd` for `journalctl`, with `/var/log/journal`, `/run/log/journal` and
+  `/etc/machine-id` mounted read-only so it reads the host journal. Installed
+  separately and best-effort; `dmesg` still covers the recent kernel log.
+- The KMD **package** version still reads `none` in a container:
+  `dpkg-query` sees the image's package database, not the host's. The
+  `module=` version from `modinfo` is correct.
+
 ## Flags
 
 | Flag | Default | Purpose |
@@ -328,6 +388,11 @@ kills the process group and takes the report with it — so raise it when runnin
 | `--qsfp-tool-path PATH` | `tt-bh-glx-cluster-debug` on PATH | Override the collector binary. A path that doesn't resolve is reported as its own SKIP rather than silently ignored. |
 | `--qsfp-descriptor PATH` | — | `factory_system_descriptor.textproto`, which gives the cage-attached links an expected partner. Without it only the soldered internal links are compared against a topology. |
 | `--qsfp-gating` | off | Report QSFP findings at their real severity and let them gate the run. Off records every finding in `details`/`data` but holds the status at PASS. |
+| `--skip-sys-triage` | off | Skip the sys-triage bundle entirely |
+| `--sys-triage-path PATH` | `sys-triage` on PATH | Override the sys-triage binary. A path that doesn't resolve is reported as its own SKIP. |
+| `--bmc-ip IP` | `$BMC_IP` | BMC address for sys-triage |
+| `--bmc-user USER` | `$BMC_USER` | BMC user for sys-triage |
+| `--bmc-password PASS` | `$BMC_PASSWORD` | BMC password for sys-triage. Prefer the variable: a flag value is visible in the process list. |
 | `--input-snapshot PATH` | — | Use a stored snapshot instead of calling tt-smi |
 | `--tt-smi-path PATH` | `/opt/tt_metal_infra/.../tt-smi` else `tt-smi` on PATH | Override tt-smi binary or repo path |
 | `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root (must contain the deployment-test binary under `build_Release/`) |

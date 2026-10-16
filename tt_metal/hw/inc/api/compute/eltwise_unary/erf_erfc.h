@@ -37,7 +37,7 @@ ALWI void erf_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void erf_tile(uint32_t idst) {
-    MATH(if constexpr (ckernel::sfpu::erf_bf16_whole_tile && !DST_ACCUM_MODE && !fast_and_approx) {
+    MATH(if constexpr (ckernel::sfpu::erf_bf16_whole_tile && !DST_ACCUM_MODE) {
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,

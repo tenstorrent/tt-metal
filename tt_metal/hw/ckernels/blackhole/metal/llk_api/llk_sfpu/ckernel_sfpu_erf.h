@@ -60,7 +60,7 @@ inline constexpr bool erf_bf16_whole_tile = true;
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_erf() {
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         if (bf16_dest_erf()) {
             calculate_erf_bf16<ITERATIONS>();
             return;
@@ -90,7 +90,7 @@ void init_erf_bf16();
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void erf_init() {
-    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+    if constexpr (!is_fp32_dest_acc_en) {
         if (bf16_dest_erf()) {
             init_erf_bf16();
             return;
