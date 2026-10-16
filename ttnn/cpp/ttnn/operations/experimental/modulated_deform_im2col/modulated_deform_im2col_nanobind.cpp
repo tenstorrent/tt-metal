@@ -65,8 +65,8 @@ void bind_modulated_deform_im2col(nb::module_& mod) {
         A whole modulated deformable convolution (DCNv2): the columns of
         :func:`ttnn.experimental.modulated_deform_im2col` multiplied by the weight in
         the same op, so they never reach DRAM, plus the bias and an optional ReLU. The columns
-        are bfloat16, the K*K*C reduction accumulates in fp32, and the output is rounded to
-        bfloat16 after the bias and the ReLU.
+        are bfloat16, the products run at HiFi2 fidelity, the K*K*C reduction accumulates in
+        fp32, and the output is rounded to bfloat16 after the bias and the ReLU.
 
         Each core keeps the fp32 outputs of all its 32-row blocks and two (C, C_out) weight
         slices in L1, so the op fits only while rows per core, C and C_out stay small; it fails

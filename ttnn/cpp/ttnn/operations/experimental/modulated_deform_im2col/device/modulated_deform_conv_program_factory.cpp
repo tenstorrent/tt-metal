@@ -282,8 +282,12 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_conv_descriptor(
         attrs.relu ? 1u : 0u};
     // As in the im2col: fp32 geometry with eight tiles live in dest, which takes full-sync dest, its
     // fp32 inputs unpacked straight to dest. The matmul's K*K*C reduction accumulates in fp32 too.
+    // HiFi2 for the corner products and the matmul: it drops the products' low bits, which costs
+    // about as much accuracy as rounding the output to bfloat16, and the cycles it saves are on the
+    // conv's critical path.
     ComputeConfigDescriptor compute_config{};
     compute_config.fp32_dest_acc_en = true;
+    compute_config.math_fidelity = MathFidelity::HiFi2;
     compute_config.dst_full_sync_en = true;
     compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     compute_config.unpack_to_dest_mode[geom_in_cb] = UnpackToDestMode::UnpackToDestFp32;
