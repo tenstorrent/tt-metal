@@ -31,8 +31,10 @@ Extending
 
 To add new RPC functionality, review the ``Inspector`` interface in the ``tt_metal/impl/debug/inspector/rpc.capnp`` file.
 Add your new method to this interface.
-This will generate a corresponding callback that you can attach by calling ``Inspector::get_rpc_server().setYourNewMethodCallback(...)``.
-Next, implement your callback to handle the request and send a response to the client.
+This will generate a corresponding callback setter, ``setYourNewMethodCallback(...)``, on the RPC server.
+Each ``MetalContext`` that runs on hardware owns an inspector session (``inspector::Data``), and the session owns the RPC server.
+Attach your callback in the session constructor in ``tt_metal/impl/debug/inspector/data.cpp``, next to the existing ones,
+then implement it to handle the request and send a response to the client.
 
 Examples
 ________
@@ -49,22 +51,24 @@ Example changes in ``tt_metal/impl/debug/inspector/rpc.capnp``:
        ... other methods ...
    }
 
-Example changes in your Metal host runtime code:
+Example changes in ``tt_metal/impl/debug/inspector/data.cpp``:
 
 .. code-block:: cpp
 
-   #include "tt_metal/impl/debug/inspector/inspector.hpp"
-   #include "impl/debug/inspector/rpc_server_generated.hpp"
-
-   // In your initialization code
-   Inspector::get_rpc_server().setGetHelloWorldCallback(
-       [](auto result) {
-           result.setMessage("Hello, World!");
-       });
-   Inspector::get_rpc_server().setSumTwoNumbersCallback(
-       [](auto params, auto result) {
-           result.setResult(params.getA() + params.getB());
-       });
+   Data::Data(MetalContext& context, std::optional<int> rank, uint64_t fw_hash) : ... {
+       ...
+           // Connect callbacks that we want to respond to
+           ...
+           get_rpc_server().setGetHelloWorldCallback(
+               [](auto result) {
+                   result.setMessage("Hello, World!");
+               });
+           get_rpc_server().setSumTwoNumbersCallback(
+               [](auto params, auto result) {
+                   result.setResult(params.getA() + params.getB());
+               });
+       ...
+   }
 
 Using in tt-triage
 __________________

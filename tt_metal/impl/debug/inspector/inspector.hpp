@@ -27,7 +27,6 @@ class MetalContext;
 
 namespace inspector {
 class Data;
-class RpcServer;  // NOLINT(cppcoreguidelines-virtual-class-destructor)
 }  // namespace inspector
 
 class Inspector {
@@ -43,8 +42,6 @@ public:
 
     static void program_created(const MetalContext& context, const detail::ProgramImpl* program) noexcept;
     static void program_destroyed(const detail::ProgramImpl* program) noexcept;
-    static void program_set_binary_status(
-        const detail::ProgramImpl* program, std::size_t device_id, ProgramBinaryStatus status) noexcept;
     static void program_compile_started(
         const MetalContext& context,
         const detail::ProgramImpl* program,
@@ -125,8 +122,6 @@ public:
     static std::string get_kernel_elf_path(
         const MetalContext& context, int watcher_kernel_id, uint32_t processor_index);
     static void enable_kernel_path_collection(const MetalContext& context);
-
-    static inspector::RpcServer& get_rpc_server();
 };
 
 }  // namespace tt::tt_metal

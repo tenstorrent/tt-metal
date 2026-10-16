@@ -275,12 +275,6 @@ public:
     void set_finalized();
     void allocate_kernel_bin_buf_on_device(IDevice* device);
     bool is_cached() const { return this->cached_device_hash_.has_value(); }
-    ProgramBinaryStatus get_program_binary_status(ChipId device_id) const {
-        if (auto it = this->binaries_on_device_.find(device_id); it != this->binaries_on_device_.end()) {
-            return it->second;
-        }
-        return ProgramBinaryStatus::NotSent;
-    }
     void set_cached(uint64_t device_hash) { this->cached_device_hash_ = device_hash; }
     void set_reload_table(uint32_t addr, const CoreRangeSet& cores) {
         this->reload_table_addr_ = addr;
@@ -303,7 +297,6 @@ public:
         return *this->reload_table_addr_;
     }
     const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
-    void set_program_binary_status(ChipId device_id, ProgramBinaryStatus status);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
     const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
@@ -716,7 +709,6 @@ private:
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
-    std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
     // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
     std::vector<CircularBufferAllocator> cb_allocators_;
     // Tracks which devices this program has CBs allocated on (for CB memory reporting)
