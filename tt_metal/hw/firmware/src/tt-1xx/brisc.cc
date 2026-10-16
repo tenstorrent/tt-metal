@@ -491,6 +491,8 @@ int main() {
 
                 uint32_t tt_l1_ptr* cb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
+                // Before either data movement kernel can issue on a NOC.
+                CLEAR_NOC_CMD_BUF_USAGE_FOR_WATCHER();
                 start_ncrisc_kernel_run_early(enables);
 
                 // Run the BRISC kernel
