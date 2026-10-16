@@ -203,12 +203,15 @@ struct KernelAdvancedOptions {
     // (DataMovement1XXConfig::noc), which keeps the other NOC free without dynamic-NOC mode's
     // per-transaction overhead. Ignored for other kernels.
     //
-    // CAUTION: Nothing checks the condition this relies on. The caller guarantees that no kind of NoC
-    //          transaction (reads, writes, atomics) is issued by both kernels, e.g. one only reads and the
-    //          other only writes and issues atomics. A kind issued by both can let a barrier return before
-    //          its transactions complete. Posted and non-posted writes, inline writes included, are one
-    //          kind: in dedicated mode both kernels issue them from the same command buffers, so one
-    //          kernel's write can redirect the other's stateful (set_state / with_state) writes.
+    // CAUTION: The caller guarantees that no kind of NoC transaction (reads, writes, atomics) is issued by
+    //          both kernels, e.g. one only reads and the other only writes and issues atomics. A kind issued
+    //          by both can let a barrier return before its transactions complete. Posted and non-posted
+    //          writes, inline writes included, are one kind: in dedicated mode both kernels issue them from
+    //          the same command buffers, so one kernel's write can redirect the other's stateful
+    //          (set_state / with_state) writes. Only the command buffers are checked: under the watcher's
+    //          NoC sanitizer the kernels record the command buffers they program on the shared NOC, and a
+    //          command buffer used by both is reported as a watcher error. The transaction-kind condition
+    //          itself goes unchecked.
     //
     // The NOC's hardware transaction counters count both kernels' traffic, but noc_async_full_barrier and
     // the end-of-kernel checks (built with watcher or lightweight kernel asserts) compare each RISC's own
