@@ -720,6 +720,21 @@ def test_lgamma(device):
     assert_with_pcc(golden, result, 0.999)
 
 
+def test_lgamma_inf(device):
+    """+inf and -inf both return +inf, matching torch.lgamma.
+
+    Stirling's (z - 0.5) * log(z) - z is inf - inf = NaN for an infinite z, so the
+    kernel must override the result for infinite inputs in bf16 Dest mode as well
+    as in fp32 Dest mode.
+    """
+    xs = torch.tensor([[float("inf"), float("-inf")]], dtype=torch.bfloat16)
+    golden = ttnn.get_golden_function(ttnn.lgamma)(xs, device=device)
+    result = ttnn.to_torch(ttnn.lgamma(to_tt_tensor(xs, device)))
+
+    assert torch.all(torch.isposinf(golden))
+    assert torch.all(torch.isposinf(result)), result
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Modified Bessel functions (i0, i1)
 # ─────────────────────────────────────────────────────────────────────────────
