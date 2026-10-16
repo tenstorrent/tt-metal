@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -252,13 +253,17 @@ def get_dest_reuse_formats(math_op):
 
 
 def get_dest_reuse_dest_acc(formats):
-    """Float32 operands also run with a 32-bit Dest.
+    """Float32 operands also run with a 32-bit Dest on Wormhole.
 
     The dest-reuse kernel passes clear_fp32_dst_acc=false, so the 32-bit Dest
     rows carry the ELWMUL accumulation across folds and the face clear must
-    follow the Dest geometry on its own.
+    follow the Dest geometry on its own. Blackhole still keys that clear on
+    clear_fp32_dst_acc, so the 32-bit cases stay Wormhole-only until it does.
     """
-    if formats.input_format == DataFormat.Float32:
+    if (
+        formats.input_format == DataFormat.Float32
+        and get_chip_architecture() == ChipArchitecture.WORMHOLE
+    ):
         return [DestAccumulation.No, DestAccumulation.Yes]
     return [DestAccumulation.No]
 
