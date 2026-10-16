@@ -511,6 +511,14 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # QWEN_FUSED_ADD_NORM_PREALLOC=0 (bs16) / QWEN_QKV_CHUNKS=2 or 1 (bs32).
     if batch_size == 16 and seq_len == 512:
         os.environ.setdefault("QWEN_FUSED_ADD_NORM_PREALLOC", "1")
+    # Batched ISL 512: WO / FF2 add the residual in their epilogue (minimal_matmul residual_tensor, in place of the
+    # intermediate -> output copy; BFP output packed with the precise shared exponent), so the two add+RMSNorms become
+    # norm-only (no b read, no sum write; tt/decoder_fusion.py). Per call WO / FF2 +5 / +10 us at bs32. Cold best on /
+    # off, same chip, 2 rounds: bs8 74.7 / 74.9, 74.7 / 75.1; bs16 139.1 / 140.6, 138.9 / 140.7; bs32 284.4 / 287.8,
+    # 282.1 / 284.9 ms. STS-B (1379 pairs) bs16 0.8174 -> 0.8187, bs32 0.8155 -> 0.8184: the sum no longer rounds WO's
+    # / FF2's output to bfp8 before the add (NEGATIVE_RESULTS 85). Opt out: QWEN_RESID_EPILOGUE=0.
+    if batch_size in (8, 16, 32) and seq_len == 512:
+        os.environ.setdefault("QWEN_RESID_EPILOGUE", "1")
     # bs32: the fused FF1+FF3 matmul with M over the grid's x axis and N over y (MinimalMatmulConfig
     # transpose_core_grid; the op transposes only when M > N): padded work per core 43 x 31 gate/up pairs instead of
     # 52 x 26, 3122 -> 3076 us standalone. Cold best, 4 chips, on / off: 277.4 / 288.9 (chip 0), 288.1 / 289.6,

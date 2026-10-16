@@ -2,7 +2,8 @@
 # dit_minimal_matmul_addcmul_fused(x, w, 1.0, resid, ones) (= resid + x @ w, the residual add in the matmul epilogue),
 # traced us per call, and the fused output's PCC vs plain + resid (NEGATIVE_RESULTS 74). The fused path requires the
 # residual's tile size to match the weights': W_BF8=1 uses bfp8 weights (bfp4 fails the check). RES=L1 puts the residual
-# in L1. Usage: bench_resid_mm.py <ff2|wo> <bs>
+# in L1. MODE=lean (default) uses minimal_matmul(residual_tensor=res) instead: the residual added in the epilogue in
+# place of the intermediate -> output copy (NEGATIVE_RESULTS 85), any weight dtype. Usage: bench_resid_mm.py <ff2|wo> <bs>
 import os
 import statistics
 import sys
@@ -68,9 +69,14 @@ try:
     plain = lambda: ttnn.experimental.minimal_matmul(
         x, w, compute_kernel_config=ckc, config=cfg, memory_config=omc, dtype=ttnn.bfloat8_b
     )
-    fused = lambda: ttnn.experimental.dit_minimal_matmul_addcmul_fused(
-        x, w, 1.0, res, ones, config=cfg, memory_config=rmc, dtype=ttnn.bfloat8_b, compute_kernel_config=ckc
-    )
+    if os.getenv("MODE", "lean") == "addcmul":
+        fused = lambda: ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+            x, w, 1.0, res, ones, config=cfg, memory_config=rmc, dtype=ttnn.bfloat8_b, compute_kernel_config=ckc
+        )
+    else:
+        fused = lambda: ttnn.experimental.minimal_matmul(
+            x, w, compute_kernel_config=ckc, config=cfg, memory_config=omc, dtype=ttnn.bfloat8_b, residual_tensor=res
+        )
     ref = ttnn.to_torch(plain()).float() + ttnn.to_torch(res).float()
     got = ttnn.to_torch(fused()).float()
     pcc = torch.corrcoef(torch.stack([ref.flatten(), got.flatten()]))[0, 1].item()
@@ -97,5 +103,13 @@ try:
             flush=True,
         )
     print(f"RES {name} bs{B} fused pcc vs plain+res {pcc:.5f}", flush=True)
+    xf, wf, rf = (ttnn.to_torch(t).float() for t in (x, w, res))
+    exact = (xf[..., :256, :] @ wf + rf[..., :256, :]).flatten()
+    for label, v in (("plain+res", ref), ("fused", got)):
+        v = v[..., :256, :].flatten()
+        print(
+            f"RES {name} bs{B} {label} rel rmse vs float {((v - exact).pow(2).mean().sqrt() / exact.std()).item():.5f}",
+            flush=True,
+        )
 finally:
     ttnn.close_device(D)

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 // Row-split add+RMSNorm reader: this core's Wc-tile slice (k) of one row of a and b per wave, plus its gamma slice,
-// scaler, eps.
+// scaler, eps. NORM_ONLY: no b (a is already the residual sum, e.g. from a matmul's fused residual epilogue).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -51,13 +51,19 @@ void kernel_main() {
     for (uint32_t w = 0; w < n_waves; ++w) {
         const uint32_t base = (row0 + w * row_stride) * Wt + k * Wc;
         ca.reserve_back(Wc);
+#ifndef NORM_ONLY
         cbb.reserve_back(Wc);
+#endif
         for (uint32_t j = 0; j < Wc; ++j) {
             noc.async_read(sa, ca, ta, {.page_id = base + j}, {.offset_bytes = j * ta});
+#ifndef NORM_ONLY
             noc.async_read(sb, cbb, tb, {.page_id = base + j}, {.offset_bytes = j * tb});
+#endif
         }
         noc.async_read_barrier();
         ca.push_back(Wc);
+#ifndef NORM_ONLY
         cbb.push_back(Wc);
+#endif
     }
 }

@@ -2223,3 +2223,29 @@ forwarding it before the next read, has less bandwidth than today's 10-12 reader
 is not what limits them. The forwarding structure alone costs ~500 µs (compute only): the in0 chains now hop across the
 chip between groups and cross the in1 chains, where today's are neighbour-to-neighbour. With the N-outer order (§83)
 also negative, the remaining matmul read exposure (FF13 55-72, FF2 bs32 80 µs a call) stays open.
+
+## 85. The residual add in the WO / FF2 epilogue; the add+RMSNorms norm-only (landed, 2026-10-16)
+
+**minimal_matmul `residual_tensor`** (new, host C++ + kernels): `output = A @ B + residual`, the residual a full [M, N]
+TILE interleaved tensor (any dtype, L1 or DRAM). The non-writer DM kernel reads each output block's residual tiles
+(`read_residual_block_sync`, one row of tiles pushed at a time) and the compute epilogue adds them to the intermediate
+(`add_residual_and_pack_block`: one `add_tiles` per tile) in place of the intermediate -> output copy, so it costs
+little: standalone µs per call (`bench_resid_mm.py`, default MODE=lean) WO bs32 637.7 -> 642.3, FF2 bs16 724.9 ->
+726.2, FF2 bs32 1468.1 -> 1478.3 (the §74 fused-ternary path cost +70 / +73). With a residual the BFP output is packed
+with the precise shared-exponent reconciliation (`config_1xx.bfp_pack_precision_mode = Precise`): with the default
+approximate mode the residual stream (outlier channels up to |x| 4.4e4) drifts over 36 layers, STS-B (128 pairs) bs16
+0.8896 -> 0.8852, bs32 0.8911 -> 0.8827; precise: 0.8955 / 0.8915.
+
+**Model** (`QWEN_RESID_EPILOGUE=1`, default at bs8 / 16 / 32; tt/decoder_fusion.py): WO gets `residual_tensor=x` (its
+output is the post-attention sum, at the sum's dtype and placement), FF2 the post-attention sum (its output is the
+post-MLP sum; not on the last layer, whose post-MLP add is the stock one). The two fused add+RMSNorms see an operand
+that already is the sum (recognised by buffer address: the attention reshapes WO's output) and run the row-split op's new
+norm-only mode (`fused_add_rmsnorm_split(norm_only=True)`, NORM_ONLY: no b read, no sum write; a's CB stands in for the
+bfp8 working copy). The decoder frees attn_out (now the post-attention sum) before the MLP; that free is deferred until
+the post-MLP add. `QWEN_FUSED_ADD_NORM_VERIFY=1` checks each fused WO / FF2 against plain + stock add (PCC >= 0.99992
+per layer at bs16); `QWEN_RESID_EPI_WO` / `_FF2=0` turn either off.
+
+Results. STS-B (1379 pairs): bs16 0.8174 -> 0.8187, bs32 0.8155 -> 0.8184 (the sum no longer rounds WO's / FF2's output
+to bfp8 before the add). Cold best / sustained median ms, on vs off on the same chip (2 rounds, chip sets swapped): bs8
+74.7 / 89.5 vs 74.9 / 90.4, 74.7 / 87.2 vs 75.1 / 88.0; bs16 139.1 / 197.3 vs 140.6 / 197.6, 138.9 / 185.8 vs 140.7 /
+186.9; bs32 284.4 / 378.3 vs 287.8 / 379.9, 282.1 / 366.8 vs 284.9 / 367.5.

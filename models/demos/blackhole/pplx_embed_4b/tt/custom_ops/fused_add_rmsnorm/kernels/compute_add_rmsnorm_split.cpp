@@ -4,6 +4,7 @@
 //   sum = a + b -> CB16 (+ bfp8 copy CB5); x2 = sum^2 -> CB6; partial = row-sum(x2)/W -> CB7 (to the writer)
 //   ms = sum of the R partials (CB8, filled by the row group) ; inv = rsqrt(ms + eps) -> CB9
 //   out = (sum * bcast_cols(inv)) * gamma_slice -> CB17
+// NORM_ONLY: a is the sum (no b, no sum output); the norm reads a's CB where it would read the bfp8 copy CB5.
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
@@ -36,6 +37,12 @@ void kernel_main() {
     const uint32_t n_waves = get_arg_val<uint32_t>(0);
     for (uint32_t w = 0; w < n_waves; ++w) {
         ca.wait_front(Wc);
+#ifdef NORM_ONLY
+        constexpr uint32_t cb_src = cb_a;
+        CircularBuffer& src = ca;
+#else
+        constexpr uint32_t cb_src = cb_s;
+        CircularBuffer& src = cs;
         cbb.wait_front(Wc);
         // sum = a + b -> residual slice + bfp8 working copy
         so.reserve_back(Wc);
@@ -63,16 +70,17 @@ void kernel_main() {
         cs.push_back(Wc);
         ca.pop_front(Wc);
         cbb.pop_front(Wc);
+#endif
         // x2 = sum^2
-        cs.wait_front(Wc);
-        reconfig_data_format(cb_s, cb_s);
+        src.wait_front(Wc);
+        reconfig_data_format(cb_src, cb_src);
         pack_reconfig_data_format(cb_x2);
-        mul_init(cb_s, cb_s);
+        mul_init(cb_src, cb_src);
         x2.reserve_back(Wc);
         for (uint32_t c = 0; c < n_chunks; ++c) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < CH; ++j) {
-                mul_tiles(cb_s, cb_s, c * CH + j, c * CH + j, j);
+                mul_tiles(cb_src, cb_src, c * CH + j, c * CH + j, j);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -126,11 +134,11 @@ void kernel_main() {
         inv.wait_front(1);
         no.reserve_back(Wc);
         for (uint32_t c = 0; c < n_chunks; ++c) {
-            reconfig_data_format(cb_s, cb_inv);
-            mul_bcast_cols_init(cb_s, cb_inv);
+            reconfig_data_format(cb_src, cb_inv);
+            mul_bcast_cols_init(cb_src, cb_inv);
             tile_regs_acquire();
             for (uint32_t j = 0; j < CH; ++j) {
-                mul_tiles_bcast_cols(cb_s, cb_inv, c * CH + j, 0, j);
+                mul_tiles_bcast_cols(cb_src, cb_inv, c * CH + j, 0, j);
             }
             reconfig_data_format_srca(cb_g);
             mul_reuse_dest_init<D2B>(cb_g);
@@ -147,6 +155,6 @@ void kernel_main() {
         }
         no.push_back(Wc);
         inv.pop_front(1);
-        cs.pop_front(Wc);
+        src.pop_front(Wc);
     }
 }

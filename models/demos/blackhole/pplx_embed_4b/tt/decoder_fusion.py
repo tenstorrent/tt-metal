@@ -183,6 +183,7 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
             return orig_forward(x, *args, **kwargs)
         rows = int(x.padded_shape[-2]) * int(x.padded_shape[-3]) * int(x.padded_shape[0])
         fuse = None
+        norm_only = None
         if rows >= _MIN_ROWS:
             # QWEN_FUSED_ADD_NORM_R >= 2: split every row over R cores (multi-wave row-split kernel). With
             # 128-512 tile-rows on 120 cores the row-granular kernel leaves most cores idle in the last
@@ -193,6 +194,9 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
                 fuse = lambda a, b, consts, dt, mc, out_mc=None, out_t=None: fused_add_rmsnorm_split(
                     a, b, *consts, R=R_env, sum_dtype=dt, memory_config=mc, out_memory_config=out_mc, out_tensor=out_t
                 )
+                norm_only = lambda s, consts, out_mc, out_t=None: fused_add_rmsnorm_split(
+                    s, None, *consts, R=R_env, out_memory_config=out_mc, out_tensor=out_t, norm_only=True
+                )[1]
             else:
                 fuse = lambda a, b, consts, dt, mc, out_mc=None: fused_add_rmsnorm(
                     a, b, *consts, sum_dtype=dt, memory_config=mc
@@ -216,6 +220,7 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
             qkv_chunks.clear()
         shape = list(x.padded_shape)
         device = x.device()  # x is freed after the post-attention add (decoder.py, prefill)
+        x_mc = x.memory_config()
         # L1 placement of the fused op's short-lived tensors (batched ISL 512 defaults, _common.py):
         #   QWEN_FUSED_ADD_NORM_OUT_L1=1   both norms' outputs (read by QKV / FF1+FF3) go to L1 interleaved
         #   QWEN_FUSED_ADD_NORM_SUM1_L1=1  the post-attention residual sum (add 2's a, alive across the MLP only)
@@ -259,6 +264,50 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
         pending = {}
         calls = [0]
         orig_add = ttnn.add
+        # QWEN_RESID_EPILOGUE=1: WO / FF2 add the residual in their epilogue (minimal_matmul residual_tensor), so their
+        # outputs already are the post-attention / post-MLP sums and the two adds become norm-only (no b read, no sum
+        # write). Fused outputs are recognised by buffer address (the attention reshapes WO's output). The decoder
+        # frees attn_out (now the post-attention sum) before the MLP: that free is deferred until FF2 has added it.
+        resid_epi = (
+            os.getenv("QWEN_RESID_EPILOGUE", "0") == "1"
+            and norm_only is not None
+            and os.getenv("QWEN_RESIDUAL_BFP8", "0") == "1"
+        )
+        fused_addrs = set()
+        epi = {"s1": None}
+        orig_dealloc = ttnn.deallocate
+
+        def _verify_resid(tag, fused_out, plain, resid, dt):
+            ref = orig_add(ttnn.reshape(plain, list(resid.padded_shape)), resid, dtype=dt)
+            f = ttnn.to_torch(fused_out).float().flatten()
+            r = ttnn.to_torch(ref).float().flatten()
+
+            err = (f - r).abs()
+            print(
+                f"[verify {tag} resid epilogue] pcc={_pcc(fused_out, ref):.6f} max|d|={err.max().item():.4g} "
+                f"rel rmse={((f - r).pow(2).mean().sqrt() / r.std()).item():.5f} resid max|x|={r.abs().max().item():.4g}",
+                flush=True,
+            )
+            orig_dealloc(plain)
+            orig_dealloc(ref)
+
+        def is_fused(t):
+            return resid_epi and t.is_allocated() and t.buffer_address() in fused_addrs
+
+        def run_fuse(a, b, consts, dt, mc, out_mc, out_t=None):
+            if is_fused(b):
+                return b, norm_only(b, consts, out_mc, out_t)
+            if resid_epi and epi["s1"] is not None and calls[0] == 1:
+                raise RuntimeError("QWEN_RESID_EPILOGUE: WO added the residual but its output did not reach the add")
+            if out_t is not None:
+                return fuse(a, b, consts, dt, mc, out_mc, out_t)
+            return fuse(a, b, consts, dt, mc, out_mc)
+
+        def dealloc_wrapper(t, *d_args, **d_kwargs):
+            s1 = epi["s1"]
+            if s1 is not None and t.is_allocated() and s1.is_allocated() and t.buffer_address() == s1.buffer_address():
+                return  # attn_out is the post-attention sum: FF2 still adds it (freed after the post-MLP add)
+            return orig_dealloc(t, *d_args, **d_kwargs)
 
         def add_wrapper(a, b, *a_args, **a_kwargs):
             if (
@@ -278,11 +327,8 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
                 if out_t is not None and out_t.dtype != (dt or a.dtype):
                     ttnn.deallocate(out_t)
                     out_t = None
-                if out_t is not None:
-                    s, n = fuse(a, b, ff_consts, dt, sum1_mc or mc, out_mc, out_t)
-                else:
-                    s, n = fuse(a, b, ff_consts, dt, sum1_mc or mc, out_mc)
-                if do_verify:
+                s, n = run_fuse(a, b, ff_consts, dt, sum1_mc or mc, out_mc, out_t)
+                if do_verify and not is_fused(b):
                     s_ref = orig_add(a, b, *a_args, **a_kwargs)
                     n_ref = orig_ff_norm(s_ref, mode)
                     print(
@@ -299,11 +345,12 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
                     for t in out_t if isinstance(out_t, tuple) else (out_t,):
                         ttnn.deallocate(t)
                     out_t = None
-                if out_t is not None:
-                    s, n = fuse(a, b, next_attn_consts, dt, sum2_mc or mc, out_mc, out_t)
-                else:
-                    s, n = fuse(a, b, next_attn_consts, dt, sum2_mc or mc, out_mc)
-                if do_verify and next_layer is not None:
+                fused_b = is_fused(b)
+                s, n = run_fuse(a, b, next_attn_consts, dt, sum2_mc or mc, out_mc, out_t)
+                if fused_b and epi["s1"] is not None:  # FF2 has added the post-attention sum: free it now
+                    orig_dealloc(epi["s1"])
+                    epi["s1"] = None
+                if do_verify and next_layer is not None and not fused_b:
                     s_ref = orig_add(a, b, *a_args, **a_kwargs)
                     n_ref = next_layer.attention_norm(s_ref, mode)
                     print(
@@ -336,6 +383,8 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
         orig_tmc = ttnn.to_memory_config
 
         def tmc_wrapper(t, memory_config=None, *t_args, **t_kwargs):
+            if is_fused(t):  # a fused sum stays where it was written; the norm-only op reads it from anywhere
+                return t
             if (
                 not t_args
                 and not t_kwargs
@@ -367,6 +416,37 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
 
         def mm_wrapper(a, b, *m_args, **m_kwargs):
             _before_mm(b)
+            if resid_epi and not m_args and "residual_tensor" not in m_kwargs:
+                if wo is not None and b is wo and os.getenv("QWEN_RESID_EPI_WO", "1") == "1":
+                    # output = x + attention = the post-attention sum
+                    sum1_dt = ttnn.bfloat8_b if os.getenv("QWEN_FFNORM_IN_BFP8", "0") == "1" else x.dtype
+                    kw = dict(m_kwargs, residual_tensor=x, memory_config=sum1_mc or x_mc, dtype=sum1_dt)
+                    out = orig_mm(a, b, **kw)
+                    if do_verify:
+                        _verify_resid(f"L{layer_idx} WO", out, orig_mm(a, b, **m_kwargs), x, sum1_dt)
+                    fused_addrs.add(out.buffer_address())
+                    epi["s1"] = out
+                    return out
+                # output = post-attention sum + MLP = the post-MLP sum (only where the post-MLP add is fused, i.e.
+                # not on the last layer)
+                if (
+                    w2 is not None
+                    and b is w2
+                    and epi["s1"] is not None
+                    and next_attn_consts is not None
+                    and os.getenv("QWEN_RESID_EPI_FF2", "1") == "1"
+                ):
+                    kw = dict(
+                        m_kwargs,
+                        residual_tensor=epi["s1"],
+                        memory_config=sum2_mc or x_mc,
+                        dtype=ttnn.bfloat8_b,
+                    )
+                    out = orig_mm(a, b, **kw)
+                    if do_verify:
+                        _verify_resid(f"L{layer_idx} FF2", out, orig_mm(a, b, **m_kwargs), epi["s1"], ttnn.bfloat8_b)
+                    fused_addrs.add(out.buffer_address())
+                    return out
             return orig_mm(a, b, *m_args, **m_kwargs)
 
         def linear_wrapper(a, b, *l_args, **l_kwargs):
@@ -377,8 +457,10 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
         ttnn.to_memory_config = tmc_wrapper
         layer.ff_norm = ff_norm_wrapper
         layer.attention_norm = attn_norm_wrapper
-        if want_prealloc or want_prealloc_ff:
+        if want_prealloc or want_prealloc_ff or resid_epi:
             ttnn.experimental.minimal_matmul, ttnn.linear = mm_wrapper, linear_wrapper
+        if resid_epi:
+            ttnn.deallocate = dealloc_wrapper
         try:
             return orig_forward(x, *args, **kwargs)
         finally:
@@ -387,6 +469,9 @@ def _wrap_layer(layer, ff_consts, next_attn_consts, stash, is_first=False, verif
             layer.ff_norm = orig_ff_norm
             layer.attention_norm = orig_attn_norm
             ttnn.experimental.minimal_matmul, ttnn.linear = orig_mm, orig_linear
+            ttnn.deallocate = orig_dealloc
+            if epi["s1"] is not None and epi["s1"].is_allocated():  # last layer: the stock post-MLP add read it
+                orig_dealloc(epi["s1"])
             for t in prealloc.values():  # not consumed (the add did not take the fused path)
                 for u in t if isinstance(t, tuple) else (t,):
                     ttnn.deallocate(u)

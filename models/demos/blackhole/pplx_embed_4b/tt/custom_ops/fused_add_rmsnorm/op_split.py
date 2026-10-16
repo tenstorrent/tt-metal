@@ -44,12 +44,14 @@ def fused_add_rmsnorm_split(
     memory_config: ttnn.MemoryConfig | None = None,
     out_memory_config: ttnn.MemoryConfig | None = None,
     out_tensor: "ttnn.Tensor | tuple[ttnn.Tensor, ...] | None" = None,
+    norm_only: bool = False,
 ) -> "tuple[ttnn.Tensor, ttnn.Tensor | tuple[ttnn.Tensor, ...]]":
     """``memory_config`` places the residual sum, ``out_memory_config`` (default: the same) the normalised output.
     ``out_tensor``: a preallocated normalised output (same shape, ``out_dtype``); where it sits in L1 is then the
     caller's choice (allocated before the ops that would otherwise push it low). A tuple of 2 or 4 equal tensors splits
     the normalised output by rows, in order (e.g. half or quarter batches, each read by its own QKV chunk); the tuple
-    is returned in place of the tensor."""
+    is returned in place of the tensor. ``norm_only``: ``a`` already is the sum (e.g. a matmul with a fused residual):
+    ``b`` is unused (may be None), nothing is added or written back, and ``a`` is returned as the sum."""
     if memory_config is None:
         memory_config = a.memory_config()
     if out_memory_config is None:
@@ -88,7 +90,13 @@ def fused_add_rmsnorm_split(
         v = device.worker_core_from_logical_core(ttnn.CoreCoord(cx, cy))
         virt.append((int(v.x), int(v.y)))
 
-    sum_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), sum_dtype, ttnn.TILE_LAYOUT, device, memory_config)
+    if norm_only:
+        b = a  # the reader / writer keep their argument layout; NORM_ONLY skips the b read and the sum write
+        sum_tensor = a
+    else:
+        sum_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(shape), sum_dtype, ttnn.TILE_LAYOUT, device, memory_config
+        )
     split_row = 0xFFFFFFFF
     parts = None
     if isinstance(out_tensor, (tuple, list)):
@@ -191,6 +199,7 @@ def fused_add_rmsnorm_split(
             )
         )
 
+    defines = [("NORM_ONLY", "1")] if norm_only else []
     pd = ttnn.ProgramDescriptor(
         kernels=[
             ttnn.KernelDescriptor(
@@ -200,6 +209,7 @@ def fused_add_rmsnorm_split(
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
                 config=ttnn.ReaderConfigDescriptor(),
+                defines=defines,
             ),
             ttnn.KernelDescriptor(
                 kernel_source=COMPUTE_KERNEL,
@@ -214,6 +224,7 @@ def fused_add_rmsnorm_split(
                     dst_full_sync_en=False,
                     bfp8_pack_precise=True,
                 ),
+                defines=defines,
             ),
             ttnn.KernelDescriptor(
                 kernel_source=WRITER_KERNEL,
@@ -222,11 +233,13 @@ def fused_add_rmsnorm_split(
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
                 config=ttnn.WriterConfigDescriptor(),
+                defines=defines,
             ),
         ],
         semaphores=semaphores,
         cbs=cbs,
     )
-    io = [a, b, gamma_tiles, scaler_tile, eps_tile, sum_tensor] + (list(parts) if parts else [out_tensor])
+    io = ([a] if norm_only else [a, b]) + [gamma_tiles, scaler_tile, eps_tile] + ([] if norm_only else [sum_tensor])
+    io += list(parts) if parts else [out_tensor]
     ttnn.generic_op(io, pd)
     return sum_tensor, (parts if parts else out_tensor)

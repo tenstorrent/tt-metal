@@ -6,6 +6,7 @@
 // row goes to part row / split_row at row % split_row (split_row = 0xFFFFFFFF: one tensor).
 // PART_TRID: the partial writes carry their own NoC transaction id, so the barrier before the semaphore increments
 // waits for them only, not for the wave's sum-slice writes to DRAM issued just before.
+// NORM_ONLY: no sum slice to write (the input already is the sum).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -50,11 +51,13 @@ void kernel_main() {
         const uint32_t row = row0 + w * row_stride;
         const uint32_t base = row * Wt + k * Wc;
 
+#ifndef NORM_ONLY
         // 1. residual sum slice
         cs.wait_front(Wc);
         for (uint32_t j = 0; j < Wc; ++j) {
             noc.async_write(cs, ss, ts, {.offset_bytes = j * ts}, {.page_id = base + j});
         }
+#endif
 
         // 2. partial mean-square exchange within the row group (all R cores, including this one)
         cparts.reserve_back(R);
@@ -102,7 +105,9 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
+#ifndef NORM_ONLY
         cs.pop_front(Wc);
+#endif
         co.pop_front(Wc);
     }
 }
