@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "qkv_causal_conv1d_silu_device_operation_types.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
@@ -28,11 +29,20 @@ inline uint64_t qkv_causal_conv1d_silu_window_bytes(uint64_t block_ct, uint64_t 
            element_bytes;
 }
 
-inline uint64_t qkv_causal_conv1d_silu_l1_bytes(uint64_t block_ct, uint64_t tile_bytes, uint64_t element_bytes) {
+// The running tap sum leaves DST between taps. With fp32_dest_acc_en it is carried in FP32, so the activation is
+// rounded to the output format once, after SiLU; a BF16 carry rounds each partial sum at the magnitude of its terms
+// and shifts small pre-activations by up to a few output ulps (tt_metal_tracker-g1b.5.19).
+inline tt::DataFormat qkv_causal_conv1d_silu_partial_format(tt::DataFormat input_format, bool fp32_dest_acc_en) {
+    return fp32_dest_acc_en ? tt::DataFormat::Float32 : input_format;
+}
+
+inline uint64_t qkv_causal_conv1d_silu_l1_bytes(
+    uint64_t block_ct, uint64_t tile_bytes, uint64_t partial_tile_bytes, uint64_t element_bytes) {
     constexpr uint64_t dfb_blocks = qkv_causal_conv1d_silu_act_rm_blocks + qkv_causal_conv1d_silu_act_tile_blocks +
-                                    qkv_causal_conv1d_silu_tap_count + qkv_causal_conv1d_silu_partial_blocks +
-                                    qkv_causal_conv1d_silu_output_blocks;
-    return (dfb_blocks * block_ct * tile_bytes) + qkv_causal_conv1d_silu_window_bytes(block_ct, element_bytes);
+                                    qkv_causal_conv1d_silu_tap_count + qkv_causal_conv1d_silu_output_blocks;
+    return (dfb_blocks * block_ct * tile_bytes) +
+           (qkv_causal_conv1d_silu_partial_blocks * block_ct * partial_tile_bytes) +
+           qkv_causal_conv1d_silu_window_bytes(block_ct, element_bytes);
 }
 
 struct QkvCausalConv1dSiluProgramFactory {

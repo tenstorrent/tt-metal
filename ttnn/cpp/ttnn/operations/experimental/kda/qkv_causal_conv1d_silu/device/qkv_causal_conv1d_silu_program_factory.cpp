@@ -69,14 +69,15 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     const tt::tt_metal::experimental::TensorParamName v_tensor_name{"v"};
 
     const auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const uint32_t tile_size = tt::tile_size(input_data_format);
-    auto make_dfb = [input_data_format, tile_size](
-                        const tt::tt_metal::experimental::DFBSpecName& name, uint32_t tiles) {
+    const auto partial_data_format = qkv_causal_conv1d_silu_partial_format(
+        input_data_format, ttnn::get_fp32_dest_acc_en(attrs.compute_kernel_config));
+    const bool fp32_partial = partial_data_format == tt::DataFormat::Float32;
+    auto make_dfb = [](const tt::tt_metal::experimental::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
         return tt::tt_metal::experimental::DataflowBufferSpec{
             .unique_id = name,
-            .entry_size = tile_size,
+            .entry_size = tt::tile_size(format),
             .num_entries = tiles,
-            .data_format_metadata = input_data_format,
+            .data_format_metadata = format,
         };
     };
 
@@ -91,11 +92,11 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         static_cast<uint32_t>(qkv_causal_conv1d_silu_window_bytes(block_ct, input.element_size()));
 
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
-        make_dfb(act_rm_dfb_name, qkv_causal_conv1d_silu_act_rm_blocks * block_ct),
-        make_dfb(act_tile_dfb_name, qkv_causal_conv1d_silu_act_tile_blocks * block_ct),
-        make_dfb(weights_dfb_name, qkv_causal_conv1d_silu_tap_count * block_ct),
-        make_dfb(partial_dfb_name, qkv_causal_conv1d_silu_partial_blocks * block_ct),
-        make_dfb(output_dfb_name, qkv_causal_conv1d_silu_output_blocks * block_ct),
+        make_dfb(act_rm_dfb_name, qkv_causal_conv1d_silu_act_rm_blocks * block_ct, input_data_format),
+        make_dfb(act_tile_dfb_name, qkv_causal_conv1d_silu_act_tile_blocks * block_ct, input_data_format),
+        make_dfb(weights_dfb_name, qkv_causal_conv1d_silu_tap_count * block_ct, input_data_format),
+        make_dfb(partial_dfb_name, qkv_causal_conv1d_silu_partial_blocks * block_ct, partial_data_format),
+        make_dfb(output_dfb_name, qkv_causal_conv1d_silu_output_blocks * block_ct, input_data_format),
     };
 
     tt::tt_metal::experimental::KernelSpec reader{
@@ -148,6 +149,12 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
+    auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
+    if (fp32_partial) {
+        // The carry add reads the FP32 carry and product through 19-bit source registers, above BF16 precision.
+        compute_hw.unpack_modes[partial_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
+    }
+
     tt::tt_metal::experimental::KernelSpec compute{
         .unique_id = compute_kernel_name,
         .source =
@@ -171,9 +178,9 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 tt::tt_metal::experimental::DFBBinding{
                     output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
             },
-        .compile_time_args = {{"block_ct", block_ct}, {"Mt", Mt}},
+        .compile_time_args = {{"block_ct", block_ct}, {"Mt", Mt}, {"fp32_partial", fp32_partial ? 1u : 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
-        .hw_config = ttnn::to_compute_hardware_config(attrs.compute_kernel_config),
+        .hw_config = std::move(compute_hw),
     };
 
     tt::tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};

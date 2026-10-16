@@ -348,6 +348,9 @@ class ttKDA:
             sequence_parallel_axis=self.sequence_parallel_axis,
             predecessor_carry=predecessor,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # FP32 DST carries the tap sum in FP32; a BF16 carry biases q/k/v by about one BF16 ulp where taps
+            # cancel large activations (tt_metal_tracker-g1b.5.19).
+            compute_kernel_config=self.kda_compute_config,
         )
         return q, k, v, new_state
 
