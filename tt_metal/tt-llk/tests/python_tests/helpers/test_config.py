@@ -189,6 +189,7 @@ class TestConfig:
     SHARED_ARTEFACTS_AVAILABLE: ClassVar[bool] = False
     PROFILER_SHARED_ARTEFACTS_AVAILABLE: ClassVar[bool] = False
     KERNEL_COMPONENTS: ClassVar[list[str]] = ["unpack", "math", "pack"]
+    COMPILE_JOBS: ClassVar[int] = os.cpu_count() or 1
 
     # === Runtime static variables, for keeping context of multiple test runs
     CURRENT_LOADED_CONFIG: ClassVar[str] = "uninitialised"
@@ -1836,7 +1837,9 @@ class TestConfig:
                 )
 
             with ThreadPoolExecutor(
-                max_workers=len(TestConfig.KERNEL_COMPONENTS)
+                max_workers=min(
+                    len(TestConfig.KERNEL_COMPONENTS), TestConfig.COMPILE_JOBS
+                )
             ) as executor:
                 futures = [
                     executor.submit(build_kernel_part, name)

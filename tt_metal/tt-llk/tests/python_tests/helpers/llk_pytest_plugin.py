@@ -76,10 +76,11 @@ if _TT_LLK_TOOLS_PYTHON not in sys.path:
 
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
+import psutil
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import LLKAssertException
+from helpers.device import LLKAssertException, get_functional_tensix_locations
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
 from helpers.perf.core import PerfConfig, PerfReport, combine_perf_reports
@@ -423,8 +424,80 @@ _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
 
 
+def _cgroup_paths():
+    groups = {}
+    for line in Path("/proc/self/cgroup").read_text().splitlines():
+        _, controllers, group = line.split(":", 2)
+        groups.update(dict.fromkeys(controllers.split(","), Path(group)))
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        fields, filesystem = line.split(" - ", 1)
+        kind, _, options = filesystem.split()[:3]
+        if kind not in ("cgroup", "cgroup2"):
+            continue
+        controllers = ("",) if kind == "cgroup2" else options.split(",")
+        group = next((groups[c] for c in controllers if c in groups), None)
+        root, mount = (
+            Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), value))
+            for value in fields.split()[3:5]
+        )
+        if group is None or not group.is_relative_to(root) or ".." in group.parts:
+            continue
+        path = mount / group.relative_to(root)
+        while True:
+            yield path, kind == "cgroup2"
+            if path == mount:
+                break
+            path = path.parent
+
+
+def _host_limits():
+    cpus = len(psutil.Process().cpu_affinity())
+    memory = psutil.virtual_memory().available
+    try:
+        paths = list(_cgroup_paths())
+    except OSError:
+        paths = []
+    for path, unified in paths:
+        try:
+            name = "cpu.max" if unified else "cpu.cfs_quota_us"
+            values = (path / name).read_text().split()
+            quota = int(values[0])
+            period = int(
+                values[1] if unified else (path / "cpu.cfs_period_us").read_text()
+            )
+            cpu_limit = (quota + period - 1) // period if quota > 0 else cpus
+            cpus = min(cpus, cpu_limit)
+        except (OSError, ValueError):
+            pass
+        try:
+            limit = "memory.max" if unified else "memory.limit_in_bytes"
+            usage = "memory.current" if unified else "memory.usage_in_bytes"
+            memory = min(
+                memory,
+                int((path / limit).read_text()) - int((path / usage).read_text()),
+            )
+        except (OSError, ValueError):
+            pass
+    return max(1, cpus), max(0, memory)
+
+
+@pytest.hookimpl(wrapper=True, optionalhook=True)
+def pytest_xdist_auto_num_workers(config):
+    workers = yield
+    if os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS"):
+        return workers
+    cpus, memory = _host_limits()
+    config._llk_auto_workers = True
+    return max(1, min(workers, cpus, memory * 3 // 4 // (2 * 1024**3)))
+
+
 def pytest_configure(config):
     _ensure_suite_pythonpath(config)
+
+    if hasattr(config, "workerinput"):
+        TestConfig.COMPILE_JOBS = config.workerinput["llk_compile_jobs"]
+    else:
+        TestConfig.COMPILE_JOBS = config._llk_cpu_budget = _host_limits()[0]
 
     # Configure loguru log level from CLI option or environment variable.
     log_level = config.getoption("--logging-level", default=None)
@@ -1082,6 +1155,7 @@ def pytest_runtest_setup(item):
         _attach_to_sim_server(_sim_server.server_directory)
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
@@ -1094,9 +1168,23 @@ def pytest_sessionstart(session):
     ):
         _sim_server.start()
 
+    config = session.config
+    if (
+        getattr(config, "_llk_auto_workers", False)
+        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
+        and not config.option.collectonly
+    ):
+        if _sim_server is not None:
+            _attach_to_sim_server(_sim_server.server_directory)
+        config.option.tx = config.option.tx[: len(get_functional_tensix_locations())]
+        config.option.numprocesses = len(config.option.tx)
+
 
 @pytest.hookimpl(optionalhook=True)
 def pytest_configure_node(node):
+    node.workerinput["llk_compile_jobs"] = max(
+        1, node.config._llk_cpu_budget // node.workerinput["workercount"]
+    )
     if _sim_server is not None and _sim_server.running:
         node.workerinput[_SIM_SERVER_DIR_KEY] = _sim_server.server_directory
         node.workerinput[_SIM_HOST_PID_KEY] = _sim_server.pid

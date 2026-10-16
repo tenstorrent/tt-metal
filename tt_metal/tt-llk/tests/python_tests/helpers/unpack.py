@@ -173,15 +173,17 @@ def _unpack_bfp_b(bfp_block, magnitude_bits, sfpu=False, num_faces=4, face_r_dim
 
     datums = _expand_bfp_datums(packed_mantissas, bits_per_datum)
 
-    cache = {}
-    bfloat16_values = []
-    for i, exponent in enumerate(exponents):
-        block_datums = datums[i * 16 : (i + 1) * 16]
-        bfloat16_values.extend(
-            _bfp_to_float_block(exponent, block_datums, magnitude_bits, cache)
-        )
-
-    return torch.tensor(bfloat16_values, dtype=torch.bfloat16)
+    blocks = datums[: len(exponents) * 16].reshape(len(exponents), 16)
+    sign_mask = 1 << magnitude_bits
+    magnitudes = (blocks & (sign_mask - 1)).astype(np.float64)
+    signed = np.where(blocks & sign_mask, -magnitudes, magnitudes)
+    shifts = (
+        np.frombuffer(bytes(exponents), dtype=np.uint8).astype(np.int32)
+        - 127
+        - (magnitude_bits - 1)
+    )
+    values = np.ldexp(signed, shifts[:, None])
+    return torch.from_numpy(values.reshape(-1)).to(torch.bfloat16)
 
 
 def unpack_bfp8_b(bfp8_block, sfpu=False, num_faces=4, face_r_dim=16):
@@ -716,6 +718,8 @@ def unpack_res_tiles(
         else:
             unpacked_tile = unpack_func(tile_data)
 
+        if isinstance(unpacked_tile, torch.Tensor):
+            unpacked_tile = unpacked_tile.tolist()
         unpacked_data.extend(unpacked_tile)
 
     return torch.tensor(unpacked_data, dtype=output_dtype)

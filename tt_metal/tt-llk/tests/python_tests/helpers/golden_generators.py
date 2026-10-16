@@ -4315,15 +4315,23 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # Same layout as `result`, so it survives the untilize below unchanged.
         generated_nan = torch.zeros(result.numel(), dtype=torch.bool)
 
-        for iteration in range(num_iterations):
-            row_offset = iteration * elements_per_row
+        overlapping = any(
+            start != dst_start and abs(start - dst_start) < elements_to_process
+            for start in (src1_start, src2_start)
+        )
+        chunk_size = (
+            elements_to_process
+            if operation in self._TENSOR_OPS and not overlapping
+            else elements_per_row
+        )
+        for row_offset in range(0, elements_to_process, chunk_size):
 
             src1_row_start = src1_start + row_offset
             src2_row_start = src2_start + row_offset
             dst_row_start = dst_start + row_offset
 
-            src1_row = result[src1_row_start : src1_row_start + elements_per_row]
-            src2_row = result[src2_row_start : src2_row_start + elements_per_row]
+            src1_row = result[src1_row_start : src1_row_start + chunk_size]
+            src2_row = result[src2_row_start : src2_row_start + chunk_size]
 
             if model_dest:
                 # Hand the ops fp32 operands. The op methods cast their result back to
@@ -4357,7 +4365,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 result_row, generated_row = self._canonicalise_emitted_nan(
                     operation, result_row
                 )
-                generated_nan[dst_row_start : dst_row_start + elements_per_row] = (
+                generated_nan[dst_row_start : dst_row_start + chunk_size] = (
                     generated_row
                 )
                 # Two casts, both NaN-sign preserving, for the reason UnarySFPUGolden records:
@@ -4366,12 +4374,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 result_row = cast_to_dest_dtype(
                     result_row, format_dict[dst_format]
                 ).float()
-                result[dst_row_start : dst_row_start + elements_per_row] = (
-                    cast_to_dest_dtype(result_row, result.dtype)
+                result[dst_row_start : dst_row_start + chunk_size] = cast_to_dest_dtype(
+                    result_row, result.dtype
                 )
             else:
-                result[dst_row_start : dst_row_start + elements_per_row] = (
-                    torch.as_tensor(row_values, dtype=format_dict[data_format])
+                result[dst_row_start : dst_row_start + chunk_size] = torch.as_tensor(
+                    row_values, dtype=format_dict[data_format]
                 )
 
         if not skip_tilize and data_format not in (
