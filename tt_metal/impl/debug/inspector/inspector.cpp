@@ -245,26 +245,6 @@ void Inspector::program_compile_finished(
     }
 }
 
-void Inspector::program_set_binary_status(
-    const detail::ProgramImpl* program, std::size_t device_id, ProgramBinaryStatus status) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
-        return;
-    }
-    try {
-        std::lock_guard<std::mutex> lock(data->programs_mutex);
-        auto& program_data = data->programs_data[program->get_id()];
-        program_data.binary_status_per_device[device_id] = status;
-        data->logger.log_program_binary_status_change(program_data, device_id, status);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log program binary status change: {}", e.what());
-    }
-}
-
 void Inspector::mesh_device_created(
     const distributed::MeshDeviceImpl* mesh_device, std::optional<int> parent_mesh_id) noexcept {
     auto* data = session_of(*mesh_device);
@@ -603,21 +583,6 @@ void Inspector::set_prefetcher_core_info(
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log prefetcher core info: {}", e.what());
     }
-}
-
-inspector::RpcServer& Inspector::get_rpc_server() {
-    if (is_enabled()) {
-        try {
-            auto* data = get_inspector_data();
-            if (data) {
-                return data->get_rpc_server();
-            }
-        } catch (const std::exception& e) {
-            TT_INSPECTOR_LOG("Failed to get RPC server: {}", e.what());
-        }
-    }
-    static inspector::RpcServer empty_rpc_server;
-    return empty_rpc_server;
 }
 
 void Inspector::enable_kernel_path_collection(const MetalContext& context) {
