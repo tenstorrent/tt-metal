@@ -127,7 +127,7 @@ inline void llk_pack_untilize(
         StateDiscard<std::uint32_t>(tile_dst_rt_offset)));
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, row_num_datums, tile_dst_ct_offset>(
             pack_tile_addr,
             pack_dst_format[output_id],
             face_r_dim,

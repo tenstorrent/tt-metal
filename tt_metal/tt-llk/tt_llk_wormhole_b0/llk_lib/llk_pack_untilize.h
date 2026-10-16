@@ -235,7 +235,6 @@ inline void _llk_pack_untilize_uninit_()
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam full_ct_dim: Total number of input tiles across all blocks.
  * @tparam diagonal: True to configure for diagonal (per-packer split) untilize packing.
- * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
  * @tparam row_num_datums: Number of datums per output row when narrow_row is set.
  * @tparam tile_dst_ct_offset: Compile-time column-tile offset into the destination register.
  * @param address: L1 destination base address for the block.
@@ -250,7 +249,6 @@ template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim        = block_ct_dim,
     bool diagonal                    = false,
-    bool narrow_row                  = false,
     std::uint32_t row_num_datums     = TILE_C_DIM,
     std::uint32_t tile_dst_ct_offset = 0>
 inline void _llk_pack_untilize_(
