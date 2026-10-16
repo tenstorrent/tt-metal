@@ -545,6 +545,7 @@ class Expect:
 
     def check(self, tag, got, ref, case, vs_golden, quiet):
         f = 1.0 if case.name == "golden" else self.lim["component_probe"]
+        warn = []  # F89: the own-floor row / column / bias checks warn, never gate (owner)
         if self.kind == "float":
             rl = self.rel_lim[case.name] + (self.golden_err if vs_golden else 0.0)
             model, res = self.model_err[case.name], self.res[case.name]
@@ -581,11 +582,11 @@ class Expect:
                 e.update(own)
                 kk = f * self.k
                 if own["row_floor"] > kk:
-                    bad.append(f"row {own['row_at']} is {own['row_floor']:.3g} x its own floor (limit {kk:g})")
+                    warn.append(f"row {own['row_at']} is {own['row_floor']:.3g} x its own floor (limit {kk:g})")
                 if case.name == "golden" and own.get("col_floor", 0) > kk:
-                    bad.append(f"column {own['col_at']} is {own['col_floor']:.3g} x its own floor (limit {kk:g})")
+                    warn.append(f"column {own['col_at']} is {own['col_floor']:.3g} x its own floor (limit {kk:g})")
                 if case.name == "golden" and own.get("bias_floor", 0) > kk:
-                    bad.append(
+                    warn.append(
                         f"column {own['bias_at']} has an additive bias of {own['bias_signed']:+.3g} of its rms, "
                         f"{own['bias_floor']:.3g} x its floor (limit {kk:g})"
                     )
@@ -607,6 +608,9 @@ class Expect:
                 metrics.record(f"{tag}_{k}", v)
             nums = " ".join(f"{k}={v:.6g}" for k, v in e.items())
             print(f"{'ok  ' if not bad else 'FAIL'} {tag}: {nums}" + (f" ({'; '.join(bad)})" if bad else ""))
+            if warn:
+                metrics.record(f"{tag}_floor_warn", 1)
+                print(f"WARN {tag} (not gating, for the owner's review; do not work on it): {'; '.join(warn)}")
         return not bad
 
     def _flips(self, got, case: str, f: float) -> tuple[dict, list[str]]:
