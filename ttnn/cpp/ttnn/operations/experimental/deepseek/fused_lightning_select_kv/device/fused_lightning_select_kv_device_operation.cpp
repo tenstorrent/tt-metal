@@ -134,15 +134,44 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         pt_shape.rank() == 2,
         "fused_lightning_select_kv: page_table_tensor must be [B, max_blocks_per_user], got {}",
         pt_shape);
+    // With a page_table_row_tensor (and no row_table) the page table holds one row per session and
+    // this call reads one of them.
+    const bool session_page_table = tensor_args.page_table_row_tensor.has_value() && !tensor_args.row_table.has_value();
+    const uint32_t batch = session_page_table ? 1 : pt_shape[0];
     TT_FATAL(
-        pos_shape.rank() == 1 && pos_shape[0] == pt_shape[0],
+        pos_shape.rank() == 1 && pos_shape[0] == batch,
         "fused_lightning_select_kv: cur_pos_tensor must be [B] with B = {}, got {}",
-        pt_shape[0],
+        batch,
         pos_shape);
 
     // Decode only: one user (B == 1) and one query token (Sq == 1).
-    const uint32_t batch = pt_shape[0];
     TT_FATAL(batch == 1, "fused_lightning_select_kv: only B == 1 is supported, got page_table batch {}", batch);
+    if (tensor_args.page_table_row_tensor.has_value()) {
+        require_int32_rm_interleaved(
+            tensor_args.page_table_row_tensor.value(), ttnn::Shape({1}), "page_table_row_tensor");
+        TT_FATAL(
+            !page_table.is_sharded(),
+            "fused_lightning_select_kv: page_table_row_tensor needs an interleaved page_table");
+        TT_FATAL(
+            !tensor_args.row_table.has_value() || tensor_args.kv_page_table.has_value(),
+            "fused_lightning_select_kv: with a row_table, page_table_row_tensor selects the kv_page_table row");
+    }
+    if (tensor_args.kv_page_table.has_value()) {
+        const auto& kv_page_table = tensor_args.kv_page_table.value();
+        TT_FATAL(
+            tensor_args.row_table.has_value() && tensor_args.new_kv_row.has_value() &&
+                tensor_args.page_table_row_tensor.has_value(),
+            "fused_lightning_select_kv: kv_page_table maps new_kv_row_index with a row_table and needs "
+            "page_table_row_tensor");
+        TT_FATAL(
+            kv_page_table.storage_type() == StorageType::DEVICE && kv_page_table.dtype() == DataType::INT32 &&
+                kv_page_table.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                kv_page_table.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                kv_page_table.logical_shape().rank() == 2,
+            "fused_lightning_select_kv: kv_page_table must be a [num_sessions, max_blocks] INT32 row-major "
+            "interleaved device tensor, got {}",
+            kv_page_table.logical_shape());
+    }
     TT_FATAL(query[2] == 1, "fused_lightning_select_kv: only Sq == 1 is supported, got query Sq {}", query[2]);
     TT_FATAL(
         tensor_args.row_table.has_value() || key_cache[0] == kv_cache[0],
@@ -389,7 +418,8 @@ FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectK
     const auto& kv = tensor_args.kv_cache;
     const auto& kv_shape = kv.logical_shape();
     const auto& pt_shape = tensor_args.page_table_tensor.logical_shape();
-    const uint32_t batch = pt_shape[0];
+    const uint32_t batch =
+        tensor_args.page_table_row_tensor.has_value() && !tensor_args.row_table.has_value() ? 1 : pt_shape[0];
     const uint32_t max_keys = pt_shape[1] * tensor_args.key_cache.logical_shape()[-2];
     spec_return_value_t specs = {
         args.num_parts > 1
@@ -474,7 +504,9 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     const std::optional<ttnn::Tensor>& pool_count_output,
     uint32_t num_parts,
     const std::optional<ttnn::Tensor>& part_index_tensor,
-    const std::optional<ttnn::Tensor>& row_table) {
+    const std::optional<ttnn::Tensor>& row_table,
+    const std::optional<ttnn::Tensor>& page_table_row_tensor,
+    const std::optional<ttnn::Tensor>& kv_page_table) {
     using OperationType =
         ttnn::operations::experimental::deepseek::fused_lightning_select_kv::FusedLightningSelectKvDeviceOperation;
 
@@ -515,6 +547,8 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
         .pool_count_output = pool_count_output,
         .part_index_tensor = part_index_tensor,
         .row_table = row_table,
+        .page_table_row_tensor = page_table_row_tensor,
+        .kv_page_table = kv_page_table,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }

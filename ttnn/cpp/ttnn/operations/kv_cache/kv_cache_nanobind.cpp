@@ -126,6 +126,10 @@ void bind_fill_cache(nb::module_& mod) {
 
         Keyword Args:
             * :attr:`update_idx` (int): seq-dim offset within the user slot, must be a multiple of TILE_HEIGHT. Default = 0.
+            * :attr:`input_row_offset_tensor` (ttnn.Tensor, optional): ``[1]`` INT32 / UINT32 device tensor holding
+              the first input row to copy (a multiple of TILE_HEIGHT). It is read on device, so a traced fill copies
+              whichever rows the tensor names at replay. Needs an interleaved, single-head input. Default = None.
+            * :attr:`num_input_rows` (int): rows copied from ``input_row_offset_tensor`` onward; required with it.
 
         Example:
             >>> cache_tensor = ttnn.from_torch(torch.zeros((4, 1, 128, 64), dtype=torch.bfloat16), device=device)
@@ -142,7 +146,9 @@ void bind_fill_cache(nb::module_& mod) {
         nb::arg("input_tensor"),
         nb::arg("batch_idx"),
         nb::kw_only(),
-        nb::arg("update_idx") = 0);
+        nb::arg("update_idx") = 0,
+        nb::arg("input_row_offset_tensor") = nb::none(),
+        nb::arg("num_input_rows") = 0);
 }
 
 }  // namespace

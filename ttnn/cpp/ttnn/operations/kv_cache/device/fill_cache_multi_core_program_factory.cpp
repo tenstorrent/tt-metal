@@ -23,19 +23,30 @@ using namespace tt::constants;
 // Kernel sources and spec resource names are declared function-locally at their use sites (below) to
 // avoid unity-build symbol collisions with the update factory's identically-named constants.
 
+namespace {
+
+// Rows of the input copied: the whole input, or the num_input_rows window the offset tensor places.
+std::uint32_t fill_cache_input_rows(const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args) {
+    return tensor_args.input_row_offset.has_value() ? operation_attributes.num_input_rows
+                                                    : tensor_args.input.padded_shape()[-2];
+}
+
+}  // namespace
+
 std::vector<std::pair<CoreCoord, std::uint32_t>> compute_fill_cache_start_ids(
     const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args) {
     const auto& cache_tensor = tensor_args.cache;
     const auto& input_tensor = tensor_args.input;
     const auto batch_idx = operation_attributes.batch_idx;
     const auto update_idx = operation_attributes.update_idx;
+    const std::uint32_t input_rows = fill_cache_input_rows(operation_attributes, tensor_args);
 
     // Mirror the shape-derived geometry and work-split from create_program_artifacts exactly so the
     // per-core cache_start_id values (and the core ordering) are identical on cache miss and hit.
-    std::uint32_t num_blocks_of_work = input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
+    std::uint32_t num_blocks_of_work = input_tensor.padded_shape()[1] * input_rows / TILE_HEIGHT;
 
     std::uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
-    std::uint32_t input_Ht = input_tensor.padded_shape()[-2] / TILE_HEIGHT;  // seq_len
+    std::uint32_t input_Ht = input_rows / TILE_HEIGHT;  // seq_len
     std::uint32_t cache_HtWt = cache_tensor.padded_shape()[-2] * Wt / TILE_HEIGHT;
     std::uint32_t cache_CHtWt = cache_tensor.padded_shape()[1] * cache_HtWt;
     std::uint32_t update_idxt = update_idx / TILE_HEIGHT;
@@ -105,21 +116,24 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
     const DFBSpecName SRC0_DFB{"src0"};  // legacy c_0 (input, reused as pass-through output)
     const TensorParamName INPUT{"input"};
     const TensorParamName DST{"dst"};  // the cache tensor (donor writer's tensor::dst)
+    const TensorParamName ROW_OFFSET{"row_offset"};
 
     const auto& cache_tensor = tensor_args.cache;
     const auto& input_tensor = tensor_args.input;
+    const auto& input_row_offset = tensor_args.input_row_offset;
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     std::uint32_t single_tile_size = tt::tile_size(data_format);
 
     // Input work is laid out head-major. A core can cross a head boundary, so the
     // writer must jump to the next cache head when the input sequence wraps.
-    std::uint32_t num_blocks_of_work = input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
+    const std::uint32_t input_rows = fill_cache_input_rows(operation_attributes, tensor_args);
+    std::uint32_t num_blocks_of_work = input_tensor.padded_shape()[1] * input_rows / TILE_HEIGHT;
 
     // The per-core destination start page depends on batch_idx and update_idx; the
     // geometry below is fixed by tensor shape and remains valid on program-cache hits.
     std::uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
-    const std::uint32_t input_Ht = input_tensor.padded_shape()[-2] / TILE_HEIGHT;
+    const std::uint32_t input_Ht = input_rows / TILE_HEIGHT;
     const std::uint32_t cache_HtWt = cache_tensor.padded_shape()[-2] / TILE_HEIGHT * Wt;
     tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
@@ -178,12 +192,23 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
     if (input_sharded) {
         reader_defines.emplace("INPUT_SHARDED", "1");
     }
+    if (input_row_offset.has_value()) {
+        reader_defines.emplace("INPUT_ROW_OFFSET", "1");
+    }
     // The reader's TensorAccessor on the input tensor exists only on the interleaved path; the sharded
     // path reads through the borrowed input DFB. Bind tensor::input only when the kernel constructs it.
     Group<TensorBinding> reader_tensor_bindings;
     if (!input_sharded) {
         reader_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"});
     }
+    Group<TensorParameter> tensor_parameters = {input_param, dst_param};
+    if (input_row_offset.has_value()) {
+        reader_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = ROW_OFFSET, .accessor_name = "row_offset"});
+        tensor_parameters.push_back(TensorParameter{.unique_id = ROW_OFFSET, .spec = input_row_offset->tensor_spec()});
+    }
+    const std::uint32_t row_offset_page_bytes =
+        input_row_offset.has_value() ? input_row_offset->buffer()->aligned_page_size() : 0;
     const KernelSpec reader{
         .unique_id = READER,
         // Converted in place — not shared: deepseek_prefill carries its own fork, not this file.
@@ -194,6 +219,7 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = SRC0_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = reader_tensor_bindings,
+        .compile_time_args = {{"Wt", Wt}, {"row_offset_page_bytes", row_offset_page_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
@@ -249,7 +275,7 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
         .name = "fill_cache_multi_core",
         .kernels = {reader, writer},
         .dataflow_buffers = {src0_dfb},
-        .tensor_parameters = {input_param, dst_param},
+        .tensor_parameters = std::move(tensor_parameters),
         .work_units = {WorkUnitSpec{.name = "fill", .kernels = {READER, WRITER}, .target_nodes = all_cores}},
     };
 
@@ -257,6 +283,9 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
     run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
     // The cache tensor is the in-place output; bind it (tensor::dst) from tensor_return_value.
     run_args.tensor_args = {{INPUT, input_tensor.mesh_tensor()}, {DST, tensor_return_value.mesh_tensor()}};
+    if (input_row_offset.has_value()) {
+        run_args.tensor_args.emplace(ROW_OFFSET, input_row_offset->mesh_tensor());
+    }
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
@@ -270,6 +299,7 @@ tt::tt_metal::experimental::ProgramRunArgs FillCacheMultiCoreProgramFactory::ove
     const KernelSpecName WRITER{"writer"};
     const TensorParamName INPUT{"input"};
     const TensorParamName DST{"dst"};
+    const TensorParamName ROW_OFFSET{"row_offset"};
 
     // Runs on every program-cache hit. compute_program_hash excludes batch_idx / update_idx, so the
     // writer's start_id (== cache_start_id) is NOT stable and must be re-applied. Buffer addresses
@@ -283,6 +313,9 @@ tt::tt_metal::experimental::ProgramRunArgs FillCacheMultiCoreProgramFactory::ove
     ProgramRunArgs params;
     params.kernel_run_args = {std::move(writer_run_args)};
     params.tensor_args = {{INPUT, tensor_args.input.mesh_tensor()}, {DST, tensor_return_value.mesh_tensor()}};
+    if (tensor_args.input_row_offset.has_value()) {
+        params.tensor_args.emplace(ROW_OFFSET, tensor_args.input_row_offset->mesh_tensor());
+    }
     return params;
 }
 

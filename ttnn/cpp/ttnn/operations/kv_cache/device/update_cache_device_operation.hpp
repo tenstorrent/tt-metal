@@ -48,6 +48,8 @@ Tensor update_cache(
     uint32_t update_index,
     uint32_t batch_offset,
     UpdateCacheOpType op_type,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<Tensor>& input_row_offset = std::nullopt,
+    uint32_t num_input_rows = 0);
 
 }  // namespace ttnn::prim

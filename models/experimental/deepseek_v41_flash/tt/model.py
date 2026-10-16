@@ -5,9 +5,13 @@
 
 The deployment is TP4 across 8 stages (a 32-chip mesh opened as ``(8, 4)``). Each stage is a
 1x4 submesh; with the profile's pipeline group size of 1 it owns one contiguous run of layers.
-What V4 already does is reused: the H2D packet ``[token | pos_sliding | pos_compress]``, on-device
-RoPE, D2D sockets, trace variants, the replay thread and the DRISC prefetch rings. This file only
-replaces the parts V4.1 changed.
+What V4 already does is reused: the H2D packet, on-device RoPE, D2D sockets, trace variants, the
+replay thread and the DRISC prefetch rings. This file only replaces the parts V4.1 changed.
+
+* Several sessions stay resident. Each owns a slot of every sliding ring and compressor window and a
+  row of every compressed-KV page table, over block pools all sessions share. The packet
+  ``[token | ring row | pos | slot | slot's ring base | slot's window base]`` names the step's slot,
+  so switching sessions is free: no device work and no wait for the steps in flight.
 
 * Layers exchange ``(streams [B, 1, hc, D], pre_mix [B, 1, 1, hc])``. The first ``pre_mix`` is the
   one-hot ``[1, 0, 0, 0]``; the last one collapses the streams (there is no ``hc_head``).
@@ -78,6 +82,13 @@ from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     _update_cache_at,
 )
 from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
+from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import (
+    ZERO_BLOCK,
+    PagedCacheFull,
+    PagedGroup,
+    PagedKVManager,
+    plan_pool_blocks,
+)
 from models.experimental.deepseek_v4_flash.tt.embedding import DeepSeekV4Embedding
 from models.experimental.deepseek_v4_flash.tt.layers import DeepSeekV4RMSNorm
 from models.experimental.deepseek_v4_flash.tt.model import (
@@ -95,6 +106,11 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 _ENGRAM_RAM_MARGIN = 1.25
 _ROW_NAMES = ("new_kv_row", "new_key_row")
 _CANDIDATE_NAMES = ("cand_blocks", "pool_count")
+# Rows of a session slot in the shared compressor windows: one tile, so a slot starts on a tile row.
+_WIN_SLOT_ROWS = ttnn.TILE_SIZE
+# Tokens past the current position a session's blocks are grown for (when the pool can spare them), so
+# the device page tables are rewritten every 16 ratio-1 blocks instead of on every block.
+_GROW_AHEAD_TOKENS = 16 * CSA_INDEX_BLOCK_SIZE
 
 
 def _host_mem_available() -> int:
@@ -331,6 +347,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._out_torch_dtype = None
         self._resident: list[Optional[int]] = []
         self._session_pos: dict[int, int] = {}
+        self._max_sessions = 1
+        self._slot_of: dict[int, int] = {}
+        self._paged_ratios: dict[int, PagedGroup] = {}
+        self._packet_sids: collections.deque = collections.deque()
+        self._packet_slot = 0
+        # Held by whoever touches the pools' book-keeping or queues work on cq 0: the replay thread and
+        # the posting thread both do.
+        self._cq_lock = threading.RLock()
         self._decode_batch = 1
         self._cache_handoff: dict[tuple[int, int], tuple[list, list]] = {}
         self._spec_hist = None
@@ -356,10 +380,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
     def paged(self) -> bool:
         """True once :meth:`prepare_static_decode` has built the shared compressed-KV pools.
 
-        One session, sized up front for ``max_seq``. The index-key and compressed-KV pools are
-        paged in ``CSA_INDEX_BLOCK_SIZE``-row blocks; the sliding ring stays dense.
+        Up to ``num_sessions`` sessions share them. The index-key and compressed-KV pools are paged in
+        ``CSA_INDEX_BLOCK_SIZE``-row blocks, sized for ``total_tokens`` across all sessions; each session
+        owns a slot of every sliding ring and compressor window.
         """
         return self._decode_max_seq is not None
+
+    @property
+    def _slotted(self) -> bool:
+        """Whether rings and windows hold several session slots (read through the ``*_view`` copies)."""
+        return self._max_sessions > 1
 
     def prepare_static_decode(
         self,
@@ -375,18 +405,24 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
         ``rope["main"]`` and ``rope["compress"]`` are ``(cos_half, sin_half)`` tables ``[max_seq, Rd/2]``
         from the checkpoint's ``precompute_freqs_cis`` (sliding: no YaRN; compressed: YaRN). The device
-        rebuilds one row per step from them. ``block_size`` and ``total_tokens`` are accepted so the V4
-        demo call works; the index pool uses :data:`CSA_INDEX_BLOCK_SIZE` and is sized for ``max_seq``.
-        ``batch`` and ``num_sessions`` are 1: the select op decodes one user, and there is no multi-session
-        page-table swap.
+        rebuilds one row per step from them. ``block_size`` is accepted so the V4 demo call works; the
+        index pools use :data:`CSA_INDEX_BLOCK_SIZE`.
+
+        ``num_sessions`` sessions can be open at once, each up to ``max_seq`` tokens, sharing index-key and
+        compressed-KV pools sized for ``total_tokens`` (default ``num_sessions * max_seq``, at least
+        ``max_seq``). ``batch`` is 1: a step decodes one session. Switching sessions costs no device work:
+        every session has its own ring and window slot and its own row of each page table, and the
+        step's packet names the slot.
         """
-        del total_tokens
         if batch != 1:
             raise NotImplementedError(f"V4.1 decode supports batch 1, got batch={batch}")
-        if num_sessions != 1:
-            raise NotImplementedError(f"V4.1 decode supports one session, got num_sessions={num_sessions}")
+        if num_sessions < 1:
+            raise ValueError(f"num_sessions must be at least 1, got {num_sessions}")
         if max_seq < 2:
             raise ValueError(f"max_seq must be at least 2 so RoPE can be recovered from row 1, got {max_seq}")
+        total_tokens = num_sessions * max_seq if total_tokens is None else total_tokens
+        if total_tokens < max_seq:
+            raise ValueError(f"total_tokens ({total_tokens}) must hold one max_seq ({max_seq}) session")
         cfg = self.config
         ratios = {int(r) for r in cfg.compress_ratios[: self.num_layers] if int(r)}
         self._context_limit = None
@@ -396,13 +432,34 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._decode_batch = batch
         self._lm_head_traced = lm_head
         self._decode_max_seq = max_seq
+        self._max_sessions = num_sessions
+        # One page-table geometry per ratio: every group of a ratio, on every stage, maps a session's
+        # entries the same way, so one allocation serves all of them.
+        self._paged_ratios = {
+            r: PagedGroup(
+                layer_type=f"ratio {r}",
+                block_size=CSA_INDEX_BLOCK_SIZE,
+                sliding_window=0,
+                max_seq=max_seq,
+                compress_rate=r,
+            )
+            for r in sorted(ratios)
+        }
+        groups = {g.layer_type: g for g in self._paged_ratios.values()}
+        self._pool_blocks = plan_pool_blocks(groups, num_sessions, total_tokens)
+        self._paged = PagedKVManager(groups, self._pool_blocks)
+        self._slot_of = {}
+        self._session_pos = {}
+        self._resident = []
+        self._packet_sids.clear()
         # Variant axis 1 is the r=2 pool phase. Stages with no r=2 source ignore it.
         has_r2 = 2 in ratios
         self._pool_crs = [2] if has_r2 else []
         self._pool_phases = [(False,), (True,)] if has_r2 else [()]
         logger.info(
-            f"V4.1 traced decode: max_seq {max_seq}, index blocks of {CSA_INDEX_BLOCK_SIZE} "
-            f"(prepare block_size={block_size} is unused)"
+            f"V4.1 traced decode: {num_sessions} session(s) of up to {max_seq} tokens sharing {total_tokens}, "
+            f"index blocks of {CSA_INDEX_BLOCK_SIZE} (pool blocks {self._pool_blocks}; prepare "
+            f"block_size={block_size} is unused)"
         )
 
         rope_gen = {}
@@ -413,7 +470,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             rope_gen[family] = (inv_freq.reshape(1, 1, 1, -1), scaling)
 
         alignment = self.system_config.pipeline.pcie_alignment
-        self._pkt_int_prefix = 3 * batch
+        # [token | ring row | pos | slot | slot's first ring row | slot's first window row], see _build_packet.
+        self._pkt_int_prefix = 6
         self._pkt_page_bytes = math.ceil(self._pkt_int_prefix * 4 / alignment) * alignment
         self._pkt_w = self._pkt_page_bytes // 4
 
@@ -526,7 +584,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 sm["pre_mix_in"] = _device_zeros([batch, 1, 1, hc], device)
             self.submeshes_io.append(sm)
 
-        self._allocate_shared_caches(max_seq)
+        self._allocate_shared_caches()
         self._output_sm_index = self.pipeline_submesh_ids.index(ids[self.num_layers - 1])
         self._traced_captured = False
         self._traces_compiled = False
@@ -540,41 +598,64 @@ class DeepSeekV41Model(DeepSeekV4Model):
             )
         if self._engram_layers:
             tables = {layer_idx: load_engram_table(self.loader, layer_idx) for layer_idx, _ in self._engram_layers}
-            self._engram_lookup = EngramHostLookup(cfg, self.loader.snapshot_dir, tables, batch=batch, max_seq=max_seq)
+            self._engram_lookup = EngramHostLookup(
+                cfg, self.loader.snapshot_dir, tables, batch=batch, max_seq=max_seq, sessions=num_sessions
+            )
             logger.info(f"Engram host lookup: layers {[layer_idx for layer_idx, _ in self._engram_layers]}")
 
-    def _allocate_shared_caches(self, max_seq: int) -> None:
+    def _allocate_shared_caches(self) -> None:
         """Per-stage KV. A group is aliased inside a stage and handed over across a pipeline edge.
 
         ``win_kv`` / ``win_gate`` stay on the stage that owns the kv source. Every stage of the
         group gets ``sel_tile``; a stage with an index source of the group also gets ``sel_kv``,
-        ``comp_kv``, ``idx_key_cache`` and its own identity page table. Groups some stage selects
-        from without holding their source carry ``new_kv_row`` / ``new_key_row`` on every stage. With a
-        two-level select, every stage of the candidate source's group carries its ``cand_blocks`` /
-        ``pool_count``, and a stage with a pool builder also gets the pool.
+        ``comp_kv``, ``idx_key_cache`` and the stage's page table of the group's ratio. Groups some
+        stage selects from without holding their source carry ``new_kv_row`` / ``new_key_row`` on every
+        stage. With a two-level select, every stage of the candidate source's group carries its
+        ``cand_blocks`` / ``pool_count``, and a stage with a pool builder also gets the pool.
+
+        With several sessions every ring is ``[1, 1, N * window, Dh]`` and every window
+        ``[1, 1, N * 32, Dh]``, read through one ``ring_view`` / ``win_view_*`` per stage (see
+        :class:`DeepSeekV41LayerCache`). ``comp_kv`` / ``idx_key_cache`` hold the ratio's
+        ``plan_pool_blocks`` blocks, and ``sm["page_tables"][ratio]`` (INT32 ``[N, L]``) maps slot
+        ``s``'s logical blocks to them; :meth:`_write_page_tables` refreshes it.
         """
         cfg = self.config
         window, head_dim = self.sliding_window, cfg.head_dim
         rows = window + cfg.index_topk
+        slots = self._max_sessions
+        slotted = self._slotted
         by_stage: dict[int, dict[int, dict]] = {}
         for sm in self.submeshes_io:
             stage = sm["index"]
             device = sm["device"]
             shared_here: dict[int, dict] = {}
+            sm["page_tables"] = {}
+            views = {}
+            if slotted and sm["has_sliding"]:
+                views["ring_view"] = _device_zeros((1, 1, window, head_dim), device)
+            if slotted and any(
+                li in cfg.kv_source_layer_ids and int(cfg.compress_ratios[li]) > 1 for li in sm["layers"]
+            ):
+                views["win_view_kv"] = _device_zeros((1, 1, _WIN_SLOT_ROWS, head_dim), device)
+                views["win_view_gate"] = _device_zeros((1, 1, _WIN_SLOT_ROWS, head_dim), device)
             for li in sm["layers"]:
                 ratio = int(cfg.compress_ratios[li])
-                ring = _device_zeros((1, 1, window, head_dim), device)
+                ring = _device_zeros((1, 1, slots * window, head_dim), device)
                 if not ratio:
-                    sm["scaches"][li] = DeepSeekV41LayerCache(kv=ring)
+                    sm["scaches"][li] = DeepSeekV41LayerCache(kv=ring, ring_view=views.get("ring_view"))
                     continue
                 src = self._kv_source_of[li]
                 if src not in shared_here:
                     owns_window = src in sm["layers"] and ratio > 1
+                    win_rows = slots * _WIN_SLOT_ROWS if slotted else ratio
                     group = {
-                        "win_kv": _device_zeros((1, 1, ratio, head_dim), device) if owns_window else None,
-                        "win_gate": _device_zeros((1, 1, ratio, head_dim), device) if owns_window else None,
+                        "win_kv": _device_zeros((1, 1, win_rows, head_dim), device) if owns_window else None,
+                        "win_gate": _device_zeros((1, 1, win_rows, head_dim), device) if owns_window else None,
                         "sel_tile": _device_zeros((1, 1, rows, head_dim), device),
                     }
+                    if owns_window:
+                        group["win_view_kv"] = views.get("win_view_kv")
+                        group["win_view_gate"] = views.get("win_view_gate")
                     if src in self._row_groups:
                         group["new_kv_row"] = _device_zeros((1, 1, 1, head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT)
                         group["new_key_row"] = _device_zeros(
@@ -584,19 +665,18 @@ class DeepSeekV41Model(DeepSeekV4Model):
                         w in cfg.index_source_layer_ids and self._kv_source_of.get(w) == src for w in sm["layers"]
                     )
                     if selects_here:
-                        blocks = -(-(max_seq // ratio) // CSA_INDEX_BLOCK_SIZE)
+                        paged = self._paged_ratios[ratio]
+                        blocks = self._pool_blocks[paged.layer_type]
+                        if ratio not in sm["page_tables"]:
+                            sm["page_tables"][ratio] = _device_zeros(
+                                (slots, paged.logical_blocks), device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+                            )
                         group.update(
                             idx_key_cache=_index_key_pool(device, blocks, CSA_INDEX_BLOCK_SIZE, cfg.index_head_dim),
                             comp_kv=_device_zeros(
                                 (blocks, 1, CSA_INDEX_BLOCK_SIZE, head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT
                             ),
-                            idx_page_table=ttnn.from_torch(
-                                torch.arange(blocks, dtype=torch.int32).reshape(1, blocks),
-                                dtype=ttnn.int32,
-                                layout=ttnn.ROW_MAJOR_LAYOUT,
-                                device=device,
-                                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                            ),
+                            idx_page_table=sm["page_tables"][ratio],
                             sel_kv=_device_zeros((1, 1, rows, head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT),
                         )
                     if src == self._candidate_group:
@@ -696,23 +776,41 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """
         return
 
-    def _write_packet(self, token_id, pos: int) -> None:
-        """The V4 packet, then each Engram layer's rows in layer order. Compile runs push zeros and do not
-        advance the hash.
+    def _build_packet(self, token_id, pos: int) -> torch.Tensor:
+        """One INT32 socket page ``[1, 1, 1, _pkt_w]``: ``[token | slot * W + pos % W | pos | slot |
+        slot * W | slot * 32]`` for session slot ``_packet_slot``, then padding.
+
+        The slot fields are what makes a session switch free: the traces read the slot's ring rows,
+        window rows and page-table row from here, so nothing on device changes between sessions.
+        """
+        w, slot = self.sliding_window, self._packet_slot
+        packet = torch.zeros(1, 1, 1, self._pkt_w, dtype=torch.int32)
+        packet[0, 0, 0, : self._pkt_int_prefix] = torch.tensor(
+            self._step_tokens(token_id) + [slot * w + pos % w, pos, slot, slot * w, slot * _WIN_SLOT_ROWS],
+            dtype=torch.int32,
+        )
+        return packet
+
+    def _write_packet(self, token_id, pos: int, sid: Optional[int] = None) -> None:
+        """The packet of session ``sid`` (the resident one when ``None``, as in the compile runs), then each
+        Engram layer's rows in layer order. Compile runs push zeros and do not advance the hash.
 
         The packet goes first so layer 0 can start while the host looks up the first Engram layer's rows;
         each later layer's lookup runs only after the earlier layer's rows are on their socket.
         """
+        if sid is None:
+            sid = self._resident[0] if self._resident and self._resident[0] is not None else None
+        self._packet_slot = self._slot_of.get(sid, 0)
         DeepSeekV4Model._write_packet(self, token_id, pos)
-        self._write_engram_rows(token_id, pos)
+        self._write_engram_rows(token_id, pos, self._packet_slot)
 
-    def _write_engram_rows(self, token_id, pos: int) -> None:
+    def _write_engram_rows(self, token_id, pos: int, slot: int = 0) -> None:
         if not self._engram_layers:
             return
         if self._eager_decode or self._traces_compiled:
             ids = torch.tensor(self._step_tokens(token_id), dtype=torch.long).reshape(-1, 1)
             lookup = self._engram_lookup
-            hashes = lookup.hash(ids, pos)  # [B, 1, n_engram_layers, n_hash_cols]
+            hashes = lookup.hash_session(slot, ids, pos)  # [B, 1, n_engram_layers, n_hash_cols]
             for layer_idx, engram in self._engram_layers:
                 ids_of_layer = hashes[:, :, lookup.layout.layer_ids.index(layer_idx)]
                 engram.write_rows(lookup.gather(layer_idx, ids_of_layer).flatten(-2))
@@ -720,71 +818,175 @@ class DeepSeekV41Model(DeepSeekV4Model):
             for _, engram in self._engram_layers:
                 engram.write_rows(torch.zeros(engram.batch, engram.kin, dtype=torch.bfloat16))
 
+    # -- sessions: slots of the rings and windows, rows of the shared block pools' page tables -- #
     def open_session(self) -> int:
-        if self._decode_max_seq is None:
-            raise RuntimeError("call prepare_static_decode() before using sessions")
-        if self._session_pos:
-            raise RuntimeError("V4.1 traced decode seats one session")
-        self._session_pos[0] = 0
-        return 0
+        """Claim the lowest free session slot and return the session's id.
+
+        Host-only. The slot's ring and window rows are the session's own, and its compressed blocks are
+        handed out as its windows close (:meth:`ensure_session_capacity`). Nothing needs zeroing: as
+        :meth:`reset_session` explains, a sequence reads only rows it wrote itself.
+        """
+        paged = self._require_paged()
+        free = sorted(set(range(self._max_sessions)) - set(self._slot_of.values()))
+        if not free:
+            raise PagedCacheFull(f"all {self._max_sessions} session slots are in use")
+        sid = paged.open_session()
+        self._slot_of[sid] = free[0]
+        self._session_pos[sid] = 0
+        return sid
+
+    def close_session(self, sid: int) -> None:
+        """Return session ``sid``'s blocks to the pools and free its slot."""
+        paged = self._require_paged()
+        if sid not in self._slot_of:
+            raise KeyError(f"no such session {sid}")
+        self._wait_replays_dispatched()
+        if sid in self._resident:
+            self._resident[self._resident.index(sid)] = None
+        paged.close_session(sid)
+        del self._slot_of[sid]
+        self._session_pos.pop(sid, None)
+        self._write_page_tables()
 
     def activate_session(self, sid: int) -> None:
         self.activate_sessions([sid])
 
     def activate_sessions(self, sids) -> None:
+        """Make ``sids`` (one session) the one the next posted steps and the next prefill belong to.
+
+        Host-only and free: the device is not touched and nothing waits for the steps in flight. Each
+        posted step carries its session (see :meth:`replay_traced`), and its packet names that session's
+        slot. The Engram lookup switches to the session's token history for the prefill.
+        """
         sids = list(sids)
         if len(sids) != self._decode_batch:
             raise ValueError(f"batch decodes {self._decode_batch} users at a time, got {len(sids)} sessions")
         for sid in sids:
-            if sid not in self._session_pos:
+            if sid not in self._slot_of:
                 raise KeyError(f"no such session {sid}")
         self._resident = sids
+        if self._engram_lookup is not None:
+            self._engram_lookup.use_session(self._slot_of[sids[0]])
 
-    def ensure_session_capacity(self, pos: int) -> None:
-        if not self._resident or None in self._resident:
-            raise RuntimeError("call activate_sessions() before decoding")
-        if self._context_limit is not None and pos >= self._context_limit:
-            raise RuntimeError(f"position {pos} exceeds the {self._context_limit}-token compressed-KV context")
-        if self._decode_max_seq is not None and pos >= self._decode_max_seq:
-            raise RuntimeError(f"position {pos} is past max_seq {self._decode_max_seq}")
+    def ensure_session_capacity(self, pos: int, sid: Optional[int] = None) -> None:
+        """Give session ``sid`` (the resident one when ``None``) blocks for every entry a step at ``pos``
+        writes, growing ahead by up to :data:`_GROW_AHEAD_TOKENS` when the pools can spare it, and
+        refresh the page tables whose rows changed.
+
+        Raises :class:`PagedCacheFull` past ``max_seq`` or when a pool runs out.
+        """
+        paged = self._require_paged()
+        if sid is None:
+            if not self._resident or None in self._resident:
+                raise RuntimeError("call activate_sessions() before decoding")
+            sid = self._resident[0]
+        if pos >= self._decode_max_seq:
+            raise PagedCacheFull(f"position {pos} is past max_seq {self._decode_max_seq}")
+        with self._cq_lock:
+            ahead = min(pos + _GROW_AHEAD_TOKENS, self._decode_max_seq - 1)
+            try:
+                changed = paged.ensure_capacity(sid, ahead)
+            except PagedCacheFull:
+                if ahead == pos:
+                    raise
+                # The failed attempt may have grown some groups before running out.
+                paged.ensure_capacity(sid, pos)
+                changed = [g.layer_type for g in self._paged_ratios.values()]
+            if changed:
+                self._write_page_tables(changed)
+
+    def _write_page_tables(self, groups=None) -> None:
+        """Copy every open session's page-table row into slot ``slot``'s row of the INT32 ``[N, L]``
+        device tables of ``groups`` (all when ``None``), on every stage that has one. Free slots map to
+        ``ZERO_BLOCK``.
+
+        Rows of other sessions are rewritten with their unchanged contents. The write is queued on the
+        command queue the traces run on, so it lands between steps: after every step dispatched before
+        it and before every step dispatched after it.
+        """
+        paged = self._require_paged()
+        with self._cq_lock:
+            for ratio, group in self._paged_ratios.items():
+                if groups is not None and group.layer_type not in groups:
+                    continue
+                table = torch.full((self._max_sessions, group.logical_blocks), ZERO_BLOCK, dtype=torch.int32)
+                for sid, slot in self._slot_of.items():
+                    table[slot] = paged.page_row(sid, group.layer_type)[0]
+                host = ttnn.from_torch(table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                for sm in self.submeshes_io:
+                    device_table = sm["page_tables"].get(ratio)
+                    if device_table is not None:
+                        ttnn.copy_host_to_device_tensor(host, device_table)
 
     def session_usage(self) -> dict:
-        """``"ratio r" -> (index blocks used, index blocks total)`` of the session's ``comp_kv`` /
-        ``idx_key_cache`` pools, V4's per-group ``(blocks used, pool size)`` shape. The pools are allocated
-        whole for ``max_seq``, so "used" is the blocks the session's position has reached."""
-        if self._decode_max_seq is None:
-            raise RuntimeError("call prepare_static_decode() before using sessions")
-        pos = max(self._session_pos.values(), default=0)
-        ratios = sorted({int(r) for r in self.config.compress_ratios[: self.num_layers] if int(r)})
-        return {
-            f"ratio {r}": (
-                -(-(pos // r) // CSA_INDEX_BLOCK_SIZE),
-                -(-(self._decode_max_seq // r) // CSA_INDEX_BLOCK_SIZE),
-            )
-            for r in ratios
-        }
+        """``"ratio r" -> (blocks in use, blocks in pool)`` of the shared ``comp_kv`` / ``idx_key_cache``
+        pools of each ratio (the zero block counts as used)."""
+        return self._require_paged().usage()
 
     def session_tokens_left(self) -> int:
-        """Tokens the one session can still take before ``max_seq``."""
-        if self._decode_max_seq is None:
-            raise RuntimeError("call prepare_static_decode() before using sessions")
-        return self._decode_max_seq - max(self._session_pos.values(), default=0)
+        """Tokens the tightest ratio's pool can still admit across all open sessions."""
+        return self._require_paged().tokens_left()
 
     def reset_static_caches(self) -> None:
         """No-op: as :meth:`reset_session` explains, a fresh sequence reads only rows it wrote itself."""
         return
 
     def reset_session(self, sid: int) -> None:
-        """Rewind session ``sid`` to position 0.
+        """Rewind session ``sid`` to position 0 and return its compressed blocks to the pools.
 
         Nothing on device needs clearing: every row a step reads was written earlier in the same
         sequence (the ring is masked below ``sliding_window``, a select scores only the groups closed
-        so far, and a ratio-2 window slot is written before its group pools).
+        so far, a ratio-2 window slot is written before its group pools, and the Engram history is
+        rewritten from position 0).
         """
-        if sid not in self._session_pos:
+        paged = self._require_paged()
+        if sid not in self._slot_of:
             raise KeyError(f"no such session {sid}")
         self._wait_replays_dispatched()
+        paged.reset_session(sid)
         self._session_pos[sid] = 0
+        self._write_page_tables()
+
+    # -- replay: every posted step is bound to the session resident when it was posted -- #
+    def replay_traced(self, pos: int) -> None:
+        """V4's :meth:`~DeepSeekV4Model.replay_traced` for the resident session, which the step keeps:
+        its packet (:meth:`write_step_packet`) and its capacity / position book-keeping
+        (:meth:`_execute_traces`) are for that session even if another is activated meanwhile."""
+        if not self._resident or None in self._resident:
+            raise RuntimeError("call activate_sessions() before decoding")
+        sid = self._resident[0]
+        if self._eager_decode:
+            self._packet_sids.append(sid)
+            self._eager_pending.append((pos, sid))
+            return
+        if not self._traced_captured:
+            raise RuntimeError("call decode_traced() once to capture the traces before replay_traced()")
+        self._ensure_replay_thread()
+        self._packet_sids.append(sid)
+        self._replay_queue.put((pos, sid))
+
+    def write_step_packet(self, token_id, pos: int) -> None:
+        """Push the packet of the oldest posted step, in its session's slot (eager: then run it)."""
+        sid = self._packet_sids.popleft()
+        self._write_packet(token_id, pos, sid)
+        if self._eager_decode:
+            posted = self._eager_pending.popleft()
+            assert posted == (pos, sid), f"eager decode: packet for {(pos, sid)}, but {posted} was posted next"
+            self._execute_traces(posted)
+
+    def _execute_traces(self, step) -> None:
+        """Replay the variant of ``step`` = ``(pos, sid)`` on every submesh, after growing that session's
+        blocks for it (normally already done when it was posted)."""
+        pos, sid = step
+        self.ensure_session_capacity(pos, sid)
+        self._session_pos[sid] = pos + 1
+        variant = self._variant_key(pos)
+        if self._eager_decode:
+            self._run_eager_step(variant)
+            return
+        with self._cq_lock:
+            for sm in self.submeshes_io:
+                ttnn.execute_trace(sm["device"], sm["tids"][variant], cq_id=0, blocking=False)
 
     def _step_context(self, sm: dict, pkt: ttnn.Tensor, causal: bool, r2_pool: bool, r2_select: bool) -> dict:
         """Token, positions, RoPE rows and the per-ratio mask or ``cur_pos`` for one step.
@@ -793,9 +995,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
         stage that ignores the r=2 bits has one op sequence across those variants.
         """
         b = self._decode_batch
+
+        def field(i: int) -> ttnn.Tensor:  # packet int i as INT32 ROW_MAJOR [1]
+            return ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, i], [1, 1, 1, i + 1]), [1])
+
         token = ttnn.typecast(ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 0], [1, 1, 1, b]), [1, b]), ttnn.uint32)
-        sliding_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, b], [1, 1, 1, 2 * b]), [b])
-        compress_pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2 * b], [1, 1, 1, 3 * b]), [b])
+        sliding_pos = field(1)
+        compress_pos = field(2)
         pos_f = ttnn.typecast(ttnn.to_layout(ttnn.reshape(compress_pos, [1, 1, 1, b]), ttnn.TILE_LAYOUT), ttnn.float32)
         rope = {family: self._device_rope(inv, scale, pos_f) for family, (inv, scale) in sm["rope_invfreq"].items()}
         ctx = {
@@ -809,7 +1015,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "win_rope": {},
             "entry": {},
             "index_pos": {},
+            "page_row": None,
+            "ring_offset": None,
+            "win_offset": None,
         }
+        win_base_f = None
+        if self._slotted:
+            ctx["page_row"], ctx["ring_offset"], ctx["win_offset"] = field(3), field(4), field(5)
+            if any(r > 1 for r in sm["kv_ratios"]):
+                win_base_f = ttnn.typecast(
+                    ttnn.to_layout(ttnn.reshape(ctx["win_offset"], [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32
+                )
         if sm["has_sliding"]:
             ctx["sliding_curpos"] = self._device_index(ttnn.clamp(pos_f, max=float(self.sliding_window - 1)))
         for ratio in sm["ratios"]:
@@ -819,7 +1035,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 ctx["mask"][ratio] = self._compressed_mask(sm["mask_idx"], pos_f, ratio)
         for ratio in sm["kv_ratios"]:
             if ratio > 1:
-                ctx["win_slot"][ratio] = self._win_slot(pos_f, ratio)
+                ctx["win_slot"][ratio] = self._win_slot(pos_f, ratio, base_f=win_base_f)
             if ratio == 1 or (ratio == 2 and r2_pool):
                 win_pos = ttnn.add(pos_f, float(1 - ratio))
                 inv, scale = sm["rope_invfreq"]["compress"]
@@ -857,9 +1073,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
     def _entry_index(self, pos_f: ttnn.Tensor, ratio: int) -> ttnn.Tensor:
         return self._device_index(ttnn.floor(ttnn.multiply(pos_f, 1.0 / ratio)))
 
-    def _win_slot(self, pos_f: ttnn.Tensor, ratio: int) -> ttnn.Tensor:
+    def _win_slot(self, pos_f: ttnn.Tensor, ratio: int, base_f: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+        """``pos % ratio``, plus the FP32 ``[1, 1, 1, 1]`` ``base_f`` row when given."""
         quot = ttnn.floor(ttnn.multiply(pos_f, 1.0 / ratio))
-        return self._device_index(ttnn.subtract(pos_f, ttnn.multiply(quot, float(ratio))))
+        slot = ttnn.subtract(pos_f, ttnn.multiply(quot, float(ratio)))
+        if base_f is not None:
+            slot = ttnn.add(slot, base_f)
+        return self._device_index(slot)
 
     def _index_position(self, pos_f: ttnn.Tensor, ratio: int) -> ttnn.Tensor:
         """``4 * n - 1``: the select op counts ``(cur_pos + 1) // 4`` keys."""
@@ -871,16 +1091,24 @@ class DeepSeekV41Model(DeepSeekV4Model):
     ) -> dict:
         ratio = attn.compress_ratio
         cos, sin, neg_sin = ctx["rope"]["main" if ratio == 0 else "compress"]
-        inputs = {"cos": cos, "sin": sin, "neg_sin": neg_sin, "sliding_pos": ctx["sliding_pos"]}
+        inputs = {
+            "cos": cos,
+            "sin": sin,
+            "neg_sin": neg_sin,
+            "sliding_pos": ctx["sliding_pos"],
+            "ring_offset": ctx["ring_offset"],
+        }
         if ratio == 0:
             inputs["sdpa_cur_pos"] = ctx["sliding_curpos"]
             return inputs
+        inputs["page_row"] = ctx["page_row"]
         if attn.is_kv_source:
             pool = ratio == 1 or (ratio == 2 and r2_pool)
             inputs["pool"] = pool
             if ratio > 1:
                 inputs["win_slot"] = ctx["win_slot"][ratio]
                 inputs["hist_slot"] = ctx.get("hist_slot")
+                inputs["win_offset"] = ctx["win_offset"]
             if pool:
                 inputs["cos_win"], inputs["sin_win"] = ctx["win_rope"][ratio]
                 inputs["entry"] = ctx["entry"][ratio]
@@ -1073,10 +1301,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         For a prompt of ``T`` tokens (a multiple of ``sliding_window``, so ring slot ``j`` holds token
         ``T - W + j``, and of every compress ratio, so no compressor window is half full):
 
-        * every layer: ``kv_tail`` -> its ring ``kv``;
+        * every layer: ``kv_tail`` -> the session's slot of its ring ``kv``;
         * every stage holding a group's ``comp_kv`` (it has an index source of the group): the kv source's
-          ``compressed_kv`` -> ``comp_kv`` and ``idx_keys`` -> ``idx_key_cache`` (identity paging). A source
-          on another stage is copied over through the host.
+          ``compressed_kv`` -> ``comp_kv`` and ``idx_keys`` -> ``idx_key_cache``, each logical block into the
+          physical block the session's page-table row maps it to. A source on another stage is copied over
+          through the host.
 
         ``win_kv`` / ``win_gate``, ``sel_kv`` / ``sel_tile`` and the carried rows need nothing: the next step
         writes them before it reads them. The caches are written in place, so captured traces stay valid.
@@ -1086,7 +1315,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise ValueError("V4.1 has no CSA position bias: commit_prefill_state takes no bias_slots")
         if not self.paged:
             raise RuntimeError("call prepare_static_decode() first")
-        if session_id not in self._session_pos:
+        if session_id not in self._slot_of:
             raise KeyError(f"no such session {session_id}")
         if len(states) < self.num_layers:
             raise ValueError(f"need {self.num_layers} layer states, got {len(states)}")
@@ -1099,7 +1328,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 f"prefilled length {total} must be a positive multiple of {ALIGNMENT} and of the "
                 f"{self.sliding_window}-token sliding window"
             )
-        self.ensure_session_capacity(total - 1)
+        self.ensure_session_capacity(total - 1, session_id)
+        ring_row = self._slot_of[session_id] * self.sliding_window
         for sm in self.submeshes_io:
             device = sm["device"]
             committed = set()
@@ -1110,7 +1340,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 scache = sm["scaches"][li]
                 note(f"commit layer {li + 1}/{self.num_layers} on decode submesh {sm['index']}")
                 ring = ttnn.to_layout(state.kv_tail, ttnn.TILE_LAYOUT)
-                self._overwrite(scache.kv, ring)
+                ttnn.fill_cache(scache.kv, ring, 0, update_idx=ring_row)
                 ttnn.deallocate(ring)
                 src = self._kv_source_of.get(li)
                 if src is None or src in committed or scache.comp_kv is None:
@@ -1121,9 +1351,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     raise ValueError(f"kv source {src} holds {source.num_entries} entries for {total} tokens")
                 entries = self._on_stage(source.compressed_kv, device)
                 keys = self._on_stage(source.idx_keys, device)
-                self._commit_index_keys(
-                    scache, PrefillAttentionState(seq_len=total, compressed_kv=entries, idx_keys=keys)
-                )
+                ratio = int(self.config.compress_ratios[src])
+                self._commit_paged_entries(scache, self._paged_ratios[ratio].layer_type, session_id, entries, keys)
                 for copy, original in ((entries, source.compressed_kv), (keys, source.idx_keys)):
                     if copy is not original:
                         ttnn.deallocate(copy)
@@ -1132,6 +1361,53 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._session_pos[session_id] = total
         note("prefill state committed")
         return total
+
+    def _commit_paged_entries(
+        self, scache, group: str, session_id: int, entries: ttnn.Tensor, keys: ttnn.Tensor
+    ) -> None:
+        """Compressed entries (ROW_MAJOR ``[1, 1, n, Dh]``) into ``scache.comp_kv`` and their index keys
+        (ROW_MAJOR ``[1, 1, n, index_head_dim]``) into ``scache.idx_key_cache``, entry ``w`` at row
+        ``w % 64`` of the physical block session ``session_id``'s row of ``group`` maps logical block
+        ``w // 64`` to.
+
+        ``comp_kv`` is ROW_MAJOR, which ``fill_cache`` does not take, so each run of consecutive physical
+        blocks is one ``slice_write``; the tiled keys go one block per ``fill_cache``.
+        """
+        n = keys.shape[2]
+        if entries.shape[2] != n:
+            raise ValueError(f"{n} index keys for {entries.shape[2]} compressed entries")
+        block = CSA_INDEX_BLOCK_SIZE
+        blocks = -(-n // block)
+        page_row = self._require_paged().page_row(session_id, group)[0].tolist()
+        if ZERO_BLOCK in page_row[:blocks]:
+            raise RuntimeError(f"{group}: {n} entries reach an unmapped block; capacity was not ensured")
+        device = scache.idx_key_cache.device()
+        dh, key_dim = entries.shape[3], keys.shape[3]
+
+        stacked = self._stack_rows([entries], blocks * block, dh, device)
+        kv_blocks = ttnn.reshape(stacked, [blocks, 1, block, dh])
+        start = 0
+        while start < blocks:
+            end = start + 1
+            while end < blocks and page_row[end] == page_row[end - 1] + 1:
+                end += 1
+            first = page_row[start]
+            run = ttnn.slice(kv_blocks, [start, 0, 0, 0], [end, 1, block, dh])
+            ttnn.experimental.slice_write(
+                run, scache.comp_kv, [first, 0, 0, 0], [first + end - start, 1, block, dh], [1, 1, 1, 1]
+            )
+            ttnn.deallocate(run)
+            start = end
+        ttnn.deallocate(stacked)
+
+        keys_rm = self._stack_rows([keys], blocks * block, key_dim, device)
+        keys_tiled = ttnn.to_layout(keys_rm, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(keys_rm)
+        for logical in range(blocks):
+            rows = ttnn.slice(keys_tiled, [0, 0, logical * block, 0], [1, 1, (logical + 1) * block, key_dim])
+            ttnn.fill_cache(scache.idx_key_cache, rows, page_row[logical])
+            ttnn.deallocate(rows)
+        ttnn.deallocate(keys_tiled)
 
     @staticmethod
     def _on_stage(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -1165,6 +1441,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """
         if self._traces_compiled or self._traced_captured:
             raise RuntimeError("call prepare_spec_decode() before the decode traces are compiled")
+        if self._slotted:
+            raise NotImplementedError("speculative decode restores one session's rings: prepare with num_sessions=1")
         cfg = self.config
         window, head_dim = self.sliding_window, cfg.head_dim
         self._spec_hist = hist

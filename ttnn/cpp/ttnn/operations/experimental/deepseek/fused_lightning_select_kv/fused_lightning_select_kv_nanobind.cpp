@@ -94,6 +94,13 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
                 candidate-pool consumer passes ``build_candidate_pool``'s rows and the source's
                 ``kv_cache``. ``new_kv_row_index`` is then a ``kv_cache`` row, since
                 ``page_table_tensor`` maps the pool.
+            page_table_row_tensor (Optional[ttnn.Tensor]): ``[1]`` INT32 session row, read on
+                device. Without ``row_table`` the page table may be
+                ``[num_sessions, max_blocks_per_user]`` and this row of it is used; with
+                ``row_table`` it selects the ``kv_page_table`` row.
+            kv_page_table (Optional[ttnn.Tensor]): ``[num_sessions, max_blocks]`` INT32
+                ``kv_cache`` page table. With ``row_table`` and ``new_kv_row``,
+                ``new_kv_row_index`` is then a logical row mapped through it.
 
         Returns:
             List[ttnn.Tensor]: ``[kv_rows, scores]``, plus ``[candidate_blocks, pool_count]`` in
@@ -129,7 +136,9 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
         nb::arg("pool_count_output") = std::nullopt,
         nb::arg("num_parts") = 1,
         nb::arg("part_index_tensor") = std::nullopt,
-        nb::arg("row_table") = std::nullopt);
+        nb::arg("row_table") = std::nullopt,
+        nb::arg("page_table_row_tensor") = std::nullopt,
+        nb::arg("kv_page_table") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::fused_lightning_select_kv::detail

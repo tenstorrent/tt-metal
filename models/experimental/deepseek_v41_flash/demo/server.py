@@ -15,9 +15,10 @@ prefill (read that docstring) -- on the V4.1 decode model and :class:`DeepSeekV4
 
 What V4.1 imposes on the serving side:
 
-* One user. V4.1 decode seats a single session (the select op decodes one user and there is no page-table swap), so
-  ``--num-users`` is 1 and requests take turns on it; a request that does not continue the stored conversation
-  re-prefills it.
+* Users. ``--num-users`` sessions stay open at once, each with its own ring and window slot and its own rows of the
+  compressed-KV page tables; their compressed KV shares pools sized for ``--total-context`` tokens (default
+  ``num_users * max_context``). A step decodes one user, and switching users costs no device work: the step's packet
+  names the user's slot. Speculative decode is single-user.
 * Context. ``--max-context`` is 524288 tokens by default (prompt + reply). Past
   ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries the select is two-level, in the
   traced prefill and in decode, so a prompt prefills up to ``--prefill-max-len`` (by default the whole context, at
@@ -140,7 +141,8 @@ class V41ChatEngine(ChatEngine):
             self.max_seq,
             lm_head=self.lm_head,
             num_sessions=args.num_users,
-            total_tokens=self.max_seq,
+            # max_seq may be rounded above --max-context; every session still has to fit the pools.
+            total_tokens=max(args.total_context, self.max_seq),
             block_size=_PAGE_BLOCK_SIZE,
         )
         if self.model.context_limit is not None and self.model.context_limit < self.max_seq:
@@ -203,8 +205,6 @@ def parse_args(argv: list[str] | None = None):
         max_new_tokens=None,
     )
     args = p.parse_args(argv)
-    if args.num_users != 1:
-        p.error("V4.1 decode seats one session: --num-users must be 1")
     if args.max_new_tokens is None:
         args.max_new_tokens = args.max_context
     return check_args(p, args, sys_cfg)
