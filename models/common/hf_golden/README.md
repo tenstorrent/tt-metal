@@ -24,6 +24,7 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_xing4_0_29b_a4b.py` | XingChen-AGI/Xing4.0-29B-A4B | repo remote code (MLA + mHC + MoE) |
 | `generate_golden_mimo_v2_6_flash_rl.py` | XiaomiMiMo/MiMo-V2.6-Flash-RL | repo remote code, FP8/MXFP4 dequantized (see below) |
 | `generate_golden_glm_5_3_flash.py` | zai-org/GLM-5.3-Flash-BF16 | transformers `glm5_next` (KDA + DSA + mHC), needs transformers >= 5.17 |
+| `generate_golden_hy3.py` | tencent/Hy3 | transformers `hy_v3` (GQA + MoE) |
 | `generate_golden_hy4_preview.py` | tencent/Hy4-preview | transformers `hy_v4` (DSA + sinks + IHC), needs transformers >= 5.17 |
 | `generate_golden_whole_model.py` | Qwen/Qwen3.8-27B, Llama-3.1-8B, Mistral-Medium-3.5 | whole model, one forward (see below) |
 
@@ -73,6 +74,10 @@ the whole sequence. Both are checked against the installed transformers at start
 the unchunked one (layers 0-8 at isl 10240, all 66 tensors). It needs no prefix: wikitext ppl at isl 10240 is 2.87
 raw, 3.06 with `[gMASK]<sop>` and 17.5 under its chat template. isl 56320 on one H200 with `--attn-chunk 2048`: 4.1
 min from cached weights, 89 GB GPU peak, 117 GB on disk (70 GB trimmed to 15 hidden layers).
+
+**Hy3:** plain GQA + MoE, no prefix (wikitext ppl at isl 10240: 5.61 raw, 5.81 after BOS, 5.88 under its chat
+template). isl 56320 on one H200 with `--attn-chunk 4096`: 2.1 min from cached weights, 40 GB GPU peak, 56 GB on disk.
+Run from a cache downloaded by commit with `--revision <commit>`: offline, `main` has no ref to resolve.
 
 **`--device cuda` under torch 2.11:** `torch.cuda.set_device` rejects a device without an index; pass `cuda:0`.
 
