@@ -26,6 +26,10 @@ from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 # conv1d measured +33 dB vs +29 dB for matmul at 205 vs ~290 ms, but it HANGS the chip
 # once the talker's traces have executed (first call after capture took 15 s, the next
 # one deadlocked), so it is blocked unless TT_QWEN3_ALLOW_UNSAFE_CONV1D=1.
+# "fused" stacks the k shifted inputs on the channel axis and runs ONE matmul against the
+# [k*in, out] weight: every tap sums in fp32 inside the matmul and rounds to bf16 once, as
+# conv1d does, but through the matmul reader only (Blaze codec_fast: the missing fp32
+# accumulation across taps was the decoder's dominant error).
 CONV_MODE = os.environ.get("TT_QWEN3_DECODE_CONV", "matmul")
 # Math fidelity with fp32 accumulation. tt-metal warns that on Wormhole HiFi4 + fp32
 # accumulation can be less accurate than HiFi3 (hardware bug), so this is A/B-able.
@@ -202,6 +206,50 @@ class TTNNConv1d:
 
         return ttnn.reshape(acc, (b, l_out, out_c), memory_config=mc), l_out
 
+    def _fused_call(self, x: ttnn.Tensor, input_length: int) -> Tuple[ttnn.Tensor, int]:
+        """Dense conv1d as one matmul over the tap-stacked input (im2col).
+
+        y[t] = [x[t] | x[t+d] | ... | x[t+(k-1)d]] @ [w_0; w_1; ...; w_{k-1}] + b
+
+        Same products as ``_matmul_call``, but summed in fp32 in one matmul with the bias
+        folded in, so the output is rounded to bf16 once instead of once per tap.
+        """
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        k, d = self.kernel_size, self.dilation
+        in_c, out_c = self.in_channels, self.out_channels
+        b = int(x.shape[0])
+        l_out = input_length - (k - 1) * d
+
+        if self._tap_w is None:
+            w = torch.cat([self.weight_host[:, :, j].T for j in range(k)], dim=0)  # [k*in, out]
+            self._tap_w = ttnn.from_torch(
+                w.contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+            if self.bias_host is not None:
+                self._bias_dev = ttnn.from_torch(
+                    self.bias_host.reshape(1, out_c).to(torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                )
+
+        if k == 1:
+            x_cat = ttnn.reshape(x, (b, input_length, in_c), memory_config=mc)
+            if x_cat.layout != ttnn.TILE_LAYOUT:
+                x_cat = ttnn.to_layout(x_cat, ttnn.TILE_LAYOUT)
+        else:
+            # Tap shifts are not 32-aligned on the length axis, so slice in ROW_MAJOR.
+            x_rm = ttnn.to_layout(ttnn.reshape(x, (b, input_length, in_c), memory_config=mc), ttnn.ROW_MAJOR_LAYOUT)
+            shifts = [ttnn.slice(x_rm, [0, j * d, 0], [b, j * d + l_out, in_c], memory_config=mc) for j in range(k)]
+            x_cat = ttnn.to_layout(ttnn.concat(shifts, dim=-1, memory_config=mc), ttnn.TILE_LAYOUT)
+            for s in shifts:
+                ttnn.deallocate(s)
+        y = ttnn.linear(
+            x_cat, self._tap_w, bias=self._bias_dev, memory_config=mc, compute_kernel_config=self.matmul_compute_config
+        )
+        ttnn.deallocate(x_cat)
+        return y, l_out
+
     def _conv1d_call(self, x: ttnn.Tensor, input_length: int) -> Tuple[ttnn.Tensor, int]:
         """Native ttnn.conv1d with fp32 accumulation, DRAM-sliced when L1 is short.
 
@@ -276,6 +324,8 @@ class TTNNConv1d:
         """
         if self.conv_mode == "conv1d" and self.weight_tt is not None:
             return self._conv1d_call(x, input_length)
+        if self.conv_mode == "fused" and self._can_use_matmul() and self.groups == 1:
+            return self._fused_call(x, input_length)
         if self._can_use_matmul():
             return self._matmul_call(x, input_length)
 

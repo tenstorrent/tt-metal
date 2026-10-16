@@ -50,6 +50,10 @@ VARIANTS = {
     "cont_hifi3": ("continue", {"numerics": "hifi", "conv": "matmul", "fidelity": "HiFi3"}),
     "cont_conv1d_hifi4": ("continue", {"numerics": "hifi", "conv": "conv1d", "fidelity": "HiFi4"}),
     "cont_conv1d_hifi3": ("continue", {"numerics": "hifi", "conv": "conv1d", "fidelity": "HiFi3"}),
+    # Blaze codec_fast ports (2026-10-16): taps fused into one fp32-accumulated matmul, fused snake_beta.
+    "cont_fused": ("continue", {"numerics": "hifi", "conv": "fused", "fidelity": "HiFi4"}),
+    "cont_snake": ("continue", {"numerics": "hifi", "conv": "matmul", "snake": "fused", "fidelity": "HiFi4"}),
+    "cont_fast": ("continue", {"numerics": "hifi", "conv": "fused", "snake": "fused", "fidelity": "HiFi4"}),
 }
 DEFAULT_VARIANTS = ["full_legacy", "full_hifi4", "cont_legacy", "cont_hifi4", "cont_hifi3"]
 NEGATIVE_CONTROL = "cont_hifi4"
@@ -72,6 +76,9 @@ def main():
     p.add_argument("--l1-small", type=int, default=32768)
     p.add_argument("--variants", nargs="+", default=DEFAULT_VARIANTS, choices=sorted(VARIANTS))
     p.add_argument("--negative-control", action="store_true")
+    # Also trace these variants' back-ends after the talker capture (Blaze L2); traced copies
+    # are reported as "<variant>+trace" next to the eager ones on the same codes.
+    p.add_argument("--trace", nargs="*", default=[], choices=sorted(VARIANTS))
     # Decoder bucket sizing only (keeps several decoders' DRAM small); the prompts stay well under it.
     p.add_argument("--max-new-tokens", type=int, default=100)
     p.add_argument("--out", default="generated/qwen3_tts_decoder_ab")
@@ -132,7 +139,9 @@ def main():
                 log(f"  [{tag}] {name}: {s if isinstance(s, str) else f'{s:.2f} dB'}")
 
         # ---- 1. every variant BEFORE any trace exists ----
-        for name in args.variants:
+        for name in list(args.variants) + [f"{n}+trace" for n in args.trace]:
+            if name.endswith("+trace"):
+                VARIANTS[name] = VARIANTS[name[: -len("+trace")]]
             dec, info = build(name)
             report["variants"][name] = info
             if dec is not None:
@@ -154,6 +163,16 @@ def main():
         config.hidden_size = talker_config.hidden_size
         log("init_server_context (captures traces)")
         ctx = api.init_server_context(device, model, config, main_weights)
+
+        for name in [n for n in decoders if n.endswith("+trace")]:
+            t0 = time.perf_counter()
+            try:
+                decoders[name].capture_backend_traces(report["variants"][name]["buckets"])
+                log(f"  traced {name}: {time.perf_counter() - t0:.1f}s")
+            except Exception as e:  # noqa: BLE001
+                log(f"  TRACE FAILED {name}: {type(e).__name__}: {e}")
+                report["variants"][name]["trace_error"] = f"{type(e).__name__}: {e}"
+                del decoders[name]
 
         if args.negative_control:
             name = f"AFTER_CAPTURE_{NEGATIVE_CONTROL}"

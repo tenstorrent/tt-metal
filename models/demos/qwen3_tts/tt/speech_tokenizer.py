@@ -36,6 +36,9 @@ from models.demos.qwen3_tts.tt.ttnn_conv_decoder import TTNNConv1d, backend_comp
 LEGACY_NUMERICS = os.environ.get("TT_QWEN3_DECODE_NUMERICS", "hifi") == "legacy"
 SNAKE_EPS = 1e-9
 DECODE_MIN_BUCKET = int(os.environ.get("TT_QWEN3_DECODE_MIN_BUCKET", "32"))
+# SnakeBeta: "host" = mul, sin, square, mul, add on host-folded parameters; "fused" = one
+# ttnn.snake_beta SFPU op (fp32 inside, one bf16 rounding; Blaze codec_fast step A).
+SNAKE_MODE = os.environ.get("TT_QWEN3_DECODE_SNAKE", "host")
 
 
 @contextmanager
@@ -43,25 +46,27 @@ def _variant_scope(variant: Optional[dict]):
     """Apply a decoder's numerics variant to the module-level switches for one call.
 
     ``variant`` keys (all optional, defaulting to the TT_QWEN3_DECODE_* env vars):
-    ``numerics`` ("hifi" | "legacy"), ``conv`` ("matmul" | "conv1d"), ``fidelity``
+    ``numerics`` ("hifi" | "legacy"), ``conv`` ("matmul" | "conv1d" | "fused"), ``snake``
+    ("host" | "fused"), ``fidelity``
     ("HiFi4" | "HiFi3" | ...). Lets several differently-configured decoders share one
     process, e.g. to A/B them on the same device and requests.
     """
-    global LEGACY_NUMERICS
+    global LEGACY_NUMERICS, SNAKE_MODE
     from models.demos.qwen3_tts.tt import ttnn_conv_decoder as tcd
 
     if not variant:
         yield
         return
-    saved = (LEGACY_NUMERICS, tcd.CONV_MODE, tcd.FIDELITY)
+    saved = (LEGACY_NUMERICS, SNAKE_MODE, tcd.CONV_MODE, tcd.FIDELITY)
     try:
         if "numerics" in variant:
             LEGACY_NUMERICS = variant["numerics"] == "legacy"
+        SNAKE_MODE = variant.get("snake", SNAKE_MODE)
         tcd.CONV_MODE = variant.get("conv", tcd.CONV_MODE)
         tcd.FIDELITY = variant.get("fidelity", tcd.FIDELITY)
         yield
     finally:
-        LEGACY_NUMERICS, tcd.CONV_MODE, tcd.FIDELITY = saved
+        LEGACY_NUMERICS, SNAKE_MODE, tcd.CONV_MODE, tcd.FIDELITY = saved
 
 
 @dataclass
@@ -231,6 +236,34 @@ def transpose_conv1d_nhwc(x_nhwc: ttnn.Tensor, weight: torch.Tensor, bias, strid
             "a shorter kernel leaves some output phases with no taps."
         )
     x_nlc = ttnn.reshape(x_nhwc, (b, L, c), memory_config=mc)
+
+    from models.demos.qwen3_tts.tt import ttnn_conv_decoder as tcd
+
+    if tcd.CONV_MODE == "fused" and k % stride == 0:
+        # All phases in one conv: output channel r*out_c + ch is phase r, so the row-major
+        # reshape below is the interleave (Blaze codec_fast step B, one fp32-accumulated op).
+        taps = k // stride
+        w_all = torch.cat(
+            [weight[:, :, r::stride].permute(1, 0, 2).flip(-1) for r in range(stride)], dim=0
+        ).contiguous()  # [stride*out, in, taps]
+        b_all = None if bias is None else bias.repeat(stride)
+        conv = _cached_conv(
+            cache,
+            f"{key}.phall" if key else None,
+            device=device,
+            in_channels=in_c,
+            out_channels=stride * out_c,
+            kernel_size=taps,
+            padding=0,
+            weight=w_all,
+            bias_tensor=b_all,
+        )
+        y, _ = conv(_causal_left_pad_nlc(x_nlc, taps - 1, device), L + taps - 1)
+        out_total = L * stride
+        if stride > 1:
+            y = ttnn.to_layout(ttnn.reshape(y, (b, L, stride * out_c), memory_config=mc), ttnn.ROW_MAJOR_LAYOUT)
+            y = ttnn.to_layout(ttnn.reshape(y, (b, out_total, out_c), memory_config=mc), ttnn.TILE_LAYOUT)
+        return ttnn.reshape(y, (b, 1, out_total, out_c), memory_config=mc), out_total
 
     phase_nlc = []
     for r in range(stride):
@@ -418,8 +451,15 @@ def _cached_snake_ab(cache, key_prefix, alpha_w, beta_w, channels, device):
     Returns (exp(alpha), 1 / (exp(beta) + eps)) computed on the host in fp32, or the raw
     log-parameters with ``LEGACY_NUMERICS`` (``snake`` then exponentiates on device).
     """
+    fused = SNAKE_MODE == "fused" and not LEGACY_NUMERICS
+    if fused:
+        key_prefix = f"{key_prefix}.fused" if key_prefix else None
     if LEGACY_NUMERICS:
         a_host, b_host = alpha_w, beta_w
+    elif fused:
+        # ttnn.snake_beta divides by its beta: pass exp(beta) + eps, not the reciprocal.
+        a_host = torch.exp(alpha_w.float())
+        b_host = torch.exp(beta_w.float()) + SNAKE_EPS
     else:
         a_host = torch.exp(alpha_w.float())
         b_host = 1.0 / (torch.exp(beta_w.float()) + SNAKE_EPS)
@@ -450,6 +490,10 @@ def snake(x: ttnn.Tensor, alpha_tt: ttnn.Tensor, beta_tt: ttnn.Tensor) -> ttnn.T
     """SnakeBeta on parameters from ``_cached_snake_ab``: x + inv_beta * sin(alpha * x) ** 2."""
     if LEGACY_NUMERICS:
         return ttnn_snake_activation(x, alpha_tt, beta_tt)
+    if SNAKE_MODE == "fused":
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        return ttnn.snake_beta(x, alpha_tt, beta_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     s = ttnn.sin(ttnn.mul(x, alpha_tt))
     return ttnn.add(x, ttnn.mul(ttnn.square(s), beta_tt))
 
@@ -1123,6 +1167,9 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         # path a miss must fail the request loudly instead of touching the chip.
         self.cache_frozen = False
 
+        # bucket -> (trace id, persistent input, output) once capture_backend_traces ran.
+        self._backend_traces = {}
+
         # Audio samples produced per codec frame = product of all upsample factors
         # (upsampler convnext ratios + conv-decoder transposed-conv rates).
         spf = 1
@@ -1697,10 +1744,49 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         x = latent.permute(0, 2, 1).to(torch.bfloat16)  # [1, frames, C]
         if bucket != real_len:
             x = torch.nn.functional.pad(x, (0, 0, 0, bucket - real_len))
+        trace = self._backend_traces.get(bucket)
+        if trace is not None:
+            tid, x_in, out = trace
+            ttnn.synchronize_device(self.device)
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), x_in)
+            ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
+            return self._audio_to_host(out, real_len)
         x_tt = ttnn.from_torch(
             x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         return self._audio_to_host(self._conv_decoder_forward(x_tt), real_len)
+
+    def capture_backend_traces(self, buckets) -> None:
+        """Record one trace of the conv back-end per warmed bucket (Blaze L2).
+
+        Call AFTER the talker's traces are captured (init_server_context) and after
+        warmup_device_decoder: every weight is already prepared, so capture allocates only
+        this bucket's input / output and per-op scratch. Scratch freed after capture can
+        then alias only other traces' scratch, never a persistent buffer, and the input /
+        output are written and read around each replay, so a talker replay in between
+        cannot leave stale data in them.
+        """
+        with _variant_scope(self.variant):
+            for bucket in buckets:
+                bucket = int(bucket)
+                if bucket in self._backend_traces:
+                    continue
+                if bucket not in self._cache_by_bucket:
+                    raise RuntimeError(f"bucket {bucket} not warmed; warm before capturing its trace")
+                self._cache = self._cache_by_bucket[bucket]
+                x_in = ttnn.from_torch(
+                    torch.zeros(1, bucket, self.config.latent_dim, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.synchronize_device(self.device)
+                tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+                out = self._conv_decoder_forward(x_in)
+                ttnn.end_trace_capture(self.device, tid, cq_id=0)
+                ttnn.synchronize_device(self.device)
+                self._backend_traces[bucket] = (tid, x_in, out)
 
     def _select_bucket(self, real_seq_len: int) -> int:
         """Pick the decode bucket for ``real_seq_len`` frames and make its cache active.
