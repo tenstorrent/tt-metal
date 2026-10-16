@@ -893,6 +893,13 @@ tasks:
     - router
     - experts
     layer: 0
+  frozen:
+    at: '2026-10-16T01:51:28'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_12_experts.py: 9045f1b9036f5c7f78bd97dd9a0ae3d068566b6e612285fb52a90bf5c09212eb
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_scaled/quietbox_2x2/s4096_c2048/manifest.json: d0473610bfc20b0c054f13fd5cfd63778792a4081b3caf2544d2937968629be8
 - id: C.swa.shared_expert
   title: swa shared_expert (mlp) on device, layer 0
   step: implement
