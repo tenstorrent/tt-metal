@@ -1230,3 +1230,12 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   absolute limits (fp8 scale floors, epsilons) dominate and the relative nudge does not model them. The own-floor
   checks now run on inputs with real value scales only (golden, chunk0, another layer, mixed); `small` / `big` keep
   their structural-probe limits.
+
+## F86 (2026-10-16): the bring-up forks first
+
+- Owner: agents must look into the bring-up ops (ttnn/ttnn/bringup/INDEX.md) and fork / extend / optimize them before
+  looking in TTNN. DeepSeek-V4.1 FIX.4 was sent (by the overseer) to fork ttnn.experimental.deepseek_prefill.
+  mhc_split_sinkhorn while ttnn.bringup.mhc_pre_xing (mhc_pre_ttnn, AI-generated) already had an fp32 SFPU Sinkhorn.
+- Agent rule 16 (forks first; then TTNN, forked when it needs changing; composing last, with the reason); the plan
+  role maps components to the forks first; the skill: check INDEX.md before a note or fix job names an op, and in
+  every plan / gate commit review.

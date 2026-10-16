@@ -180,6 +180,11 @@ done reaches the agents as a note, so the fix and its lesson land where the next
   once it is settled (`overseer close OV-n --why "..."`); `overseer list` shows them all. Notes are for things the
   agents should know or do, e.g. "the spec's scaled ladder is wrong; do not work around it", "shorten DS41-12 to 600
   characters", "check the other block sizes too", "this fork option already exists".
+- **Point agents at the bring-up forks first.** Before a note or a fix job names an op, check
+  `ttnn/ttnn/bringup/INDEX.md`: an existing fork (often faster and more precise) is used, extended or optimized
+  before any library op is forked or composed (owner; DeepSeek-V4.1 FIX.4 was first sent to fork
+  `ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn` while `ttnn.bringup.mhc_pre_xing` already had an fp32
+  SFPU Sinkhorn).
 - **Change code that passes today: a fix job, at once.** When something must change and no failing test will start
   an agent for it (a per-chunk weight rebuild, a precision raise that a wrong limit forced, a slow path the owner
   rejects), never wait for a later step or the end of the run: `python -m models.demos.common.bringup.overseer fix
@@ -242,7 +247,10 @@ stands, also when it departs from the plan or from the literal wording of an own
 (record why); a change that breaks an explicit owner rule without the tests forcing it is rejected (below). The
 person sees every such change in the end-of-run report (section 4, "At the end").
 
-Judge every agent's work before you let it stand, most of all when a gate passes after a struggle. Read the diff of
+Judge every agent's work before you let it stand, most of all when a gate passes after a struggle. In the plan and in
+every gate commit, check the ops against `ttnn/ttnn/bringup/INDEX.md` first: a step built on a library op or a composed
+path where a bring-up fork already does the job (or could, extended behind an option) goes back as a note or a fix
+job (agent rule 16: forks first, then TTNN, composing last). Read the diff of
 the gate commit (`git show --stat`, then the parts that matter), not only the verdict. Reject it as cheating if it:
 - loosens a threshold, edits a frozen test, a golden, `tasks.yaml`, `state.json` or `results/`, or skips a check;
 - special-cases the test: recognizes the golden input or layer, hard-codes outputs, or reads the golden inside the model;

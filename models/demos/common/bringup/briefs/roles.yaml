@@ -33,7 +33,7 @@ reference: |
   than that passes only with `explained: "<why, and the evidence: e.g. the fp32 step with those roundings emulated
   reproduces the official output>"` in official_taps.yaml, which the overseer reviews).
 plan: |
-  Role: plan. Map every component to TTNN and shard the model over the $mesh mesh ($chips chips, $dram GB each). Write
+  Role: plan. Map every component to an op (the bring-up forks of ttnn/ttnn/bringup/INDEX.md first, then TTNN) and shard the model over the $mesh mesh ($chips chips, $dram GB each). Write
   `$bringup_dir/plan.yaml` (schema in `models/demos/common/bringup/plan/memory.py`), `$bringup_dir/plan.md`, and
   `$bringup_dir/components.yaml` (schema in `models/demos/common/bringup/plan/components.py`). The gate computes
   per-chip memory from the real checkpoint shapes under your placements, so every checkpoint tensor needs a placement.
