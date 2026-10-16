@@ -1,0 +1,57 @@
+{
+ "used": [
+  {
+   "id": "DS41-32",
+   "how": "router vs golden split by routing (test 16's _router_checks carried over) because the CPU reference itself is PCC 0.9846",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-33",
+   "how": "experts vs golden split by routing, row / ratio 2 x the bf16 control, row slope check carried over from test 16",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-34",
+   "how": "shared_expert vs CPU row / ratio limits 2 x the bf16 control (SHARED_CPU_LIMITS) carried over",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-25",
+   "how": "kept the w2 column-span check on the swapped shared_expert's output, now read from the block trail since moe_add is the last step",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a check hooked into the framework's tail check (component._check_tail) only runs for the last swapped step; carrying a later swap test over from an earlier one must move such checks (e.g. DS41-25's span check) to read the step's output from the trail"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "n/a",
+   "evidence": "this task does not touch known_issues.md; DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x (swap_step_calib) the step's own component error, no cap'"
+  }
+ ],
+ "cited_only": [
+  "DS41-20"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.swa_engram.17",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T06:00:49",
+  "head": "5e4237f1d0e",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.swa_engram.17.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_17_moe_add.py"
+  ]
+ }
+}

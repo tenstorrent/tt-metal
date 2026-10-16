@@ -784,3 +784,20 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - OV-4: DS41-20 already states the F73 fix; nothing to change.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_16_shared_expert.py`
   (CPU: `BRINGUP_IMPL=reference` / `stub` / `mutate:<kind> BRINGUP_MUTATE_STEP=shared_expert` in front).
+
+## S.swa_engram.17 test review (layer 1, scaled, attempt 1)
+- Freeze failed: with BRINGUP_IMPL=reference only `swap_router_vs_golden` failed (0.984586 < 0.99, DS41-32): the
+  rendered test lacks tests 14-16's checks. Rebuilt from test_swap_swa_engram_16_shared_expert.py (router, experts,
+  shared-expert checks unchanged: DS41-32 / DS41-33 / DS41-34), SWAPPED + moe_add.
+- Gotcha: the framework's tail check runs only for the LAST swapped step, so test 16's w2-span check (DS41-25,
+  hooked into `_check_tail` under `last.name == "shared_expert"`) would silently stop running. It now reads the
+  shared_expert step's output from the block trail (`seen[st.output]`, shared_out) after the moe_add tail check,
+  and fails if that output is missing.
+- moe_add keeps the framework's checks (rel <= 2 x component error 0.0046, tail <= 0.0033 from the precision
+  model); they already catch every mutation, including noise1e-2 (rel 0.0100).
+- Results: reference PASS, stub FAIL, mutate:bf16 PASS (rel 0.0024, tail 0.00055), mutate:{noise1e-2, scale1.02 /
+  0.98, halfswap, rowshift, quarterzero, sign} with BRINGUP_MUTATE_STEP=moe_add all FAIL; gate (device) PASS:
+  pcc_swap_out 0.999781, device moe_add bit-equal to the CPU step, span 0.00023. Table in the test docstring.
+- OV-4: DS41-20 already states the F73 fix; known_issues.md not touched.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_17_moe_add.py`
+  (CPU: `BRINGUP_IMPL=reference` / `stub` / `mutate:<kind> BRINGUP_MUTATE_STEP=moe_add` in front).
