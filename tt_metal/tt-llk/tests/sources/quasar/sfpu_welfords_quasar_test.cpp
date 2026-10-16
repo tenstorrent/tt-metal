@@ -13,7 +13,7 @@
 #include "sfpu_stub.h"
 
 using namespace ckernel;
-#include "params.h" // WELFORDS_*, IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en
+#include "params.h" // WELFORDS_*, is_fp32_dest_acc_en
 
 // Welford running per-column mean / variance. Tiles stream through Dest one WELFORDS_TILES_PER_BLOCK
 // block per section, so the LREG4/LREG5 state crosses section handoffs; Dest indices are per section.
@@ -103,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
 
     const DataFormat math_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
 
     _llk_math_eltwise_sfpu_init_();
     welfords_init();

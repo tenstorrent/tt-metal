@@ -14,7 +14,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
-    ImpliedMathFormat,
     UnpackerEngine,
     format_dict,
 )
@@ -23,7 +22,6 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     NUM_FACES,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -259,7 +257,6 @@ def test_sfpu_welfords_quasar(formats, scenario_name):
         "sources/quasar/sfpu_welfords_quasar_test.cpp",
         formats,
         templates=[
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
             WELFORDS(
