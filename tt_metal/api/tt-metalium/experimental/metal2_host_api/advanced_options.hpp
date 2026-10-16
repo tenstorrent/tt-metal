@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,16 +15,6 @@
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt_stl/strong_type.hpp>
-
-// The PrefetcherPipe host handle (tt-metalium/experimental/prefetcher_pipe.hpp). Only referenced
-// here, so the pipe implementation is not a dependency of the core Metal 2.0 spec headers.
-// NOTE: PrefetcherPipe stays experimental when the Metal 2.0 host API graduates. This declaration
-//       and its fully qualified use in AdvancedProgramRunArgs must keep the experimental namespace.
-namespace tt::tt_metal::experimental {
-class PrefetcherPipe;
-}  // namespace tt::tt_metal::experimental
-
-namespace tt::tt_metal::experimental {
 
 // ============================================================================
 // Advanced options for Metal 2.0 specs
@@ -46,11 +37,50 @@ namespace tt::tt_metal::experimental {
 //
 // ============================================================================
 
+// Handles to experimental user-managed resource objects.
+// NOTE: These will remain experimental when the Metal 2.0 host API graduates.
+//       These class names will need to retain an explicit experimental:: name scope.
+namespace tt::tt_metal::experimental {
+class PrefetcherPipe;
+class RawAllocation;
+}  // namespace tt::tt_metal::experimental
+
+namespace tt::tt_metal::experimental {
+
 // Name identifying a DataflowBufferSpec within a ProgramSpec.
 using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 // NOTE: DFBSpecName is also declared at the top of dataflow_buffer_spec.hpp, but is
 //       re-declared here for use in AdvancedOptions to avoid circular dependency.
 //       This is legal so long as the declarations are identical, which is compiler-enforced.
+
+struct ProgramAdvancedOptions {
+    ////////////////////////////////////////////////////////////////////////////////
+    // RawAllocation parameters (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // A RawAllocation is a user-managed resource that simply reserves a region of
+    // device memory, with no specific semantics beyond allocation / reservation.
+    // Advanced users can manually allocate Program-scope resources from within a
+    // RawAllocation, rather than rely on the runtime's default allocation behavior.
+    //
+    // RawAllocation parameters specify the properties of the RawAllocation the
+    // Program expects; a matching RawAllocation object must be provided at runtime.
+    Group<RawAllocationParameter> raw_allocation_parameters;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // PrefetcherPipe parameters (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // A PrefetcherPipe is a user-managed resource that facilitates prefetching of
+    // data from external memory into the SRAM memory.
+    //
+    // PrefetcherPipeParameters name the geometry (receivers, ring size, entry size)
+    // of each durable PrefetcherPipe the Program's kernels use.
+    // The actual PrefetcherPipe objects are supplied via
+    // AdvancedProgramRunArgs::prefetcher_pipe_args. A kernel's sender/receiver role is
+    // derived from its WorkUnitSpec node coverage; see prefetcher_pipe_parameter.hpp.
+    Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
+};
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -245,6 +275,36 @@ struct DFBAdvancedOptions {
     bool allow_instance_multi_binding = false;
 
     ////////////////////////////////////////////////////////////////////////////////
+    // Borrowed memory offset
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // When a DFB is built on borrowed memory, its allocated storage is placed at the
+    // base address of the borrowed-from memory object. When borrowing from a
+    // RawAllocation, you may place the DFB's storage location at an arbitrary offset
+    // into that reserved memory region.
+    //
+    // The borrowed_memory_offset feature enables advanced users to handle their own
+    // Program-scope resource allocation decisions (a form of arena allocation).
+    //
+    // CONSTRAINTS:
+    //  - The DFB must fit within the RawAllocation on every node it occupies, i.e.
+    //    borrowed_memory_offset plus size_per_node cannot exceed the RawAllocation's
+    //    per-node size.
+    //  - borrowed_memory_offset must be a multiple of the L1 alignment.
+    //  - A DFB that borrows from a MeshTensor must have a zero offset; this is a
+    //    constraint of the programming model.
+    //  - Specifying an offset for a non-borrowed DFB will trigger an error.
+
+    //
+    // CAUTION:
+    //  - There are NO legality checks concerning the overlap of DFBs or Scratchpads
+    //    allocated within the same RawAllocation. This permits advanced users to
+    //    implement sophisticated temporal memory re-use strategies. Responsibility
+    //    for ensuring correctness lies entirely with the user.
+    //
+    uint32_t borrowed_memory_offset = 0;  // in bytes
+
+    ////////////////////////////////////////////////////////////////////////////////
     // PrefetcherPipe relay (experimental)
     ////////////////////////////////////////////////////////////////////////////////
 
@@ -297,18 +357,42 @@ struct ScratchpadAdvancedOptions {
     // DM cores and Compute cores have cache coherency misalignment that currently
     // lacks ways to synchronize. See: #62551
     bool allow_instance_multi_binding = false;
-};
 
-struct ProgramAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
-    // PrefetcherPipe parameters (experimental)
+    // Borrowed memory (experimental)
     ////////////////////////////////////////////////////////////////////////////////
 
-    // Names the geometry (receivers, ring size, entry size) of each durable PrefetcherPipe the
-    // Program's kernels take part in. The actual PrefetcherPipe objects are supplied via
-    // AdvancedProgramRunArgs::prefetcher_pipe_args. A kernel's sender/receiver role is derived
-    // from its WorkUnitSpec node coverage; see prefetcher_pipe_parameter.hpp.
-    Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
+    // Build the scratchpad on borrowed memory.
+    //
+    // Instead of automatically allocating Program execution-lifetime scratchpad storage,
+    // place the scratchpad inside a user-managed RawAllocation. The scratchpad gets a
+    // non-owning view of the memory for the duration of Program execution.
+    //
+    // The RawAllocationParameter is declared in ProgramAdvancedOptions::raw_allocation_parameters
+    // and bound here. The actual RawAllocation is supplied at runtime via ProgramRunArgs.
+    //
+    // The scratchpad's storage is placed borrowed_memory_offset bytes past the base address of
+    // the RawAllocation. This enables advanced users to handle their own Program-scope resource
+    // allocation decisions (a form of arena allocation), e.g. packing several scratchpads and
+    // DFBs into one RawAllocation.
+    //
+    // Unlike a DFB, a scratchpad cannot borrow from a TensorParameter. To use a tensor's local
+    // shard as kernel working memory, use a regular host TensorBinding and a device-side
+    // LocalTensorAccessor instead.
+    //
+    // CONSTRAINTS:
+    //  - The scratchpad must fit within the RawAllocation on every node it occupies, i.e.
+    //    borrowed_memory_offset plus size_per_node cannot exceed the RawAllocation's per-node size.
+    //  - borrowed_memory_offset must be a multiple of the L1 alignment.
+    //  - borrowed_memory_offset must be zero if borrowed_from is unset.
+    //
+    // CAUTION:
+    //  - There are NO legality checks concerning the overlap of DFBs or Scratchpads
+    //    allocated within the same RawAllocation. This permits advanced users to
+    //    implement sophisticated temporal memory re-use strategies. Responsibility
+    //    for ensuring correctness lies entirely with the user.
+    std::optional<RawAllocationParamName> borrowed_from = std::nullopt;
+    uint32_t borrowed_memory_offset = 0;  // in bytes
 };
 
 struct AdvancedKernelRunArgs {
