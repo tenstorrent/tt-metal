@@ -35,20 +35,9 @@ def _sharded(shape):
     )
 
 
-@pytest.mark.parametrize("tile_shape,dtype,fp32_dest", CASES)
-@pytest.mark.parametrize("full_sync", [False, True])
-def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runtime_output=False):
-    if device.arch() not in (ttnn.device.Arch.BLACKHOLE, ttnn.device.Arch.WORMHOLE_B0):
-        pytest.skip("Blackhole/Wormhole reduction-mask regression")
+def _run(device, source, tile_shape, dtype, fp32_dest, full_sync, runtime_output=False, leave_row_mask=False):
     height, width = tile_shape
     tile = ttnn.Tile(tile_shape)
-    # Different positive values in the two source tiles expose wrong-face selection and wrong DEST addressing.
-    source = (torch.arange(height * 2 * width, dtype=torch.float32) + 1).reshape(1, 1, height, 2 * width)
-    if dtype == ttnn.bfloat16:
-        source = source.bfloat16().float()
-    elif dtype == ttnn.bfloat8_b:
-        # Every value shares the [64, 128) exponent, so the 7-bit BFP mantissa holds it exactly.
-        source = 64 + source % 64
     inp = ttnn.from_torch(
         source,
         dtype=dtype,
@@ -76,7 +65,7 @@ def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runti
                 kernel_source=KERNEL,
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=_single_core(),
-                compile_time_args=[0, 16, REPEATS, int(runtime_output)],
+                compile_time_args=[0, 16, REPEATS, int(runtime_output), int(leave_row_mask)],
                 runtime_args=[(ttnn.CoreCoord(0, 0), [17])],
                 config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest, dst_full_sync_en=full_sync),
             )
@@ -84,7 +73,25 @@ def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runti
         semaphores=[],
         cbs=cbs,
     )
-    actual = ttnn.to_torch(ttnn.generic_op([inp, out], program))[0, 0].float()
+    return ttnn.to_torch(ttnn.generic_op([inp, out], program))[0, 0].float()
+
+
+@pytest.mark.parametrize("tile_shape,dtype,fp32_dest", CASES)
+@pytest.mark.parametrize("full_sync", [False, True])
+def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runtime_output=False, after_row_mask=False):
+    if device.arch() not in (ttnn.device.Arch.BLACKHOLE, ttnn.device.Arch.WORMHOLE_B0):
+        pytest.skip("Blackhole/Wormhole reduction-mask regression")
+    height, width = tile_shape
+    # Different positive values in the two source tiles expose wrong-face selection and wrong DEST addressing.
+    source = (torch.arange(height * 2 * width, dtype=torch.float32) + 1).reshape(1, 1, height, 2 * width)
+    if dtype == ttnn.bfloat16:
+        source = source.bfloat16().float()
+    elif dtype == ttnn.bfloat8_b:
+        # Every value shares the [64, 128) exponent, so the 7-bit BFP mantissa holds it exactly.
+        source = 64 + source % 64
+    if after_row_mask:
+        _run(device, source, tile_shape, dtype, fp32_dest, full_sync, leave_row_mask=True)
+    actual = _run(device, source, tile_shape, dtype, fp32_dest, full_sync, runtime_output)
     inputs = [source[0, 0, :, i * width : (i + 1) * width] for i in range(2)]
     expected_section = inputs.copy()
     for dim in ("row", "col", "scalar"):
@@ -107,3 +114,10 @@ def test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runti
 @pytest.mark.parametrize("full_sync", [False, True])
 def test_pack_reduce_mask_runtime_output(device, tile_shape, dtype, fp32_dest, full_sync):
     test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync, runtime_output=True)
+
+
+@pytest.mark.parametrize(
+    "tile_shape,dtype,fp32_dest", [((32, 32), ttnn.bfloat16, False), ((16, 32), ttnn.float32, True)]
+)
+def test_pack_reduce_mask_after_kernel_without_clear(device, tile_shape, dtype, fp32_dest):
+    test_pack_reduce_mask(device, tile_shape, dtype, fp32_dest, full_sync=False, after_row_mask=True)
