@@ -73,6 +73,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.ulp import ulp_distance, ulp_stats
+from helpers.ulp_budget_diff import RECORDED_SKIP
 from helpers.ulp_sweep import (
     golden_input,
     measurable_mask,
@@ -287,18 +288,19 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     else:
         unmeasurable = None
     if unmeasurable:
-        if ulp_sweep.EMIT:
-            ulp_sweep.record_unmeasurable(mathop.name, key, reason)
-            return
-        if not gated:
-            # Skipped, but on the record: the row names how many lanes went non-finite,
+        if ulp_sweep.EMIT or not gated:
+            # On the record either way: the row names how many lanes went non-finite,
             # and the headroom report fails a run where that count appears or grows.
             _record_ulp_measurement(
                 distance,
                 mask=mask,
                 nonfinite=int(overflowed.sum()),
             )
-            pytest.skip(f"{cell}: not measurable -- {unmeasurable}")
+        if ulp_sweep.EMIT:
+            ulp_sweep.record_unmeasurable(mathop.name, key, reason)
+            return
+        if not gated:
+            pytest.skip(f"{cell}: {RECORDED_SKIP} -- not measurable: {unmeasurable}")
         raise AssertionError(f"{cell}: {unmeasurable}")
 
     if ulp_sweep.EMIT or not gated:
@@ -312,7 +314,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         # A skip, not a pass: nothing here judged the cell. Without --ulp-measure there
         # is no record for the headroom report either, and a regression would show green.
         pytest.skip(
-            f"{cell}: on the tolerance metric, so not gated here; measured max "
+            f"{cell}: {RECORDED_SKIP} -- on the tolerance metric; measured max "
             f"{int(stats['max'])} ULP over {lanes} lanes. The headroom report "
             "(ulp_budget_diff.py headroom over --ulp-measure) holds it to its row's "
             "recorded figure."
