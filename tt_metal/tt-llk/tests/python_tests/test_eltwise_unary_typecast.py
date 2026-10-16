@@ -115,6 +115,27 @@ def _whole_number_float_spec(high: int) -> StimuliSpec:
     return StimuliSpec(distribution=dist, seed=0)
 
 
+def _matrix_spec(formats: InputOutputFormat) -> StimuliSpec:
+    """Stimuli for one (input, output) pair of the typecast matrix.
+
+    * integer -> block-float: small ints (0..15) so int->fp16b->bfp is exact
+      (full-range ints would differ from the golden by >1 bfp ULP);
+    * integer -> anything else: bounded range (0..255) to avoid 0xFFFF values
+      that pack into 0xFFFFFFFF on readback, which BH NOC treats as a timeout;
+    * float / block-float input: whole numbers so int conversions are exact and
+      bf16 is lossless; small range when a block-float is involved so the
+      shared-exponent quantization is (near-)exact per 16-elem block.
+    """
+    bfp_involved = _is_block_float(formats.input_format) or _is_block_float(
+        formats.output_format
+    )
+    if formats.input_format.is_integer():
+        return (
+            StimuliSpec.uniform(0, 15) if bfp_involved else StimuliSpec.uniform(0, 255)
+        )
+    return _whole_number_float_spec(16 if bfp_involved else 201)
+
+
 def _preserve_fp32_precision(formats: InputOutputFormat) -> bool:
     """preserve_fp32_precision exactly as ttnn.typecast computes it.
 
@@ -163,25 +184,37 @@ def test_eltwise_unary_typecast(
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
 ):
-    # Stimuli selection per input/output dtype:
-    #  * integer -> block-float: small ints (0..15) so int->fp16b->bfp is exact
-    #    (full-range ints would differ from the golden by >1 bfp ULP);
-    #  * integer -> anything else: bounded range (0..255) to avoid 0xFFFF values
-    #    that pack into 0xFFFFFFFF on readback, which BH NOC treats as a timeout;
-    #  * float / block-float input: whole numbers so int conversions are exact and
-    #    bf16 is lossless; small range when a block-float is involved so the
-    #    shared-exponent quantization is (near-)exact per 16-elem block.
-    bfp_involved = _is_block_float(formats.input_format) or _is_block_float(
-        formats.output_format
+    _run_typecast(
+        formats, dest_acc, approx_mode, input_dimensions, _matrix_spec(formats)
     )
-    if formats.input_format.is_integer():
-        spec_A = (
-            StimuliSpec.uniform(0, 15) if bfp_involved else StimuliSpec.uniform(0, 255)
-        )
-    else:
-        spec_A = _whole_number_float_spec(16 if bfp_involved else 201)
 
-    _run_typecast(formats, dest_acc, approx_mode, input_dimensions, spec_A)
+
+@parametrize(
+    formats=[
+        pair
+        for pair in TYPECAST_PAIRS
+        if pair.input_format == DataFormat.UInt16
+        and pair.output_format
+        in (DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+    ],
+    dest_acc=[DestAccumulation.Yes],
+    approx_mode=[ApproximationMode.No],
+    input_dimensions=[[32, 32]],
+)
+def test_eltwise_unary_typecast_uint16_to_fp16b_32bit_dest(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+):
+    # ttnn.typecast runs this pair in 16-bit Dest (the matrix above pins dest_acc
+    # to No), but the compute API allows it with fp32_dest_acc_en too. In 32-bit
+    # Dest the UInt16 datum occupies the low half of the 32-bit word, so a 16-bit
+    # Dest load reads the other half; the kernel has to load the whole word and
+    # mask it, as every other UInt16-input typecast does.
+    _run_typecast(
+        formats, dest_acc, approx_mode, input_dimensions, _matrix_spec(formats)
+    )
 
 
 @parametrize(

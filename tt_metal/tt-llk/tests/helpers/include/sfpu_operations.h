@@ -258,7 +258,8 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
     }
     else if constexpr (IN == DataFormat::UInt16 && OUT == DataFormat::Float16_b)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_fp16b, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_fp16b, (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE), dst_index, VectorMode::RC);
     }
     else if constexpr (IN == DataFormat::Int32 && OUT == DataFormat::Float16_b)
     {
@@ -294,7 +295,8 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
     }
     else if constexpr (IN == DataFormat::UInt16 && OUT == DataFormat::Bfp8_b)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_fp16b, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_fp16b, (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE), dst_index, VectorMode::RC);
     }
     else if constexpr (IN == DataFormat::Bfp8_b && OUT == DataFormat::Int32)
     {
@@ -353,7 +355,8 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
     }
     else if constexpr (IN == DataFormat::UInt16 && OUT == DataFormat::Bfp4_b)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_fp16b, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_fp16b, (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE), dst_index, VectorMode::RC);
     }
     else if constexpr (IN == DataFormat::Bfp4_b && OUT == DataFormat::Int32)
     {
