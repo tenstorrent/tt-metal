@@ -24,8 +24,7 @@ __attribute__((noinline)) void calculate_softplus_fresh_cpp(const float beta, co
     {
         const sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat t         = beta * val;
-        // Linear region softplus(t)/beta = val: explicit identity arm.
-        sfpi::vFloat result = val;
+        // Outside the region softplus(t)/beta = val, which Dst already holds.
         v_if (t < threshold)
         {
             const sfpi::vFloat a = sfpi::abs(t);
@@ -63,10 +62,9 @@ __attribute__((noinline)) void calculate_softplus_fresh_cpp(const float beta, co
             const sfpi::vFloat residual = e * p;
 #endif
             const sfpi::vFloat sp = sfpi::max(t, 0.0f) + residual;
-            result                = sfpi::convert<sfpi::vFloat16b>(beta_reciprocal * sp, sfpi::RoundMode::Nearest);
+            sfpi::dst_reg[0]      = sfpi::convert<sfpi::vFloat16b>(beta_reciprocal * sp, sfpi::RoundMode::Nearest);
         }
         v_endif;
-        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
