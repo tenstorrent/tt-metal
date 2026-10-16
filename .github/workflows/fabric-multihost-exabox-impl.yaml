@@ -103,6 +103,9 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.test-group.runs_on }}
+    # SC4 container initialization provisions remote worker pods and counts against
+    # the job timeout. Two days; other supercluster configs keep the six-hour default.
+    timeout-minutes: ${{ inputs.sp-config == 'sc4' && 2880 || 360 }}
     # Consumed by the multihost runner container hook to provision remote worker pods.
     # Job steps still run on the CPU/control runner; the hook handles worker image setup.
     container:
