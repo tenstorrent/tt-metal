@@ -126,7 +126,9 @@ class Qwen3TTSTalkerForConditionalGeneration:
         # vLLM ends the request by the context length, which bounds the frames this prefill
         # must make room for.
         self.request, _ = self.pipeline.start(embeddings, self.max_seq_len - prompt_lens[0], feed)
-        return self._logits()
+        # The talker's config declares M-RoPE, so the plugin reads a position delta per row.
+        # Its three axes carry the same positions throughout, so the delta is zero.
+        return self._logits(), torch.zeros(1, dtype=torch.long)
 
     def decode_forward(self, tokens, start_pos, page_table, kv_cache, enable_trace=False, slot_remap=None, **kwargs):
         if slot_remap is not None and torch.as_tensor(slot_remap).reshape(-1)[0] != 0:

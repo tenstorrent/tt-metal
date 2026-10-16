@@ -90,7 +90,7 @@ def test_the_stage_reproduces_the_pipelines_frames(device, expect_error):
     page_table = (blocks + 1).to(torch.int32).reshape(1, -1)  # block 0 is vLLM's null block
     stage.pipeline.reseed(SEED)
 
-    logits = stage.prefill_forward(
+    logits, rope_deltas = stage.prefill_forward(
         tokens=torch.ones(1, prompt_len, dtype=torch.int32),
         start_pos=torch.zeros(1, dtype=torch.int32),
         prompt_lens=torch.tensor([prompt_len]),
@@ -99,6 +99,7 @@ def test_the_stage_reproduces_the_pipelines_frames(device, expect_error):
         empty_slots=[0],
         stage_inputs=[info],
     )
+    assert rope_deltas.tolist() == [0], "M-RoPE's three axes agree, so no position delta"
     assert stage.pop_stage_outputs() == [], "prefill completes no frame"
     for step in range(STEPS):
         assert tuple(logits.shape) == (1, 1, expected_logits[step].numel())
