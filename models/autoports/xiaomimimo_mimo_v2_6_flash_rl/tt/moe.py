@@ -37,28 +37,40 @@ class TtMiMoMoE:
         self.inter_local = cfg.moe_intermediate_size // tp
         prefix = f"layer{layer_idx}_moe_tp{tp}"
 
-        w_router = bias = w_gate = w_up = w_down = None
+        w_router = bias = w_gate_up = w_down = None
         if router is not None:
             w_router = router["weight"].T.contiguous().to(torch.bfloat16)  # [hidden, E]
             bias = router["e_score_correction_bias"].float().reshape(1, 1, 1, -1)
         if experts is not None:
-            # gate/up [E, I, H] -> [1, E, H, I]: TP shards I. down [E, H, I] -> [1, E, I, H]: TP shards I.
-            w_gate = experts["gate_proj"].transpose(1, 2).unsqueeze(0)
-            w_up = experts["up_proj"].transpose(1, 2).unsqueeze(0)
+            # gate/up [E, I, H] -> one [1, E, H, tp * 2 * I_local] tensor: chip c's slice holds
+            # [gate_c | up_c], so one sparse_matmul makes both (twice the N width, twice the cores).
+            # down [E, H, I] -> [1, E, I, H]: TP shards I.
+            g = experts["gate_proj"].transpose(1, 2)
+            u = experts["up_proj"].transpose(1, 2)
+            il = self.inter_local
+            w_gate_up = torch.cat(
+                [torch.cat([g[..., c * il : (c + 1) * il], u[..., c * il : (c + 1) * il]], dim=-1) for c in range(tp)],
+                dim=-1,
+            ).unsqueeze(0)
+            del g, u
             w_down = experts["down_proj"].transpose(1, 2).unsqueeze(0)
 
         rep = plan.replicate()
         self.w_router = as_weight(w_router, plan, rep, ttnn.bfloat16, cache_name(cache_dir, prefix, "router"))
         self.score_bias = as_weight(bias, plan, rep, ttnn.float32, cache_name(cache_dir, prefix, "score_bias"))
-        self.w_gate = as_weight(w_gate, plan, plan.shard(-1), expert_dtype, cache_name(cache_dir, prefix, "w_gate"))
-        self.w_up = as_weight(w_up, plan, plan.shard(-1), expert_dtype, cache_name(cache_dir, prefix, "w_up"))
+        self.w_gate_up = as_weight(
+            w_gate_up, plan, plan.shard(-1), expert_dtype, cache_name(cache_dir, prefix, "w_gate_up")
+        )
+        del w_gate_up
         self.w_down = as_weight(w_down, plan, plan.shard(-2), expert_dtype, cache_name(cache_dir, prefix, "w_down"))
 
         self._zero_cache = {}
         self.router_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True)
         self.expert_config = compute_config(ttnn.MathFidelity.HiFi2, fp32_acc=True)
-        self.gate_up_program = mcast_1d_config((4, 2), TILE, self.inter_local, self.hidden, in0_block_w=4)
-        self.down_program = mcast_1d_config((8, 4), TILE, self.hidden, self.inter_local, in0_block_w=4)
+        # Measured on BH (decode, 32 experts): wider K blocks cut the per-expert handshakes; down over 8x8 cores.
+        self.gate_up_program = mcast_1d_config((8, 2), TILE, 2 * self.inter_local, self.hidden, in0_block_w=64)
+        self.down_program = mcast_1d_config((8, 8), TILE, self.hidden, self.inter_local, in0_block_w=8)
+        self.decode_users = None
 
     def _zeros(self, num_tokens):
         """Cached [1, 1, T, E] zeros. ``ttnn.zeros`` writes from the host, which a trace capture cannot do,
@@ -73,18 +85,9 @@ class TtMiMoMoE:
             )
         return self._zero_cache[num_tokens]
 
-    def route(self, x, token_mask=None):
-        """x [1, 1, T, hidden] -> dense routing weights [1, 1, T, E] (bf16; zero off the top-8)."""
-        num_tokens = x.shape[-2]
-        logits = ttnn.linear(
-            x,
-            self.w_router,
-            dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.router_config,
-        )
+    def _topk(self, logits):
+        """fp32 router logits [1, 1, T, E] -> (top-k indices uint32, normalized unbiased weights fp32), [1, 1, T, k]."""
         scores = ttnn.sigmoid(logits)
-        logits.deallocate(True)
         biased = ttnn.add(scores, self.score_bias)
         _, indices = ttnn.topk(biased, k=self.cfg.num_experts_per_tok, dim=-1, largest=True, sorted=True)
         biased.deallocate(True)
@@ -98,6 +101,20 @@ class TtMiMoMoE:
             weights = normed
         if self.cfg.routed_scaling_factor != 1.0:
             weights = ttnn.mul(weights, self.cfg.routed_scaling_factor)
+        return indices, weights
+
+    def route(self, x, token_mask=None):
+        """x [1, 1, T, hidden] -> dense routing weights [1, 1, T, E] (bf16; zero off the top-8)."""
+        num_tokens = x.shape[-2]
+        logits = ttnn.linear(
+            x,
+            self.w_router,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.router_config,
+        )
+        indices, weights = self._topk(logits)
+        logits.deallocate(True)
         weights_bf16 = ttnn.typecast(weights, ttnn.bfloat16)
         weights.deallocate(True)
         zeros = self._zeros(num_tokens)  # scatter is out of place, so one cached zero tensor per T is safe
@@ -109,6 +126,108 @@ class TtMiMoMoE:
             dense.deallocate(True)
             dense = masked
         return dense
+
+    def _swiglu(self, gate_up):
+        """[..., 2 * I] (gate | up) -> silu(gate) * up, [..., I]."""
+        shape = list(gate_up.shape)
+        I = self.inter_local
+        gate = ttnn.slice(gate_up, [0] * len(shape), shape[:-1] + [I])
+        up = ttnn.slice(gate_up, [0] * (len(shape) - 1) + [I], shape)
+        gate_up.deallocate(True)
+        act = ttnn.mul(
+            gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        gate.deallocate(True)
+        up.deallocate(True)
+        return act
+
+    def set_decode_users(self, num_users):
+        """Decode serves users in slots [0, num_users): their (user, top-k) pairs are the experts computed."""
+        self.decode_users = num_users
+        pairs = num_users * self.cfg.num_experts_per_tok
+        # pair j = user * k + slot -> one-hot row of its token in the 32-row tile: [1, pairs, 32, 1]
+        onehot = torch.zeros(1, pairs, TILE, 1)
+        onehot[0, torch.arange(pairs), torch.arange(pairs) // self.cfg.num_experts_per_tok, 0] = 1
+        rep = self.plan.replicate()
+        self.pair_onehot = ttnn.from_torch(
+            onehot, device=self.plan.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep
+        )
+        # indexed sparse_matmul still takes a sparsity operand sized to the expert axis; it is not read
+        self.all_experts = ttnn.from_torch(
+            torch.ones(1, 1, 1, self.num_experts),
+            device=self.plan.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=rep,
+        )
+
+    def forward_decode(self, x, token_mask):
+        """Decode: x [1, 1, 32, hidden], users in rows [0, decode_users). Computes only the selected experts.
+
+        Each (user, k) pair is one entry of an indexed sparse_matmul over the 256 experts: gate|up for the
+        pair's expert on all 32 rows, the routing weight applied to the pair's own row (the other rows are
+        zeroed), down for the same expert, then a sum over pairs. Nothing is materialized per expert."""
+        U, k = self.decode_users, self.cfg.num_experts_per_tok
+        pairs = U * k
+        H, I = self.hidden, self.inter_local
+        logits = ttnn.linear(
+            x,
+            self.w_router,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.router_config,
+        )
+        indices, weights = self._topk(logits)
+        logits.deallocate(True)
+
+        idx_u = ttnn.slice(indices, (0, 0, 0, 0), (1, 1, U, k))
+        # reshape does not take uint16, so flatten while uint32, then narrow to the uint16 stick sparse_matmul wants
+        ids = ttnn.typecast(ttnn.reshape(ttnn.to_layout(idx_u, ttnn.ROW_MAJOR_LAYOUT), (1, 1, 1, pairs)), ttnn.uint16)
+        w_u = ttnn.slice(weights, (0, 0, 0, 0), (1, 1, U, k))
+        mask_u = ttnn.slice(token_mask, (0, 0, 0, 0), (1, 1, U, 1))
+        w_u = ttnn.mul(w_u, ttnn.typecast(mask_u, ttnn.float32))
+        w_col = ttnn.to_layout(
+            ttnn.reshape(ttnn.to_layout(ttnn.typecast(w_u, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT), (1, pairs, 1, 1)),
+            ttnn.TILE_LAYOUT,
+        )
+        row_weight = ttnn.mul(self.pair_onehot, w_col)  # [1, pairs, 32, 1]
+        for t in (indices, weights, idx_u, w_u, mask_u, w_col):
+            t.deallocate(True)
+
+        out_tile = ttnn.Tile([TILE, TILE])
+        gate_up = ttnn.sparse_matmul(
+            x,
+            self.w_gate_up,
+            sparsity=self.all_experts,
+            indices=ids,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=out_tile,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.expert_config,
+            program_config=self.gate_up_program,
+        )  # [1, 1, 1, pairs, 32, 2I]
+        act = self._swiglu(ttnn.reshape(gate_up, (1, pairs, TILE, 2 * I)))
+        act_w = ttnn.mul(act, row_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        act.deallocate(True)
+        row_weight.deallocate(True)
+        down = ttnn.sparse_matmul(
+            act_w,
+            self.w_down,
+            sparsity=self.all_experts,
+            indices=ids,
+            is_input_a_sparse=True,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=out_tile,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.expert_config,
+            program_config=self.down_program,
+        )  # [1, pairs, 32, H]
+        act_w.deallocate(True)
+        ids.deallocate(True)
+        out = ttnn.sum(down, dim=1, keepdim=True)  # [1, 1, 32, H]
+        down.deallocate(True)
+        return self.plan.all_reduce(out)
 
     def _experts(self, x, dense):
         """x [1, 1, T, hidden], dense [1, 1, T, E] with T a multiple of 32 -> partial [1, 1, T, hidden]."""
@@ -130,15 +249,8 @@ class TtMiMoMoE:
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.expert_config,
         )
-        gate = ttnn.sparse_matmul(x4, self.w_gate, program_config=self.gate_up_program, **mm_kwargs)
-        up = ttnn.sparse_matmul(x4, self.w_up, program_config=self.gate_up_program, **mm_kwargs)
-        gate = ttnn.reshape(gate, (groups, E, TILE, I))
-        up = ttnn.reshape(up, (groups, E, TILE, I))
-        act = ttnn.mul(
-            gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        gate.deallocate(True)
-        up.deallocate(True)
+        gate_up = ttnn.sparse_matmul(x4, self.w_gate_up, program_config=self.gate_up_program, **mm_kwargs)
+        act = self._swiglu(ttnn.reshape(gate_up, (groups, E, TILE, 2 * I)))
 
         down_sparsity = ttnn.reshape(sparsity, (1, 1, groups, E))
         down = ttnn.sparse_matmul(

@@ -103,7 +103,7 @@ class TtMiMoModel:
             t0 = time.time()
             # Bump a layer's tag when its cached tensor set changes, so a warm cache from an older layout
             # is rebuilt instead of loaded with tensors missing (global layers gained grouped decode weights).
-            tag = f"layer{i}_tp{plan.tp}" + ("" if cfg.is_swa(i) else "_kvsplit")
+            tag = f"layer{i}_tp{plan.tp}" + ("" if cfg.is_swa(i) else "_kvsplit") + ("_gu" if cfg.is_moe(i) else "")
             weights = None if warm(tag) else load_layer_weights(ckpt, cfg, i)
             self.layers.append(
                 TtMiMoDecoderLayer(
@@ -146,6 +146,8 @@ class TtMiMoModel:
             )
             self.kv_caches.append(layer.attn.allocate_kv_cache(num_blocks, self.block_size, self.kv_dtype))
             tables.setdefault(layer.is_swa, table)
+            if layer.is_moe:
+                layer.mlp.set_decode_users(num_users)
         self.set_page_tables(tables)
 
     def set_page_tables(self, tables):

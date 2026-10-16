@@ -21,8 +21,46 @@ class TtRMSNorm:
         self.weight = as_weight(w, plan, plan.replicate(), ttnn.bfloat16, cache_file, layout=ttnn.ROW_MAJOR_LAYOUT)
         self.eps = eps
         self.config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_acc=False)
+        # Decode (one tile row): an interleaved rms_norm runs on a single core (67 us); width-shard the
+        # hidden dim over 8 x 4 cores instead.
+        grid = ttnn.CoreGrid(y=4, x=8)
+        self.decode_grid = grid
+
+    def _decode_configs(self, hidden):
+        cores = self.decode_grid.x * self.decode_grid.y
+        shard_w = hidden // cores
+        mem = ttnn.create_sharded_memory_config(
+            shape=(TILE, shard_w),
+            core_grid=self.decode_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        program = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(self.decode_grid.x, self.decode_grid.y),
+            subblock_w=shard_w // TILE,
+            block_h=1,
+            block_w=shard_w // TILE,
+            inplace=False,
+        )
+        return mem, program
 
     def __call__(self, x):
+        if x.shape[-2] == TILE:
+            mem, program = self._decode_configs(x.shape[-1])
+            x_sharded = ttnn.to_memory_config(x, mem)
+            y = ttnn.rms_norm(
+                x_sharded,
+                epsilon=self.eps,
+                weight=self.weight,
+                program_config=program,
+                memory_config=mem,
+                compute_kernel_config=self.config,
+            )
+            x_sharded.deallocate(True)
+            out = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+            y.deallocate(True)
+            return out
         return ttnn.rms_norm(
             x,
             epsilon=self.eps,
@@ -98,9 +136,12 @@ class TtMiMoDecoderLayer:
         else:
             self.mlp = TtMiMoDenseMLP(plan, layer_idx, w.get("mlp"), cache_dir=cache_dir, weight_dtype=mlp_dtype)
 
-    def _ffn(self, x, token_mask):
+    def _ffn(self, x, token_mask, decode=False):
         h = self.post_norm(x)
-        out = self.mlp.forward(h, token_mask)
+        if decode and self.is_moe and self.mlp.decode_users is not None:
+            out = self.mlp.forward_decode(h, token_mask)
+        else:
+            out = self.mlp.forward(h, token_mask)
         h.deallocate(True)
         y = ttnn.add(x, out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out.deallocate(True)
@@ -126,6 +167,6 @@ class TtMiMoDecoderLayer:
         h.deallocate(True)
         x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
-        y = self._ffn(x2, token_mask)
+        y = self._ffn(x2, token_mask, decode=True)
         x2.deallocate(True)
         return y
