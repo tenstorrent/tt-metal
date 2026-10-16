@@ -4075,6 +4075,13 @@ class EltwiseBinaryGolden(FidelityMasking):
 class BinarySFPUGolden(EltwiseBinaryGolden):
     _TENSOR_OPS = frozenset(
         {
+            MathOperation.SfpuElwLt,
+            MathOperation.SfpuElwGt,
+            MathOperation.SfpuElwLe,
+            MathOperation.SfpuElwGe,
+            MathOperation.SfpuElwEq,
+            MathOperation.SfpuElwNe,
+            MathOperation.SfpuIsclose,
             MathOperation.SfpuElwadd,
             MathOperation.SfpuElwsub,
             MathOperation.SfpuElwmul,
@@ -4543,22 +4550,22 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
     # reach the result. The unary comparisons keep the total order -- different kernels, no
     # guard either.
     def _lt(self, t1, t2):
-        return float(t1 < t2)
+        return (t1 < t2).to(torch.float32)
 
     def _gt(self, t1, t2):
-        return float(t1 > t2)
+        return (t1 > t2).to(torch.float32)
 
     def _le(self, t1, t2):
-        return float(t1 <= t2)
+        return (t1 <= t2).to(torch.float32)
 
     def _ge(self, t1, t2):
-        return float(t1 >= t2)
+        return (t1 >= t2).to(torch.float32)
 
     def _eq(self, t1, t2):
-        return float(t1 == t2)
+        return (t1 == t2).to(torch.float32)
 
     def _ne(self, t1, t2):
-        return float(t1 != t2)
+        return (t1 != t2).to(torch.float32)
 
     @staticmethod
     def _is_float(t):
@@ -4720,7 +4727,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             atol=1e-8,
             equal_nan=False,
         )
-        return 1.0 if bool(close) else 0.0
+        return close.to(torch.float32)
 
     def _logsigmoid(self, t1, t2):
         # logsigmoid(x) = log(sigmoid(x)) = -softplus(-x), with x = t1. The kernel takes

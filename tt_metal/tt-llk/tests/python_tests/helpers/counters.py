@@ -9,9 +9,9 @@ import pandas as pd
 from loguru import logger
 from tt_llk_perf.headers import bank_tables
 from tt_llk_perf.metrics import quasar_l1_client_label
+from ttexalens.tt_exalens_lib import read_words_from_device
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
-from .device_io import read_words_from_device
 from .test_config import TestConfig
 
 COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS

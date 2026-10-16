@@ -298,11 +298,10 @@ def pack_bfp4_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
         flattened_tensor, block_size, magnitude_bits=3
     )
 
-    packed_mantissas = []
-    for i in range(0, len(all_mantissas), 2):
-        low = all_mantissas[i]
-        high = all_mantissas[i + 1] if (i + 1) < len(all_mantissas) else 0
-        packed_mantissas.append((high << 4) | low)
+    mantissas = np.asarray(
+        all_mantissas + [0] * (-len(all_mantissas) % 2), dtype=np.uint8
+    ).reshape(-1, 2)
+    packed_mantissas = (mantissas[:, 0] | (mantissas[:, 1] << 4)).tolist()
 
     return exponents + packed_mantissas
 
@@ -343,13 +342,15 @@ def pack_bfp2_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
         flattened_tensor, block_size, magnitude_bits=1
     )
 
-    packed_mantissas = []
-    for i in range(0, len(all_mantissas), 4):
-        e0 = all_mantissas[i] if i < len(all_mantissas) else 0
-        e1 = all_mantissas[i + 1] if (i + 1) < len(all_mantissas) else 0
-        e2 = all_mantissas[i + 2] if (i + 2) < len(all_mantissas) else 0
-        e3 = all_mantissas[i + 3] if (i + 3) < len(all_mantissas) else 0
-        packed_mantissas.append((e3 << 6) | (e2 << 4) | (e1 << 2) | e0)
+    mantissas = np.asarray(
+        all_mantissas + [0] * (-len(all_mantissas) % 4), dtype=np.uint8
+    ).reshape(-1, 4)
+    packed_mantissas = (
+        mantissas[:, 0]
+        | (mantissas[:, 1] << 2)
+        | (mantissas[:, 2] << 4)
+        | (mantissas[:, 3] << 6)
+    ).tolist()
 
     return exponents + packed_mantissas
 
