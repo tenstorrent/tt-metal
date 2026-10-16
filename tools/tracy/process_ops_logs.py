@@ -710,8 +710,8 @@ def _enrich_ops_from_perf_csv(
                 # that records the decode trace up front), so the device produced no data for
                 # any of its ops. Both sources agree: no REPLAY marker from the host and no rows
                 # from the device. Leave these ops without device data instead of failing the
-                # whole report. A trace that the host did replay keeps the assert below, so a
-                # device report that lost every row of a replayed trace is still an error.
+                # whole report. An op of a trace that the host did replay goes to the check below, so a
+                # device report that lost rows of a replayed trace is still reported.
                 dropped_ops_by_trace[host_trace_id] = dropped_ops_by_trace.get(host_trace_id, 0) + 1
                 continue
 
@@ -720,10 +720,22 @@ def _enrich_ops_from_perf_csv(
                 missing_hint += "; the host replayed this trace, so the device report should have rows for it"
             if not device_rows:
                 missing_hint += "; the report has no rows at all for this device"
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id}){missing_hint}"
-            )
+            if not candidates:
+                # A host-recorded op of a replayed trace can still have no row in the C++ device report
+                # (trace-capture ops whose device data belongs to the replay). Aborting the whole report
+                # over one such op loses every other op's data: skip it, keep the rest, and say so.
+                # TT_METAL_PROFILER_STRICT_DEVICE_MATCH=1 restores the assert.
+                if os.environ.get("TT_METAL_PROFILER_STRICT_DEVICE_MATCH", "0") == "1":
+                    raise AssertionError(
+                        f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                        f"for device {device_id} (trace_id={host_trace_id}){missing_hint}"
+                    )
+                logger.warning(
+                    f"Device data missing: Op {op_id} ({host_op.get('name', '?')}) not present in "
+                    f"{PROFILER_CPP_DEVICE_PERF_REPORT} for device {device_id} (trace_id={host_trace_id})"
+                    f"{missing_hint}; skipping this op and keeping the rest of the report"
+                )
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:

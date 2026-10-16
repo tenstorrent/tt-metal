@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import copy_to_buffer
@@ -114,10 +116,19 @@ class RMSNorm(LightweightModule):
         self.sharded_program_config = sharded_program_config
         self.output_mem_config = output_mem_config
 
+        # QWEN_NORM_LOFI_APPROX=1: LoFi + approx (fp32 acc off) for every RMSNorm. On
+        # pplx-embed-4B at bs=32 the per-head q_norm ([32,32,512,128] bf16) is 24 ms/iter;
+        # traced on P150 it drops 764 -> 692 us (-11%) with this config, while the
+        # 2560-wide norms are insensitive (260 -> 256 us). Accuracy must be re-validated.
+        _lofi_approx = os.getenv("QWEN_NORM_LOFI_APPROX", "0") == "1"
+        # QWEN_NORM_FP32_ACC=0: keep HiFi2 but drop the fp32 destination accumulation (the
+        # BGE-M3 B16 LayerNorm probe: -28% standalone on the kernel, PCC-gated there).
+        if os.getenv("QWEN_NORM_FP32_ACC", "1") == "0":
+            fp32_dest_acc_en = False
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=fp32_dest_acc_en,
+            math_fidelity=ttnn.MathFidelity.LoFi if _lofi_approx else ttnn.MathFidelity.HiFi2,
+            math_approx_mode=_lofi_approx,
+            fp32_dest_acc_en=False if _lofi_approx else fp32_dest_acc_en,
             packer_l1_acc=True,
         )
 
@@ -175,7 +186,9 @@ class RMSNorm(LightweightModule):
 
         # If input is sharded do sharded RMSNorm and optionally return sharded output
         program_config = sharded_program_config if in_sharded else None
-        memory_config = sharded_output_config if out_sharded else None
+        # Interleaved path: honour an explicit output placement (e.g. L1 for a DRAM-resident
+        # residual stream, TT_PREFILL_LN_L1); the sharded path keeps handling it on its S2I.
+        memory_config = sharded_output_config if out_sharded else (output_mem_config if not in_sharded else None)
         distributed = self.is_distributed and self.is_distributed(mode)
         weight = self.weight_distributed if distributed else self.weight
 
@@ -203,6 +216,15 @@ class RMSNorm(LightweightModule):
             )
 
         if in_sharded and not out_sharded:
+            # Honor output_mem_config on the S2I path too. Default behavior of
+            # ttnn.sharded_to_interleaved is DRAM-interleaved, which silently
+            # spills the LN output to DRAM right before the next consumer
+            # (QKV / FF1 / FF3 matmul) has to read it back. The ttnn-visualizer
+            # matmul analyzer flagged this as "input 0 currently in
+            # DEV_0_DRAM_INTERLEAVED" on every QKV/FF1/FF3 call. When
+            # output_mem_config asks for L1, route the unshard straight into L1.
+            if output_mem_config is not None:
+                return ttnn.sharded_to_interleaved(x, memory_config=output_mem_config)
             return ttnn.sharded_to_interleaved(x)
         else:
             if output_mem_config is not None:

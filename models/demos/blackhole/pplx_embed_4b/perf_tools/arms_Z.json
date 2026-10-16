@@ -1,0 +1,56 @@
+[
+ {
+  "name": "Z-pplx-bs8-LoFi",
+  "B": 8,
+  "grid": [
+   12,
+   8
+  ],
+  "placement": "kvl1",
+  "fid": "LoFi"
+ },
+ {
+  "name": "Z-pplx-bs8-HiFi2",
+  "B": 8,
+  "grid": [
+   12,
+   8
+  ],
+  "placement": "kvl1",
+  "fid": "HiFi2"
+ },
+ {
+  "name": "Zf-pplx-bs1-LoFi",
+  "B": 1,
+  "nqh": 8,
+  "nkh": 8,
+  "s": 512,
+  "d": 128,
+  "qc": 128,
+  "kc": 512,
+  "grid": [
+   6,
+   6
+  ],
+  "placement": "kvl1",
+  "fid": "LoFi",
+  "reuse_kv": false
+ },
+ {
+  "name": "Zf-pplx-bs1-HiFi2",
+  "B": 1,
+  "nqh": 8,
+  "nkh": 8,
+  "s": 512,
+  "d": 128,
+  "qc": 128,
+  "kc": 512,
+  "grid": [
+   6,
+   6
+  ],
+  "placement": "kvl1",
+  "fid": "HiFi2",
+  "reuse_kv": false
+ }
+]

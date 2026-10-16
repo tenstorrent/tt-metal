@@ -1,0 +1,42 @@
+[
+ {
+  "name": "A2-pplx-bs32-LoFi-kvl1",
+  "B": 32,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "kvl1",
+  "fid": "LoFi"
+ },
+ {
+  "name": "A2-pplx-bs32-HiFi2-kvl1",
+  "B": 32,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "kvl1",
+  "fid": "HiFi2"
+ },
+ {
+  "name": "A2-pplx-bs16-LoFi-dram",
+  "B": 16,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "dram",
+  "fid": "LoFi"
+ },
+ {
+  "name": "A2-pplx-bs8-LoFi-dram",
+  "B": 8,
+  "grid": [
+   12,
+   8
+  ],
+  "placement": "dram",
+  "fid": "LoFi"
+ }
+]

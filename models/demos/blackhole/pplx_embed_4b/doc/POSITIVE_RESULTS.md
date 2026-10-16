@@ -1,0 +1,171 @@
+# pplx-embed-v1-4B on Blackhole P150 — what landed and what it bought
+
+Companion to `NEGATIVE_RESULTS.md` (what was tried and failed, with numbers). Branch
+`arg/pplx-embed-upstream` in `tt-metal/`; model code `models/demos/blackhole/pplx_embed_4b/`.
+All numbers: ISL 512, demo extended-trace timing (forward + pooling + I/O in one traced replay),
+best of 10 iterations, same-chip sequential A/B for every landing (chips 4 / 7 / 8 / 6 for bs1 / 8 / 16 / 32).
+
+## Where it stands (2026-09-24)
+
+| batch | H200 | start of effort | cold best (best of 10) | × H200 | sustained (median of iterations 5–9) | × H200 | 3× target |
+|---|---|---|---|---|---|---|---|
+| 1 | 5.437 ms | 25.9 ms | **17.5** | 3.22× | 17.7 | 3.26× | 16.3 |
+| 8 | 33.081 | 156.4 | **115.3** | 3.49× | 121.0 | 3.66× | 99.2 |
+| 16 | 67.225 | 290.9 | **221.0** | 3.29× | 228.2 | 3.39× | 201.7 |
+| 32 | 139.150 | 557.8 | **425.5** | 3.06× | 451.1 | 3.24× | 417.5 |
+
+(Measured 2026-09-24 with the shipped defaults after the concat-free SDPA landing — bs1 after the bs1 op-count landing below, same method — one 30-iteration run per
+batch size on chips 4 / 7 / 8 / 6; sustained here is the median of iterations 15–29.)
+
+"Cold best" is the first iterations on a cool chip at the full 1.35 GHz AICLK; "sustained" is after the
+board's power manager settles the clock at ≈1.1–1.2 GHz (see the note below). The H200 figures are
+taken as steady-state numbers, so the sustained column is the like-for-like comparison unless the
+H200 harness also reported a cold first iteration.
+
+Accuracy: STS-B Spearman 0.8135 → **0.8161** on the bs1 path (`eval_accuracy_tt.py`); through the
+batched paths (`eval_accuracy_batched.py`, fixed ISL 512, masked mean) bs1 0.8121 / bs8 0.8123 /
+bs16 0.8140 / bs32 0.8159. Every landing was re-checked on STS-B or per call against the stock ops.
+
+¹ ² **Cold vs sustained.** "Best of 10" is the cold-chip number: tt-smi sampled during bs16 runs shows
+AICLK at 1281–1350 MHz for iterations that read 216.7 ms and 1112–1162 MHz for iterations that read
+232–243 ms; the board's power manager pulls the clock down ≈ 0.6 s into a sustained load (iteration 3
+of a cold run) and deeper as the chip warms. No power or clock setting was changed (`AICLK_LIMIT_MAX`
+1350, board defaults). bs1 barely throttles. Sustained with the shipped defaults: bs1 17.7, bs8 121.0, bs16 228.2, bs32 451.1 ms (30-iteration runs); before today's bs>1 rounds 18.0 / 126.7 / 235 / 452.3 — so at bs32 the new defaults only help the cold iteration (the chip is power-bound at the
+sustained clock), at bs8 they hold −2.3% sustained, at bs16 ≈ −1.5%.
+
+## Landings, in order (e2e ms bs1 / bs8 / bs16 / bs32 after each)
+
+Commit hashes are those of `amorrison/high-batch-optim` after its 2026-10-15 rebase onto
+`amorrison/sdpa-gqa-kv-sharing` (the pre-rebase history is kept as `amorrison/high-batch-optim-prerebase`; commits map by
+subject). The tt-metal side of several landings now comes from the base instead of this branch:
+
+| landing | tt-metal change on this branch before the rebase | now provided by |
+|---|---|---|
+| sdpa concat-out, bs1 op-count | `sdpa: output_heads_concat` (a7760425045) | `output_concat_heads` upstream (ad2792e70b0, #56922) |
+| bs1 SDPA GQA packing, bs1 packed SDPA on 88 cores | `sdpa: pack_gqa_heads` (70d92b5d6f3) and the SDPA part of da97564d181 | automatic GQA Q-head crossing when the q chunk does not divide S (4446f29fd99, `amorrison/sdpa-gqa-kv-sharing`) |
+| batched SDPA K/V reuse + q128 | `sdpa: reuse_kv` (63f7df86899) | automatic K/V retention with one K chunk (d04fc1510e9, same branch) |
+| fused SwiGLU on the pack thread, cheaper SwiGLU sigmoid, output writer deferral | 69e1e72c1bd, 14fda30cfd0, 616341723a3 | upstream `minimal_matmul` (d5461453b44, #59325) |
+| batched SDPA row sums on the math thread | 0458a990466 | still this branch (b6dba8e9187); the opt-in form for main is `math_thread_row_sums` on `amorrison/sdpa-math-thread-row-sums` |
+
+The model passes the new SDPA API (16e604ce1ba): `output_concat_heads=True`; `QWEN_SDPA_GQA_PACK*` and
+`QWEN_SDPA_REUSE_*` now only choose the program configs that turn crossing and retention on. Same-chip A/B against the
+pre-rebase tree, WIP_HANDOFF "Rebase onto amorrison/sdpa-gqa-kv-sharing".
+
+| commit | change | mechanism | after |
+|---|---|---|---|
+| 63092bb, 0e2cfcd | prefill config baseline (09-22) | `minimal_matmul` subblock 1×8 (bs8 −12%, bs16 −13%, bs32 −18%); `in0_block_w` cap 8 → 38 for the bs1 legacy matmuls (FF2 35% → 70% of roofline, −4.4 ms); block-sharded LayerNorm at bs1 (−1.9 ms); SDPA chunks 512/256 (−2…4% batched) | 25.9 / 156.4 / 290.9 / 557.8 |
+| 1640c41, b3c527b7 | head-split QKV / concat as model-local `generic_op`s | reader/writer kernels scatter the fused QKV activation straight into `[B, H, S, d]` heads (bs1 −2.7 ms, bs32 −8.8 ms) | (included above) |
+| c898e62 | time the extended trace | the timed loop had fallen back to the Generator path; pooling + I/O now inside one replay | 25.2 / 155.6 / 288.7 / 543.5 |
+| 3a3534e | fused head-split + Q/K RMSNorm | one `generic_op` replaces create_heads + q_norm + k_norm (three DRAM passes → one) | 25.0 / 144.7 / 276.8 / 519.2 |
+| 7041989 | RoPE fused into the same op | cos/sin/transform tiles applied per head inside the kernel; two `rotary_embedding_llama` ops gone | 23.9 / 143.4 / 263.5 / 495.0 |
+| e7ebc40 | fused op emits Q and K/V in bfp8 | packer converts on the way out; the Typecast before SDPA is deleted, SDPA reads half the bytes | 23.7 / 135.3 / 250.4 / 474.3 |
+| ad7e016 | QKV projection writes bfp8 | the matmul output feeding the fused op is bfp8 too (26 MB less traffic per layer at bs8) | 23.7 / 127.5 / 240.9 / 456.7 |
+| ea61c54 | merged core ranges, fewest-cores split | per-core `CoreRange`s cost ≈ 0.4 µs/core per launch; rectangles + the smallest core set with the same per-core max | 23.4 / 126.7 / 240.6 / 455.8 |
+| 0d57c53 | batched SDPA 12×10, k-chunk 512 | all 120 workers, one K chunk (bs32 932 → 806 µs/call) | 23.3 / 126.2 / 239.6 / 450.6 |
+| 5743a91 | fused residual add + RMSNorm (bs16+) | one `generic_op` emits the sum (residual stream) and the normalised tensor: 4 DRAM passes → 2 | 23.3 / 126.2 / 234.8 / 443.5 |
+| eaaf864, 0a8e5dd | bs16 fused-SwiGLU blocks 4,20,8 / 1×4 | in-model block sweep of the packed-w13 `minimal_matmul` | 23.3 / 126.2 / 228.3 / 443.5 |
+| a8ae7d5 | bs8 blocks FF2 16,8,8 · QKV 8,4,8 · WO 16,8,8 | same sweep for the plain matmuls | 23.3 / 123.4 / 228.3 / 443.5 |
+| 7212cf0 | `silu_mul` at bs32 | SwiGLU product as one `generic_op` (dest-reuse multiply after `silu_tile`), −14% on the op | 23.3 / 123.4 / 228.3 / 438.1 |
+| 31cfadc | bs1: 12×8 matmul grids, coalesced weight reads, SDPA q256 | see below | **17.7** / 123.4 / 228.3 / 438.1 |
+| 102fd6d | bs>1: row-split add+RMSNorm, SDPA 12×8 at bs8, interleaved weights at bs32 | see below | 17.7 / **118.5** / **216.7** / **428.1** |
+| sdpa concat-out | SDPA writes `[B, 1, S, H·d]` directly (`output_heads_concat`), concat pass gone at bs>1 | tile-id remap in the SDPA writer; bit-identical; SDPA +3–7% vs concat −68…−350 µs | 17.7 / **115.4** / **221.9** / **430.1** (same-chip A/B arms) |
+| bs1 op-count (09-24) | SDPA `output_heads_concat` at bs1 too (SDPA 57.3 → 54.1 µs standalone, the 4.6 µs model-local concat op gone) + the residual adds written in the norm's 10×8 block-shard layout (the 72 I2S ops become no-ops) | from Gio's B1 shard-layout idea; bit-identical; the residual item is neutral alone, −0.3 ms median together (NEGATIVE_RESULTS §50) | **17.5** / 115.3 / 221.0 / 425.5 |
+| bs1 resid-sharded on every layer (09-24) | the §50 residual-shard item only applied to even layers: `supported(x, x)` in `decoder_fusion.py` rejects the sharded input the previous layer handed over, so odd layers fell back to interleaved adds + a real I2S before each norm (36 of 72 left). Now every layer; I2S 36 → 1 | bit-identical, STS-B 0.8161; device replay 16.97 → 16.80 ms; e2e bs1 −0.07 ms (mean of 3 alternating 30-iteration A/B pairs, 17.285 → 17.218; 8× p150b host, chip 0); bs>1 untouched | bs1 −0.4% |
+| bs1 SDPA GQA packing (09-24) | new SDPA arg `pack_gqa_heads`: the 4 Q heads sharing a KV head are scheduled as one head of 4·S rows (same memory), so each KV head's K/V streams once down one 8-core chain instead of 4× over 2-core chains; k_chunk 256 → 512 (one K chunk now wins). Default at bs1 (`QWEN_SDPA_GQA_PACK=1`) | SDPA 49.7 → 35.9 µs/call in-model; device replay −0.49 ms; e2e 17.19 → 16.70 ms (3 alternating 30-it A/B pairs, 8× p150b host, chip 0); fixed-512 STS-B 0.8121 → 0.8133, bucketed 0.8161; packed at k256 is bit-identical to unpacked. Same 64-core grid (one Q chunk per core); the gain is the removed K/V re-streaming | bs1 −2.8% |
+| bs1 resident heads-op constants (09-24) | the fused heads op takes cos/sin, the rotation tile, scaler and eps from a per-core L1 shard shared by all layers (CBs aliased via `cb_descriptor_from_sharded_tensor`) and reads gamma after the first unit, so compute starts its first unit without waiting on those reads (`QWEN_FUSED_RESIDENT_CONSTS=1`) | bit-identical; heads op 45.0 → 41.4 µs median in-model (46.5 → ~41 standalone); e2e 16.691 → 16.587 ms (3 alternating 30-it A/B pairs, 8× p150b host, chip 0). Preloading only the per-call constants, or only cos/sin, measured ≈0: the gain needs both off the first unit's path | bs1 −0.6% |
+| bs1 heads-op compute v3 (09-24) | `compute_qkv_heads_norm_bs1.cpp` (was `_v3.cpp`; `QWEN_FUSED_COMPUTE_V3=1`, bs1 only): each norm / RoPE phase runs once per unit over its 4 Q + 1 K heads (contiguous in the unit) instead of once per head, so reconfig / init / CB handshakes are paid 9× per unit instead of 45×; only the gamma multiply and the last RoPE add split into a Q and a K loop. Compute binary 24.4 → 21.6 KB | bit-identical to v1 (bs1 resident/non-resident, q_split 2, bs8); heads op 41.7 → 28.7 µs in-model; e2e 16.474 → 16.135 ms (3 alternating 30-it A/B pairs, 8× p150b host, chip 0); cold/sustained 16.5/16.6 → 16.0/16.2 (NEGATIVE_RESULTS §51) | bs1 −2.1% |
+| bs1 SDPA q192 on 88 cores (09-25) | packed SDPA calls take q_chunk 192 on an 11×8 grid (`QWEN_SDPA_GQA_PACK_Q_CHUNK=192`, `QWEN_SDPA_GQA_PACK_GRID=11,8`): each KV head's 64 packed row tiles split into 11 chunks, one per core of one grid row, so the K/V row multicast stays and each core computes 6 row tiles instead of 8. A chunk can now run into the next query head of its group: the concat-output writer wraps those rows (`head_wrap_tile_offset`), and the op no longer requires q_chunk to divide Sq. Unpacked calls keep q256 on 8×8 | SDPA 35.9 → 29.3 µs/call in-model (device replay 16.97 → 15.65 ms vs the 09-24 profile); e2e 16.15 → 15.88 ms (3 alternating 30-it A/B pairs, 8× p150b host, chip 0); cold/sustained 16.0/16.1 → 15.75/15.9; fixed-512 STS-B 0.8140, bucketed 0.8161; concat output bit-identical to `nlp_concat_heads` at q192/q160 (NEGATIVE_RESULTS §52) | bs1 −1.7% |
+| bs1 norm output stays block-sharded (09-25) | both prefill RMSNorms keep their 10×8 block-shard output (`DistributedNorm.keep_sharded_out`) and QKV / FF1 / FF3 read it as a block-sharded in0 (`QWEN_BS1_NORM_SHARDED_OUT=1`): the 2D multicast factory takes its in0 senders from the shard grid's width, so 10 shard columns feed the 12-column matmul once in0_block_w divides the 8-tile shard (8 instead of the model's 10) and fuse_batch is set. The 72 ShardedToInterleaved ops per forward go away | S2I 72 → 0 calls; QKV / FF1 / FF3 kernel time unchanged (42.3 / 69.7 µs); device replay 15.65 → 15.33 ms; e2e 15.91 → 15.74 ms (3 alternating 30-it A/B pairs, chip 0); cold/sustained 15.75/15.9 → 15.6/15.75; STS-B fixed-512 0.8111 (0.8140 before; in0_block_w 8 changes the accumulation order), bucketed 0.8169 (NEGATIVE_RESULTS §51 correction) | bs1 −1.1% |
+| batched add+norm operands in L1 (09-25) | at bs8/16/32 (ISL 512) the fused add+RMSNorm's short-lived tensors live in L1 interleaved instead of DRAM: its b operand (WO / FF2 outputs, `TT_PREFILL_WO_L1=1 TT_PREFILL_FF2_L1=1`), both norms' outputs (`QWEN_FUSED_ADD_NORM_OUT_L1=1`) and at bs8/16 the post-attention residual sum (`QWEN_FUSED_ADD_NORM_SUM1_L1=1`); the decoder's move of the attention output to the residual's DRAM config is skipped in the fused path (it had become an L1 → DRAM copy per layer). Model-level only; the op gains an `out_memory_config`. Opt out: `QWEN_BATCHED_L1_INTERMEDIATES=0` | fused op 434.9 → 255.0 µs/call at bs32; sustained_run.sh, 3 alternating rounds per chip (8× p150b host, chips 0-2 concurrently), cold / sustained: bs8 108.2 / 121.0 → 102.7 / 117.0, bs16 202.8 / 239.6 → 194.6 / 232.7, bs32 396.4 / 458.5 → 382.8 / 447.5 ms; batched STS-B 0.8123 / 0.8140 / 0.8159 unchanged; bs1 unaffected (NEGATIVE_RESULTS §54) | bs8 −5.1 / −3.3%, bs16 −4.0 / −2.9%, bs32 −3.4 / −2.4% (cold / sustained) |
+| batched SDPA K/V reuse + q128 (09-25) | new SDPA arg `reuse_kv`: a core keeps K/V in its CBs across its consecutive Q chunks of the same (batch, KV head) instead of re-reading them per chunk, and no K/V chains are built (non-causal, unmasked, one K chunk). At q512 the 4 Q heads sharing a KV head each re-read it (142 MB per call at bs16, DRAM-bound and contention-limited); with reuse, finer Q chunks cost no extra K/V traffic and q128 balances the grid. The model's SDPA wrapper passes it on eligible batched calls with q128 (`QWEN_SDPA_REUSE_KV=1 QWEN_SDPA_REUSE_Q_CHUNK=128`, bs8/16/32 at ISL 512) | standalone per call: bs8 247.5 → 233.9 µs (12×8), bs16 515 → 355 (12×10), bs32 911.6 → 620.5 (12×10); bit-identical to reuse off at equal chunks (`test_sdpa_reuse_kv.py`); **bs16 solo chip, sustained_run.sh, 3 alternating rounds, branch baseline → both batched changes: cold / sustained 202.9 / 231.2 → 189.2 / 221.8 ms**; reuse alone, chips 0-2 concurrently: bs8 102.8 / 117.7 → 102.2 / 115.9, bs16 194.8 / 233.0 → 189.2 / 230.7, bs32 381.8 / 448.1 → 372.0 / 442.9 (sustained gains trail cold: the settled clock drops 10-15 MHz); STS-B 0.8114 / 0.8144 / 0.8146 at batch 8 / 16 / 32 (q128 chunking; 0.8123 / 0.8140 / 0.8159 before) (NEGATIVE_RESULTS §55) | bs16 (both changes) −6.8 / −4.1% cold / sustained |
+| bs8 QKV output in L1 + v3 heads compute (09-28) | at bs8 (ISL 512) the QKV projection writes its 27 MB output to L1 interleaved (`TT_PREFILL_QKV_L1=1`, 223 KB per core; fits beside the matmul's CBs at bs8's 8,4,8 blocks) and, with its input in L1, the fused heads op runs the v3 compute (`QWEN_FUSED_COMPUTE_V3=1`: each phase once per unit over its 5 heads). With an L1 input the heads op is compute-bound and v3 cuts its compute by 30%; with a DRAM input v3 is slower than v1, so it follows the knob. Opt out: `TT_PREFILL_QKV_L1=0` (turns both off) | heads op standalone at bs16 shapes, cos/sin in L1: v1 304.7 → v3 214.2 µs (L1 input), bit-identical; sustained_run.sh, 3 alternating rounds per step, chip 0/1: QKV in L1 cold / sustained 102.1 / 116.1 → 100.3 / 114.4, then v3 100.3 / 116.6 → 98.7 / 115.5; **both vs neither, chip 0: 102.2 / 116.2 → 98.8 / 113.1 ms** (settled clock 1228 → 1203 MHz); STS-B bs8 0.8114 (unchanged) | bs8 −3.3 / −2.6% cold / sustained |
+| bs16 QKV output in L1 + v3 heads compute (09-28) | the bs8 landing at bs16: the 53.5 MB QKV output (446 KB per core) fits in L1 once the post-attention residual sum stays in DRAM (`QWEN_FUSED_ADD_NORM_SUM1_L1` off at bs16 when `TT_PREFILL_QKV_L1=1`). The sum held the norm output low in L1 and split the ~723 KiB free per core into two gaps of ~360 KiB, neither of which took the output; the QKV output's L1 gain outweighs the sum's. The v3 heads compute follows (input in L1). Opt out: `TT_PREFILL_QKV_L1=0` (restores the sum in L1) | `perf_tools/l1_map_first_layer.py 16` (live L1 per op); sustained_run.sh, 3 alternating rounds, chip 0: cold / sustained 189.3 / 222.9 → 186.0 / 220.3 ms; defaults confirmed 186.1 (opt-out 189.4); STS-B bs16 0.8144 (unchanged) (NEGATIVE_RESULTS §56) | bs16 −1.7 / −1.2% cold / sustained |
+| bs32 QKV + heads in half-batch chunks (09-28) | at bs32 the QKV output (892 KB per core) cannot live in L1, so each layer's QKV projection and fused heads op run per half batch (`QWEN_QKV_CHUNKS=2`, `tt/qkv_chunks.py`): each chunk is exactly the bs16 matmul (561 µs, output in L1) followed by the heads op on v3 from L1, writing Q / K / V into full-batch tensors at a batch offset (heads op `out_tensors` / `batch_offset`), so SDPA still sees one bs32 tensor. The halves are the previous layer's post-MLP add+RMSNorm output, written as two half-batch tensors (row-split output) that are preallocated before FF2 (`QWEN_FUSED_ADD_NORM_PREALLOC=1`) so they sit at the top of L1; allocated by the add, the output lands below FF2's and leaves only ~182 KiB free below it. The next layer's `attention_norm` returns a never-written DRAM stand-in, and the attention runs the chunks inside its QKV call. Layer 0 runs unchunked. Opt out: `QWEN_QKV_CHUNKS=1` | per layer 1124 + 594 µs (QKV + heads, DRAM) → 2 × (561 + 214); N-split chunks rejected (676.5 µs per half, +197 µs per layer); FF2 output to DRAM instead would cost +5.1 ms cold; sustained_run.sh, 3 alternating rounds, chip 0: cold / sustained 369.1 / 433.3 → 362.2 / 430.4 ms (settled clock 1079 → 1068 MHz); default 359.1 vs opt-out 369.0; STS-B bs32 0.8146 (unchanged); ops bit-identical (`perf_tools/test_qkv_chunks.py`) (NEGATIVE_RESULTS §56) | bs32 −1.9 / −0.7% cold / sustained |
+| bs16 add+norm output preallocated, post-attention sum back in L1 (09-28) | the same preallocation at bs16 (`QWEN_FUSED_ADD_NORM_PREALLOC=1`): the next layer's norm output takes the top of L1, so the QKV output fits beside it with the post-attention sum in L1 again (`QWEN_FUSED_ADD_NORM_SUM1_L1=1`), undoing the bs16 landing's trade | sustained_run.sh, 3 alternating rounds, chip 1: cold / sustained 186.0 / 228.1 → 185.2 / 227.0 ms; default 185.3 vs opt-out 185.9; STS-B bs16 0.8144 (unchanged) | bs16 −0.4 / −0.5% cold / sustained |
+| fused SwiGLU on the pack thread in the last K block; fused at bs32 too (09-28) | `minimal_matmul(fuse_swiglu=True)` spent ~2100 math-thread cycles per output tile in a separate epilogue (copy gate / up from the intermediate, SFPU SiLU, SFPU multiply), serialized with the matmul: the fused kernel ran at ~300 TFLOP/s against ~550 for the same shape's plain compute. Now each block's last K block accumulates from zero, adds the partial sums with one dest-reuse add, and the pack thread applies silu(gate)·up in one SFPU pass (same sigmoid and roundings as silu_tile + mul_binary_tile, `swiglu_sfpu.hpp`) on its DST half and packs straight to the output, overlapping the math thread's next subblock (the `moe_compute` pattern). With that the fused kernel beats FF1 + FF3 + `silu_mul` at bs32 as well, so bs32 turns it on (`QWEN_FUSE_SWIGLU=1`, FF13 blocks 4,20,8 1×4) | fused kernel standalone: bs8 1435 → 1050 µs, bs16 2705 → 1959, bs32 3831 vs 4704 unfused; PCC vs fp32 torch unchanged; ttnn nightly SwiGLU tests pass; sustained_run.sh, 3 alternating rounds per batch: cold / sustained bs8 98.6 / 113.7 → 85.0 / 103.7 ms, bs16 185.1 / 225.7 → 158.3 / 210.4, bs32 364.1 / 436.3 → 329.4 / 411.0; STS-B 0.8116 / 0.8150 / 0.8135 (NEGATIVE_RESULTS §58) | bs8 −13.8 / −8.8%, bs16 −14.5 / −6.8%, bs32 −9.5 / −5.8% cold / sustained |
+| fused-SwiGLU blocks re-swept (09-28) | with the pack-thread SwiGLU the best fused FF13 config is K_block 20 with a 1×8 subblock at every batch (`bench_ff13_sweep.py`, 255 configs per batch): bs8 `QWEN_MM_BLOCK_FF13=8,20,8`, bs16 / bs32 4,20,8, all `QWEN_MM_SUBBLOCK_FF13=1,8`; applied only with the fused kernel | standalone bs8 1058 → 996 µs, bs16 1965 → 1927, bs32 3849 → 3764; sustained_run.sh, 3 alternating rounds: cold / sustained bs8 85.0 / 104.1 → 82.5 / 101.4 ms, bs16 158.3 / 210.7 → 157.1 / 209.5, bs32 329.3 / 411.1 → 326.4 / 408.6; STS-B bs8 0.8114; bs1 fused still loses (15.7 → 16.0 ms) (NEGATIVE_RESULTS §58) | bs8 −2.9 / −2.6%, bs16 −0.7 / −0.6%, bs32 −0.9 / −0.6% cold / sustained |
+| fused-SwiGLU K_block 40; bs32 post-attention norm output preallocated (09-29) | the pack thread's single-pass SwiGLU (~1400 cycles per output tile) only overlaps the math of the last K block, 640 cycles per output tile at K_block 20, so half of it was exposed: skipping it saves 15-17% of the op, doubling it costs a full pass (`bench_ff13_fused_ablate.py`). K_block 40 doubles the window: bs8 `QWEN_MM_BLOCK_FF13=8,40,6 QWEN_MM_SUBBLOCK_FF13=1,6` (8,40,8 clashes with the L1 residual sum), bs16 / bs32 4,40,8 1×8. At bs32 its CBs fit only with the post-attention add's norm output allocated right before WO (`QWEN_FUSED_ADD_NORM_PREALLOC_FF=1`): allocated by the add it landed below WO's then-live L1 output and capped the FF13 CB region at 777 KB (1149 KB now); moving WO's output to DRAM instead (`TT_PREFILL_WO_L1=0`) also fits but costs 4.2 ms | fused kernel standalone bs8 999 → 882 µs, bs16 1937 → 1703, bs32 3763 → 3277; STS-B 0.8119 / 0.8147 / 0.8152; sustained_run.sh, 3 alternating rounds per batch, chip 0: cold / sustained bs8 82.5 / 102.0 → 78.5 / 99.5 ms, bs16 157.1 / 201.7 → 148.8 / 196.1, bs32 322.8 / 400.1 → 303.1 / 388.7 (NEGATIVE_RESULTS §60) | bs8 −4.8 / −2.4%, bs16 −5.3 / −2.8%, bs32 −6.1 / −2.9% cold / sustained |
+| bs8 / bs16 K/V heads in L1 (09-30) | the fused heads op writes K / V to L1 interleaved while Q stays in DRAM (`kv_memory_config`; `QWEN_HEADS_KV_L1=1`, default at bs8 / 16), so the reuse_kv SDPA reads K / V from L1. Of SDPA's DRAM round-trip only the K / V reads cost much: Q or the output in L1 add little on top. bs32's K / V do not fit beside the first QKV chunk (NEGATIVE_RESULTS §64); bs1 already keeps Q / K / V in L1. Opt out: `QWEN_HEADS_KV_L1=0` | SDPA per call (`bench_sdpa_bs16_ablate.py <bs> l1`): bs8 237.0 → 201.2 µs, bs16 355.8 → 308.7, PCC 1.00000; sustained_run.sh, 3 alternating rounds, chips 0 / 1, cold / sustained: bs8 78.3 / 97.2 → 77.0 / 97.2 ms (settled clock ~20 MHz lower), bs16 145.6 / 192.6 → 144.5 / 191.5 ms; STS-B embeddings bit-identical at both (bs8 0.8110, bs16 0.8132) | bs8 −1.7 / 0.0%, bs16 −0.8 / −0.6% cold / sustained |
+| batched SDPA row sums on the math thread (09-30) | with one K chunk (no online-softmax correction) the softmax row sums no longer L1-accumulate on the pack thread inside `sub_exp`, which paced the Q·Kᵀ / exp loop (MATH waited in `tile_regs_acquire` for PACK's exp + packs); normalize takes them from the exp'd scores with one matmul against `col_identity` per score column over the whole row group (ttnn SDPA streaming kernel; Blackhole, not ring / in-place V / sinks; `SDPA_SUM_ON_PACK` restores the old path). NEGATIVE_RESULTS §65 | SDPA per call, traced device µs: bs8 179.3 → 168.7, bs16 286.1 → 266.1, bs32 600.4 → 566.2 (−6 / −7 / −6%); compute-only unit 20.3k → 18.8k cycles; PCC 0.999248 → 0.999234; STS-B bs8 / 16 / 32 0.8120 / 0.8174 / 0.8148 (was 0.8110 / 0.8132 / 0.8156), per-text cosine inside the model's own spread; cold bs8 77.0 → 76.7 ms, bs16 144.0 → 143.1, bs32 within noise |
+| bs32 QKV in quarter-batch chunks, K / V in L1 (09-30) | QKV + the heads op run in four quarter-batch chunks (`QWEN_QKV_CHUNKS=4`; `fused_add_rmsnorm_split` writes 4 row parts), so the QKV output is 223 KB per core instead of 446 and K / V (290 KB) fit in L1 (`QWEN_HEADS_KV_L1=1` at bs32): SDPA's cold start, all cores pulling their first head's K + V from DRAM at once, was most of its gap to its floors. NEGATIVE_RESULTS §66 | device replay 280.00 -> 278.88 ms (SDPA −1.80, QKV −0.81, heads op +1.46); cold / sustained, 2 alternating rounds: chip 0 294.2 / 374.5 -> 293.5 / 373.8 ms, chip 1 296.7 / 382.4 -> 295.2 / 376.6; STS-B 0.8148 -> 0.8155 (`minimal_matmul` is not bit-stable across M) |
+| bs1 SwiGLU product: single-pass SwiGLU with a bfp8-sized sigmoid (10-01) | the bs1 SwiGLU product (`ttnn.mul(a, b, input_tensor_a_activations=[SILU])`, 52.1 µs device per call, 12% of the replay) was its SiLU: ~1,400 cycles per tile on the SFPU (the bare multiply is 19.5 µs). Below 8192 rows the `silu_mul` wrapper now routes it to `silu_mul` mode 3, which runs `minimal_matmul`'s single-pass SwiGLU (Schraudolph exp, bare SFPARECIP; §62) on the math thread over the a / b tile pair (`QWEN_SILU_MUL_BS1=1`, default; 0 = stock): 52.1 → 30.2 µs per call, rel. RMSE vs an fp32 SwiGLU 0.0176 → 0.0113 standalone, closer to torch than stock in 24 / 36 layers in-model (`QWEN_SILU_MUL_VERIFY=1`, min PCC 0.99974); STS-B 0.8161 → 0.8159 (bucketed), 0.8121 → 0.8117 (fixed ISL); chip 4, 2 alternating rounds: cold 15.6 / 15.6 → 14.8 / 14.8 ms, sustained 15.7 / 15.7 → 14.9 / 15.0 (NEGATIVE_RESULTS §68) | 14.8 / — / — / — |
+| bs1 FF1 / FF3 on the 1D matmul over 120 cores (10-01) | the bs1 projections are compute-kernel-bound (~21 cycles per tile matmul; data movement hidden) on the 96 cores the 2D multicast can use with M = 16 tile rows. FF1 / FF3 run `MatmulMultiCoreReuseMultiCast1DProgramConfig(mcast_in0)` on 12×10 instead (all 16 M rows × 3 N tiles per core, 102 cores), in0 resharded once onto 10 cores, the bfp4 weights still DRAM width-sharded: a tt-metal change lets the 1D factory read each core's slice from its bank (`IN1_DRAM_WIDTH_SHARDED`, legacy builder). 69.6 → 61.9 µs per call standalone; chip 4, 2 rounds: cold 14.8 → 14.1 ms, sustained 14.9 → 14.3; STS-B unchanged (NEGATIVE_RESULTS §69) | 14.1 / — / — / — |
+
+## The optimizations, by mechanism
+
+**Fusions (model-local `generic_op`s under `tt/custom_ops/`).**
+- `fused_qkv_heads_norm`: head split + per-head Q/K RMSNorm + RoPE in one pass, Q/K/V emitted in bfp8. Replaced five ops per layer.
+- `fused_add_rmsnorm`: residual add + RMSNorm emitting both outputs. Row-granular kernel at first (one tile-row per core; bs16/32 only), then the row-split kernel for every batch: each row is split over R cores that exchange partial mean-squares over the NoC (fixed peer groups, one CB slot per wave, monotonic semaphore). Stock add + rms_norm → split: 184 → 141 µs (M=4096), 320 → 242 (M=8192), 597 → 459 (M=16384).
+- `silu_mul`: `silu(gate) * up` as one op: at bs32 when the fused-SwiGLU matmul is off (precise `silu_tile`), and at bs1 with `minimal_matmul`'s single-pass SwiGLU (mode 3, −22 µs per layer).
+- `fused_concat_heads`: SDPA output back to `[B, S, H·d]` in one pass.
+
+**Data types.** Weights bfp4 (LoFi), residual stream and activations bfp8, Q/K/V bfp8 straight out of the fused op, QKV projection output bfp8. STS-B went up, not down, through these.
+
+**Matmul configuration.**
+- Batched (M ≥ 4096): `minimal_matmul` on 12×10 with per-projection blocks from in-model sweeps; fused-SwiGLU packed w13 at bs8/16; interleaved weights for QKV/WO/W1/W3 at bs32 (2–3% faster than width-sharded from M=8192 up).
+- bs1 (M=512): the legacy 2D-multicast kernel on **12×8 = 96 cores**. It had been pinned to 8×8 because grids with more columns than the 8 DRAM banks returned inf — a program-factory bug (a column took a whole bank stripe when its `per_core_N` was smaller); the one-line fix makes 12×8 bit-identical to 8×8: QKV 67.5 → 49.8 µs, WO 48.7 → 40.1, FF1/FF3 110.9 → 79.5, FF2 101.8 → 78.8. The DRAM-sharded in1 reader also now issues one multi-burst NoC read per block-row segment instead of one 576-byte request per tile (QKV 70.3 → 67.8, FF2 111.6 → 102.8 at 8×8). bs1 21.4 → 17.7 ms from the grids alone.
+
+**SDPA.** Streaming kernel (fp32 acc off), LoFi, exp approximation, bfp8 operands, non-causal GQA. bs1: q256/k256 on 8×8 fills the grid (79 → 55 µs/call). bs8: 12×8 q512/k512 (272 → 234 µs). bs16/32: 12×10 q512/k512.
+
+**Launch cost.** Merged rectangular core ranges and the fewest-cores split for the generic ops (≈ 0.4 µs per extra core per launch).
+
+**Measurement fixes that changed conclusions** (details in `NEGATIVE_RESULTS.md` §0, §16, §17, §46): the timed path had silently fallen back to the Generator; `DEVICE FW DURATION` overstated op costs; a loaded P150 runs at 1.09–1.14 GHz so profiler µs are ~20% optimistic for batched runs; kernel-source edits are picked up by any process started later; bs16 is bimodal per launch; bs32's best-of-10 is the cold first iteration.
+
+## Sustained clock: how to read and how to measure
+
+The board's power manager holds AICLK at ≈1.1 GHz (bs32), ≈1.19 GHz (bs8/16) under sustained load
+against 1.35 GHz cold; power sits at ≈160 W with 176–185 W peaks. The bs32 iteration slows only 4.4%
+for a 21% clock drop, so ≈ 80% of it is DRAM-traffic-bound and not helped by core efficiency or by
+using fewer cores (every fewer-cores probe lost, §48 of the negatives file). What carries over to
+the sustained number: the fused add+RMSNorm (bs16 −2.1% sustained), the bs8 changes (−2.3%
+sustained), bs1 everything. What does not: the bs32 weight layout and SDPA grid (cold-only).
+Measure with `sustained_run.sh <bs> <chip> 30 <tag> "<ENV>"` (median of iterations 15–29 plus the
+sampled clock and power) and compare arms on one chip.
+
+## Where the gates live
+
+`demo/_common.py::apply_workload_env(batch_size, seq_len)` sets every per-batch default with
+`os.environ.setdefault`, so any knob can be overridden from the shell for an A/B:
+bs1 → `QWEN_SDPA_Q_CHUNK/K_CHUNK=256`, `QWEN_QKV_GRID_X=12`, `QWEN_LEGACY_GRID_{FF13,FF2,WO}=12,8`,
+`QWEN_LEGACY_TIGHT_PER_CORE_N=1`, per-shape `QWEN_LEGACY_SUBBLOCK_K<k>_N<n>`;
+bs8 → `QWEN_SDPA_GRID=12,8`, `QWEN_SDPA_Q_CHUNK=512`, `QWEN_MM_BLOCK_{FF2,QKV,WO}`,
+`QWEN_FUSED_ADD_NORM_MIN_ROWS=4096`, `QWEN_FUSED_ADD_NORM_R=5`;
+bs16 → `QWEN_MM_BLOCK_FF13=4,20,8`, `QWEN_MM_SUBBLOCK_FF13=1,4`, `QWEN_FUSED_ADD_NORM_R=5`;
+bs32 → `QWEN_FUSED_ADD_NORM_R=4`, `QWEN_WEIGHT_INTERLEAVED_K{2560_N6144,4096_N2560,2560_N9728}=1`;
+all batches → `QWEN_FUSED_HEADS_NORM=1`, `QWEN_FUSED_ROTARY=1`, `QWEN_FUSED_Q_BFP8=force`,
+`QWEN_FUSED_KV_BFP8=1`, `QWEN_QKV_OUT_BFP8=1`, `QWEN_FUSED_ADD_NORM=1`, `QWEN_SILU_MUL=1` (bs32 rows).
+
+## Qwen3-Embedding-4B through the same stack (2026-09-24)
+
+Same backbone (2560 / 9728 / 36 layers / 32 Q + 8 KV heads / d 128), so the stack runs it unchanged with
+`HF_MODEL=Qwen/Qwen3-Embedding-4B`; only the recipe switches follow the checkpoint (causal attention via
+`QWEN_SDPA_CAUSAL=1`, set automatically for non-pplx checkpoints; last-token pooling with EOS). Nothing in
+the pplx path changed (bs1 re-measured at 17.7 ms with the switch in place). Run instructions:
+`PERF_GUIDE.md` §9.
+
+| batch | H200 | cold best (best of 10) | × H200 | sustained (median of it 15–29) | × H200 | 3× target | previous Qwen demo (`../qwen3_embedding_4b`) |
+|---|---|---|---|---|---|---|---|
+| 1 | 5.437 ms | **18.1** | 3.33× | 18.3 | 3.37× | 16.3 | 32.3 |
+| 8 | 33.081 | **115.7** | 3.50× | 121.9 | 3.68× | 99.2 | — |
+| 16 | 67.225 | **217.6** | 3.24× | 228.3 | 3.40× | 201.7 | — |
+| 32 | 139.150 | **426.9** | 3.07× | 445.5 | 3.20× | 417.5 | 725 |
+
+Within ±1–2% of pplx-embed-4B at every batch (run-to-run spread), as expected for identical compute; AICLK
+settled at 1328 / 1206 / 1190 / 1116 MHz. STS-B Spearman (last token + EOS,
+`eval_accuracy_batched.py --pool last --eos`, fixed ISL 512): bs1 0.8190, bs8 0.8095, bs16 0.8076,
+bs32 0.8073. The SDPA sweeps under causal attention pick the same grids and chunks as the bidirectional
+ones. One bs8 run died with a segfault while loading the tensor cache (host side, before any iteration);
+the rerun was clean — treat such a crash as transient and rerun before debugging.
+
+## What is left, and who has it
+
+- ~~`minimal_matmul` (K=2560, N=9728) at 332 TFLOP/s~~: with L1 activations FF1 runs at 489 TFLOP/s at bs32 (the 332 was measured with DRAM activations; NEGATIVE_RESULTS §58) — tenstorrent/tt-metal#57626 (Sankar Manoj).
+- ~~SwiGLU epilogue~~: done on this branch (pack-thread SwiGLU in the last K block, NEGATIVE_RESULTS §58) — #57627 (Sankar Manoj).
+- SDPA: bs1 fills 64 of 120 cores (≈ −0.5…−0.9 ms); batched static CBs block L1-resident activations — #57628 (Chris Maryan).
+- Interleaved `rms_norm` at ~50% of DRAM bandwidth (the remaining half of the LayerNorm cost) — #57629 (Chris Maryan).
+- Upstreaming the 2D matmul factory fix and coalesced reads — #57630 (Chris Maryan).
+- Sustained regime (§48–§49 of the negatives file): SDPA writing `[B, S, H·d]` directly is **done** (§49, −0.9…−2.0% cold, −1.2% sustained at bs32); the SwiGLU product in FF2's in0 path was retracted (12× redundant SFPU work per row group, see #57627); head-major output / in0 tile-id remap in `minimal_matmul` (≈ −10 ms bs32) — #57722 (Sankar Manoj), only worth it together with SDPA head offsets.
+- Model-side: fused heads + concat ops are 7.7% of bs8; the bs16 two-mode band needs an explanation before bs16 gains can be claimed.
+
+Tools: `github_issues/` (issue bodies with repro scripts), scratch `ab_one.sh` /
+`ab_multi.sh` (same-chip A/B, alternating multi-launch for bs16), `eval_accuracy_batched.py`.
