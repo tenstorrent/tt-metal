@@ -11,6 +11,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -147,42 +148,82 @@ FORCE_INLINE void subtract_from_values(DataflowBuffer& values, DataflowBuffer& p
 }
 
 // The summary carries the zero-seeded state B and the identity-seeded state A + B side by side: a [Kt, 2 * Vt]
-// state whose first Vt columns hold B. Publish (A + B) - B, or copy B, one tile row of Vt tiles per packet.
+// state whose first Vt columns hold B. Publish (A + B) - B, or copy B, one tile row of Vt tiles per packet, from the
+// FP32 carry (UnpackToDest) with an SFPU subtraction, so A is exact in FP32 before it is packed.
 template <bool Difference, uint32_t Kt, uint32_t Vt, uint32_t PacketRows>
-FORCE_INLINE void extract_paths(DataflowBuffer& pair, DataflowBuffer& output) {
-    constexpr uint32_t dst_tiles =
-        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
-    static_assert(Kt % PacketRows == 0 && PacketRows * Vt <= dst_tiles);
-    const uint32_t pair_id = pair.get_id();
+FORCE_INLINE void extract_paths(DataflowBuffer& carry, DataflowBuffer& output) {
+    static_assert(Kt % PacketRows == 0);
+    const uint32_t carry_id = carry.get_id();
     const uint32_t output_id = output.get_id();
-    if constexpr (Difference) {
-        reconfig_data_format(pair_id, pair_id);
-        sub_init(pair_id, pair_id);
-    } else {
-        reconfig_data_format_srca(pair_id);
-        copy_init(pair_id);
-    }
+    reconfig_data_format_srca(carry_id);
     for (uint32_t first_row = 0; first_row < Kt; first_row += PacketRows) {
         output.reserve_back(PacketRows * Vt);
-        tile_regs_acquire();
         for (uint32_t row = 0; row < PacketRows; ++row) {
             for (uint32_t value = 0; value < Vt; ++value) {
                 const uint32_t b_tile = (first_row + row) * 2 * Vt + value;
+                tile_regs_acquire();
+                copy_init(carry_id);
                 if constexpr (Difference) {
-                    sub_tiles(pair_id, pair_id, b_tile + Vt, b_tile, row * Vt + value);
+                    copy_tile(carry_id, b_tile + Vt, 0);
+                    copy_tile(carry_id, b_tile, 1);
+                    sub_binary_tile_init();
+                    sub_binary_tile(0, 1, 0);
                 } else {
-                    copy_tile(pair_id, b_tile, row * Vt + value);
+                    copy_tile(carry_id, b_tile, 0);
                 }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, output_id, row * Vt + value);
+                tile_regs_release();
             }
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t tile = 0; tile < PacketRows * Vt; ++tile) {
-            pack_tile(tile, output_id, tile);
-        }
-        tile_regs_release();
         output.push_back(PacketRows * Vt);
     }
+}
+
+// Copy an UnpackToDest seed exactly into both the ring (the matmul view of the state) and the FP32 carry.
+template <uint32_t Count>
+FORCE_INLINE void seed_state(DataflowBuffer& seed, DataflowBuffer& ring, DataflowBuffer& carry) {
+    const uint32_t seed_id = seed.get_id();
+    seed.wait_front(Count);
+    ring.reserve_back(Count);
+    carry.reserve_back(Count);
+    pack_reconfig_data_format(ring.get_id());
+    reconfig_data_format_srca(seed_id);
+    copy_init(seed_id);
+    for (uint32_t tile = 0; tile < Count; ++tile) {
+        tile_regs_acquire();
+        copy_tile(seed_id, tile, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, ring.get_id(), tile);
+        pack_tile(0, carry.get_id(), tile);
+        tile_regs_release();
+    }
+    ring.push_back(Count);
+    carry.push_back(Count);
+    seed.pop_front(Count);
+}
+
+// decay_diagonal[k] = diag(final_decay[k]): the identity tile with each row scaled by its key's decay complement.
+template <uint32_t Kt>
+FORCE_INLINE void build_decay_diagonal(
+    DataflowBuffer& identity, DataflowBuffer& final_decay, DataflowBuffer& decay_diagonal) {
+    const uint32_t identity_id = identity.get_id();
+    const uint32_t decay_id = final_decay.get_id();
+    decay_diagonal.reserve_back(Kt);
+    pack_reconfig_data_format(decay_diagonal.get_id());
+    reconfig_data_format(identity_id, decay_id);
+    mul_bcast_cols_init(identity_id, decay_id);
+    for (uint32_t key = 0; key < Kt; ++key) {
+        tile_regs_acquire();
+        mul_tiles_bcast_cols(identity_id, decay_id, 0, key, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, decay_diagonal.get_id(), key);
+        tile_regs_release();
+    }
+    decay_diagonal.push_back(Kt);
 }
 
 template <ChunkInputPolicy InputPolicy, uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Paths = 1>
@@ -262,72 +303,82 @@ FORCE_INLINE void compute_chunk_output(
     value_projection.pop_front(chunk_value_tiles);
 }
 
-FORCE_INLINE void multiply_by_decay(
-    DataflowBuffer& state, DataflowBuffer& decay, DataflowBuffer& output, uint32_t key_tiles, uint32_t value_tiles) {
-    constexpr uint32_t dst_tiles =
-        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
-    const uint32_t count = key_tiles * value_tiles;
-    const uint32_t state_id = state.get_id();
-    const uint32_t decay_id = decay.get_id();
-    const uint32_t output_id = output.get_id();
-
-    output.reserve_back(count);
-    reconfig_data_format(state_id, decay_id);
-    mul_bcast_cols_init(state_id, decay_id);
-    // Batch independent tiles to amortize destination-register lifecycle overhead.
-    for (uint32_t block_start = 0; block_start < count; block_start += dst_tiles) {
-        const uint32_t remaining = count - block_start;
-        const uint32_t block_tiles = remaining < dst_tiles ? remaining : dst_tiles;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            const uint32_t index = block_start + tile;
-            const uint32_t key = index / value_tiles;
-            mul_tiles_bcast_cols(state_id, decay_id, index, key, tile);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, output_id, block_start + tile);
-        }
-        tile_regs_release();
-    }
-    output.push_back(count);
-}
-
-template <ChunkInputPolicy InputPolicy, uint32_t Ct, uint32_t Kt, uint32_t Vt>
+// S_{n+1} = S_n + (diag(final_decay) S_n + k_dec_t @ U_n) with final_decay = expm1(G_last) (complement form). Each
+// output tile starts from the FP32 carry copied straight into DST and both products accumulate onto it there, so the
+// small per-chunk change of a long-memory channel is never rounded to a source register's precision. The new state is
+// packed to the destination (the ring, or final_state) and back to the carry, one key row at a time.
+template <ChunkInputPolicy InputPolicy, uint32_t Ct, uint32_t Kt, uint32_t Columns>
 FORCE_INLINE void update_state(
     DataflowBuffer& current_state,
+    DataflowBuffer& carry,
     DataflowBuffer& destination,
     DataflowBuffer& corrected_value,
     DataflowBuffer& k_decay_transposed,
-    DataflowBuffer& final_decay) {
-    constexpr uint32_t chunk_value_tiles = Ct * Vt;
-    constexpr uint32_t key_value_tiles = Kt * Vt;
+    DataflowBuffer& final_decay,
+    DataflowBuffer& identity,
+    DataflowBuffer& decay_diagonal) {
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    constexpr uint32_t block = Columns < dst_tiles ? Columns : dst_tiles;
+    static_assert(Columns % block == 0, "state columns must split into equal DST blocks");
+    constexpr uint32_t chunk_state_tiles = Ct * Columns;
+    constexpr uint32_t key_state_tiles = Kt * Columns;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         k_decay_transposed.wait_front(key_chunk_tiles);
         final_decay.wait_front(Kt);
     }
-    // The update and the decayed state are each packed to FP32 and then added. Accumulating the matmul onto the
-    // decayed state in DST instead changes the result enough that Kimi-K3's chunked prefill drifts from the
-    // reference over consecutive calls (L24 worst-layer PCC 0.981 -> 0.953 at 56k tokens).
-    DataflowBuffer state_update(dfb::state_update);
-    DataflowBuffer state_temporary(dfb::state_temporary);
-    matrix_multiply<Kt, Ct, Vt>(k_decay_transposed, corrected_value, state_update);
-    state_update.wait_front(key_value_tiles);
-    multiply_by_decay(current_state, final_decay, state_temporary, Kt, Vt);
-    state_temporary.wait_front(key_value_tiles);
-    elementwise<ElementwiseOperation::ADD, key_value_tiles, key_value_tiles>(
-        state_temporary, state_update, destination);
-    state_temporary.pop_front(key_value_tiles);
-    state_update.pop_front(key_value_tiles);
+    build_decay_diagonal<Kt>(identity, final_decay, decay_diagonal);
+    decay_diagonal.wait_front(Kt);
+    current_state.wait_front(key_state_tiles);
+    carry.wait_front(key_state_tiles);
+
+    const uint32_t carry_id = carry.get_id();
+    const uint32_t k_decay_id = k_decay_transposed.get_id();
+    const uint32_t value_id = corrected_value.get_id();
+    const uint32_t diagonal_id = decay_diagonal.get_id();
+    const uint32_t state_id = current_state.get_id();
+    const uint32_t destination_id = destination.get_id();
+    destination.reserve_back(key_state_tiles);
+    pack_reconfig_data_format(destination_id);
+    for (uint32_t key = 0; key < Kt; ++key) {
+        carry.reserve_back(Columns);
+        for (uint32_t first = 0; first < Columns; first += block) {
+            tile_regs_acquire();
+            reconfig_data_format_srca(carry_id);
+            copy_init(carry_id);
+            for (uint32_t column = 0; column < block; ++column) {
+                copy_tile(carry_id, first + column, column);  // FP32 S_n, this key row (front-relative)
+            }
+            reconfig_data_format<SrcOrder::Reverse>(k_decay_id, value_id);
+            matmul_block_init(k_decay_id, value_id, false, block, 1, Ct);
+            for (uint32_t chunk_tile = 0; chunk_tile < Ct; ++chunk_tile) {
+                matmul_block(
+                    k_decay_id, value_id, key * Ct + chunk_tile, chunk_tile * Columns + first, 0, false, block, 1, Ct);
+            }
+            reconfig_data_format<SrcOrder::Reverse>(diagonal_id, state_id);
+            matmul_block_init(diagonal_id, state_id, false, block, 1, 1);
+            matmul_block(diagonal_id, state_id, key, key * Columns + first, 0, false, block, 1, 1);
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t column = 0; column < block; ++column) {
+                pack_tile(column, destination_id, key * Columns + first + column);
+                pack_tile(column, carry_id, first + column);
+            }
+            tile_regs_release();
+        }
+        carry.pop_front(Columns);
+        carry.push_back(Columns);
+    }
+    destination.push_back(key_state_tiles);
+    decay_diagonal.pop_front(Kt);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         k_decay_transposed.pop_front(key_chunk_tiles);
         final_decay.pop_front(Kt);
     }
-    corrected_value.pop_front(chunk_value_tiles);
-    current_state.pop_front(key_value_tiles);
+    corrected_value.pop_front(chunk_state_tiles);
+    current_state.pop_front(key_state_tiles);
 }
 
 // The zero-seeded B and identity-seeded A + B recurrences advance together as one [Kt, 2 * Vt] state, so every
@@ -348,6 +399,9 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer summary_head_output(dfb::summary_head_output);
     DataflowBuffer summary_head_state(dfb::summary_head_state);
     DataflowBuffer transport_state(dfb::transport_state);
+    DataflowBuffer state_carry(dfb::state_carry);
+    DataflowBuffer identity(dfb::identity);
+    DataflowBuffer decay_diagonal(dfb::decay_diagonal);
 
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
@@ -356,9 +410,11 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     constexpr uint32_t key_pair_tiles = Kt * pair_columns;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
+    identity.wait_front(2);
+    seed_state<key_pair_tiles>(state, state_ring, state_carry);
     pack_reconfig_data_format(dfb::state_ring);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-        DataflowBuffer& current = chunk == 0 ? state : state_ring;
+        DataflowBuffer& current = state_ring;
         const bool last = chunk == num_chunks - 1;
 
         kd.wait_front(chunk_key_tiles);
@@ -369,19 +425,26 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt, 2>(
             current, kd, v_beta, t_inv, scratch, value_new, scratch);
         update_state<ChunkInputPolicy::RETAIN, Ct, Kt, pair_columns>(
-            current, last ? final_state : state_ring, scratch, k_decay_transposed, final_decay);
+            current,
+            state_carry,
+            last ? final_state : state_ring,
+            scratch,
+            k_decay_transposed,
+            final_decay,
+            identity,
+            decay_diagonal);
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
-            state_ring.wait_front(key_pair_tiles);
+            state_carry.wait_front(key_pair_tiles);
             pack_reconfig_data_format(summary_head_output.get_id());
-            extract_paths<true, Kt, Vt, 1>(state_ring, summary_head_output);
-            extract_paths<false, Kt, Vt, 1>(state_ring, summary_head_state);
-            pack_reconfig_data_format(dfb::state_ring);
+            extract_paths<true, Kt, Vt, 1>(state_carry, summary_head_output);
+            extract_paths<false, Kt, Vt, 1>(state_carry, summary_head_state);
             // Restart from zero and identity so the tail summary is independent
             // of the head transition just saved above.
-            state.wait_front(key_pair_tiles);
-            copy<key_pair_tiles, key_pair_tiles>(state, state_ring);
+            state_ring.wait_front(key_pair_tiles);
             state_ring.pop_front(key_pair_tiles);
-            state.pop_front(key_pair_tiles);
+            state_carry.pop_front(key_pair_tiles);
+            seed_state<key_pair_tiles>(state, state_ring, state_carry);
+            pack_reconfig_data_format(dfb::state_ring);
         }
         kd.pop_front(chunk_key_tiles);
         v_beta.pop_front(chunk_value_tiles);
@@ -390,12 +453,15 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         final_decay.pop_front(Kt);
     }
     final_state.wait_front(key_pair_tiles);
+    state_carry.wait_front(key_pair_tiles);
     pack_reconfig_data_format(output.get_id());
     constexpr uint32_t packet_rows = kda::largest_divisor_at_most(
         Kt, ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>() / Vt);
-    extract_paths<true, Kt, Vt, packet_rows>(final_state, output);
-    extract_paths<false, Kt, Vt, packet_rows>(final_state, transport_state);
+    extract_paths<true, Kt, Vt, packet_rows>(state_carry, output);
+    pack_reconfig_data_format(transport_state.get_id());
+    extract_paths<false, Kt, Vt, packet_rows>(state_carry, transport_state);
     final_state.pop_front(key_pair_tiles);
+    state_carry.pop_front(key_pair_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
@@ -415,22 +481,28 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     DataflowBuffer final_state(dfb::final_state);
     DataflowBuffer scratch(dfb::scratch);
     DataflowBuffer tail_entry_states(dfb::tail_entry_states);
+    DataflowBuffer state_carry(dfb::state_carry);
+    DataflowBuffer identity(dfb::identity);
+    DataflowBuffer decay_diagonal(dfb::decay_diagonal);
 
     constexpr uint32_t key_value_tiles = Kt * Vt;
 
+    identity.wait_front(2);
+    seed_state<key_value_tiles>(state, state_ring, state_carry);
     pack_reconfig_data_format(dfb::scratch);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         // A chronological split restarts the causal stream mid-group. The recurrence is affine in
         // the state, so no per-chunk term changes -- only where the carry comes
         // from. reset_chunk 0 means never, which is exact rather than a sentinel:
         // r == 0 means no group straddles, and chunk 0 always seeds from `state`.
-        DataflowBuffer& current_state = chunk == 0 ? state : state_ring;
+        DataflowBuffer& current_state = state_ring;
         if (reset_chunk != 0 && chunk == reset_chunk) {
             state_ring.wait_front(key_value_tiles);
-            tail_entry_states.wait_front(key_value_tiles);
-            copy<key_value_tiles, key_value_tiles>(tail_entry_states, state_ring);
+            state_carry.wait_front(key_value_tiles);
             state_ring.pop_front(key_value_tiles);
-            tail_entry_states.pop_front(key_value_tiles);
+            state_carry.pop_front(key_value_tiles);
+            seed_state<key_value_tiles>(tail_entry_states, state_ring, state_carry);
+            pack_reconfig_data_format(dfb::scratch);
         }
         DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : state_ring;
 
@@ -441,8 +513,18 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
 
         pack_reconfig_data_format(dfb::state_ring);
         update_state<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
-            current_state, destination, value_new, k_decay_transposed, final_decay);
+            current_state,
+            state_carry,
+            destination,
+            value_new,
+            k_decay_transposed,
+            final_decay,
+            identity,
+            decay_diagonal);
+        pack_reconfig_data_format(dfb::scratch);
     }
+    state_carry.wait_front(key_value_tiles);
+    state_carry.pop_front(key_value_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary>
