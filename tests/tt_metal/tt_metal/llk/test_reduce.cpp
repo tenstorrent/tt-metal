@@ -278,7 +278,6 @@ static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(c
         case ReduceType::MAX: reduce_defines.emplace("REDUCE_OP", "PoolType::MAX"); break;
     }
     reduce_defines.emplace("MATH_ONLY", test_config.math_only_reduce ? "1" : "0");
-    reduce_defines.emplace("DST_ACCUM_MODE", test_config.fp32_dest_acc_en ? "1" : "0");
     return reduce_defines;
 }
 
