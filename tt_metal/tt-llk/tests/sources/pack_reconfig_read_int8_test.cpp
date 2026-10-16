@@ -16,7 +16,8 @@
 //   UInt8 output:     previous format Float16_b. Per tile the Float16_b input is A2D-copied into
 //                     Dest and an in-place SFPU pass rounds every datum to an integer in 0..65535
 //                     (SFP_STOCH_RND FP32_TO_UINT16) and stores its low 10 magnitude bits back as
-//                     an "integer 8" Dest datum (SFPSTORE INT8), which an int8 pack reads.
+//                     an "integer 8" Dest datum (SFPSTORE INT8), which an int8 pack reads. The pass
+//                     uses the load / store address modes the SFPU typecast init programs.
 //   Float16_b output: previous format UInt8. Plain datacopy; the stimuli carry bf16 denormals and
 //                     NaN, which the full-configure read treats differently from a raw read.
 
@@ -76,19 +77,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
+// Address modes of the SFPU pass: the typecast init programs a no-increment slot for the load and a
+// Dest += 2 slot for the store (ADDR_MOD_7 and ADDR_MOD_6). Wormhole SFPLOAD / SFPSTORE carry a 2-bit
+// address-mode field that _llk_math_eltwise_sfpu_start_ rebases onto slots 4..7, so the kernel names
+// ADDR_MOD_3 / ADDR_MOD_2 there; Blackhole's field is 3 bits wide and names the slots directly.
+#ifdef ARCH_BLACKHOLE
+constexpr std::uint8_t LOAD_ADDR_MOD  = ADDR_MOD_7;
+constexpr std::uint8_t STORE_ADDR_MOD = ADDR_MOD_6;
+#else
+constexpr std::uint8_t LOAD_ADDR_MOD  = ADDR_MOD_3;
+constexpr std::uint8_t STORE_ADDR_MOD = ADDR_MOD_2;
+#endif
+
 // Round the 16-bit Dest datums of the current face to integers in 0..65535 and store their low
-// 10 magnitude bits back as "integer 8" Dest datums. Same load/store stepping as the unary SFPU
-// typecast kernels: ADDR_MOD_3 (no increment) on the load, ADDR_MOD_2 (Dest += 2) on the store,
-// 8 iterations per face.
+// 10 magnitude bits back as "integer 8" Dest datums, 8 load / store pairs per face.
 inline void round_face_to_int8_datums_in_place()
 {
 #pragma GCC unroll 8
     for (int d = 0; d < 8; ++d)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, LOAD_ADDR_MOD, 0);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPNOP;
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT8, ADDR_MOD_2, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT8, STORE_ADDR_MOD, 0);
     }
 }
 
@@ -99,17 +110,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const bool int8_out = is_int8_output(formats.pack_dst);
 
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
     if (int8_out)
     {
-        // Bare SFPU init plus the Dest += 2 store stepping the typecast kernels program.
-        _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-        math::reset_counters(p_setrwc::SET_ABD_F);
+        // SFPU config plus the typecast load (no increment) and store (Dest += 2) address modes.
+        _llk_math_eltwise_unary_sfpu_init_<SfpuType::typecast>();
     }
 
     LLK_ASSERT(
