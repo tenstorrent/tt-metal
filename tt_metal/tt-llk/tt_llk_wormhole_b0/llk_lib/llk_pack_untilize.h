@@ -229,8 +229,9 @@ inline void _llk_pack_untilize_uninit_()
 /**
  * @brief Untilize-pack one block of tiles from the destination register to L1.
  *
- * Programs the L1 destination address and the packer counters, then runs the MOP once per face group,
- * advancing counters between face groups and resetting them afterward.
+ * Programs the L1 destination address, then runs the MOP once per Dest row of the block (num_rows runs,
+ * which depends on the tile geometry, see below), resetting the W counter before each run, advancing Y
+ * after it and, for a partial block, replaying the per-row L1 address update; finally closes the block.
  *
  * @tparam block_ct_dim: Number of input tiles per block.
  * @tparam full_ct_dim: Total number of input tiles across all blocks.
