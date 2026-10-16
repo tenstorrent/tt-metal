@@ -1111,3 +1111,34 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   the weight's fixed rounding (DS41-43) and the FPU's in-tile sum (DS41-16) need a split / exact matmul (owner: no).
   Waiver requested for the hc steps' own-floor row / column / bias checks (and S.swa.15 ffn_hc's rel on fp32 streams).
 - Re-run: `scripts/tt-probe.sh mhc_ds41_fix4 < tests/ttnn/unit_tests/operations/mhc_ds41_fix4/probes/probe_01{1,2,3}.py`.
+
+## FIX.4 overseer, attempt 1 of brief FIX.4.overseer.1 (17:24, after the owner waiver OV-13): finish and report
+- Tree = HEAD c50953498f6 (HC_SINKHORN=sfpu_fp32 = mhc_pre_xing(deepseek=True), FP32_WEIGHT_ROUND=srca). Rebuilt
+  (`./build_metal.sh`; fork sources newer than the 15:11 build). No change to tt/ code or the fork's code: OV-13 waives
+  the hc own-floor checks; nothing left in tt/mhc.py is a bug or a lower-precision choice (DS41-42, DS41-43).
+- Changed: tt/settings.py HC_SINKHORN description = the table below (its step numbers were from before srca); fork
+  CHANGELOG entry 7 = the regression re-run; known_issues DS41-45.
+- HC_SINKHORN table, golden inputs, chunk 1, 2x2, 1024 rows per chip, srca (probe_014.py, 20 synced calls):
+
+  | step | floor (limit/2) | sfpu_fp32 step vs CPU | x floor | fpu step vs CPU | x floor | Sinkhorn alone sfpu / fpu | rsqrt+Sinkhorn ms sfpu / fpu | whole step ms sfpu / fpu |
+  |---|---|---|---|---|---|---|---|---|
+  | L0 attn_hc | 1.76e-5 | 1.07e-5 | 0.61 | 5.94e-4 | 33.7 | 6.6e-8 / 5.9e-4 | 0.031 / 0.455 | 0.409 / 0.797 |
+  | L0 ffn_hc | 7.37e-5 | 4.44e-5 | 0.60 | 1.19e-3 | 16.2 | 7.6e-8 / 1.2e-3 | 0.030 / 0.449 | 0.410 / 0.764 |
+  | L1 attn_hc | 1.97e-4 | 6.02e-5 | 0.31 | 6.45e-4 | 3.28 | 6.5e-8 / 6.5e-4 | 0.035 / 0.448 | 0.411 / 0.805 |
+  | L1 ffn_hc | 1.42e-4 | 6.58e-5 | 0.46 | 7.58e-4 | 5.35 | 7.5e-8 / 7.7e-4 | 0.031 / 0.451 | 0.413 / 0.771 |
+  | L2 attn_hc | 2.03e-4 | 5.88e-5 | 0.29 | 7.44e-4 | 3.67 | 6.5e-8 / 7.4e-4 | 0.033 / 0.455 | 0.410 / 0.772 |
+
+  Per layer per chunk (attn_hc + ffn_hc, L0): sfpu_fp32 0.82 ms, fpu 1.56 ms.
+- Fork regression, option off, fresh build: model cases (test_mhc_pre_xing.py + test_mhc_pre_ttnn.py: xing40, glm53,
+  the 5 DeepSeek cases, 2 CPU checks) 103 passed; unit + golden 321 passed / 1 skipped (= the recorded baseline).
+- Gate, each test with its BRINGUP_TASK (logs /tmp/fix4_ov1/g1..g7.log): every threshold metric passes:
+  err_attn_hc_L00 0.00123 <= 0.00247, err_ffn_hc_L00 0.00124 <= 0.00360, err_attn_hc_L01 0.00126 <= 0.00774,
+  err_ffn_hc_L01 0.00132 <= 0.0123, err_attn_hc_L02 0.00111 <= 0.00773, err_swap_out 0.0186 <= 0.0830 (S.swa.15),
+  0.0218 <= 0.0825 (S.swa_engram.18). The 5 component tests PASS (hc own-floor checks reported WAIVED). The 2 swap
+  tests exit 1 on non-hc checks only (DS41-45): swap_router own-floor (S.swa.15 3.92e3 x, S.swa_engram.18 2.33e3 x;
+  present before FIX.4, verify/f83) and S.swa.15 swap_kv column 183 bias 2.27 x. Their hc steps: S.swa.15 attn_hc rel
+  1.1e-5 ok, ffn_hc rel 1.95e-4 > 1.5e-4 (fp32 h_mid truncated to TF32 on unpack, K-30) WAIVED; S.swa_engram.18
+  attn_hc 1.28e-4 / ffn_hc 1.49e-4 rel ok, own-floor WAIVED.
+- Re-run: the brief's gate; table `scripts/tt-probe.sh mhc_ds41_fix4 < tests/ttnn/unit_tests/operations/mhc_ds41_fix4/probes/probe_014.py`;
+  fork `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_pre_ttnn/tests/test_mhc_pre_xing.py ttnn/ttnn/bringup/mhc_pre_ttnn/tests/test_mhc_pre_ttnn.py`
+  and `... tests/unit tests/golden`; A/B `DS41_HC_SINKHORN=fpu`.

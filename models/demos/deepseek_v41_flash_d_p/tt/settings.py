@@ -136,12 +136,14 @@ TABLE = {
         "the mHC mixes after the axis-1 exchange (tt/mhc.py): rsqrt scale, split, sigmoids and Sinkhorn. sfpu_fp32 = "
         "ttnn.bringup.mhc_pre_xing(deepseek=True): one program, every step lane-wise fp32 on the SFPU (accurate exp, "
         "Newton reciprocal / rsqrt). fpu = the composed rsqrt chain + ttnn.experimental.deepseek_prefill."
-        "mhc_split_sinkhorn, whose FPU steps read fp32 at TF32 (K-20, DS41-40). Measured FIX.4 (golden inputs, 2x2, "
-        "1024 rows per chip; L0 attn / L0 ffn / L1 attn / L1 ffn / L2 attn): Sinkhorn alone vs a CPU fp32 Sinkhorn "
-        "on the device's mixes sfpu_fp32 rel 6.5e-8..7.6e-8, fpu 5.9e-4..1.2e-3; whole step vs the CPU step "
-        "sfpu_fp32 6.1e-5 / 1.1e-4 / 1.4e-4 / 1.5e-4 / 1.0e-4 = 3.4 / 1.5 / 0.69 / 1.1 / 0.50 x the noise floor (the "
-        "rest is the linear, DS41-41), fpu 6.1e-4 / 1.3e-3 / 7.0e-4 / 8.2e-4 / 7.8e-4 = 35 / 17 / 3.5 / 5.8 / 3.9 x; "
-        "time (wall, per call) rsqrt + Sinkhorn sfpu_fp32 0.031 ms, fpu 0.45 ms; whole step 0.41 vs 0.77 ms",
+        "mhc_split_sinkhorn, whose FPU steps read fp32 at TF32 (K-20, DS41-40). Measured FIX.4 overseer.1 (golden "
+        "inputs, 2x2, 1024 rows per chip, FP32_WEIGHT_ROUND=srca; L0 attn / L0 ffn / L1 attn / L1 ffn / L2 attn): "
+        "Sinkhorn alone vs a CPU fp32 Sinkhorn on the device's mixes sfpu_fp32 rel 6.5e-8..7.6e-8, fpu 5.9e-4.."
+        "1.2e-3; whole step vs the CPU step sfpu_fp32 1.07e-5 / 4.44e-5 / 6.02e-5 / 6.58e-5 / 5.88e-5 = 0.61 / 0.60 / "
+        "0.31 / 0.46 / 0.29 x the noise floor (gate limit / 2; the own-floor column bias left is hc_fn's rounding, "
+        "DS41-43, owner waiver), fpu 5.94e-4 / 1.19e-3 / 6.45e-4 / 7.58e-4 / 7.44e-4 = 34 / 16 / 3.3 / 5.4 / 3.7 x; "
+        "time (wall, 20 synced calls) rsqrt + Sinkhorn sfpu_fp32 0.030-0.035 ms, fpu 0.448-0.455 ms; whole step "
+        "0.409-0.413 vs 0.764-0.805 ms; per layer per chunk (attn_hc + ffn_hc) 0.82 vs 1.56 ms",
     ),
     "HC_TP_SUM": Setting(
         "gather_add",
