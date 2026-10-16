@@ -1,0 +1,19 @@
+# generated/profiler/reports/2026_10_16_02_37_17/ops_perf_results_2026_10_16_02_37_17.csv: 2112 AllGather rows (of 4152)
+# roofline port (C++ link rate) vs PM IDEAL: max rel error 0.000% (ring|tile|f32|DRAM|[1,1,2048,2048]|dim3|L2|AllGather|pkt15232)
+
+config                                                             out    n   median_us  spread%   ideal_us    eff%   eff50%    us/MB   ci95%    pkt  tuning
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+linear|tile|bf16|DRAM|[1,1,2048,4096]|dim3|L2|AllGatherAsync    16.8MB   20      400.45      3.6     293.60    73.3     36.7    23.87     0.6      -  -
+linear|tile|bf16|DRAM|[1,1,2048,4096]|dim3|L2|AllGather         16.8MB   20      268.78      2.2     293.60   109.2     54.6    16.02     0.4  15232  -
+linear|tile|f32|DRAM|[1,1,2048,2048]|dim3|L2|AllGatherAsync     16.8MB   20      333.77      1.2     293.60    88.0     44.0    19.89     0.2      -  -
+linear|tile|f32|DRAM|[1,1,2048,2048]|dim3|L2|AllGather          16.8MB   20      268.13      2.7     293.60   109.5     54.8    15.98     0.2  15232  -
+ring|tile|bf16|DRAM|[1,1,2048,4096]|dim3|L2|AllGatherAsync      16.8MB   20      203.94      4.3     146.80    72.0     36.0    12.16     0.2      -  -
+ring|tile|bf16|DRAM|[1,1,2048,4096]|dim3|L2|AllGather           16.8MB   20      145.72      5.1     146.80   100.7     50.4     8.69     0.6  15232  -
+ring|tile|f32|DRAM|[1,1,2048,2048]|dim3|L2|AllGatherAsync       16.8MB   20      189.03      1.5     146.80    77.7     38.8    11.27     0.3      -  -
+ring|tile|f32|DRAM|[1,1,2048,2048]|dim3|L2|AllGather            16.8MB   20      146.29      8.4     146.80   100.4     50.2     8.72     0.8  15232  -
+linear|tile|bfp8|DRAM|[1,1,2048,8192]|dim3|L2|AllGatherAsync    17.8MB   20      698.84      1.1     293.60    42.0     21.0    39.20     0.2      -  -
+linear|tile|bfp8|DRAM|[1,1,2048,8192]|dim3|L2|AllGather         17.8MB   20      273.26      3.5     293.60   107.4     53.7    15.33     0.3  15232  -
+ring|tile|bfp8|DRAM|[1,1,2048,8192]|dim3|L2|AllGatherAsync      17.8MB   20      309.89      1.5     146.80    47.4     23.7    17.38     0.2      -  -
+ring|tile|bfp8|DRAM|[1,1,2048,8192]|dim3|L2|AllGather           17.8MB   20      151.84     15.8     146.80    96.7     48.3     8.52     1.1  15232  -
+
+wrote /tmp/claude-1211409444/-localdev-scardoza-git-tt-metal/e0f9a88a-6dd4-41db-bd04-a8d6a14bbb96/scratchpad/perf/final_page_size_tile_table.csv

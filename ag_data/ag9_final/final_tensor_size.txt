@@ -1,0 +1,43 @@
+# generated/profiler/reports/2026_10_15_20_43_50/ops_perf_results_2026_10_15_20_43_50.csv: 5632 AllGather rows (of 11328)
+# roofline port (C++ link rate) vs PM IDEAL: max rel error 0.000% (linear|tile|bf16|DRAM|[1,1,256,3584]|dim3|L2|AllGather|pkt15232)
+# generated/profiler/reports/2026_10_16_02_31_26/ops_perf_results_2026_10_16_02_31_26.csv: 5632 AllGather rows (of 11328)
+# roofline port (C++ link rate) vs PM IDEAL: max rel error 0.000% (linear|tile|bf16|DRAM|[1,1,256,3584]|dim3|L2|AllGather|pkt15232)
+
+A = generated/profiler/reports/2026_10_15_20_43_50
+B = generated/profiler/reports/2026_10_16_02_31_26
+config                                                        out   nA  nB       A_us       B_us   delta%   sprA%   sprB%   ciA%   ciB%   effA%   effB%  verdict
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+linear|tile|bf16|DRAM|[1,1,32,256]|dim3|L2|AllGather       16.4KB   20  20      18.77      18.57     -1.1     3.1    33.3    0.4    0.6    19.2    19.4  noise
+ring|tile|bf16|DRAM|[1,1,32,256]|dim3|L2|AllGather         16.4KB   20  20      15.66      16.17     +3.3     6.9     6.7    1.1    1.0    13.2    12.7  noise
+linear|tile|bf16|DRAM|[1,1,32,1024]|dim3|L2|AllGather      65.5KB   20  20      20.27      20.18     -0.4     3.7     4.9    0.4    0.7    17.8    17.9  noise
+ring|tile|bf16|DRAM|[1,1,32,1024]|dim3|L2|AllGather        65.5KB   20  20      17.42      16.95     -2.7     6.6  1115.0    0.6    0.6    11.8    12.2  noise
+linear|tile|bf16|DRAM|[1,1,128,512]|dim3|L2|AllGather     131.1KB   20  20      21.61      20.99     -2.9     4.0    38.0    0.4    0.4    16.7    17.2  noise
+ring|tile|bf16|DRAM|[1,1,128,512]|dim3|L2|AllGather       131.1KB   20  20      17.62      17.76     +0.8    24.4     6.9    0.7    1.0    11.7    11.6  noise
+linear|tile|bf16|DRAM|[1,1,128,1024]|dim3|L2|AllGather    262.1KB   20  20      24.55      24.60     +0.2     3.4     5.2    0.3    0.4    18.7    18.7  noise
+ring|tile|bf16|DRAM|[1,1,128,1024]|dim3|L2|AllGather      262.1KB   20  20      19.79      19.15     -3.2     6.1    12.7    1.3    1.0    11.6    12.0  noise
+linear|tile|bf16|DRAM|[1,1,256,2048]|dim3|L2|AllGather      1.0MB   20  20      41.49      42.08     +1.4     4.1     4.5    0.9    0.4    44.2    43.6  noise
+ring|tile|bf16|DRAM|[1,1,256,2048]|dim3|L2|AllGather        1.0MB   20  20      28.55      28.45     -0.3     7.8    21.0    1.5    2.5    32.1    32.2  noise
+linear|tile|bf16|DRAM|[1,1,288,3072]|dim3|L2|AllGather      1.8MB   20  20      57.00      52.46     -8.0     4.0     3.7    0.5    1.0    54.3    59.0  B faster
+ring|tile|bf16|DRAM|[1,1,288,3072]|dim3|L2|AllGather        1.8MB   20  20      36.50      36.24     -0.7     3.4     4.2    0.3    0.4    42.4    42.7  noise
+linear|tile|bf16|DRAM|[1,1,352,2560]|dim3|L2|AllGather      1.8MB   20  20      58.33      55.81     -4.3    14.2     2.9    0.6    0.2    54.1    56.5  noise
+ring|tile|bf16|DRAM|[1,1,352,2560]|dim3|L2|AllGather        1.8MB   20  20      37.78      38.36     +1.5     4.3     2.8    0.4    0.3    41.7    41.1  noise
+linear|tile|bf16|DRAM|[1,1,256,3584]|dim3|L2|AllGather      1.8MB   20  20      53.59      50.42     -5.9     2.5    15.7    0.5    0.4    59.9    63.7  B faster
+ring|tile|bf16|DRAM|[1,1,256,3584]|dim3|L2|AllGather        1.8MB   20  20      37.90      38.08     +0.5     3.1     7.2    0.6    0.6    42.4    42.2  noise
+linear|tile|bf16|DRAM|[1,1,2048,512]|dim3|L2|AllGather      2.1MB   20  20      64.66      63.74     -1.4     1.8     2.4    0.6    0.3    56.8    57.6  noise
+ring|tile|bf16|DRAM|[1,1,2048,512]|dim3|L2|AllGather        2.1MB   20  20      40.45      38.58     -4.6    16.7     2.4    0.4    0.3    45.4    47.6  noise
+linear|tile|bf16|DRAM|[1,1,4096,512]|dim3|L2|AllGather      4.2MB   20  20     107.91     107.39     -0.5     2.1     3.1    0.3    0.4    68.0    68.4  noise
+ring|tile|bf16|DRAM|[1,1,4096,512]|dim3|L2|AllGather        4.2MB   20  20      64.18      60.57     -5.6     2.9     2.0    0.5    0.3    57.2    60.6  B faster
+linear|tile|bf16|DRAM|[1,1,1024,2560]|dim3|L2|AllGather     5.2MB   20  20     121.42     120.98     -0.4     2.5     2.1    0.3    0.4    75.6    75.8  noise
+ring|tile|bf16|DRAM|[1,1,1024,2560]|dim3|L2|AllGather       5.2MB   20  20      67.12      66.44     -1.0     2.7     2.0    0.5    0.3    68.3    69.0  noise
+linear|tile|bf16|DRAM|[1,1,1024,5120]|dim3|L2|AllGather    10.5MB   20  20     175.28     175.44     +0.1     1.5     3.1    0.3    0.3   104.7   104.6  noise
+ring|tile|bf16|DRAM|[1,1,1024,5120]|dim3|L2|AllGather      10.5MB   20  20      94.32      93.76     -0.6     2.2     2.5    0.3    0.3    97.3    97.9  noise
+linear|tile|bf16|DRAM|[1,1,4096,2560]|dim3|L2|AllGather    21.0MB   20  20     430.12     430.25     +0.0     0.7     1.2    0.1    0.1    85.3    85.3  noise
+ring|tile|bf16|DRAM|[1,1,4096,2560]|dim3|L2|AllGather      21.0MB   20  20     212.27     209.23     -1.4     2.3     1.2    0.3    0.2    86.4    87.7  noise
+linear|tile|bf16|DRAM|[1,1,3072,8192]|dim3|L2|AllGather    50.3MB   20  20     744.49     743.25     -0.2     1.4     1.9    0.4    0.2   118.3   118.5  noise
+ring|tile|bf16|DRAM|[1,1,3072,8192]|dim3|L2|AllGather      50.3MB   20  20     377.84     376.78     -0.3     3.4     5.0    0.5    0.4   116.6   116.9  noise
+linear|tile|bf16|DRAM|[1,2,3072,8192]|dim3|L2|AllGather   100.7MB   20  20    1476.86    1475.57     -0.1     0.9     1.1    0.2    0.2   119.3   119.4  noise
+ring|tile|bf16|DRAM|[1,2,3072,8192]|dim3|L2|AllGather     100.7MB   20  20     733.75     734.70     +0.1     2.9     3.2    0.5    0.5   120.0   119.9  noise
+linear|tile|bf16|DRAM|[2,2,3072,8192]|dim3|L2|AllGather   201.3MB   20  20    2927.11    2927.64     +0.0     1.1     0.8    0.1    0.1   120.4   120.3  noise
+ring|tile|bf16|DRAM|[2,2,3072,8192]|dim3|L2|AllGather     201.3MB   20  20    1448.92    1446.12     -0.2     2.2     2.7    0.3    0.3   121.6   121.8  noise
+
+wrote /tmp/claude-1211409444/-localdev-scardoza-git-tt-metal/e0f9a88a-6dd4-41db-bd04-a8d6a14bbb96/scratchpad/perf/final_tensor_size.csv

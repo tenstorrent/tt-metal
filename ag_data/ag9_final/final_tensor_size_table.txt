@@ -1,0 +1,39 @@
+# generated/profiler/reports/2026_10_16_02_31_26/ops_perf_results_2026_10_16_02_31_26.csv: 5632 AllGather rows (of 11328)
+# roofline port (C++ link rate) vs PM IDEAL: max rel error 0.000% (linear|tile|bf16|DRAM|[1,1,256,3584]|dim3|L2|AllGather|pkt15232)
+
+config                                                        out    n   median_us  spread%   ideal_us    eff%   eff50%    us/MB   ci95%    pkt  tuning
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+linear|tile|bf16|DRAM|[1,1,32,256]|dim3|L2|AllGather       16.4KB   20       18.57     33.3       3.61    19.4     19.4  1133.70     0.6  15232  -
+ring|tile|bf16|DRAM|[1,1,32,256]|dim3|L2|AllGather         16.4KB   20       16.17      6.7       2.06    12.7     12.7   986.94     1.0  15232  -
+linear|tile|bf16|DRAM|[1,1,32,1024]|dim3|L2|AllGather      65.5KB   20       20.18      4.9       3.61    17.9     17.9   307.89     0.7  15232  -
+ring|tile|bf16|DRAM|[1,1,32,1024]|dim3|L2|AllGather        65.5KB   20       16.95   1115.0       2.06    12.2     12.2   258.66     0.6  15232  -
+linear|tile|bf16|DRAM|[1,1,128,512]|dim3|L2|AllGather     131.1KB   20       20.99     38.0       3.61    17.2     17.2   160.13     0.4  15232  -
+ring|tile|bf16|DRAM|[1,1,128,512]|dim3|L2|AllGather       131.1KB   20       17.76      6.9       2.06    11.6     11.6   135.53     1.0  15232  -
+linear|tile|bf16|DRAM|[1,1,128,1024]|dim3|L2|AllGather    262.1KB   20       24.60      5.2       4.59    18.7     14.7    93.84     0.4  15232  -
+ring|tile|bf16|DRAM|[1,1,128,1024]|dim3|L2|AllGather      262.1KB   20       19.15     12.7       2.29    12.0     10.8    73.04     1.0  15232  -
+linear|tile|bf16|DRAM|[1,1,256,2048]|dim3|L2|AllGather      1.0MB   20       42.08      4.5      18.35    43.6     21.8    40.13     0.4  15232  -
+ring|tile|bf16|DRAM|[1,1,256,2048]|dim3|L2|AllGather        1.0MB   20       28.45     21.0       9.18    32.2     16.1    27.14     2.5  15232  -
+linear|tile|bf16|DRAM|[1,1,288,3072]|dim3|L2|AllGather      1.8MB   20       52.46      3.7      30.97    59.0     29.5    29.64     1.0  15232  -
+ring|tile|bf16|DRAM|[1,1,288,3072]|dim3|L2|AllGather        1.8MB   20       36.24      4.2      15.48    42.7     21.4    20.48     0.4  15232  -
+linear|tile|bf16|DRAM|[1,1,352,2560]|dim3|L2|AllGather      1.8MB   20       55.81      2.9      31.54    56.5     28.3    30.97     0.2  15232  -
+ring|tile|bf16|DRAM|[1,1,352,2560]|dim3|L2|AllGather        1.8MB   20       38.36      2.8      15.77    41.1     20.6    21.28     0.3  15232  -
+linear|tile|bf16|DRAM|[1,1,256,3584]|dim3|L2|AllGather      1.8MB   20       50.42     15.7      32.11    63.7     31.8    27.48     0.4  15232  -
+ring|tile|bf16|DRAM|[1,1,256,3584]|dim3|L2|AllGather        1.8MB   20       38.08      7.2      16.06    42.2     21.1    20.75     0.6  15232  -
+linear|tile|bf16|DRAM|[1,1,2048,512]|dim3|L2|AllGather      2.1MB   20       63.74      2.4      36.70    57.6     28.8    30.39     0.3  15232  -
+ring|tile|bf16|DRAM|[1,1,2048,512]|dim3|L2|AllGather        2.1MB   20       38.58      2.4      18.35    47.6     23.8    18.40     0.3  15232  -
+linear|tile|bf16|DRAM|[1,1,4096,512]|dim3|L2|AllGather      4.2MB   20      107.39      3.1      73.40    68.4     34.2    25.60     0.4  15232  -
+ring|tile|bf16|DRAM|[1,1,4096,512]|dim3|L2|AllGather        4.2MB   20       60.57      2.0      36.70    60.6     30.3    14.44     0.3  15232  -
+linear|tile|bf16|DRAM|[1,1,1024,2560]|dim3|L2|AllGather     5.2MB   20      120.98      2.1      91.75    75.8     37.9    23.08     0.4  15232  -
+ring|tile|bf16|DRAM|[1,1,1024,2560]|dim3|L2|AllGather       5.2MB   20       66.44      2.0      45.88    69.0     34.5    12.67     0.3  15232  -
+linear|tile|bf16|DRAM|[1,1,1024,5120]|dim3|L2|AllGather    10.5MB   20      175.44      3.1     183.50   104.6     52.3    16.73     0.3  15232  -
+ring|tile|bf16|DRAM|[1,1,1024,5120]|dim3|L2|AllGather      10.5MB   20       93.76      2.5      91.75    97.9     48.9     8.94     0.3  15232  -
+linear|tile|bf16|DRAM|[1,1,4096,2560]|dim3|L2|AllGather    21.0MB   20      430.25      1.2     367.00    85.3     42.7    20.52     0.1  15232  -
+ring|tile|bf16|DRAM|[1,1,4096,2560]|dim3|L2|AllGather      21.0MB   20      209.23      1.2     183.50    87.7     43.9     9.98     0.2  15232  -
+linear|tile|bf16|DRAM|[1,1,3072,8192]|dim3|L2|AllGather    50.3MB   20      743.25      1.9     880.80   118.5     59.3    14.77     0.2  15232  -
+ring|tile|bf16|DRAM|[1,1,3072,8192]|dim3|L2|AllGather      50.3MB   20      376.78      5.0     440.40   116.9     58.4     7.49     0.4  15232  -
+linear|tile|bf16|DRAM|[1,2,3072,8192]|dim3|L2|AllGather   100.7MB   20     1475.57      1.1    1761.61   119.4     59.7    14.66     0.2  15232  -
+ring|tile|bf16|DRAM|[1,2,3072,8192]|dim3|L2|AllGather     100.7MB   20      734.70      3.2     880.80   119.9     59.9     7.30     0.5  15232  -
+linear|tile|bf16|DRAM|[2,2,3072,8192]|dim3|L2|AllGather   201.3MB   20     2927.64      0.8    3523.22   120.3     60.2    14.54     0.1  15232  -
+ring|tile|bf16|DRAM|[2,2,3072,8192]|dim3|L2|AllGather     201.3MB   20     1446.12      2.7    1761.61   121.8     60.9     7.18     0.3  15232  -
+
+wrote /tmp/claude-1211409444/-localdev-scardoza-git-tt-metal/e0f9a88a-6dd4-41db-bd04-a8d6a14bbb96/scratchpad/perf/final_tensor_size_table.csv
