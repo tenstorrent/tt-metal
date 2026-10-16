@@ -48,8 +48,13 @@ through a uv overlay that adds a newer transformers on top of it for that one co
 uv run --no-project --python python_env/bin/python --with transformers==5.19.0 python generate_golden_hy4_preview.py --isl 10240
 ```
 
-**MiMo-V2.6-Flash-RL:** the script passes its selftest and a full-depth run completes, but that run peaked at ~525 GB
-of host memory at isl 256, so layer weights are not all being released yet. Check memory before a long run.
+**MiMo-V2.6-Flash-RL:** no prefix (wikitext ppl at isl 10240: 4.779 raw, 4.780 chat; no BOS token). The ~525 GB
+host peak once noted here came from the pre-direct-read load path: with weights read straight to the GPU and
+dequantized there, host memory stays at ~2 GB for the whole run. isl 56320 with `--attn-chunk 1024`: 5.5 min from
+cached weights, 107 GB GPU peak, 36 GB on disk. Runs are deterministic, but NOT prefix-consistent across ISLs: the
+router's fp32 logit matmul rounds differently by row count (max 1.6e-5 at layer 1), which flips a few top-8 picks
+and grows with depth (at isl 10240 vs the first 10240 rows of isl 56320: 96-99.8% of expert picks agree, last-layer
+hidden PCC 0.974). Compare routing as sets, with a tolerance.
 
 **MiniMax-M3 at long ISL:** the upstream lightning indexer builds a whole [4, N, N] fp32 score matrix (~105 GB peak at
 isl 56320 with its masked copy). `HF_GOLDEN_INDEXER_CHUNK=4096` builds it 4096 query rows at a time (~4 GB); every op
