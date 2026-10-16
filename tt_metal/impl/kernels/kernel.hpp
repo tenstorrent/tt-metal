@@ -156,7 +156,7 @@ struct TensorBindingHandle {
 };
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
-// A scratchpad is a private, uninitialized, node-local L1 region bound to a kernel.
+// A scratchpad is an uninitialized, node-local L1 region, private to a kernel by default.
 //  - The base address is allocated at Program-compile time, and is passed to the kernel as an
 //    implicit CRTA.
 //  - Since the address is persistent across enqueues, we store it on the Kernel object rather
@@ -173,6 +173,9 @@ struct ScratchpadBindingHandle {
     uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
     std::optional<LLKMetadata> llk_metadata;
+    // Present only for opted-in multi-binding: the ProgramSpec resource name groups bindings
+    // into one allocation. Host-only identity; does not affect the kernel binary or JIT hash.
+    std::optional<std::string> shared_allocation_id;
 };
 
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).

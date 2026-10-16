@@ -722,7 +722,8 @@ uint64_t Kernel::compute_hash() const {
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
     // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time
     // inputs (size_bytes is baked into the generated header, so it MUST be in the cache key).
-    // allocated_address is a per-execution allocation, not part of the binary, so it is omitted.
+    // allocated_address and shared_allocation_id only control host allocation, not the binary,
+    // so they are omitted.
     hasher.update(static_cast<uint64_t>(this->scratchpad_binding_handles_.size()));
     for (const auto& handle : this->scratchpad_binding_handles_) {
         hasher.update(handle.accessor_name);

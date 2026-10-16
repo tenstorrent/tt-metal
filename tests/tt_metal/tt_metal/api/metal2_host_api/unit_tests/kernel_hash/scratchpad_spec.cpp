@@ -50,6 +50,18 @@ TEST_F(ProgramSpecTestQuasar, CPU_DifferentScratchpadSizeProducesDifferentKernel
     EXPECT_NE(hash_small, hash_large) << "Scratchpads of different sizes must produce different kernel hashes.";
 }
 
+TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadMultiBindingDoesNotChangeKernelHash) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 1024}};
+    spec.kernels[0].scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
+    Program private_program = MakeProgramFromSpec(*mesh_device_, spec);
+    spec.scratchpads[0].advanced_options.allow_multi_kernel_binding = true;
+    Program shared_program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_EQ(
+        private_program.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        shared_program.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
+}
+
 TEST_F(ProgramSpecTestQuasar, ScratchpadLlkFormatAffectsKernelHash) {
     auto make_spec = [](std::optional<tt::DataFormat> format) {
         ProgramSpec spec = MakeMinimalValidProgramSpec();
