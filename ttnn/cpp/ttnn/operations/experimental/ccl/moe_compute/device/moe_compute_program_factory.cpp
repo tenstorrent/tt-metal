@@ -37,6 +37,7 @@
 #include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace {
 
@@ -140,6 +141,8 @@ std::string serialize_physical_core_coords(const std::vector<ttnn::CoreCoord>& c
 }  // namespace
 
 namespace ttnn::experimental::prim {
+
+using ttnn::experimental::ccl::add_semaphore_descriptor;
 
 // expose a helper function so callers know what cores are available for subsequently running a2a combine.
 // Combine cores are selected dynamically based on hidden_size (for tilize core count) and mux_core_range_set
@@ -492,19 +495,19 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     //-------------------------------------------------------------------------
 
     // Non-drain-sync cores signal to drain-sync core that partial metadata results are ready
-    auto tilize_partial_metadata_ready_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
+    auto tilize_partial_metadata_ready_semaphore_id = add_semaphore_descriptor(desc, tilize_core_range_set, INVALID);
 
     // Non-drain-sync cores signal to drain-sync core that partial chunk has been sent to the matmul cores.
     // Drain-sync core then signals to non-drain-sync core that they can begin sending the next chunk.
-    auto tilize_chunk_ready_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
+    auto tilize_chunk_ready_semaphore_id = add_semaphore_descriptor(desc, tilize_core_range_set, INVALID);
 
     // Since both reader and writer are using NoC1, we have the readers wait until all writers have sent their
     // chunk portion to the matmul cores before reading in another set of tokens to tilize. This frees up NoC1
     // to do the mcast, which is also a requirement for doing linked mcasts.
-    auto previous_chunk_sent_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
+    auto previous_chunk_sent_semaphore_id = add_semaphore_descriptor(desc, tilize_core_range_set, INVALID);
 
     // For the gather phase scheme used for the first chunk
-    auto initial_gather_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
+    auto initial_gather_semaphore_id = add_semaphore_descriptor(desc, tilize_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Matmul semaphores
@@ -513,7 +516,7 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     // Create semaphores for ring synchronization between cores
     // Each core will have a semaphore that its predecessor will signal
     // reuse the same semaphore location for signaling combine cores that per expert data is available
-    const uint32_t ring_semaphore_id = desc.add_semaphore(matmul_core_range_set, INVALID);
+    const uint32_t ring_semaphore_id = add_semaphore_descriptor(desc, matmul_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize and Matmul semaphores
@@ -521,14 +524,14 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
 
     // Tilize drain-sync core signals to tilize non-drain-sync cores that final metadata results are ready
     // Tilize drain-sync core signals to matmul cores that final metadata results are ready
-    auto metadata_ready_semaphore_id = desc.add_semaphore(tilize_matmul_core_range_set, INVALID);
+    auto metadata_ready_semaphore_id = add_semaphore_descriptor(desc, tilize_matmul_core_range_set, INVALID);
 
     // Matmul cores signal to tilize drain-sync-core that the input chunk is free to be written to
     // Tilize drain-sync-core propagates this to the tilize non-drain-sync cores
-    auto matmul_chunk_available_semaphore_id = desc.add_semaphore(tilize_matmul_core_range_set, INVALID);
+    auto matmul_chunk_available_semaphore_id = add_semaphore_descriptor(desc, tilize_matmul_core_range_set, INVALID);
 
     // Tilize drain-sync core signals to all matmul cores that a full chunk is ready
-    auto matmul_chunk_ready_semaphore_id = desc.add_semaphore(tilize_matmul_core_range_set, INVALID);
+    auto matmul_chunk_ready_semaphore_id = add_semaphore_descriptor(desc, tilize_matmul_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize/MatMul and Combine sync semaphore
@@ -543,15 +546,15 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     // the compute_only / local_output CT args, so the semaphore is unused by anyone -- but
     // tilize_reader still calls get_semaphore() on it (a local L1 address lookup), so we still need
     // it to be allocated on at least the matmul core range set.
-    const auto tilize_combine_sync_semaphore_id = desc.add_semaphore(
-        combine_built ? CoreRangeSet(combine_core_range_set.bounding_box()) : matmul_core_range_set, INVALID);
+    const auto tilize_combine_sync_semaphore_id = add_semaphore_descriptor(
+        desc, combine_built ? CoreRangeSet(combine_core_range_set.bounding_box()) : matmul_core_range_set, INVALID);
 
     // Matmul dm1 signals combine cores when data is written; combine writer waits on this semaphore.
     // For double buffering, combine cores will also use this semaphore to signal matmul when buffer segments are free.
     // Without combine kernels dm1 still calls get_semaphore() to look up the local L1 address, but the
     // wait/increment/set are all gated off via the compute_only / local_output CT args.
     const auto matmul_combine_sync_semaphore_id =
-        desc.add_semaphore(combine_built ? combine_matmul_core_range_set : matmul_core_range_set, INVALID);
+        add_semaphore_descriptor(desc, combine_built ? combine_matmul_core_range_set : matmul_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize work split

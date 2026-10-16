@@ -15,6 +15,7 @@
 #include <tt-metalium/workload_descriptor.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include <algorithm>
 #include <numeric>
@@ -51,6 +52,7 @@ namespace ttnn::operations::experimental::moe_gpt::program {
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
+using ttnn::experimental::ccl::add_semaphore_descriptor;
 
 namespace {
 
@@ -271,14 +273,14 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
         CoreRangeSet early_tilize_set(early_tilize_cores);
         CoreRangeSet early_merged = early_tilize_set.merge(all_cores);
         constexpr uint32_t INVALID_SEM = 0;
-        fused_metadata_ready_sem = desc.add_semaphore(early_merged, INVALID_SEM);
-        fused_chunk_available_sem = desc.add_semaphore(early_merged, INVALID_SEM);
-        fused_chunk_ready_sem = desc.add_semaphore(early_merged, INVALID_SEM);
+        fused_metadata_ready_sem = add_semaphore_descriptor(desc, early_merged, INVALID_SEM);
+        fused_chunk_available_sem = add_semaphore_descriptor(desc, early_merged, INVALID_SEM);
+        fused_chunk_ready_sem = add_semaphore_descriptor(desc, early_merged, INVALID_SEM);
 
         // Per-expert token count semaphores (full 32-bit counts, no bit-packing limit)
-        metadata_count_sem_base = desc.add_semaphore(early_merged, INVALID_SEM);
+        metadata_count_sem_base = add_semaphore_descriptor(desc, early_merged, INVALID_SEM);
         for (uint32_t e = 1; e < num_experts; e++) {
-            desc.add_semaphore(early_merged, INVALID_SEM);
+            add_semaphore_descriptor(desc, early_merged, INVALID_SEM);
         }
 
         named_compile_time_args.emplace_back("metadata_ready_semaphore_id", fused_metadata_ready_sem);
@@ -345,11 +347,11 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
     });
     const size_t compute_kernel_id = 3;
 
-    const uint32_t ring_semaphore_id = desc.add_semaphore(all_cores, 0);
+    const uint32_t ring_semaphore_id = add_semaphore_descriptor(desc, all_cores, 0);
 
     // Create combine semaphore after ring semaphore so it gets a higher
     // semaphore ID, avoiding conflicts with dispatch infrastructure on combine cores
-    const uint32_t combine_semaphore_id = desc.add_semaphore(combine_core_range_set, 0);
+    const uint32_t combine_semaphore_id = add_semaphore_descriptor(desc, combine_core_range_set, 0);
 
     std::vector<uint32_t> ring_pos2bank_id(num_cores);
     std::iota(ring_pos2bank_id.begin(), ring_pos2bank_id.end(), 0);
@@ -570,10 +572,11 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
         // --- Semaphores ---
         constexpr uint32_t INVALID = 0;
 
-        auto tilize_partial_metadata_ready_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
-        auto tilize_chunk_ready_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
-        auto previous_chunk_sent_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
-        auto initial_gather_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
+        auto tilize_partial_metadata_ready_semaphore_id =
+            add_semaphore_descriptor(desc, tilize_core_range_set, INVALID);
+        auto tilize_chunk_ready_semaphore_id = add_semaphore_descriptor(desc, tilize_core_range_set, INVALID);
+        auto previous_chunk_sent_semaphore_id = add_semaphore_descriptor(desc, tilize_core_range_set, INVALID);
+        auto initial_gather_semaphore_id = add_semaphore_descriptor(desc, tilize_core_range_set, INVALID);
 
         // Tilize+Matmul shared semaphores (created early before matmul kernel creation)
         const CoreRangeSet tilize_matmul_core_range_set = tilize_core_range_set.merge(all_cores);

@@ -231,10 +231,6 @@ struct ProgramDescriptor {
     std::optional<internal::ReloadTable> reload_table;
 
     std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
-
-    // Lowest id free on every core in the range. Capacity is NUM_SEMAPHORES, same as ProgramImpl::create_semaphore.
-    uint32_t add_semaphore(
-        const CoreRangeSet& core_ranges, uint32_t initial_value, CoreType core_type = CoreType::WORKER);
 };
 
 /**

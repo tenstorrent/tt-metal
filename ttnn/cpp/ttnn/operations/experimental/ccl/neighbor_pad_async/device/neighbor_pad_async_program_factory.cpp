@@ -142,19 +142,24 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
     const uint32_t h_sem_addr = static_cast<uint32_t>(operation_attributes.h_neighbor_semaphore.address());
     const uint32_t barrier_sem_addr = static_cast<uint32_t>(operation_attributes.barrier_semaphore.address());
-    const uint32_t w_sem_addr = static_cast<uint32_t>(operation_attributes.w_neighbor_semaphore.address());
 
     // All addresses are uniform across cores → use Common Runtime Args (multicast, no per-core loops).
     // Buffer slots are CommonBufferBindings. Only caller semaphore addresses are rewritten here.
-    const NeighborPadKernelPresence presence =
-        neighbor_pad_kernel_presence(operation_attributes, tensor_args.input_tensor);
-
     auto& hr = GetCommonRuntimeArgs(program, k_h_reader_kernel_id);
     hr[2] = h_sem_addr;
 
     auto& hw = GetCommonRuntimeArgs(program, k_h_writer_kernel_id);
     hw[2] = h_sem_addr;
     hw[3] = barrier_sem_addr;
+
+    // 1D padding has only the H kernels, so their semaphore slots are the whole refresh.
+    if (!operation_attributes.pad_dim2.has_value()) {
+        return;
+    }
+
+    const uint32_t w_sem_addr = static_cast<uint32_t>(operation_attributes.w_neighbor_semaphore.address());
+    const NeighborPadKernelPresence presence =
+        neighbor_pad_kernel_presence(operation_attributes, tensor_args.input_tensor);
 
     // Local reader/writer, when present, sit at indices 2 and 3. They have no semaphore CRTAs.
     uint32_t kernel_index = k_h_writer_kernel_id + 1;

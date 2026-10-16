@@ -17,6 +17,7 @@
 #include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -28,6 +29,9 @@
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::experimental::prim {
+
+using ttnn::experimental::ccl::add_semaphore_descriptor;
+
 namespace detail {
 
 FusedSourceBufferLayout compute_fused_source_buffer_layout(
@@ -374,8 +378,8 @@ tt::tt_metal::WorkloadDescriptor UnifiedSelectReduce::create_workload_descriptor
     for (const auto& coord : tensor_coords.coords()) {
         tt::tt_metal::ProgramDescriptor desc;
         const uint32_t metadata_sync_semaphore_id =
-            desc.add_semaphore(CoreRangeSet(worker_core_range_set.bounding_box()), 1);
-        const uint32_t compute_sync_semaphore_id = desc.add_semaphore(worker_core_range_set, 0);
+            add_semaphore_descriptor(desc, CoreRangeSet(worker_core_range_set.bounding_box()), 1);
+        const uint32_t compute_sync_semaphore_id = add_semaphore_descriptor(desc, worker_core_range_set, 0);
         append_selective_reduce_combine_to_descriptor(
             desc,
             operation_attributes,
@@ -835,15 +839,15 @@ void append_selective_reduce_combine_to_descriptor(
 
     // Intra-link barrier: worker 0 of each link is the link sync core. With Mux V2 there is no termination
     // master: the mux terminates by itself after its last client closes.
-    const auto link_sync_semaphore_id = desc.add_semaphore(needed_worker_core_range_set, 0);
+    const auto link_sync_semaphore_id = add_semaphore_descriptor(desc, needed_worker_core_range_set, 0);
 
     // V2 client semaphores (flow control + teardown), one pair per direction, shared ids across worker cores.
     std::vector<tt::tt_fabric::FabricMuxV2Config::ClientSemaphores> client_semaphores;
     client_semaphores.reserve(neighbors.size());
     for (std::size_t d = 0; d < neighbors.size(); ++d) {
         client_semaphores.push_back(tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{
-            .flow_control_sem_id = desc.add_semaphore(needed_worker_core_range_set, 0),
-            .teardown_sem_id = desc.add_semaphore(needed_worker_core_range_set, 0),
+            .flow_control_sem_id = add_semaphore_descriptor(desc, needed_worker_core_range_set, 0),
+            .teardown_sem_id = add_semaphore_descriptor(desc, needed_worker_core_range_set, 0),
         });
     }
 
