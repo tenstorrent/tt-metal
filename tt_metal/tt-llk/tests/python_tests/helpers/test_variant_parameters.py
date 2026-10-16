@@ -2230,6 +2230,28 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
         )
 
 
+@dataclass
+class SFPU_DROPOUT_PROBE(TemplateParameter):
+    """Dropout parameters for sources/sfpu_dropout_test.cpp."""
+
+    dropout_binary_init_before: bool = False
+    dropout_one_call: bool = False
+    dropout_probability: int = 0
+    dropout_scale_bits: int = 0x3F800000
+    dropout_seed: int = 0x12345678
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr bool DROPOUT_BINARY_INIT_BEFORE = {'true' if self.dropout_binary_init_before else 'false'};",
+                f"constexpr bool DROPOUT_ONE_CALL = {'true' if self.dropout_one_call else 'false'};",
+                f"constexpr std::uint32_t DROPOUT_PROBABILITY = {self.dropout_probability}u;",
+                f"constexpr std::uint32_t DROPOUT_SCALE_BITS = {self.dropout_scale_bits}u;",
+                f"constexpr std::uint32_t DROPOUT_SEED = {self.dropout_seed}u;",
+            ]
+        )
+
+
 SFPU_MISC_OPERATIONS = {
     "rand": 0,
     "dropout": 1,
