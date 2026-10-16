@@ -126,7 +126,7 @@ void kernel_main() {
                         noc_async_read_set_trid(active_trid);
                         uint64_t src_noc_addr = s0.get_noc_addr(src_stick_id);
                         dest_write_addrs[slot] = current_src_buffer_l1_addr;
-                        noc_async_read(src_noc_addr, scratch_write_addrs[slot], padded_stick_size + misalignment);
+                        noc_async_read(src_noc_addr, scratch_write_addrs[slot], unpadded_stick_size + misalignment);
                         slot_states[slot] = SlotState::SRC_PENDING;
 
                         current_src_buffer_l1_addr += stick_size_offset;

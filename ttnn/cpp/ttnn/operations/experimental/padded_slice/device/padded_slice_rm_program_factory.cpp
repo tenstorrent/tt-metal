@@ -155,7 +155,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
     uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
     std::vector<uint32_t> common_reader_kernel_args = {
-        0u,  // read from nearest aligned address
+        0u,  // exact start address, set per core
         input_page_size,
         output_row_size_bytes,
         output_row_size_bytes_offset,
