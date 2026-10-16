@@ -377,7 +377,12 @@ void compute_sdpa_chunk(
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
-    sdpa_custom_mm_block<transpose_k, qk_signal_granularity, configure_mask_extent, num_tiles_k>(
+    sdpa_custom_mm_block<
+        transpose_k,
+        qk_signal_granularity,
+        configure_mask_extent,
+        num_tiles_k,
+        sdpa_custom_mm_unpack_waits_at_end(qk_signal_granularity, chunk_size, qk_kt)>(
         cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, qk_kt, chunk_size, mask_chunk);
 
     // Reduce Max (SFPU)

@@ -13,17 +13,11 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "experimental/llk_unpack_AB_custom_mm.h"
+#include "experimental/llk_sdpa_custom_mm_common.h"
 #include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
-
-// Posts of 8 or more tiles, or per tile at 4 or more columns and 8 or more K tiles, reach the consumer in bursts that the
-// next call's early start slows, so those calls drain first
-constexpr bool sdpa_custom_mm_unpack_waits_at_end(const std::uint32_t signal_granularity, const std::uint32_t ct_dim = 1, const std::uint32_t kt_dim = 2)
-{
-    return signal_granularity >= 8 || (signal_granularity == 1 && ct_dim >= 4 && kt_dim >= 8);
-}
 
 template <bool read_transposed = false, bool configure_mask_extent = false, bool wait_at_end = false>
 inline void _llk_unpack_AB_sdpa_custom_mm_(
