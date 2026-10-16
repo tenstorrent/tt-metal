@@ -2160,8 +2160,10 @@ GENERATED_NAN_SIGN_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.Sin,
         MathOperation.Softsign,
         MathOperation.Tan,
-        # Forwards a NaN through the lut and one SFPMAD; Wormhole returned it sign-set for a
-        # positive NaN input, so its bf16 narrowing lands on -inf against the golden's +inf.
+        # A NaN input comes through the lut as a NaN, and the closing `val * (-val) + 1.0f`
+        # SFPMAD then re-emits it as a NaN of its own, with the sign Wormhole leaves
+        # unspecified: measured sign-set for a positive NaN input, which the bf16 narrowing
+        # lands on -inf against the golden's +inf.
         MathOperation.TanhDerivativeLut,
     }
 )
