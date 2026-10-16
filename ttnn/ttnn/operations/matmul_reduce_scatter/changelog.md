@@ -60,3 +60,43 @@
   - The perf-only env switches grew by `MRS_KB_MAX`, `MRS_MIRROR`, `MRS_FIN_ADD_FPU`, `MRS_LOOKAHEAD_AFTER_BARRIER`, `MRS_A_READ_NOC`, `MRS_W_READ_NOC` and `MRS_ABLATE=mcast`. They follow the existing `MRS_*` convention; the defaults are the module constants.
 - **Remaining headroom (finding)**: the focus case is now compute-bound (4 × 24.7 µs matmul entries, of which ~13% is fp32 full-sync pack time), plus an ~11 µs DRAM fill in entry 0 (6.5 MB at ~175-200 GB/s aggregate), ~3 µs of finishes and a ~3 µs fin-write tail.
 - **Tests added**: `test_matmul_reduce_scatter_perf.py` gained a traced mode (`MRS_PERF_TRACE=1`). Reader ablation `MRS_ABLATE=mcast` (perf scaffolding).
+
+## Refinement 3 — Speed up the rows-scattered MiMo-V2 profile (W residency L1 fit)
+- **Date**: 2026-10-16
+- **What was done**: Brought MiMo (2048x2048x4096, scatter -2, bf8b W) into the resident-xblock regime. These are knob-turns on the existing block surface, with no kernel change.
+  - **Hold depth from the schedule.** `hold_depth()` derives the fp32 hold depth from the schedule's lag decisions: `DEPTH_HOLD` (2) if any entry of the walk lags, else 1. The lag rule moved into `entry_finish_plan()`, one source shared by the descriptor's runtime args and the footprint. The mirrored ring_balanced walks of the resident regime never lag, so they hold one slot.
+  - **Fallback depth for the streamed operand.** `RESIDENT_STREAM_DEPTHS = (3, 2)`: `choose_k_block` tries every resident kb at depth 3, then at depth 2, before falling back to stream. It now returns `(resident, kb, depth)`; `window_depths()` is the single source for footprint and CB sizes.
+  - **Plan order.** Both regimes' schedules (and hold depths) are planned before the regime choice.
+  - **`_LAST_PLAN` additions**: `depths` and `hold_depth`.
+  - Result: MiMo resident kb 8 / A depth 3 / hold 1 = 1296 KiB (budget 1363 KiB; before: 1488 KiB, which forced stream). W crosses DRAM once (48.2 → 21.5 MB).
+- **Perf** (traced, max over 4 chips, QB2 1x4 TORUS_XY, 2 links):
+
+  | Case | Before (µs) | After (µs) |
+  |---|---|---|
+  | MiMo | 243-256 | 218.4-218.9 (target 220.6) |
+  | Focus | 124.2-125.8 | 124.1-125.8 (unchanged; still resident A, kb 16, depth 3, now hold 1) |
+  | GLM | 198.5 | 197.9-199.2 |
+
+  Also measured on MiMo:
+  - kb 8 / depth 2 / hold 2 and kb 16 / depth 2 / hold 1: same within noise.
+  - Senders 1, diagonal placement, look-ahead before the barrier, W on NoC0, prefetch 0 / 2: neutral or worse.
+  - Unmirrored halves: +12 µs.
+- **Bottleneck now (finding)**: compute-bound. The zones show:
+  - entry 0 at 57.5 µs (W fill; its first K-block alone ~11 µs);
+  - 3 × 45.9 µs matmul entries on 88 of 99 rectangle cores;
+  - ~10 µs of serial finishes;
+  - a ~7-13 µs fin-write tail.
+
+  Ablations: compute alone 206 µs; everything stubbed (transport only) 113 µs.
+
+  Next levers: a smaller first K-block, Refinement 4's sub-block sends, a ragged-m grid for the 11 idle cores.
+- **Accuracy achieved**:
+  - MiMo bf8b W: PCC 0.999888, rel-RMS 0.00455 (precision baseline) / 0.00487 (perf harness).
+  - MiMo bf4b W: rel-RMS 0.00456.
+  - Focus: rel-RMS 0.00486 (perf harness); A bf8b × W bf4b: 0.00238.
+- **Golden test progress**: targeted slices (EVAL_CAPTURE_L1=0):
+  - `test_golden.py -k "2048x2048_2048x4096 or test_op_loose"`: 99/99.
+  - `test_regression.py` 6/6, `test_fabric_configs.py` 24/24, `test_ring_mock.py` 72/72.
+  - Acceptance file: 38 line + 24 ring. Precision baseline: 6/6.
+- **Issues encountered**: None.
+- **Tests added**: the perf harness prints `_LAST_PLAN` and rel-RMS per case. New perf-only env knob: `MRS_RESIDENT_DEPTHS`.

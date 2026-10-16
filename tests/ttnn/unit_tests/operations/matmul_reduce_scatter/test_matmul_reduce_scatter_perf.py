@@ -122,3 +122,6 @@ def test_perf_case(perf_mesh, case):
         ref = expected[idx // cols, idx % cols].double()
         rms = ((got - ref).pow(2).mean().sqrt() / ref.pow(2).mean().sqrt()).item()
         assert rms <= rms_t, f"device {idx}: rel_rms {rms} > {rms_t}"
+    import ttnn.operations.matmul_reduce_scatter as pkg
+
+    print(f"PLAN {_id(case)}: {pkg._LAST_PLAN} rel_rms(last device) {rms:.5f}")

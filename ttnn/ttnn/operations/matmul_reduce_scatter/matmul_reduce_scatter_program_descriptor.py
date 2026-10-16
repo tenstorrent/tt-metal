@@ -44,7 +44,13 @@ CB_PORT_CHUNKS = 6  # port cores: gathered chunks waiting for the fabric sender
 # ---- knobs (single source of truth) ------------------------------------------------------------------------------
 DEPTH_IN0 = 3  # stream regime: A K-block windows (one computing, one landing, PREFETCH_STEPS read ahead by a sender)
 DEPTH_IN1 = 3  # stream regime: W K-block windows
-DEPTH_HOLD = 2  # fp32 partial slots (lag 1 + current)
+# resident regime: depths the streamed (non-resident) operand's window may take, preferred first. choose_k_block tries
+# every kb at the first depth before shrinking the window, so a shape that fits at depth 3 keeps it (focus case) and a
+# shape whose resident operand misses the budget at depth 3 (MiMo: W 816 KiB per core) becomes resident at depth 2
+# (one window computing, one landing / prefetched) instead of falling back to re-reading the resident operand G times
+RESIDENT_STREAM_DEPTHS = tuple(int(d) for d in os.environ.get("MRS_RESIDENT_DEPTHS", "3,2").split(","))  # env: perf
+DEPTH_HOLD = 2  # fp32 partial slots when some entry lags (lag 1 + current); a walk with no lagged entry needs 1
+# (each finish pops its slot before the next entry reserves one): hold_depth() derives it from the schedule
 DEPTH_HANDOFF = 2  # finished slots (a port gathers entry e while compute finishes e+1)
 PREFER_PORT_ROW_STRIP = True  # ports in logical row 0, right under the Ethernet row (focus case: 150-160 us with
 # the column strip -> 137-145 us with the row strip, despite 14 vs 12 tiles per core: the transport tail shrinks)
@@ -201,6 +207,33 @@ def plan_transport(G, kind, mirror=False):
     return chips, slots
 
 
+def entry_finish_plan(sc, h):
+    """[(arrival mask, lag)] per entry of half h on a chip with schedule sc. mask: bit 0 fwd / bit 1 bwd arrival
+    added in (relay: its direction; fin: every direction with an upstream). lag: finish behind the next entry's matmul,
+    only when an arrival is produced at the same or a later position of the upstream's walk (an arrival produced
+    earlier has, most likely, landed), never on the last entry."""
+    roles, entries, arrivals = sc["roles"], sc["entries"][h], sc["arrivals"]
+    out = []
+    for e_idx, b in enumerate(entries):
+        r = roles[(b, h)]
+        mask = 0
+        if r[0] in _DIRS and not r[1]:
+            mask = 1 if r[0] == "fwd" else 2
+        elif r[0] == "fin":
+            mask = (1 if b in arrivals[(h, "fwd")] else 0) | (2 if b in arrivals[(h, "bwd")] else 0)
+        lag = LAG_POLICY == "always" and mask != 0
+        lag = lag or any(sc["produced_at"][(h, d)][b] >= e_idx for d, bit in (("fwd", 1), ("bwd", 2)) if mask & bit)
+        out.append((mask, int(lag and e_idx + 1 < len(entries))))
+    return out
+
+
+def hold_depth(chips_sched):
+    """fp32 hold slots: DEPTH_HOLD if any chip's walk lags an entry (its slot stays live across the next matmul),
+    else 1."""
+    lags = any(lag for sc in chips_sched.values() for h in (0, 1) for _, lag in entry_finish_plan(sc, h))
+    return DEPTH_HOLD if lags else 1
+
+
 # ======================================================================================================================
 # Work distribution / regime selection
 # ======================================================================================================================
@@ -284,37 +317,49 @@ def choose_grid(gx, gy, block_m, block_n, L):
     return best[1]
 
 
-def footprint(kb, resident, *, Kt, core_m, core_n, tA, tW, scatter_dim, slots, staging_floor_tiles=0):
+def window_depths(resident, depth):
+    """(A, W) window depths in K-blocks: the stream regime's DEPTH_IN0 / DEPTH_IN1, or under the resident regime
+    `depth` for the streamed operand (the resident operand's CB holds the whole Kt slice; its depth is unused)."""
+    return (depth, depth) if resident else (DEPTH_IN0, DEPTH_IN1)
+
+
+def footprint(
+    kb, resident, *, depth=None, Kt, core_m, core_n, tA, tW, scatter_dim, slots, hold_depths, staging_floor_tiles=0
+):
     """Per matmul core L1 bytes (l1_ledger.md): operand windows + fp32 hold + the staging slice. The staging tensor is
-    cached grow-only per mesh, so it is counted at max(what this call needs, what is already allocated)."""
+    cached grow-only per mesh, so it is counted at max(what this call needs, what is already allocated).
+    hold_depths[resident]: the regime's fp32 hold slots (hold_depth() of the schedule that regime runs)."""
     P = core_m * core_n
     rA = resident and scatter_dim == -1
     rW = resident and scatter_dim == -2
-    a = tA * (core_m * Kt if rA else DEPTH_IN0 * core_m * kb)
-    w = tW * (Kt * core_n if rW else DEPTH_IN1 * kb * core_n)
-    hold = HOLD_TILE_BYTES * DEPTH_HOLD * P
+    dA, dW = window_depths(resident, depth if depth is not None else RESIDENT_STREAM_DEPTHS[0])
+    a = tA * (core_m * Kt if rA else dA * core_m * kb)
+    w = tW * (Kt * core_n if rW else dW * kb * core_n)
+    hold = HOLD_TILE_BYTES * hold_depths[resident] * P
     staging = STAGE_TILE_BYTES * max(staging_floor_tiles, (DEPTH_HANDOFF + slots["fwd"] + slots["bwd"]) * P)
     return a + w + hold + staging
 
 
 def choose_k_block(Kt, budget, force_resident, **geo):
-    """(resident, kb): resident with the preferred kb | Kt (largest <= KB_MAX, then smaller, then larger), kb >=
-    min(Kt, KB_MIN_RESIDENT), else stream with the preferred kb | Kt that fits. force_resident (test hook) replaces the
-    residency decision."""
+    """(resident, kb, depth): resident with the preferred kb | Kt (largest <= KB_MAX, then smaller, then larger), kb >=
+    min(Kt, KB_MIN_RESIDENT), at the first RESIDENT_STREAM_DEPTHS depth where any such kb fits; else stream with the
+    preferred kb | Kt that fits (depth: None, the stream regime's DEPTH_IN0 / DEPTH_IN1). force_resident (test hook)
+    replaces the residency decision."""
     # preference order: the largest divisor <= KB_MAX first, then smaller ones, then (no fit below the cap) larger ones
     divisors = [d for d in range(min(Kt, KB_MAX), 0, -1) if Kt % d == 0]
     divisors += [d for d in range(KB_MAX + 1, Kt + 1) if Kt % d == 0]
     if force_resident is not False:
-        for kb in divisors:
-            if kb < min(Kt, KB_MIN_RESIDENT):
-                continue
-            if footprint(kb, True, Kt=Kt, **geo) <= budget:
-                return True, kb
+        for depth in RESIDENT_STREAM_DEPTHS:
+            for kb in divisors:
+                if kb < min(Kt, KB_MIN_RESIDENT):
+                    continue
+                if footprint(kb, True, depth=depth, Kt=Kt, **geo) <= budget:
+                    return True, kb, depth
         if force_resident is True:
             raise ValueError("matmul_reduce_scatter: the resident cross-block operand does not fit L1 for this shape")
     for kb in divisors:
         if footprint(kb, False, Kt=Kt, **geo) <= budget:
-            return False, kb
+            return False, kb, None
     raise NotImplementedError(
         "matmul_reduce_scatter: even kb=1 exceeds the L1 budget (regime DRAM-landing is deferred)"
     )
@@ -534,7 +579,21 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         raise ValueError("matmul_reduce_scatter: a balanced ring needs >= 2 matmul cores (two halves)")
     assert ENTRIES_PER_BLOCK == 1, "entries_per_block > 1 (overlap lamp) is not built"
 
-    chips_sched, slots = plan_transport(G, kind)
+    # halves: with a resident cross-block operand, split along the streamed operand's multicast lines (W lines = fixed
+    # gn for scatter -1, A lines = fixed gm for scatter -2), so the two halves may compute different blocks and walk
+    # mirrored orders; else the row-major split of the core index. Each regime's schedule fixes its hold depth, which
+    # the footprint (and so the regime choice) needs.
+    mirror_split = "k"
+    if int(os.environ.get("MRS_MIRROR", MIRROR_HALF_ORDERS)) and kind == "ring_balanced":  # env: perf experiments only
+        if scatter_dim == -1 and gd["grid_n"] >= 2:
+            mirror_split = "n"
+        elif scatter_dim == -2 and gd["grid_m"] >= 2:
+            mirror_split = "m"
+    sched_of = {False: plan_transport(G, kind)}
+    sched_of[True] = plan_transport(G, kind, mirror=True) if mirror_split != "k" else sched_of[False]
+    slots = sched_of[False][1]
+    assert sched_of[True][1] == slots, (sched_of[True][1], slots)  # arrival counts do not depend on the order
+    hold_depths = {r: hold_depth(sched_of[r][0]) for r in (False, True)}
     tA = int(a.buffer_aligned_page_size())
     tW = int(w.buffer_aligned_page_size())
     cached = _MESH_CACHE.get(id(mesh))
@@ -546,29 +605,22 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         tW=tW,
         scatter_dim=scatter_dim,
         slots=slots,
+        hold_depths=hold_depths,
         staging_floor_tiles=staging_floor,
     )
-    resident, kb = choose_k_block(Kt, _l1_budget(mesh), getattr(hooks, "_FORCE_XBLOCK_RESIDENCY", None), **geo)
+    resident, kb, depth = choose_k_block(Kt, _l1_budget(mesh), getattr(hooks, "_FORCE_XBLOCK_RESIDENCY", None), **geo)
     if os.environ.get("MRS_KB"):  # perf experiments only: cap the K-block (largest divisor of Kt <= MRS_KB)
         kb = max(d for d in range(1, kb + 1) if Kt % d == 0 and d <= int(os.environ["MRS_KB"]))
     if os.environ.get("MRS_SB_TALL"):  # perf experiments only: prefer taller subblocks on ties
         gd["sb"] = _subblock(core_m, core_n, prefer_tall=True)
-    # halves: split along the streamed operand's multicast lines when the other operand is resident (W lines = fixed gn
-    # for scatter -1, A lines = fixed gm for scatter -2), so the two halves may compute different blocks; else the
-    # row-major split of the core index
-    half_split = "k"
-    if resident and int(os.environ.get("MRS_MIRROR", MIRROR_HALF_ORDERS)) and kind == "ring_balanced":  # env: perf
-        if scatter_dim == -1 and gd["grid_n"] >= 2:
-            half_split = "n"
-        elif scatter_dim == -2 and gd["grid_m"] >= 2:
-            half_split = "m"
-    if half_split != "k":
-        chips_sched, slots_m = plan_transport(G, kind, mirror=True)
-        assert slots_m == slots, (slots_m, slots)  # arrival counts do not depend on the order
+    half_split = mirror_split if resident else "k"
+    chips_sched = sched_of[resident][0]
     hooks._LAST_PLAN = {
         "xblock": "resident" if resident else "stream",
         "schedule": kind,
         "kb": kb,
+        "depths": window_depths(resident, depth),
+        "hold_depth": hold_depths[resident],
         "grid": (gd["grid_m"], gd["grid_n"]),
         "strip": gd["strip"],
         "half_split": half_split,
@@ -606,6 +658,8 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         gd=gd,
         P=P,
         kb=kb,
+        depths=window_depths(resident, depth),
+        depth_hold=hold_depths[resident],
         resident=resident,
         slots=slots,
         sched=chips_sched,
@@ -680,8 +734,9 @@ def create_mesh_program_descriptor(ctx):
     sb_h, sb_w = gd["sb"]
     rA = int(resident and scatter_dim == -1)
     rW = int(resident and scatter_dim == -2)
-    a_pages = core_m * Kt if rA else DEPTH_IN0 * core_m * kb
-    w_pages = Kt * core_n if rW else DEPTH_IN1 * kb * core_n
+    depth_a, depth_w = ctx["depths"]
+    a_pages = core_m * Kt if rA else depth_a * core_m * kb
+    w_pages = Kt * core_n if rW else depth_w * kb * core_n
     tA = int(a.buffer_aligned_page_size())
     tW = int(w.buffer_aligned_page_size())
     out_nt = block_n  # output tile columns (Nt for scatter -2, Nt / G for scatter -1)
@@ -837,23 +892,10 @@ def create_mesh_program_descriptor(ctx):
                 m_valid = min(core_m, block_m - gm * core_m)
                 n_valid = min(core_n, block_n - gn * core_n)
                 ent_words, roles_k, kinds_k = [], [], []
-                for b in entries[h]:
+                for b, (mask, lag) in zip(entries[h], entry_finish_plan(sc, h)):
                     r = roles[(b, h)]
-                    mask = 0
-                    if r[0] in _DIRS and not r[1]:
-                        mask = 1 if r[0] == "fwd" else 2
-                    elif r[0] == "fin":
-                        mask = (1 if b in arrivals[(h, "fwd")] else 0) | (2 if b in arrivals[(h, "bwd")] else 0)
                     thr_f = thresholds[(h, "fwd")].get(b, 0) if mask & 1 else 0
                     thr_b = thresholds[(h, "bwd")].get(b, 0) if mask & 2 else 0
-                    # lag (finish behind the next entry's matmul) only when an arrival is produced at the same or a
-                    # later position of the upstream's walk; an arrival produced earlier has (most likely) landed
-                    e_idx = len(roles_k)
-                    lag = LAG_POLICY == "always" and mask != 0
-                    lag = lag or any(
-                        sc["produced_at"][(h, d)][b] >= e_idx for d, bit in (("fwd", 1), ("bwd", 2)) if mask & bit
-                    )
-                    lag = int(lag and e_idx + 1 < len(entries[h]))
                     ent_words += [b | (mask << 16) | (lag << 20), thr_f | (thr_b << 16)]
                     roles_k.append([ROLE_COPY, ROLE_ADD_FWD, ROLE_ADD_BWD, ROLE_ADD_BOTH][mask] | (lag << 8))
                     kinds_k.append(KIND_FIN if r[0] == "fin" else (KIND_FWD if r[0] == "fwd" else KIND_BWD))
@@ -1002,7 +1044,7 @@ def create_mesh_program_descriptor(ctx):
             program.cbs = [
                 cb(CB_ACT_K_WINDOW, a_pages, tA, a.dtype, mm_crs),
                 cb(CB_WEIGHT_K_WINDOW, w_pages, tW, w.dtype, mm_crs),
-                cb(CB_PARTIAL_HOLD, DEPTH_HOLD * P, HOLD_TILE_BYTES, ttnn.float32, mm_crs),
+                cb(CB_PARTIAL_HOLD, ctx["depth_hold"] * P, HOLD_TILE_BYTES, ttnn.float32, mm_crs),
                 ttnn.cb_descriptor_from_sharded_tensor(
                     CB_FINISHED, staging, 0, DEPTH_HANDOFF * P * STAGE_TILE_BYTES, mm_crs
                 ),

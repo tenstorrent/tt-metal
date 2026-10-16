@@ -102,7 +102,7 @@ Re-running the table on the intermediate data (the per-entry partial sums) gives
 |----|------------|---------------|---------------------|
 | `cb_act_k_window` (stream regime) | `depth_in0` | 2 | mcast of K-block t+1 overlaps the matmul of K-block t |
 | `cb_weight_k_window` (stream regime) | `depth_in1` | 2 | same, for W |
-| `cb_partial_hold` | `depth_hold` | 2 (= lag 1 + 1) | entry e+1's matmul can pack while entry e (a relay or fin) still waits for its arrival |
+| `cb_partial_hold` | `depth_hold` | 2 (= lag 1 + 1); 1 when the schedule lags no entry (`hold_depth()`, Refinement 3) | entry e+1's matmul can pack while entry e (a relay or fin) still waits for its arrival |
 | `cb_finished` | `depth_handoff` | 2 | compute finishes entry e+1 while a port is still gathering entry e |
 | `cb_port_chunks` | `port_group` (chunks per batch). Capacity is 2·group. | 4 | a reader batch of reads overlaps a sender batch of packets. Measured best or within 10% at every size (fabric_* reports). |
 

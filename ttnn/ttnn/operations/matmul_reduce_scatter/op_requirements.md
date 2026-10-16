@@ -96,13 +96,35 @@ What I would try next, and why I did not:
 - **16-bit half-sync DEST for the matmul**, so pack overlaps math. That changes the fp32-DEST precision policy, which is the design's call.
 - **Refinement 4's sub-block sends.**
 
-### [ ] Refinement 3 — Speed up the rows-scattered MiMo-V2 profile (W residency L1 fit)
+### [x] Refinement 3 — Speed up the rows-scattered MiMo-V2 profile (W residency L1 fit)
 
 **Type**: perf
 
 **Goal**: `feature_spec.LOOSE_CASES[2]` is the rows-scattered perf case: `A (1,1,2048,2048) × W (2048,4096)`, `scatter_dim=-2`, bf16 activation, bf8b weight, Ring, `cluster_axis=1`, 2 links, HiFi2, `fp32_dest_acc_en=True`, on the same 1x4 TORUS_XY placement. Perf goal `target_us = 220.6` (roofline 165.4, unfused baseline 400.7; measured today 255-261 µs untraced, max over chips); default precision gate. The case runs the **stream-xblock** regime: resident W needs ~1488 KiB per core against a ~1.33 MiB budget (`l1_ledger.md` worked example), so W crosses DRAM G = 4 times (~35.6 MB of weight traffic instead of 8.9 MB). The lever is to bring the resident-xblock regime inside the budget for this shape, then measure it against the tuned stream regime. Possible knobs: the stream windows `DEPTH_IN0` 3→2 on the non-resident operand, `DEPTH_HOLD` 2→1 when the entry walk does not lag, the per-core block `P=24` through the grid choice (88 of 99 rectangle cores), and `kb`. These are knob-turns on the planner's block surface, not a new topology. Use master.md `shared_input_reuse` / `double_buffer` as the measured references. **Folded L1-ledger findings** (no refinement of their own): the ledger's block-size-default departure (80-88 of 99 rectangle cores used) and the stream-regime DRAM delta both land here. Update `l1_ledger.md` (worked example, data-movement budget, regime rows) with whatever regime this case ends up in.
 
 **Done when**: measured device-ns on the MiMo case improves toward 220.6 µs with the golden suite green, `_LAST_PLAN` reports the regime actually used, and there is no regression across the config-spanning guard set named in Refinement 2. The focus case must not regress either: it is already resident-A and must stay so.
+
+**Outcome**: MiMo case, traced, max over 4 chips: 243-256 → **218.4-218.9 µs** (target 220.6). It now runs resident-xblock (`_LAST_PLAN`: resident, kb 8, A window depth 3, hold depth 1, grid 8x11), so W crosses DRAM once instead of 4 times (DRAM 48.2 → 21.5 MB). rel-RMS is 0.00487. Focus (124.1-125.8) and GLM (197.9-199.2) are unchanged, and both stay resident.
+
+What made it fit (1488 → 1296 KiB against 1363 KiB):
+- The second fp32 hold slot exists only for a lagged finish, and the mirrored resident walks never lag. `hold_depth()` now derives the depth from the schedule's lag decisions: −96 KiB.
+- kb 8 instead of 16 for the streamed A window: −96 KiB.
+- `RESIDENT_STREAM_DEPTHS = (3, 2)` is a live fallback knob: the resident regime tries depth 2 on the streamed operand before falling back to stream.
+
+The three fitting plans (kb 8 / d3 / hold 1, kb 8 / d2 / hold 2, kb 16 / d2 / hold 1) measured the same within noise. The fill levers (1 sender, plain diagonal, look-ahead before the barrier, W on NoC0, prefetch 0 / 2) were all neutral or worse; unmirrored was +12 µs.
+
+The case is now compute-bound. Zone timeline (chip 1):
+- entry 0: 57.5 µs, the W fill (its first K-block alone is ~11 µs);
+- 3 × 45.9 µs matmul entries on 88 of the 99 rectangle cores (block_m = 16 rows over 9 m-lines), with 3% ragged-n waste;
+- ~10 µs of serial finish adds on the TRISCs;
+- a ~7-13 µs fin-write tail (4 MB of output after the last finish).
+
+With everything stubbed, transport alone is 113 µs, which hides under compute.
+
+What I would try next, and why I did not:
+- **A smaller first K-block** to cut the fill. kb is one CB-window constant; making it vary per step is a reader/compute schedule change.
+- **Refinement 4's sub-block sends** to overlap the fill.
+- **Using the 11 idle cores.** That needs a ragged `core_m` (2 / 1 rows) split, which is a grid-model change.
 
 ### [ ] Refinement 4 — Shrink the fill term: first send before a whole block is finished (overlap)
 
