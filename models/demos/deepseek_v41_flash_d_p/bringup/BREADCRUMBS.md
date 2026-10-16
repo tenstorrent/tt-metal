@@ -751,3 +751,20 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - OV-4: DS41-20 already states the F73 fix; nothing to change.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_15_experts.py`
   (CPU: `BRINGUP_IMPL=reference` / `stub` / `mutate:<kind> BRINGUP_MUTATE_STEP=experts` in front).
+
+## C.swa_engram.shared_expert test review (layer 1, scaled, attempt 1)
+- Freeze failed: with BRINGUP_IMPL=reference only `auto_shared_expert_L01_vs_golden` failed: row norm ratio
+  [0.982, 1.0126] outside 1 +- 0.0152. The fp32 CPU step on the bf16 golden input is itself rel 0.0277, worst row
+  0.0539 from the golden (fp8 q-dq of x and h, DS41-1 / DS41-22); the built-in checks add that error to the
+  vs-golden rel / column limits only.
+- Change: the layer-0 test (test_c_swa_shared_expert.py: w2 span check, DS41-25, SPAN_REL 0.003, own mutation
+  sweep) with LAYER = 1, plus layer 1 experts' `_Expect.check` (golden error added to the vs-golden worst-row and
+  row-ratio limits: 0.058 -> 0.112, 1 +- 0.015 -> 1 +- 0.033), patched in as CC.Expect around run_component_test and
+  used by `_expect()`. Tight vs-CPU and second-input checks unchanged.
+- Measured: reference PASS (pcc 0.999617, span 5e-8); stub FAIL (built-ins); mutations PASS (bf16 inputs + output /
+  bf16 everywhere pass, span 0.00122; scale1.02 caught by vs_cpu; noise1e-2 by span 0.0074 on every input; every
+  other mistake caught); gate (device) PASS: pcc 0.999617, vs CPU rel 0.0031 (limit 0.0207), worst row 0.043, ratio
+  [0.9956, 1.0035], second inputs rel <= 0.0036, span 0.00019-0.00029, A,B,A bit-identical.
+- OV-4: DS41-20 already states the F73 fix; nothing to change. DS41-25 extended with the layer-1 note.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_shared_expert.py`
+  (CPU: `BRINGUP_IMPL=reference` / `stub` / `mutations` in front).
