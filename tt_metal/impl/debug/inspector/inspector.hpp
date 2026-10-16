@@ -7,7 +7,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include "impl/context/context_types.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
@@ -23,6 +22,8 @@ class MeshWorkloadImpl;
 class MeshSocket;
 }  // namespace distributed
 
+class MetalContext;
+
 namespace inspector {
 class Data;
 class RpcServer;  // NOLINT(cppcoreguidelines-virtual-class-destructor)
@@ -32,8 +33,12 @@ class Inspector {
 public:
     static bool is_enabled();
 
-    static std::unique_ptr<inspector::Data> initialize(std::optional<int> rank, ContextId context_id);
-    static void serialize_rpc();
+    // Creates the inspector session for `context`. The caller (the MetalContext) owns the returned session and must
+    // keep `context` alive for as long as the session lives. Returns nullptr if the inspector is disabled or `context`
+    // targets a mock device.
+    static std::unique_ptr<inspector::Data> initialize(
+        MetalContext& context, std::optional<int> rank, uint64_t fw_compile_hash);
+    static void serialize_rpc(const MetalContext& context);
 
     static void program_created(const detail::ProgramImpl* program) noexcept;
     static void program_destroyed(const detail::ProgramImpl* program) noexcept;
@@ -97,9 +102,6 @@ public:
         ChipId device_id,
         ChipId servicing_device_id);
 
-    // static method for clearing all core info to clear stale entries
-    static void clear_all_core_info();
-
     // Helper function to get the ELF path for a given kernel and processor index (risc_id). The mapping
     // is captured at compile time, so it remains valid after the Kernel object has been destroyed and
     // correctly resolves riscs that share a single binary. Returns an empty string if data is not available.
@@ -107,8 +109,6 @@ public:
     static void enable_kernel_path_collection();
 
     static inspector::RpcServer& get_rpc_server();
-
-    static void set_build_env_fw_compile_hash(uint64_t fw_compile_hash);
 };
 
 }  // namespace tt::tt_metal

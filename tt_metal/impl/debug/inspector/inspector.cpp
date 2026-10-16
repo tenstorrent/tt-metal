@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "distributed/mesh_socket_utils.hpp"
 #include "program.hpp"
+#include <atomic>
 #include <map>
 #include <memory>
 #include <optional>
@@ -37,7 +38,20 @@ inspector::Data* get_inspector_data() {
     }
     return nullptr;
 }
+
+// Error reporting policy for the TT_INSPECTOR_* macros. Set from the context's rtoptions before its session is
+// constructed. These settings only come from environment variables, so all envs agree on them.
+std::atomic<bool> g_initialization_is_important{false};
+std::atomic<bool> g_warn_on_write_exceptions{true};
 }  // namespace
+
+namespace inspector {
+
+bool initialization_is_important() { return g_initialization_is_important.load(std::memory_order_relaxed); }
+
+bool warn_on_write_exceptions() { return g_warn_on_write_exceptions.load(std::memory_order_relaxed); }
+
+}  // namespace inspector
 
 // Inspector is not used on mock devices
 bool Inspector::is_enabled() {
@@ -51,28 +65,29 @@ bool Inspector::is_enabled() {
     return false;
 }
 
-std::unique_ptr<inspector::Data> Inspector::initialize(std::optional<int> rank, ContextId context_id) {
-    if (!is_enabled()) {
-        // Inspector is not enabled, skipping initialization.
+std::unique_ptr<inspector::Data> Inspector::initialize(
+    MetalContext& context, std::optional<int> rank, uint64_t fw_compile_hash) {
+    const auto& rtoptions = context.rtoptions();
+    if (!rtoptions.get_inspector_enabled() ||
+        context.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        // Inspector is not enabled or not supported for this context, skipping initialization.
         return nullptr;
     }
+    g_initialization_is_important.store(
+        rtoptions.get_inspector_initialization_is_important(), std::memory_order_relaxed);
+    g_warn_on_write_exceptions.store(rtoptions.get_inspector_warn_on_write_exceptions(), std::memory_order_relaxed);
     try {
-        auto* data = new inspector::Data(rank, context_id);
-
-        return std::unique_ptr<inspector::Data>(data);
+        return std::unique_ptr<inspector::Data>(new inspector::Data(context, rank, fw_compile_hash));
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to initialize Inspector: {}", e.what());
         throw;
     }
 }
 
-void Inspector::serialize_rpc() {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+void Inspector::serialize_rpc(const MetalContext& context) {
+    auto* data = context.get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
+        // Inspector is not active on this context or failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -616,28 +631,6 @@ void Inspector::set_prefetcher_core_info(
     }
 }
 
-// Clear dispatch core info to clear stale entries
-// Used in MetalContext::teardown() to clear stale entries
-void Inspector::clear_all_core_info() {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
-        return;
-    }
-    try {
-        std::scoped_lock locks(
-            data->dispatch_core_info_mutex, data->dispatch_s_core_info_mutex, data->prefetcher_core_info_mutex);
-        data->dispatch_core_info.clear();
-        data->dispatch_s_core_info.clear();
-        data->prefetcher_core_info.clear();
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to clear all core infos: {}", e.what());
-    }
-}
-
 inspector::RpcServer& Inspector::get_rpc_server() {
     if (is_enabled()) {
         try {
@@ -651,22 +644,6 @@ inspector::RpcServer& Inspector::get_rpc_server() {
     }
     static inspector::RpcServer empty_rpc_server;
     return empty_rpc_server;
-}
-
-void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
-        return;
-    }
-    try {
-        data->fw_compile_hash.store(fw_compile_hash, std::memory_order_release);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to set FW compile hash: {}", e.what());
-    }
 }
 
 void Inspector::enable_kernel_path_collection() {
