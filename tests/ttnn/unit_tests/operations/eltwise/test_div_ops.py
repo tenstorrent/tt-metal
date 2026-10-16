@@ -413,6 +413,81 @@ def test_fmod_nan(testing_dtype, device):
     assert torch.equal(torch.isnan(golden), torch.isnan(output_tensor))
 
 
+def _opposite_sign_exact_multiples(torch_dtype, count, seed=0):
+    """Pairs (a, b) with a = n * |b| exactly representable in torch_dtype and
+    sign(a) != sign(b), so remainder(a, b) is exactly 0. Deterministic (seeded)."""
+    gen = torch.Generator().manual_seed(seed)
+    a_vals, b_vals = [], []
+    while len(a_vals) < count:
+        mantissa = 1.0 + torch.rand(1, generator=gen, dtype=torch.float64).item()
+        exponent = int(torch.randint(-3, 18, (1,), generator=gen).item())
+        b = torch.tensor(mantissa * 2.0**exponent, dtype=torch_dtype).double().item()
+        n = int(torch.randint(2, 4096 if torch_dtype == torch.float32 else 200, (1,), generator=gen).item())
+        a = torch.tensor(n * b, dtype=torch_dtype).double().item()
+        if a != n * b:
+            continue  # n * b is not exact in this dtype
+        if len(a_vals) % 2 == 0:
+            a_vals.append(a)
+            b_vals.append(-b)
+        else:
+            a_vals.append(-a)
+            b_vals.append(b)
+    return torch.tensor(a_vals, dtype=torch_dtype), torch.tensor(b_vals, dtype=torch_dtype)
+
+
+# remainder(a, b) must be exactly 0 when a is an exact multiple of b. The kernel computes
+# a - floor(a * (1/b)) * b with an approximate reciprocal; when the quotient lands just below the
+# true integer the floor steps one past it and the raw result is b itself (or, at large magnitudes,
+# b plus the rounding of that product). The kernel repairs that overshoot for same-sign operands but
+# used to skip the repair when a and b differ in sign, so e.g. remainder(91.0, -13.0) came back as
+# -13.0 instead of 0.0.
+@pytest.mark.parametrize(
+    "testing_dtype, pairs",
+    [
+        (
+            "float32",
+            [
+                (91.0, -13.0),
+                (-91.0, 13.0),
+                (829680.6875, -462.991455078125),
+                (424466.4375, -421.09765625),
+                (20978266.0, -42988.25),
+                (-1234226.25, 3214.130859375),
+                (14056288.0, -5818.0),
+                (63853748.0, -149191.0),
+            ],
+        ),
+        ("bfloat16", [(-1512.0, 63.0), (-390.0, 13.0), (41.25, -1.875), (675840.0, -3840.0), (2.328125, -1.1640625)]),
+    ],
+)
+def test_remainder_opposite_sign_exact_multiple(testing_dtype, pairs, device):
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    explicit_a = torch.tensor([a for a, _ in pairs], dtype=torch_dtype)
+    explicit_b = torch.tensor([b for _, b in pairs], dtype=torch_dtype)
+    random_a, random_b = _opposite_sign_exact_multiples(torch_dtype, 1024 - len(pairs))
+    torch_input_a = torch.cat([explicit_a, random_a]).reshape(32, 32)
+    torch_input_b = torch.cat([explicit_b, random_b]).reshape(32, 32)
+    # Every pair is an exact multiple in this dtype, so the whole golden is 0.
+    assert torch.all(torch_input_a.double() % torch_input_b.double() == 0)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+    assert torch.all(golden == 0)
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_in_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.remainder(tt_in_a, tt_in_b))
+
+    mismatch = output_tensor != golden
+    assert not mismatch.any(), (
+        f"{int(mismatch.sum())} of {mismatch.numel()} exact multiples gave a non-zero remainder; first: "
+        f"remainder({torch_input_a[mismatch][0].item()}, {torch_input_b[mismatch][0].item()}) = "
+        f"{output_tensor[mismatch][0].item()}"
+    )
+
+
 def test_optional_output_tensor_remainder(device):
     torch.manual_seed(0)
 
