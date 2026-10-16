@@ -743,7 +743,7 @@ ttnn::Tensor reshape_dispatch(
         return operations::data_movement::PerformView(
             tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
     }
-    if (impl == ReshapeImpl::ROUTED &&
+    if (impl == ReshapeImpl::ROUTED && operations::data_movement::codegen_supported_on_arch(tensor) &&
         reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value) == nullptr) {
         if (auto plan = reshape_codegen::routed_launch_plan(tensor, logical_shape, mem_config, sub_core_grid)) {
             return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*plan));

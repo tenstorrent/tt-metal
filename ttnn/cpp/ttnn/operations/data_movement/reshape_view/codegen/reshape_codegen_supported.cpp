@@ -53,11 +53,6 @@ const char* scope_violation(
     if (input.device()->is_remote_only()) {
         return "the mesh has no local devices";
     }
-    // The kernels access NoC-filled L1 through cached RISC pointers and copy within L1 with NoC reads from the core's
-    // own L1; Quasar keeps neither coherent, so native runs there.
-    if (input.device()->arch() == tt::ARCH::QUASAR) {
-        return "the codegen kernels do not support Quasar";
-    }
     // The program moves bytes, so any 2 or 4 B type the kernels copy in halfwords or words works alike.
     switch (input.dtype()) {
         case DataType::BFLOAT16:
