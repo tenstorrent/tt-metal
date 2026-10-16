@@ -847,6 +847,38 @@ class TILIZE(TemplateParameter):
 
 
 @dataclass
+class UNPACK_BLOCK(TemplateParameter):
+    """One block call per DEST block (datacopy) or block row (tilize).
+
+    A macro, so a kernel can default it to 0 when a driver does not pass it.
+    """
+
+    unpack_block: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"#define UNPACK_BLOCK {1 if self.unpack_block else 0}"
+
+
+class DATACOPY_FLAG(TemplateParameter):
+    """A datacopy kernel switch (#define <name> 1), picked from columns the test already reports, so it adds no column."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def __repr__(self) -> str:
+        return f"DATACOPY_FLAG({self.name})"
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, DATACOPY_FLAG) and other.name == self.name
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def convert_to_cpp(self) -> str:
+        return f"#define {self.name} 1"
+
+
+@dataclass
 class PACK_BLOCK(TemplateParameter):
     """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
 

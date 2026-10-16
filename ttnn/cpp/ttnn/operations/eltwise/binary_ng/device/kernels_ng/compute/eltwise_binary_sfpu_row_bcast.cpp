@@ -113,7 +113,9 @@ void kernel_main() {
             copy_tile(cb_post_lhs, i, i * 2);
         }
         reconfig_data_format_srca(cb_post_lhs, cb_post_rhs);
-        copy_init(cb_post_rhs);
+        if constexpr (!same_copy_init<cb_post_lhs, cb_post_rhs>()) {
+            copy_init(cb_post_rhs);
+        }
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_rhs, i, i * 2 + 1);
 
