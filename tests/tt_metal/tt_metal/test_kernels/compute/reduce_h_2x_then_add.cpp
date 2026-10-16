@@ -20,24 +20,31 @@ void kernel_main() {
     DataflowBuffer dfb_in_scaler(dfb::in_scaler);
     DataflowBuffer dfb_out(dfb::out);
     compute_kernel_hw_startup(dfb::in_data, dfb::in_scaler, dfb::out);
+    // The 2x path is chosen at run time from these formats; pin them so a plumbing change can't silently fall back
+    // to the plain MxFp4 -> Float16_b path, which gives the same sums for this stimulus.
+    UNPACK(static_assert(
+        unpack_src_format[dfb::in_data] == static_cast<std::uint8_t>(DataFormat::MxFp4) &&
+            unpack_src_format[dfb::in_scaler] == static_cast<std::uint8_t>(DataFormat::MxFp4),
+        "the 2x column reduce needs MxFp4 data and scaler"));
 
     dfb_in.wait_front(onetile);
     dfb_in_scaler.wait_front(onetile);
 
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(dfb::in_data, dfb::in_scaler, dfb::out);
     tile_regs_acquire();
-    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(dfb::in_data, dfb::in_scaler, 0, 0, 0);
+    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(
+        dfb::in_data, dfb::in_scaler, 0 /*itile*/, 0 /*itile_scaler*/, 0 /*idst*/);
     tile_regs_commit();
     tile_regs_wait();
     dfb_out.reserve_back(onetile);
-    pack_tile(0, dfb::out);
+    pack_tile(0 /*idst*/, dfb::out);
     dfb_out.push_back(onetile);
     tile_regs_release();
     reduce_uninit(dfb::in_data);
 
     add_init(dfb::in_data, dfb::in_scaler);
     tile_regs_acquire();
-    add_tiles(dfb::in_data, dfb::in_scaler, 0, 0, 0);
+    add_tiles(dfb::in_data, dfb::in_scaler, 0 /*itile0*/, 0 /*itile1*/, 0 /*idst*/);
     tile_regs_commit();
     tile_regs_wait();
     dfb_out.reserve_back(onetile);
