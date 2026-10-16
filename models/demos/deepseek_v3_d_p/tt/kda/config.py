@@ -165,8 +165,14 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         # Scan policy is fixed at construction. Direct scan avoids summary overhead for shorter fixed
         # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
         # overhead and requires batch_heads * P worker owners. K3 at T=5120 uses grouped scan.
+        # Scan and affine prefix at HiFi3: HiFi2 truncates the SrcB operand to 6 explicit bits. On the 1M fp64 golden
+        # (layers.0, SP8xTP4) scan HiFi3 cut output NRMSE 1.21% -> 0.97% (+0.2% latency) and prefix HiFi3 cut head 6
+        # state error 0.60% -> 0.42% at no measurable cost (tt_metal_tracker-kxn.9.8/9.13).
         recurrence=KDARecurrenceProgramConfig(
-            local_scan_strategy="grouped", summary_group_chunks=group_chunks[active_seq_len_local]
+            local_scan_strategy="grouped",
+            summary_group_chunks=group_chunks[active_seq_len_local],
+            scan_math_fidelity=ttnn.MathFidelity.HiFi3,
+            affine_prefix_math_fidelity=ttnn.MathFidelity.HiFi3,
         ),
         qkv_channel_chunk_size=512,
         tp_ccl_topology=tp_ccl_topology,
