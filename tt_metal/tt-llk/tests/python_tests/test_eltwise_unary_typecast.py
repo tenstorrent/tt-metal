@@ -234,22 +234,17 @@ def test_eltwise_unary_typecast(
         and pair.output_format
         in (DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Bfp4_b)
     ],
-    dest_acc=[DestAccumulation.Yes],
-    approx_mode=[ApproximationMode.No],
-    input_dimensions=[[32, 32]],
 )
-def test_eltwise_unary_typecast_uint16_to_fp16b_32bit_dest(
-    formats: InputOutputFormat,
-    dest_acc: DestAccumulation,
-    approx_mode: ApproximationMode,
-    input_dimensions: list[int],
-):
+def test_eltwise_unary_typecast_uint16_to_fp16b_32bit_dest(formats: InputOutputFormat):
     # ttnn.typecast runs this pair in 16-bit Dest (the matrix above pins dest_acc
     # to No), but the compute API allows it with fp32_dest_acc_en too. In 32-bit
     # Dest the UInt16 datum occupies the low half of the 32-bit word, so a 16-bit
     # Dest load reads the other half; the kernel has to load the whole word and
     # mask it, as every other UInt16-input typecast does.
-    #
+    dest_acc = DestAccumulation.Yes
+    approx_mode = ApproximationMode.No
+    input_dimensions = [32, 32]
+
     # Float16_b output takes the full UInt16 range so the bf16 rounding of values
     # above 256 is exercised too, bit-exact against a ties-away golden (the shared
     # golden rounds ties to even and the default tolerance, ~6 bf16 steps, would
