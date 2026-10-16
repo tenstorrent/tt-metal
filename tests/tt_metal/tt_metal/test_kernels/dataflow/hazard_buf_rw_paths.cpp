@@ -8,9 +8,22 @@
 #include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
-// Op-to-op R/W inference coverage: each tensor binding is touched through exactly one NoC transfer path or endpoint
-// kind, so the kernel's resolved R/W sets show, per binding, whether that path is attributed (and as what). One page
-// per access; the data is not checked, only the .tt.BUF_RW notes.
+// Op-to-op R/W inference coverage: one tensor binding per NoC access path, so the kernel's resolved R/W sets show,
+// per binding, whether that path is attributed (and as what). A path that fails to note at all would show up as its
+// binding MISSING from both sets -- the dangerous failure (a detector sees no access and could wrongly relax a real
+// hazard). Over-attributing (both READ+WRITE, or OPAQUE) is merely imprecise, not dangerous, so it's expected for the
+// bindings below where the specific op can't be told apart. One page per access; the data is not checked, only the
+// .tt.BUF_RW notes. Expected outcome per binding (see test_op_to_op_hazards.cpp's
+// BufRwCoversEveryTransferPathAndEndpoint for the actual assertions):
+//   view, iter, shard_iter, shard   -- noc.async_read via PageView/iterator pages/ShardView      -> READ only
+//   state, zero                     -- noc.async_write_with_state, noc.async_write_zeros         -> WRITE only
+//   legacy_r, legacy_w              -- pre-Noc-class free functions noc_async_read/write_page    -> READ/WRITE only
+//   wrap                            -- AbstractTensorAccessorWrapper (type-erased)                -> READ and WRITE
+//   escape                          -- get_noc_addr() fed to a raw noc_async_read                 -> READ and WRITE,
+//                                       plus trips the raw call's own OPAQUE tag (it can't tell an escaped-but-known
+//                                       address apart from a truly untracked one)
+//   local                           -- LocalTensorAccessor direct CPU-side access, no NoC call     -> READ and WRITE
+//   unused                          -- bound but never touched                                    -> neither set
 void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
     const uint32_t l1 = pad.get_base_address();
@@ -50,12 +63,14 @@ void kernel_main() {
     noc_async_write_page(0, legacy_w, l1);
     noc_async_write_barrier();
 
-    // The binding is erased or the address leaves it: type-erased wrapper, raw NoC on an escaped address, direct CPU
-    // access through LocalTensorAccessor -> READ and WRITE (the kernel could do either).
+    // The binding is erased: a type-erased wrapper -> READ and WRITE (the kernel could do either).
     TensorAccessor wrapped(tensor::wrap);
     AbstractTensorAccessorWrapper wrapper(wrapped);
     noc.async_read(wrapper, pad, size, {.page_id = 0}, {});
     noc.async_read_barrier();
+    // The address leaves the accessor and is fed to a raw NoC call: READ and WRITE from the escape, but the
+    // raw dataflow_api.h entry point also conservatively tags the whole kernel OPAQUE (it cannot tell this
+    // uint64_t apart from a truly untracked one).
     TensorAccessor escape(tensor::escape);
     noc_async_read(escape.get_noc_addr(0), l1, size);
     noc_async_read_barrier();
