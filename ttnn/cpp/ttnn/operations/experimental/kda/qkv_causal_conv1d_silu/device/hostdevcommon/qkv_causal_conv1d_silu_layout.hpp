@@ -32,10 +32,15 @@ constexpr uint32_t align_up(uint32_t value, uint32_t alignment) {
     return (value + alignment - 1) / alignment * alignment;
 }
 
-// Tiles per destination acquire: the largest divisor of `tiles` within half of the BFLOAT16 destination registers.
+// Tiles per destination acquire: the largest divisor of `tiles` within half of the destination registers, which hold
+// half as many FP32 tiles as BFLOAT16 ones.
 constexpr uint32_t max_dest_tiles = 8;
-constexpr uint32_t dest_group(uint32_t tiles) {
-    uint32_t group = max_dest_tiles;
+constexpr uint32_t max_dest_tiles_fp32 = max_dest_tiles / 2;
+constexpr uint32_t dest_tile_limit(bool fp32_dest_acc_en) {
+    return fp32_dest_acc_en ? max_dest_tiles_fp32 : max_dest_tiles;
+}
+constexpr uint32_t dest_group(uint32_t tiles, uint32_t limit = max_dest_tiles) {
+    uint32_t group = limit;
     while (tiles % group != 0) {
         --group;
     }

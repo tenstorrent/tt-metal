@@ -31,7 +31,9 @@ KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
 # each worker core fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
 # The convolution's Q, K and V stay in interleaved L1 until chunk preparation reads them when each core's share fits
-# this budget (96 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
+# this budget (96 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM. LoudBox SP2xTP4 holds four
+# times the rows per device (384 KiB per core), so it keeps them in DRAM, as before the fusion: its perf gate measures
+# the DRAM placement, and only Galaxy's measures the L1 one.
 KDA_QKV_L1_BYTES_PER_CORE = 112 * 1024
 # The QKV convolution's fabric history exchange (qkv_causal_conv1d_silu_layout.hpp): a persistent buffer of
 # predecessor, carry, outgoing and end rows, three rows each, and its entry, predecessor and carry semaphores.

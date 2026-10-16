@@ -351,6 +351,42 @@ def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults
         )
 
 
+@pytest.mark.parametrize(
+    ("widths", "channel_chunk_size"),
+    [
+        # Two channel tiles per block: one destination group, eight diagonal tiles in two FP32 groups.
+        pytest.param((128, 128, 128), 64, id="kimi-k3-block"),
+        # Twelve channel tiles per block: three FP32 groups of four, against two BFLOAT16 groups of six.
+        pytest.param((128, 128, 128), 384, id="wide-block"),
+    ],
+)
+def test_qkv_causal_conv1d_silu_fp32_accumulation(
+    zero_actual_start, device: ttnn.Device, widths: tuple[int, int, int], channel_chunk_size: int
+) -> None:
+    """FP32 destination accumulation halves the tiles per destination acquire and still matches the reference."""
+    (inputs, history, taps), (input_tt, history_tt, taps_tt) = qkv_device_inputs(
+        device, sequence=64, widths=widths, seed=819
+    )
+    fp32_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    outputs = _run(
+        input_tt,
+        history_tt,
+        taps_tt,
+        widths=widths,
+        channel_chunk_size=channel_chunk_size,
+        compute_kernel_config=fp32_config,
+        actual_start=zero_actual_start,
+    )
+    for name, golden, output in zip(("q", "k", "v"), qkv_reference(inputs, history, taps, widths), outputs):
+        assert_accurate(golden, ttnn.to_torch(output), name=f"fp32 {name}", pcc_threshold=0.999, nrmse_threshold=0.008)
+
+
 def test_qkv_causal_conv1d_silu_rejects_approximate_math(
     zero_actual_start, device: ttnn.Device, expect_error: Callable
 ) -> None:
@@ -447,6 +483,81 @@ def test_qkv_causal_conv1d_silu_production_performance(
     assert lower <= duration_ns <= upper, (
         f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
         f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+    )
+
+
+# Kimi-K3's per-device convolution on Galaxy SP8xTP4: 640 rows of Q, K and V (24 heads of 128) read in place from the
+# TILE input projection in L1, whose decay-rank, output-gate and beta columns follow them, with 64-channel blocks, L1
+# outputs and the history exchange, which a single rank runs without the fabric.
+_K3_ROWS = 640
+_K3_WIDTHS = (3072, 3072, 3072)
+_K3_TRAILING_COLUMNS = 128 + 3072 + 32
+_K3_CHANNEL_CHUNK_SIZE = 64
+_K3_EXPECTED_DURATION_NS = 58_200
+
+
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: ttnn.Device) -> None:
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for QKV causal Conv1D plus SiLU performance checks")
+
+    (inputs, history, taps), (_, history_tt, taps_tt) = qkv_device_inputs(device, sequence=_K3_ROWS, widths=_K3_WIDTHS)
+    projected = torch.cat((inputs, torch.randn(1, _K3_ROWS, _K3_TRAILING_COLUMNS, dtype=inputs.dtype)), dim=-1)
+    projected_tt = qkv_to_device(projected, device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    exchange_core = ttnn._ttnn.operations.experimental.kda.qkv_causal_conv1d_silu_exchange_core(
+        device.compute_with_storage_grid_size()
+    )
+    exchange_cores = ttnn.CoreRangeSet({ttnn.CoreRange(exchange_core, exchange_core)})
+    exchange_buffer = ttnn.zeros(
+        (1, KDA_HISTORY_EXCHANGE_ROWS, sum(_K3_WIDTHS)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    exchange_semaphores = [
+        ttnn.create_global_semaphore(device, exchange_cores, 0, ttnn.BufferType.L1_SMALL)
+        for _ in range(KDA_HISTORY_EXCHANGE_SEMAPHORES)
+    ]
+
+    def run() -> tuple[ttnn.Tensor, ...]:
+        return ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
+            projected_tt,
+            history_tt,
+            *taps_tt,
+            *_K3_WIDTHS,
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=_K3_CHANNEL_CHUNK_SIZE),
+            actual_start=zero_actual_start,
+            exchange_buffer=exchange_buffer,
+            exchange_semaphores=exchange_semaphores,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+    # Warm the program cache so the profiled call measures the cached program.
+    for output in run():
+        ttnn.deallocate(output)
+    outputs, programs = profile_realtime_program_merged(device, run)
+    # The profiler's window may also hold the warm-up call; the measured call is the last convolution program.
+    *_, (runtime_id, perf_record) = [
+        (runtime_id, program)
+        for runtime_id, program in programs.items()
+        if any("reader_qkv_causal_conv1d_silu.cpp" in source for source in program["kernel_sources"])
+    ]
+    duration_ns = perf_record["duration_ns"]
+    q, k, v, carry = outputs
+    for name, golden, output in zip(("q", "k", "v"), qkv_reference(inputs, history, taps, _K3_WIDTHS), (q, k, v)):
+        assert output.memory_config().buffer_type == ttnn.BufferType.L1
+        assert_accurate(
+            golden, ttnn.to_torch(output), name=f"Kimi-K3 {name}", pcc_threshold=0.999, nrmse_threshold=0.008
+        )
+    assert_bit_identical(inputs[:, -3:, :], ttnn.to_torch(carry), name="Kimi-K3 replacement carry")
+    logger.info(f"QKV causal Conv1D plus SiLU kimi-k3: measured_ns={duration_ns:.0f}, runtime_id={runtime_id}")
+    lower = _K3_EXPECTED_DURATION_NS * (1 - _PRODUCTION_PERF_MARGIN)
+    upper = _K3_EXPECTED_DURATION_NS * (1 + _PRODUCTION_PERF_MARGIN)
+    assert lower <= duration_ns <= upper, (
+        f"kimi-k3 duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
+        f"(reference {_K3_EXPECTED_DURATION_NS} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
     )
 
 
@@ -676,10 +787,11 @@ def test_qkv_causal_conv1d_silu_tiled_input(
         input_column_offset=column_offset,
     )
     for name, golden, output in zip(("q", "k", "v"), expected, (q, k, v), strict=True):
-        assert_accurate(golden, ttnn.to_torch(output), name=f"tiled {name}", pcc_threshold=0.999)
+        assert_accurate(golden, ttnn.to_torch(output), name=f"tiled {name}", pcc_threshold=0.999, nrmse_threshold=0.008)
 
-    grid = device.compute_with_storage_grid_size()
-    exchange_core = ttnn.CoreCoord(grid.x - 1, grid.y - 1)
+    exchange_core = ttnn._ttnn.operations.experimental.kda.qkv_causal_conv1d_silu_exchange_core(
+        device.compute_with_storage_grid_size()
+    )
     exchange_cores = ttnn.CoreRangeSet({ttnn.CoreRange(exchange_core, exchange_core)})
     exchange_buffer = ttnn.zeros(
         (1, KDA_HISTORY_EXCHANGE_ROWS, channels), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
@@ -698,7 +810,9 @@ def test_qkv_causal_conv1d_silu_tiled_input(
         input_column_offset=column_offset,
     )
     for name, golden, output in zip(("q", "k", "v"), expected, (q, k, v), strict=True):
-        assert_accurate(golden, ttnn.to_torch(output), name=f"with-carry {name}", pcc_threshold=0.999)
+        assert_accurate(
+            golden, ttnn.to_torch(output), name=f"with-carry {name}", pcc_threshold=0.999, nrmse_threshold=0.008
+        )
     # One rank: the carry is the last three tokens.
     last_rows = inputs[:, -3:, :]
     assert_bit_identical(last_rows, ttnn.to_torch(carry), name="replacement carry")

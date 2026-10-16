@@ -19,7 +19,6 @@ file(
     GLOB_RECURSE kernels
     device/kernels/*.cpp
     device/kernels/*.hpp
-    chronological_selections/device/kernels/*.hpp
 )
 
 target_sources(
