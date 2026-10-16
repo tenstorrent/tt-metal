@@ -462,7 +462,8 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_mesh_rows,
         fused_mesh_cols,
         fused_route_plan_hash,
-        attrs.key_stripe_split,  // bakes the reader's invP divisors: unsplit vs tp-split must not share a program
+        attrs.key_stripe_split,      // bakes the reader's invP divisors: unsplit vs tp-split must not share a program
+        attrs.natural_query_blocks,  // bring-up fork: natural query blocks (linear causal geometry)
         tensor_args);
 }
 
@@ -657,8 +658,8 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     const uint32_t D = q_shape[3];
     const uint32_t T = k_shape[2];
     TT_FATAL(
-        attrs.key_compression_ratio == 1 || attrs.key_compression_ratio == 4,
-        "indexer_score key_compression_ratio must be 1 or 4 (got {})",
+        attrs.key_compression_ratio == 1 || attrs.key_compression_ratio == 2 || attrs.key_compression_ratio == 4,
+        "indexer_score key_compression_ratio must be 1 or 4, or 2 in the bring-up fork (got {})",
         attrs.key_compression_ratio);
     TT_FATAL(
         attrs.apply_relu || attrs.key_compression_ratio == 1,
@@ -933,7 +934,9 @@ ttnn::Tensor launch_indexer_score(
     // layer terms below (see tensor_args_t::cache_batch_idx_tensor). nullopt = the scalar path.
     std::optional<ttnn::Tensor> cache_batch_idx_tensor = std::nullopt,
     uint32_t index_cache_num_layers = 1,
-    uint32_t index_cache_layer_idx = 0) {
+    uint32_t index_cache_layer_idx = 0,
+    // Bring-up fork: natural query blocks with a block-cyclic key cache (operation_attributes_t).
+    bool natural_query_blocks = false) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::bringup::indexer_score::IndexerScoreDeviceOperation;
@@ -941,8 +944,8 @@ ttnn::Tensor launch_indexer_score(
 
     const uint32_t Sq = q.logical_shape()[2];
     TT_FATAL(
-        key_compression_ratio == 1 || key_compression_ratio == 4,
-        "indexer_score: key_compression_ratio must be 1 or 4 (got {})",
+        key_compression_ratio == 1 || key_compression_ratio == 2 || key_compression_ratio == 4,
+        "indexer_score: key_compression_ratio must be 1 or 4, or 2 in the bring-up fork (got {})",
         key_compression_ratio);
     const bool full_mesh = fused_ring.has_value() && fused_ring->full_mesh;
 
@@ -1163,6 +1166,17 @@ ttnn::Tensor launch_indexer_score(
     tensor_args.cache_batch_idx_tensor = std::move(cache_batch_idx_tensor);
     operation_attributes.index_cache_num_layers = index_cache_num_layers;
     operation_attributes.index_cache_layer_idx = index_cache_layer_idx;
+    if (natural_query_blocks) {
+        TT_FATAL(
+            block_cyclic.has_value() && cluster_axis.has_value() && !full_mesh,
+            "indexer_score: natural_query_blocks needs a block-cyclic key cache on an SP axis ring "
+            "(block_cyclic_sp_axis / block_cyclic_chunk_local, cluster_axis set, SP > 1)");
+        TT_FATAL(
+            !tensor_args.chunk_start_idx_tensor.has_value() && chunk_start_idx.has_value(),
+            "indexer_score: natural_query_blocks needs the host-scalar chunk_start_idx (the metadata path derives "
+            "the rotated geometry on device)");
+    }
+    operation_attributes.natural_query_blocks = natural_query_blocks;
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
@@ -1273,7 +1287,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     const std::optional<ttnn::Tensor>& valid_end_tensor,
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor,
     uint32_t index_cache_num_layers,
-    uint32_t index_cache_layer_idx) {
+    uint32_t index_cache_layer_idx,
+    bool natural_query_blocks) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::bringup::indexer_score::FusedRingConfig fused_ring;
@@ -1384,7 +1399,8 @@ ttnn::Tensor ring_indexer_score_dsa(
         valid_end_tensor,
         cache_batch_idx_tensor,
         index_cache_num_layers,
-        index_cache_layer_idx);
+        index_cache_layer_idx,
+        natural_query_blocks);
 }
 
 }  // namespace ttnn::experimental::bringup
