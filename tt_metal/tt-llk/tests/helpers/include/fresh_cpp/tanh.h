@@ -39,14 +39,14 @@ __attribute__((noinline)) void calculate_tanh_fresh_cpp()
         r                    = r * a + C2;
         r                    = r * a + C1;
         r                    = r * a;
-        r                    = sfpi::min(r, 1.0f);
-        r                    = sfpi::copysgn(r, x);
-        // SFPSWAP's sign-magnitude order sends a NaN to the clamp; leave NaN
-        // lanes untouched in Dest instead (every NaN sorts above +inf once
-        // its sign is cleared).
-        v_if (sfpi::setsgn(x, 0) <= std::numeric_limits<float>::infinity())
+        // A NaN input makes the polynomial NaN and nothing else does.
+        // SFPSWAP's sign-magnitude order would send that NaN to the clamp,
+        // so leave NaN lanes untouched in Dest instead (NaN sorts above
+        // +inf).
+        v_if (r <= std::numeric_limits<float>::infinity())
         {
-            sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
+            const sfpi::vFloat t = sfpi::copysgn(sfpi::min(r, 1.0f), x);
+            sfpi::dst_reg[0]     = sfpi::convert<sfpi::vFloat16b>(t, sfpi::RoundMode::Nearest);
         }
         v_endif;
         sfpi::dst_reg++;
