@@ -488,6 +488,31 @@ def test_remainder_opposite_sign_exact_multiple(testing_dtype, pairs, device):
     )
 
 
+_INF = float("inf")
+
+
+# remainder(a, +-inf) for finite a is a when a is zero or has the divisor's sign, else the
+# divisor itself (torch semantics). The kernel's floor(a * (1/b)) * b term is 0 * inf for an
+# infinite divisor, which used to leave NaN in every such lane.
+@pytest.mark.parametrize("testing_dtype", ["bfloat16", "float32"])
+def test_remainder_inf_divisor(testing_dtype, device):
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    torch_input_a = torch.tensor([5.0, -5.0, 5.0, -5.0, 0.0, 0.0, 2.5, -2.5], dtype=torch_dtype)
+    torch_input_b = torch.tensor([_INF, _INF, -_INF, -_INF, _INF, -_INF, _INF, -_INF], dtype=torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+    assert not torch.isnan(golden).any()
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_in_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.remainder(tt_in_a, tt_in_b))
+
+    assert torch.equal(output_tensor, golden), f"device {output_tensor.tolist()} vs torch {golden.tolist()}"
+
+
 def test_optional_output_tensor_remainder(device):
     torch.manual_seed(0)
 
