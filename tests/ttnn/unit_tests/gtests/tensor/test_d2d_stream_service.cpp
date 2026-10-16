@@ -612,6 +612,66 @@ void verify_fabric_lease_stress(
     expect_receiver_backing_iota(receiver.get(), receiver_mesh, num_iters);
 }
 
+// Teardown while the receiver holds the links mid-transfer: the chunk has landed and
+// been handed to the workers, but they never ack. The receiver must give the links
+// back on its way out, or the pending wait_for_fabric_links() hangs its destructor.
+void verify_fabric_lease_teardown_mid_transfer(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const ttnn::Shape& global_shape) {
+    auto [sender, receiver] = D2DStreamService::create_pair(
+        sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape, /*share_fabric_links=*/true));
+    const auto& coords = sender->get_backing_tensor().tensor_topology().mesh_coords();
+
+    receiver->release_fabric_links();
+    sender->release_fabric_links();
+    Finish(receiver_mesh->mesh_command_queue());
+    Finish(sender_mesh->mesh_command_queue());
+
+    // Stand in for the sender workers: trigger one transfer.
+    std::vector<uint32_t> trigger{core_range_volume(sender->get_worker_cores())};
+    for (const auto& coord : coords) {
+        tt::tt_metal::detail::WriteToDeviceL1(
+            sender_mesh->get_device(coord),
+            sender->get_service_core(coord),
+            static_cast<uint32_t>(sender->get_data_ready_counter_addr(coord)),
+            trigger);
+    }
+
+    // Wait until the receiver hands the transfer to its workers. Nobody acks it, so the
+    // receiver now sits mid-transfer holding the links.
+    auto released_everywhere = [&] {
+        std::vector<uint32_t> v;
+        for (const auto& coord : coords) {
+            v.clear();
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                receiver_mesh->get_device(coord),
+                receiver->get_worker_cores().start_coord,
+                static_cast<uint32_t>(receiver->get_data_ready_sem_addr()),
+                sizeof(uint32_t),
+                v);
+            if (v.at(0) != 1u) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+    while (!released_everywhere() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_TRUE(released_everywhere()) << "the transfer never reached the receiver workers";
+
+    // The sender gave its links back after shipping; the receiver still holds them.
+    sender->wait_for_fabric_links();
+    Finish(sender_mesh->mesh_command_queue());
+    receiver->wait_for_fabric_links();
+
+    // Must return: teardown hands the receiver's links back, which lets the wait finish.
+    receiver.reset();
+    sender.reset();
+}
+
 // Assert the metadata blob equals `expected` on every receiver worker core's L1
 // (where the receiver service multicast it). Factored out so the multi-hop chain
 // driver can validate the terminal receiver without a paired sender on the same mesh.
@@ -1362,6 +1422,25 @@ TEST_F(D2DStreamServiceTest, FabricLeaseStressSingleChipPair) {
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
 
     verify_fabric_lease_stress(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}), /*num_iters=*/100);
+}
+
+// Tearing down a receiver that holds the links mid-transfer must not hang a pending
+// wait_for_fabric_links().
+TEST_F(D2DStreamServiceTest, FabricLeaseTeardownMidTransferSingleChipPair) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+
+    verify_fabric_lease_teardown_mid_transfer(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}));
 }
 
 // Per-handle teardown must release service cores / L1 / sockets so a fresh pair

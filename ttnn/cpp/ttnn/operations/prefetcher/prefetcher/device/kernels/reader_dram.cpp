@@ -114,6 +114,11 @@ void kernel_main() {
     cb_wait_front(sync_cb_id, 1);
     cb_pop_front(sync_cb_id, 1);
 
+    // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default; avoid clobbering sticky NOC_TARG_ADDR_* / NOC_AT_LEN_BE.
+    const uint32_t noc_rd_cmd_field =
+        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+
     // reset noc counters here because we didn't properly update ptrs for better perf.
     if (noc_mode == DM_DEDICATED_NOC) {
         ncrisc_noc_counters_init();
