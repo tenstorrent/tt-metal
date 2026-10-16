@@ -267,12 +267,13 @@ inline void _llk_pack_untilize_(
 
     program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal, row_num_datums>(address, pack_dst_format);
 
-    // MOP runs (Dest rows) per block. Each enabled packer reads one Dest row per run from its own row
-    // offset (packers 0..3 at Dest rows 0, 8, 32 and 40, see _llk_init_packer_dest_offset_registers_):
-    // a 32x32 tile is covered by all 4 packers and a 16-row two-face tile by packers 0 and 1, so 8 runs
-    // cover them. A single-face tile (num_faces == 1) enables packer 0 only, so it has to walk all
-    // face_r_dim rows itself; tiles with fewer than FACE_R_DIM rows also use one packer and need
-    // face_r_dim runs.
+    // MOP runs per block. Every run packs one output row per enabled packer: two PACRs per packer for the
+    // multi-face full-row MOP (row Y of faces 0 and 1, concatenated), one PACR for the narrow-row and
+    // single-face MOPs. In the non-diagonal layout packers 0..3 read the physical Dest rows Y + {0, 8, 32, 40}
+    // (see _llk_init_packer_dest_offset_registers_), so a 32x32 tile is covered by 4 packers x 8 runs and a
+    // 16-row two-face tile by packers 0/1 x 8 runs. A single-face tile (num_faces == 1) enables packer 0
+    // only, so it has to walk all face_r_dim rows itself; tiles with fewer than FACE_R_DIM rows also use one
+    // packer and need face_r_dim runs.
     const std::uint32_t num_rows = (face_r_dim < FACE_R_DIM) ? face_r_dim : ((num_faces == 1) ? FACE_R_DIM : TILE_R_DIM / 4);
 
     for (std::uint32_t row = 0; row < num_rows; row++)
