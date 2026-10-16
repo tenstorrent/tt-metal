@@ -422,13 +422,14 @@ CommandListData CommandListBuilderImpl::serialize_range(
     dispatch_state.reset(mesh_device.num_sub_devices());
     std::vector<uint32_t> bytes;
     auto& launch_state = dispatch_state.launch_state;
-    DispatchArray<uint32_t> expected_workers{};
+    CompletionCounterArray<uint32_t> expected_workers{};
 
     // Each staged node with no program on this range becomes a dummy GO signal at the start of the stream, so
     // launch-message write pointers and expected worker counts match across all devices. They go at the start because
     // the last program may still be running when the stream ends.
     for (uint32_t sub_device_idx = 0; sub_device_idx < mesh_device.num_sub_devices(); ++sub_device_idx) {
         const SubDeviceId sub_device{static_cast<uint8_t>(sub_device_idx)};
+        const uint32_t counter_index = mesh_device.impl().completion_counter_index(sub_device);
         for (size_t i = 0; i < staged_nodes.size(); ++i) {
             const auto& staged_node = staged_nodes[i];
             if (programs[i] != nullptr || *staged_node.sub_device_id != sub_device_idx ||
@@ -440,17 +441,17 @@ CommandListData CommandListBuilderImpl::serialize_range(
                 dispatch_state.cq_id,
                 mesh_device,
                 sub_device,
-                expected_workers[sub_device_idx],
+                expected_workers[counter_index],
                 /*send_multicast=*/true,
                 launch_state[sub_device_idx].get_mcast_wptr());
             launch_state[sub_device_idx].inc_mcast_wptr(1);
-            expected_workers[sub_device_idx] += staged_node.num_workers;
+            expected_workers[counter_index] += staged_node.num_workers;
         }
     }
 
     // SimpleTraceAllocator computes sync_count from 0, but the dummy GO signals above already add to the completion
     // counter, so each program's sync_count is offset by this amount.
-    const DispatchArray<uint32_t> starting_workers = expected_workers;
+    const CompletionCounterArray<uint32_t> starting_workers = expected_workers;
 
     for (size_t i = 0; i < staged_nodes.size(); ++i) {
         if (programs[i] == nullptr) {
@@ -477,12 +478,13 @@ CommandListData CommandListBuilderImpl::serialize_range(
         }
 
         auto& worker_launch_state = launch_state[*sub_device];
-        node.dispatch_metadata.sync_count += starting_workers[*sub_device];
+        const uint32_t counter_index = mesh_device.impl().completion_counter_index(sub_device);
+        node.dispatch_metadata.sync_count += starting_workers[counter_index];
         program_dispatch::update_traced_program_dispatch_commands(
             node,
             command_sequence,
             worker_launch_state.get_mcast_wptr(),
-            expected_workers[*sub_device],
+            expected_workers[counter_index],
             ProgramBinaryStatus::Committed);
 
         program_dispatch::for_each_program_command_sequence_chunk(
@@ -495,7 +497,7 @@ CommandListData CommandListBuilderImpl::serialize_range(
         if (staged_node.multicast_go_signals) {
             worker_launch_state.inc_mcast_wptr(1);
         }
-        expected_workers[*sub_device] += node.num_workers;
+        expected_workers[counter_index] += node.num_workers;
     }
 
     // Returns the prefetcher from the exec buffer to the issue queue.

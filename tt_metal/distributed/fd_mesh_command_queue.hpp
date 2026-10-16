@@ -11,6 +11,7 @@
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/cq_shared_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/expected_worker_completions.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "mesh_trace.hpp"
@@ -77,6 +78,8 @@ private:
         const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();
+    // Index into expected_num_workers_completed_ of the completion counter sub_device_id's programs report done into.
+    uint32_t completion_counter_index(SubDeviceId sub_device_id) const;
     // Access a reference system memory manager, which acts as a global host side state manager for
     // specific MeshCommandQueue attributes.
     // TODO: All Mesh level host state managed by this class should be moved out, since its not
@@ -108,7 +111,7 @@ private:
     static constexpr size_t max_sub_device_setup_cache_entries = 8;
     std::vector<SubDeviceSetupCommands> sub_device_setup_commands_;
 
-    DispatchArray<uint32_t> expected_num_workers_completed_{};
+    ExpectedWorkerCompletions expected_num_workers_completed_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
     // CrossNode programs rewrite a program-owned config Buffer at launch. For each
     // program id, remember the worker-completion count that launch will report when
@@ -117,7 +120,7 @@ private:
     DispatchArray<std::unordered_map<uint64_t, uint32_t>> cross_node_program_completion_counts_;
 
     DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
-    DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
+    ExpectedWorkerCompletions expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
 
     struct MeshTraceNode {

@@ -531,6 +531,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
     uint32_t wait_count,
     uint32_t go_signal,
     uint32_t wait_stream,
+    uint8_t sub_device_index,
     uint8_t multicast_go_offset,
     uint32_t go_ring_slot,
     DispatcherSelect dispatcher_type) {
@@ -546,6 +547,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         mcast_cmd->mcast.wait_count = wait_count;
         mcast_cmd->mcast.multicast_go_offset = multicast_go_offset;
         mcast_cmd->mcast.go_ring_slot = go_ring_slot;
+        mcast_cmd->mcast.sub_device_index = sub_device_index;
         mcast_cmd->mcast.wait_stream = wait_stream;
     };
     CQDispatchCmd* mcast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));

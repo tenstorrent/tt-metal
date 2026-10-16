@@ -50,7 +50,8 @@ constexpr uint32_t prefetch_h_max_credits = PREFETCH_H_MAX_CREDITS;
 constexpr uint32_t packed_write_max_unicast_sub_cmds =
     PACKED_WRITE_MAX_UNICAST_SUB_CMDS;  // Number of cores in compute grid
 constexpr uintptr_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
-constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;  // maximum number of worker semaphores
+constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;                  // maximum number of sub-devices
+constexpr uint32_t max_num_completion_counters = MAX_NUM_COMPLETION_COUNTERS;  // worker completion counters per CQ
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
 constexpr uint32_t mcast_go_ring_size = MCAST_GO_RING_SIZE;
 constexpr uint32_t go_done_noc_x = GO_DONE_NOC_X;
@@ -1613,7 +1614,7 @@ void kernel_main() {
         dispatch_d_noc_counter_start = snapshot_dispatch_d_noc_counters<upstream_noc_index>();
     }
 
-    for (size_t i = 0; i < max_num_worker_sems; i++) {
+    for (size_t i = 0; i < max_num_completion_counters; i++) {
         const uint32_t index = i + first_stream_used;
 #ifdef ARCH_QUASAR
         *worker_completion_sem_addr(index, first_stream_used, completion_counter_offset) = 0;

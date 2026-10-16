@@ -5,6 +5,7 @@
 #pragma once
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -87,6 +88,29 @@ public:
     static constexpr uint32_t MAX_NUM_HW_CQS = ::MAX_NUM_HW_CQS;
 
     static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = ::DISPATCH_MAX_MESSAGE_ENTRIES;
+
+    // Worker completion counters per CQ; each sub-device's programs report done into one of them.
+    static constexpr uint32_t DISPATCH_COMPLETION_COUNTERS = ::DISPATCH_MAX_COMPLETION_COUNTERS;
+
+    // FDS group (Quasar) that carries the gos of, and the dones into, a completion counter. Group zero is the idle
+    // value on the wire.
+    static constexpr uint32_t fds_group_for_completion_counter(uint32_t counter_index) { return counter_index + 1; }
+
+    // Most completion slots a sub-device can own: one per launch message ring entry, since no more programs than that
+    // can be in flight on a core.
+    static constexpr uint32_t MAX_COMPLETION_SLOTS_PER_SUB_DEVICE = 8;
+
+    // Completion slots (K) each sub-device owns when num_sub_devices share a CQ's completion counters. Sub-device i
+    // owns counters [i * K, (i + 1) * K); counter i * K is its base slot.
+    static constexpr uint32_t num_completion_slots(uint32_t num_sub_devices) {
+        return std::min(MAX_COMPLETION_SLOTS_PER_SUB_DEVICE, DISPATCH_COMPLETION_COUNTERS / num_sub_devices);
+    }
+
+    // Base completion counter of a sub-device, within a CQ's counter block, when each sub-device owns
+    // num_completion_slots counters. Programs and control acks report done into it.
+    static constexpr uint32_t completion_counter_index(uint32_t sub_device_index, uint32_t num_completion_slots) {
+        return sub_device_index * num_completion_slots;
+    }
 
     // correctness asserted in .cpp
     static constexpr uint32_t DISPATCH_MESSAGES_MAX_OFFSET = 255;
@@ -172,5 +196,9 @@ private:
 // Convenience type alias for arrays of `DISPATCH_MESSAGE_ENTRIES` size.
 template <typename T>
 using DispatchArray = std::array<T, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>;
+
+// Per-CQ arrays indexed by completion counter (DispatchSettings::completion_counter_index), not by sub-device.
+template <typename T>
+using CompletionCounterArray = std::array<T, DispatchSettings::DISPATCH_COMPLETION_COUNTERS>;
 
 }  // namespace tt::tt_metal

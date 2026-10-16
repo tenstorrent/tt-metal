@@ -54,6 +54,7 @@
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
 #include "tt-metalium/mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "tt-metalium/mesh_workload.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
@@ -3124,8 +3125,9 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
         // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
         ProgramCommandSequence program_command_sequence{metal_ctx};
+        program_command_sequence.completion_counter_index = mesh_device->impl().completion_counter_index(sub_device_id);
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
-        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
+        program_dispatch::insert_stall_cmds(program_command_sequence);
         program_dispatch::assemble_device_commands(
             program_command_sequence, *this, mesh_device, sub_device_id, use_prefetcher_cache);
 
@@ -3165,8 +3167,9 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
         // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
         ProgramCommandSequence program_command_sequence{metal_ctx};
+        program_command_sequence.completion_counter_index = mesh_device->impl().completion_counter_index(sub_device_id);
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
-        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
+        program_dispatch::insert_stall_cmds(program_command_sequence);
         program_dispatch::assemble_device_commands(
             program_command_sequence, *this, mesh_device, sub_device_id, use_prefetcher_cache);
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
