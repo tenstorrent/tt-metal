@@ -68,8 +68,11 @@ int main(void)
     *(mailbox_base + 2)    = ckernel::RESET_VAL;
 #ifdef ARCH_QUASAR
     *(mailbox_base + 3) = ckernel::RESET_VAL;
-#endif
-#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+    for (std::uint32_t slot = 0; slot < 4; ++slot)
+    {
+        host_signal::write(slot, ckernel::RESET_VAL);
+    }
+#else
     for (std::uint32_t slot = 0; slot < 3; ++slot)
     {
         host_signal::write(slot, ckernel::RESET_VAL);
@@ -77,7 +80,7 @@ int main(void)
 #endif
     device_setup();
 #if defined(ARCH_QUASAR)
-    // No BRISC on Quasar: unpack configures and arms the counters while the other TRISCs are still held in reset.
+    // No BRISC on Quasar: unpack scrubs the debug features and resets the barrier while the others are held in reset.
     llk_perf::configure_and_arm();
 #endif
     clear_trisc_soft_reset(); // Release the rest of the triscs
@@ -94,6 +97,7 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
+    llk_perf::load_counted_zones();
     llk_profiler::reset();
     llk_profiler::sync_threads();
 #endif
@@ -103,18 +107,42 @@ int main(void)
 
         ckernel::fence_compiler();
 
+#if defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
+        // INIT with icache prefetch, as tt-metal's trisck.cc runs a kernel's init; counters.h init_zone ends it before the loop
+        ckernel::icache_prefetch_init_begin();
+#endif
         run_kernel(temp_args);
+#if defined(LLK_PERF_INIT_ONLY) && defined(LLK_DBG_BARRIER)
+        ckernel::icache_prefetch_init_end();
+#endif
 
         ckernel::fence_compiler();
 
+#if defined(LLK_DBG_BARRIER) && defined(LLK_PROFILER) &&                     \
+    ((defined(LLK_PERF_RUN_TYPE_PACK_ISOLATE) && defined(LLK_TRISC_PACK)) || \
+     (!defined(LLK_PERF_INIT_ONLY) &&                                        \
+      ((defined(LLK_PERF_RUN_TYPE_UNPACK_ISOLATE) && defined(LLK_TRISC_UNPACK)) || (defined(LLK_PERF_RUN_TYPE_MATH_ISOLATE) && defined(LLK_TRISC_MATH)))))
+        // The measured thread releases the peers held at their TILE_LOOP end (profiler.h); they are held, so only it flips
+        llk_barrier::detail::flip(llk_barrier::RELEASE_SEM);
+#endif
         ckernel::tensix_sync();
+#if defined(LLK_DBG_BARRIER) // a thread that finishes first waits halted, so no code outside run_kernel runs in another zone
+        llk_barrier::detail::park<llk_barrier::PARK_PLAIN>();
+#endif
     }
 
     llk_perf::read_last_zone();
 
     *mailbox = ckernel::KERNEL_COMPLETE;
-#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+#if defined(ARCH_QUASAR)
+    asm volatile("fence" ::: "memory"); // the L1 results land before the flag the host polls
+#endif
     host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
+#if defined(LLK_DBG_BARRIER) // the flag has landed before the last arrival, which ends BRISC's serving
+    (void)ckernel::load_blocking(reinterpret_cast<volatile std::uint32_t*>(
+        host_signal::NOC_OVERLAY_START_ADDR + (mailbox_offset / sizeof(std::uint32_t)) * host_signal::NOC_STREAM_REG_SPACE_SIZE +
+        host_signal::STREAM_SCRATCH_REG_INDEX * 4));
+    (void)ckernel::load_blocking(&ckernel::pc_buf_base[0]);
 #endif
 }
 

@@ -34,6 +34,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // are compile-time constants emitted into params.h, so nothing is read from params.
     const EltwiseBinaryReuseDestType reuse_dest_type = EltwiseBinaryReuseDestType::NONE;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -48,6 +49,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_dst);
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -59,8 +61,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _perf_unpack_loop_set_valid<
                     /* src A */ true,
-                    /* src B */ is_fp32_dest_acc_en>(
-                    /* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
+                    /* src B */ is_fp32_dest_acc_en,
+                    PERF_RUN_TYPE>(/* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE) // UNPACK_ISOLATE, L1_TO_L1, L1_CONGESTION
@@ -95,6 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr DataFormat MATH_FORMAT_RAW  = static_cast<DataFormat>(formats.math);
     constexpr DataFormat MATH_FORMAT_ENUM = (MATH_FORMAT_RAW == DataFormat::Tf32) ? DataFormat::Float32 : MATH_FORMAT_RAW;
 
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -105,10 +108,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         test_utils::call_ternary_sfpu_operation_init<SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream (perf.h)
+        {
+            _perf_math_loop_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -121,10 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else
                     {
-                        _perf_math_loop_clear_valid<
-                            /* src A */ true,
-                            /* src B */ true>(
-                            /* iterations*/ num_faces);
+                        _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(/* iterations*/ num_faces);
                     }
                 }
             }
@@ -175,9 +180,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile, formats.math, formats.math);
                         }
 
-                        // Ternary op reads three Dest tiles (a, b, c) and writes the result back
-                        // to block_tile. The operand tiles reuse adjacent Dest slots — the SFPU
-                        // cost is data-independent, so this measures the representative math cost.
+                        // Ternary op reads three Dest tiles (a, b, c) and writes the result back to block_tile. The operand tiles reuse adjacent Dest slots —
+                        // the SFPU cost is data-independent, so this measures the representative math cost.
                         test_utils::call_ternary_sfpu_operation<
                             DST_SYNC_MODE,
                             is_fp32_dest_acc_en,
@@ -236,6 +240,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -246,6 +251,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -263,6 +269,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                    }
+                    // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                    if constexpr (PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                     }
                 }
             }

@@ -26,6 +26,7 @@ from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+from .phases import CANONICAL_PHASE, release_phases
 from .schema import (
     FLAG_HEADERS,
     FORMAT_HEADERS,
@@ -48,6 +49,8 @@ from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
 # TILE_LOOP mask in postprocess_tile_loop (no KeyError raised).
 INIT_MARKER = "INIT"
 TILE_LOOP_MARKER = "TILE_LOOP"
+# counters.h counted_zones: a bit per fixed zone id (ZONE_ID_INIT 0, ZONE_ID_TILE_LOOP 1)
+COUNT_INIT, COUNT_TILE_LOOP = 1 << 0, 1 << 1
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
@@ -721,46 +724,44 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
     zones = profiler_data.zones().frame()
     if zones.empty:
         return
-    zones = zones.assign(finish=zones["timestamp"] + zones["duration"])
-    # Identity is the name: marker_id is a per-callsite hash, different on every thread.
-    span = (
-        zones.groupby([MARKER, "thread"])
-        .agg(begin=("timestamp", "min"), finish=("finish", "max"))
-        .reset_index()
-    )
-    wrappers = set()
-    for _, group in span.groupby("thread"):
-        rows = group.to_dict("records")
-        for a in rows:
-            for b in rows:
-                if (
-                    a is not b
-                    and a["begin"] <= b["begin"] <= b["finish"] <= a["finish"]
-                ):
-                    wrappers.add(a[MARKER])
-    phases = (
-        span[~span[MARKER].isin(wrappers)]
-        .groupby(MARKER)
-        .agg(first_open=("begin", "min"), last_close=("finish", "max"))
-        .sort_values("first_open")
-        .reset_index()
-    )
+    # Plain Python over the launch's few zones: a phased row runs this check once per launch (perf/phases.py), and
+    # pandas' groupby made it the costliest step of a launch. Identity is the name: marker_id is a per-callsite hash,
+    # different on every thread.
+    spans = {}  # (thread, name) -> (first begin, last finish)
+    for thread, name, begin, duration in zip(
+        zones["thread"], zones[MARKER], zones["timestamp"], zones["duration"]
+    ):
+        first, last = spans.get((thread, name), (begin, begin + duration))
+        spans[(thread, name)] = (min(first, begin), max(last, begin + duration))
+    wrappers = {
+        a[1]
+        for a, (a_begin, a_finish) in spans.items()
+        for b, (b_begin, b_finish) in spans.items()
+        if a != b and a[0] == b[0] and a_begin <= b_begin <= b_finish <= a_finish
+    }
+    phases = {}
+    for (thread, name), (begin, finish) in spans.items():
+        if name not in wrappers:
+            first_open, last_close = phases.get(name, (begin, finish))
+            phases[name] = (min(first_open, begin), max(last_close, finish))
     prev = None
-    for row in phases.itertuples(index=False):
+    for name, (first_open, last_close) in sorted(
+        phases.items(), key=lambda phase: (phase[1][0], phase[0])
+    ):
         if (
             prev is not None
-            and row.marker not in NON_RENDEZVOUS_MARKERS
-            and prev.last_close > row.first_open
+            and name not in NON_RENDEZVOUS_MARKERS
+            and prev[1] > first_open
         ):
             raise AssertionError(
-                f"Zones overlap across threads: the last {prev.marker} closed at "
-                f"{prev.last_close} but the first {row.marker} opened at {row.first_open}, "
-                f"{prev.last_close - row.first_open} cycles earlier. Both windows therefore "
+                f"Zones overlap across threads: the last {prev[0]} closed at "
+                f"{prev[1]} but the first {name} opened at {first_open}, "
+                f"{prev[1] - first_open} cycles earlier. Both windows therefore "
                 f"cover time belonging to the other phase. The usual cause is a kernel opening "
                 f"its zones with ZONE_SCOPED instead of START_PERF_MEASURE, which is what "
                 f"supplies the cross-thread rendezvous at zone entry."
             )
-        prev = row
+        prev = (name, last_close)
 
 
 RUN_TYPE_PRESETS = {
@@ -841,6 +842,16 @@ class PerfConfig(TestConfig):
             )
             for run_type in _selected_run_types(run_types)
         ]
+        # The run types whose variants build and launch the INIT measurement ELFs (test_config.py): L1_TO_L1 for every row
+        # when selected, as its kernel runs every thread's own loop; else each run type for its own row. In an isolate
+        # kernel the other threads run a mock or nothing, so GCC drops the INIT stores only their own loop reads (pack's
+        # INIT in MATH_ISOLATE has 2 fewer): their INIT is not the one production runs.
+        selected = [rt for _, _, rt in self.run_configs]
+        self.init_run_types = (
+            (PerfRunType.L1_TO_L1,)
+            if PerfRunType.L1_TO_L1 in selected
+            else tuple(selected)
+        )
         # L1_TO_L1 keeps the state the kernel before it left, so a run without isolate kernels also warms up the
         # first isolate kernel of the test, which sets that state; otherwise the previous test still shows through.
         self.warmup_configs = list(self.run_configs)
@@ -996,6 +1007,18 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
+    def _main_counted_zones(self) -> int:
+        """The zones a measured launch counts (counters.h counted_zones): none with counters off, both on Wormhole, whose
+        barrier keeps the readouts out of every window, TILE_LOOP alone on the others (INIT counts in its own launch).
+        """
+        if not TestConfig.ENABLE_PERF_COUNTERS:
+            return 0
+        return (
+            COUNT_INIT | COUNT_TILE_LOOP
+            if self._wormhole_perf_barrier()
+            else COUNT_TILE_LOOP
+        )
+
     def _select_run_type(self, templates, runtimes, run_type):
         self.current_run_type = run_type
         # We need to manually assign different modified templates here if the speed of light is set,
@@ -1032,10 +1055,13 @@ class PerfConfig(TestConfig):
         if not TestConfig.TEST_TARGET.run_simulator:
             for templates, runtimes, run_type in self.warmup_configs:
                 self._select_run_type(templates, runtimes, run_type)
+                self.counted_zones = self._main_counted_zones()
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
 
+        stats_by_run_type = {}  # INIT rows are replaced from the INIT launch below
+        phased_run_types = set()
         for templates, runtimes, run_type in self.run_configs:
             self._select_run_type(templates, runtimes, run_type)
 
@@ -1056,8 +1082,19 @@ class PerfConfig(TestConfig):
 
             variant_raw_data = []
             variant_counter_results = []
-            for run_index in range(run_count):
-                self.write_runtimes_to_L1()
+            # rows that depend on the TILE_LOOP start phase run once per phase and report the mean (perf/phases.py)
+            phases = (
+                release_phases(self.test_name, run_type.name, TestConfig.SPEED_OF_LIGHT)
+                if self._wormhole_perf_barrier()
+                else (CANONICAL_PHASE,)
+            )
+            if len(phases) > 1:
+                phased_run_types.add(run_type)
+            else:
+                phases *= run_count
+            for run_index, phase in enumerate(phases):
+                self.counted_zones = self._main_counted_zones()
+                self.write_runtimes_to_L1(release_phase=phase)
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
                 # Counter config is written by BRISC from built-in array (local L1 write).
@@ -1084,6 +1121,21 @@ class PerfConfig(TestConfig):
                 profiler_data.df["run_index"] = run_index
                 variant_raw_data.append(profiler_data)
 
+            if self._main_counted_zones() == COUNT_TILE_LOOP:
+                # Without the Wormhole barrier INIT's readout would sit between the measured INIT and TILE_LOOP, so
+                # INIT counts in a launch of its own: the same code up to INIT's end, so the same INIT window.
+                self.counted_zones = COUNT_INIT
+                self.write_runtimes_to_L1()
+                self.run_elf_files()
+                self.wait_for_tensix_operations_finished()
+                try:
+                    counter_results = read_counters(location=TestConfig.TENSIX_LOCATION)
+                    if counter_results is not None and not counter_results.empty:
+                        counter_results["run_index"] = 0
+                        variant_counter_results.append(counter_results)
+                except Exception as e:
+                    logger.warning("Error reading INIT counters: {}", e)
+
             get_stats = Profiler.STATS_FUNCTION[run_type]
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
             # Only the no-counter build must produce wall-clock stats; a counter build may return counters alone.
@@ -1091,6 +1143,7 @@ class PerfConfig(TestConfig):
             if not stats_df.empty or not counter_only_build:
                 PerfConfig._validate_profiler_stats(stats_df, run_type)
                 results.append(stats_df)
+                stats_by_run_type[run_type] = stats_df
 
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)
@@ -1123,6 +1176,82 @@ class PerfConfig(TestConfig):
                     )
                     if not counter_csv_df.empty:
                         counter_results_list.append(counter_csv_df)
+
+        # Wormhole perf: INIT comes from the INIT measurement build of init_run_types (test_config.py _init_build_dir: a
+        # speed-of-light build, shared by tests of the same INIT in a run without --speed-of-light), launched after the
+        # measured kernels so they keep their predecessors, after one unrecorded launch of itself. Its INIT window sits
+        # in fixed sections ahead of main, so the loop code cannot move it, and BRISC releases the three INITs one after
+        # another, so L1_TO_L1's one launch gives every run type's INIT row; an isolate's launch gives its own row.
+        init_configs = [c for c in self.run_configs if c[2] in self.init_run_types]
+        while (
+            self._wormhole_perf_barrier()
+            and TestConfig.PERF_INIT_LAUNCH
+            and not TestConfig.TEST_TARGET.run_simulator
+            and init_configs
+        ):
+            init_config = init_configs.pop(0)
+            rows = (
+                self.run_configs
+                if init_config[2] == PerfRunType.L1_TO_L1
+                else [init_config]
+            )
+            self.init_launch = True
+            try:
+                self._select_run_type(*init_config)
+                self.counted_zones = 0
+                for _ in range(2):
+                    self.write_runtimes_to_L1()
+                    self.run_elf_files()
+                    self.wait_for_tensix_operations_finished()
+                init_data = Profiler.get_data(
+                    self.test_name,
+                    self.init_meta_id(),
+                    TestConfig.TENSIX_LOCATION,
+                )
+                init_data.df["run_index"] = 0
+                for templates, runtimes, run_type in rows:
+                    init_stats = Profiler.STATS_FUNCTION[run_type](
+                        ProfilerData.concat([init_data])
+                    )
+                    target = stats_by_run_type.get(run_type)
+                    row = (
+                        init_stats[init_stats[MARKER] == "INIT"]
+                        if not init_stats.empty
+                        else init_stats
+                    )
+                    if target is None or row.empty:
+                        continue
+                    row = row.copy()
+                    if run_type == PerfRunType.L1_TO_L1:
+                        # BRISC releases the three INITs one after another (brisc.cpp, the INIT park), so the span from
+                        # unpack's start to pack's end holds the release gaps: report the longest of the three INITs
+                        raw = init_data.zones().raw()
+                        raw = raw[raw[MARKER] == "INIT"]
+                        lengths = []
+                        for thread in ("unpack", "math", "pack"):
+                            t = raw[raw["thread"] == thread]
+                            starts = t[t["type"] == "ZONE_START"][
+                                "timestamp"
+                            ].to_numpy()
+                            ends = t[t["type"] == "ZONE_END"]["timestamp"].to_numpy()
+                            if len(starts) and len(starts) == len(ends):
+                                lengths.append(float((ends - starts).max()))
+                        if lengths:
+                            for column in row.columns:
+                                if column.startswith("mean("):
+                                    row[column] = max(lengths)
+                    for column in target.columns:
+                        if column != MARKER and column in row.columns:
+                            target.loc[target[MARKER] == "INIT", column] = row[
+                                column
+                            ].values[0]
+                        elif run_type in phased_run_types and column.startswith(
+                            stat_prefix(STD)
+                        ):
+                            # one INIT launch has no spread (the phased launches ran INIT once per phase)
+                            target.loc[target[MARKER] == "INIT", column] = float("nan")
+            finally:
+                self.init_launch = False
 
         # Assemble the per-test report frame (pure — see build_report_frame).
         combined = PerfConfig.build_report_frame(

@@ -48,6 +48,7 @@ static constexpr std::uint32_t EMA_OUTPUT_DST_INDEX = 1;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -63,6 +64,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -74,7 +76,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // SrcA a face at a time, so this count has to include num_faces. It must stay
             // in step with whatever the math isolate path actually retires -- a mismatch
             // in either direction hangs the handshake.
-            _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR);
+            _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
@@ -105,6 +107,7 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -126,6 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -196,6 +200,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_INIT_BEGIN
     {
         START_PERF_MEASURE("INIT")
 
@@ -205,6 +210,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    LLK_INIT_END;
     {
         START_PERF_MEASURE("TILE_LOOP")
 
@@ -216,6 +222,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     // The EMA output always lands in dst tile 1.
                     _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(EMA_OUTPUT_DST_INDEX, PERF_ADDRESS(PERF_OUTPUT, tile));
+                    // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                    if constexpr (PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                    }
                 }
             }
         }

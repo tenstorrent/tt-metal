@@ -58,6 +58,11 @@ static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 // Keep the STALLWAIT on Wormhole: an FPU instruction reads the live flag while it waits to enter the FPU
 // (e.g. for its Src operands), so a write must not land until MATH has drained. (Blackhole latches the
 // flag per instruction at issue and needs no stall.)
+// Not pinned to the Wormhole INIT measurement build's callee slot: the op inits write the flag inline, so in most kernels
+// only the loop calls this, and in that slot it moved INIT by its size whenever the loop kept a copy; an INIT that does call
+// it gets it moved into the slot by the INIT build (test_config.py _init_callees_in_slot)
+#define LLK_INIT_CALLEE_SECTION
+
 inline __attribute__((always_inline)) void _write_src_zero_flag_(const std::uint32_t value)
 {
     src_zero_flag_hw = value;
@@ -65,7 +70,7 @@ inline __attribute__((always_inline)) void _write_src_zero_flag_(const std::uint
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(value);
 }
 
-inline __attribute__((noinline)) void _apply_src_zero_flag_(const std::uint32_t value)
+inline __attribute__((noinline)) LLK_INIT_CALLEE_SECTION void _apply_src_zero_flag_(const std::uint32_t value)
 {
     _write_src_zero_flag_(value);
 }

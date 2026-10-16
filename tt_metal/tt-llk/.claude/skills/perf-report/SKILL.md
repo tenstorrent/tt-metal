@@ -64,9 +64,9 @@ Rules:
   compared with CI numbers, and never mix speed-of-light and normal rows in
   one report.
 - `--enable-perf-counters` produces a different, mutually exclusive kind of
-  report. It compiles with `-DPERF_COUNTERS_COMPILED` (the WC build), which
-  reduces `ZONE_SCOPED` to metadata only: the run emits no wall-clock
-  `mean(<run type>)` columns, only `<RUN_TYPE>_..._pct` efficiency columns.
+  report. It runs the WC build (every zone counted, the same ELFs as NC):
+  the run emits NC's wall-clock `mean(<run type>)` columns plus the
+  `<RUN_TYPE>_...` counter metric columns.
   It also writes to the same `<module>.csv` path, overwriting the timing
   report. Move the timing report out of the way first (see Refresh and
   compare), run counters as a separate sweep, and validate the result as a

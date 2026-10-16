@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import fcntl
+import functools
 import glob
+import gzip
+import json
 import os
 import re
 import shlex
@@ -10,6 +13,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, fields
@@ -75,6 +79,7 @@ from .llk_params import (
     MailboxesCoverage,
     MailboxesCoverageQuasar,
     MailboxesQuasar,
+    PerfRunType,
 )
 from .logger import logger
 from .stimuli_config import StimuliConfig
@@ -88,6 +93,418 @@ from .test_variant_parameters import (
 from .utils import create_directories, run_shell_command
 
 TEMP_DIR = Path(tempfile.gettempdir())
+
+_NON_DEBUG_SECTION = re.compile(
+    r"^\s*(\.section\s+(?!\.debug_)|\.pushsection\b|\.text\b|\.data\b|\.bss\b)",
+    re.M,
+)
+
+
+def _without_debug_sections(text: str) -> str:
+    """GCC assembly without its debug sections (from .debug_info to the closing .ident), which no loaded section
+    refers to; unchanged when anything but debug sections follows .debug_info"""
+    start = text.find("\t.section\t.debug_info")
+    end = text.rfind("\t.ident")
+    if not 0 <= start < end or _NON_DEBUG_SECTION.search(text, start + 1, end):
+        return text
+    return text[:start] + text[end:]
+
+
+# INIT measurement build: sections ahead of main that no code outside INIT can move (sections.ld)
+_INIT_FIXED_SECTIONS = (
+    ".init",
+    ".text.llk_zone.",
+    ".text.llk_init_callee",
+    ".llk_init_body",
+    ".llk_init_tramp",
+)
+# Wormhole perf builds: the sections sections.ld places; a TILE_LOOP window callee in none of them gets a slot, and
+# every other function in none of them (nor in the cold or exit code) goes after the libraries
+_PLACED_SECTIONS = _INIT_FIXED_SECTIONS[1:] + (
+    ".text.run_kernel",
+    ".text.llk_loop_callee",
+    ".llk_init_text",
+    ".llk_quiet_text",
+)
+_LOOP_FIXED_SECTIONS = _PLACED_SECTIONS + (".init", ".text.startup")
+_OTHER_PLACED_SECTIONS = (".text.unlikely", ".text.exit")
+_UNPLACED_SECTIONS = (".text",)
+_FUNCTION_TYPE = re.compile(r"\s*\.type\s+([^,\s]+),\s*@function")
+_FUNCTION_PREAMBLE = re.compile(
+    r"\s*\.(p2align|balign|align|globl|weak|hidden|local)\b"
+)
+_FUNCTION_ALIGN = re.compile(r"\s*\.(?:p2align|align)\s+(\d+)")
+_CALL = re.compile(
+    r"\s*(?:call|tail|jal|j)\s+(?:[a-z][a-z0-9]*,\s*)?([A-Za-z_.$][\w.$]*)\s*$"
+)
+_ASM_LABEL = re.compile(r"^([A-Za-z_.$][\w.$]*):")
+_ASM_INSTRUCTION = re.compile(r"^\t([a-z][a-z0-9.]*)(?:\s+(.*?))?\s*$")
+_ASM_SYMBOL = re.compile(r"[A-Za-z_.$][\w.$]*")
+# instructions that end a fall-through chain of blocks
+_CHAIN_ENDS = frozenset(("j", "jr", "ret", "tail", "mret"))
+_ASM_LOCAL_LABEL = re.compile(r"\.L(\d+)")
+_ASM_BRANCHES = frozenset(
+    "beq bne blt bge bltu bgeu beqz bnez blez bgez bltz bgtz bgt ble bgtu bleu".split()
+)
+# barrier.h parks in inline assembly: the assembler macro, or the out of line threads' ebreak word
+_PARK = re.compile(r"\bllk_park\s+\d|0x00100073")
+# the TILE_LOOP park's restart: the macro's mode 1, or the out of line threads' llk_loop_pad NOPs
+_LOOP_PARK = re.compile(r"\bllk_park\s+1\s*,|\(llk_loop_pad / 4\) \* 1\b")
+# patchable function entry NOPs (-fpatchable-function-entry=N,M) ahead of an entry
+_ENTRY_NOPS = re.compile(r"\.LPFE\d+:$")
+# the harness's own sections: _start (and code a test adds to .init) and main
+_HARNESS_SECTION = re.compile(
+    r"^(\s*\.(?:section|pushsection)\s+)(?:\.init|\.text\.startup)(?=[\s,]|$)"
+)
+# an out of line park's restart alignment (barrier.h)
+_PARK_ALIGN = re.compile(r"^\.balign\s+\d+\s*$")
+
+
+def _asm_functions(lines) -> tuple:
+    """({function: [preamble start, label, .size line, section of the label, log2 alignment]}, section of each line)"""
+    section, stack, previous = ".text", [], ".text"
+    functions, sections = {}, []
+    aligns = {}  # the largest alignment per section since the last .size
+    for i, line in enumerate(lines):
+        s = line.strip()
+        word = s.split(None, 1)[0] if s else ""
+        if word in (".section", ".pushsection"):
+            if word == ".pushsection":
+                stack.append(section)
+            previous, section = section, s.split(None, 1)[1].split(",")[0].strip()
+        elif word in (".text", ".data", ".bss"):
+            previous, section = section, word
+        elif word == ".popsection" and stack:
+            previous, section = section, stack.pop()
+        elif word == ".previous":
+            previous, section = section, previous
+        elif m := _FUNCTION_ALIGN.match(line):
+            aligns[section] = max(aligns.get(section, 0), int(m.group(1)))
+        elif m := _FUNCTION_TYPE.match(line):
+            start = i
+            while start > 0 and _FUNCTION_PREAMBLE.match(lines[start - 1]):
+                start -= 1
+            functions[m.group(1)] = [start, None, None, section, 2]
+        elif s.endswith(":") and s[:-1] in functions and functions[s[:-1]][1] is None:
+            functions[s[:-1]][1:] = [i, None, section, aligns.get(section, 2)]
+        elif word == ".size":
+            name = s.split(None, 1)[1].split(",")[0].strip()
+            if name in functions and functions[name][1] is not None:
+                functions[name][2] = i
+            aligns = {}
+        sections.append(section)
+    return {n: f for n, f in functions.items() if f[2] is not None}, sections
+
+
+def _in_slots(lines, functions, names, slot) -> str:
+    """the assembly with each named function, from its entry label to its .size, in section slot(name); what GCC
+    emits ahead of the label (directives, patchable entry NOPs) stays where it was"""
+    wrap = {}
+    for name in names:
+        _, label, end, _, align = functions[name]
+        wrap[label] = (
+            f'\t.pushsection\t{slot(name)},"ax",@progbits\n\t.p2align\t{align}'
+        )
+        wrap[end] = None
+    out = []
+    for i, line in enumerate(lines):
+        if wrap.get(i) is not None:
+            out.append(wrap[i])
+        out.append(line)
+        if i in wrap and wrap[i] is None:
+            out.append("\t.popsection")
+    return "\n".join(out)
+
+
+def _init_callees_in_slot(text: str) -> str:
+    """INIT measurement build assembly with every function INIT's body calls (directly or through another) that GCC
+    left out of line in a fixed section (.text.llk_init_callee.<n>, sections.ld) instead of among the kernel's
+    functions, where code outside INIT would move it; the functions and every other byte are unchanged.
+    """
+    lines = text.split("\n")
+    functions, _ = _asm_functions(lines)
+    fixed = lambda f: f[3].startswith(_INIT_FIXED_SECTIONS)
+    todo = [n for n, f in functions.items() if f[3] == ".llk_init_body"]
+    seen, moved = set(todo), []
+    while todo:
+        name = todo.pop(0)
+        _, label, end, _, _ = functions[name]
+        for line in lines[label:end]:
+            m = _CALL.match(line)
+            callee = m and functions.get(m.group(1))
+            if callee and m.group(1) not in seen:
+                seen.add(m.group(1))
+                todo.append(m.group(1))
+                if not fixed(callee):
+                    moved.append(m.group(1))
+    if not moved:
+        return text
+    index = {name: k for k, name in enumerate(moved)}
+    return _in_slots(
+        lines, functions, moved, lambda n: f".text.llk_init_callee.{index[n]}"
+    )
+
+
+def _kernel_body(lines, kernel) -> list:
+    """(line, op, operands) of every line of run_kernel between its label and .size: op ':' for a label, 'asm' for an
+    inline assembly line (each runs straight through), '' for any other directive"""
+    body, app = [], False
+    for i in range(kernel[1] + 1, kernel[2]):
+        s = lines[i].strip()
+        if s in ("#APP", "#NO_APP"):
+            app = s == "#APP"
+            body.append((i, "", s))
+        elif app:
+            body.append((i, "asm", s))
+        elif m := _ASM_LABEL.match(lines[i]):
+            body.append((i, ":", m.group(1)))
+        elif m := _ASM_INSTRUCTION.match(lines[i]):
+            body.append((i, m.group(1), m.group(2) or ""))
+        else:
+            body.append((i, "", s))
+    return body
+
+
+def _window_reach(body) -> list:
+    """the run_kernel lines its TILE_LOOP window can run, from the TILE_LOOP park to the next park (barrier.h), in the
+    order a depth first walk reaches them first (fall-through before the branch target); [] without the park
+    """
+    park = next(
+        (
+            k
+            for k, (_, op, s) in enumerate(body)
+            if op == "asm" and _LOOP_PARK.search(s)
+        ),
+        None,
+    )
+    if park is None:
+        return []
+    labels = {s: k for k, (_, op, s) in enumerate(body) if op == ":"}
+    seen, order, todo = {park}, [], [park]
+    while todo:
+        k = todo.pop()
+        order.append(k)
+        _, op, operands = body[k]
+        target = operands.split(",")[-1].strip()
+        nxt = [k + 1]
+        if op == "asm":
+            nxt = [] if k != park and _PARK.search(operands) else nxt
+        elif op in _ASM_BRANCHES:
+            nxt.append(labels.get(target))
+        elif op in ("j", "tail"):
+            nxt = [labels[target]] if target in labels else []
+        elif op == "ret" or (op == "jr" and target == "ra"):
+            nxt = []
+        elif op == "jr":  # a jump table: any label of the function
+            nxt = list(labels.values())
+        for n in reversed(nxt):
+            if n is not None and n < len(body) and n not in seen:
+                seen.add(n)
+                todo.append(n)
+    return order
+
+
+def _loop_window_calls(lines, kernel, names) -> list:
+    """the functions run_kernel calls (or takes the address of) on any path from its TILE_LOOP park to the next park
+    (barrier.h): every call its TILE_LOOP window can make"""
+    body, out = _kernel_body(lines, kernel), []
+    for k in _window_reach(body):
+        _, op, operands = body[k]
+        if op not in (":", "asm", ""):
+            out += [t for t in _ASM_SYMBOL.findall(operands) if t in names]
+    return list(dict.fromkeys(out))
+
+
+def _window_chains_first(text: str) -> str:
+    """TILE_LOOP build assembly whose run_kernel has every fall-through chain its window can run right after the chain of
+    the TILE_LOOP park, in the order of their entry labels, and every other chain after them (the code after the
+    window's closing park starts one): no code the window does not run sits between its blocks, and their order is
+    the loop's own, so code outside the window cannot move them
+    """
+    lines = text.split("\n")
+    functions, _ = _asm_functions(lines)
+    kernel = next(
+        (f for n, f in functions.items() if n.startswith("_Z10run_kernel")), None
+    )
+    if kernel is None:
+        return text
+    body = _kernel_body(lines, kernel)
+    reach = _window_reach(body)
+    if not reach:
+        return text
+    last = max(k for k, (_, op, _) in enumerate(body) if op not in (":", ""))
+    reached = set(reach)
+    # chains end with a jump, a return or a tail call, and after the window's closing park (a jump is added there)
+    chains, start, split, app = [], 0, {}, 0
+    for k in range(last + 1):
+        _, op, s = body[k]
+        app = k if s == "#APP" else app
+        closing = s == "#NO_APP" and any(
+            j in reached and j != reach[0] and _PARK.search(body[j][2])
+            for j in range(app, k)
+        )
+        if op in _CHAIN_ENDS or k == last or (closing and k < last):
+            chains.append((start, k))
+            start = k + 1
+            if closing and k < last:
+                split[len(chains) - 1] = f".Lllk_after_park{len(split)}"
+    chain_of = [c for c, (a, b) in enumerate(chains) for _ in range(a, b + 1)]
+    window = {chain_of[k] for k in reach if k <= last}
+    anchor = chain_of[reach[0]]
+    # the other window chains by their entry label's number: GCC numbers labels as it creates them, the loop's in its
+    # own order, so code outside the window shifts the numbers but not their order (GCC's block order can change)
+    entry = {}
+    for k in range(last + 1):
+        _, op, s = body[k]
+        if (
+            op == ":"
+            and chain_of[k] not in entry
+            and (m := _ASM_LOCAL_LABEL.fullmatch(s))
+        ):
+            entry[chain_of[k]] = int(m.group(1))
+    order = (
+        [c for c in range(anchor) if c not in window]
+        + [anchor]
+        + sorted(window - {anchor}, key=lambda c: (entry.get(c, 1 << 30), c))
+        + [c for c in range(anchor + 1, len(chains)) if c not in window]
+    )
+    if order == list(range(len(chains))) and not split:
+        return text
+    out = []
+    for c in order:
+        a, b = chains[c]
+        if c - 1 in split:  # the code after a closing park starts a chain of its own
+            out.append(f"{split[c - 1]}:")
+        out += [lines[body[k][0]] for k in range(a, b + 1)]
+        if c in split:
+            out.append(f"\tj\t{split[c]}")
+    # CFI is emitted in text order; it only feeds .debug_frame, which nothing loads
+    out = [
+        line
+        for line in out + [lines[body[k][0]] for k in range(last + 1, len(body))]
+        if not line.lstrip().startswith(".cfi_")
+        or line.strip() in (".cfi_startproc", ".cfi_endproc")
+    ]
+    return "\n".join(lines[: kernel[1] + 1] + out + lines[kernel[2] :])
+
+
+def _loop_callees_in_slot(text: str) -> str:
+    """TILE_LOOP build assembly with every function its window can run (_loop_window_calls and their calls) in its own
+    .text.llk_loop_callee.<name>, placed by name after llk_loop_end_pad (sections.ld): no other code can move them
+    """
+    lines = text.split("\n")
+    functions, _ = _asm_functions(lines)
+    kernel = next(
+        (f for n, f in functions.items() if n.startswith("_Z10run_kernel")), None
+    )
+    if kernel is None:
+        return text
+    todo = _loop_window_calls(lines, kernel, functions)
+    seen, moved = set(todo), []
+    while todo:
+        name = todo.pop(0)
+        _, label, end, section, _ = functions[name]
+        if section == ".llk_init_text" or name.startswith("_Z10run_kernel"):
+            continue
+        if not section.startswith(_LOOP_FIXED_SECTIONS):
+            moved.append(name)
+        for line in lines[label + 1 : end]:
+            m = _CALL.match(line)
+            refs = [m.group(1)] if m else []
+            if not m and (i := _ASM_INSTRUCTION.match(line)):
+                refs = _ASM_SYMBOL.findall(i.group(2) or "")
+            for callee in refs:
+                if callee in functions and callee not in seen:
+                    seen.add(callee)
+                    todo.append(callee)
+    if not moved:
+        return text
+    return _in_slots(lines, functions, moved, lambda n: f".text.llk_loop_callee.{n}")
+
+
+def _text_after_libraries(text: str, rest: bool = True) -> str:
+    """Wormhole perf build assembly with every unplaced function (rest) in .llk_text_rest, after the libraries' code
+    (sections.ld), and a placed function's patchable entry NOPs there too, so its section starts at its entry
+    """
+    lines = text.split("\n")
+    functions, _ = _asm_functions(lines)
+    wrap = {}  # first line -> (last line, alignment)
+    for _, label, end, section, align in functions.values():
+        # back over the .type and preamble directives (and a slot's push) to the NOPs' label
+        i = label - 1
+        while i > 0 and (
+            lines[i].strip() == "nop"
+            or _FUNCTION_TYPE.match(lines[i])
+            or _FUNCTION_PREAMBLE.match(lines[i])
+            or lines[i].lstrip().startswith(".pushsection\t.text.llk_")
+        ):
+            i -= 1
+        nops = i if _ENTRY_NOPS.match(lines[i].strip()) else None
+        if (
+            rest
+            and section.startswith(_UNPLACED_SECTIONS)
+            and not section.startswith(_LOOP_FIXED_SECTIONS + _OTHER_PLACED_SECTIONS)
+        ):
+            wrap[label if nops is None else nops] = (end, align)
+        elif nops is not None and (rest or section.startswith(_PLACED_SECTIONS)):
+            j = nops + 1
+            while lines[j].strip() == "nop":
+                j += 1
+            wrap[nops] = (j - 1, 2)
+    if not wrap:
+        return text
+    closing = {last for last, _ in wrap.values()}
+    out = []
+    for i, line in enumerate(lines):
+        if i in wrap:
+            out.append(
+                f'\t.pushsection\t.llk_text_rest,"ax",@progbits\n\t.p2align\t{wrap[i][1]}'
+            )
+        out.append(line)
+        if i in closing:
+            out.append("\t.popsection")
+    return "\n".join(out)
+
+
+def _spill_section(elf_path: str):
+    return _spill_section_of(elf_path, os.stat(elf_path).st_mtime_ns)
+
+
+@functools.lru_cache(maxsize=64)
+def _spill_section_of(elf_path: str, _mtime: int):
+    """(address, bytes) of a Wormhole perf TILE_LOOP ELF's .llk_spill, the code no window runs in its own L1 area
+    (sections.ld): the loader writes only .init and .text, so the host writes it; None when the ELF has none
+    """
+    data = Path(elf_path).read_bytes()
+    (shoff,) = struct.unpack_from("<I", data, 0x20)
+    shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 0x2E)
+    heads = [
+        struct.unpack_from("<IIIIIIIIII", data, shoff + i * shentsize)
+        for i in range(shnum)
+    ]
+    strtab = heads[shstrndx][4]
+    for h in heads:
+        if (
+            data[strtab + h[0] : data.index(b"\0", strtab + h[0])] == b".llk_spill"
+            and h[5]
+        ):
+            return h[3], data[h[4] : h[4] + h[5]] + bytes(-h[5] % 4)
+    return None
+
+
+def _harness_last(text: str) -> str:
+    """Wormhole perf TILE_LOOP build assembly with _start, main and any other .init code in .llk_harness, which
+    sections.ld places with the other code no window runs (.llk_spill): only the entry jump and the zone helpers
+    precede run_kernel, so a harness size change moves no code a window runs. The parks main runs after run_kernel
+    lose their restart alignment (barrier.h's out of line parks), which no window needs.
+    """
+    lines = [_HARNESS_SECTION.sub(r"\1.llk_harness", line) for line in text.split("\n")]
+    _, sections = _asm_functions(lines)
+    return "\n".join(
+        line
+        for line, section in zip(lines, sections)
+        if not (section == ".llk_harness" and _PARK_ALIGN.match(line))
+    )
 
 
 class ProfilerBuild(Enum):
@@ -623,8 +1040,14 @@ class TestConfig:
                     str(item) for item in part if item is not None and item != ""
                 )
             else:
-                argv.extend(shlex.split(str(part)))
+                argv.extend(TestConfig._split_flags(str(part)))
         return argv
+
+    @staticmethod
+    @functools.lru_cache(maxsize=256)
+    def _split_flags(flags: str) -> tuple:
+        """shlex.split of a flag string, kept: every compile and layout link of a variant splits the same strings"""
+        return tuple(shlex.split(flags))
 
     @staticmethod
     def _safe_artefact_key(source_path: str) -> str:
@@ -1144,9 +1567,10 @@ class TestConfig:
 
         self.runtime_arguments_struct = lines
 
-    def write_runtimes_to_L1(self):
+    def runtime_arguments_bytes(self) -> bytes:
+        """The RuntimeParams bytes write_runtimes_to_L1 writes (none with speed of light)."""
         if TestConfig.SPEED_OF_LIGHT:
-            return
+            return b""
 
         argument_data = [
             self.pack_size,  # uint32_t TILE_SIZE_PACK;
@@ -1191,8 +1615,17 @@ class TestConfig:
                 ]
             )
 
-        serialised_data = struct.pack(self.runtime_format, *argument_data)
+        return struct.pack(self.runtime_format, *argument_data)
 
+    def write_runtimes_to_L1(self, release_phase=None):
+        serialised_data = self.runtime_arguments_bytes()
+        if self._wormhole_perf_barrier() and not TestConfig.WITH_COVERAGE:
+            # BRISC reads the TILE_LOOP start phase from the runtime arguments' last 16 bytes (perf/phases.py)
+            from .perf.phases import CANONICAL_PHASE, with_release_phase
+
+            serialised_data = with_release_phase(
+                serialised_data, release_phase or CANONICAL_PHASE
+            )
         if len(serialised_data) != 0:
             if TestConfig.WITH_COVERAGE:
                 write_to_device(
@@ -1226,6 +1659,23 @@ class TestConfig:
             return ""
         return '#include "barrier.h"\n'
 
+    def _wormhole_perf_barrier(self) -> bool:
+        """Wormhole perf builds on hardware: compiled with LLK_DBG_BARRIER and started with the barrier commands."""
+        return (
+            self.profiler_build == ProfilerBuild.Yes
+            and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
+            and not TestConfig.TEST_TARGET.run_simulator
+        )
+
+    def _kernel_placement_include(self) -> str:
+        """C++ snippet that pins run_kernel at a fixed address (kernel_placement.h) in profiler builds, the only
+        ones that are timed; the alignment would cost the other kernels code space. Fused kernels skip the build
+        header and are not pinned; their perf runs (perf_fused.py) are skipped on every architecture.
+        """
+        if self.skip_build_header or self.profiler_build != ProfilerBuild.Yes:
+            return ""
+        return '#include "kernel_placement.h"\n'
+
     def _kernel_source_include(self) -> str:
         """C++ snippet that pulls in this variant's driver.
 
@@ -1244,6 +1694,12 @@ class TestConfig:
         return f"#include  <{source}>\n"
 
     def generate_variant_hash(self):
+        self.variant_id = sha256(
+            str(" | ".join(self._variant_hash_inputs())).encode()
+        ).hexdigest()
+
+    def _variant_hash_inputs(self, exclude=()) -> list:
+        """The compilation inputs generate_variant_hash hashes, without the instance fields named in exclude"""
         NON_COMPILATION_ARGUMENTS = [
             "run_configs",
             "warmup_configs",
@@ -1256,6 +1712,12 @@ class TestConfig:
             "temp_elfs",
             # Host-side determinism-check opt-out; does not affect the compiled kernel.
             "expected_nondeterministic",
+            # Which ELF set a launch runs (the INIT measurement launch); the variant is the same.
+            "init_launch",
+            # Which run types' variants also build the INIT measurement ELFs (perf/core.py); the variant is the same.
+            "init_run_types",
+            # Which zones a launch counts, a register the host writes before it (counters.h counted_zones).
+            "counted_zones",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -1271,7 +1733,7 @@ class TestConfig:
         temp_str = [
             str(value)
             for field_name, value in self.__dict__.items()
-            if field_name not in NON_COMPILATION_ARGUMENTS
+            if field_name not in NON_COMPILATION_ARGUMENTS and field_name not in exclude
         ]
 
         # Header and source search dirs decide which copy of a given relative
@@ -1324,9 +1786,7 @@ class TestConfig:
             *src_include_append,
         ]
 
-        self.variant_id = sha256(
-            str(" | ".join(temp_str + ["<<search-dirs>>"] + search_dirs)).encode()
-        ).hexdigest()
+        return temp_str + ["<<search-dirs>>"] + search_dirs
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
         """Flags for brisc/coverage. Process-wide ``INCLUDES`` only.
@@ -1403,6 +1863,9 @@ class TestConfig:
             llk_roots = {TestConfig.LLK_ROOT, TestConfig.LLK_ROOT.resolve()}
             for root in sorted(llk_roots):
                 OPTIONS_COMPILE += f"{shlex.quote(f'-fmacro-prefix-map={root}/=')} "
+        if self._wormhole_perf_barrier():
+            # BRISC restarts the TRISCs at every rendezvous (see barrier.h); per thread INIT placement: PERF_OOL_THREADS
+            OPTIONS_COMPILE += "-DLLK_DBG_BARRIER "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1446,13 +1909,10 @@ class TestConfig:
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                # Both builds get the mux group: BRISC writes the counter config and runs the startup
-                # sequence either way (see counters.h); only PERF_COUNTERS_COMPILED tells them apart.
+                # Both builds compile the same BRISC: the launch's counted zones decide at run time (counters.h).
                 perf_cnt_flag = (
                     f"-DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
                 )
-                if TestConfig.ENABLE_PERF_COUNTERS:
-                    perf_cnt_flag += "-DPERF_COUNTERS_COMPILED "
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
@@ -1589,7 +2049,15 @@ class TestConfig:
 
         return header_content
 
-    def generate_build_header(self) -> str:
+    def generate_build_header(self, speed_of_light: bool | None = None) -> str:
+        """The variant's build.h. speed_of_light (default: this run's mode) writes it as a --speed-of-light run does:
+        every runtime parameter, tile size, operand address and format a constant. A run without --speed-of-light
+        builds the Wormhole INIT measurement ELFs from that header (_init_build_dir).
+        """
+        sol = TestConfig.SPEED_OF_LIGHT if speed_of_light is None else speed_of_light
+        # a speed-of-light run already holds its runtimes in templates (and none in runtimes), in this order
+        templates = self.templates + self.runtimes if sol else self.templates
+        compile_time_formats = self.compile_time_formats or sol
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             sfpu_types_include = ""
         else:
@@ -1622,7 +2090,7 @@ class TestConfig:
             f"constexpr bool unpack_to_dest = {str(self.unpack_to_dest).lower()};",
         ] + (
             FORMATS_CONFIG_STRUCT_COMPILETIME
-            if self.compile_time_formats
+            if compile_time_formats
             else FORMATS_CONFIG_STRUCT_RUNTIME
         )
 
@@ -1635,7 +2103,7 @@ class TestConfig:
                 f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.cpp_enum_value};"
             )
 
-        if TestConfig.SPEED_OF_LIGHT:
+        if sol:
             header_content.extend(
                 [
                     f"constexpr std::uint32_t TILE_SIZE_PACK = {self.pack_size};",
@@ -1649,13 +2117,13 @@ class TestConfig:
                     self.variant_stimuli.generate_stimuli_header_addresses()
                 )
 
-        for parameter in self.templates:
+        for parameter in templates:
             header_content.append(parameter.convert_to_cpp())
 
-        if self.compile_time_formats:
+        if compile_time_formats and self.formats_config is not None:
             header_content.extend(self.generate_compile_time_data_formats())
 
-        if TestConfig.SPEED_OF_LIGHT:
+        if sol:
             header_content.append("struct RuntimeParams {};")
         else:
             header_content.extend(self.runtime_arguments_struct)
@@ -1693,8 +2161,375 @@ class TestConfig:
     def _compile_kernel_part(self, name, compile_command, source):
         run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
 
-    def build_elfs(self):
+    # kept assemblies of the variants this process built last, {path: (text, text without debug sections)}
+    _ASSEMBLIES: ClassVar[dict] = {}
+    _ASSEMBLIES_LOCK: ClassVar = threading.Lock()
 
+    @staticmethod
+    def _remember_assembly(path: Path, text: str):
+        with TestConfig._ASSEMBLIES_LOCK:
+            TestConfig._ASSEMBLIES[str(path)] = (text, None)
+            while len(TestConfig._ASSEMBLIES) > 12:
+                TestConfig._ASSEMBLIES.pop(next(iter(TestConfig._ASSEMBLIES)))
+
+    @staticmethod
+    def _kept_assembly(path: Path, probe: bool) -> str:
+        """A kept thread assembly; probe: without its debug sections, which link to the same loaded sections faster"""
+        with TestConfig._ASSEMBLIES_LOCK:
+            got = TestConfig._ASSEMBLIES.get(str(path))
+        if got is None:
+            with gzip.open(path, "rt") as f:
+                got = (f.read(), None)
+        text, stripped = got
+        if probe and stripped is None:
+            stripped = _without_debug_sections(text)
+        with TestConfig._ASSEMBLIES_LOCK:
+            TestConfig._ASSEMBLIES[str(path)] = (text, stripped)
+            while len(TestConfig._ASSEMBLIES) > 12:
+                TestConfig._ASSEMBLIES.pop(next(iter(TestConfig._ASSEMBLIES)))
+        return stripped if probe else text
+
+    def _build_kernel_part(
+        self,
+        name: str,
+        variant_dir: Path,
+        elf_dir: Path,
+        pads=None,
+        init_only=False,
+        probe=False,
+    ):
+        """Compiles and links one thread's ELF of this variant into elf_dir. Wormhole perf builds compile to assembly
+        once and link it with the layout pads (pads = (P, Z) bytes, see perf/layout.py) as assembler symbols.
+        probe: a link perf/layout.py only reads the code of, made without debug sections.
+        """
+        local_options_compile, local_memory_layout_ld, _ = (
+            self.resolve_compile_options()
+        )
+        shared_obj_dir = (
+            TestConfig.PROFILER_SHARED_OBJ_DIR
+            if self.profiler_build == ProfilerBuild.Yes
+            else TestConfig.SHARED_OBJ_DIR
+        )
+        src_include_prepend, src_include_append = self._extra_src_include_flag_lists()
+        # COMPILE_FOR_TRISC is the single source of truth for the compute thread id on every
+        # arch (unpack=0/math=1/pack=2/sfpu=3). Quasar also gets -DLLK_TRISC_<NAME> below, but the
+        # LLK headers now require COMPILE_FOR_TRISC (see ckernel_addrmod.h), so pass it for Quasar too.
+        optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
+            TestConfig.KERNEL_COMPONENTS.index(name)
+        )
+
+        if init_only and self._shares_sol_init():
+            # a run without --speed-of-light builds the INIT measurement ELFs from the speed-of-light header
+            # (_init_build_dir), so they compile as a speed-of-light run does: formats and parameters are constants
+            optional_kernel_flags += " -DSPEED_OF_LIGHT"
+        elif not self.compile_time_formats:
+            optional_kernel_flags += " -DRUNTIME_FORMATS"
+
+        # Only TRISC0 has the vector unit on Quasar. The flag is after
+        # ARCH_COMPUTE so it overrides the march implied by -mcpu.
+        if self.requires_vector_ext and name == "unpack":
+            optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
+
+        # Both builds get the L1 selection (mux group on tt-1xx, l1_client event on Quasar): the
+        # counters off build compiles the same zone code with the counters stopped (counters.h).
+        if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+            optional_kernel_flags += (
+                f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"
+            )
+        else:
+            optional_kernel_flags += (
+                f" -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
+            )
+        if init_only:  # the INIT measurement build of the driver (counters.h, perf.h)
+            optional_kernel_flags += " -DLLK_PERF_INIT_ONLY"
+        if (
+            self._wormhole_perf_barrier()
+            and (name, os.path.basename(str(self.test_source_path or self.test_name)))
+            in TestConfig.PERF_OOL_THREADS
+        ):
+            # INIT out of line (perf.h), so INIT cannot change the loop code; GCC would otherwise save callee saved
+            # registers inside the measured loops, so they are saved on entry instead
+            optional_kernel_flags += " -DLLK_PERF_OOL -fno-shrink-wrap-separate"
+
+        coverage_args = (
+            [
+                "-Wl,--start-group",
+                str(shared_obj_dir / "coverage.o"),
+                "-lgcov",
+                "-Wl,--end-group",
+            ]
+            if self.coverage_build == CoverageBuild.Yes
+            else []
+        )
+        trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
+        device_print_flags = ""
+        if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
+            risc_id, _ = TestConfig.RISC_INFO[name]
+            # Quasar: kernel addresses the buffer through the uncached alias
+            # (see device_print.h:get_lock_atomic).
+            kernel_buffer_base = TestConfig.DEVICE_PRINT_BUFFER_BASE + (
+                0x400000 if TestConfig.ARCH == ChipArchitecture.QUASAR else 0
+            )
+            device_print_flags = (
+                "-DDEBUG_PRINT_ENABLED "
+                f"-DLLK_DEVICE_PRINT_BUFFER_BASE={kernel_buffer_base:#x} "
+                f"-DLLK_RUNTIME_ARGS_START={TestConfig.DEVICE_PRINT_RUNTIME_ARGS_START:#x} "
+                f"-DDEVICE_PRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_BUFFER_SIZE} "
+                f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
+                f"-DPROCESSOR_INDEX={risc_id} "
+            )
+        compile_flags = TestConfig._argv(
+            TestConfig.ARCH_COMPUTE,
+            TestConfig.OPTIONS_ALL,
+            [f"-I{TestConfig.TESTS_WORKING_DIR}"],
+            src_include_prepend,
+            [f"-I{TestConfig.RISCV_SOURCES}"],
+            src_include_append,
+            [f"-I{variant_dir}"],
+            local_options_compile,
+            optional_kernel_flags,
+            f"-DLLK_TRISC_{trisc_define}",
+            device_print_flags,
+        )
+        link_flags = TestConfig._argv(
+            TestConfig.OPTIONS_LINK,
+            coverage_args,
+            [
+                f"-T{local_memory_layout_ld}",
+                f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
+                f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
+            ],
+        )
+        # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
+        # that -nostdlib drops; only referenced helpers are linked.
+        libs_out = ["-lc", "-lgcc", "-o", str(elf_dir / f"{name}.elf")]
+        source = (
+            f"{self._barrier_reservation_include()}"
+            f"{self._kernel_placement_include()}"
+            f"{self._kernel_source_include()}#include  <trisc.cpp>\n"
+        )
+        if not self._wormhole_perf_barrier():
+            compile_command = [
+                TestConfig.GXX,
+                *compile_flags,
+                *link_flags,
+                "-x",
+                "c++",
+                "-",
+                *libs_out,
+            ]
+            logger.trace(" ".join(shlex.quote(part) for part in compile_command))
+            self._compile_kernel_part(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
+                name, compile_command, source
+            )
+            return
+
+        # the assembly is kept compressed for the padded copies: with debug info it is about 0.6 MB a thread. The INIT
+        # build has no padded copies, so its assembly is not kept.
+        assembly = variant_dir / ("obj_init" if init_only else "obj") / f"{name}.s"
+        assembly.parent.mkdir(parents=True, exist_ok=True)
+        if pads is None:
+            compile_command = [
+                TestConfig.GXX,
+                # the INIT ELF is only launched to time INIT: no debug info, which changes no loaded byte (-g never
+                # changes the code) and makes its compile and link faster
+                *(
+                    [flag for flag in compile_flags if flag != "-g"]
+                    if init_only
+                    else compile_flags
+                ),
+                "-S",
+                "-x",
+                "c++",
+                "-",
+                "-o",
+                str(assembly),
+            ]
+            logger.trace(" ".join(shlex.quote(part) for part in compile_command))
+            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+            text = assembly.read_text()
+            text = (
+                _text_after_libraries(_init_callees_in_slot(text), rest=False)
+                if init_only
+                else _harness_last(
+                    _text_after_libraries(
+                        _loop_callees_in_slot(_window_chains_first(text))
+                    )
+                )
+            )
+            if not init_only:
+                # level 6: a seventh of the time of the default 9 for 6 % more bytes
+                with gzip.open(
+                    assembly.with_suffix(".s.gz"), "wt", compresslevel=6
+                ) as f:
+                    f.write(text)
+                TestConfig._remember_assembly(assembly.with_suffix(".s.gz"), text)
+            assembly.unlink()
+        else:
+            text = TestConfig._kept_assembly(assembly.with_suffix(".s.gz"), probe)
+        p, z = pads or (0, 0)
+        # without -g, as the one step build, so the link gives the same ELF
+        link_command = [
+            TestConfig.GXX,
+            *[flag for flag in compile_flags if flag != "-g"],
+            f"-Wa,--defsym,llk_loop_pad={p}",
+            f"-Wa,--defsym,llk_loop_end_pad={z}",
+            # no NOPs after a section's last byte to its alignment: run_kernel's would fill up to a period of code space
+            *([] if init_only else ["-Wa,--no-pad-sections"]),
+            *link_flags,
+            "-x",
+            "assembler",
+            "-",
+            "-x",
+            "none",
+            *libs_out,
+        ]
+        logger.trace(" ".join(shlex.quote(part) for part in link_command))
+        run_shell_command(link_command, TestConfig.TESTS_WORKING_DIR, text)
+
+    # Threads that run INIT out of line (LLK_PERF_OOL): math and the unpackers whose loop code GCC ties to INIT's code.
+    # The others keep INIT inline, so their loop code is the one built without the barrier.
+    _OOL_INLINE_EXCEPTIONS = frozenset(
+        {
+            ("unpack", "math_transpose_perf.cpp"),
+            ("unpack", "fast_tilize_test.cpp"),
+            ("unpack", "unpack_tilize_perf.cpp"),
+        }
+    )
+
+    class _OolThreads:
+        def __contains__(self, key):
+            name, source = key
+            return name == "math" or (name, source) in TestConfig._OOL_INLINE_EXCEPTIONS
+
+    PERF_OOL_THREADS: ClassVar = _OolThreads()
+
+    # Threads whose measured loop takes layout pads (perf/layout.py), per run type.
+    LAYOUT_THREADS: ClassVar[dict] = {
+        PerfRunType.UNPACK_ISOLATE: ("unpack",),
+        PerfRunType.MATH_ISOLATE: ("math",),
+        PerfRunType.PACK_ISOLATE: ("pack",),
+        PerfRunType.L1_TO_L1: ("unpack", "math", "pack"),
+        PerfRunType.L1_CONGESTION: ("unpack", "math", "pack"),
+    }
+
+    @staticmethod
+    @functools.lru_cache(maxsize=64)
+    def _layout_keys(assembly: Path) -> tuple:
+        """perf/layout.py (code_key, structure_key) of a kept thread assembly"""
+        from .perf import layout
+
+        text = TestConfig._kept_assembly(assembly, False)
+        return layout.code_key(text), layout.structure_key(text)
+
+    # Wormhole perf: INIT is measured in its own launch of the INIT measurement build (counters.h LLK_PERF_INIT_ONLY), so
+    # no code outside INIT (the loop, the kernel around it) can change INIT's code, placement or neighbours.
+    PERF_INIT_LAUNCH: ClassVar[bool] = (
+        os.environ.get("LLK_PERF_INIT_LAUNCH", "1") == "1"
+    )
+
+    def _layout_elf_dir(self, build: bool) -> Path:
+        """ELF dir to run for the current runtime arguments. Wormhole perf builds run a copy of the variant whose
+        measured loop threads take the pads perf/layout.py picks for these arguments; build makes it when missing.
+        """
+        if getattr(self, "init_launch", False):
+            return self._init_build_dir() / "init_elf"
+        variant_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
+        if not self._wormhole_perf_barrier():
+            return variant_dir / "elf"
+        threads = TestConfig.LAYOUT_THREADS.get(
+            getattr(self, "current_run_type", None), ()
+        )
+        if not threads:
+            return variant_dir / "elf"
+        from .perf import layout
+
+        runtime = self.runtime_arguments_bytes()
+        key = sha256(runtime + self.current_run_type.name.encode()).hexdigest()[:16]
+        choice = variant_dir / "layout" / f"{key}.json"
+        try:
+            pads = {t: tuple(v) for t, v in json.loads(choice.read_text()).items()}
+        except (
+            OSError,
+            ValueError,
+        ):  # not chosen yet, or being written by another worker
+            pads = {}
+            for t in threads:
+                try:
+                    pads[t] = layout.choose(
+                        variant_dir / "elf" / f"{t}.elf",
+                        t,
+                        runtime,
+                        variant_dir / "layout",
+                        relink=lambda p, z, out, t=t: self._build_kernel_part(
+                            t, variant_dir, Path(out), (p, z), probe=True
+                        ),
+                        log=os.environ.get("LLK_LAYOUT_LOG"),
+                        # variants whose thread compiles to the same code share the layout work
+                        shared=(
+                            TestConfig.ARTEFACTS_DIR / "layout_shared",
+                            *TestConfig._layout_keys(variant_dir / "obj" / f"{t}.s.gz"),
+                        ),
+                    )
+                except (
+                    Exception
+                ) as e:  # never fail a test on the layout model: run it unpadded
+                    logger.warning(
+                        "Layout choice for {} {} failed: {}", self.variant_id[:12], t, e
+                    )
+                    pads[t] = (0, 0)
+            layout.write_json(choice, pads)
+        tag = "_".join(f"{t}{p}-{z}" for t, (p, z) in sorted(pads.items()) if p or z)
+        if not tag:
+            return variant_dir / "elf"
+        layout_dir = variant_dir / f"layout_{tag}"
+        done, failed = layout_dir / ".build_complete", layout_dir / ".build_failed"
+        if not done.exists() and not failed.exists():
+            if not build:
+                raise RuntimeError(
+                    f"{layout_dir} was not built: run the producer for this test"
+                )
+            with FileLock(TestConfig.SYNC_DIR / f"{self.variant_id}-{tag}.lock"):
+                if not done.exists() and not failed.exists():
+                    elf_dir = layout_dir / "elf"
+                    create_directories([elf_dir])
+                    try:
+                        for name in TestConfig.KERNEL_COMPONENTS:
+                            p, z = pads.get(name, (0, 0))
+                            if p or z:
+                                self._build_kernel_part(
+                                    name, variant_dir, elf_dir, (p, z)
+                                )
+                            else:  # an unpadded thread is the variant's own ELF: a hard link saves its space
+                                try:
+                                    os.link(
+                                        variant_dir / "elf" / f"{name}.elf",
+                                        elf_dir / f"{name}.elf",
+                                    )
+                                except OSError:
+                                    shutil.copy2(
+                                        variant_dir / "elf" / f"{name}.elf", elf_dir
+                                    )
+                        done.touch()
+                    # a pad can push the code past its region: run it unpadded
+                    except Exception as e:
+                        logger.warning(
+                            "Layout {} of {} failed, running it unpadded: {}",
+                            tag,
+                            self.variant_id[:12],
+                            e,
+                        )
+                        failed.touch()
+        return layout_dir / "elf" if done.exists() else variant_dir / "elf"
+
+    def build_elfs(self):
+        self._build_variant_elfs()
+        if not TestConfig.INFRA_TESTING:
+            self._layout_elf_dir(build=True)
+            if self._builds_init_elfs() and self._shares_sol_init():
+                self._build_shared_init_elfs()
+
+    def _build_variant_elfs(self):
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
         if not self.skip_build_header:
             header_content = self.generate_build_header()
@@ -1705,8 +2540,11 @@ class TestConfig:
 
         self.build_shared_artefacts()
 
+        init_build = self._builds_init_elfs() and not self._shares_sol_init()
+        init_done = VARIANT_DIR / "init_elf" / ".build_complete"
+
         # Fast path: if build is already complete, skip entirely
-        if done_marker.exists():
+        if done_marker.exists() and (not init_build or init_done.exists()):
             logger.debug("Build already complete for {}", self.variant_id[:12])
             return
 
@@ -1717,6 +2555,9 @@ class TestConfig:
         with lock:
             # Check again inside lock in case another process just finished
             if done_marker.exists():
+                # a variant another test built without the INIT measurement ELFs (it ran another run type's INIT)
+                if init_build and not init_done.exists():
+                    self._build_init_elfs(VARIANT_DIR, [])
                 return
 
             VARIANT_OBJ_DIR = VARIANT_DIR / "obj"
@@ -1724,127 +2565,18 @@ class TestConfig:
 
             create_directories([VARIANT_OBJ_DIR, VARIANT_ELF_DIR])
 
-            local_options_compile, local_memory_layout_ld, _ = (
-                self.resolve_compile_options()
-            )
-
             if not self.skip_build_header:
                 with open(VARIANT_DIR / "build.h", "w") as f:
                     f.write(header_content)
 
-            # Use correct shared artefact directory based on profiler build
-            shared_obj_dir = (
-                TestConfig.PROFILER_SHARED_OBJ_DIR
-                if self.profiler_build == ProfilerBuild.Yes
-                else TestConfig.SHARED_OBJ_DIR
-            )
-
-            src_include_prepend, src_include_append = (
-                self._extra_src_include_flag_lists()
-            )
-
-            def build_kernel_part(name: str):
-                # COMPILE_FOR_TRISC is the single source of truth for the compute thread id on every
-                # arch (unpack=0/math=1/pack=2/sfpu=3). Quasar also gets -DLLK_TRISC_<NAME> below, but the
-                # LLK headers now require COMPILE_FOR_TRISC (see ckernel_addrmod.h), so pass it for Quasar too.
-                optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
-                    TestConfig.KERNEL_COMPONENTS.index(name)
-                )
-
-                if not self.compile_time_formats:
-                    optional_kernel_flags += " -DRUNTIME_FORMATS"
-
-                # Only TRISC0 has the vector unit on Quasar. The flag is after
-                # ARCH_COMPUTE so it overrides the march implied by -mcpu.
-                if self.requires_vector_ext and name == "unpack":
-                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
-
-                # Both builds get the L1 selection (mux group on tt-1xx, l1_client event on Quasar): the
-                # counters off build compiles the same zone code with the counters stopped (counters.h).
-                if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
-                    optional_kernel_flags += (
-                        f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"
-                    )
-                else:
-                    optional_kernel_flags += (
-                        f" -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
-                    )
-                if TestConfig.ENABLE_PERF_COUNTERS:
-                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
-
-                coverage_args = (
-                    [
-                        "-Wl,--start-group",
-                        str(shared_obj_dir / "coverage.o"),
-                        "-lgcov",
-                        "-Wl,--end-group",
-                    ]
-                    if self.coverage_build == CoverageBuild.Yes
-                    else []
-                )
-                trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
-                device_print_flags = ""
-                if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
-                    risc_id, _ = TestConfig.RISC_INFO[name]
-                    # Quasar: kernel addresses the buffer through the uncached alias
-                    # (see device_print.h:get_lock_atomic).
-                    kernel_buffer_base = TestConfig.DEVICE_PRINT_BUFFER_BASE + (
-                        0x400000 if TestConfig.ARCH == ChipArchitecture.QUASAR else 0
-                    )
-                    device_print_flags = (
-                        "-DDEBUG_PRINT_ENABLED "
-                        f"-DLLK_DEVICE_PRINT_BUFFER_BASE={kernel_buffer_base:#x} "
-                        f"-DLLK_RUNTIME_ARGS_START={TestConfig.DEVICE_PRINT_RUNTIME_ARGS_START:#x} "
-                        f"-DDEVICE_PRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_BUFFER_SIZE} "
-                        f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
-                        f"-DPROCESSOR_INDEX={risc_id} "
-                    )
-                compile_command = TestConfig._argv(
-                    [TestConfig.GXX],
-                    TestConfig.ARCH_COMPUTE,
-                    TestConfig.OPTIONS_ALL,
-                    [f"-I{TestConfig.TESTS_WORKING_DIR}"],
-                    src_include_prepend,
-                    [f"-I{TestConfig.RISCV_SOURCES}"],
-                    src_include_append,
-                    [f"-I{VARIANT_DIR}"],
-                    local_options_compile,
-                    optional_kernel_flags,
-                    f"-DLLK_TRISC_{trisc_define}",
-                    device_print_flags,
-                    TestConfig.OPTIONS_LINK,
-                    coverage_args,
-                    [
-                        f"-T{local_memory_layout_ld}",
-                        f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
-                        f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
-                    ],
-                    # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
-                    # that -nostdlib drops; only referenced helpers are linked.
-                    ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
-                    [str(VARIANT_ELF_DIR / f"{name}.elf")],
-                )
-
-                logger.trace(" ".join(shlex.quote(part) for part in compile_command))
-
-                self._compile_kernel_part(
-                    name,
-                    compile_command,
-                    (
-                        f"{self._barrier_reservation_include()}"
-                        f"{self._kernel_source_include()}#include  <trisc.cpp>\n"
-                    ),
-                )
-
-            with ThreadPoolExecutor(
-                max_workers=len(TestConfig.KERNEL_COMPONENTS)
-            ) as executor:
-                futures = [
-                    executor.submit(build_kernel_part, name)
-                    for name in TestConfig.KERNEL_COMPONENTS
-                ]
-                for fut in futures:
-                    fut.result()
+            jobs = [
+                (name, VARIANT_DIR, VARIANT_ELF_DIR)
+                for name in TestConfig.KERNEL_COMPONENTS
+            ]
+            if init_build:  # the INIT measurement ELFs compile in the same pool
+                self._build_init_elfs(VARIANT_DIR, jobs)
+            else:
+                TestConfig._run_build_jobs(self._build_kernel_part, jobs)
 
             if self.profiler_build == ProfilerBuild.Yes:
                 # Extract profiler metadata
@@ -1872,6 +2604,125 @@ class TestConfig:
 
             # Mark build as complete so other processes know they can use the artefacts
             done_marker.touch()
+
+    @staticmethod
+    def _run_build_jobs(build, jobs):
+        with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+            futures = [executor.submit(build, *job) for job in jobs]
+            for fut in futures:
+                fut.result()
+
+    def _builds_init_elfs(self) -> bool:
+        """Wormhole perf: whether this variant also builds the INIT measurement ELFs (LLK_PERF_INIT_ONLY). INIT's timed
+        window (its body, the callee slot and the trampoline's timed part) sits in fixed sections ahead of main, so
+        L1_TO_L1 builds them for all of a test's INIT rows, or without it each run type for its own row (perf/core.py
+        init_run_types).
+        """
+        return (
+            self._wormhole_perf_barrier()
+            and TestConfig.PERF_INIT_LAUNCH
+            and getattr(self, "current_run_type", None)
+            in getattr(self, "init_run_types", ())
+        )
+
+    def _build_init_elfs(self, variant_dir: Path, jobs):
+        """The INIT measurement ELFs (unpadded) into <variant_dir>/init_elf and their profiler metadata under
+        init_meta_id(), with jobs (other builds of the variant) in the same pool; the caller holds the lock of
+        variant_dir (the variant's, or _init_build_dir()'s for a shared build).
+        """
+        init_elf_dir = variant_dir / "init_elf"
+        create_directories([init_elf_dir])
+        TestConfig._run_build_jobs(
+            self._build_kernel_part,
+            list(jobs)
+            + [
+                (name, variant_dir, init_elf_dir, None, True)
+                for name in TestConfig.KERNEL_COMPONENTS
+            ],
+        )
+        if self.profiler_build == ProfilerBuild.Yes:
+            meta_dir = Path(
+                TestConfig.PROFILER_META / self.test_name / self.init_meta_id()
+            )
+            meta_dir.mkdir(exist_ok=True, parents=True)
+            for component in TestConfig.KERNEL_COMPONENTS:
+                run_shell_command(
+                    [
+                        TestConfig.OBJCOPY,
+                        "-O",
+                        "binary",
+                        "-j",
+                        ".profiler_meta",
+                        str(init_elf_dir / f"{component}.elf"),
+                        str(meta_dir / f"{component}.meta.bin"),
+                    ],
+                    TestConfig.TESTS_WORKING_DIR,
+                )
+        (init_elf_dir / ".build_complete").touch()
+
+    def _shares_sol_init(self) -> bool:
+        """A run without --speed-of-light takes its INIT measurement ELFs from a speed-of-light build that tests of
+        the same sharing key share (perf/init_share.py); a --speed-of-light run builds the variant's own.
+        """
+        return not TestConfig.SPEED_OF_LIGHT and not self.skip_build_header
+
+    def _init_share_key(self) -> str:
+        from .perf.init_share import init_share_key
+
+        return init_share_key(
+            str(self.test_source_path),
+            # the header holds the templates, formats and parameters; the key leaves out the ones INIT does not need
+            self._variant_hash_inputs(
+                exclude=(
+                    "templates",
+                    "runtimes",
+                    "formats_config",
+                    "variant_stimuli",
+                    "pack_size",
+                    "unpack_size_a",
+                    "unpack_size_b",
+                )
+            ),
+            self.generate_build_header(speed_of_light=True),
+        )
+
+    def _init_build_dir(self) -> Path:
+        """Directory holding this test's INIT measurement build (init_elf/, and its build.h when shared)"""
+        if not self._shares_sol_init():
+            return TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
+        return (
+            TestConfig.ARTEFACTS_DIR
+            / self.test_name
+            / "init_sol"
+            / self._init_share_key()[:16]
+        )
+
+    def init_meta_id(self) -> str:
+        """Profiler metadata id of the INIT launch (Profiler.get_data)"""
+        if not self._shares_sol_init():
+            return f"{self.variant_id}_init"
+        return f"init_sol_{self._init_build_dir().name}"
+
+    def _build_shared_init_elfs(self):
+        """The INIT measurement ELFs of this test's sharing key (perf/init_share.py), compiled from the speed-of-light
+        header that sorts first among the key's tests built so far, so a producer's ELFs do not depend on build order;
+        a run that also executes keeps the first build, which a running test may be loading
+        """
+        init_dir = self._init_build_dir()
+        done = init_dir / "init_elf" / ".build_complete"
+        if done.exists() and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+            return
+        header = self.generate_build_header(speed_of_light=True)
+        with FileLock(TestConfig.SYNC_DIR / f"init-sol-{init_dir.name}.lock"):
+            if done.exists() and (
+                TestConfig.BUILD_MODE != BuildMode.PRODUCE
+                or (init_dir / "build.h").read_text() <= header
+            ):
+                return
+            create_directories([init_dir])
+            done.unlink(missing_ok=True)
+            (init_dir / "build.h").write_text(header)
+            self._build_init_elfs(init_dir, [])
 
     def read_coverage_data_from_device(self):
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
@@ -1997,14 +2848,31 @@ class TestConfig:
         else:
             commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
-        VARIANT_ELF_DIR = (
-            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+        VARIANT_ELF_DIR = self._layout_elf_dir(
+            build=TestConfig.BUILD_MODE != BuildMode.CONSUME
         )
 
         self.temp_elfs = [
             str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
             for trisc_name in TestConfig.KERNEL_COMPONENTS
         ]
+
+        # every launch names the zones it counts (counters.h counted_zones), 0 unless a perf run counts them
+        counted_zones_reg = device_module.counted_zones_address()
+        if counted_zones_reg is not None:
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                counted_zones_reg,
+                [getattr(self, "counted_zones", 0)],
+                safe_mode=False,  # a register, as host_signal's (device.py reset_mailboxes)
+            )
+        if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR and getattr(
+            self, "counted_zones", 0
+        ):
+            # imported here: counters.py imports this module
+            from .counters import configure_quasar_counters
+
+            configure_quasar_counters(TestConfig.TENSIX_LOCATION)
 
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
             TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
@@ -2018,6 +2886,13 @@ class TestConfig:
                         return_start_address=True,
                         verify_write=False,
                     )
+                    spill = _spill_section(elf_file_path)
+                    if spill is not None:
+                        write_words_to_device(
+                            TestConfig.TENSIX_LOCATION,
+                            spill[0],
+                            np.frombuffer(spill[1], dtype=np.uint32).tolist(),
+                        )
                     write_words_to_device(
                         TestConfig.TENSIX_LOCATION,
                         TestConfig.TRISC_START_ADDRS[i],
@@ -2042,7 +2917,11 @@ class TestConfig:
             ):
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,
-                    BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
+                    (
+                        BriscCmd.UPDATE_START_ADDR_CACHE_AND_START_DBG_BARRIER
+                        if self._wormhole_perf_barrier()
+                        else BriscCmd.UPDATE_START_ADDR_CACHE_AND_START
+                    ),
                     timeout=brisc_cmd_timeout,
                 )
                 return
@@ -2051,7 +2930,11 @@ class TestConfig:
             case BootMode.BRISC:
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,
-                    BriscCmd.START_TRISCS,
+                    (
+                        BriscCmd.START_TRISCS_DBG_BARRIER
+                        if self._wormhole_perf_barrier()
+                        else BriscCmd.START_TRISCS
+                    ),
                     timeout=brisc_cmd_timeout,
                 )
             case BootMode.TRISC:
@@ -2096,16 +2979,15 @@ class TestConfig:
         span = max(mailbox.value for mailbox in mailboxes) + 4 - base
         word_index = {mailbox: (mailbox.value - base) // 4 for mailbox in mailboxes}
 
-        # Wormhole and Blackhole kernels also signal completion in overlay registers, so the wait never reads their L1.
+        # Kernels also signal completion in registers outside L1 (host_signal in boot.h), so the wait never reads their L1.
+        # The TRISC at mailbox word n signals in slot n (trisc.cpp: mailbox_offset / 4).
         signal_addrs = None
-        if self.CHIP_ARCH != ChipArchitecture.QUASAR:
-            # The TRISC at mailbox word n signals in slot n (trisc.cpp: mailbox_offset / 4).
-            addrs = {
-                mailbox: device_module.host_signal_address(word_index[mailbox])
-                for mailbox in mailboxes
-            }
-            if all(addr is not None for addr in addrs.values()):
-                signal_addrs = addrs
+        addrs = {
+            mailbox: device_module.host_signal_address(word_index[mailbox])
+            for mailbox in mailboxes
+        }
+        if all(addr is not None for addr in addrs.values()):
+            signal_addrs = addrs
 
         completed = set()
         end_time = time.time() + timeout

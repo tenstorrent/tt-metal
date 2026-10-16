@@ -29,8 +29,9 @@ constexpr std::uint16_t hashString16(const char (&s)[N])
     return static_cast<std::uint16_t>(hash32 ^ (hash32 >> 16));
 }
 
+// The file name, not the path: the id is an immediate in the kernel code, so the checkout path must not change it.
 // clang-format off
-#define MARKER_FULL(marker) "LLK_PROFILER" ":" __FILE__ ":" ExpandStringize(__LINE__) ":" marker
+#define MARKER_FULL(marker) "LLK_PROFILER" ":" __FILE_NAME__ ":" ExpandStringize(__LINE__) ":" marker
 // clang-format on
 
 #define MARKER_ID(marker) hashString16(MARKER_FULL(marker))
@@ -93,7 +94,7 @@ extern std::uint32_t reserved_words_count;
 
 __attribute__((always_inline)) inline void sync_threads()
 {
-    llk_barrier::rendezvous(llk_barrier::is_action_thread());
+    llk_barrier::rendezvous<llk_barrier::PARK_PLAIN>(llk_barrier::is_action_thread(), [] {});
 }
 
 __attribute__((always_inline)) inline void reset()
@@ -153,7 +154,74 @@ __attribute__((noipa, section(".text.llk_zone.record"))) inline void zone_record
     write_entry_at(EntryType::ZONE_END, id16, end_timestamp);
 }
 
-template <std::uint16_t id16>
+#if defined(LLK_DBG_BARRIER)
+// PACK_ISOLATE: the idle peers hold at their TILE_LOOP end until pack is done, so their epilogue's L1 traffic cannot lock
+// the packers into their slow pattern; quiet_seen sits after every other variable (sections.ld), so nothing else moves.
+__attribute__((section(".llk_quiet_data"))) inline std::uint32_t quiet_seen = 0;
+
+__attribute__((noipa, section(".llk_quiet_text"))) inline void quiet_wait()
+{
+    // the hold starts on a 512 B boundary (sections.ld), so a size change of the code before it cannot move it; only builds
+    // that have the hold define the symbol, every other build stays byte identical
+    asm volatile(".weak llk_quiet_align\n\t.set llk_quiet_align, 512");
+    while (llk_barrier::detail::settled(ckernel::semaphore_read(llk_barrier::RELEASE_SEM)) == quiet_seen)
+    {
+        for (std::uint32_t i = 0; i < 32; ++i)
+        {
+            asm volatile("nop");
+        }
+    }
+}
+#endif
+
+#if defined(LLK_DBG_BARRIER) && !defined(LLK_PERF_INIT_ONLY)
+// The TILE_LOOP zone reserves its records before its park, so the code between the release and the start read is the
+// park's own epilogue only, whatever the bookkeeping costs.
+inline bool tile_loop_opened = false;
+
+template <bool LOOP_PAD>
+struct zone_prereserve
+{
+    inline __attribute__((always_inline)) zone_prereserve()
+    {
+        if constexpr (LOOP_PAD)
+        {
+            ckernel::fence_compiler();
+            tile_loop_opened = !is_buffer_full();
+            if (tile_loop_opened)
+            {
+                zone_reserve();
+            }
+            ckernel::fence_compiler();
+        }
+    }
+};
+
+#define LLK_ZONE_PRERESERVE_(loop_pad) const llk_profiler::zone_prereserve<loop_pad> _zone_prereserve_;
+#else
+#define LLK_ZONE_PRERESERVE_(loop_pad)
+#endif
+
+#if defined(LLK_DBG_BARRIER)
+// quiet_wait inline: in the TILE_LOOP build the held peers' wait sits in their pinned TILE_LOOP code. One opaque block
+// that saves its own scratch registers, so the kernel around it compiles as if it were not there (C++ here changed the
+// register allocation of math_matmul's loop: +35 % in L1_TO_L1).
+__attribute__((always_inline)) inline void quiet_wait_here()
+{
+    asm volatile(
+        "addi  sp, sp, -16\n\tsw    t0, 0(sp)\n\tsw    t1, 4(sp)\n\tsw    t2, 8(sp)\n\t"
+        "lw    t2, %[seen]\n\tlui   t0, %%hi(%[sem])\n"
+        "1:\n\tlw    t1, %%lo(%[sem])(t0)\n\tandi  t1, t1, 0xff\n\tbne   t1, t2, 3f\n\t" // RELEASE_SEM moved
+        "li    t1, 32\n"
+        "2:\n\tnop\n\taddi  t1, t1, -1\n\tbnez  t1, 2b\n\tj     1b\n"
+        "3:\n\tlw    t2, 8(sp)\n\tlw    t1, 4(sp)\n\tlw    t0, 0(sp)\n\taddi  sp, sp, 16"
+        :
+        : [seen] "m"(quiet_seen), [sem] "i"(PC_BUF_BASE + 4 * (ckernel::PC_BUF_SEMAPHORE_BASE + llk_barrier::RELEASE_SEM))
+        : "memory");
+}
+#endif
+
+template <std::uint16_t id16, bool LOOP_PAD = false, bool QUIET_WAIT = false>
 class zone_scoped
 {
 private:
@@ -166,10 +234,21 @@ public:
     zone_scoped& operator=(const zone_scoped&) = delete;
     zone_scoped& operator=(zone_scoped&&)      = delete;
 
+    // Zones other than TILE_LOOP are marked likely, so their start and end stay inline before the TILE_LOOP park instead
+    // of next to TILE_LOOP's own blocks at the end of the kernel, where a change to them moved TILE_LOOP's clock reads.
     inline __attribute__((always_inline)) zone_scoped()
     {
         ckernel::fence_compiler();
-        if (!is_buffer_full())
+#if defined(LLK_DBG_BARRIER) && !defined(LLK_PERF_INIT_ONLY)
+        if constexpr (LOOP_PAD) // reserved before the TILE_LOOP park (zone_prereserve): only the clock read follows the release
+        {
+            start_timestamp = ckernel::read_wall_clock();
+            is_opened       = tile_loop_opened;
+            ckernel::fence_compiler();
+            return;
+        }
+#endif
+        if (LOOP_PAD ? !is_buffer_full() : __builtin_expect(!is_buffer_full(), 1))
         {
             is_opened = true;
             zone_reserve();
@@ -181,10 +260,32 @@ public:
     ~zone_scoped()
     {
         ckernel::fence_compiler();
-        if (is_opened)
+#if defined(LLK_DBG_BARRIER)
+        if constexpr (QUIET_WAIT)
+        {
+#if !defined(LLK_PERF_INIT_ONLY)
+            quiet_wait_here(); // inline, so its code sits with the pinned loop and no other code change moves it
+#else
+            quiet_wait();
+#endif
+        }
+#endif
+        if (LOOP_PAD ? is_opened : __builtin_expect(is_opened, 1))
         {
             const std::uint64_t end_timestamp = ckernel::read_wall_clock();
+#if defined(LLK_DBG_BARRIER) // the id hashes the source line: a fixed lui + addi keeps its size from moving the code after it
+#if defined(LLK_PERF_OOL)
+            // llk_loop_end_pad bytes of NOPs after the TILE_LOOP end read move the code after it against the loop (perf/layout.py)
+            asm volatile(".ifndef llk_loop_end_pad\n\t.set llk_loop_end_pad, 0\n.endif\n.rept (llk_loop_end_pad / 4) * %[on]\n\tnop\n\t.endr"
+                         :
+                         : [on] "i"(LOOP_PAD ? 1 : 0));
+#endif
+            std::uint32_t id;
+            asm volatile("lui %0, %%hi(%1)\n\taddi %0, %0, %%lo(%1)" : "=r"(id) : "i"(id16));
+            zone_record(static_cast<std::uint16_t>(id), start_timestamp, end_timestamp);
+#else
             zone_record(id16, start_timestamp, end_timestamp);
+#endif
         }
         ckernel::fence_compiler();
     }
@@ -211,7 +312,12 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 
 #define ZONE_SCOPED(marker)            \
     PROFILER_META(MARKER_FULL(marker)) \
-    const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker)>();
+    const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker), hashString16(marker) == hashString16("TILE_LOOP")>();
+
+// A peer's TILE_LOOP zone in PACK_ISOLATE: it holds its epilogue until the pack thread is done (quiet_wait).
+#define ZONE_SCOPED_Q(marker, quiet_wait) \
+    PROFILER_META(MARKER_FULL(marker))    \
+    const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker), hashString16(marker) == hashString16("TILE_LOOP"), quiet_wait>();
 
 #define TIMESTAMP(marker)              \
     PROFILER_META(MARKER_FULL(marker)) \
