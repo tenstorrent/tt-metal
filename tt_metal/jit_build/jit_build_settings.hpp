@@ -17,6 +17,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "impl/metal2_host_api/llk_metadata.hpp"
+#include "jit_build/bindings.hpp"
 
 // Host-side mirror of the device SemScope enum.
 // Codegen spells the scope by name.
@@ -41,28 +42,6 @@ struct SemBindingEntry {
     SemScope scope = SemScope::LOCAL_NONATOMIC;
     uint32_t total_binder_harts = 0;
 };
-
-// The enumerator name, as the kernel spells it.
-inline std::string_view sem_scope_enumerator(SemScope scope) {
-    switch (scope) {
-        case SemScope::LOCAL_NONATOMIC: return "LOCAL_NONATOMIC";
-        case SemScope::DM_LOCAL_CACHED: return "DM_LOCAL_CACHED";
-        case SemScope::EXTERNAL: return "EXTERNAL";
-        case SemScope::COMPUTE_ATOMIC: return "COMPUTE_ATOMIC";
-    }
-    TT_THROW("unhandled SemScope value {}", static_cast<int>(scope));
-}
-
-// The generated semaphore section: one constexpr binding token per bound semaphore, in
-// `namespace sem`. The token carries the id and the mechanism the host picked.
-inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
-    os << "namespace sem {\n";
-    for (const auto& entry : entries) {
-        os << "constexpr ::SemaphoreBindingToken " << entry.name << "{" << entry.id
-           << "u, ::SemScope::" << sem_scope_enumerator(entry.scope) << "};\n";
-    }
-    os << "}  // namespace sem\n";
-}
 
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
 //
@@ -155,6 +134,37 @@ public:
     //  - Tensor bindings
     // prefetcher_pipe_id is 0xFF unless the binding is a PrefetcherPipe relay, in which case
     // it identifies the persistent slot the relay-token constructor aligns from on TRISC.
+
+    // Emits a stream of Compile time resource bindings.
+    // Each binding represents a kind of user facing resource provided to the user kernel.
+    // Bindings consists of individual entries that tries to model an object instaniation,
+    // where the object is an individual resource binding.
+    //
+    // Conceptually, scratchpad bindings can be represented as follows:
+    //  Binding {
+    //      name: "scratchpad",
+    //      emission_namespace: "scratch",
+    //      type: "ScratchpadBinding",
+    //      entries: [
+    //          BindingEntry {
+    //              name: "scratchpad",
+    //              args: [/* scratchpad size = */ "1024"]
+    //          }
+    //      ],
+    //      // ...
+    //  }
+    //
+    // This is then expected to be serialized by the underlying build system into:
+    // namespace scratch {
+    //   constexpr ScratchpadBinding scratchpad_binding{1024};
+    // }
+    //
+    // Post condition:
+    // - For each Binding::emission_namespace, there maybe only one Binding object that have a non-empty
+    // programmatic_getter_config.
+    virtual void process_user_facing_resource_binding_handles(
+        const std::function<void(const tt::tt_metal::Binding&)>&) const {}
+
     virtual void process_dataflow_buffer_binding_handles(const std::function<void(
                                                              const std::string& accessor_name,
                                                              uint16_t logical_dfb_id,
